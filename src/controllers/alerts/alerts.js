@@ -28,6 +28,7 @@ const EXPORT_FIELDS = [
 	'deliveryResults',
 	'suppressedRepeat',
 	'tokenUsage',
+	'enrichmentData',
 	'text',
 ];
 
@@ -270,10 +271,25 @@ function escapeCsvValue(value) {
 	return safeSerialized;
 }
 
-function buildCsv(alerts, includeText) {
-	const fields = includeText
-		? EXPORT_FIELDS
-		: EXPORT_FIELDS.filter(field => field !== 'text');
+function buildCsv(alerts, optionsOrIncludeText, maybeIncludeEnrichment) {
+	const options = typeof optionsOrIncludeText === 'object' && optionsOrIncludeText !== null
+		? optionsOrIncludeText
+		: {
+			includeText: Boolean(optionsOrIncludeText),
+			includeEnrichment: Boolean(maybeIncludeEnrichment),
+		};
+	const includeText = Boolean(options.includeText);
+	const includeEnrichment = Boolean(options.includeEnrichment);
+
+	const fields = EXPORT_FIELDS.filter((field) => {
+		if (field === 'text' && !includeText) {
+			return false;
+		}
+		if (field === 'enrichmentData' && !includeEnrichment) {
+			return false;
+		}
+		return true;
+	});
 	const rows = alerts.map(alert => fields.map(field => escapeCsvValue(alert[field])).join(','));
 	return [fields.join(','), ...rows].join('\n');
 }
@@ -336,6 +352,14 @@ function exportAlerts(req, res) {
 			});
 		}
 
+		const includeEnrichment = parseBooleanFlag(req.query.includeEnrichment, false);
+		if (includeEnrichment === null) {
+			return res.status(400).json({
+				error: 'Invalid includeEnrichment flag. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
 		const source = typeof req.query.source === 'string' && req.query.source.trim()
 			? req.query.source.trim()
 			: undefined;
@@ -347,6 +371,7 @@ function exportAlerts(req, res) {
 			source,
 			enriched,
 			includeText,
+			includeEnrichment,
 		});
 
 		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
@@ -367,7 +392,7 @@ function exportAlerts(req, res) {
 
 		if (format === 'csv') {
 			res.type('text/csv; charset=utf-8');
-			return res.status(200).send(`${buildCsv(result.alerts, includeText)}\n`);
+			return res.status(200).send(`${buildCsv(result.alerts, { includeText, includeEnrichment })}\n`);
 		}
 
 		res.type('application/x-ndjson; charset=utf-8');

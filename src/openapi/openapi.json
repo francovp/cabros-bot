@@ -512,6 +512,9 @@
           },
           {
             "$ref": "#/components/parameters/IncludeText"
+          },
+          {
+            "$ref": "#/components/parameters/IncludeEnrichment"
           }
         ],
         "responses": {
@@ -2007,6 +2010,15 @@
       "IncludeText": {
         "name": "includeText",
         "in": "query",
+        "schema": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "IncludeEnrichment": {
+        "name": "includeEnrichment",
+        "in": "query",
+        "description": "When true, includes a bounded safe projection of enrichmentData in exported records.",
         "schema": {
           "type": "boolean",
           "default": false
