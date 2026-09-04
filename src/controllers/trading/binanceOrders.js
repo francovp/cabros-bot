@@ -30,7 +30,7 @@ async function postBinanceOrder(req, res) {
 
 		if (!result.dryRun) {
 			binanceOrderAuditService.recordMutation({
-				operator: binanceOrderAuditService.extractOperatorHash(req),
+				req,
 				action: 'PLACE',
 				symbol: result.order?.symbol || req.body?.symbol,
 				side: result.order?.side || req.body?.side || null,
@@ -53,7 +53,7 @@ async function postBinanceOrder(req, res) {
 			console.warn('[BinanceOrdersController] order rejected', { code: error.code });
 			if (req.body?.dryRun !== true) {
 				binanceOrderAuditService.recordMutation({
-					operator: binanceOrderAuditService.extractOperatorHash(req),
+					req,
 					action: 'PLACE',
 					symbol: req.body?.symbol,
 					side: req.body?.side || null,
@@ -78,7 +78,7 @@ async function postBinanceOrder(req, res) {
 		console.error('[BinanceOrdersController] order failed', { code: 'BINANCE_ORDER_FAILED' });
 		if (req.body?.dryRun !== true) {
 			binanceOrderAuditService.recordMutation({
-				operator: binanceOrderAuditService.extractOperatorHash(req),
+				req,
 				action: 'PLACE',
 				symbol: req.body?.symbol,
 				side: req.body?.side || null,
@@ -159,7 +159,7 @@ async function deleteBinanceOrder(req, res) {
 		}
 
 		binanceOrderAuditService.recordMutation({
-			operator: binanceOrderAuditService.extractOperatorHash(req),
+			req,
 			action: 'CANCEL',
 			symbol: result.order?.symbol || req.body?.symbol,
 			side: result.order?.side || null,
@@ -180,7 +180,7 @@ async function deleteBinanceOrder(req, res) {
 		if (error instanceof BinanceOrderRequestError || error instanceof BinanceOrderServiceError) {
 			console.warn('[BinanceOrdersController] order cancel rejected', { code: error.code });
 			binanceOrderAuditService.recordMutation({
-				operator: binanceOrderAuditService.extractOperatorHash(req),
+				req,
 				action: 'CANCEL',
 				symbol: req.body?.symbol,
 				side: null,
@@ -203,7 +203,7 @@ async function deleteBinanceOrder(req, res) {
 
 		console.error('[BinanceOrdersController] order cancel failed', { code: 'BINANCE_ORDER_CANCEL_FAILED' });
 		binanceOrderAuditService.recordMutation({
-			operator: binanceOrderAuditService.extractOperatorHash(req),
+			req,
 			action: 'CANCEL',
 			symbol: req.body?.symbol,
 			side: null,

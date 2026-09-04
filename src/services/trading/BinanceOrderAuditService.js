@@ -39,24 +39,25 @@ function getRetentionDays() {
 }
 
 const AUDIT_SALT = 'cabros-bot:binance-order-audit';
+const SENSITIVE_KEY_PATTERN = /(password|secret|token|api[-_]?key|authorization|cookie|dsn|webhookUrl|private[-_]?key)/i;
 
 function hashOperator(operator) {
 	if (!operator || typeof operator !== 'string') {
 		return 'unknown';
 	}
 	const trimmed = operator.trim();
-	if (!trimmed) {
-		return 'unknown';
-	}
-	if (/^[a-f0-9]{64}$/i.test(trimmed)) {
-		return trimmed;
+	if (!trimmed || trimmed === 'unknown' || trimmed === 'anonymous') {
+		return trimmed || 'unknown';
 	}
 	return crypto.pbkdf2Sync(trimmed, AUDIT_SALT, 10000, 32, 'sha256').toString('hex');
 }
 
 function extractOperatorHash(req) {
 	if (!req) return 'unknown';
-	const key = req.headers?.['x-api-key'] || req.headers?.['X-API-Key'] || req.query?.['api-key'];
+	const rawKey = req.headers?.['x-api-key']
+		|| req.headers?.['X-API-Key']
+		|| req.query?.['api-key'];
+	const key = Array.isArray(rawKey) ? rawKey[0] : rawKey;
 	if (typeof key === 'string' && key.trim()) {
 		return hashOperator(key.trim());
 	}
@@ -69,6 +70,9 @@ function extractOperatorHash(req) {
 
 function sanitizeFirestoreValue(value) {
 	if (value === undefined || value === null) return null;
+	if (value instanceof Date) {
+		return value;
+	}
 	if (Array.isArray(value)) {
 		return value.map((v) => sanitizeFirestoreValue(v));
 	}
@@ -83,7 +87,7 @@ function sanitizeFirestoreValue(value) {
 		}
 		const out = {};
 		for (const [k, v] of Object.entries(value)) {
-			if (/^(secret|apiKey|apiSecret|password|token|key)$/i.test(k)) {
+			if (SENSITIVE_KEY_PATTERN.test(k)) {
 				continue;
 			}
 			out[k] = sanitizeFirestoreValue(v);
@@ -166,7 +170,9 @@ class BinanceOrderAuditService {
 				? admin.firestore.Timestamp.fromDate(expiresDate)
 				: expiresDate.toISOString();
 
-			const operator = hashOperator(params.operator);
+			const operator = params.req
+				? extractOperatorHash(params.req)
+				: hashOperator(params.operator);
 
 			const record = {
 				orderId,

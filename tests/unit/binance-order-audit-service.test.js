@@ -73,22 +73,31 @@ describe('BinanceOrderAuditService', () => {
 			expect(getRetentionDays()).toBe(30);
 		});
 
-		it('hashes operator strings to 64-char hex', () => {
+		it('hashes operator strings to 64-char hex and hashes 64-char hex keys without bypass', () => {
 			const raw = 'my-secret-operator-key';
 			const expected = crypto.pbkdf2Sync(raw, 'cabros-bot:binance-order-audit', 10000, 32, 'sha256').toString('hex');
 			expect(hashOperator(raw)).toBe(expected);
-			expect(hashOperator(expected)).toBe(expected);
+
+			// Critical: standard 32-byte hex keys (64 hex chars) must be hashed, never returned in plaintext
+			const hexKey64 = 'a'.repeat(64);
+			const hashedHexKey = hashOperator(hexKey64);
+			expect(hashedHexKey).not.toBe(hexKey64);
+			expect(hashedHexKey).toBe(
+				crypto.pbkdf2Sync(hexKey64, 'cabros-bot:binance-order-audit', 10000, 32, 'sha256').toString('hex'),
+			);
+
 			expect(hashOperator('')).toBe('unknown');
 			expect(hashOperator(null)).toBe('unknown');
 			expect(hashOperator(undefined)).toBe('unknown');
 		});
 
-		it('extracts and hashes operator from request headers or query params', () => {
+		it('extracts and hashes operator from request headers or query params including arrays', () => {
 			const expected = crypto.pbkdf2Sync('test-api-key', 'cabros-bot:binance-order-audit', 10000, 32, 'sha256').toString('hex');
 
 			expect(extractOperatorHash({ headers: { 'x-api-key': 'test-api-key' } })).toBe(expected);
 			expect(extractOperatorHash({ headers: { 'X-API-Key': 'test-api-key' } })).toBe(expected);
 			expect(extractOperatorHash({ query: { 'api-key': 'test-api-key' } })).toBe(expected);
+			expect(extractOperatorHash({ query: { 'api-key': ['test-api-key', 'extra-key'] } })).toBe(expected);
 			expect(extractOperatorHash({ headers: { authorization: 'Bearer jwt.token.here' } })).toBe(
 				crypto.pbkdf2Sync('Bearer jwt.token.here', 'cabros-bot:binance-order-audit', 10000, 32, 'sha256').toString('hex'),
 			);
@@ -96,22 +105,30 @@ describe('BinanceOrderAuditService', () => {
 			expect(extractOperatorHash({})).toBe('anonymous');
 		});
 
-		it('sanitizes Firestore values by removing undefined and redacting credentials', () => {
+		it('sanitizes Firestore values by preserving Dates, removing undefined, and redacting credentials', () => {
+			const date = new Date('2026-06-01T00:00:00.000Z');
 			const sanitized = sanitizeFirestoreValue({
 				regular: 'value',
+				createdAt: date,
 				missing: undefined,
 				nested: {
 					innerMissing: undefined,
 					innerValue: 123,
 					secret: 'do-not-leak',
 					apiKey: 'strip-me',
-					token: 'remove-me',
+					api_key: 'strip-me-too',
+					binanceApiKey: 'strip-prefixed',
+					access_token: 'strip-token',
+					private_key: 'strip-private',
+					authorization: 'Bearer 123',
+					webhookUrl: 'https://secret.com',
 				},
 				array: ['a', undefined, 'b'],
 			});
 
 			expect(sanitized).toEqual({
 				regular: 'value',
+				createdAt: date,
 				missing: null,
 				nested: {
 					innerMissing: null,
@@ -119,9 +136,15 @@ describe('BinanceOrderAuditService', () => {
 				},
 				array: ['a', null, 'b'],
 			});
+			expect(sanitized.createdAt).toBeInstanceOf(Date);
 			expect(sanitized.nested.secret).toBeUndefined();
 			expect(sanitized.nested.apiKey).toBeUndefined();
-			expect(sanitized.nested.token).toBeUndefined();
+			expect(sanitized.nested.api_key).toBeUndefined();
+			expect(sanitized.nested.binanceApiKey).toBeUndefined();
+			expect(sanitized.nested.access_token).toBeUndefined();
+			expect(sanitized.nested.private_key).toBeUndefined();
+			expect(sanitized.nested.authorization).toBeUndefined();
+			expect(sanitized.nested.webhookUrl).toBeUndefined();
 		});
 	});
 
@@ -253,6 +276,28 @@ describe('BinanceOrderAuditService', () => {
 				processingMs: 15,
 			});
 			expect(result).toEqual(writtenData);
+		});
+
+		it('resolves and hashes operator from req object in recordMutation without plain text leak', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			const apiKey = 'b'.repeat(64);
+			const expectedHash = crypto.pbkdf2Sync(apiKey, 'cabros-bot:binance-order-audit', 10000, 32, 'sha256').toString('hex');
+
+			const result = await service.recordMutation({
+				req: {
+					headers: { 'x-api-key': apiKey },
+				},
+				action: 'PLACE',
+				symbol: 'SOLUSDT',
+				status: 'SUBMITTED',
+			});
+
+			const writtenData = mockDocRef.set.mock.calls[0][0];
+			expect(writtenData.operator).toBe(expectedHash);
+			expect(writtenData.operator).not.toBe(apiKey);
+			expect(result.operator).toBe(expectedHash);
 		});
 
 		it('fails open and returns null when firestore.set rejects', async () => {
