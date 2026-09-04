@@ -21,6 +21,8 @@ function postVolumeConfirmation() {
 			});
 			const decision = getVolumeDecision(analysis);
 
+			const processingTimeMs = Math.max(0, Date.now() - startTime);
+
 			return res.status(200).json({
 				success: true,
 				symbol: parsed.rawSymbol,
@@ -30,14 +32,16 @@ function postVolumeConfirmation() {
 				...decision,
 				analysis,
 				requestId,
-				totalDurationMs: Date.now() - startTime,
+				processingTimeMs,
 			});
 		} catch (error) {
+			const processingTimeMs = Math.max(0, Date.now() - startTime);
 			if (error instanceof VolumeConfirmationRequestError) {
 				return res.status(400).json({
 					error: error.message,
 					code: error.code,
 					requestId,
+					processingTimeMs,
 				});
 			}
 
@@ -48,7 +52,7 @@ function postVolumeConfirmation() {
 					error: error.message,
 					code: 'VOLUME_CONFIRMATION_FAILED',
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs,
 				});
 			}
 
@@ -68,6 +72,7 @@ function postVolumeConfirmation() {
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',
 				requestId,
+				processingTimeMs,
 			});
 		}
 	};

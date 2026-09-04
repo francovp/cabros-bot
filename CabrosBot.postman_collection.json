@@ -833,7 +833,45 @@
                 "volume-confirmation"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "Success - volume confirmed",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"confirmed\": true,\n  \"decision\": \"confirm\",\n  \"volumeRatio\": 1.7,\n  \"analysis\": {\n    \"symbol\": \"BINANCE:BTCUSDT\",\n    \"volume_analysis\": {\n      \"volume_ratio\": 1.7,\n      \"volume_strength\": \"HIGH\"\n    },\n    \"confidence\": 0.91\n  },\n  \"requestId\": \"req-vol-123\",\n  \"processingTimeMs\": 310\n}"
+            },
+            {
+              "name": "400 Invalid symbol",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-vol-400\",\n  \"processingTimeMs\": 12\n}"
+            },
+            {
+              "name": "502 TradingView failure",
+              "status": "Bad Gateway",
+              "code": 502,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"MCP unavailable\",\n  \"code\": \"VOLUME_CONFIRMATION_FAILED\",\n  \"requestId\": \"req-vol-502\",\n  \"processingTimeMs\": 450\n}"
+            }
+          ]
         },
         {
           "name": "POST Single Symbol Analysis",
@@ -872,19 +910,25 @@
               "name": "Success - decision-ready analysis",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*\ud83d\udd34 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*🔴 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  },\n  \"analysisStatus\": \"complete\",\n  \"requestId\": \"req-sym-123\",\n  \"processingTimeMs\": 850\n}"
             },
             {
               "name": "400 Invalid symbol",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\n  \"success\": false,\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+              "body": "{\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-sym-400\",\n  \"processingTimeMs\": 15\n}"
             },
             {
               "name": "502 TradingView failure",
               "status": "Bad Gateway",
               "code": 502,
-              "body": "{\n  \"success\": false,\n  \"error\": \"TradingView MCP unavailable\",\n  \"code\": \"SYMBOL_ANALYSIS_FAILED\"\n}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"TradingView MCP unavailable\",\n  \"code\": \"SYMBOL_ANALYSIS_FAILED\",\n  \"requestId\": \"req-sym-502\",\n  \"processingTimeMs\": 420\n}"
+            },
+            {
+              "name": "504 Analysis timeout",
+              "status": "Gateway Timeout",
+              "code": 504,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Symbol analysis timed out.\",\n  \"code\": \"SYMBOL_ANALYSIS_TIMEOUT\",\n  \"requestId\": \"req-sym-504\",\n  \"processingTimeMs\": 90000\n}"
             }
           ]
         },
@@ -1666,7 +1710,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"\ud83d\udce1 *SCANNER DE MERCADO \u2014 ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"totalDurationMs\": 1450\n}"
+              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"\ud83d\udce1 *SCANNER DE MERCADO \u2014 ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"processingTimeMs\": 1450\n}"
             }
           ]
         },
