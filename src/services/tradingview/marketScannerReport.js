@@ -2,7 +2,13 @@ const {
 	normalizeTradingViewTimeframe,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
-const { rankScannerItems, resolveTrendConfluence } = require('./marketScannerScoring');
+const {
+	rankScannerItems,
+	resolveTrendConfluence,
+	computePositionSizing,
+	DEFAULT_ATR_MULTIPLIER,
+	DEFAULT_ACCOUNT_RISK_PCT,
+} = require('./marketScannerScoring');
 
 const SUPPORTED_SCAN_TYPES = new Set([
 	'top_gainers',
@@ -227,6 +233,7 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 	const exchange = options.exchange || DEFAULT_EXCHANGE;
 	const timeframe = options.timeframe || '4h';
 	const ranked = options.ranked === true;
+	const positionSizingOptions = resolvePositionSizingOptions(options);
 
 	const lines = [
 		`📡 *SCANNER DE MERCADO — ${formatReportDate(now)}*`,
@@ -247,7 +254,7 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 			return;
 		}
 
-		const itemsToRender = prepareMarketScannerItems(scanResult, ranked);
+		const itemsToRender = prepareMarketScannerItems(scanResult, ranked, positionSizingOptions);
 
 		if (itemsToRender.length === 0) {
 			lines.push('No hay.');
@@ -255,14 +262,28 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 		}
 
 		itemsToRender.forEach((item, index) => {
-			lines.push(formatScanItem(item, index + 1, scanResult.scan, ranked));
+			lines.push(formatScanItem(item, index + 1, scanResult.scan, ranked, positionSizingOptions));
 		});
 	});
 
 	return lines.join('\n');
 }
 
-function prepareMarketScannerItems(scanResult = {}, ranked = false) {
+function resolvePositionSizingOptions(options = {}) {
+	const atrMultiplier = parsePositiveNumber(options.atrMultiplier ?? process.env.SCANNER_ATR_MULTIPLIER, DEFAULT_ATR_MULTIPLIER);
+	const accountRiskPct = parsePositiveNumber(options.accountRiskPct ?? process.env.SCANNER_ACCOUNT_RISK_PCT, DEFAULT_ACCOUNT_RISK_PCT);
+	return { atrMultiplier, accountRiskPct };
+}
+
+function parsePositiveNumber(value, fallback) {
+	const numeric = Number(value);
+	if (!Number.isFinite(numeric) || numeric <= 0) {
+		return fallback;
+	}
+	return numeric;
+}
+
+function prepareMarketScannerItems(scanResult = {}, ranked = false, positionSizingOptions = {}) {
 	let itemsToRender = scanResult.items || [];
 	if (scanResult.scan === 'top_gainers') {
 		itemsToRender = itemsToRender.filter((item) => typeof item.changePercent === 'number' && item.changePercent > 0);
@@ -277,7 +298,7 @@ function prepareMarketScannerItems(scanResult = {}, ranked = false) {
 	}
 
 	if (ranked) {
-		itemsToRender = rankScannerItems(itemsToRender, scanResult.scan);
+		itemsToRender = rankScannerItems(itemsToRender, scanResult.scan, positionSizingOptions);
 	}
 
 	return itemsToRender;
@@ -317,7 +338,7 @@ function classifyRiskReward(ratio) {
 	return 'poor';
 }
 
-function formatScanItem(item, rank, scanType, ranked = false) {
+function formatScanItem(item, rank, scanType, ranked = false, positionSizingOptions = {}) {
 	const symbol = stripExchange(item.symbol);
 	const priceVal = numberOrNull(item.indicators?.close ?? null);
 	const price = formatCurrency(priceVal);
@@ -402,7 +423,33 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 		}
 	}
 
+	if (ranked && item._positionSizing) {
+		const sizingLine = formatPositionSizing(item._positionSizing, positionSizingOptions);
+		if (sizingLine) {
+			itemLine += `\n  - ${sizingLine}`;
+		}
+	}
+
 	return itemLine;
+}
+
+function formatPositionSizing(sizing, options = {}) {
+	if (!sizing || typeof sizing !== 'object') {
+		return null;
+	}
+	const atrPercent = numberOrNull(sizing.atrPercent);
+	const suggestedStopPct = numberOrNull(sizing.suggestedStopPct);
+	const suggestedPositionPct = numberOrNull(sizing.suggestedPositionPct);
+	if (atrPercent === null || suggestedStopPct === null) {
+		return null;
+	}
+	const atrMultiplier = numberOrNull(options.atrMultiplier) || DEFAULT_ATR_MULTIPLIER;
+	const accountRiskPct = numberOrNull(options.accountRiskPct) || DEFAULT_ACCOUNT_RISK_PCT;
+	const multiplierText = formatNumber(atrMultiplier, 1);
+	const stopText = formatNumber(suggestedStopPct, 2);
+	const posText = suggestedPositionPct === null ? 'n/a' : `${formatNumber(suggestedPositionPct, 2)}%`;
+	const riskText = formatNumber(accountRiskPct, 2);
+	return `📏 *Position Sizing:* ${multiplierText}×ATR stop: ${stopText}% | Pos: ${posText} @ ${riskText}% risk`;
 }
 
 function formatTrendConfluence(trendConfluence = {}) {

@@ -380,11 +380,12 @@ function compactScanResults(results, includeScores = false) {
 		};
 
 		if (includeScores && Array.isArray(result.items) && result.items.length > 0) {
-			compact.scores = prepareMarketScannerItems(result, true).map((item) => ({
+			compact.scores = prepareMarketScannerItems(result, true, resolvePositionSizingOptions()).map((item) => ({
 				symbol: item.symbol,
 				score: item._score,
 				reason: item._scoreReason,
 				...(item._trendConfluence ? { trendConfluence: item._trendConfluence } : {}),
+				...(item._positionSizing ? { positionSizing: item._positionSizing } : {}),
 			}));
 		}
 
@@ -401,6 +402,30 @@ function buildSummary(scanResults, deliveryResults) {
 		totalItems: scanResults.reduce((sum, r) => sum + r.items.length, 0),
 		delivered: deliveryResults.filter((r) => r.success).length,
 	};
+}
+
+function resolvePositionSizingOptions() {
+	const atrMultiplier = parsePositiveEnvFloat(process.env.SCANNER_ATR_MULTIPLIER);
+	const accountRiskPct = parsePositiveEnvFloat(process.env.SCANNER_ACCOUNT_RISK_PCT);
+	const options = {};
+	if (atrMultiplier !== null) {
+		options.atrMultiplier = atrMultiplier;
+	}
+	if (accountRiskPct !== null) {
+		options.accountRiskPct = accountRiskPct;
+	}
+	return options;
+}
+
+function parsePositiveEnvFloat(value) {
+	if (typeof value !== 'string' || value.trim() === '') {
+		return null;
+	}
+	const numeric = Number(value);
+	if (!Number.isFinite(numeric) || numeric <= 0) {
+		return null;
+	}
+	return numeric;
 }
 
 function getMarketScannerTimeoutMs() {

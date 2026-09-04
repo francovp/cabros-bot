@@ -278,6 +278,9 @@ The response and audit logs include only sanitized order metadata. API credentia
 - `ENABLE_MARKET_SCANNER` - Enable market scanner endpoint (`true` or `false`, default: `false`)
 - `MARKET_SCANNER_DEFAULT_EXCHANGE` - Default exchange when not provided in request (default: `BINANCE`)
 - `MARKET_SCANNER_TIMEOUT_MS` - Timeout in milliseconds for scanner webhook process (default: `90000`, max `120000`)
+- `SCANNER_ATR_MULTIPLIER` - Stop distance in multiples of ATR for ranked position sizing hints (default: `2.0`; non-positive or non-finite values fall back to the default)
+- `SCANNER_ACCOUNT_RISK_PCT` - Account risk percentage per trade used to derive the suggested position size (default: `1.0`; non-positive or non-finite values fall back to the default)
+- When `ranked=true` and the item exposes a positive `ATR` and price, the report adds a `Position Sizing` line and the `scanResults[].scores[]` entry gains a `positionSizing` object with `atr`, `atrPercent`, `suggestedStopPct`, `suggestedPositionPct`, and optional `minRiskRewardRatio`; the field is omitted (fail-open) when the inputs are missing.
 
 #### Scanner Preset Storage
 
