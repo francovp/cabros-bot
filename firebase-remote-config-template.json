@@ -377,6 +377,13 @@
       },
       "description": "Audit log retention in days before Firestore TTL expiry",
       "valueType": "NUMBER"
+    },
+    "ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable multi-agent consensus analysis in symbol-analysis webhook",
+      "valueType": "BOOLEAN"
     }
   },
   "version": {

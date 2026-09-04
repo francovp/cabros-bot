@@ -853,7 +853,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"analysisMode\": \"combined\",\n  \"includeMultiTimeframe\": true\n}"
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"analysisMode\": \"combined\",\n  \"includeMultiTimeframe\": true,\n  \"includeMultiAgent\": true\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/symbol-analysis",
@@ -873,6 +873,12 @@
               "status": "OK",
               "code": 200,
               "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*\ud83d\udd34 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  }\n}"
+            },
+            {
+              "name": "Success - with multi-agent consensus",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"alertText\": \"*\ud83d\udfe2 SOBREVENTA*\\nBTCUSDT $77,103.55 (+1.2%) | RSI 28.5...\",\n  \"analysis\": {\n    \"decision\": {\n      \"action\": \"BUY\",\n      \"confidence\": \"HIGH\",\n      \"dataSufficient\": true,\n      \"multiAgent\": {\n        \"decision\": \"BUY\",\n        \"confidence\": \"High\",\n        \"net_score\": 2,\n        \"agents\": {\n          \"technical_analyst\": {\n            \"stance\": \"Bullish\"\n          }\n        }\n      }\n    }\n  },\n  \"multiAgent\": {\n    \"decision\": \"BUY\",\n    \"confidence\": \"High\",\n    \"net_score\": 2,\n    \"agents\": {\n      \"technical_analyst\": {\n        \"stance\": \"Bullish\"\n      }\n    }\n  },\n  \"analysisStatus\": \"complete\"\n}"
             },
             {
               "name": "400 Invalid symbol",
