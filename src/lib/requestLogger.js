@@ -76,7 +76,7 @@ function resolveLogLevel(statusCode) {
 }
 
 function emit(method, level, attributes) {
-	const message = 'Request completed';
+	const message = attributes.aborted ? 'Request aborted' : 'Request completed';
 	if (level === 'error') {
 		console.error(message, { ...attributes, method, path: attributes.path });
 	} else if (level === 'warn') {
@@ -102,12 +102,12 @@ function createRequestLogger(options = {}) {
 		const clientIp = sanitizeClientIp(req.ip || (req.socket && req.socket.remoteAddress));
 		let finalized = false;
 
-		const finalize = () => {
+		const finalize = (aborted = false) => {
 			if (finalized) return;
 			finalized = true;
 			const durationMs = Math.max(0, now() - startTime);
 			const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 0;
-			const level = resolveLogLevel(statusCode);
+			const level = aborted ? 'warn' : resolveLogLevel(statusCode);
 			emit(req.method, level, {
 				method: req.method,
 				path,
@@ -115,11 +115,16 @@ function createRequestLogger(options = {}) {
 				durationMs,
 				requestId,
 				clientIp,
+				aborted,
+				outcome: aborted ? 'aborted' : 'completed',
 			});
 		};
 
-		res.on('finish', finalize);
-		res.on('close', finalize);
+		res.on('finish', () => finalize(false));
+		res.on('close', () => {
+			const finished = Boolean(res.writableEnded || res.finished);
+			finalize(!finished);
+		});
 		return next();
 	};
 }

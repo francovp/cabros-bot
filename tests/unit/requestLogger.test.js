@@ -208,7 +208,7 @@ describe('Request Logger Middleware', () => {
 		expect(log.attributes.durationMs).toBeLessThanOrEqual(after - before + 5);
 	});
 
-	it('does not log if the response never finishes', () => {
+	it('does not log if the response never finishes or closes', () => {
 		const middleware = createRequestLogger();
 		const req = buildReq();
 		const res = httpMocks.createResponse();
@@ -219,5 +219,29 @@ describe('Request Logger Middleware', () => {
 		expect(output.info).not.toHaveBeenCalled();
 		expect(output.warn).not.toHaveBeenCalled();
 		expect(output.error).not.toHaveBeenCalled();
+	});
+
+	it('emits a warn log with Request aborted when close fires before response finishes', () => {
+		const middleware = createRequestLogger();
+		const req = buildReq({ headers: { 'x-request-id': 'req-abort-123' } });
+		const res = buildRes();
+		res.writableEnded = false;
+		res.finished = false;
+
+		middleware(req, res, jest.fn());
+		res._closeCb();
+
+		expect(output.info).not.toHaveBeenCalled();
+		expect(output.warn).toHaveBeenCalledTimes(1);
+		const log = parseLast(output.warn);
+		expect(log.level).toBe('warn');
+		expect(log.message).toBe('Request aborted');
+		expect(log.attributes).toEqual(expect.objectContaining({
+			method: 'GET',
+			path: '/api/test',
+			requestId: 'req-abort-123',
+			aborted: true,
+			outcome: 'aborted',
+		}));
 	});
 });

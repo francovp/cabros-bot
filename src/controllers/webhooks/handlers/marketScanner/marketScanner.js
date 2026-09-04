@@ -45,7 +45,7 @@ function resolveDryRun(req) {
 
 function postMarketScannerAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = (req && req.requestId) || uuidv4();
 		const startTime = Date.now();
 
 		try {

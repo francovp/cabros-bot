@@ -404,7 +404,7 @@ function validatePresetConfig(preset, reqBody = {}) {
 
 function postRunPreset(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = (req && req.requestId) || uuidv4();
 		const startTime = Date.now();
 
 		try {
