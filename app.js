@@ -10,6 +10,10 @@ const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
 
+// Structured request logging — attach before response-producing middleware so
+// parser and rate-limit failures are included in request telemetry.
+app.use(require('./src/lib/requestLogger'));
+
 // Tell express to use body-parser's urlencoded parsing
 app.use(express.urlencoded({ extended: false }));
 // Tell express to use body-parser's JSON and text parsing

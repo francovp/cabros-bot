@@ -49,7 +49,7 @@ class NewsMonitorHandler {
    * @returns {void}
    */
 	async handleRequest(req, res) {
-		const requestId = uuidv4();
+		const requestId = (req && req.requestId) || uuidv4();
 		const startTime = Date.now();
 		const tokenUsage = new TokenUsageTracker();
 

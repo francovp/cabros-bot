@@ -9,7 +9,7 @@ const sentryService = require('../../../../services/monitoring/SentryService');
 
 function postVolumeConfirmation() {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = (req && req.requestId) || uuidv4();
 		const startTime = Date.now();
 
 		try {
