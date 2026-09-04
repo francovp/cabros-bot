@@ -9,6 +9,7 @@ const request = require('supertest');
 const { MainClient } = require('binance');
 const { getRoutes } = require('../../src/routes');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
+const { binanceOrderAuditService } = require('../../src/services/trading/BinanceOrderAuditService');
 
 function exchangeInfo() {
 	return {
@@ -469,11 +470,17 @@ describe('Binance orders API', () => {
 			.expect(200);
 
 		expect(status.body.featureFlags.binanceTrading).toBe(true);
+		expect(status.body.featureFlags.binanceOrderAudit).toBe(false);
 		expect(status.body.dependencies.binanceTrading).toMatchObject({
 			enabled: true,
 			configured: true,
 			ready: true,
 			environment: 'testnet',
+		});
+		expect(status.body.dependencies.binanceOrderAudit).toMatchObject({
+			enabled: false,
+			collection: 'binanceOrderAudit',
+			retentionDays: 30,
 		});
 		expect(capabilities.body.dependencies.binanceTrading).toEqual(status.body.dependencies.binanceTrading);
 	});
@@ -822,6 +829,147 @@ describe('Binance orders API', () => {
 				.expect(502);
 
 			expect(response.body.code).toBe('BINANCE_QUERY_FAILED');
+		});
+	});
+
+	describe('audit logging for Binance mutations', () => {
+		let recordMutationSpy;
+
+		beforeEach(() => {
+			recordMutationSpy = jest.spyOn(binanceOrderAuditService, 'recordMutation').mockResolvedValue({});
+		});
+
+		afterEach(() => {
+			recordMutationSpy.mockRestore();
+		});
+
+		it('records an audit log for live order placement', async () => {
+			client.getAvgPrice = jest.fn().mockResolvedValue({ price: '50000.00' });
+			client.submitNewOrder = jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				orderId: 991,
+				clientOrderId: 'cabros-audit-live',
+				transactTime: 1710000000000,
+				price: '0.00000000',
+				origQty: '0.00500000',
+				executedQty: '0.00500000',
+				cummulativeQuoteQty: '250.00000000',
+				status: 'FILLED',
+				timeInForce: 'GTC',
+				type: 'MARKET',
+				side: 'BUY',
+			});
+
+			const response = await request(app)
+				.post('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'MARKET',
+					quantity: 0.005,
+					clientOrderId: 'cabros-audit-live',
+					dryRun: false,
+				})
+				.expect(201);
+
+			expect(response.body.success).toBe(true);
+			expect(recordMutationSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					action: 'PLACE',
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'MARKET',
+					status: 'FILLED',
+					binanceOrderId: 991,
+				}),
+			);
+		});
+
+		it('skips audit log for dry-run order placement', async () => {
+			const response = await request(app)
+				.post('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'LIMIT',
+					quantity: '0.005',
+					price: '50000',
+					dryRun: true,
+				})
+				.expect(200);
+
+			expect(response.body.dryRun).toBe(true);
+			expect(recordMutationSpy).not.toHaveBeenCalled();
+		});
+
+		it('records an audit log for order cancellation', async () => {
+			client.cancelOrder = jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				orderId: 42,
+				origClientOrderId: 'cabros-cancel-audit',
+				clientOrderId: 'cancel-client-order',
+				price: '50000.00000000',
+				origQty: '0.00500000',
+				executedQty: '0.00000000',
+				cummulativeQuoteQty: '0.00000000',
+				status: 'CANCELED',
+				timeInForce: 'GTC',
+				type: 'LIMIT',
+				side: 'BUY',
+			});
+
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', orderId: 42 })
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(recordMutationSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					action: 'CANCEL',
+					symbol: 'BTCUSDT',
+					status: 'CANCELED',
+					binanceOrderId: 42,
+				}),
+			);
+		});
+
+		it('fails open without failing the order when audit logging rejects', async () => {
+			recordMutationSpy.mockRejectedValue(new Error('Firestore unavailable'));
+			client.getAvgPrice = jest.fn().mockResolvedValue({ price: '50000.00' });
+			client.submitNewOrder = jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				orderId: 992,
+				clientOrderId: 'cabros-audit-failopen',
+				transactTime: 1710000000000,
+				price: '0.00000000',
+				origQty: '0.00500000',
+				executedQty: '0.00500000',
+				cummulativeQuoteQty: '250.00000000',
+				status: 'FILLED',
+				timeInForce: 'GTC',
+				type: 'MARKET',
+				side: 'BUY',
+			});
+
+			const response = await request(app)
+				.post('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'MARKET',
+					quantity: 0.005,
+					clientOrderId: 'cabros-audit-failopen',
+					dryRun: false,
+				})
+				.expect(201);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.order.orderId).toBe(992);
 		});
 	});
 });

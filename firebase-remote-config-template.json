@@ -363,6 +363,20 @@
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
+    },
+    "ENABLE_BINANCE_ORDER_AUDIT": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable structured Firestore audit logging for Binance order mutations",
+      "valueType": "BOOLEAN"
+    },
+    "BINANCE_ORDER_AUDIT_RETENTION_DAYS": {
+      "defaultValue": {
+        "value": "30"
+      },
+      "description": "Audit log retention in days before Firestore TTL expiry",
+      "valueType": "NUMBER"
     }
   },
   "version": {
