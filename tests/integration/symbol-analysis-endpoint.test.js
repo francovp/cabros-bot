@@ -133,6 +133,27 @@ describe('Symbol analysis endpoint', () => {
 		}));
 	});
 
+	it('omits empty-evidence confluence from decision reasons', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: 100 },
+				technical_indicators: { rsi: 50, atr: 4 },
+			},
+			confluence: { recommendation: 'BUY', confidence: 'HIGH', signals_agree: true },
+			news: { count: 0, latest: [] },
+			sentiment: { posts_analyzed: 0 },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT' })
+			.expect(200);
+
+		expect(res.body.analysis.decision.reasons).not.toContain('Confluencia: BUY');
+		expect(res.body.alertText).not.toContain('Confianza: HIGH');
+	});
+
 	it('rejects malformed symbols before calling TradingView MCP', async () => {
 		const res = await request(app)
 			.post('/api/webhook/symbol-analysis')
@@ -190,6 +211,7 @@ describe('Symbol analysis endpoint', () => {
 				volatility: { atr: 4 },
 			},
 			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+			news: { count: 1 },
 		});
 
 		const atrRes = await request(app)
@@ -229,6 +251,7 @@ describe('Symbol analysis endpoint', () => {
 				technical_indicators: { rsi: 50, atr: 2 },
 			},
 			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+			news: { count: 1 },
 		});
 
 		const res = await request(app)
@@ -248,6 +271,7 @@ describe('Symbol analysis endpoint', () => {
 				technical_indicators: { atr: 4 },
 			},
 			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+			news: { count: 1 },
 		});
 
 		const res = await request(app)
@@ -271,6 +295,7 @@ describe('Symbol analysis endpoint', () => {
 				support_resistance: { nearest_resistance: 105 },
 			},
 			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+			news: { count: 1 },
 		});
 
 		const res = await request(app)
@@ -290,6 +315,7 @@ describe('Symbol analysis endpoint', () => {
 				technical_indicators: { rsi: 50, atr: 4 },
 			},
 			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+			news: { count: 1 },
 		});
 
 		const res = await request(app)
@@ -337,6 +363,7 @@ describe('Symbol analysis endpoint', () => {
 				technical_indicators: { RSI: 50, ATR: 4 },
 			},
 			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+			news: { count: 1 },
 		});
 
 		const res = await request(app)
