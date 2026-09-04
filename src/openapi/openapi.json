@@ -4699,6 +4699,11 @@
           },
           "timeframe": {
             "type": "string"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "When true, validates the request and returns a dryRun response without invoking the TradingView MCP volume_confirmation_analysis call. Useful for probe requests that want to avoid the ~360s MCP budget.",
+            "default": false
           }
         }
       },
@@ -4762,6 +4767,11 @@
           "include_multi_timeframe": {
             "type": "boolean",
             "default": false
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "When true, validates the request and returns a dryRun response without invoking the TradingView MCP coin_analysis (or multi_timeframe_analysis) call. Useful for probe requests that want to avoid the ~120s MCP budget.",
+            "default": false
           }
         },
         "additionalProperties": false
@@ -4777,6 +4787,11 @@
         "properties": {
           "success": {
             "type": "boolean"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "Set to true on the dry-run response shape when dryRun is requested. When true, alertText and analysis are not produced (analysis is null).",
+            "default": false
           },
           "symbol": {
             "type": "string"
@@ -4797,7 +4812,8 @@
             "type": "string",
             "enum": [
               "complete",
-              "partial"
+              "partial",
+              "dry-run"
             ]
           },
           "analysis": {

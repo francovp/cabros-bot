@@ -135,4 +135,53 @@ describe('Volume confirmation endpoint', () => {
 			volumeRatio: null,
 		}));
 	});
+
+	it('short-circuits to a dryRun response without calling TradingView MCP when dryRun query is set', async () => {
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation?dryRun=true')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', timeframe: '1h' })
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: true,
+			dryRun: true,
+			symbol: 'BINANCE:BTCUSDT',
+			exchange: 'BINANCE',
+			asset: 'BTCUSDT',
+			timeframe: '1h',
+			confirmed: null,
+			decision: 'unknown',
+			volumeRatio: null,
+			analysis: null,
+		}));
+		expect(tradingViewMcpService.callVolumeConfirmation).not.toHaveBeenCalled();
+	});
+
+	it('short-circuits to a dryRun response when dryRun body field is true', async () => {
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', dryRun: true })
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: true,
+			dryRun: true,
+			decision: 'unknown',
+			analysis: null,
+		}));
+		expect(tradingViewMcpService.callVolumeConfirmation).not.toHaveBeenCalled();
+	});
+
+	it('still rejects malformed symbols on the dryRun path before any MCP call', async () => {
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation?dryRun=true')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BTCUSDT' })
+			.expect(400);
+
+		expect(res.body).toEqual(expect.objectContaining({ code: 'INVALID_REQUEST' }));
+		expect(tradingViewMcpService.callVolumeConfirmation).not.toHaveBeenCalled();
+	});
 });

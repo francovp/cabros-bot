@@ -850,6 +850,7 @@ Run TradingView MCP `volume_confirmation_analysis` on demand and return structur
 
 - `symbol`: Required `EXCHANGE:SYMBOL` identifier.
 - `timeframe`: Optional indicator interval. Defaults to `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` or `1h`.
+- `dryRun`: Optional. When `true` (or `?dryRun=true`), validates the request and returns the parsed `symbol`/`exchange`/`timeframe` echo with `dryRun: true`, `decision: 'unknown'`, `volumeRatio: null`, and `analysis: null` — no MCP call is made. Useful for validating request shape before paying the ~360s MCP budget.
 
 **Response (JSON):**
 ```json
@@ -887,6 +888,8 @@ Analyze one `EXCHANGE:SYMBOL` with TradingView MCP and return the Spanish report
   "includeMultiTimeframe": true
 }
 ```
+
+- `dryRun`: Optional. When `true` (or `?dryRun=true`), validates the request and returns the parsed `symbol`/`exchange`/`timeframe`/`analysisMode`/`includeMultiTimeframe` echo with `dryRun: true`, `side: null`, `analysis: null`, and `analysisStatus: 'dry-run'` — no MCP `coin_analysis` (or `multi_timeframe_analysis`) call is made. Useful for probe requests that want to avoid the ~120s MCP budget.
 
 The response includes `alertText`, normalized price/volume/indicator/signal/assessment data, sentiment/news/confluence and multi-timeframe results when requested, plus directional `risk` and `decision` metadata. `decision.action` is `BUY` or `SELL` only when the data and risk levels are sufficient; otherwise it is `NO_TRADE`. This endpoint never delivers notifications or submits orders. Invalid symbols return `400 INVALID_REQUEST`, TradingView failures return `502 SYMBOL_ANALYSIS_FAILED`, and deadline expiry returns `504 SYMBOL_ANALYSIS_TIMEOUT`.
 
