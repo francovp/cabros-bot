@@ -2,6 +2,7 @@ const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoS
 const { jobService } = require('../services/jobs/JobService');
 const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor');
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
+const alertStorageService = require('../services/storage/AlertStorageService');
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
 
@@ -196,6 +197,132 @@ const jobsCommand = async (context) => {
 		}
 		try {
 			await context.reply('No pude consultar los jobs ahora mismo. Intenta nuevamente más tarde.');
+		} catch (replyError) {
+			console.error('Failed to send error reply:', replyError);
+		}
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
+
+const HISTORY_DEFAULT_LIMIT = 5;
+const HISTORY_MAX_LIMIT = 20;
+const HISTORY_FETCH_LIMIT = 100;
+const HISTORY_COMMAND_TIMEOUT_MS = 8000;
+const HISTORY_STATUS_VALUES = new Set(['delivered', 'failed', 'partial']);
+
+function parseHistoryFilters(args) {
+	const first = String(args.positionals[0] || '').trim();
+	const second = String(args.positionals[1] || '').trim();
+	const isStatusCommand = ['status', 'estado'].includes(first.toLowerCase());
+	const rawStatus = isStatusCommand ? (second || args.options.status) : args.options.status;
+	const parsedLimit = Number(args.options.limit);
+
+	return {
+		symbol: first && !isStatusCommand ? first.toUpperCase() : undefined,
+		status: HISTORY_STATUS_VALUES.has(String(rawStatus || '').toLowerCase())
+			? String(rawStatus).toLowerCase()
+			: undefined,
+		limit: Number.isInteger(parsedLimit) && parsedLimit > 0
+			? Math.min(parsedLimit, HISTORY_MAX_LIMIT)
+			: HISTORY_DEFAULT_LIMIT,
+	};
+}
+
+function getAlertDeliveryStatus(alert) {
+	const results = Array.isArray(alert.deliveryResults) ? alert.deliveryResults : [];
+	if (results.length === 0) return 'unknown';
+	const delivered = results.filter((result) => result && result.success).length;
+	if (delivered === results.length) return 'delivered';
+	if (delivered === 0) return 'failed';
+	return 'partial';
+}
+
+function matchesHistoryFilters(alert, filters) {
+	if (filters.symbol) {
+		const symbol = String(alert.symbol || '').toUpperCase();
+		const exchange = alert.exchange ? `${String(alert.exchange).toUpperCase()}:${symbol}` : symbol;
+		if (filters.symbol !== symbol && filters.symbol !== exchange) return false;
+	}
+	return !filters.status || getAlertDeliveryStatus(alert) === filters.status;
+}
+
+function escapeTelegramText(value) {
+	return String(value ?? '').replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+}
+
+function formatHistoryTime(receivedAt) {
+	const date = new Date(receivedAt);
+	return Number.isNaN(date.getTime()) ? 'fecha desconocida' : `${date.toISOString().slice(11, 16)} UTC`;
+}
+
+function formatHistoryDelivery(results) {
+	if (!Array.isArray(results) || results.length === 0) return 'no registrada';
+	return results
+		.filter((result) => result && result.channel)
+		.map((result) => `${escapeTelegramText(result.channel)} ${result.success ? 'OK' : 'FALLÓ'}`)
+		.join(', ') || 'no registrada';
+}
+
+function formatAlertHistory(alerts, limit) {
+	const lines = [`*Historial de alertas* \\(últimas ${limit}\\)`, ''];
+	alerts.forEach((alert, index) => {
+		const symbol = escapeTelegramText(alert.symbol || 'desconocido');
+		const sentiment = escapeTelegramText(alert.enrichmentData?.sentiment || 'N/D');
+		lines.push(`${index + 1}\\. *${symbol}* \\- ${escapeTelegramText(formatHistoryTime(alert.receivedAt))}`);
+		lines.push(`   Sentimiento: ${sentiment} | Enriquecida: ${alert.enriched ? 'sí' : 'no'}`);
+		lines.push(`   Entrega: ${formatHistoryDelivery(alert.deliveryResults)}`);
+		lines.push('');
+	});
+	return lines.join('\n').trim();
+}
+
+const alertHistoryCommand = async (context) => {
+	const chatId = getChatId(context);
+	const args = parseCommandArgs(context);
+	const filters = parseHistoryFilters(args);
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.history',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/history',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+			'query.symbol': filters.symbol || 'all',
+		},
+	});
+
+	try {
+		if (!alertStorageService.isEnabled()) {
+			await context.reply('El historial de alertas está desactivado — pide a un operador que active ENABLE_FIRESTORE_ALERT_STORAGE');
+			return;
+		}
+
+		const result = await withTimeout(
+			() => alertStorageService.listAlerts({ limit: HISTORY_FETCH_LIMIT }),
+			HISTORY_COMMAND_TIMEOUT_MS,
+			'alert history read timed out',
+		);
+		const alerts = (Array.isArray(result?.alerts) ? result.alerts : [])
+			.filter((alert) => matchesHistoryFilters(alert, filters))
+			.slice(0, filters.limit);
+		if (alerts.length === 0) {
+			const suffix = filters.symbol ? ` para ${escapeTelegramText(filters.symbol)}` : '';
+			await context.reply(`No hay alertas recientes${suffix}.`, { parse_mode: 'MarkdownV2' });
+			return;
+		}
+		await context.reply(formatAlertHistory(alerts, filters.limit), { parse_mode: 'MarkdownV2' });
+	} catch (error) {
+		console.error('[commands] /history failed:', error.message);
+		const expected = error.name === 'AbortError'
+			|| error.name === 'TimeoutError'
+			|| error.code === 'TIMEOUT'
+			|| error.code === alertStorageService.STORAGE_UNAVAILABLE_CODE;
+		if (!expected) {
+			sentryService.captureRuntimeError({ channel: 'telegram', error, extra: { command: 'history', chatId } });
+		}
+		try {
+			await context.reply('No pude consultar el historial ahora mismo. Intenta nuevamente más tarde.');
 		} catch (replyError) {
 			console.error('Failed to send error reply:', replyError);
 		}
@@ -505,6 +632,7 @@ function buildHelpMessage() {
 		'• `/outcomes <simbolo>` — Rendimiento reciente de señales evaluadas \\(alias: `/rendimiento`\\)',
 		'  _Ej: `/outcomes BINANCE:BTCUSDT`_',
 		'• `/jobs [jobId]` — Lista jobs recientes o muestra su estado \\(alias: `/trabajos`\\)',
+		'• `/history [simbolo] [limit]` — Consulta alertas recientes \\(alias: `/alertas`; admite `status=failed|partial|delivered`\\)',
 		'• `/help` / `/start` — Muestra este mensaje de ayuda',
 	].join('\n');
 }
@@ -627,6 +755,7 @@ module.exports = {
 	expandedAnalysisCmd,
 	marketScannerCmd,
 	jobsCommand,
+	alertHistoryCommand,
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,

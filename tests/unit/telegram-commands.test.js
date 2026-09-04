@@ -22,15 +22,23 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
 }));
 
+jest.mock('../../src/services/storage/AlertStorageService', () => ({
+	isEnabled: jest.fn(),
+	listAlerts: jest.fn(),
+	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
+}));
+
 const { captureRuntimeError } = require('../../src/services/monitoring/SentryService');
 const { jobService } = require('../../src/services/jobs/JobService');
 const { getNewsMonitor } = require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const {
 	cryptoBotCmd,
 	expandedAnalysisCmd,
 	marketScannerCmd,
 	jobsCommand,
+	alertHistoryCommand,
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
@@ -256,6 +264,80 @@ describe('Telegram TradingView commands', () => {
 		expect(context.reply).toHaveBeenCalledWith('Noticias listas. Analizados: 2, cache: 1, alertas: 1.');
 	});
 
+	describe('alertHistoryCommand', () => {
+		it('reports when alert storage is disabled', async () => {
+			alertStorageService.isEnabled.mockReturnValue(false);
+			const context = buildContext('/history');
+
+			await alertHistoryCommand(context);
+
+			expect(alertStorageService.listAlerts).not.toHaveBeenCalled();
+			expect(context.reply).toHaveBeenCalledWith(
+				'El historial de alertas está desactivado — pide a un operador que active ENABLE_FIRESTORE_ALERT_STORAGE',
+			);
+		});
+
+		it('filters by symbol and formats delivery status as MarkdownV2', async () => {
+			alertStorageService.isEnabled.mockReturnValue(true);
+			alertStorageService.listAlerts.mockResolvedValue({
+				alerts: [
+					{
+						symbol: 'BTCUSDT',
+						receivedAt: '2026-08-31T12:34:00.000Z',
+						enriched: true,
+						enrichmentData: { sentiment: 'BULLISH' },
+						deliveryResults: [
+							{ channel: 'telegram', success: true },
+							{ channel: 'whatsapp', success: false },
+						],
+					},
+					{ symbol: 'ETHUSDT', receivedAt: '2026-08-31T12:30:00.000Z' },
+				],
+			});
+			const context = buildContext('/history BTCUSDT limit=10');
+
+			await alertHistoryCommand(context);
+
+			expect(alertStorageService.listAlerts).toHaveBeenCalledWith({ limit: 100 });
+			expect(context.reply).toHaveBeenCalledWith(
+				expect.stringContaining('BTCUSDT'),
+				{ parse_mode: 'MarkdownV2' },
+			);
+			const message = context.reply.mock.calls[0][0];
+			expect(message).toContain('12:34 UTC');
+			expect(message).toContain('BULLISH');
+			expect(message).toContain('telegram OK');
+			expect(message).toContain('whatsapp FALLÓ');
+			expect(message).not.toContain('ETHUSDT');
+		});
+
+		it('filters failed deliveries and clamps the requested limit', async () => {
+			alertStorageService.isEnabled.mockReturnValue(true);
+			alertStorageService.listAlerts.mockResolvedValue({
+				alerts: [
+					{
+						symbol: 'BTCUSDT',
+						receivedAt: '2026-08-31T12:34:00.000Z',
+						deliveryResults: [{ channel: 'telegram', success: false }],
+					},
+					{
+						symbol: 'ETHUSDT',
+						receivedAt: '2026-08-31T12:30:00.000Z',
+						deliveryResults: [{ channel: 'telegram', success: true }],
+					},
+				],
+			});
+			const context = buildContext('/alertas estado failed limit=99');
+
+			await alertHistoryCommand(context);
+
+			const message = context.reply.mock.calls[0][0];
+			expect(message).toContain('BTCUSDT');
+			expect(message).not.toContain('ETHUSDT');
+			expect(message).toContain('últimas 20');
+		});
+	});
+
 	describe('helpCmd and buildHelpMessage', () => {
 		it('builds a Telegram command menu from the same inventory as help', () => {
 			const menu = getTelegramCommandMenu();
@@ -267,6 +349,7 @@ describe('Telegram TradingView commands', () => {
 				{ command: 'scanner', description: 'Escaneo de mercado en TradingView' },
 				{ command: 'noticias', description: 'Monitor y análisis de noticias con IA' },
 				{ command: 'outcomes', description: 'Rendimiento reciente de señales evaluadas' },
+				{ command: 'history', description: 'Consulta alertas recientes' },
 				{ command: 'help', description: 'Muestra este mensaje de ayuda' },
 				{ command: 'start', description: 'Muestra este mensaje de ayuda' },
 			]);
@@ -292,6 +375,8 @@ describe('Telegram TradingView commands', () => {
 			expect(message).toContain('/rendimiento');
 			expect(message).toContain('/jobs');
 			expect(message).toContain('/trabajos');
+			expect(message).toContain('/history');
+			expect(message).toContain('/alertas');
 			expect(message).toContain('/help');
 			expect(message).toContain('/start');
 

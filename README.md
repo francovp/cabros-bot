@@ -1905,6 +1905,17 @@ List recent TradingView jobs or inspect one job's progress, terminal status, com
 /jobs 4f0c2f2e-7e6b-4c4c-8f9a-2e1a3c4b5d6e
 ```
 
+### /history `[symbol]` (alias: `/alertas`)
+
+List recent stored alerts from Telegram when `ENABLE_FIRESTORE_ALERT_STORAGE=true`. Results include symbol, UTC time, sentiment, enrichment state, and per-channel delivery status. Use `status=delivered`, `status=partial`, or `status=failed` to filter delivery results; the default is 5 alerts and the maximum is 20.
+
+**Examples:**
+```
+/history
+/history BTCUSDT limit=10
+/alertas estado failed limit=20
+```
+
 ### /noticias `[options]` (alias: `/news`)
 
 Run the news monitor and AI sentiment analysis.
