@@ -1065,6 +1065,42 @@ ENABLE_FIRESTORE_SCANNER_PRESETS (scanner preset persistence)
 3. **Sentry reporting (005-sentry-runtime-errors)**: Use a thin monitoring service (`src/services/monitoring/SentryService.js`) that wraps `@sentry/node` for runtime errors, optional tracing/spans, and Sentry Logs capture of configured console levels. Gated by `ENABLE_SENTRY` and `SENTRY_DSN`; MUST NOT change HTTP responses or notification fallbacks and SHOULD be stubbed/mocked in tests (no real Sentry traffic by default).
 4. **Telegram admin alerts**: Send critical errors to admin chat if configured
 
+### Operator-Incident Snooze (Issue #762)
+
+`/api/ops/snooze` provides a small, in-process operator surface for temporarily suppressing all outgoing alerts on a chosen set of channels (use case: flash crash, exchange incident, FOMC window). The snooze is in-process per replica by default and fails open on read/write errors. Optional Firestore cross-replica persistence is intentionally out of scope for the initial cut.
+
+**Core Components**:
+- `src/services/notification/SnoozeService.js` — `SnoozeService` class plus module-level `snoozeService` singleton. Owns the active snooze state, exposes `activate({ durationMs, reason, channels, actorIp })`, `cancel()`, `isSnoozed(channel)`, `getActive()`, and `getStatus()`. Duration is clamped to `[60000, 21600000]` (1 minute to 6 hours). `isSnoozed` and `getActive` self-expire on read when the clock passes `expiresAt`. `subscribe(listener)` emits `activated`/`reactivated`/`cancelled`/`expired` events for downstream tooling.
+- `src/controllers/ops/snooze.js` — `getSnooze`, `postSnooze`, `deleteSnooze` HTTP handlers. Validates `durationMs` and rejects out-of-range or non-numeric values with `400 INVALID_DURATION`.
+- `src/services/notification/NotificationManager.js` — `sendToAll` and `sendToChannels` short-circuit channels that are currently snoozed, returning `SendResult` objects with `success: false, category: 'SNOOZED', snoozedUntil: <iso>` and continue dispatching the remaining channels. Snoozed alerts are still persisted to Firestore (existing fire-and-forget path) so post-incident triage can replay them.
+- `src/controllers/status.js` — Exposes the active snooze under `dependencies.snooze` (`{ active, activatedAt, expiresAt, reason, channels }` or `{ active: false }`).
+- `src/routes/index.js` — Mounts `GET /api/ops/snooze` (admin.viewer) and `POST/DELETE /api/ops/snooze` (admin.operator).
+
+**Configuration**:
+- No new env vars: snooze is in-process per replica with the in-memory map as the source of truth for the delivery short-circuit. Reads/writes fail open on errors.
+
+**Snooze semantics**:
+- `durationMs` outside `[60000, 21600000]` is rejected with `400 INVALID_DURATION`; non-numeric types return the same.
+- `channels` defaults to `["telegram", "whatsapp", "discord"]` when omitted; unknown channel names are filtered out and deduped.
+- `reason` is truncated to 200 characters; non-string values are coerced to empty string.
+- `actorIp` is captured from `req.ip` when not provided; truncated to 64 chars.
+- SNOOZED SendResults are distinct from dead-letter and external-failure outcomes; existing admin failure paging, dead-letter recording, and redrive processing are unchanged.
+
+**Failure and Edge Case Behavior**:
+- In-memory map is the source of truth per process; cross-replica consistency is intentionally not in scope.
+- Errors reading the clock or persisting state are logged but never block alert delivery (fail-open).
+- `cancel()` is idempotent and returns `{ active: false }` whether or not a snooze was active.
+- `subscribe()` listener errors are isolated so other listeners still fire.
+
+**Coverage**:
+- `tests/unit/snooze-service.test.js` — activate/cancel/isSnoozed/getStatus, duration clamping, channel normalization, automatic expiry, subscribe/unsubscribe.
+- `tests/unit/snooze-controller.test.js` — request validation and response shapes for `GET`/`POST`/`DELETE`.
+- `tests/unit/notification-manager-snooze.test.js` — `sendToAll` and `sendToChannels` short-circuit behavior with mixed snoozed and clear channels.
+- `tests/integration/snooze-endpoint.test.js` — full HTTP path for the new endpoints.
+- `tests/integration/status-endpoint.test.js` — `dependencies.snooze` reporting on `/api/status`.
+
+No new environment variable, Remote Config parameter, or notification contract was added; the in-memory map is the source of truth and the existing dead-letter and redrive pipelines are unchanged.
+
 ## Runtime Error Monitoring with Sentry (005-sentry-runtime-errors)
 
 This feature introduces backend runtime error monitoring using Sentry's Node SDK (`@sentry/node`) with a strong focus on **non-intrusive** instrumentation.

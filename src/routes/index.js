@@ -22,6 +22,7 @@ const {
 	postRetryFailedJob,
 } = require('../controllers/webhooks/handlers/jobs/jobs');
 const { listAlerts, getAlertById, replayAlert, summarizeAlerts, exportAlerts, listReplays } = require('../controllers/alerts/alerts');
+const { getSnooze, postSnooze, deleteSnooze } = require('../controllers/ops/snooze');
 const { listOutcomes, summarizeOutcomes } = require('../controllers/outcomes/outcomes');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
@@ -80,6 +81,10 @@ function getRoutes(botOrGetter) {
 
 	router.get('/status', ...adminRead, getApiStatus);
 	router.get('/capabilities', ...adminRead, getApiStatus);
+
+	router.get('/ops/snooze', ...adminRead, getSnooze);
+	router.post('/ops/snooze', ...adminWrite, postSnooze);
+	router.delete('/ops/snooze', ...adminWrite, deleteSnooze);
 
 	return router;
 }
