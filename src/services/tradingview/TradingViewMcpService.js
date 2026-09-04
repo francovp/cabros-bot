@@ -8,6 +8,7 @@ const {
 	getRiskRewardRatio,
 } = require('./expandedAnalysisAlertReport');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
 const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -406,6 +407,31 @@ class TradingViewMcpService {
 		cleanBudget();
 		const enrichmentStatus = optionalEnrichmentPartial ? 'partial' : 'full';
 		this._recordEnrichmentStatus(enrichmentStatus);
+
+		if (options.tokenUsage) {
+			if (typeof options.tokenUsage.addSource === 'function') {
+				if (result.analysis?.tokenUsage) {
+					options.tokenUsage.addSource('tradingviewMcp', result.analysis.tokenUsage);
+				}
+				if (volumeAnalysis?.tokenUsage) {
+					options.tokenUsage.addSource('volumeConfirmation', volumeAnalysis.tokenUsage);
+				}
+				if (confluenceAnalysis?.tokenUsage) {
+					options.tokenUsage.addSource('confluence', confluenceAnalysis.tokenUsage);
+				}
+			} else if (typeof options.tokenUsage.addUsage === 'function') {
+				if (result.analysis?.tokenUsage) {
+					options.tokenUsage.addUsage(result.analysis.tokenUsage);
+				}
+				if (volumeAnalysis?.tokenUsage) {
+					options.tokenUsage.addUsage(volumeAnalysis.tokenUsage);
+				}
+				if (confluenceAnalysis?.tokenUsage) {
+					options.tokenUsage.addUsage(confluenceAnalysis.tokenUsage);
+				}
+			}
+		}
+
 		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis, confluenceAnalysis, multiTimeframeAnalysis, enrichmentStatus);
 	}
 
@@ -619,16 +645,33 @@ class TradingViewMcpService {
 			throw new Error(errorMessage);
 		}
 
+		let parsed;
 		if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
-			return callResult.structuredContent;
+			parsed = callResult.structuredContent;
+		} else {
+			const contentText = this._extractContentText(callResult);
+			if (!contentText) {
+				throw new Error(`TradingView MCP tool ${toolName} returned empty content`);
+			}
+			parsed = this._parseToolJson(contentText);
 		}
 
-		const contentText = this._extractContentText(callResult);
-		if (!contentText) {
-			throw new Error(`TradingView MCP tool ${toolName} returned empty content`);
+		if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+			const rawUsage = callResult.usage
+				|| callResult._meta?.usage
+				|| callResult.meta?.usage
+				|| toolResponse.usage
+				|| parsed.usage
+				|| parsed.tokenUsage;
+			if (rawUsage && !parsed.tokenUsage) {
+				const normalized = normalizeUsageMetadata(rawUsage);
+				if (normalized) {
+					parsed.tokenUsage = normalized;
+				}
+			}
 		}
 
-		return this._parseToolJson(contentText);
+		return parsed;
 	}
 
 	_extractContentText(callResult) {
@@ -946,6 +989,9 @@ class TradingViewMcpService {
 			extraText,
 			confluenceData: confluenceAnalysis || null,
 			multiTimeframeData: multiTimeframeAnalysis || null,
+			...(analysis?.tokenUsage ? { tokenUsage: analysis.tokenUsage } : {}),
+			...(volumeAnalysis?.tokenUsage ? { volumeTokenUsage: volumeAnalysis.tokenUsage } : {}),
+			...(confluenceAnalysis?.tokenUsage ? { confluenceTokenUsage: confluenceAnalysis.tokenUsage } : {}),
 			...riskMetadata,
 		};
 	}
@@ -1044,10 +1090,14 @@ class TradingViewMcpService {
 			return result;
 		}
 
+		const usage = result.tokenUsage || result.usage;
 		const keys = Object.keys(result);
-		if (keys.length === 1 && Object.prototype.hasOwnProperty.call(result, 'result')) {
+		if ((keys.length === 1 || (keys.length === 2 && (result.tokenUsage || result.usage))) && Object.prototype.hasOwnProperty.call(result, 'result')) {
 			const innerResult = result.result;
 			if (innerResult && typeof innerResult === 'object' && !Array.isArray(innerResult)) {
+				if (usage && !innerResult.tokenUsage) {
+					innerResult.tokenUsage = usage;
+				}
 				return innerResult;
 			}
 		}

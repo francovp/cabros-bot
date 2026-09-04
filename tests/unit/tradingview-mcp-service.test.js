@@ -1148,4 +1148,92 @@ describe('TradingViewMcpService', () => {
 			expect(service.hasActiveOutagePage).toBe(false);
 		});
 	});
+
+	describe('Token usage extraction and attribution', () => {
+		const { TokenUsageTracker } = require('../../src/lib/tokenUsage');
+
+		it('extracts tokenUsage from callResult.usage in _callTool', async () => {
+			const service = new TradingViewMcpService();
+			service._rpcRequest = jest.fn()
+				.mockResolvedValueOnce({ sessionId: 'session-1' })
+				.mockResolvedValueOnce({})
+				.mockResolvedValueOnce({
+					rpc: {
+						result: {
+							structuredContent: { price_data: { current_price: 50000 } },
+							usage: { prompt_tokens: 120, completion_tokens: 45 },
+						},
+					},
+				});
+
+			const result = await service._callTool('coin_analysis', { symbol: 'BTCUSDT' });
+			expect(result.tokenUsage).toEqual({
+				inputTokens: 120,
+				outputTokens: 45,
+				totalTokens: 165,
+			});
+		});
+
+		it('extracts tokenUsage from callResult._meta.usage in _callTool', async () => {
+			const service = new TradingViewMcpService();
+			service._rpcRequest = jest.fn()
+				.mockResolvedValueOnce({ sessionId: 'session-1' })
+				.mockResolvedValueOnce({})
+				.mockResolvedValueOnce({
+					rpc: {
+						result: {
+							content: [{ type: 'text', text: JSON.stringify({ price_data: { current_price: 50000 } }) }],
+							_meta: { usage: { prompt_tokens: 200, completion_tokens: 80 } },
+						},
+					},
+				});
+
+			const result = await service._callTool('coin_analysis', { symbol: 'BTCUSDT' });
+			expect(result.tokenUsage).toEqual({
+				inputTokens: 200,
+				outputTokens: 80,
+				totalTokens: 280,
+			});
+		});
+
+		it('attributes usage per tool into options.tokenUsage during enrichFromSignal', async () => {
+			const service = new TradingViewMcpService();
+			service.callCoinAnalysis = jest.fn().mockResolvedValue({
+				price_data: { current_price: 50000 },
+				market_sentiment: { overall_rating: 5 },
+				tokenUsage: { inputTokens: 500, outputTokens: 100 },
+			});
+			service.callVolumeConfirmation = jest.fn().mockResolvedValue({
+				volume_analysis: { volume_ratio: 1.5 },
+				tokenUsage: { inputTokens: 80, outputTokens: 20 },
+			});
+
+			const prevVolumeFlag = process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
+			process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = 'true';
+
+			const tokenUsage = new TokenUsageTracker();
+			const result = await service.enrichFromSignal(
+				{ symbol: 'BTCUSDT', exchange: 'BINANCE', timeframe: '1h', side: 'BUY' },
+				{ tokenUsage },
+			);
+
+			expect(result).toBeDefined();
+			expect(result.tokenUsage).toEqual({ inputTokens: 500, outputTokens: 100 });
+			expect(result.volumeTokenUsage).toEqual({ inputTokens: 80, outputTokens: 20 });
+
+			const json = tokenUsage.toJSON();
+			expect(json.bySource.tradingviewMcp).toEqual({
+				inputTokens: 500,
+				outputTokens: 100,
+				totalTokens: 600,
+			});
+			expect(json.bySource.volumeConfirmation).toEqual({
+				inputTokens: 80,
+				outputTokens: 20,
+				totalTokens: 100,
+			});
+
+			process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = prevVolumeFlag;
+		});
+	});
 });

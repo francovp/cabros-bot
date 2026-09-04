@@ -8,6 +8,7 @@ const {
 	deriveFallbackTradePlan,
 	calculateFallbackRiskLevels,
 } = require('../../../../services/tradingview/fallbackTradePlan');
+const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
 
 function mergeUnique(first = [], second = [], maxItems = 6) {
 	const result = [];
@@ -302,12 +303,12 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 			original_text: text,
 			tradingViewEnrichmentApplied: mcp.tradingViewEnrichmentApplied === true,
 			...(mcp.tradingViewEnrichmentStatus ? { tradingViewEnrichmentStatus: mcp.tradingViewEnrichmentStatus } : {}),
-				sentiment,
-				sentiment_score,
-				...(typeof gemini.sentiment_score_raw === 'number' && Number.isFinite(gemini.sentiment_score_raw)
-					? { sentiment_score_raw: gemini.sentiment_score_raw }
-					: {}),
-				...(sentimentConflict ? { sentimentConflict: true } : {}),
+			sentiment,
+			sentiment_score,
+			...(typeof gemini.sentiment_score_raw === 'number' && Number.isFinite(gemini.sentiment_score_raw)
+				? { sentiment_score_raw: gemini.sentiment_score_raw }
+				: {}),
+			...(sentimentConflict ? { sentimentConflict: true } : {}),
 			current_price: mcpCurrentPrice,
 			...(mcp.price_data ? { price_data: mcp.price_data } : {}),
 			insights,
@@ -466,6 +467,18 @@ async function enrichAlert(alert, options = {}) {
 		}
 	}
 
+	if (tokenUsage && typeof tokenUsage.addSource === 'function' && mcpEnrichedAlert) {
+		if (mcpEnrichedAlert.tokenUsage && (!tokenUsage.bySource || !tokenUsage.bySource.tradingviewMcp)) {
+			tokenUsage.addSource('tradingviewMcp', mcpEnrichedAlert.tokenUsage);
+		}
+		if (mcpEnrichedAlert.volumeTokenUsage && (!tokenUsage.bySource || !tokenUsage.bySource.volumeConfirmation)) {
+			tokenUsage.addSource('volumeConfirmation', mcpEnrichedAlert.volumeTokenUsage);
+		}
+		if (mcpEnrichedAlert.confluenceTokenUsage && (!tokenUsage.bySource || !tokenUsage.bySource.confluence)) {
+			tokenUsage.addSource('confluence', mcpEnrichedAlert.confluenceTokenUsage);
+		}
+	}
+
 	if (!isGeminiEnabled) {
 		if (mcpEnrichmentFailed) {
 			const fallbackPlan = await deriveFallbackTradePlan(text).catch(() => null);
@@ -503,8 +516,18 @@ async function enrichAlert(alert, options = {}) {
 		return mcpEnrichedAlert;
 	}
 
+	let geminiTracker = null;
+	if (tokenUsage && typeof tokenUsage.addSource === 'function') {
+		geminiTracker = new TokenUsageTracker();
+	}
+
 	try {
-		const geminiEnrichedAlert = await enrichWithGemini(text, tokenUsage);
+		const geminiEnrichedAlert = await enrichWithGemini(text, geminiTracker || tokenUsage);
+		if (tokenUsage && geminiTracker && typeof tokenUsage.addSource === 'function') {
+			if (geminiTracker.inputTokens > 0 || geminiTracker.outputTokens > 0) {
+				tokenUsage.addSource('geminiGrounding', geminiTracker);
+			}
+		}
 
 		if (mcpEnrichedAlert) {
 			return mergeEnrichmentData(text, geminiEnrichedAlert, mcpEnrichedAlert);
@@ -542,6 +565,12 @@ async function enrichAlert(alert, options = {}) {
 
 		return geminiEnrichedAlert;
 	} catch (error) {
+		if (tokenUsage && geminiTracker && typeof tokenUsage.addSource === 'function') {
+			if (geminiTracker.inputTokens > 0 || geminiTracker.outputTokens > 0) {
+				tokenUsage.addSource('geminiGrounding', geminiTracker);
+			}
+		}
+
 		if (mcpEnrichedAlert) {
 			console.warn('[Alert] Gemini grounding failed, using TradingView MCP enrichment:', error.message);
 			const guarded = applySignCoherenceGuard(mcpEnrichedAlert.sentiment, mcpEnrichedAlert.sentiment_score);
