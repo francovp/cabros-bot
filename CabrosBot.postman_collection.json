@@ -889,6 +889,100 @@
           ]
         },
         {
+          "name": "POST Canary Alert (dry run)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deliver\": false,\n  \"useTradingViewData\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/canary-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "canary-alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success (healthy)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"canary\": true,\n  \"success\": true,\n  \"overall\": \"healthy\",\n  \"mode\": \"dry_run\",\n  \"stages\": {\n    \"validation\": {\n      \"ok\": true,\n      \"status\": \"pass\",\n      \"parsedSymbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"ms\": 1\n    },\n    \"enrichment\": {\n      \"ok\": true,\n      \"status\": \"pass\",\n      \"provider\": \"none\",\n      \"enriched\": false,\n      \"skipped\": true,\n      \"ms\": 0\n    },\n    \"notification\": {\n      \"ok\": true,\n      \"status\": \"pass\",\n      \"channel\": \"none\",\n      \"channels\": [\"telegram\"],\n      \"delivered\": false,\n      \"ms\": 1\n    },\n    \"storage\": {\n      \"ok\": true,\n      \"status\": \"pass\",\n      \"collection\": \"alerts\",\n      \"checked\": false,\n      \"ms\": 0\n    }\n  },\n  \"totalMs\": 2,\n  \"executionTimeMs\": 2,\n  \"timestamp\": \"2026-09-04T08:00:00.000Z\"\n}"
+            },
+            {
+              "name": "404 Canary disabled",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Canary alert is not enabled\"\n}"
+            },
+            {
+              "name": "503 Pipeline unhealthy",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"canary\": true,\n  \"success\": false,\n  \"overall\": \"unhealthy\",\n  \"mode\": \"dry_run\",\n  \"stages\": {\n    \"validation\": {\n      \"ok\": true,\n      \"status\": \"pass\",\n      \"parsedSymbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"ms\": 1\n    },\n    \"enrichment\": {\n      \"ok\": true,\n      \"status\": \"pass\",\n      \"provider\": \"none\",\n      \"enriched\": false,\n      \"skipped\": true,\n      \"ms\": 0\n    },\n    \"notification\": {\n      \"ok\": true,\n      \"status\": \"pass\",\n      \"channel\": \"none\",\n      \"channels\": [\"telegram\"],\n      \"delivered\": false,\n      \"ms\": 1\n    },\n    \"storage\": {\n      \"ok\": false,\n      \"status\": \"fail\",\n      \"collection\": \"alerts\",\n      \"checked\": true,\n      \"error\": \"Firestore unavailable\",\n      \"ms\": 10\n    }\n  },\n  \"totalMs\": 12,\n  \"executionTimeMs\": 12,\n  \"timestamp\": \"2026-09-04T08:00:00.000Z\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Canary Alert (with delivery)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deliver\": true,\n  \"channels\": [\"telegram\"],\n  \"text\": \"[CANARY] Live delivery test for alert pipeline\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/canary-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "canary-alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success (delivered)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"canary\": true,\n  \"success\": true,\n  \"overall\": \"healthy\",\n  \"mode\": \"delivery\",\n  \"stages\": {\n    \"validation\": {\n      \"ok\": true,\n      \"status\": \"pass\",\n      \"parsedSymbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"ms\": 1\n    },\n    \"enrichment\": {\n      \"ok\": true,\n      \"status\": \"pass\",\n      \"provider\": \"none\",\n      \"enriched\": false,\n      \"skipped\": true,\n      \"ms\": 0\n    },\n    \"notification\": {\n      \"ok\": true,\n      \"status\": \"pass\",\n      \"channel\": \"telegram\",\n      \"channels\": [\"telegram\"],\n      \"delivered\": true,\n      \"ms\": 120\n    },\n    \"storage\": {\n      \"ok\": true,\n      \"status\": \"pass\",\n      \"collection\": \"alerts\",\n      \"checked\": false,\n      \"ms\": 0\n    }\n  },\n  \"totalMs\": 122,\n  \"executionTimeMs\": 122,\n  \"timestamp\": \"2026-09-04T08:00:00.000Z\"\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Send Message",
           "request": {
             "method": "POST",

@@ -120,7 +120,13 @@ function normalizeSymbol(symbol) {
 	if (!symbol || typeof symbol !== 'string') {
 		return null;
 	}
-	let cleaned = symbol.trim().toUpperCase().replace(/\s*\([A-Za-z0-9]+\)$/, '');
+	let cleaned = symbol.trim().toUpperCase();
+	if (cleaned.endsWith(')')) {
+		const openParenIndex = cleaned.lastIndexOf('(');
+		if (openParenIndex > 0 && /^[A-Za-z0-9]+$/.test(cleaned.slice(openParenIndex + 1, -1))) {
+			cleaned = cleaned.slice(0, openParenIndex).trim();
+		}
+	}
 	if (/^[A-Z]{6}$/.test(cleaned) && !cleaned.includes('/')) {
 		cleaned = `${cleaned.slice(0, 3)}/${cleaned.slice(3)}`;
 	}

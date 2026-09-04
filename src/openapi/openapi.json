@@ -333,6 +333,116 @@
         ]
       }
     },
+    "/api/webhook/canary-alert": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Execute synthetic alert pipeline validation canary",
+        "description": "Validates the full alert pipeline end-to-end across validation, enrichment, notification readiness, and optional storage probe stages without persisting synthetic alerts to database or broadcasting unless deliver: true is explicitly requested.",
+        "operationId": "postCanaryAlert",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UseTradingViewData"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Optional synthetic alert text",
+                    "example": "[CANARY] BINANCE:BTCUSDT synthetic alert pipeline probe"
+                  },
+                  "symbol": {
+                    "type": "string",
+                    "description": "Optional target symbol in EXCHANGE:SYMBOL or SYMBOL format",
+                    "example": "BINANCE:BTCUSDT"
+                  },
+                  "deliver": {
+                    "type": "boolean",
+                    "description": "Whether to actually dispatch notifications to configured channels. Defaults to false (dry run).",
+                    "default": false
+                  },
+                  "useTradingViewData": {
+                    "type": "boolean",
+                    "description": "Whether to use TradingView MCP data during enrichment stage",
+                    "default": false
+                  },
+                  "channels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "telegram",
+                        "whatsapp",
+                        "discord"
+                      ]
+                    },
+                    "description": "Optional subset of channels for delivery when deliver is true"
+                  },
+                  "telegramChatId": {
+                    "type": "string",
+                    "description": "Optional Telegram chat ID override when deliver is true"
+                  },
+                  "whatsappChatId": {
+                    "type": "string",
+                    "description": "Optional WhatsApp chat ID override when deliver is true"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Canary validation passed or degraded (fail-open)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanaryAlertResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Canary alert feature is disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Canary validation failed (unhealthy pipeline)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanaryAlertResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ]
+      }
+    },
     "/api/alerts": {
       "get": {
         "tags": [
@@ -3221,6 +3331,81 @@
       }
     },
     "schemas": {
+      "CanaryAlertResponse": {
+        "type": "object",
+        "required": [
+          "canary",
+          "success",
+          "overall",
+          "mode",
+          "stages",
+          "executionTimeMs",
+          "timestamp"
+        ],
+        "properties": {
+          "canary": {
+            "type": "boolean",
+            "example": true
+          },
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "overall": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded",
+              "unhealthy"
+            ],
+            "example": "healthy"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "dry_run",
+              "delivery"
+            ],
+            "example": "dry_run"
+          },
+          "stages": {
+            "type": "object",
+            "required": [
+              "validation",
+              "enrichment",
+              "notification",
+              "storage"
+            ],
+            "properties": {
+              "validation": {
+                "type": "object"
+              },
+              "enrichment": {
+                "type": "object"
+              },
+              "notification": {
+                "type": "object"
+              },
+              "storage": {
+                "type": "object"
+              }
+            }
+          },
+          "totalMs": {
+            "type": "integer",
+            "example": 45
+          },
+          "executionTimeMs": {
+            "type": "integer",
+            "example": 45
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-09-04T08:00:00.000Z"
+          }
+        }
+      },
       "JsonObject": {
         "type": "object",
         "additionalProperties": true

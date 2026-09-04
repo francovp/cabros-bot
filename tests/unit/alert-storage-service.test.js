@@ -1693,6 +1693,7 @@ describe('AlertStorageService', () => {
 		describe('summarizeAlerts()', () => {
 		it('counts recorded, not-applicable, and legacy unrecorded TradingView outcomes separately', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			jest.useFakeTimers({ now: new Date('2026-06-06T13:00:00.000Z') });
 			mockGet.mockResolvedValueOnce({
 				empty: false,
 				docs: [
@@ -2413,6 +2414,7 @@ describe('AlertStorageService', () => {
 
 		it('populates bySymbol metrics from plain alert text strings when candidate object properties are missing', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			jest.useFakeTimers({ now: new Date('2026-06-06T13:00:00.000Z') });
 			mockGet.mockResolvedValueOnce({
 				empty: false,
 				docs: [

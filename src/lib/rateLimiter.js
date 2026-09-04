@@ -9,7 +9,11 @@ const DEFAULT_MAX_REQUESTS = 100;
 // ponytail: fixed 1,000-request webhook bucket; split by API-key identity if isolation needs to scale.
 const WEBHOOK_MAX_REQUESTS = 1000;
 const DEFAULT_WINDOW_MS = 900000;
-const WEBHOOK_INGEST_PATHS = new Set(['/api/webhook/alert', '/api/webhook/message']);
+const WEBHOOK_INGEST_PATHS = new Set([
+	'/api/webhook/alert',
+	'/api/webhook/message',
+	'/api/webhook/canary-alert',
+]);
 const invalidConfigWarnings = new Set();
 
 let testModeEnabled = false;
