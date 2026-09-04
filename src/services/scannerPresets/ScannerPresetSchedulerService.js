@@ -295,12 +295,18 @@ class ScannerPresetSchedulerService {
 					.get();
 
 				const due = [];
+				let eligibleCount = 0;
 				if (snapshot && Array.isArray(snapshot.docs)) {
 					for (const doc of snapshot.docs) {
 						const preset = this.presetService._formatFirestoreDoc(doc);
 						if (this._isDue(preset, nowMs)) {
 							due.push(preset);
-							if (due.length >= batchLimit) break;
+							if (!this._isFloorDeferred(preset, nowMs)) {
+								eligibleCount += 1;
+								if (eligibleCount >= batchLimit) break;
+							} else if (due.length >= Math.max(batchLimit * 5, 50)) {
+								break;
+							}
 						}
 					}
 				}
@@ -312,10 +318,16 @@ class ScannerPresetSchedulerService {
 
 		const allPresets = await this.presetService.listPresets();
 		const due = [];
+		let eligibleCount = 0;
 		for (const preset of allPresets) {
 			if (preset.schedule && preset.schedule.enabled && this._isDue(preset, nowMs)) {
 				due.push(preset);
-				if (due.length >= batchLimit) break;
+				if (!this._isFloorDeferred(preset, nowMs)) {
+					eligibleCount += 1;
+					if (eligibleCount >= batchLimit) break;
+				} else if (due.length >= Math.max(batchLimit * 5, 50)) {
+					break;
+				}
 			}
 		}
 		return due;
@@ -381,6 +393,8 @@ class ScannerPresetSchedulerService {
 					const lockedUntilMs = data.lockedUntil ? new Date(data.lockedUntil).getTime() : 0;
 					if (lockedUntilMs > nowMs) return false;
 
+					if (this._isFloorDeferred(data, nowMs)) return false;
+
 					const lockedUntilDate = new Date(nowMs + leaseMs).toISOString();
 					const currentVersion = normalizeVersion(data.version, 1);
 					tx.update(docRef, {
@@ -413,6 +427,8 @@ class ScannerPresetSchedulerService {
 				const lockedUntilMs = data.lockedUntil ? new Date(data.lockedUntil).getTime() : 0;
 				if (lockedUntilMs > nowMs) return false;
 
+				if (this._isFloorDeferred(data, nowMs)) return false;
+
 				const lockedUntilDate = new Date(nowMs + leaseMs).toISOString();
 				const currentVersion = normalizeVersion(data.version, 1);
 				await docRef.update({
@@ -437,6 +453,8 @@ class ScannerPresetSchedulerService {
 
 		const lockedUntilMs = mem.lockedUntil ? new Date(mem.lockedUntil).getTime() : 0;
 		if (lockedUntilMs > nowMs) return false;
+
+		if (this._isFloorDeferred(mem, nowMs)) return false;
 
 		mem.lockedUntil = new Date(nowMs + leaseMs).toISOString();
 		mem.lockedBy = this.workerId;

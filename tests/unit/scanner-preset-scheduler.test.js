@@ -444,6 +444,42 @@ describe('ScannerPresetSchedulerService', () => {
 			expect(sweep2Result.deferredByFloorCount).toBe(1);
 		});
 
+		it('does not starve ready presets when earlier due presets are floor deferred', async () => {
+			// Preset 1 is young (deferred)
+			await createPresetWithLastRunAt('Young preset at front', 30000);
+			// Preset 2 is ready (old lastRunAt)
+			const readyId = await createPresetWithLastRunAt('Ready preset behind', 90000);
+
+			jest.spyOn(marketScannerController, 'runScans').mockResolvedValue([
+				{ scan: 'top_gainers', status: 'success', items: [] },
+			]);
+			jest.spyOn(requestRouting, 'sendWithNotificationRouting').mockResolvedValue([]);
+			jest.spyOn(notificationAlertModule, 'getNotificationManager').mockReturnValue({});
+
+			// batchLimit of 1: without the fix, the young preset would fill the batch
+			// and be deferred, leaving 0 executed. With the fix, the ready preset is
+			// included and executed.
+			const result = await scheduler.sweep({ batchLimit: 1 });
+			expect(result.deferredByFloorCount).toBe(1);
+			expect(result.executedCount).toBe(1);
+
+			const updated = await scannerPresetService.getPreset(readyId);
+			expect(updated.lastStatus).toBe('success');
+		});
+
+		it('atomic claim recheck rejects claim if lastRunAt was updated inside floor window', async () => {
+			const presetId = await createPresetWithLastRunAt('Race preset', 90000);
+			const preset = await scannerPresetService.getPreset(presetId);
+
+			// Simulate another replica completing the preset before _claimPreset executes
+			await scannerPresetService.updatePreset(presetId, {
+				lastRunAt: new Date(Date.now() - 5000).toISOString(),
+			});
+
+			const claimed = await scheduler._claimPreset(preset, Date.now(), 60000);
+			expect(claimed).toBe(false);
+		});
+
 		it('exposes deferredByFloor counter under dependencies.scannerPresetScheduler in /api/status', () => {
 			const status = scheduler.getStatus();
 			expect(status).toHaveProperty('lastRunDeferredByFloorCount');
