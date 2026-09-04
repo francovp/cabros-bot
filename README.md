@@ -292,6 +292,7 @@ The response and audit logs include only sanitized order metadata. API credentia
 - `PUT /api/scanner-presets/:id` and `DELETE /api/scanner-presets/:id` accept an optional `If-Match: "<version>"` request header for opt-in optimistic concurrency. A missing `If-Match` keeps today's behavior (the write succeeds and increments `version`).
 - A mismatched `If-Match` returns `412 PRECONDITION_FAILED` with the current preset (including `version`) so the client can rebase before retrying.
 - An update targeting a preset whose `lockedUntil` is in the future returns `409 PRESET_LOCKED` with the `lockedUntil` timestamp and the current preset, so an operator save cannot silently overwrite an in-flight sweep's lease.
+- `POST /api/scanner-presets` and `PUT /api/scanner-presets/:id` enforce case-insensitive unique names: a create/update that collides with another preset's name returns `409 NAME_CONFLICT` with the conflicting preset so the operator can rename/reuse the existing record instead of producing an ambiguous duplicate. The current preset can rename itself with a case-only change (e.g. `My Watchlist` → `my watchlist`) without tripping the conflict.
 
 #### Scanner Preset Scheduler
 
