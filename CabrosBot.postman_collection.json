@@ -1961,7 +1961,54 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [{\n    \"symbol\": \"BTCUSDT\",\n    \"status\": \"analyzed\",\n    \"alert\": {\n      \"eventCategory\": \"price_surge\",\n      \"headline\": \"Bitcoin breaks resistance\"\n    },\n    \"deliveryResults\": [],\n    \"cached\": false\n  }],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"deliveredChannels\": [],\n  \"requestId\": \"req-dryrun123\"\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [{\n    \"symbol\": \"BTCUSDT\",\n    \"status\": \"analyzed\",\n    \"alert\": {\n      \"eventCategory\": \"price_surge\",\n      \"headline\": \"Bitcoin breaks resistance\"\n    },\n    \"deliveryResults\": [],\n    \"cached\": false\n  }],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1,\n    \"narrativeClustered\": 0\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"deliveredChannels\": [],\n  \"requestId\": \"req-dryrun123\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST News Monitor (narrative clustering)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"crypto\": [\"BNBUSDT\", \"BUSDUSDT\"],\n  \"stocks\": [],\n  \"channels\": [\"telegram\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor?dryRun=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - narrative clustering",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BINANCE:BNBUSDT\",\n      \"status\": \"analyzed\",\n      \"alert\": {\n        \"eventCategory\": \"regulatory\",\n        \"headline\": \"SEC sues BNB for fraud\",\n        \"enriched\": {\n          \"narrativeCluster\": {\n            \"id\": \"cluster-abc123\",\n            \"headline\": \"SEC sues BNB for fraud\",\n            \"articleCount\": 2,\n            \"primarySymbols\": [\"BINANCE:BNBUSDT\", \"BINANCE:BUSDUSDT\"],\n            \"firstSeenAt\": 1700000000000\n          }\n        },\n        \"deliveryResults\": [],\n        \"cached\": false\n      },\n      \"requestId\": \"req-cluster123\"\n    },\n    {\n      \"symbol\": \"BINANCE:BUSDUSDT\",\n      \"status\": \"analyzed\",\n      \"alert\": {\n        \"eventCategory\": \"regulatory\",\n        \"headline\": \"SEC sues BNB for fraud\",\n        \"enriched\": {\n          \"narrativeCluster\": {\n            \"id\": \"cluster-abc123\",\n            \"headline\": \"SEC sues BNB for fraud\",\n            \"articleCount\": 2,\n            \"primarySymbols\": [\"BINANCE:BNBUSDT\", \"BINANCE:BUSDUSDT\"],\n            \"firstSeenAt\": 1700000000000\n          }\n        },\n        \"deliveryResults\": [],\n        \"cached\": false\n      },\n      \"requestId\": \"req-cluster123\"\n    }\n  ],\n  \"summary\": {\n    \"total\": 2,\n    \"analyzed\": 2,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 0,\n    \"narrativeClustered\": 1\n  },\n  \"requestedChannels\": [\"telegram\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 1750,\n  \"requestId\": \"req-cluster123\",\n  \"tokenUsage\": {}\n}"
             }
           ]
         }

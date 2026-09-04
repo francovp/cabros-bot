@@ -363,6 +363,20 @@
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
+    },
+    "ENABLE_NEWS_NARRATIVE_CLUSTERING": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable opt-in in-process narrative clustering for news-monitor alerts (multi-article/multi-symbol bursts about the same underlying story are tagged with alert.enriched.narrativeCluster; fail-open)",
+      "valueType": "BOOLEAN"
+    },
+    "NEWS_NARRATIVE_CLUSTER_WINDOW_MS": {
+      "defaultValue": {
+        "value": "600000"
+      },
+      "description": "Bounded cluster window in milliseconds (1000-120000) for news-monitor narrative clustering; out-of-window stories split into independent clusters",
+      "valueType": "NUMBER"
     }
   },
   "version": {

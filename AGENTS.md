@@ -1236,6 +1236,36 @@ This feature introduces an optional persistent/shared backend (Firestore) for th
 - `tests/unit/news-monitor-persistent-dedup.test.js` for unit coverage of the persistent cache.
 - `tests/integration/status-endpoint.test.js` for integration status tests.
 
+## News Monitor Narrative Clustering (GH-847 / Issue #255)
+
+The news-monitor endpoint now supports opt-in in-process narrative clustering. A single news event (one SEC filing, one exchange delisting) usually produces 5–20 near-duplicate articles that classify as the same event for related symbols. Today the per-symbol cache only dedupes `(symbol, event_category)`, so the same story across `BNB` and `BUSD` (or `BINANCE:BNBUSDT` and `BINANCE:BUSDUSDT`) fires two separate alerts. The clustering pass groups those alerts into a single "story" tagged with a deterministic `narrativeCluster.id` so downstream consumers (chat, replay, audit) can correlate the burst.
+
+**Core Components**:
+- `src/services/newsMonitor/narrativeClustering.js` — In-process clustering pass. Exposes `extractEntities`, `computeShingleOverlap` (2-shingle Jaccard), `buildClusterKey` (SHA-256 of the normalized headline), `clusterAlerts`, `summarizeClusters`, and `isEnabled`. Fails open: any internal error emits one cluster per alert so the existing per-symbol dedup flow is unchanged.
+- `src/controllers/webhooks/handlers/newsMonitor/newsMonitor.js` — Runs the pass after `analyzer.analyzeSymbols()` when enabled, attaches `alert.enriched.narrativeCluster = { id, headline, articleCount, primarySymbols, firstSeenAt }` to each alert that joined a cluster, and adds `summary.narrativeClustered` (alerts collapsed into existing clusters).
+- `src/services/remoteConfig/RemoteConfigService.js` — Adds the bounded `ENABLE_NEWS_NARRATIVE_CLUSTERING` (default `false`) and `NEWS_NARRATIVE_CLUSTER_WINDOW_MS` (default `600000` ms = 10 minutes, range `60000`-`3600000`) to the schema.
+- `src/controllers/status.js` — Adds `featureFlags.newsNarrativeClustering` and `dependencies.narrativeClustering` (with `enabled` + bounded `windowMs`).
+
+**Configuration**:
+- `ENABLE_NEWS_NARRATIVE_CLUSTERING` — Set to `'true'` to enable narrative clustering. Defaults to `'false'` (preserves the existing response shape exactly when disabled).
+- `NEWS_NARRATIVE_CLUSTER_WINDOW_MS` — Bounded cluster window in milliseconds (default `600000` ms = 10 minutes, range `60000`-`3600000`). Out-of-window stories split into independent clusters.
+
+**Behavior & Fail-Open**:
+- Cluster keys are deterministic SHA-256 hashes of the normalized headline so the same story across two requests receives the same id.
+- Stories are grouped by entity/shingle overlap (≥2 of: shared ticker, regulator, organization, or ≥0.6 shingle Jaccard) within the cluster window.
+- A single-article cluster is emitted whenever the pass cannot find a sibling, so a 1-symbol run keeps `narrativeCluster.articleCount: 1` and otherwise behaves unchanged.
+- Disabled mode (default) does not alter the response shape beyond an always-zero `summary.narrativeClustered`.
+
+**Coverage**:
+- `tests/unit/news-monitor-narrative-clustering.test.js` — Entity extraction, shingle overlap, deterministic cluster keys, cluster window enforcement, story-bucket overlap, fail-open on entity-extraction error, and summary counters.
+- `tests/unit/news-monitor-handler.test.js` — Existing tests confirm `generateSummary` accepts the optional `narrativeClustered` override and the new feature flag is wired without breaking the legacy summary.
+
+**Where to look first when extending or debugging**:
+- `src/services/newsMonitor/narrativeClustering.js` for clustering logic, fail-open behavior, and entity/ticker rules.
+- `src/controllers/webhooks/handlers/newsMonitor/newsMonitor.js` for the response-shape integration.
+- `src/services/remoteConfig/RemoteConfigService.js` for the bounded parameter schema.
+- `src/controllers/status.js` for the new feature flag and dependency reporting.
+
 ## OpenAI SDK using Cloudflare AI Gateway (CB-46 / Issue #137)
 
 This feature introduces integration of the official `openai` SDK to interact with LLMs routed through Cloudflare AI Gateway.

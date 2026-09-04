@@ -465,6 +465,38 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.alertSignalRepeatSuppression.enabled).toBe(true);
 	});
 
+	it('reports news narrative clustering as disabled by default and exposes the bounded window', async () => {
+		delete process.env.ENABLE_NEWS_NARRATIVE_CLUSTERING;
+		delete process.env.NEWS_NARRATIVE_CLUSTER_WINDOW_MS;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.newsNarrativeClustering).toBe(false);
+		expect(response.body.dependencies.narrativeClustering).toEqual({
+			enabled: false,
+			windowMs: 600000,
+		});
+	});
+
+	it('reports news narrative clustering when enabled with the configured window', async () => {
+		process.env.ENABLE_NEWS_NARRATIVE_CLUSTERING = 'true';
+		process.env.NEWS_NARRATIVE_CLUSTER_WINDOW_MS = '900000';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.newsNarrativeClustering).toBe(true);
+		expect(response.body.dependencies.narrativeClustering).toEqual({
+			enabled: true,
+			windowMs: 900000,
+		});
+	});
+
 	it('reports safe Firebase Remote Config load metadata without values and honest readiness', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 

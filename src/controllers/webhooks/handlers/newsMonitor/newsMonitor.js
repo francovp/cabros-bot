@@ -20,6 +20,11 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const {
+	isEnabled: isNarrativeClusteringEnabled,
+	clusterAlerts,
+	summarizeClusters,
+} = require('../../../../services/newsMonitor/narrativeClustering');
 
 function resolveDryRun(req) {
 	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
@@ -116,6 +121,7 @@ class NewsMonitorHandler {
 
 			let results;
 			let summary;
+			let narrativeSummary = null;
 			try {
 				results = await sentryService.withActiveSpan(
 					analysisSpan,
@@ -124,7 +130,20 @@ class NewsMonitorHandler {
 						assetClassBySymbol,
 					}),
 				);
-				summary = this.generateSummary(results);
+				if (isNarrativeClusteringEnabled()) {
+					const deliveredAlerts = (results || [])
+						.filter((result) => result && result.alert)
+						.map((result) => ({
+							...result.alert,
+							timestamp: result.timestamp || Date.now(),
+						}));
+					const clusters = clusterAlerts(deliveredAlerts, { now: Date.now() });
+					narrativeSummary = summarizeClusters(clusters);
+					summary = this.generateSummary(results, { narrativeClustered: narrativeSummary.collapsedCount });
+					this.attachNarrativeClustersToResults(results, clusters);
+				} else {
+					summary = this.generateSummary(results);
+				}
 				if (analysisSpan && typeof analysisSpan.setAttribute === 'function') {
 					analysisSpan.setAttribute('news.quota_exhausted', summary.quota_exhausted);
 					analysisSpan.setAttribute('news.error_count', summary.error);
@@ -388,9 +407,11 @@ class NewsMonitorHandler {
 	/**
    * Generate analysis summary statistics
    * @param {Object[]} results - Array of AnalysisResult objects
+   * @param {Object} [options] - Optional summary overrides
+   * @param {number} [options.narrativeClustered=0] - Number of alerts collapsed by narrative clustering
    * @returns {Object} Summary object
    */
-	generateSummary(results) {
+	generateSummary(results, options = {}) {
 		const summary = {
 			total: results.length,
 			analyzed: 0,
@@ -399,7 +420,11 @@ class NewsMonitorHandler {
 			error: 0,
 			quota_exhausted: 0,
 			alerts_sent: 0,
+			narrativeClustered: 0,
 		};
+		if (Number.isFinite(options.narrativeClustered) && options.narrativeClustered > 0) {
+			summary.narrativeClustered = options.narrativeClustered;
+		}
 
 		for (const result of results) {
 			if (result.status === AnalysisStatus.ANALYZED) {
@@ -423,6 +448,44 @@ class NewsMonitorHandler {
 		}
 
 		return summary;
+	}
+
+	/**
+   * Attach `narrativeCluster` metadata to the alert attached to each result so
+   * downstream consumers can correlate alerts that were collapsed together.
+   * Idempotent: re-running the pass on a list of results that already carry
+   * `narrativeCluster` simply overwrites with the latest cluster info.
+   * @param {Object[]} results - Array of AnalysisResult objects
+   * @param {Object[]} clusters - Output from clusterAlerts
+   */
+	attachNarrativeClustersToResults(results, clusters) {
+		if (!Array.isArray(results) || !Array.isArray(clusters) || clusters.length === 0) {
+			return;
+		}
+		const symbolToClusterId = new Map();
+		for (const cluster of clusters) {
+			if (!cluster || !cluster.id) continue;
+			for (const symbol of cluster.symbols || []) {
+				symbolToClusterId.set(symbol, cluster.id);
+			}
+		}
+		for (const result of results) {
+			if (!result || !result.alert) continue;
+			const clusterId = symbolToClusterId.get(result.alert.symbol);
+			if (!clusterId) continue;
+			const cluster = clusters.find((entry) => entry.id === clusterId);
+			if (!cluster) continue;
+			result.alert.enriched = {
+				...(result.alert.enriched || {}),
+				narrativeCluster: {
+					id: cluster.id,
+					headline: cluster.headline,
+					articleCount: cluster.articleCount,
+					primarySymbols: cluster.primarySymbols,
+					firstSeenAt: cluster.firstSeenAt,
+				},
+			};
+		}
 	}
 }
 

@@ -229,6 +229,8 @@ pnpm test:firebase
 - `NEWS_ALERT_THRESHOLD` - Confidence score threshold for sending alerts (default: `0.7`, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` - Cache time-to-live for deduplication (default: `6` hours)
 - `ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP` - Enable Firestore-backed news deduplication (`true` or `false`, default: `false`; failures fall back to memory)
+- `ENABLE_NEWS_NARRATIVE_CLUSTERING` - Enable in-process narrative clustering of multi-article/multi-symbol news-monitor bursts into a single "story" (`true` or `false`, default: `false`; opt-in, fail-open). When enabled, every alert that joins a cluster gets `alert.enriched.narrativeCluster = { id, headline, articleCount, primarySymbols, firstSeenAt }` and the response summary exposes `narrativeClustered` (alerts collapsed into existing clusters).
+- `NEWS_NARRATIVE_CLUSTER_WINDOW_MS` - Bounded cluster window in milliseconds (default: `600000` ms = 10 minutes, range `60000`-`3600000`). Out-of-window stories split into independent clusters.
 - `NEWS_TIMEOUT_MS` - Per-symbol analysis timeout (default: `30000` ms)
 - `NEWS_GEMINI_CONCURRENCY` - Max concurrent Gemini-backed symbol analyses. Production policy is `3`; unset keeps legacy parallel fan-out for backward compatibility.
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` - Max per-symbol retries for Gemini `429 RESOURCE_EXHAUSTED` errors (default: `2`)
