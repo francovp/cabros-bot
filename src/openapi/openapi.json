@@ -1740,6 +1740,546 @@
         ],
         "x-admin-role": "admin.viewer"
       }
+    },
+    "/api/research/strategies": {
+      "get": {
+        "tags": [
+          "Research"
+        ],
+        "summary": "Compare multiple technical strategies using TradingView MCP",
+        "description": "Evaluates multiple strategies across historical data for a given asset and returns comparative performance metrics.",
+        "operationId": "getCompareStrategies",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": true,
+            "description": "TradingView symbol (e.g. BTCUSDT or BINANCE:BTCUSDT)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "description": "Exchange identifier (e.g. BINANCE)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "required": false,
+            "description": "Bar interval (1h or 1d; 4h is mapped to 1h)",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "1d"
+              ],
+              "default": "1h"
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "description": "Historical lookback period (e.g. 1y, 6m, 30d)",
+            "schema": {
+              "type": "string",
+              "default": "1y"
+            }
+          },
+          {
+            "name": "initial_capital",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 10000
+            }
+          },
+          {
+            "name": "commission_pct",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 0.001
+            }
+          },
+          {
+            "name": "slippage_pct",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 0.0005
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Strategy comparison results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "tool",
+                    "symbol",
+                    "exchange",
+                    "cached",
+                    "result",
+                    "requestId",
+                    "processingTimeMs"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "tool": {
+                      "type": "string",
+                      "example": "compare_strategies"
+                    },
+                    "symbol": {
+                      "type": "string",
+                      "example": "BTCUSDT"
+                    },
+                    "exchange": {
+                      "type": "string",
+                      "example": "BINANCE"
+                    },
+                    "interval": {
+                      "type": "string",
+                      "example": "1h"
+                    },
+                    "period": {
+                      "type": "string",
+                      "example": "1y"
+                    },
+                    "cached": {
+                      "type": "boolean"
+                    },
+                    "result": {
+                      "type": "object"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "processingTimeMs": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/research/walk-forward": {
+      "post": {
+        "tags": [
+          "Research"
+        ],
+        "summary": "Execute walk-forward strategy backtest using TradingView MCP",
+        "description": "Performs out-of-sample walk-forward validation across rolling train/test splits for a specified strategy.",
+        "operationId": "postWalkForward",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "symbol",
+                  "strategy"
+                ],
+                "properties": {
+                  "symbol": {
+                    "type": "string",
+                    "example": "BINANCE:BTCUSDT"
+                  },
+                  "exchange": {
+                    "type": "string",
+                    "example": "BINANCE"
+                  },
+                  "strategy": {
+                    "type": "string",
+                    "enum": [
+                      "rsi",
+                      "bollinger",
+                      "macd",
+                      "ema_cross",
+                      "supertrend",
+                      "donchian"
+                    ],
+                    "example": "rsi"
+                  },
+                  "interval": {
+                    "type": "string",
+                    "enum": [
+                      "1h",
+                      "1d"
+                    ],
+                    "default": "1h"
+                  },
+                  "period": {
+                    "type": "string",
+                    "default": "1y"
+                  },
+                  "n_splits": {
+                    "type": "integer",
+                    "minimum": 2,
+                    "maximum": 10,
+                    "default": 5
+                  },
+                  "train_ratio": {
+                    "type": "number",
+                    "minimum": 0.5,
+                    "maximum": 0.9,
+                    "default": 0.7
+                  },
+                  "initial_capital": {
+                    "type": "number",
+                    "default": 10000
+                  },
+                  "commission_pct": {
+                    "type": "number",
+                    "default": 0.001
+                  },
+                  "slippage_pct": {
+                    "type": "number",
+                    "default": 0.0005
+                  },
+                  "include_trade_log": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Walk forward backtest results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "tool",
+                    "symbol",
+                    "exchange",
+                    "strategy",
+                    "cached",
+                    "result",
+                    "requestId",
+                    "processingTimeMs"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "tool": {
+                      "type": "string",
+                      "example": "walk_forward_backtest_strategy"
+                    },
+                    "symbol": {
+                      "type": "string",
+                      "example": "BTCUSDT"
+                    },
+                    "exchange": {
+                      "type": "string",
+                      "example": "BINANCE"
+                    },
+                    "strategy": {
+                      "type": "string",
+                      "example": "rsi"
+                    },
+                    "interval": {
+                      "type": "string",
+                      "example": "1h"
+                    },
+                    "period": {
+                      "type": "string",
+                      "example": "1y"
+                    },
+                    "cached": {
+                      "type": "boolean"
+                    },
+                    "result": {
+                      "type": "object"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "processingTimeMs": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/research/backtest": {
+      "post": {
+        "tags": [
+          "Research"
+        ],
+        "summary": "Execute single technical strategy backtest using TradingView MCP",
+        "description": "Runs a backtest for a chosen indicator-based strategy over historical price data.",
+        "operationId": "postBacktest",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "symbol",
+                  "strategy"
+                ],
+                "properties": {
+                  "symbol": {
+                    "type": "string",
+                    "example": "BINANCE:BTCUSDT"
+                  },
+                  "exchange": {
+                    "type": "string",
+                    "example": "BINANCE"
+                  },
+                  "strategy": {
+                    "type": "string",
+                    "enum": [
+                      "rsi",
+                      "bollinger",
+                      "macd",
+                      "ema_cross",
+                      "supertrend",
+                      "donchian"
+                    ],
+                    "example": "ema_cross"
+                  },
+                  "interval": {
+                    "type": "string",
+                    "enum": [
+                      "1h",
+                      "1d"
+                    ],
+                    "default": "1h"
+                  },
+                  "period": {
+                    "type": "string",
+                    "default": "1y"
+                  },
+                  "initial_capital": {
+                    "type": "number",
+                    "default": 10000
+                  },
+                  "commission_pct": {
+                    "type": "number",
+                    "default": 0.001
+                  },
+                  "slippage_pct": {
+                    "type": "number",
+                    "default": 0.0005
+                  },
+                  "include_trade_log": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Backtest results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "tool",
+                    "symbol",
+                    "exchange",
+                    "strategy",
+                    "cached",
+                    "result",
+                    "requestId",
+                    "processingTimeMs"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "tool": {
+                      "type": "string",
+                      "example": "backtest_strategy"
+                    },
+                    "symbol": {
+                      "type": "string",
+                      "example": "BTCUSDT"
+                    },
+                    "exchange": {
+                      "type": "string",
+                      "example": "BINANCE"
+                    },
+                    "strategy": {
+                      "type": "string",
+                      "example": "ema_cross"
+                    },
+                    "interval": {
+                      "type": "string",
+                      "example": "1h"
+                    },
+                    "period": {
+                      "type": "string",
+                      "example": "1y"
+                    },
+                    "cached": {
+                      "type": "boolean"
+                    },
+                    "result": {
+                      "type": "object"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "processingTimeMs": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
     }
   },
   "components": {
@@ -3250,7 +3790,10 @@
         "properties": {
           "window": {
             "type": "object",
-            "required": ["startedAt", "durationMs"],
+            "required": [
+              "startedAt",
+              "durationMs"
+            ],
             "properties": {
               "startedAt": {
                 "type": "string",
@@ -3296,7 +3839,13 @@
       },
       "DeliveryChannelMetrics": {
         "type": "object",
-        "required": ["success", "failure", "total", "successRate", "averageDeliveryMs"],
+        "required": [
+          "success",
+          "failure",
+          "total",
+          "successRate",
+          "averageDeliveryMs"
+        ],
         "properties": {
           "success": {
             "type": "integer",
@@ -4379,11 +4928,26 @@
                 "type": "object",
                 "description": "Counts TradingView enrichment outcomes; requested alerts without a stored status are reported as unrecorded.",
                 "properties": {
-                  "full": { "type": "integer", "minimum": 0 },
-                  "partial": { "type": "integer", "minimum": 0 },
-                  "failed": { "type": "integer", "minimum": 0 },
-                  "not_applicable": { "type": "integer", "minimum": 0 },
-                  "unrecorded": { "type": "integer", "minimum": 0 }
+                  "full": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "partial": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "failed": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "not_applicable": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "unrecorded": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
                 }
               },
               "riskMetadataCoverage": {
@@ -4401,22 +4965,43 @@
                   "zeroSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "oneToTwoSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "threePlusSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "totalSourceCount": {

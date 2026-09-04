@@ -377,6 +377,27 @@
       },
       "description": "Audit log retention in days before Firestore TTL expiry",
       "valueType": "NUMBER"
+    },
+    "ENABLE_STRATEGY_RESEARCH": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable TradingView MCP strategy research and backtest endpoints",
+      "valueType": "BOOLEAN"
+    },
+    "STRATEGY_RESEARCH_CACHE_TTL_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "Strategy research cache TTL in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "STRATEGY_RESEARCH_RETENTION_DAYS": {
+      "defaultValue": {
+        "value": "30"
+      },
+      "description": "Strategy research Firestore persistence retention in days",
+      "valueType": "NUMBER"
     }
   },
   "version": {

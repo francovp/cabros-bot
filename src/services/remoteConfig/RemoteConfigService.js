@@ -70,6 +70,9 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
 	ENABLE_BINANCE_ORDER_AUDIT: { type: 'boolean', defaultValue: false },
 	BINANCE_ORDER_AUDIT_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
+	ENABLE_STRATEGY_RESEARCH: { type: 'boolean', defaultValue: false },
+	STRATEGY_RESEARCH_CACHE_TTL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 3600000 },
+	STRATEGY_RESEARCH_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
 });
 
 let remoteOverrides = {};
