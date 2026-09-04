@@ -833,7 +833,75 @@
                 "volume-confirmation"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "Success - structured volume confirmation",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"confirmed\": true,\n  \"decision\": \"confirm\",\n  \"volumeRatio\": 1.7,\n  \"analysis\": {\n    \"symbol\": \"BINANCE:BTCUSDT\",\n    \"volume_analysis\": {\n      \"volume_ratio\": 1.7,\n      \"volume_strength\": \"HIGH\"\n    }\n  }\n}"
+            },
+            {
+              "name": "400 Invalid symbol",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Volume Confirmation (dryRun)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/volume-confirmation?dryRun=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "volume-confirmation"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "true",
+                  "description": "Validate the request and short-circuit without invoking TradingView MCP."
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success - dryRun echoes parsed request without MCP call",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"confirmed\": null,\n  \"decision\": \"unknown\",\n  \"volumeRatio\": null,\n  \"analysis\": null,\n  \"requestId\": \"req-dryrun-456\",\n  \"totalDurationMs\": 3\n}"
+            },
+            {
+              "name": "400 Invalid symbol on dryRun path",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
         },
         {
           "name": "POST Single Symbol Analysis",
@@ -885,6 +953,60 @@
               "status": "Bad Gateway",
               "code": 502,
               "body": "{\n  \"success\": false,\n  \"error\": \"TradingView MCP unavailable\",\n  \"code\": \"SYMBOL_ANALYSIS_FAILED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Single Symbol Analysis (dryRun)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"analysisMode\": \"combined\",\n  \"includeMultiTimeframe\": true,\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/symbol-analysis?dryRun=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "symbol-analysis"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "true",
+                  "description": "Validate the request and short-circuit without invoking TradingView MCP."
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success - dryRun echoes parsed request without MCP call",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"analysisMode\": \"combined\",\n  \"includeMultiTimeframe\": true,\n  \"side\": null,\n  \"analysis\": null,\n  \"analysisStatus\": \"dry-run\",\n  \"requestId\": \"req-dryrun-123\",\n  \"totalDurationMs\": 4\n}"
+            },
+            {
+              "name": "400 Invalid symbol on dryRun path",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
