@@ -275,6 +275,14 @@
         ],
         "summary": "Check TradingView volume confirmation",
         "operationId": "postVolumeConfirmation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          }
+        ],
         "requestBody": {
           "$ref": "#/components/requestBodies/VolumeConfirmation"
         },
@@ -284,6 +292,9 @@
           },
           "400": {
             "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -306,6 +317,14 @@
         ],
         "summary": "Analyze one TradingView symbol without delivery",
         "operationId": "postSymbolAnalysis",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          }
+        ],
         "requestBody": {
           "$ref": "#/components/requestBodies/SymbolAnalysis"
         },
@@ -315,6 +334,9 @@
           },
           "400": {
             "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -2903,7 +2925,19 @@
         }
       },
       "SymbolAnalysisResult": {
-        "description": "Single-symbol TradingView analysis, formatted alert text, risk levels, and decision metadata.",
+        "description": "Single-symbol TradingView analysis, formatted alert text, risk levels, and decision metadata. A replay includes idempotencyReplayed=true.",
+        "headers": {
+          "Idempotency-Replay": {
+            "description": "false for the first request, true for a cached replay.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        },
         "content": {
           "application/json": {
             "schema": {
@@ -2913,7 +2947,19 @@
         }
       },
       "VolumeConfirmationResult": {
-        "description": "Structured TradingView MCP volume confirmation data, decision, and timing metadata.",
+        "description": "Structured TradingView MCP volume confirmation data, decision, and timing metadata. A replay includes idempotencyReplayed=true.",
+        "headers": {
+          "Idempotency-Replay": {
+            "description": "false for the first request, true for a cached replay.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        },
         "content": {
           "application/json": {
             "schema": {
@@ -4822,6 +4868,10 @@
             "type": "integer",
             "minimum": 0,
             "description": "Total endpoint execution time in milliseconds."
+          },
+          "idempotencyReplayed": {
+            "type": "boolean",
+            "description": "Present and true when the response was replayed from a matching idempotency key."
           }
         }
       },
@@ -4883,6 +4933,10 @@
             "type": "integer",
             "minimum": 0,
             "description": "Total endpoint execution time in milliseconds."
+          },
+          "idempotencyReplayed": {
+            "type": "boolean",
+            "description": "Present and true when the response was replayed from a matching idempotency key."
           }
         }
       },

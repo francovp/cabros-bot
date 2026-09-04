@@ -224,4 +224,38 @@ describe('Postman collection contract', () => {
 		expect(marketBuyResp.order.newOrderRespType).toBe('FULL');
 		expect(marketBuyResp.order.newClientOrderId).toBeUndefined();
 	});
+
+	it('documents idempotency headers and replay examples for volume confirmation and symbol analysis', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const volumeConfirm = findItem(collection.item, 'POST Volume Confirmation');
+		const symbolAnalysis = findItem(collection.item, 'POST Single Symbol Analysis');
+
+		expect(volumeConfirm).toBeDefined();
+		expect(findHeader(volumeConfirm, 'idempotency-key')).toEqual(expect.objectContaining({
+			value: 'volume-confirm-demo-1',
+		}));
+		expect(findHeader(volumeConfirm, 'x-idempotency-key')).toEqual(expect.objectContaining({
+			value: 'volume-confirm-key-1',
+			disabled: true,
+		}));
+		expect(volumeConfirm.response.map((r) => r.name)).toEqual(expect.arrayContaining([
+			'Success - volume confirmed (idempotent replay)',
+			'409 Idempotency conflict',
+			'400 Invalid idempotency key',
+		]));
+
+		expect(symbolAnalysis).toBeDefined();
+		expect(findHeader(symbolAnalysis, 'idempotency-key')).toEqual(expect.objectContaining({
+			value: 'symbol-analysis-demo-1',
+		}));
+		expect(findHeader(symbolAnalysis, 'x-idempotency-key')).toEqual(expect.objectContaining({
+			value: 'symbol-analysis-key-1',
+			disabled: true,
+		}));
+		expect(symbolAnalysis.response.map((r) => r.name)).toEqual(expect.arrayContaining([
+			'Success - decision-ready analysis (idempotent replay)',
+			'409 Idempotency conflict',
+			'400 Invalid idempotency key',
+		]));
+	});
 });
