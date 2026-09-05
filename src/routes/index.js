@@ -75,6 +75,8 @@ function getRoutes(botOrGetter) {
 
 	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
 	const newsMonitor = getNewsMonitor();
+	router.get('/news-monitor/summary', ...adminRead, newsMonitor.handleSummary.bind(newsMonitor));
+	router.get('/news-monitor/analyses', ...adminRead, newsMonitor.handleListAnalyses.bind(newsMonitor));
 	router.post('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
 	router.get('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
 

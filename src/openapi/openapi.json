@@ -1304,6 +1304,121 @@
         ]
       }
     },
+    "/api/news-monitor/summary": {
+      "get": {
+        "tags": [
+          "News"
+        ],
+        "summary": "Summarize stored news-monitor analyses and false-positive tracking",
+        "description": "Query aggregated performance, alert rates, and false-positive proxy metrics for recorded news analysis runs.",
+        "operationId": "getNewsMonitorSummary",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SummaryLimit"
+          },
+          {
+            "$ref": "#/components/parameters/NewsAnalysisThreshold"
+          },
+          {
+            "$ref": "#/components/parameters/NewsAnalysisSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/NewsAnalysisSummaryResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/news-monitor/analyses": {
+      "get": {
+        "tags": [
+          "News"
+        ],
+        "summary": "List recorded news analysis records",
+        "description": "Query durably recorded news analysis records with pagination and filtering by symbol, eventCategory, and date range.",
+        "operationId": "listNewsAnalyses",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/NewsAnalysisLimit"
+          },
+          {
+            "$ref": "#/components/parameters/BeforeCursor"
+          },
+          {
+            "$ref": "#/components/parameters/NewsAnalysisSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/NewsAnalysisEventCategory"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/NewsAnalysisListResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/outcomes": {
       "get": {
         "tags": [
@@ -2110,6 +2225,44 @@
           "maxLength": 128
         },
         "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Echoed in the response and persisted on stored alerts."
+      },
+      "NewsAnalysisSymbol": {
+        "name": "symbol",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "Filter by trading symbol (e.g. BTCUSDT)."
+      },
+      "NewsAnalysisEventCategory": {
+        "name": "eventCategory",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "Filter by detected news event category."
+      },
+      "NewsAnalysisThreshold": {
+        "name": "threshold",
+        "in": "query",
+        "schema": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.7
+        },
+        "description": "Confidence threshold above which an analysis is treated as a high-confidence signal."
+      },
+      "NewsAnalysisLimit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        },
+        "description": "Maximum number of analysis records to return (1-100)."
       }
     },
     "requestBodies": {
@@ -3242,6 +3395,26 @@
                   "maxAgeMs": 3600000
                 }
               }
+            }
+          }
+        }
+      },
+      "NewsAnalysisSummaryResult": {
+        "description": "Aggregated news-monitor analyses and false-positive tracking metrics.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsAnalysisSummary"
+            }
+          }
+        }
+      },
+      "NewsAnalysisListResult": {
+        "description": "Paginated list of recorded news analysis records.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsAnalysisList"
             }
           }
         }
@@ -6198,6 +6371,193 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "NewsAnalysisRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "symbol",
+          "analyzedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "eventCategory": {
+            "type": "string",
+            "nullable": true
+          },
+          "sentiment": {
+            "type": "number",
+            "nullable": true
+          },
+          "confidence": {
+            "type": "number",
+            "nullable": true
+          },
+          "headline": {
+            "type": "string",
+            "nullable": true
+          },
+          "alertSent": {
+            "type": "boolean"
+          },
+          "promptVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "tokens": {
+            "type": "object",
+            "nullable": true
+          },
+          "analyzedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "NewsAnalysisSummary": {
+        "type": "object",
+        "required": [
+          "success",
+          "totalAnalyses",
+          "totalAlertsSent",
+          "alertRatePercent",
+          "bySymbol",
+          "byEventCategory",
+          "falsePositiveProxy",
+          "window"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "totalAnalyses": {
+            "type": "integer"
+          },
+          "totalAlertsSent": {
+            "type": "integer"
+          },
+          "alertRatePercent": {
+            "type": "number"
+          },
+          "bySymbol": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "count": {
+                  "type": "integer"
+                },
+                "alertsSent": {
+                  "type": "integer"
+                },
+                "alertRatePercent": {
+                  "type": "number"
+                },
+                "avgConfidence": {
+                  "type": "number"
+                }
+              }
+            }
+          },
+          "byEventCategory": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "count": {
+                  "type": "integer"
+                },
+                "alertsSent": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "falsePositiveProxy": {
+            "type": "object",
+            "required": [
+              "totalHighConfidenceAlerts",
+              "falsePositiveAlerts",
+              "falsePositiveRatePercent"
+            ],
+            "properties": {
+              "totalHighConfidenceAlerts": {
+                "type": "integer"
+              },
+              "falsePositiveAlerts": {
+                "type": "integer"
+              },
+              "falsePositiveRatePercent": {
+                "type": "number"
+              },
+              "description": {
+                "type": "string"
+              }
+            }
+          },
+          "window": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "nullable": true
+              },
+              "to": {
+                "type": "string",
+                "nullable": true
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "threshold": {
+                "type": "number"
+              },
+              "symbol": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          }
+        }
+      },
+      "NewsAnalysisList": {
+        "type": "object",
+        "required": [
+          "success",
+          "analyses",
+          "count",
+          "limit"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "analyses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NewsAnalysisRecord"
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
           }
         }
       }

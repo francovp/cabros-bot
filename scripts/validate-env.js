@@ -154,6 +154,7 @@ function validateEnv(env = process.env) {
 		'ENABLE_FIRESTORE_IDEMPOTENCY',
 		'ENABLE_FIREBASE_REMOTE_CONFIG',
 		'ENABLE_SIGNAL_OUTCOME_TRACKING',
+		'ENABLE_FIRESTORE_NEWS_ANALYSIS',
 	].some((name) => isEnabled(env, name));
 	if (firestoreGateEnabled && !isFirestoreConfigured()) {
 		addInvalid(warnings, 'FIREBASE_CREDENTIALS', 'are not configured or readable for an enabled Firebase feature');

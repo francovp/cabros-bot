@@ -377,6 +377,20 @@
       },
       "description": "Audit log retention in days before Firestore TTL expiry",
       "valueType": "NUMBER"
+    },
+    "ENABLE_FIRESTORE_NEWS_ANALYSIS": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable persistent Firestore storage for news monitor analysis results",
+      "valueType": "BOOLEAN"
+    },
+    "NEWS_ANALYSIS_RETENTION_DAYS": {
+      "defaultValue": {
+        "value": "30"
+      },
+      "description": "News analysis retention in days before Firestore TTL expiry",
+      "valueType": "NUMBER"
     }
   },
   "version": {
