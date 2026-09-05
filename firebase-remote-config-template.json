@@ -119,6 +119,34 @@
       "description": "News cache retention TTL in hours",
       "valueType": "NUMBER"
     },
+    "NEWS_CACHE_MAX_ENTRIES": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Maximum entries held in the in-memory news cache before LRU eviction kicks in",
+      "valueType": "NUMBER"
+    },
+    "NEWS_DELIVERY_LOCK_MAX_ENTRIES": {
+      "defaultValue": {
+        "value": "1000"
+      },
+      "description": "Maximum entries held in the news cache deliveryLocks map before size-based eviction",
+      "valueType": "NUMBER"
+    },
+    "URL_SHORTENER_CACHE_MAX_ENTRIES": {
+      "defaultValue": {
+        "value": "1000"
+      },
+      "description": "Maximum entries held in the URL shortener LRU cache before eviction",
+      "valueType": "NUMBER"
+    },
+    "URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES": {
+      "defaultValue": {
+        "value": "32"
+      },
+      "description": "Maximum provider entries tracked in URL shortener failure circuit breaker before eviction",
+      "valueType": "NUMBER"
+    },
     "BINANCE_FETCH_TIMEOUT_MS": {
       "defaultValue": {
         "value": "5000"
