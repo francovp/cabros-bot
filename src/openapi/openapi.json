@@ -1258,6 +1258,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
@@ -1292,6 +1295,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
@@ -1302,6 +1308,111 @@
             "ApiKeyQuery": []
           }
         ]
+      }
+    },
+    "/api/news-monitor/pause": {
+      "post": {
+        "tags": [
+          "News"
+        ],
+        "summary": "Pause news monitor analysis",
+        "description": "Sets the process-level news monitor pause toggle, rejecting incoming manual analysis requests with HTTP 503 and causing background sweep cycles to skip execution.",
+        "operationId": "pauseNewsMonitor",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/NewsMonitorPause"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/NewsMonitorPauseResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/news-monitor/resume": {
+      "post": {
+        "tags": [
+          "News"
+        ],
+        "summary": "Resume news monitor analysis",
+        "description": "Clears the process-level news monitor pause toggle, allowing incoming manual analysis requests and background scheduler sweep cycles to proceed normally.",
+        "operationId": "resumeNewsMonitor",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/NewsMonitorResumeResult"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/news-monitor/status": {
+      "get": {
+        "tags": [
+          "News"
+        ],
+        "summary": "Get news monitor pause status",
+        "description": "Returns the current process-level pause status, timestamp, and optional reason for the news monitor analysis pipeline.",
+        "operationId": "getNewsMonitorStatus",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/NewsMonitorStatusResult"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
       }
     },
     "/api/outcomes": {
@@ -2482,6 +2593,18 @@
             }
           }
         }
+      },
+      "NewsMonitorPause": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsMonitorPauseRequest"
+            },
+            "example": {
+              "reason": "Gemini quota exhaustion"
+            }
+          }
+        }
       }
     },
     "responses": {
@@ -3060,6 +3183,54 @@
                   "tokenUsage": {}
                 }
               }
+            }
+          }
+        }
+      },
+      "NewsMonitorPauseResult": {
+        "description": "News monitor successfully paused",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsMonitorPauseResponse"
+            },
+            "example": {
+              "message": "News monitor analysis paused",
+              "paused": true,
+              "pausedAt": "2026-09-04T05:00:00.000Z",
+              "reason": "Gemini quota exhaustion"
+            }
+          }
+        }
+      },
+      "NewsMonitorResumeResult": {
+        "description": "News monitor successfully resumed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsMonitorResumeResponse"
+            },
+            "example": {
+              "message": "News monitor analysis resumed",
+              "paused": false,
+              "resumedAt": "2026-09-04T05:10:00.000Z",
+              "wasPaused": true,
+              "previouslyPausedAt": "2026-09-04T05:00:00.000Z"
+            }
+          }
+        }
+      },
+      "NewsMonitorStatusResult": {
+        "description": "Current news monitor pause status",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsMonitorStatusResponse"
+            },
+            "example": {
+              "paused": false,
+              "pausedAt": null,
+              "reason": null
             }
           }
         }
@@ -5599,6 +5770,103 @@
             "$ref": "#/components/schemas/JsonObject"
           }
         }
+      },
+      "NewsMonitorPauseRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Optional operational reason for pausing news monitor analysis",
+            "example": "Gemini quota exhaustion"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewsMonitorPauseResponse": {
+        "type": "object",
+        "required": [
+          "message",
+          "paused",
+          "pausedAt",
+          "reason"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "News monitor analysis paused"
+          },
+          "paused": {
+            "type": "boolean",
+            "example": true
+          },
+          "pausedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "example": "Gemini quota exhaustion"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewsMonitorResumeResponse": {
+        "type": "object",
+        "required": [
+          "message",
+          "paused",
+          "resumedAt"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "News monitor analysis resumed"
+          },
+          "paused": {
+            "type": "boolean",
+            "example": false
+          },
+          "resumedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "wasPaused": {
+            "type": "boolean",
+            "example": true
+          },
+          "previouslyPausedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewsMonitorStatusResponse": {
+        "type": "object",
+        "required": [
+          "paused",
+          "pausedAt",
+          "reason"
+        ],
+        "properties": {
+          "paused": {
+            "type": "boolean",
+            "example": false
+          },
+          "pausedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          }
+        },
+        "additionalProperties": false
       },
       "DeliveryResult": {
         "type": "object",
