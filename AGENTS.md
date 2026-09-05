@@ -1543,6 +1543,16 @@ Disabled by default preserves existing webhook behavior byte-for-byte.
 
 This change is workflow/documentation-only: no application environment variable, Remote Config key, endpoint, OpenAPI, or Postman contract changed.
 
+## Gemini Quota Window Telemetry (Issue #622)
+
+Extended the existing process-local `geminiQuota` status dependency with a fixed 60-second window for actual Gemini API calls and quota exhaustion events: `windowStartedAt`, `windowDurationMs`, `requestsInWindow`, `exhaustedEventsInWindow`, `lastExhaustedAt`, and `quotaStatus`. The established readiness `status` field remains unchanged for compatibility. Both Gemini `generateContent` call sites record requests; counters expire at the declared window boundary, and the same propagated quota error is counted once. No new environment variable or Remote Config key was added.
+
+**Coverage**:
+- `tests/unit/gemini-quota-manager.test.js` and `tests/unit/genaiClient.test.js` — Window lifecycle and real Gemini request/error counting.
+- `tests/integration/status-endpoint.test.js` — `/api/status` and `/api/capabilities` response contract.
+
+OpenAPI, Postman, and README status documentation include the new non-sensitive fields.
+
 ## Binance Market-Data Host Configuration (CB-244 / Issue #539)
 
 Added an application-owned `BINANCE_DATA_BASE_URL` env var (default `https://api.binance.com`) that overrides the default Binance REST host for **all** market-data client construction paths. The new variable is forwarded as `MainClient` `baseUrl` (which `binance@2.15.22` honors via `BaseRestClient.options.baseUrl` → `requestUtils.getRestBaseUrl`), so Railway production can route around the `HTTP 451 Service unavailable from restricted location` reply from `api.binance.com` without touching the trading order client or hot-patching `node_modules`. Affected paths: `SignalOutcomeService` sweep + entry fallback, `BinanceOrderService` live client (testnet stays pinned to `https://testnet.binance.vision`), news-monitor price fallback, and the `/precio` Telegram command. Malformed values fall back to the default with a `console.warn`, so a typo never silently breaks evaluation.
