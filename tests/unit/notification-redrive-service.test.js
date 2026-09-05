@@ -102,6 +102,7 @@ describe('NotificationRedriveService', () => {
 				ready: true,
 				status: 'ready',
 				role: 'web',
+				workerRole: 'web',
 				running: false,
 				intervalMs: 60000,
 				batchLimit: 50,
@@ -112,11 +113,38 @@ describe('NotificationRedriveService', () => {
 				exhaustedCount: 0,
 				zeroChannelBroadcasts: 0,
 				lastRunAt: null,
+				lastSweepAt: null,
 				lastRunDurationMs: null,
 				lastRunScannedCount: 0,
 				lastRunRedrivenCount: 0,
 				lastRunErrorCount: 0,
+				lastRunExhaustedCount: 0,
+				lastSweepResult: null,
 			});
+		});
+
+		it('exposes structured lastSweepResult with processed/succeeded/exhausted/errors', () => {
+			service.lastRunAt = new Date('2026-08-30T00:00:00.000Z');
+			service.lastRunDurationMs = 123;
+			service.lastRunScannedCount = 10;
+			service.lastRunRedrivenCount = 4;
+			service.lastRunExhaustedCount = 2;
+			service.lastRunErrorCount = 1;
+			const status = service.getStatus();
+			expect(status.lastSweepAt).toBe('2026-08-30T00:00:00.000Z');
+			expect(status.lastSweepResult).toEqual({
+				processed: 10,
+				succeeded: 4,
+				exhausted: 2,
+				errors: 1,
+			});
+		});
+
+		it('reports workerRole mirroring role', () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			const status = service.getStatus();
+			expect(status.role).toBe('worker');
+			expect(status.workerRole).toBe('worker');
 		});
 
 		it('normalizes worker role to web, worker, or disabled', () => {
