@@ -3841,6 +3841,113 @@
       ]
     },
     {
+      "name": "Symbol Analyses",
+      "description": "Symbol analysis persistence query and summary operations. Feature is gated by ENABLE_SYMBOL_ANALYSIS_STORAGE=true and requires admin.viewer authorization (via API key or Firebase Bearer token).",
+      "item": [
+        {
+          "name": "GET List Symbol Analyses",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Lists recorded symbol analyses with default limit (50) and optional filtering by symbol, exchange, timeframe, action, and date range.",
+            "url": {
+              "raw": "{{baseUrl}}/api/symbol-analyses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "symbol-analyses"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"analyses\": [\n    {\n      \"id\": \"req-1\",\n      \"requestId\": \"req-1\",\n      \"recordedAt\": \"2026-09-04T12:00:00.000Z\",\n      \"expiresAt\": \"2026-09-11T12:00:00.000Z\",\n      \"symbol\": \"BINANCE:BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"asset\": \"BTCUSDT\",\n      \"timeframe\": \"1h\",\n      \"action\": \"BUY\",\n      \"price\": 65000,\n      \"rsi\": 55.4,\n      \"indicators\": {\n        \"rsi\": 55.4,\n        \"macd\": 120.5\n      },\n      \"risk\": {\n        \"risk_reward_ratio\": 2.5\n      },\n      \"decision\": {\n        \"action\": \"BUY\",\n        \"confidence\": 0.85\n      },\n      \"analysisStatus\": \"complete\",\n      \"alertText\": \"TradingView analysis alert for BINANCE:BTCUSDT\",\n      \"processingTimeMs\": 120\n    }\n  ],\n  \"count\": 1,\n  \"limit\": 50,\n  \"nextCursor\": null\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "403 Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Symbol analysis storage feature is disabled. Set ENABLE_SYMBOL_ANALYSIS_STORAGE=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Firestore is unavailable or not configured.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Symbol Analyses",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Summarizes recorded symbol analyses metrics (totalAnalyses, byAction, bySymbol, byTimeframe, byExchange).",
+            "url": {
+              "raw": "{{baseUrl}}/api/symbol-analyses/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "symbol-analyses",
+                "summary"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"success\": true,\n    \"totalAnalyses\": 10,\n    \"byAction\": {\n      \"BUY\": 5,\n      \"SELL\": 3,\n      \"NO_TRADE\": 2\n    },\n    \"bySymbol\": {\n      \"BINANCE:BTCUSDT\": 10\n    },\n    \"byTimeframe\": {\n      \"1h\": 10\n    },\n    \"byExchange\": {\n      \"BINANCE\": 10\n    },\n    \"window\": {\n      \"limit\": 500\n    }\n  }\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "403 Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Symbol analysis storage feature is disabled. Set ENABLE_SYMBOL_ANALYSIS_STORAGE=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Firestore is unavailable or not configured.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Async Jobs",
       "item": [
         {

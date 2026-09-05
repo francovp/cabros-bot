@@ -377,10 +377,24 @@
       },
       "description": "Audit log retention in days before Firestore TTL expiry",
       "valueType": "NUMBER"
+    },
+    "ENABLE_SYMBOL_ANALYSIS_STORAGE": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable Firestore persistence of symbol-analysis results for decision history and accuracy trending",
+      "valueType": "BOOLEAN"
+    },
+    "SYMBOL_ANALYSIS_RETENTION_DAYS": {
+      "defaultValue": {
+        "value": "7"
+      },
+      "description": "Retention window in days for persisted symbol-analysis records before Firestore TTL expiry",
+      "valueType": "NUMBER"
     }
   },
   "version": {
-    "versionNumber": "21",
+    "versionNumber": "22",
     "isLegacy": true
   }
 }
