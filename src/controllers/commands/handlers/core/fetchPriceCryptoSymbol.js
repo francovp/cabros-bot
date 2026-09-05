@@ -32,6 +32,31 @@ const client = new MainClient(clientOptions);
 
 const CRYPTO_QUOTE_SUFFIXES = ['USDT', 'USDC', 'BUSD', 'FDUSD', 'TUSD', 'BTC', 'ETH', 'BNB'];
 const FOREX_PAIRS = new Set(['USDCLP', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD']);
+const MAX_BATCH_SYMBOLS = 10;
+
+/**
+ * Parse a free-form input string into a deduplicated, order-preserving list
+ * of trimmed symbol tokens. Supports comma- and whitespace-separated input.
+ *
+ * @param {string|null|undefined} rawInput
+ * @returns {string[]}
+ */
+function parseSymbolList(rawInput) {
+	if (typeof rawInput !== 'string' || rawInput.trim() === '') {
+		return [];
+	}
+	const seen = new Set();
+	const out = [];
+	for (const token of rawInput.split(/[\s,]+/)) {
+		const trimmed = token.trim();
+		if (trimmed === '') continue;
+		const upper = trimmed.toUpperCase();
+		if (seen.has(upper)) continue;
+		seen.add(upper);
+		out.push(upper);
+	}
+	return out;
+}
 
 function classifyPriceQuery(rawInput) {
 	if (!rawInput || typeof rawInput !== 'string' || rawInput.trim() === '') {
@@ -255,9 +280,88 @@ const fetchSymbolPrice = async (context, options = {}) => {
 	return fetchCryptoPrice(classification.symbol, options);
 };
 
+/**
+ * Fetch prices for a batch of symbols in parallel. Each entry resolves
+ * independently — a failure in one entry does not reject the whole call.
+ * Returns an array of result objects in the same order as `symbols`.
+ *
+ * @param {string[]} symbols - Pre-validated, deduplicated, uppercase symbols
+ * @param {object} [options] - Forwarded to fetchCryptoPrice/fetchEquityPrice
+ * @returns {Promise<Array<{symbol: string, success: boolean, ...}>>}
+ */
+async function fetchSymbolsPrices(symbols, options = {}) {
+	if (!Array.isArray(symbols) || symbols.length === 0) {
+		return [];
+	}
+	if (symbols.length > MAX_BATCH_SYMBOLS) {
+		const error = new Error(
+			`Máximo ${MAX_BATCH_SYMBOLS} símbolos por consulta. Recibidos: ${symbols.length}.`,
+		);
+		error.userMessage = `Máximo ${MAX_BATCH_SYMBOLS} símbolos por consulta. Recibidos: ${symbols.length}.`;
+		error.isUserFriendly = true;
+		throw error;
+	}
+
+	let equityQueue = Promise.resolve();
+	const settled = await Promise.allSettled(
+		symbols.map(async (raw) => {
+			const classification = classifyPriceQuery(raw);
+			if (!classification.valid) {
+				const err = new Error('Símbolo inválido');
+				err.userMessage = `Símbolo inválido: ${raw}`;
+				err.isUserFriendly = true;
+				throw err;
+			}
+			if (classification.assetClass === 'unsupported') {
+				const err = new Error(classification.reason);
+				err.userMessage = classification.reason;
+				err.isUserFriendly = true;
+				throw err;
+			}
+			if (classification.assetClass === 'equity') {
+				const result = equityQueue.then(() =>
+					fetchEquityPrice(classification.symbol, classification.exchange, options),
+				);
+				equityQueue = result.catch(() => {});
+				return result;
+			}
+			return fetchCryptoPrice(classification.symbol, options);
+		}),
+	);
+
+	return symbols.map((raw, idx) => {
+		const outcome = settled[idx];
+		if (outcome.status === 'fulfilled') {
+			return { ...outcome.value, success: true };
+		}
+		const err = outcome.reason || new Error('Unknown error');
+		if (!err.isUserFriendly) {
+			sentryService.captureRuntimeError({
+				channel: 'telegram',
+				error: err,
+				extra: {
+					command: 'getPrice',
+					symbol: raw,
+					batchSize: symbols.length,
+				},
+			});
+		}
+		return {
+			symbol: raw,
+			assetClass: 'unknown',
+			success: false,
+			error: err.userMessage || err.message || String(err),
+			isUserFriendly: err.isUserFriendly === true,
+		};
+	});
+}
+
 module.exports = {
 	classifyPriceQuery,
 	fetchCryptoPrice,
 	fetchEquityPrice,
 	fetchSymbolPrice,
+	fetchSymbolsPrices,
+	parseSymbolList,
+	MAX_BATCH_SYMBOLS,
 };
