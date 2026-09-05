@@ -129,6 +129,7 @@ textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas
 .progress-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent-strong), var(--accent)); transition: width var(--speed) ease; }
 .report-text { white-space: pre-wrap; overflow-wrap: anywhere; padding: 1rem; border-radius: var(--radius-md); background: #091727; border: 1px solid var(--border); font-family: var(--font-mono); font-size: .82rem; line-height: 1.5; }
 .alert-card .alert-preview { margin: 0; color: #c9dbee; font-size: .88rem; line-height: 1.5; }
+.active-filters { margin: 0; padding: .55rem .8rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-soft); color: var(--muted); font-size: .82rem; font-family: var(--font-mono); }
 .badge-row { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; }
 .mono-line { display: flex; align-items: center; gap: .45rem; margin: .2rem 0 0; font-family: var(--font-mono); font-size: .78rem; color: #bfeaff; overflow-wrap: anywhere; }
 .delivery-ok { border-color: #2a6d62; background: #103b3a; color: var(--success); font-weight: 700; }

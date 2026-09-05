@@ -1418,7 +1418,24 @@ const createAlertListForm = () => {
 	);
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
 	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
-	const source = addField(form, 'Source', 'source', { placeholder: 'webhook' });
+	const source = addField(form, 'Source', 'source', { placeholder: 'Any source, including custom values' });
+	source.setAttribute('list', 'alert-source-options');
+	const sourceOptions = element('datalist', { attributes: { id: 'alert-source-options' } });
+	[
+		['', 'All sources'],
+		['webhook', 'Webhook'],
+		['webhook-alert', 'Webhook alert'],
+		['webhook-message', 'Webhook message'],
+		['news-monitor', 'News monitor'],
+		['alert-replay', 'Alert replay'],
+		['market-scanner', 'Market scanner'],
+		['expanded-analysis', 'Expanded analysis'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		sourceOptions.append(option);
+	});
+	form.append(sourceOptions);
 	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
 	[
 		['', 'All alerts'],
@@ -1429,6 +1446,10 @@ const createAlertListForm = () => {
 		option.value = value;
 		enriched.append(option);
 	});
+	const activeFilters = element('p', { className: 'active-filters', text: 'Active filters: none' });
+	const clearFilters = element('button', { text: 'Clear filters' });
+	clearFilters.type = 'button';
+	clearFilters.disabled = true;
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	const prev = element('button', { text: 'Previous page' });
@@ -1449,7 +1470,7 @@ const createAlertListForm = () => {
 		rawCopyButton,
 		rawOutput,
 	);
-	form.append(button, prev, next, output, alertList, rawToggle);
+	form.append(activeFilters, button, clearFilters, prev, next, output, alertList, rawToggle);
 
 	let nextBefore;
 	let backCursors = [];
@@ -1517,7 +1538,25 @@ const createAlertListForm = () => {
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load alerts to refresh.';
 		if (clearCursor) before.value = '';
+		updateActiveFilters();
 	};
+	const updateActiveFilters = () => {
+		const active = [];
+		if (source.value) active.push(`source=${source.value}`);
+		if (enriched.value) active.push(`enriched=${enriched.value}`);
+		if (active.length === 0) {
+			activeFilters.textContent = 'Active filters: none';
+			clearFilters.disabled = true;
+		} else {
+			activeFilters.textContent = `Active filters: ${active.join(', ')}`;
+			clearFilters.disabled = false;
+		}
+	};
+	clearFilters.addEventListener('click', () => {
+		source.value = '';
+		enriched.value = '';
+		resetPagination({ clearCursor: true });
+	});
 	[limit, source, enriched].forEach((field) => {
 		field.addEventListener('input', () => resetPagination({ clearCursor: true }));
 		field.addEventListener('change', () => resetPagination({ clearCursor: true }));
