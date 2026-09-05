@@ -21,7 +21,7 @@ const {
 	postRetryJob,
 	postRetryFailedJob,
 } = require('../controllers/webhooks/handlers/jobs/jobs');
-const { listAlerts, getAlertById, replayAlert, summarizeAlerts, exportAlerts, listReplays } = require('../controllers/alerts/alerts');
+const { listAlerts, getAlertById, replayAlert, summarizeAlerts, exportAlerts, listReplays, acknowledgeAlert, getAcknowledgementBreakdown } = require('../controllers/alerts/alerts');
 const { listOutcomes, summarizeOutcomes } = require('../controllers/outcomes/outcomes');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
@@ -52,6 +52,8 @@ function getRoutes(botOrGetter) {
 	router.get('/alerts/summary', ...adminRead, summarizeAlerts);
 	router.get('/alerts/export', ...adminRead, exportAlerts);
 	router.post('/alerts/:alertId/replay', ...adminWrite, idempotencyMiddleware, replayAlert(botOrGetter));
+	router.post('/alerts/:alertId/acknowledge', ...adminWrite, acknowledgeAlert);
+	router.get('/alerts/:alertId/acknowledgements/breakdown', ...adminRead, getAcknowledgementBreakdown);
 	router.get('/alerts/:alertId', ...adminRead, getAlertById);
 	router.get('/outcomes', ...adminRead, listOutcomes);
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);

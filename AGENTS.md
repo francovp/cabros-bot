@@ -555,6 +555,34 @@ The system provides status and capability querying endpoints to verify service c
 - Dependency checking (like querying the TradingView MCP or testing Firestore credentials) is done safely and returns detailed state status (`ready`, `error`, `unconfigured`) in a clean JSON format.
 - `deliveryMetrics` is fail-open: malformed or missing `durationMs` values are excluded from latency averages without blocking delivery; counters reset on process restart (acceptable for operational monitoring) and never return values for channels that have not recorded any deliveries.
 
+## Alert Acknowledgement Tracking (GH-812)
+
+`POST /api/alerts/:alertId/acknowledge` and `GET /api/alerts/:alertId/acknowledgements/breakdown` close the trader-side feedback loop for the signal-outcome tracker. Each acknowledgement joins a trader's action (`took_trade`, `skipped`, `no_trade_no_signal`, or `snoozed`) to a stored alert, enabling per-trader expectancy attribution that complements the existing population-level shadow-mode metrics.
+
+**Schema** — new Firestore collection `alertAcknowledgements` (deny-by-default client; admin-only server-side), with a per-record `expiresAt` that mirrors `ALERT_STORAGE_RETENTION_DAYS` (default 90, bounded 1-3650). The same `(alertId, chatId)` pair maps to a single document id (`<alertId>__<sanitized chatId>`), so a second call from the same chat updates the record instead of creating a duplicate. The `acknowledgedAt` field is set on the first write and preserved across updates; `updatedAt` is refreshed on every write.
+
+**Privacy boundary** — the `chatId` is the only sensitive field on the document and is never returned in any list, breakdown, or acknowledgement response. Notes are trimmed and capped at 280 characters; safe characters only.
+
+**Core Components**:
+- `src/services/storage/AlertAcknowledgementService.js` — Lazy Firestore singleton (reuses `AlertStorageService.getFirestore()`), fail-open to a process-local in-memory store on init or write failure. `saveAcknowledgement` / `getAcknowledgement` / `listAcknowledgements` / `getAcknowledgementBreakdown` plus the in-memory store with retention expiry eviction.
+- `src/controllers/alerts/alerts.js` — `acknowledgeAlert` and `getAcknowledgementBreakdown` controllers that map the service's `INVALID_REQUEST` and `STORAGE_UNAVAILABLE_CODE` to 400 / 503, validate the action enum, enforce the 280-char notes cap, and confirm the stored alert exists before persisting.
+- `src/routes/index.js` — `POST /api/alerts/:alertId/acknowledge` (admin.operator) and `GET /api/alerts/:alertId/acknowledgements/breakdown` (admin.viewer) routes behind the existing Firebase Admin auth middleware.
+- `src/openapi/openapi.json` — New `AlertAcknowledgement` and `AlertAcknowledgementBreakdown` schemas plus operation entries for both endpoints.
+- `CabrosBot.postman_collection.json` — `POST Acknowledge Alert (took_trade)`, `POST Acknowledge Alert (skipped)`, and `GET Alert Acknowledgement Breakdown` request entries with valid + 4xx/5xx example responses.
+
+**Failure behavior**:
+- `403 FEATURE_DISABLED` when `ENABLE_FIRESTORE_ALERT_STORAGE` is unset.
+- `400 INVALID_REQUEST` for missing `chatId`, unknown action, or `chatId` that fails sanitization.
+- `404 NOT_FOUND` when the stored alert id does not exist.
+- `503 STORAGE_UNAVAILABLE` when Firestore is enabled but unavailable; the service logs the failure and falls back to the in-memory store so the endpoint never blocks alert delivery.
+
+**Coverage**:
+- `tests/unit/alert-acknowledgement-service.test.js` — 26 cases covering isEnabled, save / get / list / breakdown, action normalization, notes truncation, chat-id sanitization, idempotency, retention filtering, and the Firestore + memory fallback paths.
+- `tests/integration/alert-acknowledge-endpoint.test.js` — 11 cases covering 401, 403, 400 (missing chatId, invalid action), 404, 503, the 201 sanitized success path, idempotent re-ack, and the breakdown endpoint contract.
+- `tests/unit/openapi-contract.test.js` — Updated `firebaseAdminOperations` set and `expectedRoles` map to cover the new operator/viewer paths and ensure the new endpoints stay in the contract guard.
+
+The Telegram inline-keyboard extension, the `/outcomes` command acknowledgement footer, and the `?includeAcknowledgments=true` summary breakdown remain out of scope for this delivery and are tracked as follow-up work alongside the existing `automation/ready` and `enhancement` issues.
+
 ## Alert Delivery SLA & Error Budget Metrics (GH-687)
 
 `GET /api/status` and `/api/capabilities` now expose an optional `deliveryMetrics` section reporting in-memory per-channel delivery success/failure counts, success rate, and average delivery latency aggregated across the current process lifetime. The section is omitted entirely until at least one channel records a delivery; counters reset on process restart.
