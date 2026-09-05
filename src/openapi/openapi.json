@@ -3250,7 +3250,10 @@
         "properties": {
           "window": {
             "type": "object",
-            "required": ["startedAt", "durationMs"],
+            "required": [
+              "startedAt",
+              "durationMs"
+            ],
             "properties": {
               "startedAt": {
                 "type": "string",
@@ -3296,7 +3299,13 @@
       },
       "DeliveryChannelMetrics": {
         "type": "object",
-        "required": ["success", "failure", "total", "successRate", "averageDeliveryMs"],
+        "required": [
+          "success",
+          "failure",
+          "total",
+          "successRate",
+          "averageDeliveryMs"
+        ],
         "properties": {
           "success": {
             "type": "integer",
@@ -3411,7 +3420,10 @@
       "Error": {
         "type": "object",
         "required": [
-          "error"
+          "error",
+          "success",
+          "code",
+          "retryable"
         ],
         "properties": {
           "error": {
@@ -3423,6 +3435,24 @@
           "jobId": {
             "type": "string",
             "description": "Durably stored job identifier returned when queue acceptance is indeterminate."
+          },
+          "success": {
+            "type": "boolean",
+            "const": false,
+            "description": "Always false on error responses."
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Request correlation UUID; echoes the X-Request-Id header when available."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "True when the client should retry the request (5xx or 429)."
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Optional extra context for the failure; caller is responsible for sanitizing secrets."
           }
         }
       },
@@ -4379,11 +4409,26 @@
                 "type": "object",
                 "description": "Counts TradingView enrichment outcomes; requested alerts without a stored status are reported as unrecorded.",
                 "properties": {
-                  "full": { "type": "integer", "minimum": 0 },
-                  "partial": { "type": "integer", "minimum": 0 },
-                  "failed": { "type": "integer", "minimum": 0 },
-                  "not_applicable": { "type": "integer", "minimum": 0 },
-                  "unrecorded": { "type": "integer", "minimum": 0 }
+                  "full": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "partial": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "failed": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "not_applicable": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "unrecorded": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
                 }
               },
               "riskMetadataCoverage": {
@@ -4401,22 +4446,43 @@
                   "zeroSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "oneToTwoSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "threePlusSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "totalSourceCount": {
