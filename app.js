@@ -6,6 +6,8 @@ const { createCorsMiddleware } = require('./src/lib/cors');
 const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
+const { getPublicStatus } = require('./src/controllers/publicStatus');
+const { getStatus: getAdminStatus } = require('./src/controllers/status');
 
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
@@ -38,6 +40,11 @@ app.get('/ready', (req, res) => {
 	const status = bootstrapReadiness.getStatus();
 	return res.status(status.ready ? 200 : 503).json(status);
 });
+
+// Public, unauthenticated, read-only status snapshot. Mounted before the
+// rate limiter so monitoring traffic and embedded status widgets never hit
+// the global bucket and never require operator credentials.
+app.get('/api/public/status', getPublicStatus(getAdminStatus));
 
 // Rate Limiter (must be after healthcheck to avoid limiting health checks)
 app.use(require('./src/lib/rateLimiter'));
