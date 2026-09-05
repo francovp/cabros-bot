@@ -1172,6 +1172,7 @@ List stored alerts ordered by `receivedAt` descending.
 - `before` - Either a legacy ISO-8601 timestamp cursor or the opaque `nextBefore` token from a previous response
 - `source` - Optional source filter. Valid values include `webhook`, `news-monitor`, `market-scanner`, and `expanded-analysis`.
 - `enriched` - Optional boolean filter (`true` or `false`)
+- `include` - Optional projection filter. Allowed value: `enrichment_summary`. When set, each returned alert item includes a sanitized `enrichmentSummary` projection object (with `sentiment`, `sentiment_score`, `setup_type`, `invalidation_level`, `target_level`, `risk_reward_ratio`, `sourceCount`, `sourceDomains`, `tradingViewEnrichmentApplied`, `tradingViewEnrichmentStatus`, and `promptProvenance`) and a sanitized `enrichmentData` payload without requiring N+1 detail fetches.
 
 **Response (200 OK):**
 ```json

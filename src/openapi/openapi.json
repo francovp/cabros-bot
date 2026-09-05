@@ -352,11 +352,17 @@
           },
           {
             "$ref": "#/components/parameters/Enriched"
+          },
+          {
+            "$ref": "#/components/parameters/AlertListInclude"
           }
         ],
         "responses": {
           "200": {
             "$ref": "#/components/responses/AlertList"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -1853,6 +1859,17 @@
           "maximum": 100,
           "default": 50
         }
+      },
+      "AlertListInclude": {
+        "name": "include",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "enrichment_summary"
+          ]
+        },
+        "description": "Optional projections to include in list records. Allowed values: enrichment_summary."
       },
       "OutcomeLimit": {
         "name": "limit",
@@ -4081,6 +4098,103 @@
           }
         }
       },
+      "EnrichmentSummary": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "description": "Sanitized, bounded summary projection of alert enrichment metadata requested via include=enrichment_summary.",
+        "properties": {
+          "sentiment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Trading sentiment signal (e.g. BULLISH, BEARISH, NEUTRAL)."
+          },
+          "sentiment_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Normalized sentiment score."
+          },
+          "setup_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Technical setup type (e.g. breakout, continuation)."
+          },
+          "invalidation_level": {
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Price level where setup is invalidated."
+          },
+          "target_level": {
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Target take-profit price level."
+          },
+          "risk_reward_ratio": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Calculated risk-reward ratio."
+          },
+          "sourceCount": {
+            "type": "integer",
+            "description": "Number of reference sources attached to the enrichment."
+          },
+          "sourceDomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Up to 10 unique lowercase hostnames extracted from source URLs."
+          },
+          "tradingViewEnrichmentApplied": {
+            "type": "boolean",
+            "description": "Whether TradingView MCP technical data was incorporated."
+          },
+          "tradingViewEnrichmentStatus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Status of TradingView enrichment (e.g. full, partial, none)."
+          },
+          "promptProvenance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PromptProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "StoredAlert": {
         "type": "object",
         "description": "Stored alert document. The `source` field identifies the producing flow (webhook, news-monitor, market-scanner, expanded-analysis). When the report text exceeded the 20,000-character storage cap, `truncated: true` and `originalLength` are populated so consumers and replay can flag the loss; replay will redeliver only the truncated text.",
@@ -4104,6 +4218,9 @@
               "null"
             ],
             "additionalProperties": true
+          },
+          "enrichmentSummary": {
+            "$ref": "#/components/schemas/EnrichmentSummary"
           },
           "tokenUsage": {
             "type": [

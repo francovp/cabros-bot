@@ -757,6 +757,132 @@ describe('AlertStorageService', () => {
 			expect(result.alerts[0]).not.toHaveProperty('originalLength');
 		});
 
+		it('projects sanitized enrichmentData and enrichmentSummary when include=enrichment_summary is requested', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-enriched-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'BTC breakout',
+						enriched: true,
+						enrichmentData: {
+							sentiment: '  BULLISH  ',
+							sentiment_score: 0.85,
+							setup_type: 'breakout',
+							invalidation_level: 64200,
+							target_level: 68500,
+							risk_reward_ratio: 2.5,
+							sources: [
+								'https://coindesk.com/article/1',
+								{ url: 'https://cointelegraph.com/news/2' },
+								'invalid-url',
+							],
+							tradingViewEnrichmentApplied: true,
+							tradingViewEnrichmentStatus: 'full',
+							promptProvenance: {
+								name: 'crypto-sentiment',
+								source: 'langfuse',
+								label: 'production',
+								version: 2,
+								secretToken: 'do-not-leak',
+							},
+							internalSecret: 'sensitive-gemini-key',
+							rawAnalysis: 'unbounded raw text',
+						},
+						channels: ['telegram'],
+						deliveryResults: [{ channel: 'telegram', success: true }],
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listAlerts({
+				limit: 1,
+				include: ['enrichment_summary'],
+			});
+
+			expect(result.alerts).toHaveLength(1);
+			const alert = result.alerts[0];
+
+			const expectedProjection = {
+				sentiment: 'BULLISH',
+				sentiment_score: 0.85,
+				setup_type: 'breakout',
+				invalidation_level: 64200,
+				target_level: 68500,
+				risk_reward_ratio: 2.5,
+				sourceCount: 3,
+				sourceDomains: ['coindesk.com', 'cointelegraph.com'],
+				tradingViewEnrichmentApplied: true,
+				tradingViewEnrichmentStatus: 'full',
+				promptProvenance: {
+					name: 'crypto-sentiment',
+					source: 'langfuse',
+					label: 'production',
+					version: 2,
+					schemaDriftDetected: false,
+				},
+			};
+
+			expect(alert.enrichmentData).toEqual(expectedProjection);
+			expect(alert.enrichmentSummary).toEqual(expectedProjection);
+			expect(alert.enrichmentData).not.toHaveProperty('internalSecret');
+			expect(alert.enrichmentData).not.toHaveProperty('rawAnalysis');
+			expect(alert.enrichmentData.promptProvenance).not.toHaveProperty('secretToken');
+		});
+
+		it('returns null enrichment projection for unenriched alerts when include=enrichment_summary is requested', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-plain-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'Plain alert',
+						enriched: false,
+						enrichmentData: null,
+						channels: ['telegram'],
+						deliveryResults: [{ channel: 'telegram', success: true }],
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listAlerts({
+				limit: 1,
+				includeEnrichmentSummary: true,
+			});
+
+			expect(result.alerts).toHaveLength(1);
+			expect(result.alerts[0].enrichmentData).toBeNull();
+			expect(result.alerts[0].enrichmentSummary).toBeNull();
+		});
+
+		it('preserves raw doc enrichmentData and omits enrichmentSummary when include is not requested', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-raw-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'Alert with raw enrichment',
+						enriched: true,
+						enrichmentData: {
+							customField: 'unmodified-payload',
+						},
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listAlerts({ limit: 1 });
+			expect(result.alerts[0].enrichmentData).toEqual({
+				customField: 'unmodified-payload',
+			});
+			expect(result.alerts[0]).not.toHaveProperty('enrichmentSummary');
+		});
+
 		it('hides expired alerts and ages legacy records from receivedAt', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
@@ -2535,5 +2661,81 @@ describe('AlertStorageService', () => {
 				});
 			});
 		});
+
+		describe('extractSourceDomains()', () => {
+			it('extracts unique lowercase hostnames from string and object source entries', () => {
+				const sources = [
+					'https://Bloomberg.com/news/1',
+					{ url: 'https://COINDESK.COM/article/2' },
+					'https://bloomberg.com/news/other', // duplicate
+					'not-a-url',
+					null,
+					123,
+				];
+				expect(AlertStorageService.extractSourceDomains(sources)).toEqual([
+					'bloomberg.com',
+					'coindesk.com',
+				]);
+			});
+
+			it('caps source domains at 10 items', () => {
+				const sources = Array.from({ length: 15 }, (_, i) => `https://domain${i}.com/page`);
+				const result = AlertStorageService.extractSourceDomains(sources);
+				expect(result).toHaveLength(10);
+				expect(result[0]).toBe('domain0.com');
+			});
+
+			it('returns empty array when sources is not an array', () => {
+				expect(AlertStorageService.extractSourceDomains(null)).toEqual([]);
+				expect(AlertStorageService.extractSourceDomains(undefined)).toEqual([]);
+				expect(AlertStorageService.extractSourceDomains('not-array')).toEqual([]);
+			});
+		});
+
+		describe('formatEnrichmentSummary()', () => {
+			it('returns null for non-object, null, or array inputs', () => {
+				expect(AlertStorageService.formatEnrichmentSummary(null)).toBeNull();
+				expect(AlertStorageService.formatEnrichmentSummary(undefined)).toBeNull();
+				expect(AlertStorageService.formatEnrichmentSummary([])).toBeNull();
+				expect(AlertStorageService.formatEnrichmentSummary('invalid')).toBeNull();
+			});
+
+			it('clips sentiment to 32 chars and setup_type to 64 chars', () => {
+				const result = AlertStorageService.formatEnrichmentSummary({
+					sentiment: 'A'.repeat(50),
+					setup_type: 'B'.repeat(100),
+				});
+				expect(result.sentiment).toBe('A'.repeat(32));
+				expect(result.setup_type).toBe('B'.repeat(64));
+			});
+
+			it('handles alternate camelCase field names for sentimentScore and setupType', () => {
+				const result = AlertStorageService.formatEnrichmentSummary({
+					sentimentScore: 0.75,
+					setupType: 'continuation',
+					invalidationLevel: 100,
+					targetLevel: 200,
+					riskRewardRatio: 2.0,
+				});
+				expect(result.sentiment_score).toBe(0.75);
+				expect(result.setup_type).toBe('continuation');
+				expect(result.invalidation_level).toBe(100);
+				expect(result.target_level).toBe(200);
+				expect(result.risk_reward_ratio).toBe(2.0);
+			});
+
+			it('falls back to docData for tradingViewEnrichment fields if missing from enrichmentData', () => {
+				const result = AlertStorageService.formatEnrichmentSummary(
+					{ sentiment: 'NEUTRAL' },
+					{
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'partial',
+					}
+				);
+				expect(result.tradingViewEnrichmentApplied).toBe(true);
+				expect(result.tradingViewEnrichmentStatus).toBe('partial');
+			});
+		});
 	});
 });
+
