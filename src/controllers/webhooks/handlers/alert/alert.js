@@ -25,6 +25,7 @@ const {
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
+const { signalCrossTimeframeCooldown, SUPPRESSION_REASON: CROSS_TF_SUPPRESSION_REASON } = require('../../../../services/alerts/signalCrossTimeframeCooldown');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
 const {
@@ -259,6 +260,7 @@ function postAlert(botOrGetter) {
 			// reservation is made before delivery so overlapping requests cannot
 			// both send; failed channels remain retryable.
 			let suppressedRepeat = false;
+			let suppressionReason = null;
 			let reservation = null;
 			let deliveryRouting = routing;
 			let repeatCooldownOptions;
@@ -309,6 +311,41 @@ function postAlert(botOrGetter) {
 						if (verdict.channels.length < requestedChannels.length) {
 							deliveryRouting = { ...routing, channels: verdict.channels.map(getChannelName) };
 						}
+					}
+				}
+			}
+
+			// Opt-in cross-timeframe collapse: same (exchange, symbol, side)
+			// on a DIFFERENT timeframe inside ALERT_CROSS_TF_WINDOW_MS skips
+			// channel delivery. Same-timeframe repeats are not re-checked here
+			// because the same-timeframe rule above already owns that path.
+			// Disabled by default; storage errors fail open. Records the new
+			// signal only when the previous same-side match was on a different
+			// timeframe so opposite-side flips and same-timeframe repeats
+			// remain recorded under their respective modules.
+			if (signalCrossTimeframeCooldown.isEnabled()) {
+				const parsedSignal = parseTradingViewSignal(alert.text);
+				if (parsedSignal && parsedSignal.symbol && parsedSignal.side) {
+					const crossTfVerdict = signalCrossTimeframeCooldown.check({
+						exchange: parsedSignal.exchange,
+						symbol: parsedSignal.symbol,
+						timeframe: parsedSignal.timeframe,
+						side: parsedSignal.side,
+					});
+					if (crossTfVerdict.suppressed) {
+						suppressedRepeat = true;
+						suppressionReason = CROSS_TF_SUPPRESSION_REASON;
+						signalCrossTimeframeCooldown.recordSuppression();
+						console.log(
+							`[Alert] Cross-timeframe suppressed for ${crossTfVerdict.key} (prior ${crossTfVerdict.priorTimeframe} -> ${crossTfVerdict.incomingTimeframe}, ${Math.round(crossTfVerdict.elapsedMs / 1000)}s elapsed, retry in ${Math.round(crossTfVerdict.retryInMs / 1000)}s)`,
+						);
+					} else {
+						signalCrossTimeframeCooldown.record({
+							exchange: parsedSignal.exchange,
+							symbol: parsedSignal.symbol,
+							timeframe: parsedSignal.timeframe,
+							side: parsedSignal.side,
+						});
 					}
 				}
 			}
@@ -411,6 +448,7 @@ function postAlert(botOrGetter) {
 				results,
 				enriched,
 				suppressedRepeat: suppressedRepeat || undefined,
+				suppressionReason: suppressionReason || undefined,
 				tokenUsage: tokenUsageJSON,
 				requestedChannels,
 				deliveredChannels,
@@ -448,6 +486,7 @@ function postAlert(botOrGetter) {
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
 				suppressedRepeat,
+				suppressionReason,
 				source: body.source || 'webhook-alert',
 				telegramChatId: routing.telegramChatId,
 				telegramThreadId: routing.telegramThreadId,

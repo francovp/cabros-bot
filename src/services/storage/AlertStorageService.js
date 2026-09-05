@@ -68,6 +68,7 @@ const VALID_SETUP_TYPES = new Set([
 	'reversal',
 ]);
 const VALID_TRADINGVIEW_ENRICHMENT_STATUSES = new Set(['full', 'partial', 'failed', 'not_applicable']);
+const VALID_SUPPRESSION_REASONS = new Set(['cross_timeframe_duplicate']);
 
 // Lazy Firestore singleton
 let db = null;
@@ -204,6 +205,9 @@ function formatAlertDocument(doc, options = {}) {
 	}
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
+	}
+	if (typeof data.suppressionReason === 'string' && VALID_SUPPRESSION_REASONS.has(data.suppressionReason)) {
+		docObj.suppressionReason = data.suppressionReason;
 	}
 	if (typeof data.eventCategory === 'string') {
 		docObj.eventCategory = data.eventCategory;
@@ -1093,6 +1097,7 @@ async function saveAlertInternal({
 	tradingViewEnrichmentApplied,
 	tradingViewEnrichmentStatus,
 	suppressedRepeat,
+	suppressionReason,
 	processingTimeMs,
 	source,
 	eventCategory,
@@ -1154,6 +1159,9 @@ async function saveAlertInternal({
 		if (suppressedRepeat === true) {
 			document.suppressedRepeat = true;
 			document.deliveryResults = [];
+		}
+		if (typeof suppressionReason === 'string' && VALID_SUPPRESSION_REASONS.has(suppressionReason)) {
+			document.suppressionReason = suppressionReason;
 		}
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
 		if (normalizedProcessingTimeMs !== null) {
