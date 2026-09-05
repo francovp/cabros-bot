@@ -364,6 +364,27 @@
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
     },
+    "ENABLE_ALERT_SYNTH_BURST_AGGREGATION": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Buffer parsed webhook alerts with identical routing and direction for a short rolling window and emit a single aggregated regime message when the minimum number of signals accumulates (CB-1104)",
+      "valueType": "BOOLEAN"
+    },
+    "ALERT_BURST_WINDOW_MS": {
+      "defaultValue": {
+        "value": "3000"
+      },
+      "description": "Rolling window in milliseconds used to coalesce same-direction webhook alerts into a single regime message (min 1000, max 15000)",
+      "valueType": "NUMBER"
+    },
+    "ALERT_BURST_MIN_SIGNALS": {
+      "defaultValue": {
+        "value": "3"
+      },
+      "description": "Minimum number of same-direction parsed alerts that must accumulate inside the burst window before a single regime message is delivered instead of individual alerts (min 2, max 20)",
+      "valueType": "NUMBER"
+    },
     "ENABLE_BINANCE_ORDER_AUDIT": {
       "defaultValue": {
         "value": "false"

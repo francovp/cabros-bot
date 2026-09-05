@@ -85,6 +85,7 @@ function createProcessLifecycle(options = {}) {
 		stopNewsMonitorScheduler = () => undefined,
 		stopRemoteConfig = () => undefined,
 		shutdownNewsMonitor = () => undefined,
+		shutdownBurstAggregator = () => undefined,
 		flushSentry = () => undefined,
 		timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
 		logger = console,
@@ -184,6 +185,7 @@ function createProcessLifecycle(options = {}) {
 					safelyRun(logger, 'news monitor scheduler', () => stopNewsMonitorScheduler({ drain: true })),
 					safelyRun(logger, 'remote config service', stopRemoteConfig),
 					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
+					safelyRun(logger, 'burst aggregator windows', shutdownBurstAggregator),
 				]);
 				await safelyRun(logger, 'Sentry', () => flushSentry(Math.min(shutdownTimeoutMs, 2000)));
 			};

@@ -68,6 +68,9 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_ALERT_SYNTH_BURST_AGGREGATION: { type: 'boolean', defaultValue: false },
+	ALERT_BURST_WINDOW_MS: { type: 'number', defaultValue: 3000, integer: true, min: 1000, max: 15000 },
+	ALERT_BURST_MIN_SIGNALS: { type: 'number', defaultValue: 3, integer: true, min: 2, max: 20 },
 	ENABLE_BINANCE_ORDER_AUDIT: { type: 'boolean', defaultValue: false },
 	BINANCE_ORDER_AUDIT_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
 });
