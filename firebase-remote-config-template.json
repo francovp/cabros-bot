@@ -377,6 +377,13 @@
       },
       "description": "Audit log retention in days before Firestore TTL expiry",
       "valueType": "NUMBER"
+    },
+    "WHATSAPP_TEMPLATE_PARAM_ORDER": {
+      "defaultValue": {
+        "value": "symbol,price,action,setup,timeframe,source"
+      },
+      "description": "Comma-separated ordered parameter names extracted from the alert for GreenAPI sendTemplate placeholders. Each maps to a field in alert.enriched or alert. Missing fields produce empty strings. WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, and WHATSAPP_TEMPLATE_NAMESPACE are excluded (notification destinations).",
+      "valueType": "STRING"
     }
   },
   "version": {

@@ -18,6 +18,7 @@ const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
+const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
@@ -359,6 +360,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -383,6 +385,7 @@ function getStatus() {
 			discord,
 			webhookAuth,
 			whatsappCommandBridge: whatsAppCommandBridgeService.getStatus(),
+			whatsappTemplate: getWhatsAppTemplateStatus(),
 			gemini,
 			geminiQuota,
 			groundingCoalescing: getCoalescingStatus(),
