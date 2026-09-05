@@ -402,6 +402,43 @@ describe('News Alert Source Formatting', () => {
 			expect(message).not.toContain('Horizonte:');
 			expect(message).not.toContain('Invalidación:');
 		});
+
+		// Regression coverage for GH-711 — MarkdownV2-reserved punctuation in
+		// invalidation_hint must be escaped so the parser does not reject the
+		// entire message and fall back to plain text.
+		it('should escape MarkdownV2-reserved punctuation in invalidation_hint (GH-711)', () => {
+			const analysis = {
+				event_category: 'price_surge',
+				headline: 'BTC breaks major resistance',
+				sentiment_score: 0.75,
+				confidence: 0.85,
+				invalidation_hint: 'Reversal below (80,000). Watch for spike!',
+			};
+
+			const message = analyzer.formatAlertMessage('BTCUSDT', analysis, { price: 83500 });
+
+			// Reserved characters must be backslash-escaped
+			expect(message).toContain('Invalidación: Reversal below \\(80,000\\)\\. Watch for spike\\!');
+			expect(message).not.toContain('Invalidación: Reversal below (80,000). Watch for spike!');
+		});
+
+		it('should escape MarkdownV2-reserved punctuation in invalidation_hint inside buildAlert summary (GH-711)', () => {
+			const geminiAnalysis = {
+				event_category: 'price_surge',
+				headline: 'BTC breaks major resistance',
+				sentiment_score: 0.75,
+				confidence: 0.85,
+				time_horizon: 'short_term',
+				invalidation_hint: 'Reversal below (80,000).',
+			};
+
+			const marketContext = { price: 83500, change24h: 5.2 };
+
+			const alert = analyzer.buildAlert('BTCUSDT', geminiAnalysis, marketContext, null, null);
+
+			expect(alert.enriched.summary).toContain('*Invalidación:* Reversal below \\(80,000\\)\\.');
+			expect(alert.enriched.summary).not.toContain('*Invalidación:* Reversal below (80,000).');
+		});
 	});
 
 	describe('WhatsApp and MarkdownV2 news alert formatting with invalidation and horizon', () => {

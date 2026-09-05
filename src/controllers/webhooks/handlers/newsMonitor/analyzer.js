@@ -23,7 +23,11 @@ const {
 	validateNotificationRouting,
 } = require('../../../../services/notification/requestRouting');
 
+const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
+
 const promptService = getPromptService();
+
+const markdownV2Formatter = new MarkdownV2Formatter();
 
 // Placeholder for NotificationManager - will be injected
 let notificationManager = null;
@@ -1194,7 +1198,7 @@ class NewsAnalyzer {
 		}
 
 		if (geminiAnalysis.invalidation_hint && typeof geminiAnalysis.invalidation_hint === 'string' && geminiAnalysis.invalidation_hint.trim()) {
-			context += `\n*Invalidación:* ${geminiAnalysis.invalidation_hint.trim()}`;
+			context += `\n*Invalidación:* ${markdownV2Formatter.format(geminiAnalysis.invalidation_hint.trim())}`;
 		}
 
 		// Derive outcome barriers when marketContext has a valid numeric price
@@ -1323,7 +1327,7 @@ class NewsAnalyzer {
 		}
 
 		if (analysis.invalidation_hint && typeof analysis.invalidation_hint === 'string' && analysis.invalidation_hint.trim()) {
-			message += `Invalidación: ${analysis.invalidation_hint.trim()}\n`;
+			message += `Invalidación: ${markdownV2Formatter.format(analysis.invalidation_hint.trim())}\n`;
 		}
 
 		if (analysis.sources && Array.isArray(analysis.sources) && analysis.sources.length > 0) {
