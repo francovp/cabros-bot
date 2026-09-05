@@ -1434,6 +1434,165 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/enrollments": {
+      "get": {
+        "tags": [
+          "Chat enrollments"
+        ],
+        "summary": "Summarize Telegram chat enrollments collected via /start deep links",
+        "description": "Returns sanitized aggregate counts (total chats, language distribution, watchlist symbol distribution) for the opt-in chatEnrollments collection. Chat IDs are never returned unless the caller is an admin operator AND `includeChatIds=true`. Requires `ENABLE_CHAT_ENROLLMENTS=true`. When the flag is disabled, the endpoint returns 403 FEATURE_DISABLED. When Firestore is enabled but unreachable, returns 503 STORAGE_UNAVAILABLE.",
+        "operationId": "listEnrollments",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Bounded document scan window for the in-memory aggregation cache; integer between 1 and 1000 (default: 200).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 200
+            }
+          },
+          {
+            "name": "includeChatIds",
+            "in": "query",
+            "required": false,
+            "description": "Operator-only flag: when true and the caller is an admin operator, the response includes a `records` array with the sanitized chat IDs. Viewer callers receive the summary without records regardless of the flag.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ],
+              "default": "false"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sanitized enrollment summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentsSummary"
+                },
+                "examples": {
+                  "viewer": {
+                    "summary": "Admin viewer response (no chat IDs)",
+                    "value": {
+                      "mode": "durable",
+                      "backend": "firestore",
+                      "count": 42,
+                      "languages": [
+                        { "value": "es", "total": 30 },
+                        { "value": "en", "total": 12 }
+                      ],
+                      "watchlist": [
+                        { "value": "BTCUSDT", "total": 18 },
+                        { "value": "ETHUSDT", "total": 9 }
+                      ]
+                    }
+                  },
+                  "operator": {
+                    "summary": "Admin operator response (with chat IDs)",
+                    "value": {
+                      "mode": "durable",
+                      "backend": "firestore",
+                      "count": 2,
+                      "languages": [
+                        { "value": "es", "total": 1 },
+                        { "value": "en", "total": 1 }
+                      ],
+                      "watchlist": [
+                        { "value": "BTCUSDT", "total": 1 }
+                      ],
+                      "records": [
+                        {
+                          "chatId": "555",
+                          "chatType": "group",
+                          "language": "es",
+                          "watchlist": ["BTCUSDT"],
+                          "refSource": "launch"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters (limit out of range or non-integer).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "Invalid limit. Use an integer between 1 and 1000.",
+                  "code": "INVALID_REQUEST"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "description": "Feature disabled or insufficient admin role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "featureDisabled": {
+                    "value": {
+                      "error": "Chat enrollments are disabled. Set ENABLE_CHAT_ENROLLMENTS=true to enable.",
+                      "code": "FEATURE_DISABLED"
+                    }
+                  },
+                  "forbidden": {
+                    "value": {
+                      "error": "Admin viewer role required for chat enrollment summary.",
+                      "code": "FORBIDDEN"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Chat enrollment storage is enabled but unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "Chat enrollment storage is unavailable.",
+                  "code": "STORAGE_UNAVAILABLE"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/trading/binance/orders": {
       "get": {
         "tags": [
@@ -4650,6 +4809,128 @@
           },
           "summary": {
             "$ref": "#/components/schemas/AlertSummary"
+          }
+        }
+      },
+      "EnrollmentsSummary": {
+        "type": "object",
+        "required": [
+          "mode",
+          "backend",
+          "count",
+          "languages",
+          "watchlist"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "durable",
+              "ephemeral"
+            ],
+            "description": "Whether enrollments are persisted across process restarts (durable Firestore backend) or kept in memory only (ephemeral)."
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ],
+            "description": "Effective storage backend for chat enrollments."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total enrolled chats represented in the summary aggregation."
+          },
+          "languages": {
+            "type": "array",
+            "description": "Aggregated language preferences sorted by count desc.",
+            "items": {
+              "type": "object",
+              "required": [
+                "value",
+                "total"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "total": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "watchlist": {
+            "type": "array",
+            "description": "Aggregated watchlist symbols sorted by count desc.",
+            "items": {
+              "type": "object",
+              "required": [
+                "value",
+                "total"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "total": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "records": {
+            "type": "array",
+            "description": "Operator-only sanitized enrollment records. Present only when the caller is an admin operator and the `includeChatIds=true` query parameter is supplied.",
+            "items": {
+              "type": "object",
+              "required": [
+                "chatId"
+              ],
+              "properties": {
+                "chatId": {
+                  "type": "string",
+                  "description": "Telegram chat id (sanitized string)."
+                },
+                "chatType": {
+                  "type": "string",
+                  "enum": [
+                    "private",
+                    "group",
+                    "supergroup",
+                    "channel"
+                  ]
+                },
+                "language": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [
+                    "es",
+                    "en",
+                    null
+                  ]
+                },
+                "watchlist": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "refSource": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "enrolledAt": {
+                  "type": "integer",
+                  "nullable": true,
+                  "description": "Enrollment timestamp in milliseconds since epoch (UTC)."
+                }
+              }
+            }
           }
         }
       },

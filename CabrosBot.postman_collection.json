@@ -3921,6 +3921,134 @@
       ]
     },
     {
+      "name": "Chat Enrollments",
+      "item": [
+        {
+          "name": "GET List Enrollments",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Returns the sanitized /start deep-link enrollment summary (counts, language distribution, watchlist symbol distribution). Chat IDs are never returned unless the caller is an admin operator AND includeChatIds=true.",
+            "url": {
+              "raw": "{{baseUrl}}/api/enrollments?limit=200",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "enrollments"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "200",
+                  "description": "Bounded document scan window for the in-memory aggregation cache (1-1000, default 200)."
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - viewer summary (no chat IDs)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"mode\": \"durable\",\n  \"backend\": \"firestore\",\n  \"count\": 42,\n  \"languages\": [\n    { \"value\": \"es\", \"total\": 30 },\n    { \"value\": \"en\", \"total\": 12 }\n  ],\n  \"watchlist\": [\n    { \"value\": \"BTCUSDT\", \"total\": 18 },\n    { \"value\": \"ETHUSDT\", \"total\": 9 }\n  ]\n}"
+            },
+            {
+              "name": "200 OK - operator with chat IDs",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"mode\": \"durable\",\n  \"backend\": \"firestore\",\n  \"count\": 2,\n  \"languages\": [\n    { \"value\": \"es\", \"total\": 1 },\n    { \"value\": \"en\", \"total\": 1 }\n  ],\n  \"watchlist\": [\n    { \"value\": \"BTCUSDT\", \"total\": 1 }\n  ],\n  \"records\": [\n    {\n      \"chatId\": \"555\",\n      \"chatType\": \"group\",\n      \"language\": \"es\",\n      \"watchlist\": [\"BTCUSDT\"],\n      \"refSource\": \"launch\"\n    },\n    {\n      \"chatId\": \"123456\",\n      \"chatType\": \"private\",\n      \"language\": \"en\",\n      \"watchlist\": [],\n      \"refSource\": null\n    }\n  ]\n}"
+            },
+            {
+              "name": "200 OK - ephemeral mode (Firestore disabled)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"mode\": \"ephemeral\",\n  \"backend\": \"memory\",\n  \"count\": 1,\n  \"languages\": [\n    { \"value\": \"es\", \"total\": 1 }\n  ],\n  \"watchlist\": []\n}"
+            },
+            {
+              "name": "400 Invalid Limit",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 1000.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "403 Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Chat enrollments are disabled. Set ENABLE_CHAT_ENROLLMENTS=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Chat enrollment storage is unavailable.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Enrollments (operator - includeChatIds)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Same as the viewer summary but instructs the server to include the sanitized `records` array. Requires an admin operator API key with admin.operator role.",
+            "url": {
+              "raw": "{{baseUrl}}/api/enrollments?limit=200&includeChatIds=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "enrollments"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "200"
+                },
+                {
+                  "key": "includeChatIds",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - operator",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"mode\": \"durable\",\n  \"backend\": \"firestore\",\n  \"count\": 1,\n  \"languages\": [{ \"value\": \"es\", \"total\": 1 }],\n  \"watchlist\": [{ \"value\": \"BTCUSDT\", \"total\": 1 }],\n  \"records\": [\n    {\n      \"chatId\": \"555\",\n      \"chatType\": \"group\",\n      \"language\": \"es\",\n      \"watchlist\": [\"BTCUSDT\"],\n      \"refSource\": \"launch\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "200 OK - viewer flag silently ignored",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"mode\": \"durable\",\n  \"backend\": \"firestore\",\n  \"count\": 1,\n  \"languages\": [{ \"value\": \"es\", \"total\": 1 }],\n  \"watchlist\": [{ \"value\": \"BTCUSDT\", \"total\": 1 }]\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Async Jobs",
       "item": [
         {
