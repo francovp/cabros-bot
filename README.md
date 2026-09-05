@@ -974,7 +974,7 @@ When `ranked` is `true`, each successful scan also includes structured scores:
 Send alert via webhook. Accepts either JSON or plain text.
 
 Optional headers:
-- `x-request-id`: Optional client-supplied correlation ID (1-128 printable ASCII characters). If omitted or invalid, a UUIDv4 is generated.
+- `x-request-id`: Optional client-supplied correlation ID (1-128 printable ASCII characters). If omitted or invalid, a UUIDv4 is generated. The value is attached to the request as `req.requestId`, echoed back as the `X-Request-Id` response header, persisted on stored alerts, and forwarded to Sentry tags when reporting errors.
 - `idempotency-key` / `x-idempotency-key`: Optional replay key for deduplicating retries.
 
 Optional query param: `useTradingViewData=true` enables TradingView MCP technical enrichment for this request (requires `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`).

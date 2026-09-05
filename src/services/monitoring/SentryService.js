@@ -657,12 +657,14 @@ class SentryService {
 						status_code: String(event.http.statusCode),
 						http_category: `${Math.floor(Number(event.http.statusCode) / 100)}xx`,
 					}),
+					...(event.http.requestId && { request_id: String(event.http.requestId) }),
 				}),
 				...(event.external && {
 					provider: event.external.provider,
 					...(event.external.lastErrorCode && { provider_status_code: String(event.external.lastErrorCode) }),
 				}),
 				...(event.extra && event.extra.category && { category: String(event.extra.category) }),
+				...(event.extra && event.extra.requestId && { request_id: String(event.extra.requestId) }),
 				...(spanContext && {
 					trace_id: spanContext.traceId,
 					span_id: spanContext.spanId,

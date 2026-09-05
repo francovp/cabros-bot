@@ -1,6 +1,6 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
+const { v4: uuidv4 } = require('uuid'); // retained for fallback when req.requestId is not set
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const {
 	MarketScannerRequestError,
@@ -45,8 +45,8 @@ function resolveDryRun(req) {
 
 function postMarketScannerAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
-		const startTime = Date.now();
+		const requestId = (req && req.requestId) || uuidv4();
+		const startTime = (req && req.startTime) || Date.now();
 
 		try {
 			if (!getRuntimeConfig().ENABLE_MARKET_SCANNER) {
