@@ -428,6 +428,45 @@ describe('RemoteConfigService', () => {
 		expect(config.SIGNAL_OUTCOME_RETENTION_DAYS).toBe(180);
 	});
 
+	it('validates and applies Binance Spot trading parameters from Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({
+			BINANCE_TRADING_ENV: 'demo',
+			BINANCE_TRADING_ALLOWED_SYMBOLS: 'BTCUSDT,ETHUSDT',
+			BINANCE_TRADING_MAX_NOTIONAL: 5000,
+			BINANCE_TRADING_TIMEOUT_MS: 15000,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.BINANCE_TRADING_ENV).toBe('demo');
+		expect(config.BINANCE_TRADING_ALLOWED_SYMBOLS).toBe('BTCUSDT,ETHUSDT');
+		expect(config.BINANCE_TRADING_MAX_NOTIONAL).toBe(5000);
+		expect(config.BINANCE_TRADING_TIMEOUT_MS).toBe(15000);
+	});
+
+	it('rejects out-of-range and invalid Binance Spot trading parameters in env parsing', () => {
+		process.env.BINANCE_TRADING_ENV = 'mainnet'; // not in allowedValues
+		process.env.BINANCE_TRADING_MAX_NOTIONAL = '2000000'; // max 1000000
+		process.env.BINANCE_TRADING_TIMEOUT_MS = '500'; // min 1000
+		process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = '';
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.BINANCE_TRADING_ENV).toBe('testnet'); // fallback to default
+		expect(config.BINANCE_TRADING_ALLOWED_SYMBOLS).toBe(''); // default empty
+		expect(config.BINANCE_TRADING_MAX_NOTIONAL).toBe(1000); // fallback to default
+		expect(config.BINANCE_TRADING_TIMEOUT_MS).toBe(10000); // fallback to default
+	});
+
+	it('keeps BINANCE_API_KEY and BINANCE_API_SECRET out of the Remote Config schema', () => {
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('BINANCE_API_KEY');
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('BINANCE_API_SECRET');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('BINANCE_API_KEY');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('BINANCE_API_SECRET');
+	});
+
 	describe('getStatus readiness and lifecycle states', () => {
 		it('reports disabled readiness status when Remote Config is disabled', () => {
 			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'false';

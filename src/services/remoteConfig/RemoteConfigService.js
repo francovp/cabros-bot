@@ -30,6 +30,18 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ALERT_GROUNDING_COALESCE_MS: { type: 'number', defaultValue: 0, integer: true, min: 0, max: 60000 },
 	NEWS_CACHE_TTL_HOURS: { type: 'number', defaultValue: 6, min: 0, max: 720 },
 	BINANCE_FETCH_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
+	BINANCE_TRADING_ENV: {
+		type: 'string',
+		defaultValue: 'testnet',
+		allowedValues: ['testnet', 'demo', 'live'],
+	},
+	BINANCE_TRADING_ALLOWED_SYMBOLS: { type: 'string', defaultValue: '' },
+	BINANCE_TRADING_MAX_NOTIONAL: { type: 'number', defaultValue: 1000, integer: true, min: 0, max: 1000000 },
+	BINANCE_TRADING_TIMEOUT_MS: { type: 'number', defaultValue: 10000, integer: true, min: 1000, max: 60000 },
+	// NOTE: BINANCE_API_KEY and BINANCE_API_SECRET are intentionally excluded from
+	// Remote Config. They are secrets/credentials and the agents.md Firebase Remote
+	// Config parity policy classifies credentials as environment-only so they never
+	// enter the server-side template, status response, or logs.
 	TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: {
 		type: 'string',
 		defaultValue: '1h',
