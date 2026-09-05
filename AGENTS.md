@@ -1543,6 +1543,20 @@ Disabled by default preserves existing webhook behavior byte-for-byte.
 
 This change is workflow/documentation-only: no application environment variable, Remote Config key, endpoint, OpenAPI, or Postman contract changed.
 
+## Process Health Metrics Endpoint (GH-612 / Issue #612)
+
+`GET /api/metrics` is a new API-key-protected Node.js process health endpoint behind the admin auth middleware. It returns memory (`rss`, `heapUsed`, `heapTotal`, `external`, `arrayBuffers`), CPU usage (`process.cpuUsage()` user/system microseconds), event-loop lag (mean + max of N samples, ms), process metadata (PID, uptime seconds, Node version, platform, active handles/requests), and a top-level `node` mirror of `process.version`. All fields are computed lazily on each request so the endpoint has zero overhead when not called. The handler logs structured errors through `SentryService` and returns `500 INTERNAL_ERROR` when collection fails.
+
+**Core Components**:
+- `src/controllers/observability/metrics.js` — Lazy collectors with bounded `toFiniteNumber`/`toFiniteMillis`/`toFiniteSeconds` sanitizers, event-loop probe (`measureEventLoopLag`), and the `getMetrics` request handler.
+- `src/routes/index.js` — Registers `GET /api/metrics` with the shared admin-read middleware.
+- `src/openapi/openapi.json` — Adds the `/api/metrics` path and the `ProcessMetrics` schema.
+- `CabrosBot.postman_collection.json` — Adds a `Get Process Metrics` request with success and authorization variants.
+- `tests/unit/metrics-controller.test.js` — Covers the sanitizers, collectors, and request-handler success/error paths.
+- `tests/integration/metrics-endpoint.test.js` — Covers 401/403/200 paths and the legacy `api-key` query parameter.
+
+No new environment variable, Remote Config key, endpoint, or notification channel was added.
+
 ## Binance Market-Data Host Configuration (CB-244 / Issue #539)
 
 Added an application-owned `BINANCE_DATA_BASE_URL` env var (default `https://api.binance.com`) that overrides the default Binance REST host for **all** market-data client construction paths. The new variable is forwarded as `MainClient` `baseUrl` (which `binance@2.15.22` honors via `BaseRestClient.options.baseUrl` → `requestUtils.getRestBaseUrl`), so Railway production can route around the `HTTP 451 Service unavailable from restricted location` reply from `api.binance.com` without touching the trading order client or hot-patching `node_modules`. Affected paths: `SignalOutcomeService` sweep + entry fallback, `BinanceOrderService` live client (testnet stays pinned to `https://testnet.binance.vision`), news-monitor price fallback, and the `/precio` Telegram command. Malformed values fall back to the default with a `console.warn`, so a typo never silently breaks evaluation.

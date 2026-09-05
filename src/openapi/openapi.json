@@ -1746,6 +1746,63 @@
         ],
         "x-admin-role": "admin.viewer"
       }
+    },
+    "/api/metrics": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Get Node.js process health metrics",
+        "description": "Returns memory, CPU, and event-loop lag snapshots plus Node.js version and process metadata. All metrics are computed lazily on each request; idle processes have no overhead. The endpoint is API-key protected and requires the admin.viewer role.",
+        "operationId": "getMetrics",
+        "responses": {
+          "200": {
+            "description": "Process metrics snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessMetrics"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Authenticated but lacks the admin.viewer role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
     }
   },
   "components": {
@@ -6198,6 +6255,176 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "ProcessMetrics": {
+        "type": "object",
+        "description": "Node.js process health snapshot. All fields are computed lazily on each request; idle processes have no overhead.",
+        "required": [
+          "success",
+          "uptime",
+          "memory",
+          "cpu",
+          "eventLoop",
+          "process",
+          "node"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "uptime": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Process uptime in seconds (rounded to milliseconds).",
+            "minimum": 0
+          },
+          "memory": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Result of process.memoryUsage() in bytes. Fields default to 0 when source data is unavailable.",
+            "required": [
+              "rss",
+              "heapUsed",
+              "heapTotal",
+              "external",
+              "arrayBuffers"
+            ],
+            "properties": {
+              "rss": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "heapUsed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "heapTotal": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "external": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "arrayBuffers": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "cpu": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Result of process.cpuUsage() in microseconds. Fields default to 0 when source data is unavailable.",
+            "required": [
+              "user",
+              "system"
+            ],
+            "properties": {
+              "user": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "system": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "eventLoop": {
+            "type": "object",
+            "description": "Bounded event-loop lag probe (mean and max of N samples in ms).",
+            "required": [
+              "lagMs",
+              "maxLagMs",
+              "samples"
+            ],
+            "properties": {
+              "lagMs": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "description": "Mean lag in milliseconds. null when no samples were captured."
+              },
+              "maxLagMs": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "description": "Maximum observed lag in milliseconds across the sample window."
+              },
+              "samples": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Number of lag samples captured."
+              }
+            }
+          },
+          "process": {
+            "type": "object",
+            "required": [
+              "pid",
+              "uptime",
+              "nodeVersion",
+              "platform",
+              "activeHandles",
+              "activeRequests"
+            ],
+            "properties": {
+              "pid": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "uptime": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "nodeVersion": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "platform": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "activeHandles": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "activeRequests": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "node": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Mirror of process.version (e.g. v24.18.0)."
           }
         }
       }
