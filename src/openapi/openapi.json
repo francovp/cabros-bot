@@ -2261,13 +2261,18 @@
                       "discord"
                     ]
                   }
+                },
+                "reEnrich": {
+                  "type": "boolean",
+                  "description": "Optional opt-in flag. When true, the stored alert text is re-analyzed through TradingView MCP before delivery and the response includes both the original stored enrichment and the fresh re-enrichment payload. Fail-open: an MCP error or disabled gate falls back to the stored enrichment and reports reEnrichApplied=false. Defaults to false (legacy stored-enrichment replay)."
                 }
               }
             },
             "example": {
               "channels": [
                 "telegram"
-              ]
+              ],
+              "reEnrich": true
             }
           }
         }
@@ -2890,7 +2895,7 @@
         }
       },
       "DeliveryResult": {
-        "description": "Per-channel delivery result. When ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION is enabled and the same exchange/symbol/timeframe/side signal fires within its cooldown window, the response includes suppressedRepeat: true with empty results and deliveredChannels while the alert remains persisted with a suppression marker.",
+        "description": "Per-channel delivery result. When ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION is enabled and the same exchange/symbol/timeframe/side signal fires within its cooldown window, the response includes suppressedRepeat: true with empty results and deliveredChannels while the alert remains persisted with a suppression marker. When the request includes reEnrich: true, the response also carries reEnrich, reEnrichApplied, optional reEnrichReason, originalEnrichment, and reEnriched so callers can compare fresh TradingView MCP analysis against the stored snapshot.",
         "content": {
           "application/json": {
             "schema": {
@@ -4355,6 +4360,36 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "reEnrich": {
+            "type": "boolean",
+            "description": "True when the replay request opted in to fresh TradingView MCP re-analysis. Persisted for audit so operators can identify replays that requested a fresh MCP round-trip."
+          },
+          "reEnrichApplied": {
+            "type": "boolean",
+            "description": "True when the fresh MCP analysis succeeded and was used for delivery. False when the MCP gate was disabled, the call returned no data, or the call failed (fail-open)."
+          },
+          "reEnrichReason": {
+            "type": "string",
+            "enum": [
+              "tradingview-mcp-disabled",
+              "mcp-no-data",
+              "mcp-error"
+            ],
+            "description": "Populated only when reEnrich=true and reEnrichApplied=false. Identifies why the fresh TradingView MCP analysis was not used (gate disabled, no analysis returned, or MCP errored)."
+          },
+          "originalEnrichment": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Stored enrichment payload that was attached to the original alert at ingestion time. Returned only when the replay request used reEnrich=true so callers can diff the original against the fresh re-enrichment."
+          },
+          "reEnriched": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "Fresh TradingView MCP analysis payload applied to the replay, or null when the MCP call did not produce data or failed (fail-open)."
           }
         }
       },

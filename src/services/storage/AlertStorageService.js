@@ -1365,7 +1365,17 @@ async function getAlertById(alertId) {
  * @param {Array} params.deliveryResults
  * @returns {Promise<string|null>}
  */
-async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults }) {
+async function saveReplayAttempt({
+	alertId,
+	idempotencyKey,
+	channels,
+	deliveryResults,
+	reEnrich = false,
+	reEnrichApplied = false,
+	reEnrichReason = null,
+	originalEnrichment = null,
+	reEnriched = null,
+}) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		throw createStorageUnavailableError();
@@ -1384,6 +1394,19 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 		expiresAt: buildRetentionExpiryTimestamp(),
 		source: 'alert-replay',
 	};
+	if (reEnrich === true) {
+		document.reEnrich = true;
+		document.reEnrichApplied = reEnrichApplied === true;
+		if (typeof reEnrichReason === 'string' && reEnrichReason) {
+			document.reEnrichReason = reEnrichReason;
+		}
+		if (originalEnrichment && typeof originalEnrichment === 'object' && !Array.isArray(originalEnrichment)) {
+			document.originalEnrichment = stripUndefinedFieldsDeep(sanitizeEnrichmentData(originalEnrichment));
+		}
+		if (reEnriched && typeof reEnriched === 'object' && !Array.isArray(reEnriched)) {
+			document.reEnriched = stripUndefinedFieldsDeep(sanitizeEnrichmentData(reEnriched));
+		}
+	}
 
 	try {
 		await firestore.collection(REPLAY_COLLECTION_NAME).doc(replayId).set(document, { merge: false });
