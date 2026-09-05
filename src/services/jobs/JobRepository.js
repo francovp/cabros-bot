@@ -2,6 +2,9 @@
 
 const admin = require('firebase-admin');
 const alertStorageService = require('../storage/AlertStorageService');
+const { firestoreWriteMetricsService } = require('../storage/FirestoreWriteMetricsService');
+
+const WRITE_METRICS_DOMAIN_JOBS = 'jobs';
 
 const COLLECTION_NAME = 'tradingviewJobs';
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
@@ -184,8 +187,10 @@ class JobRepository {
 				} else {
 					await firestore.collection(COLLECTION_NAME).doc(sanitized.jobId).set(durableJob);
 				}
+				firestoreWriteMetricsService.recordWriteSuccess(WRITE_METRICS_DOMAIN_JOBS);
 			} catch (error) {
 				console.warn('[JobRepository] Failed to persist job:', error.message);
+				firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN_JOBS);
 				if (required) {
 					memoryJobs.delete(sanitized.jobId);
 					const storageError = new Error('Durable job storage is unavailable.');
@@ -757,5 +762,6 @@ module.exports = {
 		memoryJobs.clear();
 		saveVersions.clear();
 		pendingSaves.clear();
+		firestoreWriteMetricsService.resetForTesting();
 	},
 };
