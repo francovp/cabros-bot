@@ -7,14 +7,18 @@ const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
 
+function captureRawBody(req, _res, buffer) {
+	req.rawBody = Buffer.from(buffer);
+}
+
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
 
 // Tell express to use body-parser's urlencoded parsing
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, verify: captureRawBody }));
 // Tell express to use body-parser's JSON and text parsing
-app.use(express.text({ type: 'text/plain' }));
-app.use(express.json());
+app.use(express.text({ type: 'text/plain', verify: captureRawBody }));
+app.use(express.json({ verify: captureRawBody }));
 
 // Configurar Cabeseras y CORS
 app.use(createCorsMiddleware());

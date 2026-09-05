@@ -80,4 +80,44 @@ function isValidApiKey(req) {
 		&& crypto.timingSafeEqual(bufferApiKey, bufferValidApiKey);
 }
 
-module.exports = { isValidApiKey, validateApiKey };
+function validateWebhookSignature(req, res, next) {
+	const secret = process.env.WEBHOOK_SIGNING_SECRET;
+	if (!secret) return next();
+
+	const timestamp = req.headers && req.headers['x-webhook-timestamp'];
+	const signature = req.headers && req.headers['x-webhook-signature'];
+	if (typeof timestamp !== 'string' || typeof signature !== 'string') {
+		return res.status(401).json({
+			error: 'Unauthorized: Missing webhook signature',
+			code: 'WEBHOOK_SIGNATURE_MISSING',
+		});
+	}
+
+	const timestampMs = Number(timestamp);
+	const toleranceMs = Number.parseInt(process.env.WEBHOOK_SIGNING_TOLERANCE_MS || '300000', 10);
+	if (!Number.isSafeInteger(timestampMs)
+		|| !Number.isFinite(toleranceMs)
+		|| toleranceMs < 0
+		|| Math.abs(Date.now() - timestampMs) > toleranceMs) {
+		return res.status(403).json({
+			error: 'Forbidden: Invalid webhook signature',
+			code: 'WEBHOOK_SIGNATURE_INVALID',
+		});
+	}
+
+	const rawBody = Buffer.isBuffer(req.rawBody) ? req.rawBody.toString('utf8') : '';
+	const canonical = `${timestamp}\n${req.method}\n${req.originalUrl || req.url}\n${rawBody}`;
+	const expected = `sha256=${crypto.createHmac('sha256', secret).update(canonical).digest('hex')}`;
+	const provided = Buffer.from(signature);
+	const expectedBuffer = Buffer.from(expected);
+	if (provided.length !== expectedBuffer.length || !crypto.timingSafeEqual(provided, expectedBuffer)) {
+		return res.status(403).json({
+			error: 'Forbidden: Invalid webhook signature',
+			code: 'WEBHOOK_SIGNATURE_INVALID',
+		});
+	}
+
+	return next();
+}
+
+module.exports = { isValidApiKey, validateApiKey, validateWebhookSignature };

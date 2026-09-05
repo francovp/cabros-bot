@@ -35,6 +35,9 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 #### Security
 
 - `WEBHOOK_API_KEY` - API key used to secure `/api/*` webhook endpoints. Required in production-like environments (`NODE_ENV=production`, Render, Vercel, Railway), where endpoints fail-closed with HTTP 503 if unset. When configured, clients must provide the key via the `x-api-key` header (or the `api-key` query parameter)
+- `WEBHOOK_SIGNING_SECRET` - Optional shared secret for HMAC-SHA256 verification on inbound `POST /api/webhook/*` requests. Environment-only because it is a credential; it is excluded from Firebase Remote Config
+- `WEBHOOK_SIGNING_TOLERANCE_MS` - Maximum request timestamp age in milliseconds for HMAC verification (default: `300000`). Environment-only because it controls authentication/replay protection; it is excluded from Firebase Remote Config
+- When signing is enabled, send `x-webhook-timestamp` as Unix milliseconds and `x-webhook-signature: sha256=<hex digest>`. Sign the exact string `timestamp + "\\n" + method + "\\n" + path/query + "\\n" + raw request body`; missing headers return `401 WEBHOOK_SIGNATURE_MISSING`, and invalid/expired signatures return `403 WEBHOOK_SIGNATURE_INVALID`. API-key-only behavior is unchanged when `WEBHOOK_SIGNING_SECRET` is unset
 - `ENABLE_FIREBASE_ADMIN_AUTH` - Enable opt-in Firebase email/password authentication for the browser admin console (`false` by default)
 - `FIREBASE_WEB_API_KEY` - Public Firebase Web API key used by the browser sign-in flow; not a service-account credential
 - `FIREBASE_AUTH_DOMAIN` - Public Firebase Auth domain used by the browser sign-in flow
