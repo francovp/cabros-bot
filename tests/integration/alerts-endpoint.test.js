@@ -136,6 +136,91 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	it('passes include and includeEnrichmentSummary when include=enrichment_summary is requested', async () => {
+		alertStorageService.listAlerts.mockResolvedValue({
+			alerts: [
+				{
+					id: 'alert-1',
+					receivedAt: '2026-06-06T12:00:00.000Z',
+					text: 'BTC alert',
+					enriched: true,
+					enrichmentData: {
+						sentiment: 'BULLISH',
+						sentiment_score: 0.9,
+						setup_type: 'breakout',
+						invalidation_level: 64000,
+						target_level: 68000,
+						risk_reward_ratio: 2,
+						sourceCount: 1,
+						sourceDomains: ['coindesk.com'],
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'full',
+						promptProvenance: {
+							name: 'crypto-sentiment',
+							source: 'langfuse',
+							label: 'production',
+							version: 1,
+						},
+					},
+					enrichmentSummary: {
+						sentiment: 'BULLISH',
+						sentiment_score: 0.9,
+						setup_type: 'breakout',
+						invalidation_level: 64000,
+						target_level: 68000,
+						risk_reward_ratio: 2,
+						sourceCount: 1,
+						sourceDomains: ['coindesk.com'],
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'full',
+						promptProvenance: {
+							name: 'crypto-sentiment',
+							source: 'langfuse',
+							label: 'production',
+							version: 1,
+						},
+					},
+					channels: ['telegram'],
+					deliveryResults: [{ channel: 'telegram', success: true }],
+					source: 'webhook',
+					useTradingViewData: false,
+					tradingViewEnrichmentApplied: true,
+				},
+			],
+			hasMore: false,
+			nextBefore: null,
+		});
+
+		const res = await request(app)
+			.get('/api/alerts?limit=10&include=enrichment_summary')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listAlerts).toHaveBeenCalledWith({
+			before: undefined,
+			enriched: undefined,
+			limit: 10,
+			source: undefined,
+			include: ['enrichment_summary'],
+			includeEnrichmentSummary: true,
+		});
+		expect(res.body.success).toBe(true);
+		expect(res.body.alerts[0].enrichmentData.sentiment).toBe('BULLISH');
+		expect(res.body.alerts[0].enrichmentSummary.sentiment).toBe('BULLISH');
+	});
+
+	it('returns 400 for invalid include values', async () => {
+		const res = await request(app)
+			.get('/api/alerts?include=unknown_field')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: "Invalid include parameter 'unknown_field'. Allowed values: enrichment_summary.",
+			code: 'INVALID_REQUEST',
+		});
+	});
+
 	it('returns 400 for invalid before cursor values', async () => {
 		const res = await request(app)
 			.get('/api/alerts?before=not-a-date')

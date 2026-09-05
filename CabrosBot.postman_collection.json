@@ -2038,6 +2038,86 @@
           }
         },
         {
+          "name": "GET List Alerts (include=enrichment_summary)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?limit=10&include=enrichment_summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "include",
+                  "value": "enrichment_summary"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - Alerts list with enrichment summary projection",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"alert-123\",\n      \"receivedAt\": \"2026-06-06T12:00:00.000Z\",\n      \"source\": \"webhook\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": true,\n      \"enrichmentData\": {\n        \"sentiment\": \"BULLISH\",\n        \"sentiment_score\": 0.85,\n        \"setup_type\": \"breakout\"\n      },\n      \"enrichmentSummary\": {\n        \"sentiment\": \"BULLISH\",\n        \"sentiment_score\": 0.85,\n        \"setup_type\": \"breakout\",\n        \"invalidation_level\": 64000,\n        \"target_level\": 70000,\n        \"risk_reward_ratio\": 2.5,\n        \"sourceCount\": 2,\n        \"sourceDomains\": [\"coindesk.com\", \"bloomberg.com\"],\n        \"tradingViewEnrichmentApplied\": true,\n        \"tradingViewEnrichmentStatus\": \"full\",\n        \"promptProvenance\": {\n          \"name\": \"market-analysis\",\n          \"source\": \"langfuse\",\n          \"label\": \"production\",\n          \"version\": 3,\n          \"schemaDriftDetected\": false\n        }\n      },\n      \"useTradingViewData\": true,\n      \"tradingViewEnrichmentApplied\": true,\n      \"tradingViewEnrichmentStatus\": \"full\",\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"123\"\n        }\n      ]\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 10,\n    \"nextBefore\": null\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Alerts (invalid include - 400 Bad Request)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?include=invalid_field",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "include",
+                  "value": "invalid_field"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid include parameter",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Invalid include parameter 'invalid_field'. Allowed values: enrichment_summary.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "GET List Alerts (filtered)",
           "request": {
             "method": "GET",
