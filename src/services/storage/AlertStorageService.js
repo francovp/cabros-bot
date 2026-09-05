@@ -68,6 +68,7 @@ const VALID_SETUP_TYPES = new Set([
 	'reversal',
 ]);
 const VALID_TRADINGVIEW_ENRICHMENT_STATUSES = new Set(['full', 'partial', 'failed', 'not_applicable']);
+const FEATURE_TAGS = ['grounding', 'news-analysis', 'expanded-analysis', 'scanner', 'enrichment'];
 
 // Lazy Firestore singleton
 let db = null;
@@ -736,6 +737,61 @@ function addTokenUsage(totals, tokenUsage) {
 	totals.totalCost += getNumericValue(tokenUsage.totalCost);
 }
 
+function createFeatureCostSummary() {
+	return Object.fromEntries(FEATURE_TAGS.map(feature => [feature, {
+		alerts: 0,
+		batches: 0,
+		symbols: 0,
+		inputTokens: 0,
+		outputTokens: 0,
+		totalTokens: 0,
+		totalCost: 0,
+	}]));
+}
+
+function getLegacyFeature(source, tokenUsage) {
+	if (!tokenUsage && !['expanded-analysis', 'market-scanner', 'scanner-preset', 'news-monitor'].includes(source)) {
+		return null;
+	}
+	if (source === 'news-monitor') return 'news-analysis';
+	if (source === 'expanded-analysis') return 'expanded-analysis';
+	if (source === 'market-scanner' || source === 'scanner-preset') return 'scanner';
+	return tokenUsage ? 'grounding' : null;
+}
+
+function addFeatureCostSummary(summary, data) {
+	const tokenUsage = data && data.tokenUsage;
+	const byFeature = tokenUsage && typeof tokenUsage.byFeature === 'object'
+		? tokenUsage.byFeature
+		: null;
+	const entries = byFeature && Object.keys(byFeature).length > 0
+		? Object.entries(byFeature)
+		: [[getLegacyFeature(data && data.source, tokenUsage), tokenUsage]];
+	const symbol = extractAlertSymbol(data);
+
+	for (const [feature, usage] of entries) {
+		if (!FEATURE_TAGS.includes(feature)) continue;
+		const bucket = summary[feature];
+		bucket.inputTokens += getNumericValue(usage && (usage.inputTokens || usage.promptTokens));
+		bucket.outputTokens += getNumericValue(usage && (usage.outputTokens || usage.completionTokens));
+		bucket.totalTokens += getNumericValue(usage && (usage.totalTokens || usage.total));
+		bucket.totalCost += getNumericValue(usage && usage.totalCost);
+		if (data.source === 'news-monitor') bucket.batches += 1;
+		else bucket.alerts += 1;
+		if (symbol !== 'unknown') bucket.symbols += 1;
+	}
+}
+
+function getFeatureNames(data) {
+	const byFeature = data && data.tokenUsage && data.tokenUsage.byFeature;
+	const taggedFeatures = byFeature && typeof byFeature === 'object'
+		? Object.keys(byFeature).filter(feature => FEATURE_TAGS.includes(feature))
+		: [];
+	return taggedFeatures.length > 0
+		? taggedFeatures
+		: [getLegacyFeature(data && data.source, data && data.tokenUsage)].filter(Boolean);
+}
+
 function addDeliverySummary(summary, deliveryResults) {
 	if (!Array.isArray(deliveryResults)) {
 		return;
@@ -783,12 +839,27 @@ function summarizeTokenUsage(tokenUsage) {
 		return null;
 	}
 
-	return {
+	const result = {
 		inputTokens: getNumericValue(tokenUsage.inputTokens || tokenUsage.promptTokens),
 		outputTokens: getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens),
 		totalTokens: getNumericValue(tokenUsage.totalTokens || tokenUsage.total),
 		totalCost: getNumericValue(tokenUsage.totalCost),
 	};
+	if (tokenUsage.byFeature && typeof tokenUsage.byFeature === 'object') {
+		result.byFeature = Object.fromEntries(Object.entries(tokenUsage.byFeature)
+			.filter(([feature]) => FEATURE_TAGS.includes(feature))
+			.map(([feature, usage]) => [feature, {
+				calls: getNumericValue(usage.calls),
+				inputTokens: getNumericValue(usage.inputTokens),
+				outputTokens: getNumericValue(usage.outputTokens),
+				totalTokens: getNumericValue(usage.totalTokens),
+				inputCost: getNumericValue(usage.inputCost),
+				outputCost: getNumericValue(usage.outputCost),
+				totalCost: getNumericValue(usage.totalCost),
+			}]));
+		if (Object.keys(result.byFeature).length === 0) delete result.byFeature;
+	}
+	return result;
 }
 
 function truncateAlertText(text) {
@@ -813,6 +884,10 @@ function formatExportRecord(doc, { includeText }) {
 		deliveryResults: summarizeDeliveryResults(data.deliveryResults),
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 	};
+	const featureNames = getFeatureNames(data);
+	if (featureNames.length > 0) {
+		record.feature = featureNames.join(',');
+	}
 	if (typeof data.requestId === 'string' && data.requestId.trim()) {
 		record.requestId = data.requestId.trim();
 	}
@@ -1825,6 +1900,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 			averageProcessingMs: null,
 			averageDeliveryMs: null,
 		},
+		costByFeature: createFeatureCostSummary(),
 	};
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
@@ -1868,6 +1944,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		}
 
 		addTokenUsage(summary.enrichment.tokenUsage, data.tokenUsage);
+		addFeatureCostSummary(summary.costByFeature, data);
 		addDeliverySummary(summary.delivery, data.deliveryResults);
 		collectLatency(processingLatencySamples, data.processingTimeMs ?? data.processing_time_ms);
 
@@ -1881,6 +1958,9 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 	finalizeRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage);
 	finalizeEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage);
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
+	for (const feature of FEATURE_TAGS) {
+		summary.costByFeature[feature].totalCost = Number(summary.costByFeature[feature].totalCost.toFixed(6));
+	}
 	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
 	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);
 

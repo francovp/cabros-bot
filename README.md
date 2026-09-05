@@ -1211,7 +1211,7 @@ List stored alerts ordered by `receivedAt` descending.
 
 #### GET /api/alerts/export
 
-Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string fields whose leading control characters (`tab`/`LF`/`CR`) are followed by `=`, `+`, `-`, or `@`—or that begin directly with those markers—with an apostrophe so spreadsheet clients treat them as inert text; finite numeric strings such as `-42` remain unchanged. JSONL output is unchanged.
+Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string fields whose leading control characters (`tab`/`LF`/`CR`) are followed by `=`, `+`, `-`, or `@`—or that begin directly with those markers—with an apostrophe so spreadsheet clients treat them as inert text; finite numeric strings such as `-42` remain unchanged. Feature-attributed records include a `feature` column containing comma-separated tags. JSONL output is unchanged.
 
 **Query Parameters:**
 - `format` - `jsonl` or `csv` (default: `jsonl`)
@@ -1234,6 +1234,8 @@ Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited gr
 - `limit` - Integer between `1` and `1000` (default: `500`)
 
 The service caps the queried window at 31 days to keep routine operator usage cheap.
+
+The summary also returns `costByFeature` for `grounding`, `news-analysis`, `expanded-analysis`, `scanner`, and `enrichment`. Each bucket includes `alerts`, `batches`, `symbols`, `inputTokens`, `outputTokens`, `totalTokens`, and `totalCost`; the feature costs sum to `enrichment.tokenUsage.totalCost` without double-counting. Older records without feature tags are attributed conservatively from their stored source.
 
 **Response (200 OK):**
 ```json

@@ -51,7 +51,7 @@ class NewsMonitorHandler {
 	async handleRequest(req, res) {
 		const requestId = uuidv4();
 		const startTime = Date.now();
-		const tokenUsage = new TokenUsageTracker();
+		const tokenUsage = new TokenUsageTracker('news-analysis');
 
 		try {
 			const requestSpan = sentryService.getActiveSpan();

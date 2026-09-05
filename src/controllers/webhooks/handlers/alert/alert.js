@@ -224,7 +224,7 @@ function postAlert(botOrGetter) {
 				: 'webhook-alert';
 			alert = { text, source };
 
-			const tokenUsage = new TokenUsageTracker();
+			const tokenUsage = new TokenUsageTracker('grounding');
 			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan });
 
 			const tokenUsageJSON = tokenUsage.toJSON();

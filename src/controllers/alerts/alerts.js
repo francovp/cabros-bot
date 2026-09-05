@@ -24,6 +24,7 @@ const EXPORT_FIELDS = [
 	'confidence',
 	'sentimentScore',
 	'dedupStatus',
+	'feature',
 	'channels',
 	'deliveryResults',
 	'suppressedRepeat',

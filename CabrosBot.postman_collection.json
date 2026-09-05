@@ -2562,7 +2562,7 @@
                 }
               ]
             },
-            "description": "Protected summary request. Unfiltered responses include the full shadow-mode outcome metrics payload (coverage buckets, per-window WindowStats with hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR, drawdown proxy, and latency/cost metadata). The shadow-mode metrics field is the string sentinel \"No measurements found\" when signal-outcome tracking is disabled or has no data. Requires ENABLE_FIRESTORE_ALERT_STORAGE=true and a valid x-api-key."
+            "description": "Protected summary request. Unfiltered responses include the full shadow-mode outcome metrics payload (coverage buckets, per-window WindowStats with hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR, drawdown proxy, and latency/cost metadata) plus costByFeature attribution. The shadow-mode metrics field is the string sentinel \"No measurements found\" when signal-outcome tracking is disabled or has no data. Requires ENABLE_FIRESTORE_ALERT_STORAGE=true and a valid x-api-key."
           },
           "response": [
             {
@@ -2588,6 +2588,38 @@
               "status": "OK",
               "code": 200,
               "body": "{\"success\":true,\"summary\":{\"shadowModeMetrics\":{\"exchangeBreakdown\":{\"BATS\":{\"received\":1,\"eligible\":1,\"evaluated\":1,\"pending\":0,\"unavailable\":0}},\"providerBreakdown\":{\"twelve-data\":{\"received\":1,\"eligible\":1,\"evaluated\":1,\"pending\":0,\"unavailable\":0}}}}}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary - feature cost attribution",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "alerts", "summary"],
+              "query": [
+                { "key": "from", "value": "2026-06-06T00:00:00.000Z" },
+                { "key": "to", "value": "2026-06-07T00:00:00.000Z" },
+                { "key": "limit", "value": "500" }
+              ]
+            },
+            "description": "Valid protected summary variant showing per-feature token counts/costs. The five feature keys are always present and legacy records are attributed from source."
+          },
+          "response": [
+            {
+              "name": "200 OK - costByFeature",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"costByFeature\": {\n      \"grounding\": {\"alerts\": 1, \"batches\": 0, \"symbols\": 1, \"inputTokens\": 120, \"outputTokens\": 40, \"totalTokens\": 160, \"totalCost\": 0.0002},\n      \"news-analysis\": {\"alerts\": 0, \"batches\": 2, \"symbols\": 2, \"inputTokens\": 300, \"outputTokens\": 120, \"totalTokens\": 420, \"totalCost\": 0.0005},\n      \"expanded-analysis\": {\"alerts\": 0, \"batches\": 0, \"symbols\": 0, \"inputTokens\": 0, \"outputTokens\": 0, \"totalTokens\": 0, \"totalCost\": 0},\n      \"scanner\": {\"alerts\": 0, \"batches\": 0, \"symbols\": 0, \"inputTokens\": 0, \"outputTokens\": 0, \"totalTokens\": 0, \"totalCost\": 0},\n      \"enrichment\": {\"alerts\": 1, \"batches\": 0, \"symbols\": 1, \"inputTokens\": 50, \"outputTokens\": 20, \"totalTokens\": 70, \"totalCost\": 0.0001}\n    }\n  }\n}"
             }
           ]
         },
@@ -3008,7 +3040,7 @@
               "name": "200 OK - CSV export",
               "status": "OK",
               "code": 200,
-              "body": "id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,tokenUsage,text\nalert-123,2026-06-06T12:00:00.000Z,webhook,true,false,false,not_applicable,,,,,\"[\"\"telegram\"\"]\",\"[{\"\"channel\"\": \"\"telegram\"\", \"\"success\"\": true, \"\"messageId\"\": \"\"123\"\", \"\"errorCode\"\": null, \"\"statusCode\"\": null}]\",\"{\"\"inputTokens\"\":10,\"\"outputTokens\"\":20,\"\"totalTokens\"\":30,\"\"totalCost\"\":0.001}\",BTC breakout\n"
+              "body": "id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,tokenUsage,text\nalert-123,2026-06-06T12:00:00.000Z,webhook,true,false,false,not_applicable,,,,,grounding,\"[\"\"telegram\"\"]\",\"[{\"\"channel\"\": \"\"telegram\"\", \"\"success\"\": true, \"\"messageId\"\": \"\"123\"\", \"\"errorCode\"\": null, \"\"statusCode\"\": null}]\",\"{\"\"inputTokens\"\":10,\"\"outputTokens\"\":20,\"\"totalTokens\"\":30,\"\"totalCost\"\":0.001}\",BTC breakout\n"
             }
           ]
         },
