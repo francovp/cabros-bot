@@ -294,6 +294,20 @@
       "description": "Maximum default news-monitor symbols to process per scheduler sweep",
       "valueType": "NUMBER"
     },
+    "ALERT_SCHEDULER_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Background sweep interval in milliseconds for the JSON-defined alert scheduler",
+      "valueType": "NUMBER"
+    },
+    "ALERT_SCHEDULER_BATCH_LIMIT": {
+      "defaultValue": {
+        "value": "10"
+      },
+      "description": "Maximum due alert-scheduler entries to execute per sweep",
+      "valueType": "NUMBER"
+    },
     "ENABLE_GEMINI_GROUNDING": {
       "defaultValue": {
         "value": "false"
