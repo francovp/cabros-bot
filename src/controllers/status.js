@@ -7,6 +7,7 @@ const {
 const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
+const { getAuthKeyStatus } = require('../lib/auth');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 const { jobQueue } = require('../services/jobs/JobQueue');
 const equityMarketDataService = require('../services/storage/EquityMarketDataService');
@@ -312,10 +313,14 @@ function getStatus() {
 		signalOutcomeWorkerDependency.status = 'disabled';
 	}
 
-	const webhookAuth = dependencyStatus({
-		enabled: true,
-		configured: hasValue(process.env.WEBHOOK_API_KEY),
-	});
+	const authKeyStatus = getAuthKeyStatus();
+	const webhookAuth = {
+		...authKeyStatus,
+		...dependencyStatus({
+			enabled: true,
+			configured: hasValue(process.env.WEBHOOK_API_KEY),
+		}),
+	};
 
 	return {
 		readiness: bootstrapReadiness.getStatus(),

@@ -209,6 +209,29 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			slots: ['current'],
+			previousExpiresAt: null,
+		});
+	});
+
+	it('reports API key rotation slots when ENABLE_API_KEY_ROTATION is true', async () => {
+		process.env.ENABLE_API_KEY_ROTATION = 'true';
+		process.env.WEBHOOK_API_KEY = 'status-key';
+		process.env.WEBHOOK_API_KEY_PREVIOUS = 'old-key';
+		process.env.WEBHOOK_API_KEY_PREVIOUS_EXPIRES_AT = '2999-12-31T23:59:59.000Z';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.webhookAuth).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			slots: ['current', 'previous'],
+			previousExpiresAt: '2999-12-31T23:59:59.000Z',
 		});
 	});
 
