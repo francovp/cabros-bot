@@ -1915,6 +1915,15 @@ Run the news monitor and AI sentiment analysis.
 /noticias crypto=BTCUSDT,ETHUSDT stocks=NVDA
 ```
 
+### /outcomes `<symbol>` (alias: `/rendimiento`)
+
+Query recent evaluated signal outcomes for a symbol in chat (hits `GET /api/outcomes`).
+
+**Example:**
+```
+/outcomes BINANCE:BTCUSDT
+```
+
 ## Runtime Error Monitoring (005-sentry-runtime-errors)
 
 **📖 [Quickstart Guide](specs/005-sentry-runtime-errors/quickstart.md)** — Complete setup and verification instructions.
