@@ -3,7 +3,7 @@
   "info": {
     "title": "Cabros Bot API",
     "version": "0.1.0",
-    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter exists only for legacy compatibility and may leak through logs. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true."
+    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter is deprecated and exists only for legacy compatibility — it may leak through reverse-proxy access logs. A one-time per-process deprecation warning is emitted on use; setting API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) rejects query-parameter auth with 401 API_KEY_QUERY_REMOVED after the date. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true."
   },
   "servers": [
     {
@@ -1759,7 +1759,8 @@
         "type": "apiKey",
         "in": "query",
         "name": "api-key",
-        "description": "Legacy compatibility only. Prefer x-api-key because query strings may be logged."
+        "description": "Deprecated (GH-756): legacy compatibility only — query strings may be logged by reverse proxies and access logs. Prefer the x-api-key header. A process-scoped deprecation warning is logged on first use, and a sunset date (API_KEY_QUERY_SUNSET, YYYY-MM-DD UTC) can be set to reject query-parameter auth with 401 API_KEY_QUERY_REMOVED.",
+        "x-deprecated": true
       },
       "FirebaseBearerAuth": {
         "type": "http",
