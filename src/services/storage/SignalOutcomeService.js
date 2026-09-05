@@ -1289,6 +1289,11 @@ function createEmptyMetricsSummary() {
 		providerBreakdown: {},
 		entryPriceSourceBreakdown: {},
 		eligibilityBreakdown: {},
+		barrierSourceBreakdown: {
+		 derived: { received: 0, eligible: 0, targetHitRatePercent: 0, stopHitRatePercent: 0, targetEligible: 0, stopEligible: 0 },
+		 marketContext: { received: 0, eligible: 0, targetHitRatePercent: 0, stopHitRatePercent: 0, targetEligible: 0, stopEligible: 0 },
+		 none: { received: 0, eligible: 0, targetHitRatePercent: 0, stopHitRatePercent: 0, targetEligible: 0, stopEligible: 0 },
+		},
 		windows: {},
 		drawdownProxy: {
 			averageMaxAdverseExcursionPercent: 0,
@@ -1488,6 +1493,17 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 	const entryPriceSourceBreakdown = {};
 	const eligibilityBreakdown = {};
 
+	// Barrier provenance breakdown (issue #809 / CB-???). Mirrors the
+	// entryPriceSourceBreakdown shape so operators can see whether
+	// target/stop outcomes came from a provider (marketContext) or the
+	// NewsAnalyzer.deriveBarriers() heuristic, and how many signals had
+	// no barrier provenance recorded at all.
+	const barrierSourceBreakdown = {
+		derived: { received: 0, eligible: 0, targetHits: 0, stopHits: 0, targetEligible: 0, stopEligible: 0 },
+		marketContext: { received: 0, eligible: 0, targetHits: 0, stopHits: 0, targetEligible: 0, stopEligible: 0 },
+		none: { received: 0, eligible: 0, targetHits: 0, stopHits: 0, targetEligible: 0, stopEligible: 0 },
+	};
+
 	const evaluatedSignals = [];
 
 	for (const doc of docs) {
@@ -1495,6 +1511,13 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		const docSymbol = doc.symbol || 'UNKNOWN';
 		const marketDataProvider = doc.marketDataProvider || (docExchange === 'BINANCE' ? 'binance' : 'none');
 		const entryPriceSource = doc.entryPriceSource || (doc.price !== null && doc.price !== undefined ? (doc.marketDataProvider || 'unknown') : 'none');
+
+		const barrierSource = (doc.barriers && typeof doc.barriers.source === 'string')
+			? doc.barriers.source
+			: 'none';
+		if (!barrierSourceBreakdown[barrierSource]) {
+			barrierSourceBreakdown[barrierSource] = { received: 0, eligible: 0, targetHits: 0, stopHits: 0, targetEligible: 0, stopEligible: 0 };
+		}
 
 		let eligibilityState = doc.eligibilityState;
 		if (!eligibilityState) {
@@ -1516,6 +1539,10 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 
 		eligibilityBreakdown[eligibilityState] = (eligibilityBreakdown[eligibilityState] || 0) + 1;
 		entryPriceSourceBreakdown[entryPriceSource] = (entryPriceSourceBreakdown[entryPriceSource] || 0) + 1;
+		barrierSourceBreakdown[barrierSource].received++;
+		if (isEligible) {
+			barrierSourceBreakdown[barrierSource].eligible++;
+		}
 
 		if (!exchangeBreakdown[docExchange]) {
 			exchangeBreakdown[docExchange] = createCoverageBucket();
@@ -1574,6 +1601,37 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 						: null;
 					if (setupKey) {
 						accumulateWindowBucket(accumulator, signal, outcome, setupKey);
+					}
+					// Barrier provenance (issue #809 / CB-???). Aggregate
+					// target/stop hits and eligible-window counts per source so
+					// summarizeOutcomes() can compare derived vs supplied
+					// barriers without flattening the populations.
+					const sourceForSignal = (signal.barriers && typeof signal.barriers.source === 'string')
+						? signal.barriers.source
+						: 'none';
+					if (!barrierSourceBreakdown[sourceForSignal]) {
+						barrierSourceBreakdown[sourceForSignal] = {
+							received: 0,
+							eligible: 0,
+							targetHits: 0,
+							stopHits: 0,
+							targetEligible: 0,
+							stopEligible: 0,
+						};
+					}
+					const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
+					const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
+					if (hasTargetBarrier) {
+						barrierSourceBreakdown[sourceForSignal].targetEligible++;
+						if (outcome.targetHit === true || outcome.firstHit === 'target') {
+							barrierSourceBreakdown[sourceForSignal].targetHits++;
+						}
+					}
+					if (hasStopBarrier) {
+						barrierSourceBreakdown[sourceForSignal].stopEligible++;
+						if (outcome.stopHit === true || outcome.firstHit === 'stop') {
+							barrierSourceBreakdown[sourceForSignal].stopHits++;
+						}
 					}
 				}
 			}
@@ -1731,6 +1789,25 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		providerBreakdown,
 		entryPriceSourceBreakdown,
 		eligibilityBreakdown,
+		barrierSourceBreakdown: Object.fromEntries(
+		Object.entries(barrierSourceBreakdown).map(([key, val]) => [
+		key,
+		{
+		received: val.received,
+		eligible: val.eligible,
+		targetEligible: val.targetEligible || 0,
+		stopEligible: val.stopEligible || 0,
+		targetHits: val.targetHits || 0,
+		stopHits: val.stopHits || 0,
+		targetHitRatePercent: (val.targetEligible || 0) > 0
+		? parseFloat(((val.targetHits / val.targetEligible) * 100).toFixed(2))
+		: 0,
+		stopHitRatePercent: (val.stopEligible || 0) > 0
+		? parseFloat(((val.stopHits / val.stopEligible) * 100).toFixed(2))
+		: 0,
+		},
+		])
+		),
 		windows: windowStats,
 		drawdownProxy: {
 			averageMaxAdverseExcursionPercent: averageWorstMae,

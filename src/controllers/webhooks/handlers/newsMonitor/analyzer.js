@@ -920,6 +920,9 @@ class NewsAnalyzer {
 				const target = (alert.marketContext && typeof alert.marketContext.target === 'number')
 					? alert.marketContext.target
 					: (typeof alert.target === 'number' ? alert.target : null);
+				// Preserve barrier provenance for outcome tracking so
+				// summarizeOutcomes() can build barrierSourceBreakdown.
+				const barriers = alert.barriers || null;
 
 				signalOutcomeService.recordSignal({
 					requestId,
@@ -937,6 +940,7 @@ class NewsAnalyzer {
 					priceSource: alert.marketContext ? alert.marketContext.source : null,
 					stop,
 					target,
+					barriers,
 					sources: alert.sources || [],
 					tokenUsage: alert.enriched ? alert.enriched.tokenUsage : null,
 				}).catch(() => {});
@@ -1228,6 +1232,27 @@ class NewsAnalyzer {
 		const enrichedExtraText = confidenceReason
 			? `_Model Confidence: ${confidense}%_\n_Reason: ${confidenceReason}_\n_Model used: ${GROUNDING_MODEL_NAME}_`
 			: `_Model Confidence: ${confidense}%_\n_Model used: ${GROUNDING_MODEL_NAME}_`;
+
+		// Preserve barrier provenance so downstream delivery, outcome tracking,
+		// and summary rollups can distinguish derived vs. supplied vs. absent
+		// barriers. See issue #809 / CB-???.
+		const hasMarketContextBarriers = marketContext
+			&& (typeof marketContext.stop === 'number' || typeof marketContext.target === 'number');
+		let barriers = null;
+		if (derivedBarriers) {
+			barriers = {
+				stop: derivedBarriers.stop,
+				target: derivedBarriers.target,
+				side: derivedBarriers.side,
+				stopPct: derivedBarriers.stopPct,
+				rewardMultiplier: derivedBarriers.rewardMultiplier,
+				source: 'derived',
+				timeHorizon: geminiAnalysis.time_horizon || 'short_term',
+			};
+		} else if (hasMarketContextBarriers) {
+			barriers = { source: 'marketContext' };
+		}
+
 		const enriched = {
 			originalText: alertTitle,
 			summary: context,
@@ -1236,6 +1261,7 @@ class NewsAnalyzer {
 			tokenUsage: tokenUsageSummary || undefined,
 			time_horizon: geminiAnalysis.time_horizon,
 			invalidation_hint: geminiAnalysis.invalidation_hint,
+			barriers,
 		};
 
 		return {
@@ -1269,6 +1295,7 @@ class NewsAnalyzer {
 			target: (marketContext && typeof marketContext.target === 'number')
 				? marketContext.target
 				: (derivedBarriers ? derivedBarriers.target : undefined),
+			barriers,
 		};
 	}
 
