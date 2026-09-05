@@ -186,4 +186,99 @@ describe('Rate Limiter Middleware', () => {
 
 		expect(next).toHaveBeenCalledTimes(3);
 	});
+
+	test('emits X-RateLimit-Limit / X-RateLimit-Remaining / X-RateLimit-Reset on successful requests', () => {
+		const realNow = Date.now;
+		let mockTime = 1_000_000;
+		Date.now = jest.fn(() => mockTime);
+		process.env.RATE_LIMIT_MAX = '5';
+		process.env.RATE_LIMIT_WINDOW_MS = '60000';
+
+		try {
+			rateLimiter(req, res, next);
+
+			expect(next).toHaveBeenCalled();
+			expect(res.getHeader('X-RateLimit-Limit')).toBe('5');
+			expect(res.getHeader('X-RateLimit-Remaining')).toBe('4');
+			expect(res.getHeader('X-RateLimit-Reset')).toBe(
+				String(Math.ceil((mockTime + 60000) / 1000))
+			);
+		} finally {
+			Date.now = realNow;
+		}
+	});
+
+	test('emits X-RateLimit-* headers on throttled 429 responses alongside Retry-After', () => {
+		const realNow = Date.now;
+		let mockTime = 1_000_000;
+		Date.now = jest.fn(() => mockTime);
+		process.env.RATE_LIMIT_MAX = '1';
+		process.env.RATE_LIMIT_WINDOW_MS = '60000';
+
+		try {
+			rateLimiter(req, res, next);
+			const resBlocked = httpMocks.createResponse();
+			rateLimiter(req, resBlocked, jest.fn());
+
+			expect(resBlocked.statusCode).toBe(429);
+			expect(resBlocked.getHeader('X-RateLimit-Limit')).toBe('1');
+			expect(resBlocked.getHeader('X-RateLimit-Remaining')).toBe('0');
+			expect(resBlocked.getHeader('X-RateLimit-Reset')).toBe(
+				String(Math.ceil((mockTime + 60000) / 1000))
+			);
+			expect(resBlocked.getHeader('Retry-After')).toBeDefined();
+		} finally {
+			Date.now = realNow;
+		}
+	});
+
+	test('decrements X-RateLimit-Remaining across sequential requests within the window', () => {
+		const realNow = Date.now;
+		let mockTime = 1_000_000;
+		Date.now = jest.fn(() => mockTime);
+		process.env.RATE_LIMIT_MAX = '10';
+		process.env.RATE_LIMIT_WINDOW_MS = '60000';
+
+		try {
+			rateLimiter(req, res, next);
+			expect(res.getHeader('X-RateLimit-Remaining')).toBe('9');
+
+			const res2 = httpMocks.createResponse();
+			rateLimiter(req, res2, jest.fn());
+			expect(res2.getHeader('X-RateLimit-Remaining')).toBe('8');
+
+			const res3 = httpMocks.createResponse();
+			rateLimiter(req, res3, jest.fn());
+			expect(res3.getHeader('X-RateLimit-Remaining')).toBe('7');
+		} finally {
+			Date.now = realNow;
+		}
+	});
+
+	test('isolates X-RateLimit-* headers between ordinary and webhook buckets', () => {
+		const realNow = Date.now;
+		let mockTime = 1_000_000;
+		Date.now = jest.fn(() => mockTime);
+		process.env.RATE_LIMIT_MAX = '5';
+		process.env.RATE_LIMIT_WINDOW_MS = '60000';
+
+		try {
+			rateLimiter(req, res, next);
+			expect(res.getHeader('X-RateLimit-Limit')).toBe('5');
+			expect(res.getHeader('X-RateLimit-Remaining')).toBe('4');
+
+			const webhookReq = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/webhook/alert',
+				ip: '127.0.0.1',
+			});
+			const webhookRes = httpMocks.createResponse();
+			rateLimiter(webhookReq, webhookRes, jest.fn());
+
+			expect(webhookRes.getHeader('X-RateLimit-Limit')).toBe('1000');
+			expect(webhookRes.getHeader('X-RateLimit-Remaining')).toBe('999');
+		} finally {
+			Date.now = realNow;
+		}
+	});
 });
