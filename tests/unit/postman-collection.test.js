@@ -53,6 +53,28 @@ describe('Postman collection contract', () => {
 		});
 	});
 
+	it('documents grounding operational metrics in the Get Status variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const groundingStatus = findItem(collection.item, 'Get Status - grounding operational metrics');
+
+		expect(groundingStatus).toBeDefined();
+		const responseBody = JSON.parse(groundingStatus.response[0].body);
+		expect(responseBody.dependencies.grounding).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			metrics: {
+				totalRequests: 1234,
+				successRequests: 1180,
+				failureRequests: 40,
+				timeoutRequests: 14,
+				successRate: 0.956,
+				uptimeSince: '2026-08-25T10:00:00Z',
+			},
+		});
+	});
+
 	it('documents x-idempotency-key on the alert webhook request', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const sendAlert = findItem(collection.item, 'POST Send Alert');
