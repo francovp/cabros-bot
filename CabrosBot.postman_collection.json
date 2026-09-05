@@ -991,6 +991,18 @@
               "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 410\n    }\n  ]\n}"
             },
             {
+              "name": "Success (dry-run validation with estimatedChunks)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"dryValidate\": true,\n  \"estimatedChunks\": {\n    \"telegram\": 1,\n    \"whatsapp\": 3,\n    \"discord\": 25\n  }\n}"
+            },
+            {
+              "name": "Success (chunked multi-channel delivery)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320,\n      \"splitMessageCount\": 3\n    }\n  ],\n  \"delivered\": [\n    \"telegram\",\n    \"whatsapp\"\n  ],\n  \"channelDetails\": {\n    \"telegram\": {\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    },\n    \"whatsapp\": {\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"chunks\": 3\n    }\n  },\n  \"estimatedChunks\": {\n    \"telegram\": 1,\n    \"whatsapp\": 3,\n    \"discord\": 25\n  }\n}"
+            },
+            {
               "name": "Success (idempotent replay)",
               "status": "OK",
               "code": 200,
@@ -1043,6 +1055,12 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"success\": false,\n  \"error\": \"\\\"discordWebhookUrl\\\" must be a valid HTTPS Discord webhook URL\",\n  \"details\": {\n    \"field\": \"discordWebhookUrl\"\n  }\n}"
+            },
+            {
+              "name": "Error (invalid dryValidate type)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryValidate\\\" must be a boolean if provided\",\n  \"details\": {\n    \"field\": \"dryValidate\"\n  }\n}"
             },
             {
               "name": "Error (unknown channel)",

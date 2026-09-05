@@ -2143,14 +2143,24 @@
             "schema": {
               "$ref": "#/components/schemas/MessageRequest"
             },
-            "example": {
-              "message": "Deployment completed",
-              "channels": [
-                "telegram",
-                "whatsapp",
-                "discord"
-              ],
-              "idempotencyKey": "generic-message-demo-1"
+            "examples": {
+              "default": {
+                "value": {
+                  "message": "Deployment completed",
+                  "channels": [
+                    "telegram",
+                    "whatsapp",
+                    "discord"
+                  ],
+                  "idempotencyKey": "generic-message-demo-1"
+                }
+              },
+              "dryValidate": {
+                "value": {
+                  "message": "Custom notification payload to estimate before dispatch",
+                  "dryValidate": true
+                }
+              }
             }
           }
         }
@@ -2840,6 +2850,41 @@
                   "properties": {
                     "idempotencyReplayed": {
                       "type": "boolean"
+                    },
+                    "dryValidate": {
+                      "type": "boolean",
+                      "description": "True when the request was executed in dry-run validation mode without sending notifications."
+                    },
+                    "delivered": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "List of channels that successfully delivered the message."
+                    },
+                    "channelDetails": {
+                      "type": "object",
+                      "description": "Detailed per-channel delivery results including chunk counts when messages are split.",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "success": {
+                            "type": "boolean"
+                          },
+                          "messageId": {
+                            "type": "string"
+                          },
+                          "chunks": {
+                            "type": "integer"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "estimatedChunks": {
+                      "$ref": "#/components/schemas/EstimatedChunks"
                     }
                   }
                 }
@@ -2856,6 +2901,55 @@
                       "messageId": "tg-msg-123"
                     }
                   ]
+                }
+              },
+              "dryValidate": {
+                "value": {
+                  "success": true,
+                  "dryValidate": true,
+                  "estimatedChunks": {
+                    "telegram": 1,
+                    "whatsapp": 3,
+                    "discord": 25
+                  }
+                }
+              },
+              "chunked": {
+                "value": {
+                  "success": true,
+                  "results": [
+                    {
+                      "channel": "telegram",
+                      "success": true,
+                      "messageId": "tg-msg-123"
+                    },
+                    {
+                      "channel": "whatsapp",
+                      "success": true,
+                      "messageId": "wa-msg-456",
+                      "splitMessageCount": 3
+                    }
+                  ],
+                  "delivered": [
+                    "telegram",
+                    "whatsapp"
+                  ],
+                  "channelDetails": {
+                    "telegram": {
+                      "success": true,
+                      "messageId": "tg-msg-123"
+                    },
+                    "whatsapp": {
+                      "success": true,
+                      "messageId": "wa-msg-456",
+                      "chunks": 3
+                    }
+                  },
+                  "estimatedChunks": {
+                    "telegram": 1,
+                    "whatsapp": 3,
+                    "discord": 25
+                  }
                 }
               },
               "replay": {
@@ -4744,8 +4838,38 @@
             "type": "string",
             "minLength": 1,
             "description": "Optional replay key; snake_case body form."
+          },
+          "dryValidate": {
+            "type": "boolean",
+            "description": "Optional validation mode; when true, validates the request and returns per-channel estimatedChunks without sending notifications."
           }
         }
+      },
+      "EstimatedChunks": {
+        "type": "object",
+        "description": "Estimated message chunk count per channel based on provider-specific payload limits.",
+        "properties": {
+          "telegram": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Estimated chunk count for Telegram (single chunk for standard messages)."
+          },
+          "whatsapp": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Estimated chunk count for WhatsApp based on 20,000 character limit."
+          },
+          "discord": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Estimated chunk count for Discord based on 2,000 character limit."
+          }
+        },
+        "required": [
+          "telegram",
+          "whatsapp",
+          "discord"
+        ]
       },
       "ExpandedAnalysisRequest": {
         "type": "object",
