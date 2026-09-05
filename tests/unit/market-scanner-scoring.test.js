@@ -1,4 +1,10 @@
-const { scoreScannerItem, rankScannerItems } = require('../../src/services/tradingview/marketScannerScoring');
+const {
+	scoreScannerItem,
+	rankScannerItems,
+	computePositionSizing,
+	DEFAULT_ATR_MULTIPLIER,
+	DEFAULT_ACCOUNT_RISK_PCT,
+} = require('../../src/services/tradingview/marketScannerScoring');
 
 describe('Market Scanner Scoring', () => {
 	describe('scoreScannerItem', () => {
@@ -424,6 +430,131 @@ describe('Market Scanner Scoring', () => {
 			rankScannerItems([item], 'top_gainers');
 
 			expect(item).toEqual(original);
+		});
+
+		it('attaches _positionSizing when ATR and close are available', () => {
+			const ranked = rankScannerItems([
+				{ symbol: 'BINANCE:BTCUSDT', changePercent: 4, indicators: { close: 50000, RSI: 62, ATR: 1500 }, volume_ratio: 1.5, breakout_type: 'bullish' },
+			], 'top_gainers');
+			expect(ranked[0]._positionSizing).toEqual(expect.objectContaining({
+				atr: 1500,
+				atrPercent: 3,
+				suggestedStopPct: 6,
+				suggestedPositionPct: expect.closeTo(0.17, 2),
+				minRiskRewardRatio: null,
+			}));
+		});
+	});
+
+	describe('computePositionSizing', () => {
+		const btcItem = {
+			symbol: 'BINANCE:BTCUSDT',
+			indicators: { close: 50000, ATR: 1500 },
+		};
+
+		it('uses default ATR multiplier (2.0) and account risk (1%) when no options are provided', () => {
+			const result = computePositionSizing(btcItem);
+			expect(result).not.toBeNull();
+			expect(result.atr).toBe(1500);
+			expect(result.atrPercent).toBe(3);
+			// suggestedStopPct = 3% * 2 = 6%
+			expect(result.suggestedStopPct).toBe(6);
+			// suggestedPositionPct = 1% / 6% = 0.1667
+			expect(result.suggestedPositionPct).toBeCloseTo(0.17, 2);
+		});
+
+		it('respects a custom atrMultiplier and accountRiskPct', () => {
+			const result = computePositionSizing(btcItem, { atrMultiplier: 1.5, accountRiskPct: 2 });
+			expect(result.suggestedStopPct).toBe(4.5); // 3% * 1.5
+			expect(result.suggestedPositionPct).toBeCloseTo(0.44, 2); // 2% / 4.5%
+		});
+
+		it('falls back to defaults when options are non-positive or non-finite', () => {
+			const result = computePositionSizing(btcItem, { atrMultiplier: -1, accountRiskPct: 0 });
+			expect(result.suggestedStopPct).toBe(6); // default 2 * 3
+			expect(result.suggestedPositionPct).toBeCloseTo(0.17, 2);
+		});
+
+		it('returns null when ATR is missing', () => {
+			expect(computePositionSizing({ symbol: 'X', indicators: { close: 100 } })).toBeNull();
+		});
+
+		it('returns null when ATR is zero or negative', () => {
+			expect(computePositionSizing({ symbol: 'X', indicators: { close: 100, ATR: 0 } })).toBeNull();
+			expect(computePositionSizing({ symbol: 'X', indicators: { close: 100, ATR: -5 } })).toBeNull();
+		});
+
+		it('returns null when close price is missing or non-positive', () => {
+			expect(computePositionSizing({ symbol: 'X', indicators: { ATR: 10 } })).toBeNull();
+			expect(computePositionSizing({ symbol: 'X', indicators: { close: 0, ATR: 10 } })).toBeNull();
+		});
+
+		it('reads ATR from item.atr, indicators.atr, and indicators.ATR', () => {
+			expect(computePositionSizing({ ...btcItem, atr: 1500 }).atr).toBe(1500);
+			expect(computePositionSizing({ ...btcItem, indicators: { ...btcItem.indicators, atr: 1500 } }).atr).toBe(1500);
+		});
+
+		it('uses item.price as a fallback when indicators.close is missing', () => {
+			const result = computePositionSizing({ symbol: 'X', price: 100, indicators: { ATR: 2 } });
+			expect(result).not.toBeNull();
+			expect(result.atrPercent).toBe(2); // 2 / 100 * 100
+		});
+
+		it('preserves minRiskRewardRatio when the item supplies it', () => {
+			const result = computePositionSizing({ ...btcItem, minRiskRewardRatio: 2.5 });
+			expect(result.minRiskRewardRatio).toBe(2.5);
+		});
+
+		it('exposes DEFAULT_ATR_MULTIPLIER and DEFAULT_ACCOUNT_RISK_PCT as the documented defaults', () => {
+			expect(DEFAULT_ATR_MULTIPLIER).toBe(2.0);
+			expect(DEFAULT_ACCOUNT_RISK_PCT).toBe(1.0);
+		});
+
+		it('does not crash on an empty item', () => {
+			expect(computePositionSizing({})).toBeNull();
+		});
+	});
+
+	describe('scoreScannerItem positionSizing integration', () => {
+		it('attaches positionSizing to the score result when ATR and price are available', () => {
+			const result = scoreScannerItem({
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 3,
+				indicators: { close: 50000, RSI: 60, ATR: 1500 },
+				volume_ratio: 1.5,
+				breakout_type: 'bullish',
+			}, 'top_gainers');
+
+			expect(result.positionSizing).toEqual(expect.objectContaining({
+				atrPercent: 3,
+				suggestedStopPct: 6,
+			}));
+		});
+
+		it('omits positionSizing when ATR is missing', () => {
+			const result = scoreScannerItem({
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 3,
+				indicators: { close: 50000, RSI: 60 },
+				volume_ratio: 1.5,
+			}, 'top_gainers');
+
+			expect(result.positionSizing).toBeUndefined();
+		});
+
+		it('passes atrMultiplier/accountRiskPct options through to computePositionSizing', () => {
+			const result = scoreScannerItem({
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 3,
+				indicators: { close: 100, RSI: 60, ATR: 2 },
+				volume_ratio: 1.5,
+			}, 'top_gainers', { atrMultiplier: 3, accountRiskPct: 0.5 });
+
+			expect(result.positionSizing).toEqual(expect.objectContaining({
+				atrPercent: 2,
+				suggestedStopPct: 6, // 2% * 3
+				suggestedPositionPct: expect.closeTo(0.08, 2), // 0.5% / 6%
+			}));
 		});
 	});
 });

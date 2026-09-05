@@ -237,6 +237,120 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('1. DOTUSDT $7.45 (0.0%) | BBW 0.03');
 		});
 
+		it('renders position sizing hints when ranked=true and ATR is available', () => {
+			const results = [
+				{
+					scan: 'top_gainers',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:BTCUSDT',
+							changePercent: 4,
+							indicators: { close: 50000, RSI: 62, ATR: 1500 },
+							volume_ratio: 1.5,
+							breakout_type: 'bullish',
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: true,
+				now: mockDate,
+			});
+
+			expect(report).toContain('🏆');
+			expect(report).toContain('Position Sizing');
+			expect(report).toContain('2.0×ATR stop: 6.00%');
+			// 1% / 6% = 0.17% position size, formatted to 0.17
+			expect(report).toContain('Pos: 0.17% @ 1.00% risk');
+		});
+
+		it('omits the position sizing line when ranked is not set', () => {
+			const results = [
+				{
+					scan: 'top_gainers',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:BTCUSDT',
+							changePercent: 4,
+							indicators: { close: 50000, RSI: 62, ATR: 1500 },
+							volume_ratio: 1.5,
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			expect(report).not.toContain('Position Sizing');
+		});
+
+		it('omits the position sizing line when ATR is missing', () => {
+			const results = [
+				{
+					scan: 'top_gainers',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:BTCUSDT',
+							changePercent: 4,
+							indicators: { close: 50000, RSI: 62 },
+							volume_ratio: 1.5,
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: true,
+				now: mockDate,
+			});
+
+			expect(report).toContain('🏆');
+			expect(report).not.toContain('Position Sizing');
+		});
+
+		it('honors custom atrMultiplier and accountRiskPct options', () => {
+			const results = [
+				{
+					scan: 'top_gainers',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:BTCUSDT',
+							changePercent: 4,
+							indicators: { close: 100, RSI: 62, ATR: 2 },
+							volume_ratio: 1.5,
+							breakout_type: 'bullish',
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: true,
+				atrMultiplier: 3,
+				accountRiskPct: 0.5,
+				now: mockDate,
+			});
+
+			// atrPercent=2% * 3 = 6% stop, 0.5%/6% = 0.08% position
+			expect(report).toContain('3.0×ATR stop: 6.00%');
+			expect(report).toContain('Pos: 0.08% @ 0.50% risk');
+		});
+
 		it('filters out positive changes from top_losers and negative changes from top_gainers', () => {
 			const results = [
 				{

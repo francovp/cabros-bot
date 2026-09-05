@@ -5826,7 +5826,7 @@
           },
           "scanResults": {
             "$ref": "#/components/schemas/JsonObject",
-            "description": "Per-scan results (market-scanner jobs only, when completed). Ranked jobs include scores with symbol, score, reason, and optional trendConfluence entries."
+            "description": "Per-scan results (market-scanner jobs only, when completed). Ranked jobs include scores with symbol, score, reason, and optional trendConfluence and positionSizing entries. positionSizing carries atr, atrPercent, suggestedStopPct, suggestedPositionPct, and optional minRiskRewardRatio when ATR is available."
           },
           "summary": {
             "$ref": "#/components/schemas/JsonObject"
