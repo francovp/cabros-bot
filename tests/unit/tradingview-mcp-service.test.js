@@ -905,6 +905,95 @@ describe('TradingViewMcpService', () => {
 		expect(result.insights.join(' ')).not.toContain('[object Object]');
 	});
 
+	it('calls multi-timeframe enrichment independently when confluence enrichment is disabled', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'false';
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'true';
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 65000 },
+			market_sentiment: { overall_rating: 4, momentum: 'Bullish' },
+			market_structure: { trend: 'Bullish', trend_score: 4 },
+		});
+		service.callCombinedAnalysis = jest.fn();
+		service.callMultiTimeframeAnalysis = jest.fn().mockResolvedValue({
+			alignment: { status: 'bullish', confidence: 81 },
+			recommendation: { action: 'BUY' },
+			confluences: ['Weekly and Daily aligned'],
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(service.callCombinedAnalysis).not.toHaveBeenCalled();
+		expect(service.callMultiTimeframeAnalysis).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+		}));
+		expect(result.multiTimeframeData).toEqual({
+			alignment: { status: 'bullish', confidence: 81 },
+			recommendation: { action: 'BUY' },
+			confluences: ['Weekly and Daily aligned'],
+		});
+		expect(result.confluenceData).toBeNull();
+		expect(result.insights).toContain('Multi-timeframe: bullish');
+		expect(result.tradingViewEnrichmentApplied).toBe(true);
+	});
+
+	it('skips multi-timeframe enrichment when ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME is not set', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'false';
+		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME;
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 65000 },
+			market_sentiment: { overall_rating: 4, momentum: 'Bullish' },
+			market_structure: { trend: 'Bullish', trend_score: 4 },
+		});
+		service.callCombinedAnalysis = jest.fn();
+		service.callMultiTimeframeAnalysis = jest.fn();
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(service.callCombinedAnalysis).not.toHaveBeenCalled();
+		expect(service.callMultiTimeframeAnalysis).not.toHaveBeenCalled();
+		expect(result.multiTimeframeData).toBeNull();
+		expect(result.confluenceData).toBeNull();
+	});
+
+	it('marks enrichment as partial when multi-timeframe call fails while confluence is disabled', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'false';
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'true';
+		const logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn() };
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger,
+		});
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 65000 },
+			market_sentiment: { overall_rating: 4, momentum: 'Bullish' },
+			market_structure: { trend: 'Bullish', trend_score: 4 },
+		});
+		service.callMultiTimeframeAnalysis = jest.fn().mockRejectedValue(new Error('TradingView MCP HTTP 502: Bad Gateway'));
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(service.callMultiTimeframeAnalysis).toHaveBeenCalled();
+		expect(result.multiTimeframeData).toBeNull();
+		expect(result.tradingViewEnrichmentStatus).toBe('partial');
+		expect(result.tradingViewEnrichmentApplied).toBe(true);
+		expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Multi-timeframe enrichment failed'));
+	});
+
 	describe('circuit breaker and operator paging', () => {
 		let originalAdminChatId;
 
