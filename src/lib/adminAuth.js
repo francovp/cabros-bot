@@ -2,7 +2,11 @@
 
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
-const { isValidApiKey, validateApiKey } = require('./auth');
+const {
+	isAdminApiKeyScoped,
+	isValidAdminApiKey,
+	isValidBinanceTradingApiKey,
+} = require('./auth');
 
 const ADMIN_VIEWER = 'admin.viewer';
 const ADMIN_OPERATOR = 'admin.operator';
@@ -86,14 +90,19 @@ function getAdminAuthConfig() {
 
 async function validateAdminAccess(req, res, next) {
 	if (!isFirebaseAdminAuthEnabled()) {
-		return validateApiKey(req, res, () => {
+		// Legacy path: when Firebase admin auth is disabled, accept the admin
+		// key (or its webhook-key fallback) on admin routes. Webhook routes
+		// still require the webhook key via the dedicated `validateApiKey`
+		// middleware. When the operator has configured ADMIN_API_KEY, the
+		// webhook key is no longer accepted on admin routes.
+		return validateAdminApiKeyInternal(req, res, () => {
 			req.adminRole = ADMIN_OPERATOR;
 			next();
 		});
 	}
 
 	const suppliedApiKey = req.headers['x-api-key'] || req.query['api-key'];
-	if (suppliedApiKey !== undefined && isValidApiKey(req)) {
+	if (suppliedApiKey !== undefined && isValidAdminApiKey(req)) {
 		req.adminRole = ADMIN_OPERATOR;
 		return next();
 	}
@@ -123,7 +132,10 @@ async function validateAdminAccess(req, res, next) {
 }
 
 function requireConfiguredAdminAccess(req, res, next) {
-	if (!isFirebaseAdminAuthEnabled() && !String(process.env.WEBHOOK_API_KEY || '').trim()) {
+	const firebaseEnabled = isFirebaseAdminAuthEnabled();
+	const hasAdminKey = Boolean(String(process.env.ADMIN_API_KEY || '').trim())
+		|| Boolean(String(process.env.WEBHOOK_API_KEY || '').trim());
+	if (!firebaseEnabled && !hasAdminKey) {
 		return res.status(503).json({
 			error: 'Admin authentication is not configured',
 			code: 'ADMIN_AUTH_UNAVAILABLE',
@@ -139,14 +151,77 @@ function requireAdminRole(requiredRole) {
 	};
 }
 
+/**
+ * Express middleware: validate that the request carries the admin/operator
+ * API key. The key is sourced from `ADMIN_API_KEY` when configured; when
+ * unset, the legacy `WEBHOOK_API_KEY` is accepted so existing deployments
+ * keep working until the operator opts in. Used in places that need an
+ * admin-key check without the full Firebase bearer path (e.g. the legacy
+ * `ENABLE_FIREBASE_ADMIN_AUTH=false` flow).
+ */
+function validateAdminApiKeyInternal(req, res, next) {
+	if (isValidAdminApiKey(req)) return next();
+	const supplied = req.headers['x-api-key'] || req.query['api-key'];
+	if (supplied === undefined || supplied === '') {
+		return res.status(401).json({ error: 'Unauthorized: Missing API key' });
+	}
+	return res.status(403).json({ error: 'Forbidden: Invalid API key' });
+}
+
+/**
+ * Express middleware: validate that the request carries the Binance trading
+ * API key (`BINANCE_TRADING_API_KEY`) independent of the admin/webhook keys.
+ * Falls back to admin/operator authentication when the trading key is not
+ * configured. Operators that configure both get full scope separation.
+ */
+function validateBinanceTradingAccess(req, res, next) {
+	if (isValidBinanceTradingApiKey(req)) {
+		req.adminRole = ADMIN_OPERATOR;
+		return next();
+	}
+	if (String(process.env.BINANCE_TRADING_API_KEY || '').trim()) {
+		// Trading key is configured and the supplied key did not match.
+		// Reject this attempt rather than fall back to the admin key, so a
+		// leaked webhook/admin key cannot execute trades.
+		const supplied = req.headers['x-api-key'] || req.query['api-key'];
+		if (supplied === undefined || supplied === '') {
+			return res.status(401).json({ error: 'Unauthorized: Missing API key' });
+		}
+		return res.status(403).json({ error: 'Forbidden: Invalid API key' });
+	}
+	// No dedicated trading key configured: defer to admin auth (Firebase or
+	// admin API key). This preserves the current "admin operator can trade"
+	// contract for operators that have not yet provisioned BINANCE_TRADING_API_KEY.
+	return validateAdminAccess(req, res, next);
+}
+
+function requireConfiguredBinanceTradingAccess(req, res, next) {
+	const hasTradingKey = Boolean(String(process.env.BINANCE_TRADING_API_KEY || '').trim());
+	if (hasTradingKey) {
+		// Trading key is configured: it is the only acceptable credential on
+		// the trading surface. Reject the request if the key is missing or
+		// does not match. The 503 gate is unnecessary here because the
+		// trading key itself is the configuration contract.
+		return validateBinanceTradingAccess(req, res, next);
+	}
+	// No trading key: defer to the admin auth gate. The admin gate owns the
+	// 503 ADMIN_AUTH_UNAVAILABLE response and its own configuration check,
+	// so the trading route inherits the legacy behavior without duplicating
+	// the gate.
+	return requireConfiguredAdminAccess(req, res, next);
+}
+
 module.exports = {
 	ADMIN_OPERATOR,
 	ADMIN_VIEWER,
 	getAdminAuthConfig,
 	getAdminRole,
 	getFirebaseWebConfig,
+	isAdminApiKeyScoped,
 	isFirebaseAdminAuthEnabled,
 	requireAdminRole,
 	requireConfiguredAdminAccess,
+	requireConfiguredBinanceTradingAccess,
 	validateAdminAccess,
+	validateBinanceTradingAccess,
 };

@@ -20,11 +20,21 @@ describe('public OpenAPI documentation', () => {
 		expect(response.status).toBe(200);
 		expect(response.headers['content-type']).toMatch(/application\/json/);
 		expect(response.body.openapi).toMatch(/^3\./);
-		expect(response.body.components.securitySchemes.ApiKeyHeader).toEqual({
+		expect(response.body.components.securitySchemes.ApiKeyHeader).toEqual(expect.objectContaining({
 			type: 'apiKey',
 			in: 'header',
 			name: 'x-api-key',
-		});
+		}));
+		expect(response.body.components.securitySchemes.AdminApiKeyHeader).toEqual(expect.objectContaining({
+			type: 'apiKey',
+			in: 'header',
+			name: 'x-api-key',
+		}));
+		expect(response.body.components.securitySchemes.BinanceTradingApiKeyHeader).toEqual(expect.objectContaining({
+			type: 'apiKey',
+			in: 'header',
+			name: 'x-api-key',
+		}));
 		expect(response.text).not.toContain(process.env.WEBHOOK_API_KEY);
 	});
 
