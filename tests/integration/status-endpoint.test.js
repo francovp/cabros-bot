@@ -1861,4 +1861,22 @@ describe('Status endpoints', () => {
 			}),
 		}));
 	});
+
+	it('exposes the requestDeadline dependency in /api/status', async () => {
+		process.env.API_REQUEST_DEADLINE_MS = '45000';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.requestDeadline).toEqual(expect.objectContaining({
+			enabled: true,
+			defaultMs: 45000,
+			hardCapMs: 600000,
+			minMs: 1000,
+			activeTimers: expect.any(Number),
+			exemptPaths: expect.arrayContaining(['/healthcheck', '/ready', '/openapi.json', '/docs']),
+		}));
+	});
 });

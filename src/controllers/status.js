@@ -22,6 +22,7 @@ const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const requestDeadline = require('../lib/requestDeadline');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -433,6 +434,7 @@ function getStatus() {
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
 			binanceOrderAudit: binanceOrderAuditService.getStatus(),
+			requestDeadline: requestDeadline.getStatus(),
 		},
 	};
 }

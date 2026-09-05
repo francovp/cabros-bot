@@ -42,6 +42,11 @@ app.get('/ready', (req, res) => {
 // Rate Limiter (must be after healthcheck to avoid limiting health checks)
 app.use(require('./src/lib/rateLimiter'));
 
+// Global request-deadline middleware: enforces a per-request server-side
+// budget so a single hung downstream call cannot pin a connection open.
+// Mounted after the OpenAPI router so /openapi.json and /docs stay exempt.
+app.use(require('./src/lib/requestDeadline'));
+
 // Public, read-only API contract and interactive documentation.
 app.use(getOpenApiDocsRouter());
 
