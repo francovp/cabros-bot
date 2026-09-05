@@ -72,6 +72,7 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - `NOTIFICATION_REDRIVE_MAX_ATTEMPTS` - Maximum attempts before terminal exhaustion (default: `5`, Remote Config supported)
 - `NOTIFICATION_REDRIVE_MAX_AGE_MS` - Maximum lifespan of dead-letter records before expiration (default: `3600000`, Remote Config supported)
 - Firestore-backed `notificationDeadLetters` records use `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` once per project to enable native TTL and optionally backfill legacy records.
+- **Redrive idempotency contract**: every redrive dispatch threads a deterministic `idempotencyKey` of the form `redrive:<deadLetterId>:<channel>:<attemptNumber>` through `NotificationManager.sendToChannels`. The key is preserved on the redrive Firestore document (`lastIdempotencyKey`) and exposed on every `SendResult.idempotencyKey` so downstream subscribers can dedupe accidental replays even though Telegram has no `sendMessage` idempotency (CB-178). Alert-producing webhooks may also forward an explicit `idempotencyKey` field, which `parseNotificationRouting` validates (≤256 chars) and preserves on the dispatched alert payload.
 - `ZERO_CHANNEL_ALERT_COOLDOWN_MS` - Cooldown between admin notifications when all channels are disabled in milliseconds (default: `300000`, Remote Config supported)
 - `ENABLE_API_ONLY_MODE` - Declare intentional API-only mode without notification delivery, suppressing zero-channel alerts and dead-letters (default: `false`, Remote Config supported)
 

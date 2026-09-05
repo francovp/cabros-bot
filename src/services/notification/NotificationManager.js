@@ -63,6 +63,56 @@ class NotificationManager {
 	}
 
 	/**
+	 * Resolve the effective idempotency key for a dispatch, preferring
+	 * the per-channel key on the alert (set by the redrive dispatcher) and
+	 * falling back to the alert/options level key. Returns undefined when no
+	 * dedupe key is supplied so callers can include `idempotencyKey: undefined`
+	 * in their `SendResult` without forcing consumers to filter.
+	 *
+	 * @param {Object} alert - The alert object being dispatched
+	 * @param {Object} [options] - Dispatch options from the caller
+	 * @returns {string|undefined}
+	 */
+	resolveIdempotencyKey(alert, options = {}) {
+		if (alert && typeof alert === 'object') {
+			if (typeof alert.idempotencyKey === 'string' && alert.idempotencyKey.length > 0) {
+				return alert.idempotencyKey;
+			}
+			const channelKeys = alert.idempotencyKeysByChannel;
+			if (channelKeys && typeof channelKeys === 'object') {
+				for (const [channelName, value] of Object.entries(channelKeys)) {
+					if (typeof value === 'string' && value.length > 0) {
+						return value;
+					}
+				}
+			}
+		}
+
+		if (options && typeof options === 'object' && typeof options.idempotencyKey === 'string' && options.idempotencyKey.length > 0) {
+			return options.idempotencyKey;
+		}
+
+		return undefined;
+	}
+
+	/**
+	 * Build a partial `SendResult` shell that exposes the dispatch-level
+	 * idempotency key. Channel `send()` implementations merge their own fields
+	 * into this shell via spread, so the dedupe key survives any channel
+	 * implementation that ignores it.
+	 *
+	 * @param {string} channelName - Channel name (e.g. `telegram`, `whatsapp`)
+	 * @param {string|undefined} idempotencyKey - Effective idempotency key
+	 * @returns {{ channel: string, idempotencyKey: string|undefined }}
+	 */
+	buildSendResultShell(channelName, idempotencyKey) {
+		return {
+			channel: channelName,
+			idempotencyKey,
+		};
+	}
+
+	/**
    * Validate all notification channels on startup
    * @returns {Promise<Array>} Array of validation results
    */
@@ -285,22 +335,28 @@ class NotificationManager {
 
 		const formattedResults = results.map((r, idx) => {
 			const chName = channels[idx] ? channels[idx].name : 'unknown';
+			const channelKey = this.resolveIdempotencyKey(alert, {
+				...options,
+				idempotencyKey: alert?.idempotencyKeysByChannel?.[chName] || options.idempotencyKey,
+			});
+			const shell = this.buildSendResultShell(chName, channelKey);
 			if (r.status === 'fulfilled') {
 				if (r.value && typeof r.value === 'object') {
 					return {
-						channel: chName,
+						...shell,
 						...r.value,
+						idempotencyKey: r.value.idempotencyKey ?? shell.idempotencyKey,
 					};
 				}
 				return {
+					...shell,
 					success: false,
-					channel: chName,
 					error: 'Channel returned empty response',
 				};
 			}
 			return {
+				...shell,
 				success: false,
-				channel: chName,
 				error: (r.reason && (r.reason.message || String(r.reason))) || 'Unknown error',
 			};
 		});
@@ -470,22 +526,28 @@ class NotificationManager {
 
 		const formattedResults = results.map((r, idx) => {
 			const chName = enabledChannels[idx] ? enabledChannels[idx].name : 'unknown';
+			const channelKey = this.resolveIdempotencyKey(alert, {
+				...options,
+				idempotencyKey: alert?.idempotencyKeysByChannel?.[chName] || options.idempotencyKey,
+			});
+			const shell = this.buildSendResultShell(chName, channelKey);
 			if (r.status === 'fulfilled') {
 				if (r.value && typeof r.value === 'object') {
 					return {
-						channel: chName,
+						...shell,
 						...r.value,
+						idempotencyKey: r.value.idempotencyKey ?? shell.idempotencyKey,
 					};
 				}
 				return {
+					...shell,
 					success: false,
-					channel: chName,
 					error: 'Channel returned empty response',
 				};
 			}
 			return {
+				...shell,
 				success: false,
-				channel: chName,
 				error: (r.reason && (r.reason.message || String(r.reason))) || 'Unknown error',
 			};
 		});

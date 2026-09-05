@@ -149,3 +149,56 @@ describe('requestRouting - telegramThreadId validation', () => {
 	});
 });
 
+describe('requestRouting - idempotencyKey', () => {
+	it('parses a caller-supplied idempotencyKey on the routing result', () => {
+		const result = parseNotificationRouting({
+			text: 'hello',
+			idempotencyKey: 'redrive:abc_telegram:telegram:0',
+		});
+		expect(result.idempotencyKey).toBe('redrive:abc_telegram:telegram:0');
+	});
+
+	it('returns undefined when idempotencyKey is omitted', () => {
+		const result = parseNotificationRouting({ text: 'hello' });
+		expect(result.idempotencyKey).toBeUndefined();
+	});
+
+	it('treats empty and whitespace-only idempotencyKey as undefined', () => {
+		expect(parseNotificationRouting({ idempotencyKey: '' }).idempotencyKey).toBeUndefined();
+		expect(parseNotificationRouting({ idempotencyKey: '   ' }).idempotencyKey).toBeUndefined();
+	});
+
+	it('throws NotificationRoutingValidationError for non-string idempotencyKey', () => {
+		expect(() => parseNotificationRouting({ idempotencyKey: 42 }))
+			.toThrow(NotificationRoutingValidationError);
+		expect(() => parseNotificationRouting({ idempotencyKey: null }))
+			.not.toThrow();
+	});
+
+	it('throws NotificationRoutingValidationError when idempotencyKey exceeds 256 chars', () => {
+		const huge = 'x'.repeat(257);
+		expect(() => parseNotificationRouting({ idempotencyKey: huge }))
+			.toThrow(NotificationRoutingValidationError);
+	});
+
+	it('threads idempotencyKey through sendWithNotificationRouting to the alert payload', async () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
+			sendToChannels: jest.fn().mockResolvedValue([]),
+		};
+		await sendWithNotificationRouting(
+			notificationManager,
+			{ text: 'hello' },
+			{ channels: ['telegram'], idempotencyKey: 'redrive:abc_telegram:telegram:0' },
+		);
+		expect(notificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'hello',
+				idempotencyKey: 'redrive:abc_telegram:telegram:0',
+			}),
+			['telegram'],
+			{},
+		);
+	});
+});
+
