@@ -96,6 +96,19 @@ describe('SymbolAnalysesController', () => {
 				code: 'STORAGE_UNAVAILABLE',
 			}));
 		});
+
+		it('returns 400 when from is after to in listSymbolAnalyses', async () => {
+			jest.spyOn(symbolAnalysisStorageService, 'isEnabled').mockReturnValue(true);
+			req.query.from = '2026-09-02T00:00:00Z';
+			req.query.to = '2026-09-01T00:00:00Z';
+
+			await symbolAnalysesController.listSymbolAnalyses(req, res);
+
+			expect(res.status).toHaveBeenCalledWith(400);
+			expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+				code: 'INVALID_REQUEST',
+			}));
+		});
 	});
 
 	describe('summarizeSymbolAnalyses', () => {
@@ -107,6 +120,19 @@ describe('SymbolAnalysesController', () => {
 			expect(res.status).toHaveBeenCalledWith(403);
 			expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
 				code: 'FEATURE_DISABLED',
+			}));
+		});
+
+		it('returns 400 when from is after to in summarizeSymbolAnalyses', async () => {
+			jest.spyOn(symbolAnalysisStorageService, 'isEnabled').mockReturnValue(true);
+			req.query.from = '2026-09-02T00:00:00Z';
+			req.query.to = '2026-09-01T00:00:00Z';
+
+			await symbolAnalysesController.summarizeSymbolAnalyses(req, res);
+
+			expect(res.status).toHaveBeenCalledWith(400);
+			expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+				code: 'INVALID_REQUEST',
 			}));
 		});
 

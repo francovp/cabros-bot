@@ -142,6 +142,7 @@ function formatSymbolAnalysisDoc(doc) {
 	const id = doc.id || data.id || data.requestId;
 	const createdAt = getDocTimestamp(data.createdAt);
 	const receivedAt = getDocTimestamp(data.receivedAt) || createdAt;
+	const action = data.action || data.decision?.action || 'NO_TRADE';
 
 	return {
 		id,
@@ -150,9 +151,10 @@ function formatSymbolAnalysisDoc(doc) {
 		asset: data.asset || '',
 		exchange: data.exchange || '',
 		timeframe: data.timeframe || '',
+		action,
 		analysisMode: data.analysisMode || 'standard',
 		decision: {
-			action: data.decision?.action || 'NO_TRADE',
+			action,
 			confidence: numberOrNull(data.decision?.confidence),
 			dataSufficient: Boolean(data.decision?.dataSufficient),
 		},
@@ -163,6 +165,9 @@ function formatSymbolAnalysisDoc(doc) {
 		multiTimeframe: Boolean(data.multiTimeframe),
 		analysisStatus: data.analysisStatus || 'complete',
 		processingTimeMs: numberOrNull(data.processingTimeMs),
+		analysis: data.analysis || '',
+		alertText: data.alertText || '',
+		recordedAt: createdAt,
 		receivedAt,
 		createdAt,
 		expiresAt: getDocTimestamp(data.expiresAt),
@@ -233,6 +238,7 @@ async function recordAnalysis(record = {}) {
 			asset,
 			exchange,
 			timeframe,
+			action: decisionAction,
 			analysisMode,
 			decision: {
 				action: decisionAction,
@@ -246,6 +252,8 @@ async function recordAnalysis(record = {}) {
 			multiTimeframe,
 			analysisStatus,
 			processingTimeMs,
+			analysis: record.analysis || '',
+			alertText: record.alertText || '',
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
 			createdAt: admin.firestore.FieldValue.serverTimestamp(),
 			expiresAt: buildRetentionExpiryTimestamp(),
@@ -418,7 +426,7 @@ async function summarizeAnalyses({ from, to, limit = 500, symbol, exchange, time
 /**
  * List paginated symbol analyses.
  */
-async function listAnalyses({ from, to, limit = 50, symbol, exchange, timeframe, action, beforeCursor } = {}) {
+async function listAnalyses({ from, to, limit = 50, symbol, exchange, timeframe, action, before, beforeCursor = before } = {}) {
 	if (!isEnabled()) {
 		const error = new Error('Symbol analysis storage feature is disabled. Set ENABLE_SYMBOL_ANALYSIS_STORAGE=true to enable.');
 		error.code = 'FEATURE_DISABLED';
@@ -455,10 +463,15 @@ async function listAnalyses({ from, to, limit = 50, symbol, exchange, timeframe,
 	const boundedLimit = Math.min(Math.max(1, limit || 50), 100);
 	query = query.orderBy('createdAt', 'desc');
 
-	if (beforeCursor) {
-		const cursorDoc = await firestore.collection(COLLECTION_NAME).doc(beforeCursor).get();
-		if (cursorDoc && cursorDoc.exists) {
-			query = query.startAfter(cursorDoc);
+	const effectiveCursor = beforeCursor || before;
+	if (effectiveCursor && typeof effectiveCursor === 'string' && !effectiveCursor.includes('/')) {
+		try {
+			const cursorDoc = await firestore.collection(COLLECTION_NAME).doc(effectiveCursor).get();
+			if (cursorDoc && cursorDoc.exists) {
+				query = query.startAfter(cursorDoc);
+			}
+		} catch {
+			// fail-open on invalid cursor
 		}
 	}
 

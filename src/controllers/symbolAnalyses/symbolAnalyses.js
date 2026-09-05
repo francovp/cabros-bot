@@ -79,6 +79,13 @@ async function listSymbolAnalyses(req, res) {
 			return res.status(400).json(to.error);
 		}
 
+		if (from.value && to.value && new Date(from.value) > new Date(to.value)) {
+			return res.status(400).json({
+				error: 'Invalid time window. from must be before or equal to to.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
 		let action;
 		if (req.query.action !== undefined) {
 			action = parseAction(req.query.action);
@@ -114,6 +121,7 @@ async function listSymbolAnalyses(req, res) {
 			exchange,
 			timeframe,
 			action,
+			before,
 			beforeCursor: before,
 		});
 
@@ -149,6 +157,13 @@ async function summarizeSymbolAnalyses(req, res) {
 		const to = parseOptionalTimestamp(req.query.to, 'to');
 		if (to.error) {
 			return res.status(400).json(to.error);
+		}
+
+		if (from.value && to.value && new Date(from.value) > new Date(to.value)) {
+			return res.status(400).json({
+				error: 'Invalid time window. from must be before or equal to to.',
+				code: 'INVALID_REQUEST',
+			});
 		}
 
 		const symbol = typeof req.query.symbol === 'string' && req.query.symbol.trim()
