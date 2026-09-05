@@ -901,6 +901,30 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - GH-183 / CB-78: Azure, OpenRouter, and Cloudflare `llmCallv2()` results now return normalized token usage for downstream `tokenUsage` aggregation; the shared normalizer accepts OpenAI-compatible `prompt_tokens`, `completion_tokens`, and `total_tokens` fields.
 - GH-199 / CB-83: `detect-unused-features` derives disabled flags, status mappings, indirect env lookups, `.env.example` gaps, and Sentry profiling findings from the fresh protected capabilities response and current repository files; dated snapshots are guidance-free and a healthy-data dry run guards against stale issues.
 
+## In-Process Event Bus (GH-819)
+
+A small in-process pub/sub (`src/lib/eventBus.js`) decouples side-effect consumers (Firestore persistence, Sentry capture, signal-outcome tracking, shadow-mode metrics, notification redrive, admin paging) from the request hot path so new side effects can subscribe without editing every alert-producing handler.
+
+**Core Components**:
+- `src/lib/eventBus.js` — `EventBus` class plus a default singleton (`eventBus`). Methods: `on(eventName, handler)`, `once`, `off`, `emit(eventName, payload)` (synchronous, sub-millisecond p99), `emitAsync(eventName, payload, options)` (parallel `Promise.allSettled` with bounded per-handler timeout via `asyncTimeoutMs`, default `5000`), `listenerCount`, `eventNames`, `removeAllListeners`, `resetForTesting`. Synchronous `emit` swallows handler errors and logs them via the bus logger; `emitAsync` treats timeouts as `EVENT_BUS_HANDLER_TIMEOUT` rejections but never propagates them to the publisher.
+- `src/lib/eventBusCatalog.js` — Canonical event-name constants (`EVENT_NAMES`) plus per-event payload schemas. New event names must be added here so tests and consumers can grep them.
+- `tests/unit/event-bus.test.js` — Covers on/off/once ordering, error isolation, async dispatch, bounded timeouts, per-call overrides, catalog integration, and the default singleton.
+- `tests/integration/event-bus-alert-flow.test.js` — Wires `eventBus` to a stub alert route that calls `notificationManager.sendToAll` and emits `alert.delivered`. A failing or slow subscriber never affects the response, the delivery path, or other subscribers.
+
+**Conventions**:
+- Subscribe in `index.js` startup bootstrap (mirroring `initializeNotificationServices`). Subscribers MUST treat payloads as read-only.
+- Synchronous `emit` is the default for hot-path publishers (alert received, alert delivered); reach for `emitAsync` only when subscribers do I/O that the publisher can wait for.
+- Handler ordering is insertion order (FIFO). Subscribers must not rely on other handlers' return values.
+- A failing handler never affects the request response, other subscribers, or the delivery path. The bus never throws synchronously, and rejected async tails are caught and logged.
+- Per-handler emit-only overhead is sub-millisecond on the happy path; the bus does not introduce new dependencies (`Set`-backed subscribers).
+
+**Where to look first when extending or debugging**:
+- `src/lib/eventBus.js` — bus core, `emit` vs `emitAsync`, timeout/error semantics.
+- `src/lib/eventBusCatalog.js` — event names + payload contracts.
+- `tests/unit/event-bus.test.js` and `tests/integration/event-bus-alert-flow.test.js` — ordering, isolation, and end-to-end wiring coverage.
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed; this is purely a developer-facing abstraction.
+
 ## Architectural Patterns & Extension Guide
 
 ### Multi-Channel Notification Pattern (002)
