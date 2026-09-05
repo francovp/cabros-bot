@@ -6023,6 +6023,9 @@
           "deliveryChannels": {
             "$ref": "#/components/schemas/JsonObject"
           },
+          "deliveryHealth": {
+            "$ref": "#/components/schemas/DeliveryHealth"
+          },
           "deliveryMetrics": {
             "$ref": "#/components/schemas/DeliveryMetrics"
           },
@@ -6034,6 +6037,67 @@
                 "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
               }
             }
+          }
+        }
+      },
+      "DeliveryHealth": {
+        "type": "object",
+        "description": "Per-channel delivery health counters from the in-memory NotificationManager. Channels that have never sent an alert are omitted. Resets on process restart; in-memory only, no Firestore persistence.",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/DeliveryHealthChannel"
+        }
+      },
+      "DeliveryHealthChannel": {
+        "type": "object",
+        "description": "Per-channel success and failure counters with the most recent observation timestamps. Timestamps are ISO-8601 UTC strings or null when never observed.",
+        "required": [
+          "channel",
+          "success",
+          "failure"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string",
+            "enum": [
+              "telegram",
+              "whatsapp",
+              "discord"
+            ],
+            "description": "Notification channel identifier."
+          },
+          "success": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cumulative number of successful deliveries observed by NotificationManager since process startup."
+          },
+          "failure": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cumulative number of failed deliveries observed by NotificationManager since process startup."
+          },
+          "lastSuccessAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO-8601 UTC timestamp of the last successful delivery, or null when the channel has never succeeded."
+          },
+          "lastFailureAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO-8601 UTC timestamp of the last failed delivery, or null when the channel has never failed."
+          },
+          "firstObservedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO-8601 UTC timestamp of the first delivery observation (success or failure), or null."
           }
         }
       },
