@@ -3209,6 +3209,150 @@
                     "lastStateChangeAt": null,
                     "failureThreshold": 5,
                     "cooldownMs": 600000
+                  },
+                  "mcpTools": {
+                    "discovered": [
+                      "coin_analysis",
+                      "combined_analysis",
+                      "multi_timeframe_analysis",
+                      "volume_confirmation_analysis",
+                      "top_gainers",
+                      "top_losers",
+                      "volume_breakout_scanner",
+                      "smart_volume_scanner",
+                      "bollinger_scan",
+                      "backtest_strategy",
+                      "compare_strategies",
+                      "walk_forward_backtest_strategy",
+                      "multi_agent_analysis",
+                      "market_snapshot",
+                      "rating_filter",
+                      "consecutive_candles_scan",
+                      "advanced_candle_pattern"
+                    ],
+                    "wired": {
+                      "coin_analysis": {
+                        "wired": true,
+                        "callers": ["enrichFromSignal", "alert/grounding"],
+                        "lastSuccessAt": "2026-08-27T17:30:00.000Z",
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "combined_analysis": {
+                        "wired": true,
+                        "callers": ["enrichFromSignal"],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "multi_timeframe_analysis": {
+                        "wired": true,
+                        "callers": ["enrichFromSignal"],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "volume_confirmation_analysis": {
+                        "wired": true,
+                        "callers": ["enrichFromSignal"],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "top_gainers": {
+                        "wired": true,
+                        "callers": ["marketScanner"],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "top_losers": {
+                        "wired": true,
+                        "callers": ["marketScanner"],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "volume_breakout_scanner": {
+                        "wired": true,
+                        "callers": ["marketScanner"],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "smart_volume_scanner": {
+                        "wired": true,
+                        "callers": ["marketScanner"],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "bollinger_scan": {
+                        "wired": true,
+                        "callers": ["marketScanner"],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "backtest_strategy": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "compare_strategies": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "walk_forward_backtest_strategy": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "multi_agent_analysis": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "market_snapshot": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "rating_filter": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "consecutive_candles_scan": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "advanced_candle_pattern": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      }
+                    },
+                    "discoveredAt": "2026-08-27T17:00:00.000Z",
+                    "discoveredSource": "tools/list"
                   }
                 },
                 "equityMarketData": {
@@ -6009,7 +6153,7 @@
       },
       "Status": {
         "type": "object",
-        "description": "Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals).",
+        "description": "Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.tradingViewMcp.mcpTools exposes the upstream TradingView MCP tool inventory (discovered list, wired vs. unwired mapping, callers, last success/failure timestamps, last error category) discovered via tools/list with a static fallback catalog, used by operators to plan roadmap work without code archaeology. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals).",
         "properties": {
           "readiness": {
             "$ref": "#/components/schemas/BootstrapReadiness"

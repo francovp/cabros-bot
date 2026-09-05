@@ -607,6 +607,24 @@ When TradingView data is requested, `alert.enriched.tradingViewEnrichmentApplied
 
 `GET /api/status` exposes `dependencies.tradingViewMcp.enrichment.alertPath`, an in-process rolling 24-hour window with `totalCount`, `appliedCount`, `failedCount`, `appliedRate24h`, and `failureRate24h`. The existing circuit-breaker admin page remains deduplicated and fail-open. `GET /api/alerts/summary` exposes `enrichment.tradingViewStatusCounts`; requested records without a persisted status are counted as `unrecorded`, while non-requested records are `not_applicable`.
 
+`GET /api/status` also exposes `dependencies.tradingViewMcp.mcpTools`, the upstream TradingView MCP tool inventory. The shape is:
+
+```json
+{
+  "discovered": ["coin_analysis", "combined_analysis", "multi_timeframe_analysis", "volume_confirmation_analysis", "top_gainers", "..."],
+  "wired": {
+    "coin_analysis": { "wired": true, "callers": ["enrichFromSignal", "alert/grounding"], "lastSuccessAt": "...", "lastFailureAt": null, "lastCategory": null },
+    "combined_analysis": { "wired": true, "callers": ["enrichFromSignal"], "lastSuccessAt": null, "lastFailureAt": null, "lastCategory": null },
+    "top_gainers": { "wired": true, "callers": ["marketScanner"], "lastSuccessAt": null, "lastFailureAt": null, "lastCategory": null },
+    "multi_agent_analysis": { "wired": false, "callers": [], "lastSuccessAt": null, "lastFailureAt": null, "lastCategory": null }
+  },
+  "discoveredAt": "2026-08-27T17:00:00.000Z",
+  "discoveredSource": "tools/list"
+}
+```
+
+Discovery runs `tools/list` against `TRADINGVIEW_MCP_URL` once per hour (`McpToolInventory.discoveryTtlMs`, default 1h, bounded by `TRADINGVIEW_MCP_TIMEOUT_MS`). When `tools/list` is unreachable, returns an empty payload, or throws, the inventory falls back to the static catalog (`STATIC_FALLBACK_CATALOG` in `src/services/tradingview/mcpToolInventory.js`) so operators still see the wired vs. supported mapping. Per-tool telemetry is recorded in-process for every wired call (success + last category, failure + sanitized category) and remains live during provider outages so `lastSuccessAt` / `lastFailureAt` / `lastCategory` reflect the most recent wired attempt. No provider URLs, raw payloads, or secrets are exposed through `mcpTools`.
+
 ### Timeframe Mapping
 
 - `5 -> 5m`
