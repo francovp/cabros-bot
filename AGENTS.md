@@ -1059,6 +1059,15 @@ ENABLE_FIRESTORE_SCANNER_PRESETS (scanner preset persistence)
 - The page lists failed/succeeded channels, provider errors, status/attempt metadata when available, and the request/correlation ID when present on the alert.
 - Admin paging calls `TelegramService.send()` directly instead of re-entering `NotificationManager`, so Telegram/admin delivery failures are logged but cannot recurse or change the original delivery results.
 
+### Per-request strict chat ID validation
+
+- `parseNotificationRouting` accepts an opt-in `strictChatIds` flag (and reads `ENABLE_STRICT_CHAT_ID_VALIDATION=true` from env when callers do not override).
+- When enabled, `telegramChatId` overrides must match `/^-?\d{5,20}$/` (numeric Telegram chat IDs only; `@public` handles are rejected by default) and `whatsappChatId` overrides must match `/^\d{6,20}@(c|g)\.us$/`.
+- Both fields also reject whitespace, MarkdownV2 escape-trigger characters (`<>[]{}()~`|#^=+!`) and other injection-prone values before pattern validation.
+- Default is `false` for backwards compatibility with existing operators that pass ad-hoc strings; toggle via `ENABLE_STRICT_CHAT_ID_VALIDATION=true` or by passing `{ strictChatIds: true }` to `parseNotificationRouting()` directly.
+- Classified as **environment-only** for Remote Config parity (request-time validation behavior; opt-in operator toggle).
+- Coverage: `tests/unit/request-routing.test.js` accepts numeric Telegram IDs and GreenAPI WhatsApp IDs, rejects free-form/MarkdownV2-escape/empty values, and confirms the legacy non-strict behavior remains unchanged when the flag is off.
+
 **To extend**:
 1. **Discord integration**: Add in `src/services/notification/DiscordService.js`
 2. **Error aggregation**: Track error rates in memory for metrics
