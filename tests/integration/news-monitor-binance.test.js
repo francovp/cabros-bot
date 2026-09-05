@@ -6,7 +6,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 
 jest.mock('../../src/services/grounding/gemini');
@@ -36,6 +36,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 
 		// Mock Gemini for symbol analysis
 		const gemini = require('../../src/services/grounding/gemini');

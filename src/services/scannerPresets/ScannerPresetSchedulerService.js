@@ -441,7 +441,7 @@ class ScannerPresetSchedulerService {
 
 				let notificationManager = this.getNotificationManager();
 				if (!notificationManager && this.botGetter) {
-					notificationManager = await alertModule.initializeNotificationServices(resolveBot(this.botGetter));
+					notificationManager = await alertModule.getOrInitializeNotificationManager(resolveBot(this.botGetter));
 				}
 
 				if (notificationManager) {

@@ -5,11 +5,6 @@ const { validateAlert } = require('../../../../lib/validation');
 const { v4: uuidv4 } = require('uuid');
 const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
-const TelegramService = require('../../../../services/notification/TelegramService');
-const WhatsAppService = require('../../../../services/notification/WhatsAppService');
-const DiscordService = require('../../../../services/notification/DiscordService');
-const NotificationManager = require('../../../../services/notification/NotificationManager');
-const { getURLShortener } = require('../../handlers/newsMonitor/urlShortener');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
 const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
@@ -33,48 +28,59 @@ const {
 	STANDARD_ERROR_CODES,
 } = require('../../../../lib/errorEnvelope');
 
-// Initialize services
-let notificationManager = null;
+const {
+	initialize: bootstrapInitialize,
+	getOrInitialize: bootstrapGetOrInitialize,
+	getInitialized: bootstrapGetInitialized,
+	getBootstrapStatus,
+	resetForTesting: bootstrapResetForTesting,
+} = require('../../../../services/notification/NotificationManagerBootstrap');
 
 /**
  * Initialize notification services
- * Call this once on app startup
+ * Backwards-compatible thin wrapper around `NotificationManagerBootstrap.initialize(bot)`.
+ * Existing call sites (e.g., `index.js`, handlers) keep working while the canonical
+ * bootstrap lives in the dedicated module.
+ *
  * @param {Object} bot - Telegraf bot instance
- * @returns {Promise<NotificationManager>}
+ * @returns {Promise<NotificationManager|null>}
  */
-async function initializeNotificationServices(bot) {
-	const telegramService = new TelegramService({
-		bot,
-		logger: console,
-	});
-
-	const whatsappService = new WhatsAppService({
-		logger: console,
-		urlShortener: getURLShortener(),
-	});
-
-	const discordService = new DiscordService({
-		logger: console,
-	});
-
-	notificationManager = new NotificationManager(telegramService, whatsappService, discordService);
-
-	console.debug('Initializing notification services...');
-	await notificationManager.validateAll();
-
-	const enabledChannels = notificationManager.getEnabledChannels();
-	console.debug(`Notification services initialized: ${enabledChannels.join(', ')}`);
-
-	return notificationManager;
+function initializeNotificationServices(bot) {
+	return bootstrapInitialize(bot);
 }
 
 /**
- * Get the initialized NotificationManager instance
- * Used by other handlers (e.g., newsMonitor) to send alerts
+ * Get the initialized NotificationManager instance, lazily initializing if missing.
+ * Backwards-compatible wrapper around `NotificationManagerBootstrap.getOrInitialize(bot)`.
+ *
+ * @param {Object|null|Function} [botOrGetter]
+ * @returns {Promise<NotificationManager|null>}
+ */
+function getOrInitializeNotificationManager(botOrGetter) {
+	return bootstrapGetOrInitialize(botOrGetter);
+}
+
+/**
+ * Get the initialized NotificationManager instance (without triggering init).
+ * Used by other handlers (e.g., newsMonitor) to send alerts.
  * @returns {NotificationManager|null}
  */
 function getNotificationManager() {
-	return notificationManager;
+	return bootstrapGetInitialized();
+}
+
+/**
+ * Read-only bootstrap status (for `/api/status` and tests).
+ */
+function getNotificationManagerBootstrapStatus() {
+	return getBootstrapStatus();
+}
+
+/**
+ * Reset internal state (tests only).
+ */
+function resetNotificationManagerForTesting() {
+	bootstrapResetForTesting();
 }
 
 function resolveBot(botOrGetter) {
@@ -247,9 +253,7 @@ function postAlert(botOrGetter) {
 
 			// Defer notification service initialization until we know we need delivery.
 			const bot = resolveBot(botOrGetter);
-			if (!notificationManager) {
-				await initializeNotificationServices(bot);
-			}
+			const notificationManager = bootstrapGetInitialized() || await bootstrapGetOrInitialize(bot);
 			validateNotificationRouting(notificationManager, routing);
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
 
@@ -552,5 +556,8 @@ module.exports = {
 	resolveRequestId,
 	initializeNotificationServices,
 	getNotificationManager,
+	getOrInitializeNotificationManager,
+	getNotificationManagerBootstrapStatus,
+	resetNotificationManagerForTesting,
 	getCooldownChannelIdentity,
 };

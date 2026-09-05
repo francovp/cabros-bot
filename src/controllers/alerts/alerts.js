@@ -598,11 +598,14 @@ function replayAlert(botOrGetter) {
 				});
 			}
 
-			const { getNotificationManager, initializeNotificationServices } = require('../webhooks/handlers/alert/alert');
+			const {
+				getNotificationManager,
+				getOrInitializeNotificationManager,
+			} = require('../webhooks/handlers/alert/alert');
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
 				const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
-				notificationManager = await initializeNotificationServices(bot);
+				notificationManager = await getOrInitializeNotificationManager(bot);
 			}
 
 			let storedTelegramThreadId = storedAlert.telegramThreadId;

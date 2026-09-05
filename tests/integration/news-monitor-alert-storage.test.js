@@ -3,7 +3,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 
@@ -38,6 +38,7 @@ describe('News Monitor - Alert Storage Integration', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 		getCacheInstance().clear();
 
 		const gemini = require('../../src/services/grounding/gemini');

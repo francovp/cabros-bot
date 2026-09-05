@@ -6,7 +6,7 @@ const { getRoutes } = require('../../src/routes');
 const genaiClient = require('../../src/services/grounding/genaiClient');
 const gemini = require('../../src/services/grounding/gemini');
 const { GEMINI_MODEL_NAME_FALLBACK } = require('../../src/services/grounding/config');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 
 // Define mock search results
 const mockSearchResults = [
@@ -53,6 +53,7 @@ describe('Alert Grounding Integration', () => {
 
 		// Reset all mocks
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 
 		// Default mock implementations for genaiClient
 		genaiClient.search = jest.fn().mockResolvedValue({
@@ -289,6 +290,7 @@ describe('Alert Grounding Integration', () => {
 			process.env.WHATSAPP_API_URL = 'https://api.greenapi.com/waInstance123/';
 			process.env.WHATSAPP_API_KEY = 'test-whatsapp-key';
 			process.env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
+			resetNotificationManagerForTesting();
 			await initializeNotificationServices(bot);
 
 			const response = await request(app)
@@ -322,6 +324,7 @@ describe('Alert Grounding Integration', () => {
 			process.env.WHATSAPP_API_URL = 'https://api.greenapi.com/waInstance123/';
 			process.env.WHATSAPP_API_KEY = 'test-whatsapp-key';
 			process.env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
+			resetNotificationManagerForTesting();
 			await initializeNotificationServices(bot);
 
 			const response = await request(app)
