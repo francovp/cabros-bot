@@ -42,6 +42,15 @@ function getOpenApiDocsRouter() {
 		setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
 	}));
 
+	// Public, unauthenticated operator runbook so the admin console sidebar
+	// link (`/RUNBOOK.md`) resolves without API-key auth. The runbook is
+	// designed to be reachable from inside a paging flow.
+	const repoRoot = path.join(__dirname, '..', '..');
+	router.get('/RUNBOOK.md', (req, res) => {
+		res.set('Cache-Control', 'no-cache');
+		return res.sendFile(path.join(repoRoot, 'RUNBOOK.md'));
+	});
+
 	return router;
 }
 
