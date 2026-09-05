@@ -2,9 +2,51 @@ const crypto = require('crypto');
 const sentryService = require('../services/monitoring/SentryService');
 const { isProductionLikeEnvironment, isPreviewEnvironment } = require('./deploymentEnvironment');
 
+const QUERY_DEPRECATION_FLAG_KEY = '__cabrosApiKeyQueryDeprecationWarned';
+
+function parseApiKeyQuerySunset(value) {
+	const raw = value === undefined ? process.env.API_KEY_QUERY_SUNSET : value;
+	if (!raw) return null;
+	const match = String(raw).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+	if (!match) return null;
+	const year = Number(match[1]);
+	const month = Number(match[2]);
+	const day = Number(match[3]);
+	if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+	if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+	// Compare against UTC midnight to keep the boundary deterministic across deployments.
+	return Date.UTC(year, month - 1, day);
+}
+
+function isQueryAuthSunsetReached() {
+	const sunset = parseApiKeyQuerySunset();
+	if (sunset === null) return false;
+	return Date.now() >= sunset;
+}
+
+function isQueryApiKeyPresent(req) {
+	if (!req || !req.query) return false;
+	const value = req.query['api-key'];
+	return typeof value === 'string' || Array.isArray(value);
+}
+
+function warnQueryApiKeyDeprecationOnce(req) {
+	if (process.env[QUERY_DEPRECATION_FLAG_KEY] === '1') return;
+	process.env[QUERY_DEPRECATION_FLAG_KEY] = '1';
+	const route = (req && (req.originalUrl || req.url)) || 'unknown';
+	const sunset = process.env.API_KEY_QUERY_SUNSET;
+	const sunsetNote = sunset
+		? ` Set API_KEY_QUERY_SUNSET=${sunset} has passed; remove the query parameter from your client.`
+		: ' Migrate to the x-api-key header before the announced sunset date.';
+	console.warn(`[auth] The api-key query parameter is deprecated and may leak through reverse-proxy access logs. Route: ${route}.${sunsetNote}`);
+}
+
 /**
  * Middleware to validate API key for webhook endpoints.
  * Requires `x-api-key` header to match `WEBHOOK_API_KEY` environment variable.
+ * The legacy `api-key` query parameter is accepted for backward compatibility but emits a
+ * one-time deprecation warning per process; when `API_KEY_QUERY_SUNSET` (YYYY-MM-DD, UTC) is
+ * reached or passed, query-parameter auth is rejected with `401 API_KEY_QUERY_REMOVED`.
  */
 function validateApiKey(req, res, next) {
 	const validApiKey = process.env.WEBHOOK_API_KEY;
@@ -48,6 +90,14 @@ function validateApiKey(req, res, next) {
 		return next();
 	}
 
+	// Sunset has passed: query-parameter auth is no longer accepted.
+	if (isQueryApiKeyPresent(req) && isQueryAuthSunsetReached()) {
+		return res.status(401).json({
+			error: 'The api-key query parameter support has been removed; use the x-api-key header instead.',
+			code: 'API_KEY_QUERY_REMOVED',
+		});
+	}
+
 	// Get API key from headers (recommended) or query params. Headers is recommended, query params are less secure.
 	const apiKey = req.headers['x-api-key'] || req.query['api-key'];
 
@@ -60,6 +110,10 @@ function validateApiKey(req, res, next) {
 
 	if (!isValidApiKey(req)) {
 		return res.status(403).json({ error: 'Forbidden: Invalid API key' });
+	}
+
+	if (isQueryApiKeyPresent(req)) {
+		warnQueryApiKeyDeprecationOnce(req);
 	}
 
 	next();
@@ -80,4 +134,15 @@ function isValidApiKey(req) {
 		&& crypto.timingSafeEqual(bufferApiKey, bufferValidApiKey);
 }
 
-module.exports = { isValidApiKey, validateApiKey };
+function _resetQueryDeprecationFlagForTests() {
+	delete process.env[QUERY_DEPRECATION_FLAG_KEY];
+}
+
+module.exports = {
+	_isQueryApiKeyPresent: isQueryApiKeyPresent,
+	_isQueryAuthSunsetReached: isQueryAuthSunsetReached,
+	_parseApiKeyQuerySunset: parseApiKeyQuerySunset,
+	_resetQueryDeprecationFlagForTests,
+	isValidApiKey,
+	validateApiKey,
+};

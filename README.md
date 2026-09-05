@@ -34,7 +34,8 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 #### Security
 
-- `WEBHOOK_API_KEY` - API key used to secure `/api/*` webhook endpoints. Required in production-like environments (`NODE_ENV=production`, Render, Vercel, Railway), where endpoints fail-closed with HTTP 503 if unset. When configured, clients must provide the key via the `x-api-key` header (or the `api-key` query parameter)
+- `WEBHOOK_API_KEY` - API key used to secure `/api/*` webhook endpoints. Required in production-like environments (`NODE_ENV=production`, Render, Vercel, Railway), where endpoints fail-closed with HTTP 503 if unset. When configured, clients must provide the key via the `x-api-key` header. The legacy `api-key` query parameter is deprecated ([GH-756](https://github.com/francovp/cabros-bot/issues/756)) — query strings may leak through reverse-proxy access logs, so a one-time deprecation warning is emitted on use; migrate to the header before the announced sunset date.
+- `API_KEY_QUERY_SUNSET` - Optional UTC sunset date (`YYYY-MM-DD`) for the deprecated `api-key` query-parameter auth path. After this date, requests authenticated only via `?api-key=...` are rejected with `401 API_KEY_QUERY_REMOVED`; the `x-api-key` header continues to work. Leave unset to keep accepting the legacy query parameter indefinitely. Classified as environment-only for Remote Config parity (auth/transport sunset policy; excluded from the Remote Config template).
 - `ENABLE_FIREBASE_ADMIN_AUTH` - Enable opt-in Firebase email/password authentication for the browser admin console (`false` by default)
 - `FIREBASE_WEB_API_KEY` - Public Firebase Web API key used by the browser sign-in flow; not a service-account credential
 - `FIREBASE_AUTH_DOMAIN` - Public Firebase Auth domain used by the browser sign-in flow
@@ -1458,7 +1459,7 @@ Retrieve a single stored alert by Firestore document ID. The response also surfa
 
 #### GET /api/outcomes
 
-Query durably recorded signal outcomes record-by-record with pagination and filtering by symbol, exchange, status, window, and date range. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role. Returns `403 FEATURE_DISABLED` if `ENABLE_SIGNAL_OUTCOME_TRACKING !== 'true'`, and `503 STORAGE_UNAVAILABLE` if Firestore is enabled but inaccessible.
+Query durably recorded signal outcomes record-by-record with pagination and filtering by symbol, exchange, status, window, and date range. Requires `x-api-key` header (or deprecated `api-key` query parameter — see [GH-756](https://github.com/francovp/cabros-bot/issues/756)) or Firebase Bearer token with `admin.viewer` or `admin.operator` role. Returns `403 FEATURE_DISABLED` if `ENABLE_SIGNAL_OUTCOME_TRACKING !== 'true'`, and `503 STORAGE_UNAVAILABLE` if Firestore is enabled but inaccessible.
 
 **Query Parameters:**
 - `limit` - Integer between `1` and `100` (default: `50`)
@@ -1531,7 +1532,7 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
 
 #### GET /api/outcomes/summary
 
-Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range. When no outcomes match the filters or tracking is enabled with an empty dataset, the endpoint returns `200 OK` with `available: false` and a typed empty summary structure. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
+Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range. When no outcomes match the filters or tracking is enabled with an empty dataset, the endpoint returns `200 OK` with `available: false` and a typed empty summary structure. Requires `x-api-key` header (or deprecated `api-key` query parameter — see [GH-756](https://github.com/francovp/cabros-bot/issues/756)) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
 
 **Query Parameters:**
 - `limit` - Maximum number of recent outcomes to aggregate (integer between `1` and `100`, default: `50`)
