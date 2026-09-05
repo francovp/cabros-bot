@@ -1229,6 +1229,13 @@ This feature introduces an optional persistent/shared backend (Firestore) for th
 - Writes update the local memory cache, and if persistent mode is active, also save to Firestore.
 - Fail-open strategy: any Firestore errors (permissions, timeouts, missing collection) are logged as warnings and the cache gracefully falls back to local in-memory operation.
 
+**Race-Safe Persistence State (GH-871 / CB-189)**:
+- `NewsDedupStorageService.setEntry()` now applies channel-scoped delta merges so a concurrent `setEntry()` retry cannot erase another replica's `originalPersistedState` flip or channel-scoped delivery/routing deltas that landed between the transaction's read and write.
+- A late `'pending'` write that arrives after the durable side has already resolved to `'owned'`/`'none'` is dropped (only the channel-scoped delta is preserved); a terminal write that arrives after a still-`'pending'` predecessor keeps the terminal value so concurrent pending writes cannot regress it back to `'pending'`.
+- `NewsCache.markOriginalPersistState('pending')` is gated by an `expectedField: 'originalPersistedState'` / `expectedValues: ['pending']` Firestore transaction guard, so the fire-and-forget pending write is rejected when another replica has already committed a terminal value.
+- `NewsCache.claimUsageOwnership()` writes `originalPersistedState: 'claimed'` together with a bounded `claimDeadline` (`Date.now() + USAGE_CLAIM_DEADLINE_MS`, default 60s) and uses `updateEntry`'s new `expectedExpirableField` guard. A replica attempting to claim against an active unexpired `claimed` lock is rejected; once the deadline passes, takeover succeeds and the prior `claimDeadline` is overwritten. `releaseUsageOwnershipClaim()` clears the local `claimDeadline` so the next claim starts fresh.
+- New `updateEntry()` options: `expectedExpirableField` (timestamp field whose expiry allows takeover) and `expectedExpirableValues` (subset of `expectedValues` that are subject to the expirable guard).
+
 **Where to look first when extending or debugging**:
 - `src/controllers/webhooks/handlers/newsMonitor/cache.js` for cache lookup and eviction rules.
 - `src/services/storage/NewsDedupStorageService.js` for Firestore interactions.

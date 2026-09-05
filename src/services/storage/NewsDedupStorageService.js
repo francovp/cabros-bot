@@ -255,12 +255,19 @@ async function claimEntry(key, ttlMs, claimToken) {
  *
  * Fail-open: errors are logged and swallowed; alert delivery is not affected.
  *
+ * Persistence state (`originalPersistedState`) transitions are guarded:
+ *   - `pending` may be applied when the existing state is absent or `pending`.
+ *   - terminal states (`owned`, `none`) overwrite any prior state, including
+ *     stale `pending` writes that started before the terminal transition
+ *     landed on another replica.
+ *
  * @param {string} key - Dedup key
  * @param {number} ttlMs - TTL in milliseconds
  * @param {Object} data - Cache data payload to store
+ * @param {{deliveryChannels?: string[]}} options - Optional claimed-channel delta scope
  * @returns {Promise<void>}
  */
-async function setEntry(key, ttlMs, data) {
+async function setEntry(key, ttlMs, data, options = {}) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		return;
@@ -275,18 +282,53 @@ async function setEntry(key, ttlMs, data) {
 			const docRef = firestore.collection(COLLECTION_NAME).doc(key);
 			const existing = await transaction.get(docRef);
 			const existingData = existing.exists ? existing.data() : null;
-			// Merge over the current durable payload so concurrent field-scoped
-			// writes (e.g. originalPersistedState committed after this write
-			// started) are not erased by this replacement.
 			const baseData = existingData?.data && typeof existingData.data === 'object'
 				? existingData.data
 				: {};
-			const nextData = { ...baseData, ...(data || {}) };
+			const incomingData = data || {};
+			const incomingState = incomingData.originalPersistedState;
+			const existingState = baseData.originalPersistedState;
+
+			const isTerminalIncoming = incomingState === 'owned' || incomingState === 'none';
+			const isPendingIncoming = incomingState === 'pending';
+			let baseForMerge = baseData;
+			let incomingForMerge = incomingData;
+
+			if (isPendingIncoming && (existingState === 'owned' || existingState === 'none')) {
+				// Stale `pending` (fire-and-forget that lost the race to a terminal
+				// write on another replica): drop the `originalPersistedState`
+				// overwrite but still merge channel-scoped delivery/routing deltas
+				// via the regular path.
+				const { originalPersistedState: _drop, ...rest } = incomingData;
+				incomingForMerge = rest;
+			} else if (isTerminalIncoming && existingState === 'pending') {
+				// Terminal write arriving after a still-pending predecessor: keep
+				// the terminal value so concurrent pending writes cannot resurrect
+				// ownership that has already been resolved.
+				baseForMerge = { ...baseData, originalPersistedState: incomingState };
+				const { originalPersistedState: _drop, ...rest } = incomingData;
+				incomingForMerge = rest;
+			}
+
+			// Merge channel-scoped delivery/routing deltas so a retry cannot erase
+			// concurrent field-scoped writes (e.g. `originalPersistedState`
+			// committed by another replica between this transaction's read and
+			// write).
+			const mergedData = mergeDeliveryData(baseForMerge, incomingForMerge, options) || {};
+			// Preserve the originalPersistedState transition resolved above
+			// (e.g. dropping a stale `pending` or promoting an older `pending`
+			// to the incoming terminal value) only when the merge did not
+			// already carry it. Skip the propagation when the existing value is
+			// absent so we do not introduce an explicit `undefined` field that
+			// would silently propagate into the durable payload.
+			if (!mergedData.originalPersistedState && baseForMerge.originalPersistedState) {
+				mergedData.originalPersistedState = baseForMerge.originalPersistedState;
+			}
 			transaction.set(docRef, {
 				key,
 				createdAt: existingData?.createdAt ?? now,
 				expiresAt,
-				data: nextData,
+				data: mergedData,
 			});
 		});
 		console.debug('[NewsDedupStorageService] Dedup entry written with data:', key);
@@ -300,7 +342,7 @@ async function setEntry(key, ttlMs, data) {
  *
  * @param {string} key - Dedup key
  * @param {Object} data - Updated cache payload
- * @param {{deliveryChannels?: string[]}} options - Optional claimed-channel delta scope
+ * @param {{deliveryChannels?: string[], mergeFields?: string[], expectedField?: string, expectedValues?: string[], expectedExpirableField?: string}} options - Optional claimed-channel delta scope and expected-state guards
  * @returns {Promise<boolean>} true when an active entry was updated
  */
 async function updateEntry(key, data, options = {}) {
@@ -330,8 +372,45 @@ async function updateEntry(key, data, options = {}) {
 					const allowed = Array.isArray(options.expectedValues)
 						? options.expectedValues
 						: [];
-					if (currentValue !== undefined && !allowed.includes(currentValue)) {
-						return false;
+					const valueAllowed = currentValue === undefined || allowed.includes(currentValue);
+					if (!valueAllowed) {
+						// Allow takeover when an `expectedExpirableField` deadline has
+						// expired so a crashed prior owner does not lock out
+						// later redeliveries until the full dedup TTL expires.
+						if (options.expectedExpirableField) {
+							const deadline = existingData.data
+								? existingData.data[options.expectedExpirableField]
+								: undefined;
+							const deadlineMs = typeof deadline === 'number'
+								? deadline
+								: Number.isFinite(deadline?.toMillis?.())
+									? deadline.toMillis()
+									: null;
+							if (deadlineMs === null || deadlineMs > now.toMillis()) {
+								return false;
+							}
+						} else {
+							return false;
+						}
+					} else if (options.expectedExpirableField
+						&& currentValue !== undefined
+						&& Array.isArray(options.expectedExpirableValues)
+						&& options.expectedExpirableValues.includes(currentValue)) {
+						// The current value is one of the expirable allowed
+						// states (e.g. `'claimed'`). Reject when its deadline
+						// is still in the future so an active lease is not
+						// stolen, allow takeover once the deadline has passed.
+						const deadline = existingData.data
+							? existingData.data[options.expectedExpirableField]
+							: undefined;
+						const deadlineMs = typeof deadline === 'number'
+							? deadline
+							: Number.isFinite(deadline?.toMillis?.())
+								? deadline.toMillis()
+								: null;
+						if (deadlineMs === null || deadlineMs > now.toMillis()) {
+							return false;
+						}
 					}
 				}
 				nextData = { ...(existingData.data || {}) };
