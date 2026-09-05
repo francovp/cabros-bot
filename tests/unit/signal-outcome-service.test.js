@@ -2967,4 +2967,227 @@ describe('SignalOutcomeService', () => {
 			}
 		});
 	});
+
+	describe('getOutcomeById()', () => {
+		function buildQueryDoc(id, data) {
+			return {
+				id,
+				data: () => data,
+				exists: true,
+			};
+		}
+
+		it('returns null when feature is disabled', async () => {
+			const res = await SignalOutcomeService.getOutcomeById('outcome-1');
+			expect(res).toBeNull();
+		});
+
+		it('returns null for empty or invalid outcomeId', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			expect(await SignalOutcomeService.getOutcomeById(undefined)).toBeNull();
+			expect(await SignalOutcomeService.getOutcomeById('')).toBeNull();
+			expect(await SignalOutcomeService.getOutcomeById('   ')).toBeNull();
+		});
+
+		it('throws STORAGE_UNAVAILABLE when Firestore is not available', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const origGetFirestore = AlertStorageService.getFirestore;
+			AlertStorageService.getFirestore = () => null;
+
+			try {
+				await expect(SignalOutcomeService.getOutcomeById('outcome-1')).rejects.toMatchObject({
+					code: 'STORAGE_UNAVAILABLE',
+				});
+			} finally {
+				AlertStorageService.getFirestore = origGetFirestore;
+			}
+		});
+
+		it('returns null when the document does not exist', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockDocGet.mockResolvedValueOnce({ exists: false, id: 'outcome-1', data: () => ({}) });
+
+			const res = await SignalOutcomeService.getOutcomeById('outcome-1');
+			expect(res).toBeNull();
+			expect(mockDocGet).toHaveBeenCalled();
+		});
+
+		it('returns null when the document is retention-expired', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const longAgo = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000);
+			mockDocGet.mockResolvedValueOnce(buildQueryDoc('outcome-1', {
+				receivedAt: admin.firestore.Timestamp.fromDate(longAgo),
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+			}));
+
+			const res = await SignalOutcomeService.getOutcomeById('outcome-1');
+			expect(res).toBeNull();
+		});
+
+		it('returns the formatted outcome document when found', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const receivedAt = new Date('2026-08-23T12:00:00.000Z');
+			mockDocGet.mockResolvedValueOnce(buildQueryDoc('outcome-1', {
+				receivedAt: admin.firestore.Timestamp.fromDate(receivedAt),
+				requestId: 'req-1',
+				source: 'news-monitor',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				side: 'BUY',
+				price: 65000,
+				setupType: 'breakout',
+				score: 0.9,
+				outcomeEvaluated: true,
+				outcomes: { '1h': { status: 'evaluated' } },
+				tokenUsage: { totalTokens: 140 },
+			}));
+
+			const res = await SignalOutcomeService.getOutcomeById('outcome-1');
+			expect(res).toMatchObject({
+				id: 'outcome-1',
+				receivedAt: '2026-08-23T12:00:00.000Z',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				side: 'BUY',
+				price: 65000,
+				setupType: 'breakout',
+				score: 0.9,
+				outcomeEvaluated: true,
+			});
+		});
+
+		it('wraps Firestore read failures as STORAGE_UNAVAILABLE', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockDocGet.mockRejectedValueOnce(new Error('Connection terminated'));
+
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			try {
+				await expect(SignalOutcomeService.getOutcomeById('outcome-1')).rejects.toMatchObject({
+					code: 'STORAGE_UNAVAILABLE',
+				});
+			} finally {
+				warnSpy.mockRestore();
+			}
+		});
+	});
+
+	describe('exportOutcomes()', () => {
+		function buildQueryDoc(id, data) {
+			return {
+				id,
+				data: () => data,
+			};
+		}
+
+		it('returns null when feature is disabled', async () => {
+			const res = await SignalOutcomeService.exportOutcomes({ from: '2026-08-23T00:00:00.000Z', to: '2026-08-24T00:00:00.000Z' });
+			expect(res).toBeNull();
+		});
+
+		it('throws STORAGE_UNAVAILABLE when Firestore is not available', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const origGetFirestore = AlertStorageService.getFirestore;
+			AlertStorageService.getFirestore = () => null;
+
+			try {
+				await expect(SignalOutcomeService.exportOutcomes({
+					from: '2026-08-23T00:00:00.000Z',
+					to: '2026-08-24T00:00:00.000Z',
+				})).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
+			} finally {
+				AlertStorageService.getFirestore = origGetFirestore;
+			}
+		});
+
+		it('throws INVALID_REQUEST when bounds are missing', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			await expect(SignalOutcomeService.exportOutcomes({})).rejects.toMatchObject({
+				code: 'INVALID_REQUEST',
+			});
+		});
+
+		it('throws INVALID_REQUEST when window exceeds 31 days', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			await expect(SignalOutcomeService.exportOutcomes({
+				from: '2026-01-01T00:00:00.000Z',
+				to: '2026-03-01T00:00:00.000Z',
+			})).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+		});
+
+		it('returns empty list when no documents match the bounds', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockGet.mockResolvedValueOnce({ empty: true, docs: [] });
+
+			const res = await SignalOutcomeService.exportOutcomes({
+				from: '2026-08-23T00:00:00.000Z',
+				to: '2026-08-24T00:00:00.000Z',
+			});
+			expect(res.window.from).toBe('2026-08-23T00:00:00.000Z');
+			expect(res.window.to).toBe('2026-08-24T00:00:00.000Z');
+			expect(res.window.maxDays).toBe(31);
+			expect(res.outcomes).toEqual([]);
+		});
+
+		it('returns formatted export records with safe fields only', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const receivedAt = new Date('2026-08-23T12:00:00.000Z');
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('outcome-1', {
+						receivedAt: admin.firestore.Timestamp.fromDate(receivedAt),
+						source: 'webhook',
+						symbol: 'BTCUSDT',
+						exchange: 'BINANCE',
+						assetClass: 'crypto',
+						side: 'BUY',
+						price: 65000,
+						stop: 63000,
+						target: 68000,
+						score: 0.9,
+						setupType: 'breakout',
+						outcomeEvaluated: true,
+						outcomes: { '1h': { status: 'evaluated' } },
+						rawMcpPayload: { sensitive: 'must-not-leak' },
+					}),
+				],
+			});
+
+			const res = await SignalOutcomeService.exportOutcomes({
+				from: '2026-08-23T00:00:00.000Z',
+				to: '2026-08-24T00:00:00.000Z',
+			});
+			expect(res.outcomes).toHaveLength(1);
+			expect(res.outcomes[0]).toMatchObject({
+				id: 'outcome-1',
+				receivedAt: '2026-08-23T12:00:00.000Z',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				side: 'BUY',
+				price: 65000,
+				setupType: 'breakout',
+				score: 0.9,
+			});
+			expect(res.outcomes[0]).not.toHaveProperty('rawMcpPayload');
+			expect(res.outcomes[0]).not.toHaveProperty('outcomeEvaluated');
+		});
+
+		it('wraps Firestore read failures as STORAGE_UNAVAILABLE', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockGet.mockRejectedValueOnce(new Error('Connection terminated'));
+
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			try {
+				await expect(SignalOutcomeService.exportOutcomes({
+					from: '2026-08-23T00:00:00.000Z',
+					to: '2026-08-24T00:00:00.000Z',
+				})).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
+			} finally {
+				warnSpy.mockRestore();
+			}
+		});
+	});
 });

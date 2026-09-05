@@ -19,6 +19,9 @@ const MAX_TIMER_DELAY_MS = 2147483647;
 const MAX_CONFIGURED_INTERVAL_MS = 3600000;
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
+const DEFAULT_EXPORT_LIMIT = 100;
+const MAX_EXPORT_LIMIT = 1000;
+const MAX_EXPORT_WINDOW_DAYS = 31;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
@@ -2045,6 +2048,181 @@ async function listOutcomes({
 	};
 }
 
+async function getOutcomeById(outcomeId) {
+	if (!isEnabled()) {
+		return null;
+	}
+	if (typeof outcomeId !== 'string' || !outcomeId.trim()) {
+		return null;
+	}
+
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	let snapshot;
+	try {
+		snapshot = await firestore.collection(COLLECTION_NAME).doc(outcomeId.trim()).get();
+	} catch (error) {
+		console.warn('[SignalOutcomeService] Failed to read signal outcome from Firestore:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+
+	if (!snapshot || !snapshot.exists) {
+		return null;
+	}
+	if (isRetentionExpired(snapshot.data() || {})) {
+		return null;
+	}
+
+	return formatOutcomeDocument(snapshot);
+}
+
+function clampOutcomeExportLimit(limit) {
+	if (!Number.isInteger(limit) || limit < 1) {
+		return DEFAULT_EXPORT_LIMIT;
+	}
+	return Math.min(limit, MAX_EXPORT_LIMIT);
+}
+
+function buildOutcomeExportWindow({ from, to, limit }) {
+	if (!from || !to) {
+		const error = new Error('Export requests require bounded from and to ISO-8601 timestamps.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+
+	const parsedFrom = new Date(from);
+	const parsedTo = new Date(to);
+	const maxWindowMs = MAX_EXPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+	if (Number.isNaN(parsedFrom.getTime()) || Number.isNaN(parsedTo.getTime())) {
+		const error = new Error('Invalid export window. Use ISO-8601 timestamps.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+
+	if (parsedFrom.getTime() > parsedTo.getTime()) {
+		const error = new Error('Invalid export window. from must be before or equal to to.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+
+	if (parsedTo.getTime() - parsedFrom.getTime() > maxWindowMs) {
+		const error = new Error(`Invalid export window. Maximum export window is ${MAX_EXPORT_WINDOW_DAYS} days.`);
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+
+	return {
+		from: parsedFrom.toISOString(),
+		to: parsedTo.toISOString(),
+		limit: clampOutcomeExportLimit(limit),
+		maxDays: MAX_EXPORT_WINDOW_DAYS,
+	};
+}
+
+function formatOutcomeExportRecord(doc) {
+	const data = doc.data() || {};
+	const record = {
+		id: doc.id,
+		receivedAt: getDocTimestamp(data),
+		requestId: typeof data.requestId === 'string' && data.requestId.trim() ? data.requestId.trim() : null,
+		source: typeof data.source === 'string' ? data.source : null,
+		symbol: typeof data.symbol === 'string' ? data.symbol : null,
+		exchange: typeof data.exchange === 'string' ? data.exchange : null,
+		assetClass: typeof data.assetClass === 'string' ? data.assetClass : null,
+		timeframe: typeof data.timeframe === 'string' ? data.timeframe : null,
+		setupType: typeof data.setupType === 'string' ? data.setupType : null,
+		score: typeof data.score === 'number' && Number.isFinite(data.score) ? data.score : null,
+		side: data.side === 'SELL' ? 'SELL' : 'BUY',
+		price: typeof data.price === 'number' && Number.isFinite(data.price) ? data.price : null,
+		stop: typeof data.stop === 'number' && Number.isFinite(data.stop) ? data.stop : null,
+		target: typeof data.target === 'number' && Number.isFinite(data.target) ? data.target : null,
+		outcomes: data.outcomes && typeof data.outcomes === 'object' ? data.outcomes : {},
+	};
+
+	return record;
+}
+
+async function exportOutcomes({ from, to, limit, symbol, exchange, setupType } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const window = buildOutcomeExportWindow({ from, to, limit });
+	const scanLimit = Math.max(window.limit, MAX_LIMIT);
+	const docs = [];
+	let pageCursor = null;
+
+	while (docs.length < window.limit) {
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
+			.orderBy('receivedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
+
+		if (pageCursor) {
+			const cursorTimestamp = buildParsedCursorTimestamp(pageCursor);
+			query = query.startAfter(cursorTimestamp, pageCursor.documentId);
+		}
+
+		query = query.limit(scanLimit);
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[SignalOutcomeService] Failed to export signal outcomes from Firestore:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+
+		for (const doc of snapshot.docs) {
+			if (isRetentionExpired(doc.data() || {})) {
+				continue;
+			}
+			const formatted = formatOutcomeExportRecord(doc);
+			if (matchesOutcomeFilters(formatted, {
+				symbol,
+				exchange,
+				setupType,
+				from: window.from,
+				to: window.to,
+			})) {
+				docs.push(formatted);
+				if (docs.length >= window.limit) {
+					break;
+				}
+			}
+		}
+
+		if (snapshot.docs.length < scanLimit) {
+			break;
+		}
+
+		pageCursor = getDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!pageCursor) {
+			break;
+		}
+	}
+
+	return {
+		window,
+		outcomes: docs,
+	};
+}
+
 function _resetForTesting() {
 	lastRetentionWarningValue = null;
 	binanceClient = null;
@@ -2068,6 +2246,8 @@ module.exports = {
 	getMetricsSummary,
 	summarizeOutcomes,
 	listOutcomes,
+	getOutcomeById,
+	exportOutcomes,
 	normalizeSide,
 	normalizeSymbolAndExchange,
 	startWorker,
