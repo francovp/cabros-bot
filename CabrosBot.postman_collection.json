@@ -276,6 +276,50 @@
       ]
     },
     {
+      "name": "Get Status - discord source routing",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing the Discord per-source routing dependency (ENABLE_DISCORD_SOURCE_ROUTING + DISCORD_SOURCE_ROUTING_JSON). Reports enabled, configured, ready, status, routesConfigured, hasDefault, keys (sorted, lowercased), decisions, and fallbacks without leaking webhook URLs."
+      },
+      "response": [
+        {
+          "name": "200 OK - discord source routing ready",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"discordSourceRouting\":true},\"dependencies\":{\"discordSourceRouting\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"routesConfigured\":3,\"hasDefault\":true,\"keys\":[\"default\",\"news-monitor\",\"scanner\"],\"decisions\":12,\"fallbacks\":2}}}"
+        },
+        {
+          "name": "200 OK - discord source routing disabled",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"discordSourceRouting\":false},\"dependencies\":{\"discordSourceRouting\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"routesConfigured\":0,\"hasDefault\":false,\"keys\":[],\"decisions\":0,\"fallbacks\":0}}}"
+        },
+        {
+          "name": "200 OK - discord source routing misconfigured",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"discordSourceRouting\":true},\"dependencies\":{\"discordSourceRouting\":{\"enabled\":true,\"configured\":false,\"ready\":false,\"status\":\"misconfigured\",\"routesConfigured\":0,\"hasDefault\":false,\"keys\":[],\"decisions\":0,\"fallbacks\":0}}}"
+        }
+      ]
+    },
+    {
       "name": "Get Capabilities",
       "request": {
         "method": "GET",

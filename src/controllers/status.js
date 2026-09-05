@@ -27,6 +27,7 @@ const {
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
 } = require('../lib/deploymentEnvironment');
+const { getAggregateStats: getDiscordSourceRoutingAggregateStats } = require('../services/notification/discordSourceRouting');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
 const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
@@ -234,6 +235,49 @@ function getStatus() {
 		enabled: discordEnabled,
 		configured: hasValue(process.env.DISCORD_WEBHOOK_URL),
 	});
+	const discordSourceRoutingEnabled = isEnabled(process.env.ENABLE_DISCORD_SOURCE_ROUTING);
+	const discordSourceRouting = (() => {
+		if (!discordSourceRoutingEnabled) {
+			return {
+				enabled: false,
+				configured: false,
+				ready: false,
+				status: 'disabled',
+				routesConfigured: 0,
+				hasDefault: false,
+			};
+		}
+		const rawRoutes = process.env.DISCORD_SOURCE_ROUTING_JSON;
+		let parsedKeys = [];
+		let hasDefault = false;
+		if (typeof rawRoutes === 'string' && rawRoutes.trim().length > 0) {
+			const trimmed = rawRoutes.trim();
+			if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+				try {
+					const parsed = JSON.parse(trimmed);
+					if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+						parsedKeys = Object.keys(parsed).map((k) => k.toLowerCase());
+						hasDefault = parsedKeys.includes('default') || parsedKeys.includes('*');
+					}
+				} catch (_) {
+					// invalid JSON; surfaced via discordSourceRouting warning logs in the service
+				}
+			}
+		}
+		const configured = parsedKeys.length > 0;
+		const aggregate = getDiscordSourceRoutingAggregateStats();
+		return {
+			enabled: discordSourceRoutingEnabled,
+			configured,
+			ready: configured,
+			status: configured ? 'ready' : 'misconfigured',
+			routesConfigured: parsedKeys.length,
+			hasDefault,
+			keys: parsedKeys.sort(),
+			decisions: aggregate.decisions || 0,
+			fallbacks: aggregate.fallbacks || 0,
+		};
+	})();
 	const gemini = getGeminiDependency({
 		enabled: geminiEnabled,
 		geminiGroundingEnabled,
@@ -329,6 +373,7 @@ function getStatus() {
 			telegramBot: telegramFlagEnabled,
 			whatsappAlerts: whatsappEnabled,
 			discordAlerts: discordEnabled,
+			discordSourceRouting: discordSourceRoutingEnabled,
 			geminiGrounding: geminiGroundingEnabled,
 			newsMonitor: newsMonitorEnabled,
 			newsMonitorTestMode: newsMonitorTestModeEnabled,
@@ -381,6 +426,7 @@ function getStatus() {
 			telegram,
 			whatsapp,
 			discord,
+			discordSourceRouting,
 			webhookAuth,
 			whatsappCommandBridge: whatsAppCommandBridgeService.getStatus(),
 			gemini,
