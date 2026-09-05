@@ -1197,7 +1197,35 @@ describe('AlertStorageService', () => {
 				code: 'STORAGE_UNAVAILABLE',
 			});
 		});
+
+		it('persists reEnriched flag and sanitized enrichmentData when provided', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const idempotencyKey = 'replay/key-enrich';
+			const enrichmentData = {
+				current_price: 65000,
+				setup_type: 'breakout',
+				unsupportedUndefined: undefined,
+			};
+
+			const result = await AlertStorageService.saveReplayAttempt({
+				alertId: 'alert-123',
+				idempotencyKey,
+				channels: ['telegram'],
+				deliveryResults: [{ channel: 'telegram', success: true }],
+				reEnriched: true,
+				enrichmentData,
+			});
+
+			expect(result).toBeDefined();
+			const document = mockDocSet.mock.calls[0][0];
+			expect(document.reEnriched).toBe(true);
+			expect(document.enrichmentData).toEqual({
+				current_price: 65000,
+				setup_type: 'breakout',
+			});
+			expect(document.enrichmentData).not.toHaveProperty('unsupportedUndefined');
 		});
+	});
 
 
 	describe('listReplayAttempts()', () => {
@@ -1273,6 +1301,29 @@ describe('AlertStorageService', () => {
 
 			expect(result.replays[0].id).toBe('1700000000000_uuid');
 			expect(result.replays[0].id).not.toContain('full-hash');
+		});
+
+		it('includes reEnriched and enrichmentData in formatted replay document when present', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1_hash_ts_uuid', {
+						alertId: 'alert-1',
+						idempotencyKeyHash: 'test-hash-prefix',
+						attemptId: 'ts_uuid',
+						channels: ['telegram'],
+						deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+						replayedAt: buildTimestamp('2026-06-06T12:34:56.000Z'),
+						reEnriched: true,
+						enrichmentData: { current_price: 65000 },
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listReplayAttempts({ limit: 1 });
+			expect(result.replays[0].reEnriched).toBe(true);
+			expect(result.replays[0].enrichmentData).toEqual({ current_price: 65000 });
 		});
 
 		it('applies the composite before cursor to the Firestore query', async () => {

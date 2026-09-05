@@ -1363,9 +1363,11 @@ async function getAlertById(alertId) {
  * @param {string} params.idempotencyKey
  * @param {Array<string>} params.channels
  * @param {Array} params.deliveryResults
+ * @param {boolean} [params.reEnriched]
+ * @param {Object} [params.enrichmentData]
  * @returns {Promise<string|null>}
  */
-async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults }) {
+async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults, reEnriched, enrichmentData }) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		throw createStorageUnavailableError();
@@ -1383,6 +1385,8 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
 		expiresAt: buildRetentionExpiryTimestamp(),
 		source: 'alert-replay',
+		...(typeof reEnriched === 'boolean' ? { reEnriched } : {}),
+		...(enrichmentData && typeof enrichmentData === 'object' ? { enrichmentData: stripUndefinedFieldsDeep(sanitizeEnrichmentData(enrichmentData)) } : {}),
 	};
 
 	try {
@@ -1443,6 +1447,8 @@ function formatReplayDocument(doc) {
 		deliverySummary: compactDelivery,
 		replayedAt,
 		attemptId: typeof data.attemptId === 'string' ? data.attemptId : null,
+		...(typeof data.reEnriched === 'boolean' ? { reEnriched: data.reEnriched } : {}),
+		...(data.enrichmentData && typeof data.enrichmentData === 'object' ? { enrichmentData: data.enrichmentData } : {}),
 	};
 }
 

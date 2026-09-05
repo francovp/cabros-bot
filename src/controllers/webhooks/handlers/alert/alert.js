@@ -553,4 +553,5 @@ module.exports = {
 	initializeNotificationServices,
 	getNotificationManager,
 	getCooldownChannelIdentity,
+	processEnrichment,
 };
