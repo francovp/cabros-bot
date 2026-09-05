@@ -1397,72 +1397,81 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		throw createStorageUnavailableError();
 	}
 
-		const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-		const parsedTo = to ? new Date(to) : new Date();
+	const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+	const parsedTo = to ? new Date(to) : new Date();
 
-		const retentionDays = getSignalOutcomeRetentionDays();
-		const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
-		const effectiveFromMs = Math.max(parsedFrom.getTime(), retentionCutoffMs);
-		if (effectiveFromMs > parsedTo.getTime()) {
-			return createEmptyMetricsSummary();
+	const retentionDays = getSignalOutcomeRetentionDays();
+	const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
+	const effectiveFromMs = Math.max(parsedFrom.getTime(), retentionCutoffMs);
+	if (effectiveFromMs > parsedTo.getTime()) {
+		return createEmptyMetricsSummary();
+	}
+	const effectiveFrom = new Date(effectiveFromMs);
+
+	const targetLimit = limit || 1000;
+	const batchSize = Math.min(targetLimit, 100);
+	const matchedDocs = [];
+	let lastDoc = null;
+
+	const hasFilters = Boolean(symbol || exchange || status || window);
+
+	while (matchedDocs.length < targetLimit) {
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
+			.limit(batchSize);
+
+		if (lastDoc) {
+			query = query.startAfter(lastDoc);
 		}
-		const effectiveFrom = new Date(effectiveFromMs);
 
-		const targetLimit = limit || 1000;
-		const batchSize = Math.min(targetLimit, 100);
-		const activeDocs = [];
-		let lastDoc = null;
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			throw createStorageUnavailableError(error);
+		}
 
-		while (activeDocs.length < targetLimit) {
-			let query = firestore
-				.collection(COLLECTION_NAME)
-				.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
-				.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
-				.limit(batchSize);
+		if (!snapshot || snapshot.empty) {
+			break;
+		}
 
-			if (lastDoc) {
-				query = query.startAfter(lastDoc);
+		for (const doc of snapshot.docs) {
+			if (isRetentionExpired(doc.data() || {})) {
+				continue;
 			}
-
-			let snapshot;
-			try {
-				snapshot = await query.get();
-			} catch (error) {
-				throw createStorageUnavailableError(error);
-			}
-
-			if (!snapshot || snapshot.empty) {
-				break;
-			}
-
-			for (const doc of snapshot.docs) {
-				if (!isRetentionExpired(doc.data() || {})) {
-					activeDocs.push(doc);
-					if (activeDocs.length >= targetLimit) {
-						break;
-					}
+			if (hasFilters) {
+				const formatted = {
+					...doc.data(),
+					id: doc.id,
+					receivedAt: getDocTimestamp(doc.data()),
+				};
+				if (!matchesOutcomeFilters(formatted, { symbol, exchange, status, window, from, to })) {
+					continue;
 				}
 			}
-
-			if (snapshot.docs.length < batchSize) {
+			matchedDocs.push(doc);
+			if (matchedDocs.length >= targetLimit) {
 				break;
 			}
-			lastDoc = snapshot.docs[snapshot.docs.length - 1];
 		}
 
-		if (activeDocs.length === 0) {
-			return createEmptyMetricsSummary();
+		if (snapshot.docs.length < batchSize) {
+			break;
 		}
+		lastDoc = snapshot.docs[snapshot.docs.length - 1];
+	}
 
-	let docs = activeDocs.map(doc => ({
+	if (matchedDocs.length === 0) {
+		return createEmptyMetricsSummary();
+	}
+
+	const docs = matchedDocs.map(doc => ({
 		...doc.data(),
 		id: doc.id,
 		receivedAt: getDocTimestamp(doc.data()),
 	}));
-
-	if (symbol || exchange || status || window) {
-		docs = docs.filter(doc => matchesOutcomeFilters(doc, { symbol, exchange, status, window, from, to }));
-	}
 
 	if (docs.length === 0) {
 		return createEmptyMetricsSummary();
@@ -1522,8 +1531,13 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		}
 
 		const outcomesValues = doc.outcomes ? Object.values(doc.outcomes) : [];
-		const hasEvaluated = outcomesValues.some(o => o.status === 'evaluated');
-		const hasPending = doc.outcomeEvaluated === false && outcomesValues.some(o => o.status === 'pending');
+		// When a window filter is set, "evaluated" only counts windows that match the requested filter
+		const winOutcomeKeys = window
+			? [Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window]
+			: Object.keys(doc.outcomes || {});
+		const winOutcomeValues = winOutcomeKeys.map(k => doc.outcomes ? doc.outcomes[k] : null).filter(Boolean);
+		const hasEvaluated = winOutcomeValues.length > 0 && winOutcomeValues.some(o => o.status === 'evaluated');
+		const hasPending = doc.outcomeEvaluated === false && winOutcomeValues.some(o => o.status === 'pending');
 
 		if (hasEvaluated) {
 			totalSignalsEvaluated++;
@@ -1542,8 +1556,11 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 	}
 
 	const windowStats = {};
+	const windowKeysToAggregate = window
+		? [Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window]
+		: Object.keys(WINDOW_CONFIGS);
 	if (evaluatedSignals.length > 0) {
-		for (const winKey of Object.keys(WINDOW_CONFIGS)) {
+		for (const winKey of windowKeysToAggregate) {
 			const accumulator = createWindowAccumulator();
 
 			for (const signal of evaluatedSignals) {
@@ -1612,7 +1629,8 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		let bestReturn = -Infinity;
 		let resolvedReturn = null;
 
-		for (const outcome of Object.values(signal.outcomes || {})) {
+		for (const winKey of windowKeysToAggregate) {
+			const outcome = signal.outcomes ? signal.outcomes[winKey] : null;
 			if (outcome && outcome.status === 'evaluated') {
 				if (outcome.maxAdverseExcursion < worstMae) {
 					worstMae = outcome.maxAdverseExcursion;
@@ -1660,7 +1678,8 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 	for (const signal of evaluatedSignals) {
 		const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
 		const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
-		for (const outcome of Object.values(signal.outcomes || {})) {
+		for (const winKey of windowKeysToAggregate) {
+			const outcome = signal.outcomes ? signal.outcomes[winKey] : null;
 			if (outcome && outcome.status === 'evaluated') {
 				allEvaluatedWindows++;
 				if (hasTargetBarrier) {
