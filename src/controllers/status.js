@@ -194,10 +194,12 @@ function getStatus() {
 	const tradingViewMcpEnrichmentEnabled = runtimeConfig.ENABLE_TRADINGVIEW_MCP_ENRICHMENT;
 	const tradingViewVolumeConfirmationFlagEnabled = runtimeConfig.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
 	const tradingViewVolumeConfirmationEnabled = tradingViewVolumeConfirmationFlagEnabled && tradingViewMcpEnrichmentEnabled;
+	const strategyResearchEnabled = runtimeConfig.ENABLE_STRATEGY_RESEARCH;
 	const observedTradingViewMcpStatus = tradingViewMcpService.getStatus({ enabled: true });
 	const tradingViewMcpEnabled =
 		tradingViewMcpEnrichmentEnabled
 		|| marketScannerEnabled
+		|| strategyResearchEnabled
 		|| observedTradingViewMcpStatus.lastCheckedAt !== null;
 	const firestoreEnabled = isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE);
 	const firestoreScannerPresetsEnabled = isEnabled(process.env.ENABLE_FIRESTORE_SCANNER_PRESETS);
@@ -244,6 +246,9 @@ function getStatus() {
 	const tradingViewMcp = tradingViewRuntimeStatus;
 	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
 		enabled: tradingViewVolumeConfirmationEnabled,
+	});
+	const tradingViewStrategyResearch = tradingViewMcpService.getStrategyResearchStatus({
+		enabled: strategyResearchEnabled,
 	});
 	const firestore = dependencyStatus({
 		enabled: firestoreEnabled,
@@ -336,6 +341,7 @@ function getStatus() {
 			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationFlagEnabled,
 			tradingViewConfluenceEnrichment: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT),
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
+			strategyResearch: strategyResearchEnabled,
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
@@ -388,6 +394,7 @@ function getStatus() {
 			groundingCoalescing: getCoalescingStatus(),
 			tradingViewMcp,
 			tradingViewVolumeConfirmation,
+			tradingViewStrategyResearch,
 			firestore,
 			firestoreJobStorage,
 			sentry,

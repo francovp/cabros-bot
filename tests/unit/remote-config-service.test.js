@@ -312,6 +312,8 @@ describe('RemoteConfigService', () => {
 			TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD: 10,
 			TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS: 300000,
 			TRADINGVIEW_MCP_PAGE_COOLDOWN_MS: 1800000,
+			STRATEGY_RESEARCH_CACHE_TTL_MS: 600000,
+			STRATEGY_RESEARCH_RETENTION_DAYS: 60,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -345,6 +347,8 @@ describe('RemoteConfigService', () => {
 		expect(config.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD).toBe(10);
 		expect(config.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS).toBe(300000);
 		expect(config.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS).toBe(1800000);
+		expect(config.STRATEGY_RESEARCH_CACHE_TTL_MS).toBe(600000);
+		expect(config.STRATEGY_RESEARCH_RETENTION_DAYS).toBe(60);
 	});
 
 	it('validates and applies safe request-time feature flags from remote config', async () => {
@@ -356,6 +360,7 @@ describe('RemoteConfigService', () => {
 			ENABLE_MARKET_SCANNER: true,
 			ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: true,
 			ENABLE_ALERT_HTF_RENDER: false,
+			ENABLE_STRATEGY_RESEARCH: true,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -368,6 +373,7 @@ describe('RemoteConfigService', () => {
 		expect(config.ENABLE_MARKET_SCANNER).toBe(true);
 		expect(config.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP).toBe(true);
 		expect(config.ENABLE_ALERT_HTF_RENDER).toBe(false);
+		expect(config.ENABLE_STRATEGY_RESEARCH).toBe(true);
 	});
 
 	it('keeps the startup-only signal outcome cadence out of Remote Config', async () => {

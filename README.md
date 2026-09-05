@@ -1616,6 +1616,49 @@ Query aggregated performance and coverage metrics for recorded signal outcomes, 
 }
 ```
 
+### Strategy Research (TradingView MCP)
+
+When `ENABLE_STRATEGY_RESEARCH=true`, the service exposes strategy comparison, backtesting, and walk-forward validation powered by TradingView MCP. Upstream responses are cached in memory (configurable via `STRATEGY_RESEARCH_CACHE_TTL_MS`) to protect against rate limits. Successful evaluations are asynchronously stored in the Firestore `strategyResearch` collection when Firestore alert storage is enabled.
+
+#### GET /api/research/strategies
+
+Compare multiple technical strategies (`rsi`, `bollinger`, `macd`, `ema_cross`, `supertrend`, `donchian`) over historical data for a given asset. Requires `admin.viewer` or `admin.operator` role or valid API key.
+
+**Query Parameters:**
+- `symbol` - Required. Symbol identifier (e.g. `BTCUSDT` or `BINANCE:BTCUSDT`)
+- `exchange` - Optional. Exchange identifier (e.g. `BINANCE`)
+- `interval` - Optional. Bar interval: `1h` or `1d` (default: `1h`; `4h` is normalized to `1h`)
+- `period` - Optional. Historical lookback period: `1y`, `6m`, `30d` (default: `1y`)
+- `initial_capital` - Optional. Starting capital (default: `10000`)
+- `commission_pct` - Optional. Commission percentage (default: `0.001`)
+- `slippage_pct` - Optional. Slippage percentage (default: `0.0005`)
+
+#### POST /api/research/walk-forward
+
+Execute walk-forward out-of-sample validation across rolling train/test splits for a strategy. Requires `admin.operator` role or valid API key. Supports `Idempotency-Key`.
+
+**Request Body:**
+- `symbol` - Required. Symbol identifier
+- `strategy` - Required. One of: `rsi`, `bollinger`, `macd`, `ema_cross`, `supertrend`, `donchian`
+- `exchange` - Optional. Exchange identifier
+- `interval` - Optional. `1h` or `1d` (default: `1h`)
+- `period` - Optional. Historical period (default: `1y`)
+- `n_splits` - Optional. Number of walk-forward splits (default: `5`, range: `2`-`10`)
+- `train_ratio` - Optional. Train/test split ratio (default: `0.7`, range: `0.5`-`0.9`)
+- `include_trade_log` - Optional. Include detailed trade logs (default: `false`)
+
+#### POST /api/research/backtest
+
+Execute single technical strategy backtest over historical price data. Requires `admin.operator` role or valid API key. Supports `Idempotency-Key`.
+
+**Request Body:**
+- `symbol` - Required. Symbol identifier
+- `strategy` - Required. One of: `rsi`, `bollinger`, `macd`, `ema_cross`, `supertrend`, `donchian`
+- `exchange` - Optional. Exchange identifier
+- `interval` - Optional. `1h` or `1d` (default: `1h`)
+- `period` - Optional. Historical period (default: `1y`)
+- `include_trade_log` - Optional. Include detailed trade logs (default: `false`)
+
 ## Multi-Channel Alerts (002)
 
 The alert webhook system supports simultaneous delivery to multiple channels (Telegram, WhatsApp, and Discord) with independent retry logic and graceful degradation.

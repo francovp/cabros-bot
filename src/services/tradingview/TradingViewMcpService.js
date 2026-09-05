@@ -98,6 +98,7 @@ class TradingViewMcpService {
 		this.requestCounter = 0;
 		this.runtimeStatus = createRuntimeStatus();
 		this.volumeRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
+		this.strategyResearchRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
 		this.consecutiveFailures = 0;
 		this.breakerState = 'closed';
 		this.breakerOpenedAt = null;
@@ -112,6 +113,7 @@ class TradingViewMcpService {
 	_resetForTesting() {
 		this.runtimeStatus = createRuntimeStatus();
 		this.volumeRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
+		this.strategyResearchRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
 		this.consecutiveFailures = 0;
 		this.breakerState = 'closed';
 		this.breakerOpenedAt = null;
@@ -220,6 +222,10 @@ class TradingViewMcpService {
 
 	getVolumeConfirmationStatus({ enabled = this.isEnabled() } = {}) {
 		return this.getStatus({ enabled, runtimeStatus: this.volumeRuntimeStatus });
+	}
+
+	getStrategyResearchStatus({ enabled = this.isEnabled() } = {}) {
+		return this.getStatus({ enabled, runtimeStatus: this.strategyResearchRuntimeStatus });
 	}
 
 	async enrichFromAlertText(alertText, options = {}) {
@@ -566,6 +572,36 @@ class TradingViewMcpService {
 		}
 
 		return [];
+	}
+
+	async callStrategyResearch(toolName, args = {}, options = {}) {
+		const { signal } = options;
+		const cfg = this.getConfig();
+
+		return this._withRuntimeStatus(async () => {
+			const result = await sendWithRetry(async () => {
+				try {
+					const rpcResult = await this._callTool(toolName, args, { signal });
+					return { success: true, channel: 'tradingview-mcp', data: rpcResult };
+				} catch (error) {
+					return { success: false, channel: 'tradingview-mcp', error: error.message };
+				}
+			}, cfg.maxRetries, this.logger, { signal });
+
+			if (!result.success) {
+				throw new Error(`TradingView MCP strategy research ${toolName} failed: ${result.error || 'unknown error'}`);
+			}
+
+			return this._normalizeStrategyResearchResult(result.data);
+		}, { signal, runtimeStatusKey: 'strategyResearchRuntimeStatus' });
+	}
+
+	_normalizeStrategyResearchResult(data) {
+		if (!data || typeof data !== 'object') {
+			return data;
+		}
+
+		return this._unwrapSchemaResult(data);
 	}
 
 	async _callTool(toolName, args = {}, options = {}) {

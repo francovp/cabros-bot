@@ -23,6 +23,7 @@ const {
 } = require('../controllers/webhooks/handlers/jobs/jobs');
 const { listAlerts, getAlertById, replayAlert, summarizeAlerts, exportAlerts, listReplays } = require('../controllers/alerts/alerts');
 const { listOutcomes, summarizeOutcomes } = require('../controllers/outcomes/outcomes');
+const { getCompareStrategies, postWalkForward, postBacktest } = require('../controllers/research/strategyResearch');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const { postBinanceOrder, getBinanceOrders, deleteBinanceOrder } = require('../controllers/trading/binanceOrders');
@@ -72,6 +73,11 @@ function getRoutes(botOrGetter) {
 	router.get('/trading/binance/orders', ...binanceOrderRead, getBinanceOrders);
 	router.post('/trading/binance/orders', ...binanceOrderWrite, idempotencyMiddleware, postBinanceOrder);
 	router.delete('/trading/binance/orders', ...binanceOrderWrite, deleteBinanceOrder);
+
+	// Strategy research endpoints
+	router.get('/research/strategies', ...adminRead, getCompareStrategies());
+	router.post('/research/walk-forward', ...adminWrite, idempotencyMiddleware, postWalkForward());
+	router.post('/research/backtest', ...adminWrite, idempotencyMiddleware, postBacktest());
 
 	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
 	const newsMonitor = getNewsMonitor();
