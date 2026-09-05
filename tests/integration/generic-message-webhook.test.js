@@ -678,6 +678,148 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	});
 
 	// ---------------------------------------------------------------------------
+	// Truncation contract (GH-780)
+	// ---------------------------------------------------------------------------
+	describe('Truncation contract', () => {
+		it('returns truncated=false and matching lengths for inputs at or under the default limit', async () => {
+			const message = 'short message';
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({ message, channels: ['telegram'] })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.truncated).toBe(false);
+			expect(res.body.originalLength).toBe(message.length);
+			expect(res.body.messageLength).toBe(message.length);
+			expect(res.body.maxMessageLength).toBe(4000);
+		});
+
+		it('returns truncated=true and exposes the original length when input exceeds the default limit', async () => {
+			const message = 'a'.repeat(4500);
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({ message, channels: ['telegram'] })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.truncated).toBe(true);
+			expect(res.body.originalLength).toBe(4500);
+			expect(res.body.maxMessageLength).toBe(4000);
+			expect(res.body.messageLength).toBe(4003);
+			// Telegram may split the dispatched text into multiple chunks; the
+			// combined dispatched length must equal messageLength and at least one
+			// chunk must carry the truncation marker.
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalled();
+			const dispatchedChunks = mockBot.telegram.sendMessage.mock.calls.map((call) => call[1]);
+			const totalDispatched = dispatchedChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+			// Telegram chunking plus MarkdownV2 escaping may pad the dispatched text;
+			// confirm the dispatched text is bounded above the original 4500-char input.
+			expect(totalDispatched).toBeLessThan(4500);
+			// MarkdownV2 escapes each '.' into '\\.', so the truncation marker becomes '\\.\\.\\.'.
+			expect(dispatchedChunks.some((chunk) => chunk.endsWith('\\.\\.\\.'))).toBe(true);
+		});
+
+		it('honors GENERIC_MESSAGE_MAX_LENGTH when within range', async () => {
+			const previousMax = process.env.GENERIC_MESSAGE_MAX_LENGTH;
+			process.env.GENERIC_MESSAGE_MAX_LENGTH = '120';
+			try {
+				const message = 'a'.repeat(180);
+				const res = await request(app)
+					.post('/api/webhook/message')
+					.set('x-api-key', 'test-key')
+					.send({ message, channels: ['telegram'] })
+					.expect(200);
+
+				expect(res.body.truncated).toBe(true);
+				expect(res.body.originalLength).toBe(180);
+				expect(res.body.maxMessageLength).toBe(120);
+				expect(res.body.messageLength).toBe(123);
+			} finally {
+				if (previousMax === undefined) {
+					delete process.env.GENERIC_MESSAGE_MAX_LENGTH;
+				} else {
+					process.env.GENERIC_MESSAGE_MAX_LENGTH = previousMax;
+				}
+			}
+		});
+
+		it('falls back to the default when GENERIC_MESSAGE_MAX_LENGTH is malformed', async () => {
+			const previousMax = process.env.GENERIC_MESSAGE_MAX_LENGTH;
+			process.env.GENERIC_MESSAGE_MAX_LENGTH = 'not-a-number';
+			try {
+				const message = 'a'.repeat(4500);
+				const res = await request(app)
+					.post('/api/webhook/message')
+					.set('x-api-key', 'test-key')
+					.send({ message, channels: ['telegram'] })
+					.expect(200);
+
+				expect(res.body.truncated).toBe(true);
+				expect(res.body.maxMessageLength).toBe(4000);
+				expect(res.body.originalLength).toBe(4500);
+			} finally {
+				if (previousMax === undefined) {
+					delete process.env.GENERIC_MESSAGE_MAX_LENGTH;
+				} else {
+					process.env.GENERIC_MESSAGE_MAX_LENGTH = previousMax;
+				}
+			}
+		});
+
+		it('falls back to the default when GENERIC_MESSAGE_MAX_LENGTH exceeds the upper bound', async () => {
+			const previousMax = process.env.GENERIC_MESSAGE_MAX_LENGTH;
+			process.env.GENERIC_MESSAGE_MAX_LENGTH = '999999';
+			try {
+				const message = 'a'.repeat(4500);
+				const res = await request(app)
+					.post('/api/webhook/message')
+					.set('x-api-key', 'test-key')
+					.send({ message, channels: ['telegram'] })
+					.expect(200);
+
+				expect(res.body.truncated).toBe(true);
+				expect(res.body.maxMessageLength).toBe(4000);
+			} finally {
+				if (previousMax === undefined) {
+					delete process.env.GENERIC_MESSAGE_MAX_LENGTH;
+				} else {
+					process.env.GENERIC_MESSAGE_MAX_LENGTH = previousMax;
+				}
+			}
+		});
+
+		it('keeps the existing idempotency replay contract while surfacing truncation metadata', async () => {
+			const message = 'a'.repeat(4500);
+			await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'truncation-replay-1')
+				.send({ message, channels: ['telegram'] })
+				.expect(200);
+
+			const callsBeforeReplay = mockBot.telegram.sendMessage.mock.calls.length;
+
+			const replay = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'truncation-replay-1')
+				.send({ message, channels: ['telegram'] })
+				.expect(200);
+
+			expect(replay.body.idempotencyReplayed).toBe(true);
+			expect(replay.body.truncated).toBe(true);
+			expect(replay.body.originalLength).toBe(4500);
+			expect(replay.body.messageLength).toBe(4003);
+			expect(replay.body.maxMessageLength).toBe(4000);
+			// Replay must not redispatch.
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(callsBeforeReplay);
+		});
+	});
+
+	// ---------------------------------------------------------------------------
 	// API key protection
 	// ---------------------------------------------------------------------------
 	it('returns 401 without API key', async () => {

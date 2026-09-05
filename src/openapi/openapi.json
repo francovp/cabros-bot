@@ -2840,6 +2840,25 @@
                   "properties": {
                     "idempotencyReplayed": {
                       "type": "boolean"
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "description": "True when the incoming message exceeded the active GENERIC_MESSAGE_MAX_LENGTH limit and the dispatched text was truncated."
+                    },
+                    "messageLength": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Length of the dispatched text after any truncation."
+                    },
+                    "originalLength": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Length of the original incoming message before any truncation."
+                    },
+                    "maxMessageLength": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Active GENERIC_MESSAGE_MAX_LENGTH limit applied to this request."
                     }
                   }
                 }
@@ -2855,7 +2874,27 @@
                       "success": true,
                       "messageId": "tg-msg-123"
                     }
-                  ]
+                  ],
+                  "truncated": false,
+                  "messageLength": 18,
+                  "originalLength": 18,
+                  "maxMessageLength": 4000
+                }
+              },
+              "truncated": {
+                "value": {
+                  "success": true,
+                  "results": [
+                    {
+                      "channel": "telegram",
+                      "success": true,
+                      "messageId": "tg-msg-124"
+                    }
+                  ],
+                  "truncated": true,
+                  "messageLength": 4003,
+                  "originalLength": 5200,
+                  "maxMessageLength": 4000
                 }
               },
               "replay": {
@@ -2868,7 +2907,11 @@
                       "success": true,
                       "messageId": "tg-msg-123"
                     }
-                  ]
+                  ],
+                  "truncated": false,
+                  "messageLength": 18,
+                  "originalLength": 18,
+                  "maxMessageLength": 4000
                 }
               }
             }
