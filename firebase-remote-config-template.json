@@ -364,6 +364,20 @@
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
     },
+    "ENABLE_ALERT_CROSS_TF_SUPPRESSION": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Suppress cross-timeframe duplicate signals (same exchange/symbol/side on a different timeframe within ALERT_CROSS_TF_WINDOW_MS); suppressed alerts stay persisted with a suppressionReason marker",
+      "valueType": "BOOLEAN"
+    },
+    "ALERT_CROSS_TF_WINDOW_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Cross-timeframe suppression window in milliseconds (0-600000; 0 disables the rule even when the gate is on)",
+      "valueType": "NUMBER"
+    },
     "ENABLE_BINANCE_ORDER_AUDIT": {
       "defaultValue": {
         "value": "false"
