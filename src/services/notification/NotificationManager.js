@@ -8,6 +8,7 @@ const remoteConfigService = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { notificationRedriveService } = require('./NotificationRedriveService');
 const { deliveryMetricsService } = require('./DeliveryMetricsService');
+const { adminPagingDeduplicator } = require('./adminPagingDeduplicator');
 
 const DEFAULT_ZERO_CHANNEL_ALERT_COOLDOWN_MS = 300000;
 
@@ -136,10 +137,30 @@ class NotificationManager {
 			...(requestId ? [`Request ID: ${requestId}`] : []),
 		].join('\n');
 
+		const failedChannels = failures.map(result => result.channel).filter(Boolean).sort().join(',');
+		const primaryFailure = failures[0] || {};
+		const category = primaryFailure.category || (failures.some(f => f.statusCode === 429) ? 'RATE_LIMITED' : 'PROVIDER_ERROR');
+		const errorCode = primaryFailure.statusCode || primaryFailure.errorCode || (primaryFailure.error ? String(primaryFailure.error).slice(0, 30) : 'unknown');
+
+		const deduplicator = this.adminPagingDeduplicator || adminPagingDeduplicator;
+		const fingerprint = deduplicator.computeFingerprint({
+			category,
+			channel: failedChannels,
+			requestId: requestId || 'none',
+			errorCode,
+		});
+
+		if (deduplicator.shouldSuppress(fingerprint)) {
+			console.info(`[NotificationManager] Admin delivery failure notification suppressed by deduplicator: ${fingerprint}`);
+			return;
+		}
+
 		try {
 			const adminResult = await telegramService.send({
 				text: message,
 				telegramChatId: adminChatId,
+				pagingFingerprint: fingerprint,
+				dedupChecked: true,
 			});
 			if (adminResult && adminResult.success) {
 				console.info('[NotificationManager] Admin delivery failure notification sent');

@@ -6032,6 +6032,9 @@
             "properties": {
               "firebaseRemoteConfig": {
                 "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
+              },
+              "telegramAdminPaging": {
+                "$ref": "#/components/schemas/TelegramAdminPagingDependency"
               }
             }
           }
@@ -6198,6 +6201,34 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "TelegramAdminPagingDependency": {
+        "type": "object",
+        "description": "Safe runtime metadata for Telegram admin paging deduplication without exposing message content or chat identifiers.",
+        "required": [
+          "enabled",
+          "dedupHits",
+          "dedupWindowMs",
+          "lastDedupAt"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "dedupHits": {
+            "type": "integer"
+          },
+          "dedupWindowMs": {
+            "type": "integer"
+          },
+          "lastDedupAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           }
         }
       }

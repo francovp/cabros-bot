@@ -64,6 +64,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_MARKET_SCANNER: { type: 'boolean', defaultValue: false },
 	ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: { type: 'boolean', defaultValue: false },
 	ZERO_CHANNEL_ALERT_COOLDOWN_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 86400000 },
+	ADMIN_PAGE_DEDUP_TTL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 0, max: 86400000 },
 	ENABLE_API_ONLY_MODE: { type: 'boolean', defaultValue: false },
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },

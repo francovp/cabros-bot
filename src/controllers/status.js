@@ -18,6 +18,7 @@ const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
+const { adminPagingDeduplicator } = require('../services/notification/adminPagingDeduplicator');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
@@ -430,6 +431,7 @@ function getStatus() {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
 			},
+			telegramAdminPaging: adminPagingDeduplicator.getStatus(),
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
 			binanceOrderAudit: binanceOrderAuditService.getStatus(),
