@@ -69,6 +69,20 @@ export interface NewsAlert {
   timestamp: number;
   marketContext?: MarketContext;
   enrichmentMetadata?: EnrichmentMetadata;
+  /**
+   * Optional numeric stop barrier for the alert, in the same units as
+   * `marketContext.price`. Populated when market context supplies a stop or
+   * `deriveBarriers()` produces a finite, on-side-of-entry value; otherwise
+   * omitted from the response.
+   */
+  stop?: number;
+  /**
+   * Optional numeric target barrier for the alert, in the same units as
+   * `marketContext.price`. Populated when market context supplies a target or
+   * `deriveBarriers()` produces a finite, on-side-of-entry value; otherwise
+   * omitted from the response.
+   */
+  target?: number;
 }
 
 /**

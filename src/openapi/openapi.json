@@ -3032,9 +3032,25 @@
                       "symbol": "BTCUSDT",
                       "status": "analyzed",
                       "alert": {
+                        "symbol": "BTCUSDT",
                         "eventCategory": "price_surge",
                         "headline": "Bitcoin breaks resistance",
-                        "confidence": 0.85
+                        "sentimentScore": 0.65,
+                        "confidence": 0.85,
+                        "sources": [
+                          "https://www.coindesk.com/markets/2026/08/bitcoin-resistance"
+                        ],
+                        "formattedMessage": "BTCUSDT breakout above resistance (confidence 0.85).",
+                        "timestamp": 1724745600000,
+                        "marketContext": {
+                          "price": 68500.0,
+                          "change24h": 2.4,
+                          "volume24h": 18500000000,
+                          "source": "binance",
+                          "timestamp": 1724745599000
+                        },
+                        "stop": 67130.0,
+                        "target": 71925.0
                       },
                       "deliveryResults": [],
                       "cached": false,
@@ -3058,6 +3074,48 @@
                   "totalDurationMs": 850,
                   "requestId": "req-dryrun123",
                   "tokenUsage": {}
+                }
+              },
+              "analyzedNoBarriers": {
+                "summary": "Analyzed alert without numeric barriers",
+                "value": {
+                  "success": true,
+                  "results": [
+                    {
+                      "symbol": "ETHUSDT",
+                      "status": "analyzed",
+                      "alert": {
+                        "symbol": "ETHUSDT",
+                        "eventCategory": "public_figure",
+                        "headline": "Vitalik discusses scaling roadmap",
+                        "sentimentScore": 0.3,
+                        "confidence": 0.6,
+                        "sources": [
+                          "https://example.com/eth-news"
+                        ],
+                        "formattedMessage": "ETHUSDT public_figure event (confidence 0.6).",
+                        "timestamp": 1724745600000
+                      },
+                      "deliveryResults": [],
+                      "cached": false,
+                      "requestId": "req-nobarriers456"
+                    }
+                  ],
+                  "summary": {
+                    "total": 1,
+                    "analyzed": 1,
+                    "cached": 0,
+                    "timeout": 0,
+                    "error": 0,
+                    "quota_exhausted": 0,
+                    "alerts_sent": 0
+                  },
+                  "requestedChannels": [
+                    "telegram"
+                  ],
+                  "deliveredChannels": [],
+                  "totalDurationMs": 720,
+                  "requestId": "req-nobarriers456"
                 }
               }
             }
@@ -5545,7 +5603,7 @@
           "results": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/JsonObject"
+              "$ref": "#/components/schemas/NewsMonitorResult"
             }
           },
           "summary": {
@@ -5597,6 +5655,151 @@
           },
           "tokenUsage": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "NewsMonitorResult": {
+        "type": "object",
+        "description": "Per-symbol news-monitor analysis result. The optional `alert` object carries the risk-barrier fields (`stop`, `target`) whenever a finite, on-side-of-entry barrier is available from market context or `deriveBarriers()`.",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "analyzed",
+              "cached",
+              "timeout",
+              "error"
+            ]
+          },
+          "alert": {
+            "$ref": "#/components/schemas/NewsAlert"
+          },
+          "deliveryResults": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryResult"
+            }
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "originalError": {
+                "type": "string"
+              }
+            }
+          },
+          "totalDurationMs": {
+            "type": "integer"
+          },
+          "cached": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        }
+      },
+      "NewsAlert": {
+        "type": "object",
+        "description": "Structured news alert payload returned by `/api/news-monitor`. Optional numeric `stop` and `target` risk barriers are present whenever a finite, on-side-of-entry value is available from market context or `deriveBarriers()`; otherwise they are omitted.",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "eventCategory": {
+            "type": "string",
+            "enum": [
+              "price_surge",
+              "price_decline",
+              "public_figure",
+              "regulatory",
+              "none"
+            ]
+          },
+          "headline": {
+            "type": "string"
+          },
+          "sentimentScore": {
+            "type": "number"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "formattedMessage": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "integer"
+          },
+          "marketContext": {
+            "type": "object",
+            "properties": {
+              "price": {
+                "type": "number"
+              },
+              "change24h": {
+                "type": "number"
+              },
+              "volume24h": {
+                "type": "number"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "binance",
+                  "gemini"
+                ]
+              },
+              "timestamp": {
+                "type": "integer"
+              }
+            }
+          },
+          "enrichmentMetadata": {
+            "type": "object",
+            "properties": {
+              "original_confidence": {
+                "type": "number"
+              },
+              "enriched_confidence": {
+                "type": "number"
+              },
+              "enrichment_applied": {
+                "type": "boolean"
+              },
+              "reasoning_excerpt": {
+                "type": "string"
+              },
+              "model_name": {
+                "type": "string"
+              },
+              "processing_time_ms": {
+                "type": "integer"
+              }
+            }
+          },
+          "stop": {
+            "type": "number",
+            "description": "Optional numeric stop barrier in the same units as `marketContext.price`. Populated when market context supplies a stop or `deriveBarriers()` produces a finite, on-side-of-entry value; omitted otherwise."
+          },
+          "target": {
+            "type": "number",
+            "description": "Optional numeric target barrier in the same units as `marketContext.price`. Populated when market context supplies a target or `deriveBarriers()` produces a finite, on-side-of-entry value; omitted otherwise."
           }
         }
       },
