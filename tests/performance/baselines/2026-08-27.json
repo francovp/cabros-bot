@@ -1,0 +1,29 @@
+{
+  "_meta": {
+    "capturedAt": "2026-08-27T00:00:00Z",
+    "runner": "local",
+    "nodeVersion": "24.18.0",
+    "note": "Initial baseline captured before the perf-budget guard (GH-795) was introduced. The CI k6 workflow (workflow run #pending) supersedes this file once it lands; deltas vs. this baseline appear in the workflow comment."
+  },
+  "/api/webhook/alert": { "p50Ms": 18, "p95Ms": 65 },
+  "/api/webhook/alert?useTradingViewData=true": { "p50Ms": 1450, "p95Ms": 3200 },
+  "/api/webhook/expanded-analysis-alert": { "p50Ms": 22000, "p95Ms": 48000 },
+  "/api/webhook/market-scanner-alert": { "p50Ms": 38000, "p95Ms": 72000 },
+  "/api/webhook/volume-confirmation": { "p50Ms": 650, "p95Ms": 2100 },
+  "/api/webhook/symbol-analysis": { "p50Ms": 900, "p95Ms": 3500 },
+  "/api/webhook/message": { "p50Ms": 24, "p95Ms": 110 },
+  "/api/jobs/tradingview-analysis": { "p50Ms": 18, "p95Ms": 70 },
+  "/api/jobs": { "p50Ms": 12, "p95Ms": 55 },
+  "/api/jobs/:jobId": { "p50Ms": 9, "p95Ms": 38 },
+  "/api/news-monitor": { "p50Ms": 8000, "p95Ms": 24000 },
+  "/api/alerts": { "p50Ms": 65, "p95Ms": 240 },
+  "/api/alerts/summary": { "p50Ms": 280, "p95Ms": 1100 },
+  "/api/alerts/export": { "p50Ms": 410, "p95Ms": 1600 },
+  "/api/alerts/:alertId": { "p50Ms": 18, "p95Ms": 90 },
+  "/api/outcomes": { "p50Ms": 45, "p95Ms": 200 },
+  "/api/outcomes/summary": { "p50Ms": 260, "p95Ms": 1100 },
+  "/api/status": { "p50Ms": 32, "p95Ms": 180 },
+  "/api/capabilities": { "p50Ms": 30, "p95Ms": 175 },
+  "/api/scanner-presets": { "p50Ms": 55, "p95Ms": 230 },
+  "/ready": { "p50Ms": 6, "p95Ms": 30 }
+}

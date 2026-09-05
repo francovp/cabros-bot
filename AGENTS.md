@@ -270,6 +270,20 @@ Ephemeral preview channels created by the `.github/workflows/firebase-hosting.ym
 - **Rationale**: Full test runs take 2-5 minutes and consume significant token budget. Focused tests give rapid feedback (10-30s) during development. Only run full suite as final validation after full implementation phase.
 - **Performance tip**: Use `--testTimeout=5000` with unit tests to speed up execution; integration tests need higher timeouts (~10000ms)
 
+### Per-endpoint latency-budget guard (GH-795)
+
+`tests/performance/budgets.json` declares a p95 ceiling for each `/api`
+route. `tests/helpers/perfBudget.js` enforces it from integration tests
+with a 1.5x soft envelope (`console.warn` only) and a 2x hard envelope
+(test failure unless `PERF_BUDGET_RELAXED=true`). The dedicated
+`tests/integration/perf-budget.test.js` boots the app in API-only mode
+and runs the check on every PR via `.github/workflows/perf-budget.yml`
+(currently `continue-on-error: true` while baselines stabilize in
+`tests/performance/baselines/`). When a route's budget needs to change,
+edit `budgets.json` and append a baseline row to the matching dated
+JSON file in `baselines/` — the helper refuses routes that lack a
+declared `p95Ms` + `rationale`.
+
 ### When extending a feature:
 
 1. **Locate entry points** (see "Where to look first" sections)

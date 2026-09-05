@@ -1,4 +1,5 @@
 const request = require('supertest');
+const { assertWithinBudget } = require('../helpers/perfBudget');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
@@ -57,10 +58,13 @@ describe('Market Scanner Alert endpoint', () => {
 	});
 
 	it('returns 401 when request lacks valid api key', async () => {
+		const start = process.hrtime.bigint();
 		await request(app)
 			.post('/api/webhook/market-scanner-alert')
 			.send({ scans: ['top_gainers'] })
 			.expect(401);
+		const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+		assertWithinBudget('/api/webhook/market-scanner-alert', durationMs);
 
 		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
 	});

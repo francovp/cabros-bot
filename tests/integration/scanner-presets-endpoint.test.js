@@ -9,6 +9,7 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 const admin = require('firebase-admin');
 const { generateKeyPairSync } = require('crypto');
 const request = require('supertest');
+const { assertWithinBudget } = require('../helpers/perfBudget');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
@@ -109,10 +110,12 @@ describe('Scanner presets API integration tests', () => {
 			}),
 		}));
 
+		const listStart = Date.now();
 		const listResponse = await request(app)
 			.get('/api/scanner-presets')
 			.set('x-api-key', 'test-key')
 			.expect(200);
+		assertWithinBudget('/api/scanner-presets', Date.now() - listStart);
 
 		expect(listResponse.body.presets).toHaveLength(1);
 		expect(listResponse.body.presets[0]).toEqual(expect.objectContaining({
