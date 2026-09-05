@@ -1226,6 +1226,206 @@ const renderStatusCards = (container, entries, emptyText) => {
 	});
 };
 
+const renderSystemIssuesWarning = (container, { dependencies, deliverySummary, jobsData }) => {
+	container.replaceChildren();
+	const issues = [];
+
+	(dependencies || []).forEach(([name, detail]) => {
+		if (!['ready', 'disabled'].includes(detail.status)) {
+			issues.push({
+				label: `${displayLabel(name)}: ${displayStatus(detail.status)}`,
+				detail: detail.provider ? `Provider: ${detail.provider}` : (detail.error || 'Check configuration and service credentials.'),
+				tone: statusTone(detail.status),
+			});
+		}
+	});
+
+	if (deliverySummary && deliverySummary.summary && deliverySummary.summary.delivery) {
+		const { totalFailure, byChannel } = deliverySummary.summary.delivery;
+		if (Number(totalFailure) > 0) {
+			const channelFailures = Object.entries(asObject(byChannel))
+				.filter(([, stats]) => Number(stats.failure) > 0)
+				.map(([ch, stats]) => `${displayLabel(ch)} (${stats.failure} failed)`)
+				.join(', ');
+			issues.push({
+				label: `Delivery alerts had ${totalFailure} failure${totalFailure === 1 ? '' : 's'}`,
+				detail: channelFailures || 'Check webhook destinations and channel settings.',
+				tone: 'danger',
+			});
+		}
+	}
+
+	const jobs = Array.isArray(jobsData?.jobs) ? jobsData.jobs : [];
+	const failedJobs = jobs.filter((j) => j.status === 'failed');
+	if (failedJobs.length > 0) {
+		issues.push({
+			label: `${failedJobs.length} background job${failedJobs.length === 1 ? '' : 's'} failed`,
+			detail: 'Inspect the Jobs view for error details and retry options.',
+			tone: 'misconfigured',
+		});
+	}
+
+	if (!issues.length) {
+		const healthyCard = element('div', { className: 'dashboard-healthy-card' });
+		healthyCard.append(
+			element('span', { className: 'status-badge status-ready', text: 'Healthy' }),
+			element('span', { text: 'All configured services and delivery channels operating normally.' }),
+		);
+		container.append(healthyCard);
+		return;
+	}
+
+	const grid = element('div', { className: 'status-grid' });
+	issues.forEach((issue) => {
+		const card = element('article', { className: 'status-card' });
+		const copy = element('div');
+		copy.append(
+			element('strong', { text: issue.label }),
+			element('small', { text: issue.detail }),
+		);
+		const badge = element('span', {
+			className: `status-badge status-${issue.tone}`,
+			text: issue.tone === 'danger' ? 'Error' : 'Warning',
+		});
+		card.append(copy, badge);
+		grid.append(card);
+	});
+	container.append(grid);
+};
+
+const renderDeliveryHealthDashboard = (container, deliverySummary) => {
+	container.replaceChildren();
+	if (!deliverySummary || !deliverySummary.summary || !deliverySummary.summary.delivery) {
+		container.append(createEmptyState('No recent delivery metrics reported or alert storage disabled.'));
+		return;
+	}
+	const summary = deliverySummary.summary;
+	const delivery = summary.delivery || {};
+	const totalSuccess = Number(delivery.totalSuccess) || 0;
+	const totalFailure = Number(delivery.totalFailure) || 0;
+	const totalDeliveries = totalSuccess + totalFailure;
+	const successRate = totalDeliveries > 0 ? Math.round((totalSuccess / totalDeliveries) * 100) : 100;
+
+	const metricsGrid = element('div', { className: 'metric-grid' });
+	metricsGrid.append(
+		createMetricCard('Total alerts', summary.totalAlerts ?? 0, 'In monitored window'),
+		createMetricCard('Successful deliveries', totalSuccess, `${successRate}% success rate`),
+		createMetricCard('Failed deliveries', totalFailure, totalFailure > 0 ? 'Requires attention' : '0 failures'),
+		createMetricCard('Overall delivery rate', `${successRate}%`, `${totalSuccess}/${totalDeliveries} delivered`),
+	);
+
+	const channels = Object.entries(asObject(delivery.byChannel));
+	const channelGrid = element('div', { className: 'status-grid' });
+	if (!channels.length) {
+		channelGrid.append(createEmptyState('No channel delivery stats reported.'));
+	} else {
+		channels.forEach(([channelName, stats]) => {
+			const card = element('article', { className: 'status-card' });
+			const copy = element('div');
+			const chTotal = Number(stats.total) || (Number(stats.success) || 0) + (Number(stats.failure) || 0);
+			const chSuccess = Number(stats.success) || 0;
+			const chFailure = Number(stats.failure) || 0;
+			const chRate = chTotal > 0 ? Math.round((chSuccess / chTotal) * 100) : 100;
+			copy.append(
+				element('strong', { text: displayLabel(channelName) }),
+				element('small', { text: `${chSuccess} success · ${chFailure} failed (${chRate}%)` }),
+			);
+			const badge = element('span', {
+				className: `status-badge ${chFailure > 0 ? 'status-misconfigured' : 'status-ready'}`,
+				text: `${chRate}%`,
+			});
+			card.append(copy, badge);
+			channelGrid.append(card);
+		});
+	}
+
+	container.append(metricsGrid, channelGrid);
+};
+
+const renderActiveWorkDashboard = (container, { jobsData, outcomesData, status }) => {
+	container.replaceChildren();
+	const jobs = Array.isArray(jobsData?.jobs) ? jobsData.jobs : [];
+	const inFlightJobs = jobs.filter((j) => ['queued', 'running', 'pending'].includes(j.status));
+	const completedJobs = jobs.filter((j) => j.status === 'completed');
+	const failedJobs = jobs.filter((j) => j.status === 'failed');
+
+	const outcomes = Array.isArray(outcomesData?.outcomes) ? outcomesData.outcomes : [];
+	const pendingOutcomes = outcomes.filter((o) => ['pending', 'evaluating'].includes(o.status));
+	const evaluatedOutcomes = outcomes.filter((o) => o.status === 'evaluated');
+
+	const metricsGrid = element('div', { className: 'metric-grid' });
+	metricsGrid.append(
+		createMetricCard('In-flight jobs', inFlightJobs.length, `${completedJobs.length} completed · ${failedJobs.length} failed`),
+		createMetricCard('Pending outcomes', pendingOutcomes.length, `${evaluatedOutcomes.length} evaluated signals`),
+		createMetricCard('Outcome tracking', status?.featureFlags?.signalOutcomeTracking ? 'Active' : 'Disabled', 'Signal evaluation'),
+		createMetricCard('Worker health', displayStatus(status?.dependencies?.signalOutcomeWorker?.status || 'disabled'), 'Background worker'),
+	);
+
+	const workList = element('div', { className: 'form-fields' });
+	if (!inFlightJobs.length && !pendingOutcomes.length) {
+		workList.append(createEmptyState('No in-flight background jobs or pending outcome evaluations.'));
+	} else {
+		if (inFlightJobs.length > 0) {
+			const jobGroup = element('div');
+			jobGroup.append(element('strong', { text: `Active background jobs (${inFlightJobs.length}):` }));
+			inFlightJobs.slice(0, 5).forEach((job) => {
+				const item = element('div', { className: 'mono-line' });
+				item.append(
+					element('span', { className: 'status-badge status-active', text: job.status }),
+					element('span', { text: `${job.id} · ${job.type || 'analysis'}` }),
+				);
+				jobGroup.append(item);
+			});
+			workList.append(jobGroup);
+		}
+		if (pendingOutcomes.length > 0) {
+			const outcomeGroup = element('div');
+			outcomeGroup.append(element('strong', { text: `Pending signal evaluations (${pendingOutcomes.length}):` }));
+			pendingOutcomes.slice(0, 5).forEach((outcome) => {
+				const item = element('div', { className: 'mono-line' });
+				item.append(
+					element('span', { className: 'status-badge status-active', text: outcome.status }),
+					element('span', { text: `${outcome.symbol || outcome.id} · waiting evaluation` }),
+				);
+				outcomeGroup.append(item);
+			});
+			workList.append(outcomeGroup);
+		}
+	}
+
+	container.append(metricsGrid, workList);
+};
+
+const renderRecentAlertsDashboard = (container, alertsData) => {
+	container.replaceChildren();
+	const alerts = Array.isArray(alertsData?.alerts) ? alertsData.alerts : [];
+	if (!alerts.length) {
+		container.append(createEmptyState('No recent alerts stored or alert storage disabled.'));
+		return;
+	}
+	const alertsList = element('div', { className: 'form-fields' });
+	alerts.slice(0, 10).forEach((alert) => {
+		const card = element('article', { className: 'alert-card status-card' });
+		const header = element('div');
+		const symbolOrSource = alert.symbol || alert.source || alert.alertId || 'Alert';
+		const chips = deliveryChips(alert.deliveryResults);
+		header.append(
+			element('strong', { text: symbolOrSource }),
+			element('small', { text: `${alert.enriched ? 'Enriched' : 'Plain'} · ${alert.createdAt ? new Date(alert.createdAt).toLocaleString() : 'Recent'}` }),
+		);
+		const badge = element('span', {
+			className: `status-badge ${alert.enriched ? 'status-ready' : 'status-disabled'}`,
+			text: alert.enriched ? 'Enriched' : 'Plain',
+		});
+		card.append(header, badge);
+		if (chips.children.length > 0) {
+			card.append(chips);
+		}
+		alertsList.append(card);
+	});
+	container.append(alertsList);
+};
+
 const renderStatusDashboard = ({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status) => {
 	const service = asObject(status.service);
 	const features = Object.entries(asObject(status.featureFlags)).filter(([, enabled]) => enabled === true);
@@ -1266,15 +1466,38 @@ const createOverviewDashboard = () => {
 		element('p', { text: 'A quick read on service readiness, enabled capabilities and delivery health.' }),
 		lastChecked,
 	);
+
+	const controls = element('div', { className: 'dashboard-controls' });
+	const intervalLabel = element('label', { className: 'interval-select-label', text: 'Auto-refresh ' });
+	const intervalSelect = element('select');
+	[
+		{ label: '30s (default)', value: 30000 },
+		{ label: '10s', value: 10000 },
+		{ label: '60s', value: 60000 },
+		{ label: 'Off', value: 0 },
+	].forEach(({ label, value }) => {
+		const opt = element('option', { text: label });
+		opt.value = String(value);
+		if (value === 30000) opt.selected = true;
+		intervalSelect.append(opt);
+	});
+	intervalLabel.append(intervalSelect);
+
 	const refreshButton = element('button', { className: 'button-primary', text: 'Refresh dashboard' });
 	refreshButton.type = 'button';
-	hero.append(heroCopy, refreshButton);
+	controls.append(intervalLabel, refreshButton);
+	hero.append(heroCopy, controls);
 
+	const issuesContainer = element('div', { className: 'dashboard-section' });
 	const metrics = element('div', { className: 'metric-grid' });
 	metrics.append(element('p', { className: 'request-state', text: 'Loading live status…' }));
 	const channelGrid = element('div', { className: 'status-grid' });
 	const dependencyGrid = element('div', { className: 'status-grid' });
 	const featureGrid = element('div', { className: 'chip-grid' });
+	const deliveryHealthContainer = element('div');
+	const activeWorkContainer = element('div');
+	const recentAlertsContainer = element('div');
+
 	const statusOutput = element('pre', { className: 'response-block', text: 'No status response yet.' });
 	let lastRawStatus = '';
 	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy JSON');
@@ -1293,33 +1516,119 @@ const createOverviewDashboard = () => {
 	};
 	dashboard.append(
 		hero,
+		section('System issues & warnings', issuesContainer),
 		metrics,
+		section('Delivery health', deliveryHealthContainer),
+		section('Active work', activeWorkContainer),
+		section('Recent alerts', recentAlertsContainer),
 		section('Delivery channels', channelGrid),
 		section('Dependency health', dependencyGrid),
 		section('Enabled capabilities', featureGrid),
 		rawStatus,
 	);
 
-	const loadStatus = async () => {
+	let pollTimer = null;
+	let pollIntervalMs = 30000;
+	let dashboardVersion = 0;
+	let inFlight = false;
+
+	const stopPoll = () => {
+		if (pollTimer) {
+			clearTimeout(pollTimer);
+			pollTimer = null;
+		}
+	};
+
+	const schedulePoll = () => {
+		stopPoll();
+		if (pollIntervalMs > 0) {
+			pollTimer = setTimeout(() => {
+				if (!inFlight) {
+					loadDashboard();
+				}
+			}, pollIntervalMs);
+		}
+	};
+
+	intervalSelect.addEventListener('change', () => {
+		pollIntervalMs = Number(intervalSelect.value) || 0;
+		schedulePoll();
+	});
+
+	detachActiveViewPoll = () => {
+		dashboardVersion += 1;
+		stopPoll();
+	};
+
+	const fetchSilent = (definition, query) => {
+		const dummyButton = element('button');
+		const dummyOutput = element('pre');
+		return sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button: dummyButton,
+			output: dummyOutput,
+			isCurrent: () => dashboardEpoch === dashboardVersion,
+		}).catch(() => null);
+	};
+
+	let dashboardEpoch = 0;
+	const loadDashboard = async () => {
+		dashboardEpoch = ++dashboardVersion;
+		stopPoll();
+		inFlight = true;
 		lastRawStatus = '';
 		rawCopyButton.hidden = true;
-		const status = await sendRequest({
+
+		const currentEpoch = dashboardEpoch;
+		const isCurrentEpoch = () => currentEpoch === dashboardVersion;
+
+		const statusPromise = sendRequest({
 			definition: STATUS_DEFINITION,
 			path: STATUS_DEFINITION.path,
 			button: refreshButton,
 			output: statusOutput,
+			isCurrent: isCurrentEpoch,
 		});
+
+		const summaryPromise = fetchSilent({ method: 'GET', path: '/api/alerts/summary' });
+		const jobsPromise = fetchSilent({ method: 'GET', path: '/api/jobs' }, { limit: '20' });
+		const outcomesPromise = fetchSilent({ method: 'GET', path: '/api/outcomes' }, { limit: '20' });
+		const alertsPromise = fetchSilent({ method: 'GET', path: '/api/alerts' }, { limit: '10' });
+
+		const [status, deliverySummary, jobsData, outcomesData, alertsData] = await Promise.all([
+			statusPromise,
+			summaryPromise,
+			jobsPromise,
+			outcomesPromise,
+			alertsPromise,
+		]);
+
+		inFlight = false;
+		if (!isCurrentEpoch()) return;
+
 		if (status && typeof status === 'object') {
 			lastRawStatus = JSON.stringify(status, null, 2);
 			rawCopyButton.hidden = false;
+			const dependencies = statusEntries(status.dependencies);
+			const channels = statusEntries(status.deliveryChannels);
+
 			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status);
+			renderSystemIssuesWarning(issuesContainer, { dependencies, channels, deliverySummary, jobsData, status });
+			renderDeliveryHealthDashboard(deliveryHealthContainer, deliverySummary);
+			renderActiveWorkDashboard(activeWorkContainer, { jobsData, outcomesData, status });
+			renderRecentAlertsDashboard(recentAlertsContainer, alertsData);
+
+			schedulePoll();
 		} else {
 			metrics.replaceChildren(element('p', { className: 'request-state', text: 'Status unavailable. Check the API key and service logs.' }));
 		}
 	};
-	refreshButton.addEventListener('click', loadStatus);
+
+	refreshButton.addEventListener('click', () => loadDashboard());
 	if (getElement('api-key')?.value || (authState.enabled && authState.user)) {
-		loadStatus();
+		loadDashboard();
 	} else {
 		metrics.replaceChildren(element('p', { className: 'request-state', text: 'Enter an API key to load live status.' }));
 	}
