@@ -6030,8 +6030,113 @@
             "type": "object",
             "additionalProperties": true,
             "properties": {
+              "newsMonitorCache": {
+                "$ref": "#/components/schemas/NewsMonitorCacheDependency"
+              },
               "firebaseRemoteConfig": {
                 "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
+              }
+            }
+          }
+        }
+      },
+      "NewsMonitorCacheDependency": {
+        "type": "object",
+        "description": "Safe runtime status and metrics for news monitor deduplication cache.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "mode",
+          "backend",
+          "metrics"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether news monitor is enabled via ENABLE_NEWS_MONITOR."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether news monitor cache is configured."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "Whether news monitor cache is ready to serve requests."
+          },
+          "status": {
+            "type": "string",
+            "description": "Readiness status of the news monitor cache."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "in-memory",
+              "persistent"
+            ],
+            "description": "Deduplication cache mode."
+          },
+          "backend": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Underlying storage backend (firestore or null)."
+          },
+          "metrics": {
+            "type": "object",
+            "description": "Operational hit/miss counters and memory estimates.",
+            "required": [
+              "hits",
+              "misses",
+              "hitRate",
+              "totalEntries",
+              "evictions",
+              "estimatedMemoryBytes",
+              "lastHitAt",
+              "lastMissAt"
+            ],
+            "properties": {
+              "hits": {
+                "type": "integer",
+                "description": "Cumulative successful cache reads."
+              },
+              "misses": {
+                "type": "integer",
+                "description": "Cumulative cache misses."
+              },
+              "hitRate": {
+                "type": "number",
+                "description": "Hit rate ratio (hits / (hits + misses)) rounded to 3 decimal places."
+              },
+              "totalEntries": {
+                "type": "integer",
+                "description": "Current non-expired in-memory cache entries."
+              },
+              "evictions": {
+                "type": "integer",
+                "description": "Cumulative expired entries removed from cache."
+              },
+              "estimatedMemoryBytes": {
+                "type": "integer",
+                "description": "Approximate memory consumption of in-memory cache entries in bytes."
+              },
+              "lastHitAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "description": "ISO timestamp of the most recent cache hit."
+              },
+              "lastMissAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "description": "ISO timestamp of the most recent cache miss."
               }
             }
           }
