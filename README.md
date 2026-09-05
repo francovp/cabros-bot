@@ -1014,6 +1014,46 @@ BTC price is at $45,000 - breakout detected!
 }
 ```
 
+### POST /api/webhook/message
+
+Deliver a generic, non-alert message to one or more enabled channels. Optional `channels`, `telegramChatId`, `telegramThreadId`, `whatsappChatId`, and `discordWebhookUrl` overrides select destinations and per-message routing. Without `channels`, the message fans out to every enabled channel.
+
+Optional headers / query params:
+- `idempotency-key` / `x-idempotency-key` / `idempotencyKey` / `idempotency_key`: Optional replay key for deduplicating retries.
+
+**Request:**
+```json
+{
+  "message": "Custom notification from automation",
+  "channels": ["telegram", "whatsapp"]
+}
+```
+
+**Response (no truncation):**
+```json
+{
+  "success": true,
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-msg-123" }
+  ]
+}
+```
+
+**Response (message exceeded 4,000 chars):**
+```json
+{
+  "success": true,
+  "truncated": true,
+  "originalLength": 6000,
+  "deliveredLength": 4003,
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-msg-123" }
+  ]
+}
+```
+
+Inbound messages above `MAX_MESSAGE_LENGTH` (4,000 characters) are clipped before delivery. The response surfaces `truncated: true`, `originalLength`, and `deliveredLength` so callers can detect silent content loss; downstream delivery proceeds with the truncated text and the truncation is logged via `console.warn`.
+
 ### Asynchronous Jobs API
 
 To run long-running technical analysis or market scans without hitting HTTP request limits or gateway timeouts (502/504), you can use the asynchronous jobs API. All endpoints require the `x-api-key` header to be configured.

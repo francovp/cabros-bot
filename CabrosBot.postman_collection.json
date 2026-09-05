@@ -1003,6 +1003,12 @@
               "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ]\n}"
             },
             {
+              "name": "Success (truncated - message exceeded MAX_MESSAGE_LENGTH)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"truncated\": true,\n  \"originalLength\": 6000,\n  \"deliveredLength\": 4003,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ]\n}"
+            },
+            {
               "name": "Error (idempotency conflict)",
               "status": "Conflict",
               "code": 409,
