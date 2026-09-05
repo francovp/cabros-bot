@@ -12,7 +12,18 @@ const { tradingViewMcpService } = require('../../src/services/tradingview/Tradin
 const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
+const groundingService = require('../../src/services/grounding/grounding');
+const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
 const { getRoutes } = require('../../src/routes');
+
+const defaultCircuitBreaker = Object.freeze({
+	state: 'closed',
+	consecutiveFailures: 0,
+	openedAt: null,
+	lastStateChangeAt: null,
+	failureThreshold: 5,
+	cooldownMs: 60000,
+});
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
 	type: 'pkcs1',
@@ -63,6 +74,8 @@ describe('Status endpoints', () => {
 		remoteConfigService._resetForTesting();
 		geminiQuotaManager.resetForTesting();
 		groundingMetrics.resetForTesting();
+		groundingService._resetForTesting();
+		equityMarketDataService._resetCircuitBreakerForTesting();
 		Object.keys(process.env).forEach((key) => {
 			delete process.env[key];
 		});
@@ -105,6 +118,8 @@ describe('Status endpoints', () => {
 		remoteConfigService._resetForTesting();
 		geminiQuotaManager.resetForTesting();
 		groundingMetrics.resetForTesting();
+		groundingService._resetForTesting();
+		equityMarketDataService._resetCircuitBreakerForTesting();
 		deliveryMetricsService.resetForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
@@ -149,6 +164,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.geminiQuota).toEqual({
 			enabled: true,
@@ -585,6 +601,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 			supportedExchanges: ['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD'],
 			timeoutMs: 5000,
 			rpm: 0,
@@ -761,6 +778,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'misconfigured',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.geminiQuota).toEqual(expect.objectContaining({
 			enabled: true,
@@ -852,6 +870,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 	});
 
@@ -871,6 +890,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.newsMonitorLlm).toEqual({
 			enabled: true,
@@ -902,6 +922,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'disabled',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: true,
@@ -991,6 +1012,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'disabled',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.newsMonitorLlm).toEqual({
 			enabled: true,
@@ -1019,6 +1041,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'disabled',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.newsMonitorLlm).toEqual({
 			enabled: true,
