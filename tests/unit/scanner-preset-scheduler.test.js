@@ -117,6 +117,7 @@ describe('ScannerPresetSchedulerService', () => {
 				lastRunScannedCount: 0,
 				lastRunExecutedCount: 0,
 				lastRunErrorCount: 0,
+				lastRunDeferredByFloorCount: 0,
 			});
 		});
 
@@ -302,6 +303,189 @@ describe('ScannerPresetSchedulerService', () => {
 			resolveFirstScan();
 			const sweep1Result = await sweep1Promise;
 			expect(sweep1Result.executedCount).toBe(1);
+		});
+	});
+
+	describe('per-preset floor enforcement (GH-786)', () => {
+		const MIN_PRESET_FLOOR_MS = 60000;
+
+		async function createPresetWithLastRunAt(name, lastRunAtOffsetMs) {
+			const preset = await scannerPresetService.createPreset({
+				name,
+				schedule: { enabled: true, cadence: '5m' },
+				nextRunAt: new Date(Date.now() - 1000).toISOString(),
+			});
+			if (lastRunAtOffsetMs !== null) {
+				await scannerPresetService.updatePreset(preset.id, {
+					lastRunAt: new Date(Date.now() - lastRunAtOffsetMs).toISOString(),
+				});
+			} else {
+				await scannerPresetService.updatePreset(preset.id, {
+					lastRunAt: null,
+				});
+			}
+			return preset.id;
+		}
+
+		it('defers preset whose lastRunAt is younger than the 60s floor even when nextRunAt is past', async () => {
+			const presetId = await createPresetWithLastRunAt('Young preset', 30000);
+
+			const runSpy = jest.spyOn(marketScannerController, 'runScans').mockResolvedValue([
+				{ scan: 'top_gainers', status: 'success', items: [] },
+			]);
+
+			const result = await scheduler.sweep();
+			expect(result.scannedCount).toBe(1);
+			expect(result.executedCount).toBe(0);
+			expect(result.deferredByFloorCount).toBe(1);
+			expect(runSpy).not.toHaveBeenCalled();
+
+			const updated = await scannerPresetService.getPreset(presetId);
+			expect(updated.lastRunAt).not.toBeNull();
+		});
+
+		it('fires preset whose lastRunAt is older than the 60s floor', async () => {
+			const presetId = await createPresetWithLastRunAt('Ready preset', 90000);
+
+			jest.spyOn(marketScannerController, 'runScans').mockResolvedValue([
+				{ scan: 'top_gainers', status: 'success', items: [] },
+			]);
+			jest.spyOn(requestRouting, 'sendWithNotificationRouting').mockResolvedValue([]);
+			jest.spyOn(notificationAlertModule, 'getNotificationManager').mockReturnValue({});
+
+			const result = await scheduler.sweep();
+			expect(result.scannedCount).toBe(1);
+			expect(result.executedCount).toBe(1);
+			expect(result.deferredByFloorCount).toBe(0);
+
+			const updated = await scannerPresetService.getPreset(presetId);
+			expect(updated.lastStatus).toBe('success');
+		});
+
+		it('does not defer preset without lastRunAt (first run after creation)', async () => {
+			const presetId = await createPresetWithLastRunAt('Brand-new preset', null);
+
+			jest.spyOn(marketScannerController, 'runScans').mockResolvedValue([
+				{ scan: 'top_gainers', status: 'success', items: [] },
+			]);
+			jest.spyOn(requestRouting, 'sendWithNotificationRouting').mockResolvedValue([]);
+			jest.spyOn(notificationAlertModule, 'getNotificationManager').mockReturnValue({});
+
+			const result = await scheduler.sweep();
+			expect(result.scannedCount).toBe(1);
+			expect(result.executedCount).toBe(1);
+			expect(result.deferredByFloorCount).toBe(0);
+
+			const updated = await scannerPresetService.getPreset(presetId);
+			expect(updated.lastStatus).toBe('success');
+		});
+
+		it('two consecutive sweeps 1s apart cannot fire the same preset twice', async () => {
+			const presetId = await createPresetWithLastRunAt('Rapid preset', 1000);
+
+			const runSpy = jest.spyOn(marketScannerController, 'runScans').mockResolvedValue([
+				{ scan: 'top_gainers', status: 'success', items: [] },
+			]);
+
+			const first = await scheduler.sweep();
+			expect(first.executedCount).toBe(0);
+			expect(first.deferredByFloorCount).toBe(1);
+			expect(runSpy).not.toHaveBeenCalled();
+
+			await new Promise((resolve) => setTimeout(resolve, 50));
+
+			const second = await scheduler.sweep();
+			expect(second.executedCount).toBe(0);
+			expect(second.deferredByFloorCount).toBe(1);
+			expect(runSpy).not.toHaveBeenCalled();
+
+			const updated = await scannerPresetService.getPreset(presetId);
+			expect(updated.lastRunAt).not.toBeNull();
+		});
+
+		it('multi-replica concurrent sweep cannot fire a young preset twice', async () => {
+			// Preset has not run yet — its previous lastRunAt is older than the
+			// floor, so the first sweep is allowed to fire. After the first sweep
+			// finishes, the preset's lastRunAt is within the floor window and a
+			// concurrent replica sweeping at the same time must defer instead of
+			// re-running.
+			const presetId = await createPresetWithLastRunAt('Multi-replica preset', 90000);
+
+			let resolveScan;
+			const scanGate = new Promise((resolve) => {
+				resolveScan = resolve;
+			});
+
+			jest.spyOn(marketScannerController, 'runScans').mockImplementation(async () => {
+				await scanGate;
+				return [{ scan: 'top_gainers', status: 'success', items: [] }];
+			});
+			jest.spyOn(requestRouting, 'sendWithNotificationRouting').mockResolvedValue([]);
+			jest.spyOn(notificationAlertModule, 'getNotificationManager').mockReturnValue({});
+
+			const scheduler1 = new ScannerPresetSchedulerService();
+			const scheduler2 = new ScannerPresetSchedulerService();
+
+			const sweep1Promise = scheduler1.sweep();
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			resolveScan();
+			await sweep1Promise;
+
+			// Re-mark the preset as due again so a fresh sweep would otherwise
+			// try to fire it; the floor must defer it because scheduler1 just ran
+			// the preset moments ago.
+			await scannerPresetService.updatePreset(presetId, {
+				nextRunAt: new Date(Date.now() - 1000).toISOString(),
+			});
+
+			const sweep2Result = await scheduler2.sweep();
+			expect(sweep2Result.executedCount).toBe(0);
+			expect(sweep2Result.deferredByFloorCount).toBe(1);
+		});
+
+		it('does not starve ready presets when earlier due presets are floor deferred', async () => {
+			// Preset 1 is young (deferred)
+			await createPresetWithLastRunAt('Young preset at front', 30000);
+			// Preset 2 is ready (old lastRunAt)
+			const readyId = await createPresetWithLastRunAt('Ready preset behind', 90000);
+
+			jest.spyOn(marketScannerController, 'runScans').mockResolvedValue([
+				{ scan: 'top_gainers', status: 'success', items: [] },
+			]);
+			jest.spyOn(requestRouting, 'sendWithNotificationRouting').mockResolvedValue([]);
+			jest.spyOn(notificationAlertModule, 'getNotificationManager').mockReturnValue({});
+
+			// batchLimit of 1: without the fix, the young preset would fill the batch
+			// and be deferred, leaving 0 executed. With the fix, the ready preset is
+			// included and executed.
+			const result = await scheduler.sweep({ batchLimit: 1 });
+			expect(result.deferredByFloorCount).toBe(1);
+			expect(result.executedCount).toBe(1);
+
+			const updated = await scannerPresetService.getPreset(readyId);
+			expect(updated.lastStatus).toBe('success');
+		});
+
+		it('atomic claim recheck rejects claim if lastRunAt was updated inside floor window', async () => {
+			const presetId = await createPresetWithLastRunAt('Race preset', 90000);
+			const preset = await scannerPresetService.getPreset(presetId);
+
+			// Simulate another replica completing the preset before _claimPreset executes
+			await scannerPresetService.updatePreset(presetId, {
+				lastRunAt: new Date(Date.now() - 5000).toISOString(),
+			});
+
+			const claimed = await scheduler._claimPreset(preset, Date.now(), 60000);
+			expect(claimed).toBe(false);
+		});
+
+		it('exposes deferredByFloor counter under dependencies.scannerPresetScheduler in /api/status', () => {
+			const status = scheduler.getStatus();
+			expect(status).toHaveProperty('lastRunDeferredByFloorCount');
+			expect(status.lastRunDeferredByFloorCount).toBe(0);
+			expect(status.lastRunDeferredByFloorCount).toBeDefined();
+			expect(MIN_PRESET_FLOOR_MS).toBe(60000);
 		});
 	});
 

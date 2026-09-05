@@ -300,7 +300,8 @@ The response and audit logs include only sanitized order metadata. API credentia
 - `SCANNER_PRESET_SCHEDULER_INTERVAL_MS` - Background sweep interval in milliseconds (default: `60000`, bounds `1000`-`3600000`).
 - `SCANNER_PRESET_SCHEDULER_BATCH_LIMIT` - Maximum due presets processed per sweep (default: `50`, bounds `1`-`500`).
 - `SCANNER_PRESET_SCHEDULER_LEASE_MS` - Distributed concurrency lock lease duration in milliseconds (default: `120000`, bounds `10000`-`600000`).
-- `dependencies.scannerPresetScheduler` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `role`, `running`, `shutdownRequested`, and execution counters without secrets.
+- **Per-preset floor**: every sweep applies a `MIN_PRESET_FLOOR_MS` (60s) minimum interval between runs of the same preset, independent of the configured `cadenceMs`. If `nextRunAt` lands in the past after a cadence downgrade or save, the scheduler defers the run until the floor has elapsed since `lastRunAt` and counts the deferral under `dependencies.scannerPresetScheduler.lastRunDeferredByFloorCount`. The floor matches `parseCadenceToMs`'s lower bound and is applied symmetrically by both the local web sweeper and dedicated-worker sweepers, so multi-replica sweeps never fire the same preset within the floor window.
+- `dependencies.scannerPresetScheduler` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `role`, `running`, `shutdownRequested`, `lastRunScannedCount`, `lastRunExecutedCount`, `lastRunErrorCount`, `lastRunDeferredByFloorCount`, and timing metadata without secrets.
 
 #### News Monitor Scheduler
 
