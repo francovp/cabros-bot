@@ -153,17 +153,138 @@ describe('WhatsAppService', () => {
 			expect(global.fetch).toHaveBeenCalledTimes(2);
 		});
 
-		it('should exhaust retries on persistent failure', async () => {
+		it('should exhaust retries on persistent 429 (RATE_LIMITED) failures', async () => {
 			global.fetch = jest.fn().mockResolvedValue({
-				ok: true,
-				json: async () => ({ success: false, error: 'Rate limited' }),
+				ok: false,
+				status: 429,
+				headers: { get: () => null },
+				text: async () => 'Rate limited',
 			});
 
 			const result = await service.send({ text: 'Test alert' });
 
 			expect(result.success).toBe(false);
+			expect(result.category).toBe('RATE_LIMITED');
+			expect(result.statusCode).toBe(429);
 			expect(result.attemptCount).toBe(3);
 			expect(global.fetch).toHaveBeenCalledTimes(3);
+		});
+
+		it('should NOT retry on 401/403 UNAUTHORIZED responses', async () => {
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: false,
+				status: 401,
+				headers: { get: () => null },
+				text: async () => 'Unauthorized',
+			});
+
+			const result = await service.send({ text: 'Test alert' });
+
+			expect(result.success).toBe(false);
+			expect(result.category).toBe('UNAUTHORIZED');
+			expect(result.statusCode).toBe(401);
+			expect(result.attemptCount).toBe(1);
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('should NOT retry on 4xx CLIENT_ERROR responses', async () => {
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: false,
+				status: 400,
+				headers: { get: () => null },
+				text: async () => 'Bad chatId',
+			});
+
+			const result = await service.send({ text: 'Test alert' });
+
+			expect(result.success).toBe(false);
+			expect(result.category).toBe('CLIENT_ERROR');
+			expect(result.statusCode).toBe(400);
+			expect(result.attemptCount).toBe(1);
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('should NOT retry on AMBIGUOUS_OUTCOME (200 with no idMessage)', async () => {
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				headers: { get: () => null },
+				json: async () => ({ success: true }),
+			});
+
+			const result = await service.send({ text: 'Test alert' });
+
+			expect(result.success).toBe(false);
+			expect(result.category).toBe('AMBIGUOUS_OUTCOME');
+			expect(result.ambiguous).toBe(true);
+			expect(result.attemptCount).toBe(1);
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('should NOT retry on INVALID_RESPONSE (non-JSON body)', async () => {
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				headers: { get: () => null },
+				json: async () => {
+					throw new Error('invalid json');
+				},
+			});
+
+			const result = await service.send({ text: 'Test alert' });
+
+			expect(result.success).toBe(false);
+			expect(result.category).toBe('INVALID_RESPONSE');
+			expect(result.attemptCount).toBe(1);
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('should honor provider Retry-After header on 429', async () => {
+			global.fetch = jest
+				.fn()
+				.mockResolvedValueOnce({
+					ok: false,
+					status: 429,
+					headers: { get: (name) => (name === 'Retry-After' ? '0.05' : null) },
+					text: async () => 'Rate limited',
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					status: 200,
+					headers: { get: () => null },
+					json: async () => ({ idMessage: 'msg-after-429' }),
+				});
+
+			const result = await service.send({ text: 'Test alert' });
+
+			expect(result.success).toBe(true);
+			expect(result.messageId).toBe('msg-after-429');
+			expect(result.attemptCount).toBe(2);
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+		});
+
+		it('should retry on 5xx PROVIDER_ERROR and succeed on subsequent attempt', async () => {
+			global.fetch = jest
+				.fn()
+				.mockResolvedValueOnce({
+					ok: false,
+					status: 500,
+					headers: { get: () => null },
+					text: async () => 'Server error',
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					status: 200,
+					headers: { get: () => null },
+					json: async () => ({ idMessage: 'msg-after-500' }),
+				});
+
+			const result = await service.send({ text: 'Test alert' });
+
+			expect(result.success).toBe(true);
+			expect(result.messageId).toBe('msg-after-500');
+			expect(result.attemptCount).toBe(2);
+			expect(global.fetch).toHaveBeenCalledTimes(2);
 		});
 
 		it('should forward an external abort signal to the GreenAPI request', async () => {
@@ -236,10 +357,12 @@ describe('WhatsAppService', () => {
 				.fn()
 				.mockResolvedValueOnce({
 					ok: true,
+					headers: { get: () => null },
 					json: async () => ({ idMessage: 'msg-1' }),
 				})
 				.mockResolvedValueOnce({
 					ok: true,
+					headers: { get: () => null },
 					json: async () => ({ idMessage: 'msg-2' }),
 				});
 
@@ -269,6 +392,58 @@ describe('WhatsAppService', () => {
 			expect(firstPayload.message + secondPayload.message).toBe(longText);
 			expect(firstPayload.message.endsWith('…')).toBe(false);
 			expect(secondPayload.message.endsWith('…')).toBe(false);
+		});
+
+		it('should NOT retry chunked messages on a 401 and never send later chunks', async () => {
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: false,
+				status: 401,
+				headers: { get: () => null },
+				text: async () => 'Unauthorized',
+			});
+
+			const longText = 'A'.repeat(20010);
+			const result = await service.send({
+				text: longText,
+				whatsappChatId: 'override@g.us',
+			});
+
+			expect(result.success).toBe(false);
+			expect(result.category).toBe('UNAUTHORIZED');
+			expect(result.statusCode).toBe(401);
+			expect(result.attemptCount).toBe(1);
+			expect(result.failedPart).toBe(1);
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('should NOT retry chunked messages on an ambiguous first-chunk response', async () => {
+			global.fetch = jest
+				.fn()
+				.mockResolvedValueOnce({
+					ok: true,
+					status: 200,
+					headers: { get: () => null },
+					json: async () => ({ success: true }),
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					status: 200,
+					headers: { get: () => null },
+					json: async () => ({ idMessage: 'msg-2' }),
+				});
+
+			const longText = 'A'.repeat(20010);
+			const result = await service.send({
+				text: longText,
+				whatsappChatId: 'override@g.us',
+			});
+
+			expect(result.success).toBe(false);
+			expect(result.category).toBe('AMBIGUOUS_OUTCOME');
+			expect(result.ambiguous).toBe(true);
+			expect(result.attemptCount).toBe(1);
+			expect(result.failedPart).toBe(1);
+			expect(global.fetch).toHaveBeenCalledTimes(1);
 		});
 	});
 });
