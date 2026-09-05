@@ -4,6 +4,7 @@ const { setupTrustProxy } = require('./src/lib/trustProxy');
 const app = express();
 const { createCorsMiddleware } = require('./src/lib/cors');
 const helmet = require('helmet');
+const { createCompressionMiddleware } = require('./src/lib/compression');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
 
@@ -21,9 +22,9 @@ app.use(createCorsMiddleware());
 
 // Use helmet for improved security
 const contentSecurityPolicy = helmet.contentSecurityPolicy.getDefaultDirectives();
-contentSecurityPolicy['script-src'] = ["'self'", 'https://www.gstatic.com'];
+contentSecurityPolicy['script-src'] = ['\'self\'', 'https://www.gstatic.com'];
 contentSecurityPolicy['connect-src'] = [
-	"'self'",
+	'\'self\'',
 	'https://identitytoolkit.googleapis.com',
 	'https://securetoken.googleapis.com',
 	'https://www.googleapis.com',
@@ -32,6 +33,9 @@ contentSecurityPolicy['connect-src'] = [
 	'https://cabros-bot-production.up.railway.app',
 ];
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
+
+// HTTP response compression for payloads exceeding 1KB (skips streaming responses)
+app.use(createCompressionMiddleware());
 
 app.use('/healthcheck', require('express-healthcheck')());
 app.get('/ready', (req, res) => {
