@@ -678,6 +678,67 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	});
 
 	// ---------------------------------------------------------------------------
+	// requestId correlation parity with /api/webhook/alert (GH-867)
+	// ---------------------------------------------------------------------------
+	it('returns a generated requestId on success when no x-request-id header is supplied', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Hello correlation', channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.requestId).toEqual(expect.any(String));
+		expect(res.body.requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+	});
+
+	it('echoes a supplied x-request-id header on success', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('x-request-id', 'msg-correlation-001')
+			.send({ message: 'Hello correlation', channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.requestId).toBe('msg-correlation-001');
+	});
+
+	it('includes requestId in validation error bodies', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('x-request-id', 'msg-validation-001')
+			.send({ channels: ['telegram'] })
+			.expect(400);
+
+		expect(res.body.requestId).toBe('msg-validation-001');
+	});
+
+	it('replays the same requestId on idempotent replay', async () => {
+		const payload = { message: 'Replay with same requestId', channels: ['telegram'] };
+		const first = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('x-request-id', 'msg-replay-001')
+			.set('idempotency-key', 'msg-replay-idem-001')
+			.send(payload)
+			.expect(200);
+
+		const replay = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('x-request-id', 'msg-replay-001')
+			.set('idempotency-key', 'msg-replay-idem-001')
+			.send(payload)
+			.expect(200);
+
+		expect(first.body.requestId).toBe('msg-replay-001');
+		expect(replay.body.requestId).toBe('msg-replay-001');
+		expect(replay.body.idempotencyReplayed).toBe(true);
+	});
+
+	// ---------------------------------------------------------------------------
 	// API key protection
 	// ---------------------------------------------------------------------------
 	it('returns 401 without API key', async () => {
