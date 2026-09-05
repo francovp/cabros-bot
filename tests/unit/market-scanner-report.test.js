@@ -4,6 +4,7 @@ const {
 	MarketScannerRequestError,
 	pickLevel,
 	getRiskLevelsForSide,
+	getScanItemSide,
 } = require('../../src/services/tradingview/marketScannerReport');
 
 describe('Market Scanner Report', () => {
@@ -29,6 +30,10 @@ describe('Market Scanner Report', () => {
 				scans: ['top_gainers', 'top_losers', 'volume_breakout_scanner'],
 				limit: 5,
 				bbwThreshold: 0.05,
+				rating: 3,
+				consecutiveCandlesPatternType: 'bullish',
+				candleCount: 3,
+				minGrowth: undefined,
 				ranked: false,
 				includeMultiTimeframe: false,
 			});
@@ -74,9 +79,63 @@ describe('Market Scanner Report', () => {
 				scans: ['top_gainers', 'bollinger_scan'],
 				limit: 15,
 				bbwThreshold: 0.02,
+				rating: 3,
+				consecutiveCandlesPatternType: 'bullish',
+				candleCount: 3,
+				minGrowth: undefined,
 				ranked: false,
 				includeMultiTimeframe: false,
 			});
+		});
+
+		it('accepts valid rating, pattern_type, candle_count, and min_growth parameters', () => {
+			const parsed = parseMarketScannerRequest({
+				body: {
+					scans: ['rating_filter', 'consecutive_candles_scan'],
+					rating: -2,
+					pattern_type: 'bearish',
+					candle_count: 4,
+					min_growth: 1.5,
+				},
+			});
+
+			expect(parsed.scans).toEqual(['rating_filter', 'consecutive_candles_scan']);
+			expect(parsed.rating).toBe(-2);
+			expect(parsed.consecutiveCandlesPatternType).toBe('bearish');
+			expect(parsed.candleCount).toBe(4);
+			expect(parsed.minGrowth).toBe(1.5);
+		});
+
+		it('throws MarketScannerRequestError for invalid rating', () => {
+			expect(() => parseMarketScannerRequest({ body: { rating: 4 } }))
+				.toThrow('rating must be an integer between -3 and 3');
+			expect(() => parseMarketScannerRequest({ body: { rating: -4 } }))
+				.toThrow('rating must be an integer between -3 and 3');
+			expect(() => parseMarketScannerRequest({ body: { rating: 'invalid' } }))
+				.toThrow('rating must be an integer between -3 and 3');
+		});
+
+		it('throws MarketScannerRequestError for invalid pattern_type', () => {
+			expect(() => parseMarketScannerRequest({ body: { pattern_type: 'sideways' } }))
+				.toThrow('pattern_type must be either "bullish" or "bearish"');
+			expect(() => parseMarketScannerRequest({ body: { pattern_type: 123 } }))
+				.toThrow('pattern_type must be either "bullish" or "bearish"');
+		});
+
+		it('throws MarketScannerRequestError for invalid candle_count', () => {
+			expect(() => parseMarketScannerRequest({ body: { candle_count: 1 } }))
+				.toThrow('candle_count must be an integer between 2 and 5');
+			expect(() => parseMarketScannerRequest({ body: { candle_count: 6 } }))
+				.toThrow('candle_count must be an integer between 2 and 5');
+			expect(() => parseMarketScannerRequest({ body: { candle_count: 'three' } }))
+				.toThrow('candle_count must be an integer between 2 and 5');
+		});
+
+		it('throws MarketScannerRequestError for invalid min_growth', () => {
+			expect(() => parseMarketScannerRequest({ body: { min_growth: -0.5 } }))
+				.toThrow('min_growth must be a non-negative number');
+			expect(() => parseMarketScannerRequest({ body: { min_growth: 'abc' } }))
+				.toThrow('min_growth must be a non-negative number');
 		});
 
 		it('clamps limit to [1, 20]', () => {
@@ -235,6 +294,75 @@ describe('Market Scanner Report', () => {
 
 			expect(report).toContain('*🔥 SQUEEZE BOLLINGER*');
 			expect(report).toContain('1. DOTUSDT $7.45 (0.0%) | BBW 0.03');
+		});
+
+		it('formats rating_filter items with BB rating and RSI correctly', () => {
+			const results = [
+				{
+					scan: 'rating_filter',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:STXUSDT',
+							changePercent: 2.72,
+							bollinger_rating: 3,
+							indicators: { close: 1.85, RSI: 70.2 },
+						},
+						{
+							symbol: 'BINANCE:SOLUSDT',
+							changePercent: -1.5,
+							rating: -2,
+							indicators: { close: 140.5, RSI: 38.0 },
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			expect(report).toContain('*📊 RATING BOLLINGER*');
+			expect(report).toContain('1. STXUSDT $1.85 (+2.7%) | BB Rating +3 | RSI 70.2');
+			expect(report).toContain('2. SOLUSDT $140.50 (-1.5%) | BB Rating -2 | RSI 38.0');
+		});
+
+		it('formats consecutive_candles_scan items with pattern details and strength correctly', () => {
+			const results = [
+				{
+					scan: 'consecutive_candles_scan',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:AVAXUSDT',
+							changePercent: 4.8,
+							pattern_type: 'bullish',
+							candle_count: 3,
+							pattern_strength: 85,
+							indicators: { close: 25.4 },
+						},
+						{
+							symbol: 'BINANCE:DOGEUSDT',
+							changePercent: -3.2,
+							pattern_type: 'bearish',
+							candle_count: 4,
+							indicators: { close: 0.12 },
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			expect(report).toContain('*🕯️ VELAS CONSECUTIVAS*');
+			expect(report).toContain('1. AVAXUSDT $25.40 (+4.8%) | 3 velas 🟢 Bullish | Fuerza 85');
+			expect(report).toContain('2. DOGEUSDT $0.120000 (-3.2%) | 4 velas 🔴 Bearish');
 		});
 
 		it('filters out positive changes from top_losers and negative changes from top_gainers', () => {
@@ -1110,6 +1238,22 @@ describe('Market Scanner Report', () => {
 					resistance: null,
 				});
 				expect(levels.takeProfit).toBeNull();
+			});
+		});
+
+		describe('getScanItemSide', () => {
+			it('resolves side for rating_filter based on bollinger rating sign', () => {
+				expect(getScanItemSide('rating_filter', { bollinger_rating: 3 })).toBe('BUY');
+				expect(getScanItemSide('rating_filter', { bollinger_rating: 1 })).toBe('BUY');
+				expect(getScanItemSide('rating_filter', { rating: -3 })).toBe('SELL');
+				expect(getScanItemSide('rating_filter', { bollinger_rating: -1 })).toBe('SELL');
+				expect(getScanItemSide('rating_filter', {})).toBe('BUY');
+			});
+
+			it('resolves side for consecutive_candles_scan based on pattern_type', () => {
+				expect(getScanItemSide('consecutive_candles_scan', { pattern_type: 'bullish' })).toBe('BUY');
+				expect(getScanItemSide('consecutive_candles_scan', { pattern_type: 'bearish' })).toBe('SELL');
+				expect(getScanItemSide('consecutive_candles_scan', {})).toBe('BUY');
 			});
 		});
 	});

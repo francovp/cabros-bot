@@ -528,4 +528,79 @@ describe('Market Scanner Alert endpoint', () => {
 			trendConfluence: expect.objectContaining({ status: 'aligned', confidence: 82 }),
 		}));
 	});
+
+	it('triggers rating_filter scan with rating parameter and formats report', async () => {
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:STXUSDT',
+				changePercent: 2.72,
+				bollinger_rating: 3,
+				indicators: { close: 1.85, RSI: 70.2 },
+			},
+		]);
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.query({ dryRun: 'true' })
+			.send({
+				scans: ['rating_filter'],
+				rating: 3,
+				timeframe: '4h',
+				exchange: 'BINANCE',
+			})
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.payload.alertText).toContain('RATING BOLLINGER');
+		expect(res.body.payload.alertText).toContain('BB Rating +3');
+		expect(tradingViewMcpService.callScanTool).toHaveBeenCalledWith(
+			'rating_filter',
+			{ exchange: 'BINANCE', timeframe: '4h', limit: 5, rating: 3 },
+			expect.any(Object),
+		);
+	});
+
+	it('triggers consecutive_candles_scan with pattern_type, candle_count, and min_growth', async () => {
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:AVAXUSDT',
+				changePercent: 4.8,
+				pattern_type: 'bullish',
+				candle_count: 3,
+				pattern_strength: 85,
+				indicators: { close: 25.4 },
+			},
+		]);
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.query({ dryRun: 'true' })
+			.send({
+				scans: ['consecutive_candles_scan'],
+				pattern_type: 'bullish',
+				candle_count: 3,
+				min_growth: 1.2,
+				timeframe: '4h',
+				exchange: 'BINANCE',
+			})
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.payload.alertText).toContain('VELAS CONSECUTIVAS');
+		expect(res.body.payload.alertText).toContain('3 velas 🟢 Bullish');
+		expect(tradingViewMcpService.callScanTool).toHaveBeenCalledWith(
+			'consecutive_candles_scan',
+			{
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				limit: 5,
+				pattern_type: 'bullish',
+				candle_count: 3,
+				min_growth: 1.2,
+			},
+			expect.any(Object),
+		);
+	});
 });

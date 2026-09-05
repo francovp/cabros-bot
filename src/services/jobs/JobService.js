@@ -1655,6 +1655,14 @@ class JobService {
 		};
 		if (scanType === 'bollinger_scan') {
 			args.bbw_threshold = parsed.bbwThreshold;
+		} else if (scanType === 'rating_filter') {
+			args.rating = parsed.rating;
+		} else if (scanType === 'consecutive_candles_scan') {
+			args.pattern_type = parsed.consecutiveCandlesPatternType;
+			args.candle_count = parsed.candleCount;
+			if (parsed.minGrowth !== undefined) {
+				args.min_growth = parsed.minGrowth;
+			}
 		}
 		return args;
 	}

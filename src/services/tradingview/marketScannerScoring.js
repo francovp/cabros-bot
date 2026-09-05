@@ -149,6 +149,44 @@ function scoreScannerItem(item, scanType, options = {}) {
 		volatilityScore = 5; // Neutral for non-BB scans
 	}
 
+	// --- Persistence / Pattern strength for consecutive candles (0-15) ---
+	let persistenceScore = 0;
+	if (scanType === 'consecutive_candles_scan') {
+		const patternStrength = numberOrNull(item.pattern_strength);
+		const candleBodyRatio = numberOrNull(item.candle_body_ratio);
+		if (patternStrength !== null) {
+			const normalizedStrength = patternStrength <= 1 ? patternStrength : patternStrength / 100;
+			persistenceScore += Math.min(10, Math.round(normalizedStrength * 10));
+		}
+		if (candleBodyRatio !== null) {
+			persistenceScore += Math.min(5, Math.round(candleBodyRatio * 5));
+		}
+	}
+
+	// --- Bollinger Band Rating adjustment (-10 to +10) ---
+	const bbRating = numberOrNull(item.bollinger_rating ?? item.rating);
+	let bbRatingAdjustment = 0;
+	if (bbRating !== null) {
+		const isBearishSetup = scanType === 'top_losers'
+			|| (scanType === 'consecutive_candles_scan' && normalizeTrendDirection(item.pattern_type) === 'bearish')
+			|| (scanType === 'rating_filter' && bbRating < 0);
+		const isBullishSetup = scanType === 'top_gainers'
+			|| (scanType === 'consecutive_candles_scan' && normalizeTrendDirection(item.pattern_type) === 'bullish')
+			|| (scanType === 'rating_filter' && bbRating > 0);
+
+		if (isBullishSetup && bbRating > 0) {
+			bbRatingAdjustment = Math.min(10, Math.round((bbRating / 3) * 10));
+		} else if (isBearishSetup && bbRating < 0) {
+			bbRatingAdjustment = Math.min(10, Math.round((Math.abs(bbRating) / 3) * 10));
+		} else if (isBullishSetup && bbRating < 0) {
+			bbRatingAdjustment = -Math.min(10, Math.round((Math.abs(bbRating) / 3) * 10));
+		} else if (isBearishSetup && bbRating > 0) {
+			bbRatingAdjustment = -Math.min(10, Math.round((bbRating / 3) * 10));
+		} else {
+			bbRatingAdjustment = Math.round((Math.abs(bbRating) / 3) * 5);
+		}
+	}
+
 	// --- Chase-entry penalty ---
 	let chasePenalty = 0;
 	if (rsi !== null && volRatio !== null) {
@@ -176,7 +214,7 @@ function scoreScannerItem(item, scanType, options = {}) {
 	}
 
 	// --- Composite score (0-100) ---
-	const rawScore = trendScore + momentumScore + volumeScore + breakoutScore + volatilityScore + trendConfluenceAdjustment;
+	const rawScore = trendScore + momentumScore + volumeScore + breakoutScore + volatilityScore + persistenceScore + bbRatingAdjustment + trendConfluenceAdjustment;
 	const finalScore = Math.max(0, Math.min(100, rawScore - chasePenalty));
 
 	// --- Reason text ---
@@ -189,6 +227,18 @@ function scoreScannerItem(item, scanType, options = {}) {
 	}
 	if (volRatio !== null) {
 		parts.push(`Vol ${volRatio.toFixed(1)}x`);
+	}
+	if (bbRating !== null) {
+		const sign = bbRating > 0 ? '+' : '';
+		parts.push(`BB rating ${sign}${bbRating}`);
+	}
+	if (scanType === 'consecutive_candles_scan') {
+		if (item.pattern_strength !== undefined && item.pattern_strength !== null) {
+			parts.push(`strength ${item.pattern_strength}`);
+		}
+		if (item.candle_body_ratio !== undefined && item.candle_body_ratio !== null) {
+			parts.push(`body ${item.candle_body_ratio}`);
+		}
 	}
 	if (chasePenalty > 0) {
 		parts.push(`⚠️ chase penalty -${chasePenalty}`);
@@ -336,6 +386,20 @@ function getExpectedTrendDirection(item = {}, scanType) {
 	}
 	if (scanType === 'top_losers') {
 		return 'bearish';
+	}
+
+	if (scanType === 'rating_filter') {
+		const bbRating = numberOrNull(item.bollinger_rating ?? item.rating);
+		if (bbRating !== null) {
+			return bbRating >= 0 ? 'bullish' : 'bearish';
+		}
+	}
+
+	if (scanType === 'consecutive_candles_scan' || item.pattern_type) {
+		const patternDir = normalizeTrendDirection(item.pattern_type);
+		if (patternDir) {
+			return patternDir;
+		}
 	}
 
 	const breakoutDirection = normalizeTrendDirection(item.breakout_type);
