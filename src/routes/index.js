@@ -27,6 +27,7 @@ const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const { postBinanceOrder, getBinanceOrders, deleteBinanceOrder } = require('../controllers/trading/binanceOrders');
 const { idempotencyMiddleware } = require('../lib/idempotency');
+const { postOpsCanary } = require('../controllers/webhooks/handlers/opsCanary/opsCanary');
 const {
 	ADMIN_OPERATOR,
 	ADMIN_VIEWER,
@@ -61,6 +62,7 @@ function getRoutes(botOrGetter) {
 	router.put('/scanner-presets/:id', ...adminWrite, updatePreset);
 	router.delete('/scanner-presets/:id', ...adminWrite, deletePreset);
 	router.post('/scanner-presets/:id/run', ...adminWrite, idempotencyMiddleware, postRunPreset(botOrGetter));
+	router.post('/ops/test-alert', validateApiKey, postOpsCanary(botOrGetter));
 
 	// Async job endpoints
 	router.post('/jobs/tradingview-analysis', ...adminWrite, idempotencyMiddleware, postCreateJob(botOrGetter));

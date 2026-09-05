@@ -359,6 +359,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			canaryEndpoint: isEnabled(process.env.ENABLE_CANARY_ENDPOINT),
 		},
 		deliveryChannels: {
 			telegram: {

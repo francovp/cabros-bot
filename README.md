@@ -535,6 +535,67 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
 }
 ```
 
+### POST /api/ops/test-alert
+
+Opt-in post-deploy channel-delivery canary. Wire this into your Render deploy hook, Railway release pipeline, or a GitHub Action to confirm the just-deployed build can actually deliver through every notification channel — without having to wait for a real alert.
+
+Gated by `ENABLE_CANARY_ENDPOINT` (default: `false`). When disabled, the endpoint returns `404 FEATURE_DISABLED` so production traffic is unaffected.
+
+**Auth**: requires `WEBHOOK_API_KEY` (`x-api-key` header, same operator credential as the rest of the webhook surface).
+
+**Request body** (all fields optional):
+
+```json
+{
+  "channels": ["telegram", "whatsapp"],
+  "text": "Cabros Bot canary alert - ignore"
+}
+```
+
+- `channels` — non-empty array limited to `telegram`, `whatsapp`, and/or `discord`. When omitted, all currently enabled channels are used.
+- `text` — custom canary text (≤ 4000 chars). Defaults to a static `Cabros Bot canary alert - ignore` marker.
+- `telegramChatId`, `telegramThreadId`, `whatsappChatId`, `discordWebhookUrl` — per-channel destination overrides, identical to the generic-message webhook contract.
+
+**Behavior**:
+
+- Sends one synthetic alert (`source: 'canary'`) through the same `notificationManager.sendToChannels()` (or `sendToAll()`) pipeline as a real webhook alert — same formatter, retry policy, and redrive queue.
+- Pure delivery probe: no Gemini grounding, no TradingView MCP, no Langfuse prompt lookup. Safe to run on every deploy.
+- Synthetic alert is **not** persisted to the alerts collection and is excluded from signal-outcome tracking by virtue of the `source: 'canary'` tag (downstream consumers should filter `source != 'canary'` when aggregating real metrics).
+- Bounded `console.info` log line with `requestId`, `source: 'canary'`, and per-channel `success` counts — never logs message text.
+
+**Response** (`200` even when some channels fail — mirrors the generic-message webhook contract):
+
+```json
+{
+  "success": true,
+  "source": "canary",
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-msg-123", "attemptCount": 1, "durationMs": 450 },
+    { "channel": "whatsapp", "success": true, "messageId": "wa-msg-456", "attemptCount": 1, "durationMs": 320 }
+  ],
+  "requestedChannels": ["telegram", "whatsapp"],
+  "successCount": 2,
+  "failureCount": 0,
+  "requestId": "8e9b0d1c-2f3a-4b5c-8d7e-9f0a1b2c3d4e",
+  "totalDurationMs": 482
+}
+```
+
+`success: false` is returned when at least one channel reports failure; per-channel `results` is always populated so an operator can pinpoint which channel broke.
+
+**Recommended deploy-hook wiring**:
+
+```bash
+# After Render deploy finishes, hit the canary with the production API key
+curl -fsS -X POST "https://cabros-bot-production.up.railway.app/api/ops/test-alert" \
+  -H "x-api-key: $WEBHOOK_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"channels":["telegram","whatsapp"]}'
+# Exit non-zero when any channel failed so the deploy is flagged
+```
+
+For Discord, recommend capping canary cadence to ≥ 1/min to avoid hitting the webhook rate limit on heavy deploy traffic.
+
 ## Alert Enrichment with Gemini Grounding (001)
 
 The webhook alert system can optionally enrich alerts with verified sources and market context using Google Gemini API with GoogleSearch grounding.
