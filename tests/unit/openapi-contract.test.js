@@ -352,4 +352,43 @@ describe('OpenAPI contract', () => {
 			expect(timeoutMs.default).toBe(300000); // 5 minutes default
 		});
 	});
+
+	describe('news-monitor alert barrier fields (GH-712)', () => {
+		it('types results[].alert as a structured NewsAlert schema with optional stop/target', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const newsMonitorResponse = contract.components.schemas.NewsMonitorResponse;
+			const resultItemSchema = newsMonitorResponse.properties.results.items;
+			expect(resultItemSchema.$ref).toBe('#/components/schemas/NewsMonitorResult');
+
+			const resultSchema = contract.components.schemas.NewsMonitorResult;
+			expect(resultSchema.properties.alert.$ref).toBe('#/components/schemas/NewsAlert');
+
+			const newsAlert = contract.components.schemas.NewsAlert;
+			expect(newsAlert.properties.stop).toEqual(expect.objectContaining({ type: 'number' }));
+			expect(newsAlert.properties.target).toEqual(expect.objectContaining({ type: 'number' }));
+			expect(newsAlert.required).not.toEqual(expect.arrayContaining(['stop', 'target']));
+		});
+
+		it('includes a populated stop/target example and a no-barrier example for the news-monitor response', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const response = contract.components.responses.NewsMonitorAnalysisResult;
+			const examples = response.content['application/json'].examples;
+			expect(examples.dryRun).toBeDefined();
+			expect(examples.analyzedNoBarriers).toBeDefined();
+
+			const dryRunAlert = examples.dryRun.value.results[0].alert;
+			expect(typeof dryRunAlert.stop).toBe('number');
+			expect(typeof dryRunAlert.target).toBe('number');
+			expect(dryRunAlert.stop).toBeGreaterThan(0);
+			expect(dryRunAlert.target).toBeGreaterThan(dryRunAlert.stop);
+
+			const noBarriersAlert = examples.analyzedNoBarriers.value.results[0].alert;
+			expect(noBarriersAlert.stop).toBeUndefined();
+			expect(noBarriersAlert.target).toBeUndefined();
+		});
+	});
 });
