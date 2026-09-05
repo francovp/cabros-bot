@@ -22,6 +22,7 @@ const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const { workerHeartbeatMonitor } = require('../services/workerHeartbeat/WorkerHeartbeatMonitor');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -175,7 +176,7 @@ function getGeminiQuotaDependency({ gemini }) {
 }
 
 
-function getStatus() {
+async function getStatus() {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
 	const runtimeConfig = remoteConfigService.getRuntimeConfig();
@@ -311,6 +312,9 @@ function getStatus() {
 		signalOutcomeWorkerDependency.ready = false;
 		signalOutcomeWorkerDependency.status = 'disabled';
 	}
+	const signalOutcomeHeartbeat = await workerHeartbeatMonitor.getSignalOutcomeStatus();
+	const scannerPresetSchedulerStatus = scannerPresetSchedulerService.getStatus();
+	const scannerPresetSchedulerHeartbeat = await workerHeartbeatMonitor.getScannerPresetSchedulerStatus();
 
 	const webhookAuth = dependencyStatus({
 		enabled: true,
@@ -406,7 +410,10 @@ function getStatus() {
 			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
 			firebaseRemoteConfig: remoteConfigStatus,
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
-			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
+			scannerPresetScheduler: {
+				...scannerPresetSchedulerStatus,
+				heartbeat: scannerPresetSchedulerHeartbeat,
+			},
 			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
@@ -424,6 +431,7 @@ function getStatus() {
 				lastRunEvaluatedCount: signalOutcomeWorkerStatus.lastRunEvaluatedCount,
 				lastRunPendingCount: signalOutcomeWorkerStatus.lastRunPendingCount,
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
+				heartbeat: signalOutcomeHeartbeat,
 			},
 			notificationRedrive: notificationRedriveService.getStatus(),
 			alertSignalRepeatSuppression: {
@@ -437,9 +445,10 @@ function getStatus() {
 	};
 }
 
-function getApiStatus(req, res) {
+async function getApiStatus(req, res) {
 	try {
-		return res.status(200).json(getStatus());
+		const body = await getStatus();
+		return res.status(200).json(body);
 	} catch (error) {
 		console.error('[StatusController] getStatus failed:', error);
 		return res.status(500).json({ error: error.message, code: 'INTERNAL_ERROR' });
