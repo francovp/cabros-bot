@@ -8,6 +8,27 @@ const {
 	getRiskRewardRatio,
 } = require('./expandedAnalysisAlertReport');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { getEnvironmentBannerMetadata } = require('../../lib/environmentBanner');
+
+const PREVIEW_ENVIRONMENTS_FOR_FOOTER = new Set(['preview', 'development', 'staging']);
+
+function buildEnvironmentFooterLine() {
+	const metadata = getEnvironmentBannerMetadata();
+	if (!metadata || !PREVIEW_ENVIRONMENTS_FOR_FOOTER.has(String(metadata.environment).toLowerCase())) {
+		return '';
+	}
+	const shortCommit = metadata.shortCommit || (metadata.commit ? String(metadata.commit).slice(0, 8) : '');
+	const parts = [`*Env*: ${metadata.environment}`];
+	if (shortCommit) parts.push(`*Commit*: ${shortCommit}`);
+	return `(${parts.join(' @ ')})`;
+}
+
+function appendEnvironmentFooter(extraText) {
+	const footerLine = buildEnvironmentFooterLine();
+	if (!footerLine) return extraText;
+	if (!extraText) return footerLine;
+	return `${extraText}\n${footerLine}`;
+}
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
 const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -924,9 +945,11 @@ class TradingViewMcpService {
 		}
 
 		const sentiment = sentimentScore > 0.15 ? 'BULLISH' : sentimentScore < -0.15 ? 'BEARISH' : 'NEUTRAL';
-		const extraText = getRuntimeConfig().ENABLE_MESSAGE_FOOTER_METADATA
-			? '*Grounding*: `tradingview-mcp`'
-			: '';
+		const extraText = appendEnvironmentFooter(
+			getRuntimeConfig().ENABLE_MESSAGE_FOOTER_METADATA
+				? '*Grounding*: `tradingview-mcp`'
+				: '',
+		);
 
 		return {
 			original_text: originalText,

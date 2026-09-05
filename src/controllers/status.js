@@ -27,6 +27,10 @@ const {
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
 } = require('../lib/deploymentEnvironment');
+const {
+	getEnvironmentBannerPayload,
+	isEnvironmentBannerEnabled,
+} = require('../lib/environmentBanner');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
 const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
@@ -359,6 +363,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			environmentBanner: isEnvironmentBannerEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -433,6 +438,7 @@ function getStatus() {
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
 			binanceOrderAudit: binanceOrderAuditService.getStatus(),
+			environmentBanner: getEnvironmentBannerPayload(),
 		},
 	};
 }

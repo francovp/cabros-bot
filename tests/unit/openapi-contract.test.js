@@ -83,9 +83,16 @@ describe('OpenAPI contract', () => {
 			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
 		]);
 
+		// Public operations opt out of API-key auth by declaring `security: []`.
+		const publicOperations = new Set([
+			'GET /api/banner',
+		]);
+
 		for (const operation of operations) {
 			const operationKey = `${operation.method || 'UNKNOWN'} ${operation.path || ''}`;
-			const expected = [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
+			const expected = publicOperations.has(operationKey)
+				? []
+				: [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
 			if (firebaseAdminOperations.has(operationKey)) expected.push({ FirebaseBearerAuth: [] });
 			expect(operation.security).toEqual(expected);
 		}

@@ -81,6 +81,15 @@ function getRoutes(botOrGetter) {
 	router.get('/status', ...adminRead, getApiStatus);
 	router.get('/capabilities', ...adminRead, getApiStatus);
 
+	// Public, unauthenticated deployment banner snapshot for external
+	// status pages / badge generators. Mounted under /api so the path
+	// appears in the OpenAPI contract but explicitly opts out of API-key
+	// auth via `security: []` (see src/openapi/openapi.json).
+	const { getEnvironmentBannerPayload } = require('../lib/environmentBanner');
+	router.get('/banner', (req, res) => {
+		return res.status(200).json(getEnvironmentBannerPayload());
+	});
+
 	return router;
 }
 

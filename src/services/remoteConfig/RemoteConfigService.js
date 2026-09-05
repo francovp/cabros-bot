@@ -24,6 +24,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS: { type: 'number', defaultValue: 600000, integer: true, min: 1000, max: 86400000 },
 	TRADINGVIEW_MCP_PAGE_COOLDOWN_MS: { type: 'number', defaultValue: 3600000, integer: true, min: 1000, max: 86400000 },
 	ENABLE_MESSAGE_FOOTER_METADATA: { type: 'boolean', defaultValue: true },
+	ENABLE_ENVIRONMENT_BANNER: { type: 'boolean', defaultValue: true },
 	GROUNDING_MAX_SOURCES: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	GROUNDING_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 120000 },
 	GROUNDING_MAX_LENGTH: { type: 'number', defaultValue: 2000, integer: true, min: 1, max: 10000 },

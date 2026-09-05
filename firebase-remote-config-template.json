@@ -84,6 +84,13 @@
       "description": "Enable metadata footer on outgoing messages",
       "valueType": "BOOLEAN"
     },
+    "ENABLE_ENVIRONMENT_BANNER": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Stamp non-secret X-Cabros-* deployment headers on every HTTP response and surface an admin banner when environment !== production",
+      "valueType": "BOOLEAN"
+    },
     "GROUNDING_MAX_SOURCES": {
       "defaultValue": {
         "value": "3"
