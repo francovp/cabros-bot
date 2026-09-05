@@ -362,4 +362,31 @@ describe('Symbol analysis endpoint', () => {
 		expect(res.body.alertText).toContain('*ATR:* $4.00');
 		expect(res.body.alertText).toContain('- *Target sugerido:* $112.00');
 	});
+
+	it('persists symbol analysis result asynchronously when storage is enabled', async () => {
+		process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'true';
+		const symbolAnalysisStorageService = require('../../src/services/storage/SymbolAnalysisStorageService');
+		const recordSpy = jest.spyOn(symbolAnalysisStorageService, 'recordAnalysis').mockResolvedValue({ id: 'analysis-123' });
+
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: 100 },
+				technical_indicators: { rsi: 60 },
+			},
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'BINANCE:BTCUSDT',
+			exchange: 'BINANCE',
+			asset: 'BTCUSDT',
+			timeframe: '1D',
+		}));
+	});
 });

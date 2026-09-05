@@ -34,6 +34,9 @@
       "name": "Signal outcomes"
     },
     {
+      "name": "Symbol analyses"
+    },
+    {
       "name": "Operations"
     }
   ],
@@ -1428,6 +1431,133 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/symbol-analyses": {
+      "get": {
+        "tags": [
+          "Symbol analyses"
+        ],
+        "summary": "List recorded symbol analyses",
+        "description": "Query durably recorded symbol analysis results with pagination and filtering by symbol, exchange, timeframe, action, and date range.",
+        "operationId": "listSymbolAnalyses",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OutcomeLimit"
+          },
+          {
+            "$ref": "#/components/parameters/BeforeCursor"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeExchange"
+          },
+          {
+            "$ref": "#/components/parameters/SymbolAnalysisTimeframe"
+          },
+          {
+            "$ref": "#/components/parameters/SymbolAnalysisAction"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SymbolAnalysesList"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/symbol-analyses/summary": {
+      "get": {
+        "tags": [
+          "Symbol analyses"
+        ],
+        "summary": "Summarize recorded symbol analyses",
+        "description": "Query aggregated action breakdown and coverage metrics for recorded symbol analyses.",
+        "operationId": "summarizeSymbolAnalyses",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SymbolAnalysisSummaryLimit"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeExchange"
+          },
+          {
+            "$ref": "#/components/parameters/SymbolAnalysisTimeframe"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SymbolAnalysesSummaryResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/trading/binance/orders": {
       "get": {
         "tags": [
@@ -1917,6 +2047,39 @@
           ]
         },
         "description": "Filter by measurement window."
+      },
+      "SymbolAnalysisAction": {
+        "name": "action",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "BUY",
+            "SELL",
+            "NO_TRADE"
+          ]
+        },
+        "description": "Filter by analysis decision action (BUY, SELL, or NO_TRADE)."
+      },
+      "SymbolAnalysisTimeframe": {
+        "name": "timeframe",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "example": "1h",
+        "description": "Filter by chart timeframe (e.g. 15m, 1h, 4h, 1D)."
+      },
+      "SymbolAnalysisSummaryLimit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 500
+        },
+        "description": "Maximum number of recent symbol analyses to aggregate into the summary."
       },
       "JobListLimit": {
         "name": "limit",
@@ -2991,6 +3154,120 @@
                 },
                 "summary": {
                   "$ref": "#/components/schemas/OutcomesSummary"
+                }
+              }
+            }
+          }
+        }
+      },
+      "SymbolAnalysesList": {
+        "description": "Paginated list of recorded symbol analyses",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "analyses",
+                "count",
+                "limit"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "analyses": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SymbolAnalysisRecord"
+                  }
+                },
+                "count": {
+                  "type": "integer",
+                  "example": 1
+                },
+                "limit": {
+                  "type": "integer",
+                  "example": 50
+                },
+                "nextCursor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "example": null
+                }
+              }
+            }
+          }
+        }
+      },
+      "SymbolAnalysesSummaryResult": {
+        "description": "Aggregated summary of recorded symbol analyses",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "summary"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "summary": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "totalAnalyses",
+                    "byAction",
+                    "bySymbol",
+                    "byTimeframe",
+                    "byExchange",
+                    "window"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "totalAnalyses": {
+                      "type": "integer",
+                      "example": 10
+                    },
+                    "byAction": {
+                      "type": "object",
+                      "properties": {
+                        "BUY": {
+                          "type": "integer",
+                          "example": 5
+                        },
+                        "SELL": {
+                          "type": "integer",
+                          "example": 3
+                        },
+                        "NO_TRADE": {
+                          "type": "integer",
+                          "example": 2
+                        }
+                      }
+                    },
+                    "bySymbol": {
+                      "type": "object"
+                    },
+                    "byTimeframe": {
+                      "type": "object"
+                    },
+                    "byExchange": {
+                      "type": "object"
+                    },
+                    "window": {
+                      "type": "object"
+                    }
+                  }
                 }
               }
             }
@@ -4822,6 +5099,82 @@
             "type": "integer",
             "minimum": 0,
             "description": "Total endpoint execution time in milliseconds."
+          }
+        }
+      },
+      "SymbolAnalysisRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "requestId",
+          "recordedAt",
+          "expiresAt",
+          "symbol",
+          "exchange",
+          "timeframe",
+          "action"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "recordedAt": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL",
+              "NO_TRADE"
+            ]
+          },
+          "price": {
+            "type": "number",
+            "nullable": true
+          },
+          "rsi": {
+            "type": "number",
+            "nullable": true
+          },
+          "indicators": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "risk": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "analysisStatus": {
+            "type": "string"
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "alertText": {
+            "type": "string"
+          },
+          "processingTimeMs": {
+            "type": "integer"
           }
         }
       },
