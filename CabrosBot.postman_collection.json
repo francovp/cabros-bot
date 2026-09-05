@@ -3921,6 +3921,142 @@
       ]
     },
     {
+      "name": "Pre-Trade Check",
+      "description": "GET /api/pretrade-check composes a decision-support snapshot (current price + recent hit-rate) for a single symbol so a trader can decide without leaving the chat. Requires admin.viewer authorization (API key or Firebase bearer).",
+      "item": [
+        {
+          "name": "GET Pre-Trade Check (crypto)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Returns a pre-trade snapshot for BINANCE:BTCUSDT (current Binance price + 7-day hit-rate).",
+            "url": {
+              "raw": "{{baseUrl}}/api/pretrade-check?symbol=BINANCE:BTCUSDT",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pretrade-check"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BINANCE:BTCUSDT"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"pretradeCheck\": {\n    \"symbol\": \"BINANCE:BTCUSDT\",\n    \"normalized\": {\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"assetClass\": \"crypto\"\n    },\n    \"price\": {\n      \"available\": true,\n      \"price\": 65000,\n      \"assetClass\": \"crypto\",\n      \"symbol\": \"BTCUSDT\"\n    },\n    \"hitRate\": {\n      \"available\": true,\n      \"hitRatePercent\": 66.67,\n      \"winWindows\": 2,\n      \"evaluatedWindows\": 3,\n      \"sampleSize\": 5,\n      \"windowDays\": 7\n    },\n    \"requestId\": null,\n    \"generatedAt\": \"2026-08-30T12:00:00.000Z\",\n    \"durationMs\": 142\n  }\n}"
+            },
+            {
+              "name": "400 Invalid Symbol",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid symbol. Use a TradingView-style symbol like BINANCE:BTCUSDT or a bare ticker (BTCUSDT, NVDA).\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing API key\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Pre-Trade Check (equity)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Returns a pre-trade snapshot for NASDAQ:NVDA (current Twelve Data quote + 7-day hit-rate).",
+            "url": {
+              "raw": "{{baseUrl}}/api/pretrade-check?symbol=NASDAQ:NVDA",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pretrade-check"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "NASDAQ:NVDA"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"pretradeCheck\": {\n    \"symbol\": \"NASDAQ:NVDA\",\n    \"normalized\": {\n      \"symbol\": \"NVDA\",\n      \"exchange\": \"NASDAQ\",\n      \"assetClass\": \"equity\"\n    },\n    \"price\": {\n      \"available\": true,\n      \"price\": 450.12,\n      \"change\": 6.55,\n      \"percentChange\": 1.5,\n      \"currency\": \"USD\",\n      \"assetClass\": \"equity\",\n      \"symbol\": \"NVDA\",\n      \"exchange\": \"NASDAQ\"\n    },\n    \"hitRate\": {\n      \"available\": false,\n      \"reason\": \"Signal outcome tracking is disabled.\"\n    },\n    \"requestId\": null,\n    \"generatedAt\": \"2026-08-30T12:00:00.000Z\",\n    \"durationMs\": 87\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Pre-Trade Check (invalid limit)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "limit=2000 exceeds the 1000 max.",
+            "url": {
+              "raw": "{{baseUrl}}/api/pretrade-check?symbol=BINANCE:BTCUSDT&limit=2000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pretrade-check"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BINANCE:BTCUSDT"
+                },
+                {
+                  "key": "limit",
+                  "value": "2000"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Limit",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 1000.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Async Jobs",
       "item": [
         {
@@ -5459,7 +5595,7 @@
           ]
         },
         {
-          "name": "POST Binance order (dry-run LIMIT — demo env)",
+          "name": "POST Binance order (dry-run LIMIT \u2014 demo env)",
           "request": {
             "method": "POST",
             "header": [
@@ -5478,7 +5614,7 @@
               "mode": "raw",
               "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"LIMIT\",\n  \"quantity\": 0.001,\n  \"price\": 60000,\n  \"timeInForce\": \"GTC\",\n  \"dryRun\": true\n}"
             },
-            "description": "Dry-run LIMIT order validated against the Binance Demo Trading API (demo-api.binance.com). Requires BINANCE_TRADING_ENV=demo on the server. The demo environment mirrors live production market data and exchange filters exactly — use this for pre-live validation before switching to BINANCE_TRADING_ENV=live.",
+            "description": "Dry-run LIMIT order validated against the Binance Demo Trading API (demo-api.binance.com). Requires BINANCE_TRADING_ENV=demo on the server. The demo environment mirrors live production market data and exchange filters exactly \u2014 use this for pre-live validation before switching to BINANCE_TRADING_ENV=live.",
             "url": {
               "raw": "{{baseUrl}}/api/trading/binance/orders",
               "host": [
@@ -5500,7 +5636,7 @@
               "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"demo\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"LIMIT\",\n    \"quantity\": 0.001,\n    \"price\": 60000,\n    \"timeInForce\": \"GTC\",\n    \"newOrderRespType\": \"FULL\"\n  }\n}"
             },
             {
-              "name": "Error — feature disabled (ENABLE_BINANCE_TRADING=false)",
+              "name": "Error \u2014 feature disabled (ENABLE_BINANCE_TRADING=false)",
               "status": "Forbidden",
               "code": 403,
               "body": "{\n  \"success\": false,\n  \"code\": \"FEATURE_DISABLED\",\n  \"error\": \"Binance trading is disabled\"\n}"

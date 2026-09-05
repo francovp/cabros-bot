@@ -1616,6 +1616,46 @@ Query aggregated performance and coverage metrics for recorded signal outcomes, 
 }
 ```
 
+#### GET /api/pretrade-check
+
+Compose a pre-trade decision-support snapshot for a single symbol by aggregating current price (Binance for crypto, Twelve Data for supported equity venues) and a recent (last 7 days) hit-rate from evaluated signal outcomes. The endpoint is fail-open: missing price or outcome data is reported under `price.reason` / `hitRate.reason` rather than failing the whole call. Companion to the Telegram `/check <symbol>` command. Requires `x-api-key` header (or `api-key` query parameter) or Firebase ****** with `admin.viewer` or `admin.operator` role.
+
+**Query Parameters:**
+- `symbol` (required) — TradingView-style symbol (`BINANCE:BTCUSDT`), bare crypto ticker (`BTCUSDT`), or supported equity symbol (`NVDA` via `symbol=NASDAQ:NVDA`)
+- `limit` (optional) — Maximum number of evaluated outcomes to read when computing the 7-day hit-rate (integer between `1` and `1000`, default: `200`)
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "pretradeCheck": {
+    "symbol": "BINANCE:BTCUSDT",
+    "normalized": {
+      "symbol": "BTCUSDT",
+      "exchange": "BINANCE",
+      "assetClass": "crypto"
+    },
+    "price": {
+      "available": true,
+      "price": 65000,
+      "assetClass": "crypto",
+      "symbol": "BTCUSDT"
+    },
+    "hitRate": {
+      "available": true,
+      "hitRatePercent": 66.67,
+      "winWindows": 2,
+      "evaluatedWindows": 3,
+      "sampleSize": 5,
+      "windowDays": 7
+    },
+    "requestId": null,
+    "generatedAt": "2026-08-30T12:00:00.000Z",
+    "durationMs": 142
+  }
+}
+```
+
 ## Multi-Channel Alerts (002)
 
 The alert webhook system supports simultaneous delivery to multiple channels (Telegram, WhatsApp, and Discord) with independent retry logic and graceful degradation.
