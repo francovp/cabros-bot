@@ -3,6 +3,23 @@
 const crypto = require('crypto');
 const { getValidApiKeys } = require('./auth');
 
+// Remote Config lookup is optional and loaded lazily so the rate limiter
+// can run during early request handling before Firebase Admin has finished
+// initializing. Remote Config only exposes RATE_LIMIT_API_KEY_MAX (the
+// authenticated-caller per-window budget); the bucket fingerprint secret
+// and the API-key list itself remain environment-controlled.
+let remoteConfigService = null;
+function getRemoteConfigService() {
+	if (remoteConfigService) return remoteConfigService;
+	try {
+		// eslint-disable-next-line global-require
+		remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
+	} catch (_) {
+		remoteConfigService = { getEnvironmentConfig: () => ({}) };
+	}
+	return remoteConfigService;
+}
+
 const rateLimit = new Map();
 // Store: bucketKey -> { count, resetTime }
 
@@ -31,6 +48,31 @@ function readPositiveInteger(name, fallback) {
 	}
 
 	return value;
+}
+
+// Remote Config–aware lookup for select rate-limit settings. Only
+// non-secret, request-time tuning is honored. The bucket fingerprint secret
+// and the API-key list itself are environment-only and never read here.
+function readRemoteOrPositiveInteger(name, envFallback) {
+	const remoteConfig = getRemoteConfigService();
+	let remoteValue = null;
+	try {
+		const runtime = typeof remoteConfig.getRuntimeConfig === 'function'
+			? remoteConfig.getRuntimeConfig()
+			: null;
+		if (runtime && Object.prototype.hasOwnProperty.call(runtime, name)) {
+			const candidate = runtime[name];
+			if (Number.isFinite(candidate) && Number.isSafeInteger(candidate) && candidate >= 0) {
+				remoteValue = candidate;
+			}
+		}
+	} catch (_) {
+		remoteValue = null;
+	}
+	const envValue = readPositiveInteger(name, 0);
+	if (remoteValue !== null && remoteValue > 0) return remoteValue;
+	if (envValue > 0) return envValue;
+	return envFallback;
 }
 
 // Resolve a per-process HMAC secret for API-key fingerprinting so the bucket
@@ -143,7 +185,7 @@ function rateLimiter(req, res, next) {
 	const maxRequests = (() => {
 		if (isWebhookIngest) return WEBHOOK_MAX_REQUESTS;
 		if (hasApiKey) {
-			const explicit = readPositiveInteger('RATE_LIMIT_API_KEY_MAX', 0);
+			const explicit = readRemoteOrPositiveInteger('RATE_LIMIT_API_KEY_MAX', 0);
 			if (explicit > 0) return explicit;
 		}
 		return readPositiveInteger('RATE_LIMIT_MAX', DEFAULT_MAX_REQUESTS);

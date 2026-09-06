@@ -422,5 +422,75 @@ describe('Rate Limiter Middleware', () => {
 			rateLimiter(authReq, resBlocked, jest.fn());
 			expect(resBlocked.statusCode).toBe(429);
 		});
+
+		test('honors Remote Config override of RATE_LIMIT_API_KEY_MAX', () => {
+			jest.isolateModules(() => {
+				// Re-require the limiter inside an isolated module registry so this test
+				// can patch the RemoteConfigService without leaking state to other tests.
+				const isolatedRateLimiter = require('../../src/lib/rateLimiter');
+				const isolatedHttpMocks = require('node-mocks-http');
+				const remoteConfigModule = require('../../src/services/remoteConfig/RemoteConfigService');
+				const runtimeSpy = jest
+					.spyOn(remoteConfigModule, 'getRuntimeConfig')
+					.mockReturnValue({ RATE_LIMIT_API_KEY_MAX: 1 });
+
+				try {
+					process.env.WEBHOOK_API_KEY = 'super-secret';
+					delete process.env.RATE_LIMIT_API_KEY_MAX;
+					process.env.RATE_LIMIT_MAX = '5';
+					isolatedRateLimiter.enableTestMode();
+					isolatedRateLimiter.reset();
+
+					const authReq = isolatedHttpMocks.createRequest({
+						method: 'POST',
+						url: '/api/test',
+						ip: '203.0.113.10',
+						headers: { 'x-api-key': 'super-secret' },
+					});
+
+					isolatedRateLimiter(authReq, isolatedHttpMocks.createResponse(), jest.fn());
+					const resBlocked = isolatedHttpMocks.createResponse();
+					isolatedRateLimiter(authReq, resBlocked, jest.fn());
+					expect(resBlocked.statusCode).toBe(429);
+				} finally {
+					runtimeSpy.mockRestore();
+					isolatedRateLimiter.disableTestMode();
+				}
+			});
+		});
+
+		test('falls back to env RATE_LIMIT_API_KEY_MAX when Remote Config returns 0', () => {
+			jest.isolateModules(() => {
+				const isolatedRateLimiter = require('../../src/lib/rateLimiter');
+				const isolatedHttpMocks = require('node-mocks-http');
+				const remoteConfigModule = require('../../src/services/remoteConfig/RemoteConfigService');
+				const runtimeSpy = jest
+					.spyOn(remoteConfigModule, 'getRuntimeConfig')
+					.mockReturnValue({ RATE_LIMIT_API_KEY_MAX: 0 });
+
+				try {
+					process.env.WEBHOOK_API_KEY = 'super-secret';
+					process.env.RATE_LIMIT_API_KEY_MAX = '1';
+					process.env.RATE_LIMIT_MAX = '5';
+					isolatedRateLimiter.enableTestMode();
+					isolatedRateLimiter.reset();
+
+					const authReq = isolatedHttpMocks.createRequest({
+						method: 'POST',
+						url: '/api/test',
+						ip: '203.0.113.10',
+						headers: { 'x-api-key': 'super-secret' },
+					});
+
+					isolatedRateLimiter(authReq, isolatedHttpMocks.createResponse(), jest.fn());
+					const resBlocked = isolatedHttpMocks.createResponse();
+					isolatedRateLimiter(authReq, resBlocked, jest.fn());
+					expect(resBlocked.statusCode).toBe(429);
+				} finally {
+					runtimeSpy.mockRestore();
+					isolatedRateLimiter.disableTestMode();
+				}
+			});
+		});
 	});
 });
