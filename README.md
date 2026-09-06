@@ -220,9 +220,10 @@ pnpm test:firebase
 - `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default). Core `/api/webhook/alert` and `/api/webhook/message` ingest uses an isolated finite bucket of 1,000 requests per window so TradingView bursts do not consume the ordinary client bucket; API-key validation still applies.
 - `RATE_LIMIT_API_KEY_MAX` - Optional per-window maximum for authenticated (`x-api-key`) callers. Defaults to `RATE_LIMIT_MAX` when unset. Lets operators grant trusted API keys a different per-window budget than anonymous traffic (issue #692).
 - `WEBHOOK_API_KEYS` - Optional comma-separated list of additional accepted webhook API keys. Each key receives its own rate-limit bucket so distinct consumers cannot exhaust each other's budget (issue #692). Single `WEBHOOK_API_KEY` is still supported.
+- `RATE_LIMIT_FINGERPRINT_SECRET` - Optional 32+ char random string used as the HMAC secret that derives the API-key bucket fingerprint. When unset, a per-process random secret is generated at startup (bucket keys remain non-reversible but do not survive process restarts); set this in production for stable bucket identities across deploys and to satisfy CodeQL "insufficient computational effort" guidance (issue #692).
 
-Behind a trusted proxy (`TRUST_PROXY` truthy or `RENDER`/`VERCEL`/`RAILWAY_ENVIRONMENT_NAME` set), unauthenticated traffic falls back to a `client-ip|user-agent` fingerprint instead of the proxy IP alone, so a single noisy caller no longer exhausts the limit for everyone sharing the proxy (issue #692).
-- `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
+Behind a trusted proxy (`TRUST_PROXY` truthy or `RENDER`/`VERCEL`/`RAILWAY_ENVIRONMENT_NAME` set), `req.ip` already reflects the proxy-decided client IP — the limiter uses that trusted IP alone for anonymous traffic. User-Agent is intentionally **not** part of the bucket key so an attacker cannot rotate it to mint fresh buckets and bypass the limit (issue #692).
+- `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production). The logger automatically masks sensitive plain-object keys, bare-scalar secrets preceded by sensitive labels, URL query secrets, embedded JSON strings, Authorization/****** Telegram bot tokens, Discord webhook tokens, OpenAI keys, and dynamically registered request-scoped secrets via `registerSecretValue` / `clearSecretValue`.
 - `SERVICE_NAME` - Optional service name included in JSON logs (default: package name or `cabros-bot`)
 
 #### News Monitoring (003-news-monitor)
@@ -836,7 +837,7 @@ The endpoint stops analysis at `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` (default 60 
     "delivered": 1
   },
   "requestId": "req-abc123",
-  "totalDurationMs": 1200
+  "processingTimeMs": 1200
 }
 ```
 
@@ -872,7 +873,9 @@ Run TradingView MCP `volume_confirmation_analysis` on demand and return structur
       "volume_ratio": 1.7,
       "volume_strength": "HIGH"
     }
-  }
+  },
+  "requestId": "req-vol-123",
+  "processingTimeMs": 310
 }
 ```
 
@@ -956,7 +959,7 @@ Execute multiple market scanner tools on the TradingView MCP server (such as top
   "includeMultiTimeframe": true,
   "timeoutMs": 90000,
   "requestId": "req-xyz789",
-  "totalDurationMs": 1450
+  "processingTimeMs": 1450
 }
 ```
 
@@ -1174,6 +1177,7 @@ List stored alerts ordered by `receivedAt` descending.
 - `before` - Either a legacy ISO-8601 timestamp cursor or the opaque `nextBefore` token from a previous response
 - `source` - Optional source filter. Valid values include `webhook`, `news-monitor`, `market-scanner`, and `expanded-analysis`.
 - `enriched` - Optional boolean filter (`true` or `false`)
+- `include` - Optional projection filter. Allowed value: `enrichment_summary`. When set, each returned alert item includes a sanitized `enrichmentSummary` projection object (with `sentiment`, `sentiment_score`, `setup_type`, `invalidation_level`, `target_level`, `risk_reward_ratio`, `sourceCount`, `sourceDomains`, `tradingViewEnrichmentApplied`, `tradingViewEnrichmentStatus`, and `promptProvenance`) and a sanitized `enrichmentData` payload without requiring N+1 detail fetches.
 
 **Response (200 OK):**
 ```json
