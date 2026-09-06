@@ -125,3 +125,51 @@ When designing cross-channel features, ensure the business layer does not contai
 - Pattern-Key: arch.adapter_pattern
 
 ---
+
+## [LRN-20260906-001] correction
+
+**Logged**: 2026-09-06T22:30:00Z
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+PR lacks acceptance criteria and scope too large for automation
+
+### Details
+@gigachad-senior-dev evaluated PR #1089 (idempotency middleware mounting on volume-confirmation and symbol-analysis webhooks) with `automation/skip` and Score 15/100. Feedback: "Feature/enhancement missing acceptance criteria" and "Scope is too large for a single automated pass." The PR mounts middleware on 2 endpoints, adds integration tests for both, and updates OpenAPI + Postman contracts.
+
+### Suggested Action
+For future middleware/infra PRs: define concrete acceptance criteria upfront (BDD-style scenarios or contract tests). Consider decomposing cross-cutting changes into smaller, independently automatable PRs (one endpoint at a time, then contract updates). Understand the automation readiness threshold for infra changes.
+
+### Metadata
+- Source: user_feedback
+- Related Files: AGENTS.md
+- Tags: automation, acceptance_criteria, scope, trainee
+- Pattern-Key: automation.acceptance_criteria
+
+---
+
+## [LRN-20260906-002] correction
+
+**Logged**: 2026-09-06T22:30:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: infra
+
+### Summary
+Railway preview stale commit blocks verification
+
+### Details
+PR #696 (/precio Binance enrichment) has been blocked for weeks by Railway preview serving stale commit (dcdf7a9) while PR head advances (b1cfc10). Railway health checks pass but deployed code doesn't match PR head. This prevents verification of Telegram command-only changes via HTTP smoke tests.
+
+### Suggested Action
+Investigate Railway preview deployment configuration — ensure it builds from PR head commit, not cached build. For Telegram command-only PRs, establish alternative verification strategy (integration test against preview webhook, manual QA checklist). Consider codifying "preview verification" as a reusable workflow.
+
+### Metadata
+- Source: conversation
+- Related Files: AGENTS.md
+- Tags: railway, preview, deployment, verification, trainee
+- Pattern-Key: infra.preview_verification
+
+---
