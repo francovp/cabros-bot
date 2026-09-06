@@ -142,7 +142,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['overview', 'status', 'alerts', 'presets', 'jobs', 'analysis', 'playground'].forEach((view) => {
+	['overview', 'status', 'alerts', 'outcomes', 'presets', 'jobs', 'analysis', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -1677,6 +1677,149 @@ describe('admin browser client', () => {
 		await flush();
 		expect(statusCalls).toBe(1);
 	});
+	it('renders the single-symbol analysis verdict with badges, confidence meter, risk levels, indicators, and report preview', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:BTCUSDT',
+						exchange: 'BINANCE',
+						asset: 'BTCUSDT',
+						timeframe: '1D',
+						analysisStatus: 'complete',
+						alertText: 'BTCUSDT Analysis: Bullish breakout above 65000',
+						analysis: {
+							price_data: { current_price: 65000 },
+							volume_analysis: { volume_ratio: 2.1, volume_strength: 'HIGH' },
+							technical_indicators: {
+								RSI: 62.5,
+								MACD: 'BULLISH',
+								BB_position: 'UPPER',
+								ATR: 1200,
+								ADX: 28,
+								SMA20: 63500,
+							},
+							risk: {
+								entry_price: 65000,
+								stop_loss: 63000,
+								target: 69000,
+								risk_reward_ratio: 2,
+								valid: true,
+							},
+							decision: {
+								action: 'BUY',
+								confidence: 0.82,
+								reasons: ['Confluencia: BUY', 'RSI: 62.5', 'Tendencia: BULLISH'],
+								warnings: [],
+								dataSufficient: true,
+							},
+							multi_timeframe: {
+								'4h': { trend: 'BULLISH' },
+								'1W': { trend: 'NEUTRAL' },
+							},
+						},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		expect(form).toBeDefined();
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('symbol-analysis-result'));
+		expect(verdict).toBeDefined();
+		expect(verdict.textContent).toContain('BUY');
+		expect(verdict.textContent).toContain('Status: Complete');
+		expect(verdict.textContent).toContain('BINANCE:BTCUSDT · 1D');
+		expect(verdict.textContent).toContain('82% confidence');
+		expect(verdict.textContent).toContain('Decision reasons');
+		expect(verdict.textContent).toContain('Confluencia: BUY');
+		expect(verdict.textContent).toContain('Price & Risk Levels');
+		expect(verdict.textContent).toContain('Entry Price');
+		expect(verdict.textContent).toContain('Stop Loss');
+		expect(verdict.textContent).toContain('Target');
+		expect(verdict.textContent).toContain('2:1');
+		expect(verdict.textContent).toContain('Technical Indicators');
+		expect(verdict.textContent).toContain('RSI: 62.5');
+		expect(verdict.textContent).toContain('Volume Ratio: 2.1x');
+		expect(verdict.textContent).toContain('Volume Strength: HIGH');
+		expect(verdict.textContent).toContain('Multi-timeframe Analysis');
+		expect(verdict.textContent).toContain('4h: BULLISH');
+		expect(verdict.textContent).toContain('Report preview');
+		expect(verdict.textContent).toContain('BTCUSDT Analysis: Bullish breakout above 65000');
+		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
+	});
+
+	it('renders NO_TRADE decision action and warning chips when data is insufficient or neutral', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:ETHUSDT',
+						timeframe: '4h',
+						analysis: {
+							decision: {
+								action: 'NO_TRADE',
+								confidence: 0.3,
+								dataSufficient: false,
+								reasons: [],
+								warnings: ['Falta el RSI para una decisión accionable.', 'El riesgo calculado no tiene niveles direccionales válidos.'],
+							},
+						},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('symbol-analysis-result'));
+		expect(verdict).toBeDefined();
+		expect(verdict.textContent).toContain('NO_TRADE');
+		expect(verdict.textContent).toContain('Insufficient data');
+		expect(verdict.textContent).toContain('30% confidence');
+		expect(verdict.textContent).toContain('Warnings');
+		expect(verdict.textContent).toContain('Falta el RSI para una decisión accionable.');
+	});
+
+	it('renders error response and status code on symbol-analysis failure', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({ success: false, error: 'TradingView MCP service unavailable' }, 502);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		await form.dispatch('submit');
+		await flush();
+
+		const errorBlock = find(form, (node) => node.className.includes('response-error'));
+		expect(errorBlock).toBeDefined();
+		expect(errorBlock.textContent).toContain('502');
+		expect(errorBlock.textContent).toContain('TradingView MCP service unavailable');
+		const verdict = find(form, (node) => node.className.includes('symbol-analysis-result'));
+		expect(verdict).toBeUndefined();
+	});
 
 	it('renders the volume confirmation verdict with a ratio meter', async () => {
 		const browser = createBrowser({
@@ -2702,9 +2845,294 @@ describe('admin browser client', () => {
 		expect(find(summaryForm, (node) => node.tagName === 'PRE' && node.textContent.includes('totalAlerts'))).toBeUndefined();
 		expect(summaryForm.textContent).toContain('Filters changed');
 	});
+
+	it('renders dedicated outcomes filters and follows the returned before cursor', async () => {
+		let outcomesPage = 0;
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				if (url.startsWith('/api/outcomes')) {
+					outcomesPage++;
+					return response({
+						success: true,
+						outcomes: [
+							{
+								id: `doc-${outcomesPage}`,
+								symbol: 'BTCUSDT',
+								exchange: 'BINANCE',
+								side: 'BUY',
+								price: 65000,
+								outcomeEvaluated: true,
+								outcomes: {
+									'1h': { status: 'evaluated', return: 1.5, rMultiple: 0.5, maxFavorableExcursion: 2.0, maxAdverseExcursion: -0.2, firstHit: 'target' },
+								},
+							},
+						],
+						pagination: outcomesPage === 1
+							? { hasMore: true, nextBefore: 'cursor-outcome-2' }
+							: { hasMore: false },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'outcomes');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/outcomes');
+		expect(listForm).toBeDefined();
+		expect(listForm.elements.limit).toBeDefined();
+		expect(listForm.elements.before).toBeDefined();
+		expect(listForm.elements.symbol).toBeDefined();
+		expect(listForm.elements.exchange).toBeDefined();
+		expect(listForm.elements.status).toBeDefined();
+		expect(listForm.elements.window).toBeDefined();
+		expect(listForm.elements.from).toBeDefined();
+		expect(listForm.elements.to).toBeDefined();
+
+		listForm.elements.limit.value = '25';
+		listForm.elements.symbol.value = 'BTCUSDT';
+		listForm.elements.exchange.value = 'BINANCE';
+		listForm.elements.status.value = 'evaluated';
+		listForm.elements.window.value = '1h';
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/outcomes?limit=25&symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h');
+		expect(listForm.textContent).toContain('1 outcomes on this page');
+		expect(listForm.textContent).toContain('BTCUSDT · BINANCE');
+
+		const nextButton = findButton(listForm, 'Next page');
+		expect(nextButton.disabled).toBe(false);
+		await nextButton.dispatch('click');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/outcomes?limit=25&before=cursor-outcome-2&symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h');
+
+		const prevButton = findButton(listForm, 'Previous page');
+		expect(prevButton.disabled).toBe(false);
+		await prevButton.dispatch('click');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/outcomes?limit=25&symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h');
+	});
+
+	it('renders dedicated outcomes summary query and builds metrics dashboard', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				if (url.startsWith('/api/outcomes/summary')) {
+					return response({
+						success: true,
+						summary: {
+							totalSignalsReceived: 10,
+							totalSignalsEligible: 8,
+							totalSignalsEvaluated: 6,
+							totalSignalsPending: 2,
+							winRatePercent: 75,
+							expectancyR: 1.25,
+							averageReturnPercent: 2.34,
+							averageMfePercent: 3.5,
+							averageMaePercent: -0.8,
+							windows: {
+								'1h': {
+									totalSignals: 6,
+									hitRatePercent: 66.67,
+									targetHitRatePercent: 50.0,
+									stopHitRatePercent: 16.67,
+									expectancyR: 1.1,
+									averageReturnPercent: 1.8,
+									averageMfePercent: 2.5,
+									averageMaePercent: -0.5,
+								},
+							},
+						},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'outcomes');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/outcomes/summary');
+		expect(summaryForm).toBeDefined();
+		summaryForm.elements.symbol.value = 'ETHUSDT';
+		summaryForm.elements.status.value = 'evaluated';
+		await summaryForm.dispatch('submit');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/outcomes/summary?limit=50&symbol=ETHUSDT&status=evaluated');
+		expect(summaryForm.textContent).toContain('Hit rate');
+		expect(summaryForm.textContent).toContain('75%');
+		expect(summaryForm.textContent).toContain('Average return');
+		expect(summaryForm.textContent).toContain('+2.34%');
+		expect(summaryForm.textContent).toContain('Performance by window');
+		expect(summaryForm.textContent).toContain('66.67%');
+	});
+
+	it('safely renders outcome cards with excursions, barriers, and expandable detail', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/outcomes')) {
+					return response({
+						success: true,
+						outcomes: [
+							{
+								id: 'outcome-detail-doc-1',
+								requestId: 'req-abc-123',
+								source: 'market-scanner',
+								symbol: 'SOLUSDT',
+								exchange: 'BINANCE',
+								assetClass: 'crypto',
+								timeframe: '4h',
+								setupType: 'breakout',
+								score: 85,
+								side: 'BUY',
+								price: 145.5,
+								stop: 140.0,
+								target: 155.0,
+								entryPriceSource: 'binance',
+								marketDataProvider: 'binance',
+								eligibilityState: 'supported_provider',
+								outcomeEvaluated: true,
+								outcomes: {
+									'1h': { status: 'evaluated', return: 2.1, rMultiple: 0.8, maxFavorableExcursion: 3.2, maxAdverseExcursion: -0.4, firstHit: 'target', price: 148.5 },
+									'4h': { status: 'pending' },
+									'1D': { status: 'unavailable', reason: 'market closed' },
+								},
+								tokenUsage: { inputTokens: 120, outputTokens: 60, totalTokens: 180, totalCost: 0.0005 },
+								processingTimeMs: 250,
+							},
+						],
+						pagination: { hasMore: false },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'outcomes');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/outcomes');
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('SOLUSDT · BINANCE');
+		expect(listForm.textContent).toContain('BUY');
+		expect(listForm.textContent).toContain('Evaluated');
+		expect(listForm.textContent).toContain('Score: 85');
+		expect(listForm.textContent).toContain('145.5');
+		expect(listForm.textContent).toContain('+2.10%');
+		expect(listForm.textContent).toContain('+0.80R');
+		expect(listForm.textContent).toContain('+3.20% / -0.40%');
+		expect(listForm.textContent).toContain('First: target');
+
+		const detailButton = findButton(listForm, 'Show detail');
+		expect(detailButton).toBeDefined();
+		await detailButton.dispatch('click');
+		await flush();
+
+		expect(detailButton.textContent).toBe('Hide detail');
+		expect(listForm.textContent).toContain('req-abc-123');
+		expect(listForm.textContent).toContain('market-scanner');
+		expect(listForm.textContent).toContain('180 total');
+		expect(listForm.textContent).toContain('250 ms');
+	});
+
+	it('handles 403 FEATURE_DISABLED and 503 STORAGE_UNAVAILABLE cleanly on outcomes requests', async () => {
+		let currentStatus = 403;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/outcomes')) {
+					return response({
+						error: currentStatus === 403 ? 'Feature disabled' : 'Storage unavailable',
+						code: currentStatus === 403 ? 'FEATURE_DISABLED' : 'STORAGE_UNAVAILABLE',
+					}, currentStatus);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'outcomes');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/outcomes');
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('HTTP 403');
+		expect(listForm.textContent).toContain('FEATURE_DISABLED');
+
+		currentStatus = 503;
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('HTTP 503');
+		expect(listForm.textContent).toContain('STORAGE_UNAVAILABLE');
+	});
+
+	it('invalidates pending outcomes list and summary responses when filters change', async () => {
+		let releaseList;
+		let releaseSummary;
+		const slowList = new Promise((resolve) => { releaseList = resolve; });
+		const slowSummary = new Promise((resolve) => { releaseSummary = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/outcomes/summary')) {
+					return slowSummary.then(() => response({ success: true, summary: { totalSignalsReceived: 5 } }));
+				}
+				if (url.startsWith('/api/outcomes')) {
+					return slowList.then(() => response({ success: true, outcomes: [{ id: 'doc-stale', symbol: 'BTCUSDT' }] }));
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'outcomes');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/outcomes');
+		const listButton = findButton(listForm, 'Load outcomes');
+		const listSubmit = listForm.dispatch('submit');
+		await flush();
+
+		listForm.elements.symbol.value = 'XRPUSDT';
+		await listForm.elements.symbol.dispatch('input');
+
+		expect(listButton.disabled).toBe(false);
+		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
+
+		releaseList();
+		await flush();
+		await listSubmit;
+		expect(listForm.textContent).toContain('Filters changed');
+		expect(listForm.textContent).not.toContain('doc-stale');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/outcomes/summary');
+		const summaryButton = findButton(summaryForm, 'Load outcomes summary');
+		const summarySubmit = summaryForm.dispatch('submit');
+		await flush();
+
+		summaryForm.elements.symbol.value = 'ADAUSDT';
+		await summaryForm.elements.symbol.dispatch('input');
+
+		expect(summaryButton.disabled).toBe(false);
+
+		releaseSummary();
+		await flush();
+		await summarySubmit;
+		expect(summaryForm.textContent).toContain('Filters changed');
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
-		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);
+		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(8);
 		expect(shell).not.toMatch(/[⌂◈◉◇◌✦▷]/);
 	});
 });

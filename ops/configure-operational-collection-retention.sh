@@ -2,10 +2,12 @@
 # configure-operational-collection-retention.sh
 #
 # Enables Firestore native TTL deletion on the `expiresAt` field for the
-# two operational collections that accumulate expired documents indefinitely:
+# operational collections that accumulate expired documents indefinitely:
 #
 #   - idempotency_keys  (ENABLE_FIRESTORE_IDEMPOTENCY)
 #   - news-monitor-dedup (ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP)
+#   - notificationDeadLetters (ENABLE_NOTIFICATION_REDRIVE)
+#   - tradingSignalOutcomes (ENABLE_SIGNAL_OUTCOME_TRACKING)
 #
 # Run once per Firebase project. Safe to re-run: enabling TTL on a field that
 # already has TTL enabled is a no-op.
@@ -14,7 +16,7 @@
 #   FIREBASE_PROJECT_ID=my-project bash ops/configure-operational-collection-retention.sh
 #
 # Optional: also backfill legacy documents that pre-date the expiresAt field
-# (the two collections always write expiresAt on creation, so this is a safety
+# (these collections always write expiresAt on creation, so this is a safety
 # measure for documents written by an older version of the service):
 #
 #   BACKFILL=true FIREBASE_PROJECT_ID=my-project bash ops/configure-operational-collection-retention.sh
@@ -38,7 +40,7 @@ if [[ "$BACKFILL" == "true" ]]; then
 	FIREBASE_PROJECT_ID="$project" node ops/backfill-operational-collection-retention.js
 fi
 
-for collection_group in idempotency_keys news-monitor-dedup; do
+for collection_group in idempotency_keys news-monitor-dedup notificationDeadLetters tradingSignalOutcomes; do
 	echo "Enabling TTL on expiresAt for collection group: $collection_group"
 	gcloud firestore fields ttls update expiresAt \
 		--collection-group="$collection_group" \
@@ -46,4 +48,4 @@ for collection_group in idempotency_keys news-monitor-dedup; do
 		--project="$project"
 done
 
-echo "Done. Firestore will now auto-delete expired documents in idempotency_keys and news-monitor-dedup."
+echo "Done. Firestore will now auto-delete expired documents in idempotency_keys, news-monitor-dedup, notificationDeadLetters, and tradingSignalOutcomes."

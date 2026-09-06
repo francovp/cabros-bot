@@ -1,6 +1,8 @@
 jest.mock('../../src/services/jobs/JobService', () => ({
 	jobService: {
 		createJob: jest.fn(),
+		listJobs: jest.fn(),
+		getJob: jest.fn(),
 	},
 }));
 
@@ -28,10 +30,12 @@ const {
 	cryptoBotCmd,
 	expandedAnalysisCmd,
 	marketScannerCmd,
+	jobsCommand,
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
 	buildHelpMessage,
+	getTelegramCommandMenu,
 	parseCommandArgs,
 } = require('../../src/controllers/commands');
 
@@ -78,6 +82,7 @@ describe('Telegram TradingView commands', () => {
 			{
 				type: 'expanded-analysis',
 				symbols: ['BINANCE:BTCUSDT', 'NASDAQ:NVDA'],
+				telegramChatId: '123',
 				timeframe: '1D',
 				includeMultiTimeframe: true,
 				timeoutMs: 300000,
@@ -102,6 +107,7 @@ describe('Telegram TradingView commands', () => {
 			{
 				type: 'market-scanner',
 				scans: ['top_gainers', 'top_losers'],
+				telegramChatId: '123',
 				exchange: 'BINANCE',
 				timeframe: '4h',
 				limit: 7,
@@ -111,6 +117,105 @@ describe('Telegram TradingView commands', () => {
 			{ telegram: context.telegram },
 		);
 		expect(context.reply).toHaveBeenCalledWith('Job job-2 creado para market-scanner. Estado: pending.');
+	});
+
+	describe('jobsCommand', () => {
+		it('lists recent bounded job summaries', async () => {
+			jobService.listJobs.mockResolvedValue([
+				{
+					jobId: 'job-1',
+					type: 'expanded-analysis',
+					status: 'processing',
+					progress: { current: 1, total: 2 },
+				},
+			]);
+			const context = buildContext('/jobs');
+
+			await jobsCommand(context);
+
+			expect(jobService.listJobs).toHaveBeenCalledWith({
+				limit: expect.any(Number),
+				telegramChatId: '123',
+				signal: expect.any(AbortSignal),
+			});
+			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('job-1'));
+			expect(context.reply.mock.calls[0][0]).toContain('1/2');
+		});
+
+		it('renders a job status and completed result summary', async () => {
+			jobService.getJob.mockResolvedValue({
+				jobId: 'job-2',
+				type: 'market-scanner',
+				status: 'completed',
+				progress: { current: 2, total: 2 },
+				summary: { totalScans: 2, success: 2, totalItems: 8, delivered: 1 },
+				deliveryResults: [{ channel: 'telegram', success: true }],
+			});
+			const context = buildContext('/jobs job-2');
+
+			await jobsCommand(context);
+
+			expect(jobService.getJob).toHaveBeenCalledWith('job-2', {
+				telegramChatId: '123',
+				signal: expect.any(AbortSignal),
+			});
+			expect(context.reply.mock.calls[0][0]).toEqual(expect.stringContaining('completado'));
+			expect(context.reply.mock.calls[0][0]).toEqual(expect.stringContaining('8'));
+			expect(context.reply.mock.calls[0][0]).toContain('Entrega: OK.');
+		});
+
+		it('renders processing and failed job states', async () => {
+			jobService.getJob
+				.mockResolvedValueOnce({
+					jobId: 'job-pending',
+					type: 'expanded-analysis',
+					status: 'processing',
+					progress: { current: 1, total: 3 },
+				})
+				.mockResolvedValueOnce({
+					jobId: 'job-failed',
+					type: 'expanded-analysis',
+					status: 'failed',
+					error: 'MCP timeout',
+				});
+
+			const pendingContext = buildContext('/jobs job-pending');
+			const failedContext = buildContext('/jobs job-failed');
+			await jobsCommand(pendingContext);
+			await jobsCommand(failedContext);
+
+			expect(pendingContext.reply.mock.calls[0][0]).toContain('procesando (1/3)');
+			expect(failedContext.reply.mock.calls[0][0]).toContain('Error: MCP timeout.');
+		});
+
+		it('handles expired or unknown jobs without throwing', async () => {
+			jobService.getJob.mockResolvedValue(null);
+			const context = buildContext('/jobs expired-job');
+
+			await expect(jobsCommand(context)).resolves.not.toThrow();
+			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('No encontré el job'));
+		});
+
+		it('fails open when job storage is unavailable', async () => {
+			jobService.listJobs.mockRejectedValue(new Error('Firestore unavailable'));
+			const context = buildContext('/jobs');
+
+			await expect(jobsCommand(context)).resolves.not.toThrow();
+			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('No pude consultar los jobs'));
+		});
+
+		it('fails open when job storage stalls past the read deadline', async () => {
+			jest.useFakeTimers();
+			jobService.listJobs.mockImplementation(() => new Promise(() => {}));
+			const context = buildContext('/jobs');
+
+			const command = jobsCommand(context);
+			await jest.advanceTimersByTimeAsync(8000);
+			await command;
+
+			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('No pude consultar los jobs'));
+			jest.useRealTimers();
+		});
 	});
 
 	it('returns clear validation errors from job commands', async () => {
@@ -152,6 +257,27 @@ describe('Telegram TradingView commands', () => {
 	});
 
 	describe('helpCmd and buildHelpMessage', () => {
+		it('builds a Telegram command menu from the same inventory as help', () => {
+			const menu = getTelegramCommandMenu();
+
+			expect(menu).toEqual([
+				{ command: 'precio', description: 'Consulta el precio en Binance o Twelve Data' },
+				{ command: 'cryptobot', description: 'Muestra el Chat ID actual de Telegram' },
+				{ command: 'analisis', description: 'Crea un análisis técnico en TradingView' },
+				{ command: 'scanner', description: 'Escaneo de mercado en TradingView' },
+				{ command: 'noticias', description: 'Monitor y análisis de noticias con IA' },
+				{ command: 'outcomes', description: 'Rendimiento reciente de señales evaluadas' },
+				{ command: 'help', description: 'Muestra este mensaje de ayuda' },
+				{ command: 'start', description: 'Muestra este mensaje de ayuda' },
+			]);
+			const helpMessage = buildHelpMessage();
+
+			menu.forEach(({ command, description }) => {
+				expect(helpMessage).toContain(`/${command}`);
+				expect(helpMessage).toContain(description);
+			});
+		});
+
 		it('buildHelpMessage returns MarkdownV2 formatted message with all commands and aliases', () => {
 			const message = buildHelpMessage();
 			expect(message).toContain('*🤖 Comandos disponibles en Cabros Bot*');
@@ -164,6 +290,8 @@ describe('Telegram TradingView commands', () => {
 			expect(message).toContain('/news');
 			expect(message).toContain('/outcomes');
 			expect(message).toContain('/rendimiento');
+			expect(message).toContain('/jobs');
+			expect(message).toContain('/trabajos');
 			expect(message).toContain('/help');
 			expect(message).toContain('/start');
 
@@ -478,4 +606,3 @@ describe('Telegram TradingView commands', () => {
 		}, 12000);
 	});
 });
-

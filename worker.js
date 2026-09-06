@@ -2,11 +2,17 @@
 
 require('dotenv').config();
 require('./instrument.js');
+const { printWarnings, validateEnv } = require('./scripts/validate-env');
+
+printWarnings(validateEnv());
 
 const { Telegraf } = require('telegraf');
 const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');
 const { startJobWorker } = require('./src/services/jobs/jobWorker');
+const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
+const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
 const sentryService = require('./src/services/monitoring/SentryService');
+const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
 
 function buildNotificationBot() {
 	if (process.env.ENABLE_TELEGRAM_BOT !== 'true' || !process.env.BOT_TOKEN) {
@@ -30,9 +36,12 @@ async function main() {
 		throw error;
 	}
 
+	void remoteConfigService.start();
 	const bot = buildNotificationBot();
 	await initializeNotificationServices(bot);
 	const runtime = await startJobWorker({ botOrGetter: bot });
+	notificationRedriveService.startWorker({ source: 'worker', unref: false });
+	newsMonitorSchedulerService.startWorker({ source: 'worker' });
 	let stopping = false;
 
 	const shutdown = async (signal) => {
@@ -40,14 +49,20 @@ async function main() {
 			return;
 		}
 		stopping = true;
-		console.log(`[worker] ${signal} received; draining TradingView jobs.`);
+		console.log(`[worker] ${signal} received; stopping redrive intake and draining TradingView jobs.`);
+		const shutdownTimeoutMs = Number(process.env.SHUTDOWN_TIMEOUT_MS) || 60000;
 		try {
+			await notificationRedriveService.stopWorker({ drain: false });
+			await newsMonitorSchedulerService.stopWorker({ drain: true, timeoutMs: shutdownTimeoutMs });
 			await runtime.stop();
+			await notificationRedriveService.stopWorker({ drain: true });
 			stopNotificationBot(bot, signal);
+			remoteConfigService.stop();
 			await sentryService.flush(2000);
 			process.exit(0);
 		} catch (error) {
 			console.error('[worker] Graceful shutdown failed:', error.message);
+			remoteConfigService.stop();
 			await sentryService.flush(2000);
 			process.exit(1);
 		}

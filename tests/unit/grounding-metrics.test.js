@@ -72,4 +72,18 @@ describe('grounding metrics', () => {
 			timeoutRequests: 0,
 		});
 	});
+
+	it('tracks search coalescing counters separately from grounding request metrics', () => {
+		metrics.recordCoalescingMiss();
+		metrics.recordCoalescingHit();
+		metrics.recordCoalescingFailure();
+
+		expect(metrics.getSnapshot()).toEqual({
+			totalRequests: 0,
+			successRequests: 0,
+			failureRequests: 0,
+			timeoutRequests: 0,
+		});
+		expect(metrics.getCoalescingSnapshot()).toEqual({ hits: 1, misses: 1, failures: 1 });
+	});
 });

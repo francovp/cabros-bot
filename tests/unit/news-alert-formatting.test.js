@@ -431,6 +431,50 @@ describe('News Alert Source Formatting', () => {
 			expect(formatted).toContain('*Horizonte:* Corto plazo');
 			expect(formatted).toContain('*Invalidación:* Reversal below $82,000');
 		});
+
+		it('should render Entry, Invalidation, Target, and Risk/Reward in webhook alert for MarkdownV2Formatter', () => {
+			const enrichedAlert = {
+				original_text: 'BTCUSDT(60) pasó a señal de COMPRA',
+				sentiment: 'BULLISH',
+				sentiment_score: 0.75,
+				insights: ['Breakout confirmation'],
+				current_price: 85200.5,
+				setup_type: 'breakout',
+				invalidation_level: 83070.49,
+				target_level: 89460.52,
+				risk_reward_ratio: 2,
+			};
+
+			const formatted = formatter.formatWebhookAlert(enrichedAlert);
+			expect(formatted).toContain('*Risk Parameters*');
+			expect(formatted).toContain('Setup: breakout');
+			expect(formatted).toContain('Entry: 85200\\.5');
+			expect(formatted).toContain('Invalidation: 83070\\.49');
+			expect(formatted).toContain('Target: 89460\\.52');
+			expect(formatted).toContain('Risk/Reward: 2');
+		});
+
+		it('should render Entry, Invalidation, Target, and Risk/Reward in webhook alert for WhatsAppMarkdownFormatter', async () => {
+			const enrichedAlert = {
+				original_text: 'BTCUSDT(60) pasó a señal de COMPRA',
+				sentiment: 'BULLISH',
+				sentiment_score: 0.75,
+				insights: ['Breakout confirmation'],
+				current_price: 85200.5,
+				setup_type: 'breakout',
+				invalidation_level: 83070.49,
+				target_level: 89460.52,
+				risk_reward_ratio: 2,
+			};
+
+			const formatted = await whatsappFormatter.formatWebhookAlert(enrichedAlert);
+			expect(formatted).toContain('*Risk Parameters*');
+			expect(formatted).toContain('Setup: breakout');
+			expect(formatted).toContain('Entry: 85200.5');
+			expect(formatted).toContain('Invalidation: 83070.49');
+			expect(formatted).toContain('Target: 89460.52');
+			expect(formatted).toContain('Risk/Reward: 2');
+		});
 	});
 });
 

@@ -13,6 +13,24 @@ const DEFAULT_CLAIM_LEASE_MS = 60000;
 const DEFAULT_CALLBACK_CLAIM_LEASE_MS = 60000;
 const TERMINAL_JOB_RETENTION_MS = 3600000;
 
+function createAbortError(signal) {
+	return signal?.reason || Object.assign(new Error('Job repository read aborted.'), { name: 'AbortError' });
+}
+
+function throwIfAborted(signal) {
+	if (signal?.aborted) throw createAbortError(signal);
+}
+
+function awaitWithAbort(promise, signal) {
+	throwIfAborted(signal);
+	if (!signal) return promise;
+	return new Promise((resolve, reject) => {
+		const onAbort = () => reject(createAbortError(signal));
+		signal.addEventListener('abort', onAbort, { once: true });
+		Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+	});
+}
+
 function cloneJob(job) {
 	if (!job) return null;
 	return JSON.parse(JSON.stringify(job));
@@ -566,10 +584,11 @@ class JobRepository {
 		}, attempt);
 	}
 
-	async get(jobId) {
+	async get(jobId, { signal } = {}) {
 		if (!jobId) {
 			return null;
 		}
+		throwIfAborted(signal);
 
 		const localJob = saveVersions.get(jobId)?.job || memoryJobs.get(jobId);
 		if (localJob && TERMINAL_JOB_STATUSES.has(localJob.status) && pendingSaves.has(jobId)) {
@@ -579,7 +598,10 @@ class JobRepository {
 		const firestore = this._getFirestore();
 		if (firestore) {
 			try {
-				const snapshot = await firestore.collection(COLLECTION_NAME).doc(jobId).get();
+				const snapshot = await awaitWithAbort(
+					firestore.collection(COLLECTION_NAME).doc(jobId).get(),
+					signal,
+				);
 				if (snapshot && snapshot.exists) {
 					const data = snapshot.data() || {};
 					const job = { ...data, jobId: data.jobId || snapshot.id };
@@ -591,6 +613,7 @@ class JobRepository {
 					return cloneJob(job);
 				}
 			} catch (error) {
+				if (error.name === 'AbortError') throw error;
 				console.warn('[JobRepository] Failed to read job from Firestore:', error.message);
 			}
 		}
@@ -611,11 +634,16 @@ class JobRepository {
 		}
 	}
 
-	async list({ status, type, limit = 50 } = {}) {
+	async list({ status, type, telegramChatId, signal, limit = 50 } = {}) {
+		throwIfAborted(signal);
 		const firestore = this._getFirestore();
 		const jobs = new Map();
 		const safeLimit = Number.isInteger(limit) && limit > 0 ? limit : 50;
-		const matches = (job) => (!status || job.status === status) && (!type || job.type === type);
+		const matches = (job) => (
+			(!status || job.status === status)
+			&& (!type || job.type === type)
+			&& (telegramChatId === undefined || String(job.requestMetadata?.telegramChatId) === String(telegramChatId))
+		);
 
 		if (firestore) {
 			try {
@@ -625,24 +653,19 @@ class JobRepository {
 
 				while (true) {
 					let query = firestore.collection(COLLECTION_NAME);
-					if (status && typeof query.where === 'function') {
-						const statusQuery = query.where('status', '==', status);
-						if (statusQuery && typeof statusQuery.orderBy === 'function') {
-							query = statusQuery.orderBy('createdAt', 'desc');
-						} else if (statusQuery && typeof statusQuery.limit === 'function') {
-							query = statusQuery;
-						} else {
-							query = query.orderBy('createdAt', 'desc');
+					if (typeof query.where === 'function') {
+						if (status) query = query.where('status', '==', status);
+						if (telegramChatId !== undefined) {
+							query = query.where('requestMetadata.telegramChatId', '==', String(telegramChatId));
 						}
-					} else {
-						query = query.orderBy('createdAt', 'desc');
 					}
+					query = query.orderBy('createdAt', 'desc');
 					query = query.limit(safeLimit);
 					if (lastDoc) {
 						query = query.startAfter(lastDoc);
 					}
 
-					const snapshot = await query.get();
+					const snapshot = await awaitWithAbort(query.get(), signal);
 					const docs = snapshot?.docs || [];
 					for (const doc of docs) {
 						const data = doc.data() || {};
@@ -664,8 +687,9 @@ class JobRepository {
 					lastDoc = nextDoc;
 					lastDocId = nextDoc.id;
 				}
-			} catch (error) {
-				console.warn('[JobRepository] Failed to list jobs from Firestore:', error.message);
+				} catch (error) {
+					if (error.name === 'AbortError') throw error;
+					console.warn('[JobRepository] Failed to list jobs from Firestore:', error.message);
 			}
 		}
 

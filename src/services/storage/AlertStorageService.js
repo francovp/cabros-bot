@@ -42,6 +42,12 @@ const DEFAULT_EXPORT_LIMIT = 500;
 const MAX_EXPORT_LIMIT = 1000;
 const MAX_EXPORT_WINDOW_DAYS = 31;
 const MAX_EXPORT_TEXT_LENGTH = 1000;
+// Stored alert text cap; high-volume expanded-analysis (50 symbols) and ranked
+// market-scanner reports can exceed this. When clipped, the document is flagged
+// with `truncated: true` and `originalLength` so consumers and replay can
+// detect the loss; raise only if Firestore's 1 MiB document cap and the
+// existing per-channel chunked delivery can absorb the full text.
+const MAX_ALERT_TEXT_LENGTH = 20000;
 const DEFAULT_ALERT_STORAGE_RETENTION_DAYS = 90;
 const MAX_ALERT_STORAGE_RETENTION_DAYS = 3650;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -77,7 +83,9 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
 		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
 		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true'
-		|| process.env.ENABLE_NOTIFICATION_REDRIVE === 'true';
+		|| process.env.ENABLE_NOTIFICATION_REDRIVE === 'true'
+		|| process.env.ENABLE_NEWS_MONITOR_SCHEDULER === 'true'
+		|| process.env.ENABLE_BINANCE_ORDER_AUDIT === 'true';
 }
 
 function getAlertStorageRetentionDays() {
@@ -156,15 +164,22 @@ function isRetentionExpired(data) {
 		&& eventTimestamp + (getAlertStorageRetentionDays() * DAY_MS) <= Date.now();
 }
 
-function formatAlertDocument(doc) {
+function formatAlertDocument(doc, options = {}) {
 	const data = doc.data() || {};
 	const extracted = extractSymbolAndExchange(data);
+	const includeEnrichmentSummary = Boolean(
+		options.includeEnrichmentSummary ||
+		(Array.isArray(options.include) && options.include.includes('enrichment_summary')) ||
+		options.include === 'enrichment_summary',
+	);
 	const docObj = {
 		id: doc.id,
 		receivedAt: getDocTimestamp(data),
 		text: typeof data.text === 'string' ? data.text : '',
 		enriched: Boolean(data.enriched),
-		enrichmentData: data.enrichmentData || null,
+		enrichmentData: includeEnrichmentSummary
+			? formatEnrichmentSummary(data.enrichmentData, data)
+			: (data.enrichmentData || null),
 		tokenUsage: data.tokenUsage || null,
 		channels: Array.isArray(data.channels) ? data.channels : [],
 		deliveryResults: Array.isArray(data.deliveryResults) ? data.deliveryResults : [],
@@ -172,6 +187,9 @@ function formatAlertDocument(doc) {
 		useTradingViewData: Boolean(data.useTradingViewData),
 		tradingViewEnrichmentApplied: Boolean(data.tradingViewEnrichmentApplied),
 	};
+	if (includeEnrichmentSummary) {
+		docObj.enrichmentSummary = docObj.enrichmentData;
+	}
 	if (typeof data.requestId === 'string' && data.requestId.trim()) {
 		docObj.requestId = data.requestId.trim();
 	}
@@ -184,6 +202,9 @@ function formatAlertDocument(doc) {
 	if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(data.tradingViewEnrichmentStatus)) {
 		docObj.tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
 	}
+	if (data.suppressedRepeat === true) {
+		docObj.suppressedRepeat = true;
+	}
 	if (typeof data.eventCategory === 'string') {
 		docObj.eventCategory = data.eventCategory;
 	}
@@ -193,8 +214,26 @@ function formatAlertDocument(doc) {
 	if (typeof data.sentimentScore === 'number' && Number.isFinite(data.sentimentScore)) {
 		docObj.sentimentScore = data.sentimentScore;
 	}
+	if (typeof data.telegramChatId === 'string' && data.telegramChatId.trim()) {
+		docObj.telegramChatId = data.telegramChatId.trim();
+	}
+	if (typeof data.telegramThreadId === 'number' && Number.isSafeInteger(data.telegramThreadId) && data.telegramThreadId >= 0) {
+		docObj.telegramThreadId = data.telegramThreadId;
+	}
+	if (typeof data.whatsappChatId === 'string' && data.whatsappChatId.trim()) {
+		docObj.whatsappChatId = data.whatsappChatId.trim();
+	}
+	if (typeof data.discordWebhookUrl === 'string' && data.discordWebhookUrl.trim()) {
+		docObj.discordWebhookUrl = data.discordWebhookUrl.trim();
+	}
 	if (typeof data.dedupStatus === 'string') {
 		docObj.dedupStatus = data.dedupStatus;
+	}
+	if (data.truncated === true) {
+		docObj.truncated = true;
+		if (typeof data.originalLength === 'number' && Number.isFinite(data.originalLength)) {
+			docObj.originalLength = data.originalLength;
+		}
 	}
 	return docObj;
 }
@@ -285,6 +324,16 @@ function createRiskMetadataCoverageBucket() {
 	};
 }
 
+function createTradingViewStatusCounts() {
+	return {
+		full: 0,
+		partial: 0,
+		failed: 0,
+		not_applicable: 0,
+		unrecorded: 0,
+	};
+}
+
 function isRiskMetadataPopulated(field, value) {
 	if (field === 'setup_type') {
 		return typeof value === 'string' && VALID_SETUP_TYPES.has(value.trim().toLowerCase());
@@ -364,6 +413,218 @@ function recordRiskMetadataCoverageByProvenance(coverage, enrichmentData) {
 function finalizeRiskMetadataCoverageByProvenance(coverage) {
 	finalizeRiskMetadataCoverage(coverage);
 	coverage.byPromptProvenance.forEach(finalizeRiskMetadataCoverage);
+}
+
+// ---------------------------------------------------------------------------
+// Evidence coverage — tracks how many enriched alerts cited grounding sources.
+// Mirrors the riskMetadataCoverage pattern: a top-level bucket plus a
+// byPromptProvenance sub-array so regressions can be attributed to a specific
+// prompt version vs. the local fallback.
+// ---------------------------------------------------------------------------
+
+function createEvidenceCoverageBucket() {
+	return {
+		denominator: 0,
+		zeroSources: { populated: 0, percentage: 0 },
+		oneToTwoSources: { populated: 0, percentage: 0 },
+		threePlusSources: { populated: 0, percentage: 0 },
+		totalSourceCount: 0,
+		averageSourceCount: 0,
+	};
+}
+
+function getSourceCount(enrichmentData) {
+	const sources = enrichmentData && typeof enrichmentData === 'object'
+		? enrichmentData.sources
+		: undefined;
+	if (Array.isArray(sources)) {
+		return sources.length;
+	}
+	if (typeof sources === 'number' && Number.isFinite(sources) && sources >= 0) {
+		return Math.floor(sources);
+	}
+	// Legacy records lacking a sources field count as zero (fail-safe: no crash).
+	return 0;
+}
+
+function extractSourceDomains(sources) {
+	if (!Array.isArray(sources)) {
+		return [];
+	}
+
+	const domains = new Set();
+	for (const source of sources) {
+		let rawUrl = null;
+		if (typeof source === 'string') {
+			rawUrl = source;
+		} else if (source && typeof source === 'object' && typeof source.url === 'string') {
+			rawUrl = source.url;
+		}
+
+		if (rawUrl) {
+			try {
+				const { hostname } = new URL(rawUrl);
+				if (hostname) {
+					domains.add(hostname.toLowerCase().substring(0, 100));
+				}
+			} catch {
+				// Non-URL strings or invalid URLs are safely ignored
+			}
+		}
+	}
+
+	return Array.from(domains).slice(0, 10);
+}
+
+function formatEnrichmentSummary(enrichmentData, docData = {}) {
+	if (!enrichmentData || typeof enrichmentData !== 'object' || Array.isArray(enrichmentData)) {
+		return null;
+	}
+
+	const sentiment = typeof enrichmentData.sentiment === 'string' && enrichmentData.sentiment.trim()
+		? enrichmentData.sentiment.trim().substring(0, 32)
+		: null;
+
+	const sentimentScore = typeof enrichmentData.sentiment_score === 'number' && Number.isFinite(enrichmentData.sentiment_score)
+		? enrichmentData.sentiment_score
+		: (typeof enrichmentData.sentimentScore === 'number' && Number.isFinite(enrichmentData.sentimentScore)
+			? enrichmentData.sentimentScore
+			: null);
+
+	const setupType = typeof enrichmentData.setup_type === 'string' && enrichmentData.setup_type.trim()
+		? enrichmentData.setup_type.trim().substring(0, 64)
+		: (typeof enrichmentData.setupType === 'string' && enrichmentData.setupType.trim()
+			? enrichmentData.setupType.trim().substring(0, 64)
+			: null);
+
+	let invalidationLevel = null;
+	const rawInvalidation = enrichmentData.invalidation_level !== undefined ? enrichmentData.invalidation_level : enrichmentData.invalidationLevel;
+	if (typeof rawInvalidation === 'number' && Number.isFinite(rawInvalidation)) {
+		invalidationLevel = rawInvalidation;
+	} else if (typeof rawInvalidation === 'string' && rawInvalidation.trim()) {
+		invalidationLevel = rawInvalidation.trim().substring(0, 32);
+	}
+
+	let targetLevel = null;
+	const rawTarget = enrichmentData.target_level !== undefined ? enrichmentData.target_level : enrichmentData.targetLevel;
+	if (typeof rawTarget === 'number' && Number.isFinite(rawTarget)) {
+		targetLevel = rawTarget;
+	} else if (typeof rawTarget === 'string' && rawTarget.trim()) {
+		targetLevel = rawTarget.trim().substring(0, 32);
+	}
+
+	let riskRewardRatio = null;
+	const rawRrr = enrichmentData.risk_reward_ratio !== undefined ? enrichmentData.risk_reward_ratio : enrichmentData.riskRewardRatio;
+	if (typeof rawRrr === 'number' && Number.isFinite(rawRrr)) {
+		riskRewardRatio = rawRrr;
+	} else if (typeof rawRrr === 'string' && rawRrr.trim() && Number.isFinite(Number(rawRrr))) {
+		riskRewardRatio = Number(rawRrr);
+	}
+
+	const sourceCount = getSourceCount(enrichmentData);
+	const sourceDomains = extractSourceDomains(enrichmentData.sources);
+
+	const tradingViewEnrichmentApplied = enrichmentData.tradingViewEnrichmentApplied !== undefined
+		? Boolean(enrichmentData.tradingViewEnrichmentApplied)
+		: Boolean(docData.tradingViewEnrichmentApplied);
+
+	const tradingViewEnrichmentStatus = VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(enrichmentData.tradingViewEnrichmentStatus)
+		? enrichmentData.tradingViewEnrichmentStatus
+		: (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(docData.tradingViewEnrichmentStatus)
+			? docData.tradingViewEnrichmentStatus
+			: null);
+
+	const promptProvenance = normalizePromptProvenance(enrichmentData.promptProvenance);
+
+	return {
+		sentiment,
+		sentiment_score: sentimentScore,
+		setup_type: setupType,
+		invalidation_level: invalidationLevel,
+		target_level: targetLevel,
+		risk_reward_ratio: riskRewardRatio,
+		sourceCount,
+		sourceDomains,
+		tradingViewEnrichmentApplied,
+		tradingViewEnrichmentStatus,
+		promptProvenance,
+	};
+}
+
+function recordEvidenceCoverage(bucket, enrichmentData) {
+	bucket.denominator += 1;
+	const count = getSourceCount(enrichmentData);
+	bucket.totalSourceCount += count;
+	if (count === 0) {
+		bucket.zeroSources.populated += 1;
+	} else if (count <= 2) {
+		bucket.oneToTwoSources.populated += 1;
+	} else {
+		bucket.threePlusSources.populated += 1;
+	}
+}
+
+function finalizeEvidenceCoverage(bucket) {
+	const denom = bucket.denominator;
+	const pct = (n) => (denom === 0 ? 0 : Number(((n / denom) * 100).toFixed(2)));
+	bucket.zeroSources.percentage = pct(bucket.zeroSources.populated);
+	bucket.oneToTwoSources.percentage = pct(bucket.oneToTwoSources.populated);
+	bucket.threePlusSources.percentage = pct(bucket.threePlusSources.populated);
+	bucket.averageSourceCount = denom === 0
+		? 0
+		: Number((bucket.totalSourceCount / denom).toFixed(2));
+}
+
+function getEvidenceProvenanceGroup(coverage, provenance) {
+	const safeProvenanceKey = provenance
+		? {
+			name: provenance.name,
+			source: provenance.source,
+			label: provenance.label,
+			version: provenance.version,
+		}
+		: null;
+	const key = JSON.stringify(safeProvenanceKey);
+	let group = coverage.byPromptProvenance.find(item => {
+		const itemKey = item.provenance
+			? JSON.stringify({
+				name: item.provenance.name,
+				source: item.provenance.source,
+				label: item.provenance.label,
+				version: item.provenance.version,
+			})
+			: JSON.stringify(null);
+		return itemKey === key;
+	});
+
+	if (!group) {
+		group = {
+			provenance: provenance
+				? {
+					...safeProvenanceKey,
+					schemaDriftDetected: Boolean(provenance.schemaDriftDetected),
+				}
+				: null,
+			...createEvidenceCoverageBucket(),
+		};
+		coverage.byPromptProvenance.push(group);
+	} else if (provenance?.schemaDriftDetected && group.provenance) {
+		group.provenance.schemaDriftDetected = true;
+	}
+
+	return group;
+}
+
+function recordEvidenceCoverageByProvenance(coverage, enrichmentData) {
+	recordEvidenceCoverage(coverage, enrichmentData);
+	const provenance = normalizePromptProvenance(enrichmentData && enrichmentData.promptProvenance);
+	const group = getEvidenceProvenanceGroup(coverage, provenance);
+	recordEvidenceCoverage(group, enrichmentData);
+}
+
+function finalizeEvidenceCoverageByProvenance(coverage) {
+	finalizeEvidenceCoverage(coverage);
+	coverage.byPromptProvenance.forEach(finalizeEvidenceCoverage);
 }
 
 function incrementCounter(target, key) {
@@ -573,6 +834,12 @@ function formatExportRecord(doc, { includeText }) {
 
 	if (includeText) {
 		record.text = truncateAlertText(data.text);
+		if (data.truncated === true) {
+			record.truncated = true;
+			if (typeof data.originalLength === 'number' && Number.isFinite(data.originalLength)) {
+				record.originalLength = data.originalLength;
+			}
+		}
 	}
 
 	return record;
@@ -700,6 +967,13 @@ function createInvalidCursorError() {
 }
 
 function buildParsedCursorTimestamp(parsedCursor) {
+	if (parsedCursor && parsedCursor.timestamp
+		&& typeof admin.firestore.Timestamp.fromSeconds === 'function') {
+		return admin.firestore.Timestamp.fromSeconds(
+			parsedCursor.timestamp.seconds,
+			parsedCursor.timestamp.nanoseconds,
+		);
+	}
 	return admin.firestore.Timestamp.fromDate(new Date(parsedCursor.receivedAt));
 }
 
@@ -818,6 +1092,7 @@ async function saveAlertInternal({
 	useTradingViewData,
 	tradingViewEnrichmentApplied,
 	tradingViewEnrichmentStatus,
+	suppressedRepeat,
 	processingTimeMs,
 	source,
 	eventCategory,
@@ -825,6 +1100,11 @@ async function saveAlertInternal({
 	sentimentScore,
 	dedupStatus,
 	requestId,
+	telegramChatId,
+	telegramThreadId,
+	whatsappChatId,
+	discordWebhookUrl,
+	routing,
 }) {
 	if (!isEnabled()) {
 		return null;
@@ -837,10 +1117,19 @@ async function saveAlertInternal({
 
 	try {
 		const extracted = extractSymbolAndExchange({ text, symbol, exchange, enrichmentData });
+		const rawText = typeof text === 'string' ? text : '';
+		const truncated = rawText.length > MAX_ALERT_TEXT_LENGTH;
+		const effectiveTelegramChatId = telegramChatId || (routing && routing.telegramChatId);
+		const effectiveTelegramThreadId = telegramThreadId !== undefined
+			? telegramThreadId
+			: (routing && routing.telegramThreadId !== undefined ? routing.telegramThreadId : undefined);
+		const effectiveWhatsappChatId = whatsappChatId || (routing && routing.whatsappChatId);
+		const effectiveDiscordWebhookUrl = discordWebhookUrl || (routing && routing.discordWebhookUrl);
+
 		const document = {
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
 			expiresAt: buildRetentionExpiryTimestamp(),
-			text: typeof text === 'string' ? text.substring(0, 20000) : '',
+			text: truncated ? rawText.substring(0, MAX_ALERT_TEXT_LENGTH) : rawText,
 			enriched: Boolean(enriched),
 			enrichmentData: stripUndefinedFieldsDeep(sanitizeEnrichmentData(enrichmentData)),
 			tokenUsage: stripUndefinedFieldsDeep(tokenUsage ?? null),
@@ -852,11 +1141,19 @@ async function saveAlertInternal({
 			useTradingViewData: Boolean(useTradingViewData),
 			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
 		};
+		if (truncated) {
+			document.truncated = true;
+			document.originalLength = rawText.length;
+		}
 		if (typeof requestId === 'string' && requestId.trim()) {
 			document.requestId = requestId.trim();
 		}
 		if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(tradingViewEnrichmentStatus)) {
 			document.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
+		}
+		if (suppressedRepeat === true) {
+			document.suppressedRepeat = true;
+			document.deliveryResults = [];
 		}
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
 		if (normalizedProcessingTimeMs !== null) {
@@ -880,6 +1177,18 @@ async function saveAlertInternal({
 		}
 		if (typeof dedupStatus === 'string' && dedupStatus.trim()) {
 			document.dedupStatus = dedupStatus.trim();
+		}
+		if (typeof effectiveTelegramChatId === 'string' && effectiveTelegramChatId.trim()) {
+			document.telegramChatId = effectiveTelegramChatId.trim();
+		}
+		if (typeof effectiveTelegramThreadId === 'number' && Number.isSafeInteger(effectiveTelegramThreadId) && effectiveTelegramThreadId >= 0) {
+			document.telegramThreadId = effectiveTelegramThreadId;
+		}
+		if (typeof effectiveWhatsappChatId === 'string' && effectiveWhatsappChatId.trim()) {
+			document.whatsappChatId = effectiveWhatsappChatId.trim();
+		}
+		if (typeof effectiveDiscordWebhookUrl === 'string' && effectiveDiscordWebhookUrl.trim()) {
+			document.discordWebhookUrl = effectiveDiscordWebhookUrl.trim();
 		}
 
 		const docRef = await firestore.collection(COLLECTION_NAME).add(document);
@@ -906,9 +1215,18 @@ function saveAlert(params) {
  * @param {string|undefined} params.before
  * @param {string|undefined} params.source
  * @param {boolean|undefined} params.enriched
+ * @param {string[]|string|undefined} params.include
+ * @param {boolean|undefined} params.includeEnrichmentSummary
  * @returns {Promise<{alerts: Array, hasMore: boolean, nextBefore: string|null}|null>}
  */
-async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched } = {}) {
+async function listAlerts({
+	limit = DEFAULT_PAGE_SIZE,
+	before,
+	source,
+	enriched,
+	include,
+	includeEnrichmentSummary,
+} = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -968,7 +1286,7 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 				continue;
 			}
 
-			const formatted = formatAlertDocument(doc);
+			const formatted = formatAlertDocument(doc, { include, includeEnrichmentSummary });
 			if (matchesFilters(formatted, { source, enriched })) {
 				matches.push(formatted);
 				if (matches.length >= targetCount) {
@@ -1034,6 +1352,12 @@ async function getAlertById(alertId) {
 /**
  * Persist a replay attempt separately from the immutable original alert.
  *
+ * Each call writes a unique audit document so retries with the same idempotency
+ * key do not overwrite history. The HTTP `Idempotency-Replay` contract is
+ * preserved upstream by the idempotency middleware, which replays the cached
+ * response without re-running this storage write; this layer only sees fresh
+ * attempts that survived middleware, so uniqueness is required for audit.
+ *
  * @param {Object} params
  * @param {string} params.alertId
  * @param {string} params.idempotencyKey
@@ -1048,10 +1372,12 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 	}
 
 	const idempotencyKeyHash = crypto.createHash('sha256').update(idempotencyKey).digest('hex');
-	const replayId = `${alertId}_${idempotencyKeyHash}`;
+	const attemptId = `${Date.now()}_${crypto.randomUUID()}`;
+	const replayId = `${alertId}_${idempotencyKeyHash}_${attemptId}`;
 	const document = {
 		alertId,
 		idempotencyKeyHash,
+		attemptId,
 		channels: Array.isArray(channels) ? channels : [],
 		deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
 		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1065,6 +1391,241 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 	} catch (error) {
 		console.warn('[AlertStorageService] Failed to store alert replay attempt:', error.message);
 		throw createStorageUnavailableError(error);
+	}
+}
+
+/**
+ * Format a replay document into an API-safe response payload. Only safe fields
+ * are exposed: the original idempotency key is never persisted or returned, and
+ * delivery results are reduced to a compact summary.
+ *
+ * @param {Object} doc Firestore snapshot document
+ * @returns {Object|null}
+ */
+function formatReplayDocument(doc) {
+	if (!doc || typeof doc.data !== 'function') {
+		return null;
+	}
+
+	const data = doc.data() || {};
+	const replayedAt = data.replayedAt && typeof data.replayedAt.toDate === 'function'
+		? data.replayedAt.toDate().toISOString()
+		: null;
+	const compactDelivery = (Array.isArray(data.deliveryResults) ? data.deliveryResults : []).map((entry) => {
+		if (!entry || typeof entry !== 'object') {
+			return null;
+		}
+		const compact = { channel: typeof entry.channel === 'string' ? entry.channel : null };
+		if (typeof entry.success === 'boolean') {
+			compact.success = entry.success;
+		}
+		if (typeof entry.messageId === 'string' && entry.messageId) {
+			compact.messageId = entry.messageId;
+		}
+		if (typeof entry.errorCode === 'string' && entry.errorCode) {
+			compact.errorCode = entry.errorCode;
+		}
+		if (typeof entry.statusCode === 'number' && Number.isFinite(entry.statusCode)) {
+			compact.statusCode = entry.statusCode;
+		}
+		return compact;
+	}).filter(Boolean);
+
+	return {
+		id: typeof data.attemptId === 'string' && data.attemptId
+			? data.attemptId
+			: crypto.createHash('sha256').update(doc.id).digest('hex').slice(0, 24),
+		alertId: typeof data.alertId === 'string' ? data.alertId : null,
+		idempotencyKeyHashPrefix: typeof data.idempotencyKeyHash === 'string'
+			? data.idempotencyKeyHash.slice(0, 12)
+			: null,
+		channels: Array.isArray(data.channels) ? data.channels : [],
+		deliverySummary: compactDelivery,
+		replayedAt,
+		attemptId: typeof data.attemptId === 'string' ? data.attemptId : null,
+	};
+}
+
+function getReplayCursorValues(doc) {
+	if (!doc || typeof doc.data !== 'function') {
+		return null;
+	}
+	const data = doc.data() || {};
+	const replayedAt = data.replayedAt && typeof data.replayedAt.toDate === 'function'
+		? data.replayedAt.toDate().toISOString()
+		: null;
+	if (!replayedAt || typeof doc.id !== 'string' || !doc.id) {
+		return null;
+	}
+	return { replayedAt, timestamp: data.replayedAt, documentId: doc.id };
+}
+
+/**
+ * Bounded list of replay audit records with retention filtering and optional
+ * alertId filter. Mirrors `listAlerts()` pagination and error semantics.
+ *
+ * @param {Object} params
+ * @param {number|undefined} params.limit
+ * @param {string|undefined} params.alertId
+ * @param {string|undefined} params.before
+ * @returns {Promise<{replays: Array, hasMore: boolean, nextBefore: string|null}|null>}
+ */
+async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId, before } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const pageSize = clampLimit(limit);
+	const targetCount = pageSize + 1;
+	const scanLimit = Math.max(targetCount, MAX_PAGE_SIZE);
+	const matches = [];
+	const matchCursors = [];
+	const parsedBeforeCursor = before
+		? parseAlertPaginationCursor(before)
+		: null;
+	if (before && !parsedBeforeCursor) {
+		throw createInvalidCursorError();
+	}
+	let pageCursor = parsedBeforeCursor
+		? {
+			receivedAt: parsedBeforeCursor.receivedAt,
+			timestamp: parsedBeforeCursor.timestamp,
+			documentId: parsedBeforeCursor.documentId,
+		}
+		: null;
+
+	while (matches.length < targetCount) {
+		let query = firestore
+			.collection(REPLAY_COLLECTION_NAME)
+			.orderBy('replayedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+			.limit(scanLimit);
+
+		if (typeof alertId === 'string' && alertId.trim()) {
+			query = firestore
+				.collection(REPLAY_COLLECTION_NAME)
+				.where('alertId', '==', alertId.trim())
+				.orderBy('replayedAt', 'desc')
+				.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+				.limit(scanLimit);
+		}
+		if (pageCursor) {
+			const pageTimestamp = buildParsedCursorTimestamp(pageCursor);
+			if (pageCursor.documentId) {
+				query = query.startAfter(pageTimestamp, pageCursor.documentId);
+			} else {
+				query = query.where('replayedAt', '<', pageTimestamp);
+			}
+		}
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to list replay attempts:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+
+		for (const doc of snapshot.docs) {
+			if (isRetentionExpired(doc.data() || {})) {
+				continue;
+			}
+			const formatted = formatReplayDocument(doc);
+			const docCursor = getReplayCursorValues(doc);
+			if (formatted && docCursor) {
+				matches.push(formatted);
+				matchCursors.push(docCursor);
+				if (matches.length >= targetCount) {
+					break;
+				}
+			}
+		}
+
+		const lastDocCursor = getReplayCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!lastDocCursor || snapshot.docs.length < scanLimit) {
+			break;
+		}
+		pageCursor = {
+			receivedAt: lastDocCursor.replayedAt,
+			timestamp: lastDocCursor.timestamp,
+			documentId: lastDocCursor.documentId,
+		};
+	}
+
+	const hasMore = matches.length > pageSize;
+	const replays = hasMore ? matches.slice(0, pageSize) : matches;
+	const lastCursor = hasMore ? matchCursors[pageSize - 1] : null;
+	const nextBefore = hasMore && lastCursor
+		? encodeAlertPaginationCursor({
+			receivedAt: lastCursor.replayedAt,
+			id: lastCursor.documentId,
+			timestamp: lastCursor.timestamp,
+		})
+		: null;
+
+	return { replays, hasMore, nextBefore };
+}
+
+/**
+ * Most recent replay metadata for a single alert, formatted for inclusion on
+ * `GET /api/alerts/:alertId`. Returns `null` if no replay exists.
+ *
+ * @param {string} alertId
+ * @returns {Promise<Object|null>}
+ */
+async function getLatestReplayForAlert(alertId) {
+	if (!isEnabled() || typeof alertId !== 'string' || !alertId.trim()) {
+		return null;
+	}
+
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	let pageCursor = null;
+	while (true) {
+		let query = firestore
+			.collection(REPLAY_COLLECTION_NAME)
+			.where('alertId', '==', alertId.trim())
+			.orderBy('replayedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+			.limit(MAX_PAGE_SIZE);
+		if (pageCursor) {
+			query = query.startAfter(pageCursor.timestamp, pageCursor.documentId);
+		}
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to read latest replay for alert:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			return null;
+		}
+
+		const doc = snapshot.docs.find(d => !isRetentionExpired(d.data() || {}));
+		if (doc) {
+			return formatReplayDocument(doc);
+		}
+
+		const lastDocCursor = getReplayCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!lastDocCursor || snapshot.docs.length < MAX_PAGE_SIZE) {
+			return null;
+		}
+		pageCursor = lastDocCursor;
 	}
 }
 
@@ -1239,8 +1800,13 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		enrichment: {
 			enrichedAlerts: 0,
 			plainAlerts: 0,
+			tradingViewStatusCounts: createTradingViewStatusCounts(),
 			riskMetadataCoverage: {
 				...createRiskMetadataCoverageBucket(),
+				byPromptProvenance: [],
+			},
+			evidenceCoverage: {
+				...createEvidenceCoverageBucket(),
 				byPromptProvenance: [],
 			},
 			tokenUsage: {
@@ -1268,6 +1834,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		const alertEnriched = Boolean(data.enriched);
 		const useTradingViewData = Boolean(data.useTradingViewData);
 		const tradingViewEnrichmentApplied = Boolean(data.tradingViewEnrichmentApplied);
+		const tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
 
 		summary.totalAlerts += 1;
 		incrementCounter(summary.bySource, data.source);
@@ -1277,9 +1844,18 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 			summary.byFeatureFlag.enriched += 1;
 			summary.enrichment.enrichedAlerts += 1;
 			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData);
+			recordEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage, data.enrichmentData);
 		} else {
 			summary.byFeatureFlag.plain += 1;
 			summary.enrichment.plainAlerts += 1;
+		}
+
+		if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(tradingViewEnrichmentStatus)) {
+			summary.enrichment.tradingViewStatusCounts[tradingViewEnrichmentStatus] += 1;
+		} else if (useTradingViewData) {
+			summary.enrichment.tradingViewStatusCounts.unrecorded += 1;
+		} else {
+			summary.enrichment.tradingViewStatusCounts.not_applicable += 1;
 		}
 
 		if (useTradingViewData) {
@@ -1303,6 +1879,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 	}
 
 	finalizeRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage);
+	finalizeEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage);
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
 	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
 	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);
@@ -1318,12 +1895,18 @@ module.exports = {
 	summarizeAlerts,
 	exportAlerts,
 	saveReplayAttempt,
+	listReplayAttempts,
+	getLatestReplayForAlert,
 	parseSymbolFromText,
 	extractSymbolAndExchange,
 	extractAlertSymbol,
+	formatEnrichmentSummary,
+	extractSourceDomains,
+	formatAlertDocument,
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,
+	MAX_ALERT_TEXT_LENGTH,
 	// Exported for testing
 	getFirestore,
 	COLLECTION_NAME,

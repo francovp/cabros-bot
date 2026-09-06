@@ -4,6 +4,7 @@ const {
 	scannerPresetService,
 	scannerPresetSchedulerService,
 } = require('../services/scannerPresets');
+const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
@@ -12,10 +13,16 @@ const equityMarketDataService = require('../services/storage/EquityMarketDataSer
 const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
+const { binanceOrderAuditService } = require('../services/trading/BinanceOrderAuditService');
+const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
+const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
+const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
+const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { getCoalescingStatus } = require('../services/grounding/grounding');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -306,7 +313,13 @@ function getStatus() {
 		signalOutcomeWorkerDependency.status = 'disabled';
 	}
 
+	const webhookAuth = dependencyStatus({
+		enabled: true,
+		configured: hasValue(process.env.WEBHOOK_API_KEY),
+	});
+
 	return {
+		readiness: bootstrapReadiness.getStatus(),
 		service: {
 			name: process.env.SERVICE_NAME || packageJson.name || 'cabros-bot',
 			version: packageJson.version || null,
@@ -328,12 +341,14 @@ function getStatus() {
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
 			scannerPresetScheduler: scannerPresetSchedulerService.isEnabled(),
+			newsMonitorScheduler: newsMonitorSchedulerService.isEnabled(),
 			sentryMonitoring: sentryEnabled,
 			sentryProfiling: sentryService.isProfilingEnabled(),
 			langfusePrompts: langfusePromptsEnabled,
 			marketScanner: marketScannerEnabled,
 			binancePriceCheck: binancePriceCheckEnabled,
 			binanceTrading: binanceTradingEnabled,
+			binanceOrderAudit: binanceOrderAuditService.isEnabled(),
 			llmAlertEnrichment: llmAlertEnrichmentEnabled,
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
@@ -343,7 +358,9 @@ function getStatus() {
 			firebaseRemoteConfig: remoteConfigStatus.enabled,
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
+			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -359,13 +376,19 @@ function getStatus() {
 				status: discord.status,
 			},
 		},
+		...(deliveryMetricsService.getSnapshot()
+			? { deliveryMetrics: deliveryMetricsService.getSnapshot() }
+			: {}),
 		dependencies: {
 			telegram,
 			whatsapp,
 			discord,
+			webhookAuth,
 			whatsappCommandBridge: whatsAppCommandBridgeService.getStatus(),
+			whatsappTemplate: getWhatsAppTemplateStatus(),
 			gemini,
 			geminiQuota,
+			groundingCoalescing: getCoalescingStatus(),
 			tradingViewMcp,
 			tradingViewVolumeConfirmation,
 			firestore,
@@ -387,6 +410,7 @@ function getStatus() {
 			firebaseRemoteConfig: remoteConfigStatus,
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
+			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,
@@ -405,8 +429,13 @@ function getStatus() {
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
 			},
 			notificationRedrive: notificationRedriveService.getStatus(),
+			alertSignalRepeatSuppression: {
+				enabled: signalRepeatCooldown.isEnabled(),
+				...signalRepeatCooldown.getStats(),
+			},
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
+			binanceOrderAudit: binanceOrderAuditService.getStatus(),
 		},
 	};
 }

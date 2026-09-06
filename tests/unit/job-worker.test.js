@@ -554,4 +554,63 @@ describe('queued job execution', () => {
 			else process.env.JOB_QUEUE_CLAIM_LEASE_MS = previousLeaseMs;
 		}
 	});
+
+	it('gracefully finalizes queued job cancellation during expanded analysis without claim loss', async () => {
+		const jobRecord = {
+			jobId: 'job-cancel-test',
+			type: 'expanded-analysis',
+			status: 'processing',
+			progress: { current: 0, total: 2, status: 'Starting' },
+			execution: { mode: 'render-worker', status: 'claimed', workerId: 'worker-1', attempt: 1 },
+			createdAt: new Date().toISOString(),
+			callbackUrl: 'https://example.com/callback',
+			callbackEvents: ['cancelled'],
+			callbackStatus: { status: 'pending', attempts: [] },
+		};
+
+		const repository = {
+			get: jest.fn(async () => JSON.parse(JSON.stringify(jobRecord))),
+			save: jest.fn(async (savedJob) => {
+				Object.assign(jobRecord, JSON.parse(JSON.stringify(savedJob)));
+				return savedJob.jobId;
+			}),
+		};
+
+		const service = new JobService(repository);
+		service._triggerCallbackIfConfigured = jest.fn().mockResolvedValue(undefined);
+
+		const parsed = {
+			symbols: [
+				{ raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+				{ raw: 'BINANCE:ETHUSDT', exchange: 'BINANCE', symbol: 'ETHUSDT' },
+			],
+			timeframe: '1D',
+			includeMultiTimeframe: false,
+		};
+
+		const run = service._runBackgroundJob(
+			jobRecord.jobId,
+			parsed,
+			jobRecord,
+			null,
+			'worker-1',
+		);
+
+		// Simulate cancelJob arriving after starting
+		await delay(10);
+		jobRecord.status = 'cancelled';
+		const controller = service.activeControllers.get(jobRecord.jobId);
+		if (controller) {
+			controller.abort(new Error('Job was cancelled by user'));
+		}
+
+		await run;
+
+		expect(jobRecord.status).toBe('cancelled');
+		expect(jobRecord.execution.status).toBe('cancelled');
+		expect(service._triggerCallbackIfConfigured).toHaveBeenCalledWith(
+			expect.objectContaining({ status: 'cancelled' }),
+			{ awaitDelivery: true },
+		);
+	});
 });

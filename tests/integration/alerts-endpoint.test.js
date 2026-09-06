@@ -5,6 +5,8 @@ jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	listAlerts: jest.fn(),
 	getAlertById: jest.fn(),
 	saveReplayAttempt: jest.fn(),
+	listReplayAttempts: jest.fn(),
+	getLatestReplayForAlert: jest.fn(),
 	summarizeAlerts: jest.fn(),
 	exportAlerts: jest.fn(),
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
@@ -53,6 +55,8 @@ describe('Alerts API Integration Tests', () => {
 		alertHandler.initializeNotificationServices.mockResolvedValue(mockNotificationManager);
 		alertStorageService.isEnabled.mockReturnValue(true);
 		alertStorageService.saveReplayAttempt.mockResolvedValue('replay-1');
+		alertStorageService.listReplayAttempts.mockResolvedValue({ replays: [], hasMore: false, nextBefore: null });
+		alertStorageService.getLatestReplayForAlert.mockResolvedValue(null);
 		signalOutcomeService.isEnabled.mockReturnValue(false);
 		signalOutcomeService.getMetricsSummary.mockResolvedValue('No measurements found');
 		const { parseAlertPaginationCursor: actualParseCursor } = jest.requireActual('../../src/services/storage/alertPaginationCursor');
@@ -129,6 +133,91 @@ describe('Alerts API Integration Tests', () => {
 				limit: 1,
 				nextBefore,
 			},
+		});
+	});
+
+	it('passes include and includeEnrichmentSummary when include=enrichment_summary is requested', async () => {
+		alertStorageService.listAlerts.mockResolvedValue({
+			alerts: [
+				{
+					id: 'alert-1',
+					receivedAt: '2026-06-06T12:00:00.000Z',
+					text: 'BTC alert',
+					enriched: true,
+					enrichmentData: {
+						sentiment: 'BULLISH',
+						sentiment_score: 0.9,
+						setup_type: 'breakout',
+						invalidation_level: 64000,
+						target_level: 68000,
+						risk_reward_ratio: 2,
+						sourceCount: 1,
+						sourceDomains: ['coindesk.com'],
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'full',
+						promptProvenance: {
+							name: 'crypto-sentiment',
+							source: 'langfuse',
+							label: 'production',
+							version: 1,
+						},
+					},
+					enrichmentSummary: {
+						sentiment: 'BULLISH',
+						sentiment_score: 0.9,
+						setup_type: 'breakout',
+						invalidation_level: 64000,
+						target_level: 68000,
+						risk_reward_ratio: 2,
+						sourceCount: 1,
+						sourceDomains: ['coindesk.com'],
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'full',
+						promptProvenance: {
+							name: 'crypto-sentiment',
+							source: 'langfuse',
+							label: 'production',
+							version: 1,
+						},
+					},
+					channels: ['telegram'],
+					deliveryResults: [{ channel: 'telegram', success: true }],
+					source: 'webhook',
+					useTradingViewData: false,
+					tradingViewEnrichmentApplied: true,
+				},
+			],
+			hasMore: false,
+			nextBefore: null,
+		});
+
+		const res = await request(app)
+			.get('/api/alerts?limit=10&include=enrichment_summary')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listAlerts).toHaveBeenCalledWith({
+			before: undefined,
+			enriched: undefined,
+			limit: 10,
+			source: undefined,
+			include: ['enrichment_summary'],
+			includeEnrichmentSummary: true,
+		});
+		expect(res.body.success).toBe(true);
+		expect(res.body.alerts[0].enrichmentData.sentiment).toBe('BULLISH');
+		expect(res.body.alerts[0].enrichmentSummary.sentiment).toBe('BULLISH');
+	});
+
+	it('returns 400 for invalid include values', async () => {
+		const res = await request(app)
+			.get('/api/alerts?include=unknown_field')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: "Invalid include parameter 'unknown_field'. Allowed values: enrichment_summary.",
+			code: 'INVALID_REQUEST',
 		});
 	});
 
@@ -319,6 +408,28 @@ describe('Alerts API Integration Tests', () => {
 		expect(res.body.summary.shadowModeMetrics).toBe('No measurements found');
 	});
 
+	it('returns evidence coverage from the protected summary endpoint', async () => {
+		const evidenceCoverage = {
+			denominator: 2,
+			zeroSources: { populated: 1, percentage: 50 },
+			oneToTwoSources: { populated: 0, percentage: 0 },
+			threePlusSources: { populated: 1, percentage: 50 },
+			totalSourceCount: 3,
+			averageSourceCount: 1.5,
+			byPromptProvenance: [],
+		};
+		alertStorageService.summarizeAlerts.mockResolvedValue({
+			enrichment: { evidenceCoverage },
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/summary')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(res.body.summary.enrichment.evidenceCoverage).toEqual(evidenceCoverage);
+	});
+
 	it('omits unfiltered shadow metrics from filtered summaries', async () => {
 		signalOutcomeService.isEnabled.mockReturnValue(true);
 		signalOutcomeService.getMetricsSummary.mockResolvedValue({ totalSignalsReceived: 99 });
@@ -429,7 +540,8 @@ describe('Alerts API Integration Tests', () => {
 					useTradingViewData: true,
 					tradingViewEnrichmentStatus: 'partial',
 					deliveryResults: [{ channel: 'whatsapp', success: false, messageId: null, errorCode: 'PROVIDER_LIMIT', statusCode: 429 }],
-					tokenUsage: null,
+				suppressedRepeat: true,
+				tokenUsage: null,
 					text: '=@SUM(1,1), "quoted"\r\n+next',
 				},
 			],
@@ -449,11 +561,12 @@ describe('Alerts API Integration Tests', () => {
 			includeText: true,
 		});
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,requestId,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,tokenUsage,text');
+		expect(res.text).toContain('id,requestId,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
 		expect(res.text).toContain("'=alert-1,,-42,'@webhook");
 		expect(res.text).toContain('"\'=@SUM(1,1), ""quoted""\r\n+next"');
 		expect(res.text).not.toContain('=alert-1,-42,@webhook');
 		expect(res.text).toContain('PROVIDER_LIMIT');
+		expect(res.text).toContain('}]",true,,');
 	});
 
 	it('includes news-monitor metadata in CSV export', async () => {
@@ -486,7 +599,7 @@ describe('Alerts API Integration Tests', () => {
 			.expect(200);
 
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,requestId,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,tokenUsage,text');
+		expect(res.text).toContain('id,requestId,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
 		expect(res.text).toContain('news-123,req-news-456,2026-06-06T12:00:00.000Z,news-monitor,true,false,false,not_applicable,price_surge,0.85,0.75,fresh');
 		expect(res.text).toContain('BTCUSDT: Bitcoin surges past 100k');
 	});
@@ -569,6 +682,7 @@ describe('Alerts API Integration Tests', () => {
 				source: 'webhook',
 				useTradingViewData: true,
 			},
+			lastReplay: null,
 		});
 	});
 
@@ -625,6 +739,7 @@ describe('Alerts API Integration Tests', () => {
 		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith({
 			text: 'Replay me',
 			enriched: { sentiment: 'bullish' },
+			source: 'webhook',
 			replay: {
 				originalAlertId: 'alert-123',
 				idempotencyKey: 'replay-key-1',
@@ -698,5 +813,173 @@ describe('Alerts API Integration Tests', () => {
 			error: 'Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord.',
 			code: 'INVALID_REQUEST',
 		});
+	});
+
+	it('returns 403 when GET /api/alerts/replays has storage disabled', async () => {
+		alertStorageService.isEnabled.mockReturnValue(false);
+
+		const res = await request(app)
+			.get('/api/alerts/replays')
+			.set('x-api-key', 'test-key')
+			.expect(403);
+
+		expect(res.body).toEqual({
+			error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+			code: 'FEATURE_DISABLED',
+		});
+		expect(alertStorageService.listReplayAttempts).not.toHaveBeenCalled();
+	});
+
+	it('returns bounded replay records with safe fields and pagination', async () => {
+		const replayRecord = {
+			id: '1234_uuid',
+			alertId: 'alert-1',
+			idempotencyKeyHashPrefix: 'abcdef012345',
+			channels: ['telegram'],
+			deliverySummary: [
+				{ channel: 'telegram', success: true, messageId: 'tg-1' },
+			],
+			replayedAt: '2026-06-06T12:34:56.000Z',
+			attemptId: '1234_uuid',
+		};
+		alertStorageService.listReplayAttempts.mockResolvedValue({
+			replays: [replayRecord],
+			hasMore: false,
+			nextBefore: null,
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/replays?limit=10')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listReplayAttempts).toHaveBeenCalledWith({
+			limit: 10,
+			alertId: undefined,
+			before: undefined,
+		});
+		expect(res.body).toEqual({
+			success: true,
+			replays: [replayRecord],
+			pagination: { hasMore: false, limit: 10, nextBefore: null },
+		});
+	});
+
+	it('passes alertId filter through to listReplayAttempts', async () => {
+		alertStorageService.listReplayAttempts.mockResolvedValue({
+			replays: [],
+			hasMore: false,
+			nextBefore: null,
+		});
+
+		await request(app)
+			.get('/api/alerts/replays?alertId=alert-42&limit=5')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listReplayAttempts).toHaveBeenCalledWith({
+			limit: 5,
+			alertId: 'alert-42',
+			before: undefined,
+		});
+	});
+
+	it('passes the replay before cursor through to listReplayAttempts', async () => {
+		const before = encodeAlertPaginationCursor({
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			id: 'alert-1_replayhash_1234',
+		});
+
+		await request(app)
+			.get(`/api/alerts/replays?before=${encodeURIComponent(before)}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listReplayAttempts).toHaveBeenCalledWith({
+			limit: 50,
+			alertId: undefined,
+			before,
+		});
+	});
+
+	it('returns 400 for invalid limit on GET /api/alerts/replays', async () => {
+		const res = await request(app)
+			.get('/api/alerts/replays?limit=999')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body.code).toBe('INVALID_REQUEST');
+		expect(alertStorageService.listReplayAttempts).not.toHaveBeenCalled();
+	});
+
+	it('returns 503 when GET /api/alerts/replays hits storage unavailable', async () => {
+		const storageError = new Error('Firestore down');
+		storageError.code = 'STORAGE_UNAVAILABLE';
+		alertStorageService.listReplayAttempts.mockRejectedValue(storageError);
+
+		const res = await request(app)
+			.get('/api/alerts/replays')
+			.set('x-api-key', 'test-key')
+			.expect(503);
+
+		expect(res.body).toEqual({
+			error: 'Firestore down',
+			code: 'STORAGE_UNAVAILABLE',
+		});
+	});
+
+	it('includes lastReplay on GET /api/alerts/:alertId when a replay exists', async () => {
+		const alertRecord = {
+			id: 'alert-1',
+			receivedAt: '2026-06-06T12:00:00.000Z',
+			text: 'Hello',
+			enriched: false,
+			enrichmentData: null,
+			tokenUsage: null,
+			deliveryResults: [],
+			source: 'webhook',
+			useTradingViewData: false,
+		};
+		const lastReplay = {
+			id: 'ts_uuid',
+			alertId: 'alert-1',
+			idempotencyKeyHashPrefix: 'abcdef012345',
+			channels: ['telegram'],
+			deliverySummary: [{ channel: 'telegram', success: true }],
+			replayedAt: '2026-06-06T12:34:56.000Z',
+			attemptId: 'ts_uuid',
+		};
+		alertStorageService.getAlertById.mockResolvedValue(alertRecord);
+		alertStorageService.getLatestReplayForAlert.mockResolvedValue(lastReplay);
+
+		const res = await request(app)
+			.get('/api/alerts/alert-1')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(res.body.alert).toEqual(alertRecord);
+		expect(res.body.lastReplay).toEqual(lastReplay);
+	});
+
+	it('omits lastReplay on GET /api/alerts/:alertId when no replay exists', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-2',
+			receivedAt: '2026-06-06T12:00:00.000Z',
+			text: 'Hello',
+			enriched: false,
+			enrichmentData: null,
+			tokenUsage: null,
+			deliveryResults: [],
+			source: 'webhook',
+			useTradingViewData: false,
+		});
+		alertStorageService.getLatestReplayForAlert.mockResolvedValue(null);
+
+		const res = await request(app)
+			.get('/api/alerts/alert-2')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(res.body.lastReplay).toBeNull();
 	});
 });

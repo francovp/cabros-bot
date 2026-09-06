@@ -12,6 +12,7 @@ describe('process lifecycle coordinator', () => {
 		const server = { close: jest.fn((callback) => callback()) };
 		const bot = { stop: jest.fn().mockResolvedValue(undefined) };
 		const stopWorker = jest.fn().mockResolvedValue(undefined);
+		const stopNewsMonitorScheduler = jest.fn().mockResolvedValue(undefined);
 		const shutdownNewsMonitor = jest.fn();
 		const flushSentry = jest.fn().mockResolvedValue(true);
 		const forceExit = jest.fn();
@@ -20,6 +21,7 @@ describe('process lifecycle coordinator', () => {
 			getServer: () => server,
 			getBot: () => bot,
 			stopSignalOutcomeWorker: stopWorker,
+			stopNewsMonitorScheduler,
 			shutdownNewsMonitor,
 			flushSentry,
 			timeoutMs: 100,
@@ -35,6 +37,7 @@ describe('process lifecycle coordinator', () => {
 
 		expect(server.close).toHaveBeenCalledTimes(1);
 		expect(stopWorker).toHaveBeenCalledWith({ drain: true });
+		expect(stopNewsMonitorScheduler).toHaveBeenCalledWith({ drain: true });
 		expect(shutdownNewsMonitor).toHaveBeenCalledTimes(1);
 		expect(bot.stop).toHaveBeenCalledWith('SIGTERM');
 		expect(flushSentry).toHaveBeenCalledWith(100);

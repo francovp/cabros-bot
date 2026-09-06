@@ -87,6 +87,9 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 			.expect(200);
 
 		expect(res.body.success).toBe(true);
+		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
+		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.alertText).toContain('*🟡 NEUTROS*');
 		expect(res.body.summary).toEqual({
 			total: 1,
@@ -225,6 +228,9 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 			timedOut: true,
 			timeoutMs: 5,
 		}));
+		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
+		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.results).toEqual([
 			expect.objectContaining({
 				symbol: 'NASDAQ:NVDA',
@@ -376,16 +382,17 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
-	it('analyzes symbols sequentially to avoid concurrent MCP failures', async () => {
+	it('analyzes symbols with bounded concurrency and preserves input order', async () => {
 		let activeCalls = 0;
 		let maxActiveCalls = 0;
 		const callOrder = [];
+		process.env.EXPANDED_ANALYSIS_ALERT_CONCURRENCY = '2';
 
 		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(async ({ raw }) => {
 			activeCalls++;
 			maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
 			callOrder.push(`start:${raw}`);
-			await Promise.resolve();
+			await new Promise((resolve) => setTimeout(resolve, raw.endsWith('NVDA') ? 10 : 1));
 			activeCalls--;
 			callOrder.push(`end:${raw}`);
 			return {
@@ -394,7 +401,7 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 			};
 		});
 
-		await analyzeSymbols({
+		const results = await analyzeSymbols({
 			symbols: [
 				{ raw: 'NASDAQ:NVDA', exchange: 'NASDAQ', symbol: 'NVDA' },
 				{ raw: 'NASDAQ:AAPL', exchange: 'NASDAQ', symbol: 'AAPL' },
@@ -402,16 +409,21 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 			timeframe: '1D',
 		});
 
-		expect(maxActiveCalls).toBe(1);
+		expect(maxActiveCalls).toBe(2);
 		expect(callOrder).toEqual([
 			'start:NASDAQ:NVDA',
-			'end:NASDAQ:NVDA',
 			'start:NASDAQ:AAPL',
 			'end:NASDAQ:AAPL',
+			'end:NASDAQ:NVDA',
+		]);
+		expect(results.map((result) => result.symbol)).toEqual([
+			'NASDAQ:NVDA',
+			'NASDAQ:AAPL',
 		]);
 	});
 
 	it('stops analysis and marks remaining symbols as timeout when deadline is aborted', async () => {
+		process.env.EXPANDED_ANALYSIS_ALERT_CONCURRENCY = '1';
 		const controller = new AbortController();
 		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementationOnce(async () => {
 			controller.abort(new Error('Expanded analysis alert timeout after 60000ms'));
@@ -574,5 +586,36 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 			timeframe: '1D',
 			analysisMode: 'combined',
 		}));
+	});
+
+	it('supports dryRun query parameter and returns processingTimeMs without delivery', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			symbol: 'NASDAQ:NVDA',
+			price_data: {
+				current_price: 219.51,
+				change_percent: -1.8,
+				volume: 70213090,
+			},
+			technical_indicators: {
+				rsi: 57.8,
+				sma20: 214.1,
+				macd: 6.1,
+				macd_signal: 7.2,
+				atr: 7.69,
+			},
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert?dryRun=true')
+			.set('x-api-key', 'test-key')
+			.send({ symbols: ['NASDAQ:NVDA'], timeframe: '1D' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.dryRun).toBe(true);
+		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
+		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		expect(res.body).not.toHaveProperty('totalDurationMs');
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 });

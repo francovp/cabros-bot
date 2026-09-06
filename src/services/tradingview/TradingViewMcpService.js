@@ -10,6 +10,7 @@ const {
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
+const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function getAbortMessage(signal, fallback) {
 	const reason = signal && signal.reason;
@@ -24,8 +25,8 @@ function getAbortMessage(signal, fallback) {
 	return fallback;
 }
 
-function createRuntimeStatus() {
-	return {
+function createRuntimeStatus({ includeEnrichment = true } = {}) {
+	const status = {
 		status: 'unknown',
 		lastCheckedAt: null,
 		lastSuccessAt: null,
@@ -33,13 +34,21 @@ function createRuntimeStatus() {
 		lastErrorCategory: null,
 		successCount: 0,
 		failureCount: 0,
-		enrichment: {
+	};
+	if (includeEnrichment) {
+		status.enrichment = {
 			lastStatus: null,
 			fullCount: 0,
 			partialCount: 0,
 			failedCount: 0,
-		},
-	};
+		};
+	}
+
+	return status;
+}
+
+function getPercentage(value, total) {
+	return total === 0 ? 0 : Number(((value / total) * 100).toFixed(2));
 }
 
 const SETUP_TYPES = new Set(['breakout', 'mean_reversion', 'trend_continuation', 'reversal']);
@@ -88,26 +97,28 @@ class TradingViewMcpService {
 		this.logger = config.logger || console;
 		this.requestCounter = 0;
 		this.runtimeStatus = createRuntimeStatus();
-		this.volumeRuntimeStatus = createRuntimeStatus();
+		this.volumeRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
 		this.consecutiveFailures = 0;
 		this.breakerState = 'closed';
 		this.breakerOpenedAt = null;
 		this.lastBreakerStateChangeAt = null;
 		this.lastAdminPageSentAt = null;
 		this.hasActiveOutagePage = false;
+		this.enrichmentEvents = [];
 		this.notifyAdmin = config.notifyAdmin || null;
 		this.notificationManager = config.notificationManager || null;
 	}
 
 	_resetForTesting() {
 		this.runtimeStatus = createRuntimeStatus();
-		this.volumeRuntimeStatus = createRuntimeStatus();
+		this.volumeRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
 		this.consecutiveFailures = 0;
 		this.breakerState = 'closed';
 		this.breakerOpenedAt = null;
 		this.lastBreakerStateChangeAt = null;
 		this.lastAdminPageSentAt = null;
 		this.hasActiveOutagePage = false;
+		this.enrichmentEvents = [];
 	}
 
 	isEnabled() {
@@ -189,7 +200,7 @@ class TradingViewMcpService {
 		const baseStatus = !enabled ? 'disabled' : !configured ? 'misconfigured' : runtimeStatus.status;
 		const status = baseStatus === 'ready' && circuitBreaker.state === 'open' ? 'degraded' : baseStatus;
 
-		return {
+		const statusDetails = {
 			enabled,
 			configured,
 			...runtimeStatus,
@@ -197,6 +208,14 @@ class TradingViewMcpService {
 			ready: enabled && configured && status === 'ready' && circuitBreaker.state !== 'open',
 			status,
 		};
+		if (statusDetails.enrichment && runtimeStatus === this.runtimeStatus) {
+			statusDetails.enrichment = {
+				...statusDetails.enrichment,
+				alertPath: this._getAlertPathEnrichmentStatus(),
+			};
+		}
+
+		return statusDetails;
 	}
 
 	getVolumeConfirmationStatus({ enabled = this.isEnabled() } = {}) {
@@ -1046,6 +1065,11 @@ class TradingViewMcpService {
 			return;
 		}
 
+		const now = Date.now();
+		this.enrichmentEvents = this.enrichmentEvents
+			.filter(event => event.timestamp > now - ENRICHMENT_WINDOW_MS);
+		this.enrichmentEvents.push({ status, timestamp: now });
+
 		const countKey = `${status}Count`;
 		const enrichment = this.runtimeStatus.enrichment || {
 			lastStatus: null,
@@ -1060,6 +1084,24 @@ class TradingViewMcpService {
 				lastStatus: status,
 				[countKey]: enrichment[countKey] + 1,
 			},
+		};
+	}
+
+	_getAlertPathEnrichmentStatus() {
+		const cutoff = Date.now() - ENRICHMENT_WINDOW_MS;
+		const events = this.enrichmentEvents.filter(event => event.timestamp > cutoff);
+		const fullCount = events.filter(event => event.status === 'full').length;
+		const partialCount = events.filter(event => event.status === 'partial').length;
+		const failedCount = events.filter(event => event.status === 'failed').length;
+		const totalCount = events.length;
+
+		return {
+			windowMs: ENRICHMENT_WINDOW_MS,
+			totalCount,
+			appliedCount: fullCount + partialCount,
+			failedCount,
+			appliedRate24h: getPercentage(fullCount + partialCount, totalCount),
+			failureRate24h: getPercentage(failedCount, totalCount),
 		};
 	}
 

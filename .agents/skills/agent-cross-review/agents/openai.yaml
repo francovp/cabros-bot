@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Cross-Review"
+  short_description: "Review PRs made by other AI coding agents"
+  default_prompt: "Use $agent-cross-review to inspect recently opened PRs created by other AI agents (Codex, GitHub Copilot, OpenCode, Claude) and perform a comprehensive review against Cabros Bot standards."

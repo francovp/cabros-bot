@@ -144,7 +144,10 @@
 
 	const getApiRequestTimeout = (definition) => {
 		if (!definition || !definition.path) return API_REQUEST_TIMEOUT_MS;
-		if (definition.path === '/api/webhook/volume-confirmation') return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+		if (definition.path === '/api/webhook/volume-confirmation'
+			|| definition.path === '/api/webhook/symbol-analysis') {
+			return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+		}
 		return LONG_RUNNING_REQUEST_PATHS.has(definition.path)
 			? LONG_RUNNING_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS;
 	};

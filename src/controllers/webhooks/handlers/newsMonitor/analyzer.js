@@ -22,6 +22,7 @@ const {
 	getRequestedChannels,
 	validateNotificationRouting,
 } = require('../../../../services/notification/requestRouting');
+const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 
 const promptService = getPromptService();
 
@@ -31,11 +32,30 @@ let notificationManager = null;
 // Binance client singleton
 let binanceClient = null;
 
+function resolveBinanceBaseUrl() {
+	const configured = process.env.BINANCE_DATA_BASE_URL;
+	if (typeof configured === 'string' && configured.trim() !== '') {
+		const trimmed = configured.trim();
+		if (/^https?:\/\//i.test(trimmed)) {
+			return trimmed;
+		}
+		console.warn(
+			`[newsMonitor/analyzer] Ignoring BINANCE_DATA_BASE_URL="${configured}" — must be an http(s) URL. Falling back to https://api.binance.com.`,
+		);
+	}
+	return 'https://api.binance.com';
+}
+
 function getBinanceClient() {
 	if (!binanceClient) {
-		binanceClient = new MainClient({
+		const clientOptions = {
 			beautifyResponses: true,
-		});
+		};
+		const baseUrl = resolveBinanceBaseUrl();
+		if (baseUrl) {
+			clientOptions.baseUrl = baseUrl;
+		}
+		binanceClient = new MainClient(clientOptions);
 	}
 	return binanceClient;
 }
@@ -75,6 +95,17 @@ function getRoutingDestination(notificationMgr, routing = {}, channel) {
 		return hashDiscordWebhook(routing.discordWebhookUrl || getChannelDefaultDestination(notificationMgr, channel));
 	}
 
+	if (channel === 'telegram') {
+		const chatId = (typeof routing.telegramChatId === 'string' && routing.telegramChatId)
+			? routing.telegramChatId
+			: getChannelDefaultDestination(notificationMgr, channel);
+		if (!chatId) return undefined;
+		const threadId = (typeof routing.telegramThreadId === 'number' && Number.isSafeInteger(routing.telegramThreadId))
+			? routing.telegramThreadId
+			: undefined;
+		return threadId !== undefined ? `${chatId}:${threadId}` : String(chatId);
+	}
+
 	const field = ROUTING_IDENTITY_FIELDS[channel];
 	if (field && typeof routing[field] === 'string') return routing[field];
 	return getChannelDefaultDestination(notificationMgr, channel);
@@ -83,6 +114,14 @@ function getRoutingDestination(notificationMgr, routing = {}, channel) {
 function getStoredRoutingIdentity(routing = {}, channel) {
 	if (channel === 'discord') {
 		return routing.discordWebhookFingerprint || hashDiscordWebhook(routing.discordWebhookUrl);
+	}
+	if (channel === 'telegram') {
+		const chatId = routing.telegramChatId;
+		if (!chatId) return undefined;
+		const threadId = (typeof routing.telegramThreadId === 'number' && Number.isSafeInteger(routing.telegramThreadId))
+			? routing.telegramThreadId
+			: undefined;
+		return threadId !== undefined ? `${chatId}:${threadId}` : String(chatId);
 	}
 	return routing[ROUTING_IDENTITY_FIELDS[channel]];
 }
@@ -101,6 +140,12 @@ function getCachedRoutingMetadata(routing = {}, previousRouting = {}, notificati
 		if (identity !== undefined) {
 			metadata[field] = identity;
 		}
+	}
+	const threadId = typeof routing.telegramThreadId === 'number'
+		? routing.telegramThreadId
+		: (typeof previousRouting.telegramThreadId === 'number' ? previousRouting.telegramThreadId : undefined);
+	if (threadId !== undefined) {
+		metadata.telegramThreadId = threadId;
 	}
 	return metadata;
 }
@@ -1150,7 +1195,8 @@ class NewsAnalyzer {
 		}
 
 		if (geminiAnalysis.invalidation_hint && typeof geminiAnalysis.invalidation_hint === 'string' && geminiAnalysis.invalidation_hint.trim()) {
-			context += `\n*Invalidación:* ${geminiAnalysis.invalidation_hint.trim()}`;
+			const escapedInvalidationHint = new MarkdownV2Formatter().format(geminiAnalysis.invalidation_hint.trim());
+			context += `\n*Invalidación:* ${escapedInvalidationHint}`;
 		}
 
 		// Derive outcome barriers when marketContext has a valid numeric price
@@ -1194,6 +1240,7 @@ class NewsAnalyzer {
 
 		return {
 			symbol,
+			source: 'news-monitor',
 			eventCategory: geminiAnalysis.event_category,
 			headline: geminiAnalysis.headline,
 			sentimentScore: geminiAnalysis.sentiment_score,
