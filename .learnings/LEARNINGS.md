@@ -173,3 +173,81 @@ When engaging on PRs, reference the senior dev's evaluation labels to show aware
 - Pattern-Key: process.triage_labels
 
 ---
+
+## [LRN-20260906-001] correction
+
+**Logged**: 2026-09-06T00:02:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Low automation readiness score from Senior Dev on PR #1098
+
+### Details
+PR #1098 (feat(webhooks): add standardized structured error envelope to /api/webhook/alert) received an automated evaluation from @gigachad-senior-dev with `automation/skip` label and Score: 25/100. The PR body also noted "@virgin-trainee-dev did not contribute on this issue." This indicates the trainee missed an engagement opportunity and the work was assessed as not suitable for automation.
+
+### Suggested Action
+- Always engage on PRs where Senior Dev has provided evaluation, especially when score is low (automation/skip)
+- Reference the automation readiness score and labels in engagement to show awareness
+- Proactively contribute technical questions/insights on PRs within the trainee's domain
+
+### Metadata
+- Source: user_feedback
+- Related Files: PR #1098
+- Tags: triage, evaluation, senior-dev, missed-engagement
+- Pattern-Key: interact.senior_dev_evaluation
+
+---
+
+## [LRN-20260906-002] correction
+
+**Logged**: 2026-09-06T00:02:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Missed engagement on multiple PRs with Senior Dev evaluations
+
+### Details
+PRs #1106, #1105, #1102, #1101, #1100 all received automated evaluations from @gigachad-senior-dev with `automation/skip` labels and low scores (15-45/100). PR bodies for #1098, #1102, #1101 explicitly noted "@virgin-trainee-dev did not contribute on this issue." This pattern indicates systematic missed engagement opportunities on PRs with Senior Dev triage.
+
+### Suggested Action
+- In every scan cycle, explicitly check ALL open PRs for Senior Dev evaluations, not just mentions
+- Engage proactively on PRs with automation/skip regardless of direct mention
+- Reference the automation readiness score, priority, type, areas, and size labels in engagement
+
+### Metadata
+- Source: user_feedback
+- Related Files: PR #1106, #1105, #1102, #1101, #1100
+- Tags: triage, evaluation, senior-dev, missed-engagement, pattern
+- Pattern-Key: interact.senior_dev_evaluation
+
+---
+
+## [LRN-20260906-003] insight
+
+**Logged**: 2026-09-06T00:02:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Senior Dev evaluations follow consistent pattern across PRs
+
+### Details
+All evaluated PRs (#1098, #1106, #1105, #1102, #1101, #1100) received evaluations with identical structure: priority, type, areas, size, status/triage, automation readiness with score, and labels. Common automation readiness details: "Bug report missing reproduction steps" and/or "Scope is too large for a single automated pass". Scores range 15-45/100, all resulting in `automation/skip`.
+
+### Suggested Action
+- Treat automation readiness score as a triage signal: lower score = more need for human review/engagement
+- When score <= 25, prioritize engagement with technical questions about scope boundaries and failure modes
+- Use the applied labels (priority, type, areas, size) to frame engagement context
+
+### Metadata
+- Source: observation
+- Related Files: PR #1098, #1106, #1105, #1102, #1101, #1100
+- Tags: triage, evaluation, pattern, automation-readiness
+- Pattern-Key: process.triage_labels
+
+---
