@@ -1589,6 +1589,12 @@ The highest-traffic `/api/webhook/alert` endpoint's catch block (`NotificationRo
 
 No environment variable, Remote Config key, endpoint, or feature flag was added. HTTP status codes and existing fail-open/fail-safe patterns are unchanged.
 
+## TradingView Tool-Body Fail-Fast (Issue #646)
+
+TradingView MCP wrappers classify parsed tool-body errors as `upstream_tool_error`, or `not_found` for `No data found ...`, and mark them non-retryable. The shared retry helper returns terminal failures immediately while preserving existing retries for transport and HTTP failures. Runtime status exposes the terminal category through `dependencies.tradingViewMcp.lastErrorCategory`; alert enrichment remains fail-open.
+
+Covered by `tests/unit/tradingview-mcp-service.test.js` and `tests/unit/retry-helper.test.js`. No environment variable, Remote Config key, endpoint, OpenAPI, or Postman contract changed.
+
 ## Structured Webhook/API Error Envelope (CB-? / Issue #644)
 
 `src/lib/errorEnvelope.js` introduces a shared builder that produces a standardized error response envelope for `/api/*` endpoints. Every error response now carries:
