@@ -47,10 +47,16 @@ const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 ]);
 
 class MarketScannerRequestError extends Error {
-	constructor(message, code = 'INVALID_REQUEST') {
+	constructor(message, code = 'INVALID_REQUEST', options = {}) {
 		super(message);
 		this.name = 'MarketScannerRequestError';
 		this.code = code;
+		if (options && Number.isInteger(options.statusCode)) {
+			this.statusCode = options.statusCode;
+		}
+		if (options && options.details !== undefined) {
+			this.details = options.details;
+		}
 	}
 }
 
