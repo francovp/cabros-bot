@@ -3495,6 +3495,54 @@
             "format": "date-time",
             "example": "2026-08-23T12:00:00.000Z"
           },
+          "observedAt": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "Timestamp at which the signal was observed. Present on records written with session metadata."
+          },
+          "decisionBarClosedAt": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "Regular-session close represented by the signal when known."
+          },
+          "tradableAt": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "First regular-session timestamp at which an anchored cohort could trade. Current shadow evaluation still uses raw observation prices."
+          },
+          "anchorMode": {
+            "type": ["string", "null"],
+            "enum": ["raw_received_at", null],
+            "description": "Price/time denominator used by the current outcome evaluator."
+          },
+          "anchorVersion": {
+            "type": ["string", "null"],
+            "example": "v1"
+          },
+          "calendarId": {
+            "type": ["string", "null"],
+            "example": "nyse"
+          },
+          "calendarTimeZone": {
+            "type": ["string", "null"],
+            "example": "America/New_York"
+          },
+          "sessionContext": {
+            "type": ["string", "null"],
+            "enum": ["crypto_24_7", "regular", "pre_close", "after_hours", "market_holiday", "non_regular_market", null]
+          },
+          "measurementCohort": {
+            "type": ["string", "null"],
+            "enum": ["raw_received_at", "raw_received_at_after_hours", "raw_pre_open", "raw_market_closed", null],
+            "description": "Downstream segmentation label; after-hours equity windows are not anchored to a tradable opening price."
+          },
+          "observedPrice": {
+            "type": ["number", "null"]
+          },
+          "tradablePrice": {
+            "type": ["number", "null"],
+            "description": "Separate executable-session price. Null while the record remains in the raw observation shadow cohort."
+          },
           "requestId": {
             "type": [
               "string",

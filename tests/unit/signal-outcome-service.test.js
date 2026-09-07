@@ -147,6 +147,75 @@ describe('SignalOutcomeService', () => {
 		});
 	});
 
+	describe('getSessionContext()', () => {
+		it('flags a post-close daily equity signal and points to the next session open', () => {
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-08-25T20:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'after_hours',
+				measurementCohort: 'raw_received_at_after_hours',
+				anchorMode: 'raw_received_at',
+				calendarId: 'nyse',
+				calendarTimeZone: 'America/New_York',
+				decisionBarClosedAt: '2026-08-25T20:00:00.000Z',
+				tradableAt: '2026-08-26T13:30:00.000Z',
+			}));
+		});
+
+		it('preserves DST-aware session times and skips US holidays', () => {
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'NASDAQ_DLY',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-11-26T20:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'market_holiday',
+				decisionBarClosedAt: null,
+				tradableAt: '2026-11-27T14:30:00.000Z',
+			}));
+
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-11-27T18:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'after_hours',
+				decisionBarClosedAt: '2026-11-27T18:00:00.000Z',
+				tradableAt: '2026-11-30T14:30:00.000Z',
+			}));
+		});
+
+		it('uses the correct DST offset after a Friday close', () => {
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'BATS',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-11-02T21:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				decisionBarClosedAt: '2026-11-02T21:00:00.000Z',
+				tradableAt: '2026-11-03T14:30:00.000Z',
+			}));
+		});
+
+		it('does not add equity session assumptions to crypto signals', () => {
+			const receivedAt = new Date('2026-08-25T20:01:00.000Z');
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'BINANCE',
+				assetClass: 'crypto',
+				timeframe: '1D',
+				receivedAt,
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'crypto_24_7',
+				measurementCohort: 'raw_received_at',
+				tradableAt: receivedAt.toISOString(),
+			}));
+		});
+	});
+
 	describe('recordSignal()', () => {
 		it('returns null when feature is disabled', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'false';
@@ -188,6 +257,34 @@ describe('SignalOutcomeService', () => {
 			expect(saved.source).toBe('market-scanner');
 			expect(saved.price).toBe(50000);
 			expect(saved.side).toBe('BUY');
+		});
+
+		it('persists equity session context without mixing post-close windows into a tradable cohort', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+			process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+			process.env.TWELVE_DATA_API_KEY = 'test-twelve-data-key';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-25T20:01:00.000Z'));
+
+			try {
+				const resId = await SignalOutcomeService.recordSignal({
+					requestId: 'req-post-close-session',
+					source: 'market-scanner',
+					symbol: 'NYSE:AAPL',
+					timeframe: '1D',
+					assetClass: 'stock',
+					price: 150,
+				});
+
+				const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+				expect(saved.sessionContext).toBe('after_hours');
+				expect(saved.measurementCohort).toBe('raw_received_at_after_hours');
+				expect(saved.anchorMode).toBe('raw_received_at');
+				expect(saved.tradablePrice).toBeNull();
+				expect(saved.outcomes['1h'].measurementCohort).toBe('raw_received_at_after_hours');
+			} finally {
+				jest.useRealTimers();
+			}
 		});
 
 		it('saves a normalised document when enabled with alert storage', async () => {

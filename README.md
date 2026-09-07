@@ -1478,6 +1478,15 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
     {
       "id": "outcome-doc-1",
       "receivedAt": "2026-08-23T12:00:00.000Z",
+      "observedAt": "2026-08-23T12:00:00.000Z",
+      "decisionBarClosedAt": null,
+      "tradableAt": "2026-08-23T12:00:00.000Z",
+      "anchorMode": "raw_received_at",
+      "anchorVersion": "v1",
+      "calendarId": null,
+      "calendarTimeZone": null,
+      "sessionContext": "crypto_24_7",
+      "measurementCohort": "raw_received_at",
       "requestId": "req-1",
       "source": "news-monitor",
       "symbol": "BTCUSDT",
@@ -1488,6 +1497,8 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
       "score": 0.9,
       "side": "BUY",
       "price": 65000,
+      "observedPrice": 65000,
+      "tradablePrice": 65000,
       "entryPriceSource": "tradingview-mcp",
       "stop": 63000,
       "target": 68000,
@@ -1500,6 +1511,9 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
           "status": "evaluated",
           "reason": null,
           "targetTime": "2026-08-23T13:00:00.000Z",
+          "anchorMode": "raw_received_at",
+          "anchorVersion": "v1",
+          "measurementCohort": "raw_received_at",
           "price": 66000,
           "return": 1.5385,
           "maxFavorableExcursion": 2.0,
@@ -1528,6 +1542,8 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
   }
 }
 ```
+
+Equity records also persist `sessionContext`, `decisionBarClosedAt`, `tradableAt`, and separate observed/tradable price fields. Post-close or holiday records are labeled `raw_received_at_after_hours` or `raw_market_closed`; they remain in the shadow raw-observation cohort until a separate executable-session price is available.
 
 #### GET /api/outcomes/summary
 
