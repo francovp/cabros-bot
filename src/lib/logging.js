@@ -30,6 +30,102 @@ const BASE_CONSOLE_METHODS = {
 };
 
 const SENSITIVE_KEY_PATTERN = /(password|secret|token|api[-_]?key|authorization|cookie|dsn|discordWebhookUrl|webhookUrl)/i;
+const registeredSecrets = new Set();
+
+function registerSecretValue(value) {
+	if (typeof value === 'string') {
+		const trimmed = value.trim();
+		if (trimmed.length >= 4) {
+			registeredSecrets.add(trimmed);
+		}
+	}
+}
+
+function clearSecretValue(value) {
+	if (typeof value === 'string') {
+		registeredSecrets.delete(value.trim());
+	}
+}
+
+function clearAllSecretValues() {
+	registeredSecrets.clear();
+}
+
+function isSensitiveKeyLabel(str) {
+	if (typeof str !== 'string') return false;
+	const trimmed = str.trim();
+	return /(?:password|secret|(?:(?:bot|auth|access)[-_]?)?token|api[-_]?key|authorization|cookie|dsn|discordWebhookUrl|webhookUrl)\s*(?:is|[:=])?$/i.test(trimmed);
+}
+
+function redactString(text) {
+	if (typeof text !== 'string' || text.length === 0) {
+		return text;
+	}
+
+	let result = text;
+
+	// 1. Registered runtime secrets (longest first to avoid partial replacements)
+	if (registeredSecrets.size > 0) {
+		const secrets = Array.from(registeredSecrets).sort((a, b) => b.length - a.length);
+		for (const secret of secrets) {
+			if (result.includes(secret)) {
+				result = result.replaceAll(secret, '[REDACTED]');
+			}
+		}
+	}
+
+	// 2. Discord Webhook URLs (preserve webhook base, mask token)
+	result = result.replace(
+		/(https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/[0-9]+\/)(?!\[REDACTED\])[^?\s/]+/gi,
+		'$1[REDACTED]'
+	);
+
+	// 3. Telegram bot tokens (<id>:AA<30+ chars>)
+	result = result.replace(
+		/\b[0-9]{8,10}:AA[A-Za-z0-9_-]{30,}\b/g,
+		'[REDACTED]'
+	);
+
+	// 4. OpenAI-style API keys (sk-<16+ chars>)
+	result = result.replace(
+		/(?<![A-Za-z0-9])sk-[A-Za-z0-9]{16,}/g,
+		'[REDACTED]'
+	);
+
+	// 5. URL query-string parameters with sensitive keys
+	result = result.replace(
+		/([?&](?:api[-_]?key|token|password|secret|access[-_]?token)=)(?!\[REDACTED\])([^&\s#"']+)/gi,
+		'$1[REDACTED]'
+	);
+
+	// 6. JSON string properties with sensitive keys
+	result = result.replace(
+		/"(password|secret|token|api[-_]?key|authorization|cookie|dsn|discordWebhookUrl|webhookUrl)"\s*:\s*"(?!\[REDACTED\])([^"]*)"/gi,
+		'"$1":"[REDACTED]"'
+	);
+
+	// 7. Authorization headers
+	result = result.replace(
+		/(?<=\bauthorization\s*:\s*(?:Bearer|Basic)\s+)(?!\[REDACTED\])[^\s,"'}{]+/gi,
+		'[REDACTED]'
+	);
+	result = result.replace(
+		/(?<=\bauthorization\s*:\s*)(?!(?:Bearer|Basic)\b|\[REDACTED\])[^\s,"'}{]+/gi,
+		'[REDACTED]'
+	);
+	result = result.replace(
+		/(?<=\bBearer\s+)(?!\[REDACTED\])[A-Za-z0-9._~+/-]{16,}=*/g,
+		'[REDACTED]'
+	);
+
+	// 8. Key-value string patterns (e.g. api-key: value, token=value)
+	result = result.replace(
+		/(?<=\b(?:(?:bot|auth|access)[-_]?)?(?:token|api[-_]?key|password|secret)\s*(?:[:=]|is)\s*)(['"]?)(?!\[REDACTED\])[^\s,"'}{]+\1/gi,
+		'$1[REDACTED]$1'
+	);
+
+	return result;
+}
 
 function resolveLogLevel() {
 	const raw = process.env.LOG_LEVEL || (process.env.NODE_ENV === 'production' ? 'info' : 'debug');
@@ -58,6 +154,9 @@ function normalizeValue(value, seen = new WeakSet()) {
 	}
 
 	if (value === null || typeof value !== 'object') {
+		if (typeof value === 'string') {
+			return redactString(value);
+		}
 		return value;
 	}
 
@@ -79,23 +178,23 @@ function normalizeValue(value, seen = new WeakSet()) {
 		}, {});
 	}
 
-	return String(value);
+	return redactString(String(value));
 }
 
 function serializeError(error) {
 	return {
 		name: error.name,
-		message: error.message,
-		stack: error.stack,
+		message: redactString(error.message),
+		stack: redactString(error.stack),
 	};
 }
 
 function stringifyMessagePart(arg) {
 	if (arg instanceof Error) {
-		return arg.message;
+		return redactString(arg.message);
 	}
 	if (typeof arg === 'string') {
-		return arg;
+		return redactString(arg);
 	}
 	if (typeof arg === 'number' || typeof arg === 'boolean' || typeof arg === 'bigint') {
 		return String(arg);
@@ -113,11 +212,15 @@ function buildLogEntry(level, args) {
 	let error;
 
 	args.forEach((arg, index) => {
+		const prevArgIsLabel = index > 0 && isSensitiveKeyLabel(args[index - 1]);
 		const messagePart = stringifyMessagePart(arg);
+
 		if (messagePart !== undefined) {
-			messageParts.push(messagePart);
+			const finalMessagePart = prevArgIsLabel ? '[REDACTED]' : messagePart;
+			messageParts.push(finalMessagePart);
 			if (index > 0 && !(arg instanceof Error)) {
-				parameters.push(normalizeValue(arg));
+				const paramValue = prevArgIsLabel ? '[REDACTED]' : normalizeValue(arg);
+				parameters.push(paramValue);
 			}
 		}
 
@@ -129,14 +232,16 @@ function buildLogEntry(level, args) {
 		if (isPlainObject(arg)) {
 			Object.assign(attributes, normalizeValue(arg));
 		} else if (index > 0 && messagePart === undefined) {
-			parameters.push(normalizeValue(arg));
+			const paramValue = prevArgIsLabel ? '[REDACTED]' : normalizeValue(arg);
+			parameters.push(paramValue);
 		}
 	});
 
+	const rawMessage = messageParts.join(' ') || 'Log event';
 	const entry = {
 		timestamp: new Date().toISOString(),
 		level,
-		message: messageParts.join(' ') || 'Log event',
+		message: redactString(rawMessage),
 		service: getServiceName(),
 		environment: getEnvironmentName(),
 		pid: process.pid,
@@ -209,6 +314,7 @@ function configureLogging() {
 
 function _resetLoggingForTests() {
 	configured = false;
+	registeredSecrets.clear();
 	console.debug = BASE_CONSOLE_METHODS.debug;
 	console.info = BASE_CONSOLE_METHODS.info;
 	console.log = BASE_CONSOLE_METHODS.log;
@@ -220,4 +326,8 @@ module.exports = {
 	configureLogging,
 	LEVELS,
 	_resetLoggingForTests,
+	registerSecretValue,
+	clearSecretValue,
+	clearAllSecretValues,
+	redactString,
 };
