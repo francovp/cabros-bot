@@ -83,6 +83,9 @@ async function sendWithRetry(sendFn, maxRetries = 3, logger = null, options = {}
 
 			// Failure; retry if attempts remain
 			lastResult = result;
+			if (result.retryable === false) {
+				return { ...result, attemptCount: attempt, durationMs };
+			}
 			if (signal && signal.aborted) {
 				return buildAbortedResult(signal, lastResult, totalStartTime, attempt);
 			}
