@@ -218,7 +218,7 @@ pnpm test:firebase
 - `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel/Railway, and `false` for direct deployments)
 - `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes; invalid values use the default)
 - `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default). Core `/api/webhook/alert` and `/api/webhook/message` ingest uses an isolated finite bucket of 1,000 requests per window so TradingView bursts do not consume the ordinary client bucket; API-key validation still applies.
-- `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
+- `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production). The logger automatically masks sensitive plain-object keys, bare-scalar secrets preceded by sensitive labels, URL query secrets, embedded JSON strings, Authorization/Bearer credentials, Telegram bot tokens, Discord webhook tokens, OpenAI keys, and dynamically registered request-scoped secrets via `registerSecretValue` / `clearSecretValue`.
 - `SERVICE_NAME` - Optional service name included in JSON logs (default: package name or `cabros-bot`)
 
 #### News Monitoring (003-news-monitor)
@@ -393,6 +393,29 @@ Health check endpoint.
 {"uptime":"..."}
 ```
 
+### GET /ready
+
+Public bootstrap-readiness endpoint for deployment traffic cutover. It returns `503` while startup is pending or failed, and `200` only after the required bootstrap components are ready. Telegram is `disabled` when the bot is disabled or the environment is a preview; the news monitor is `disabled` when it is not enabled. Readiness checks bootstrap completion only and does not continuously ping external providers, avoiding restart loops caused by transient dependency outages.
+
+Configure the deployment platform health check to use `/ready` (`healthCheckPath` in `render.yaml`; Railway's service healthcheck path should use the same value). Keep `/healthcheck` for process liveness.
+
+The protected `/api/status` response includes the same non-sensitive state under `readiness`.
+
+**Ready response:**
+```json
+{
+  "status": "ready",
+  "ready": true,
+  "components": {
+    "telegramBot": { "status": "disabled" },
+    "notificationServices": { "status": "ready" },
+    "newsMonitor": { "status": "disabled" }
+  }
+}
+```
+
+Pending and failed bootstrap states use the same body shape with HTTP `503`; failed responses include a sanitized `error` message.
+
 ### GET /api/status
 
 Machine-readable runtime status for operational tooling. This endpoint uses the same `WEBHOOK_API_KEY` protection as other `/api` endpoints when that environment variable is configured. Send the key with the `x-api-key` header.
@@ -441,7 +464,7 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
 
 - **Build & Artifacts**: `pnpm run build:hosting` synchronizes static console assets from `src/admin/` to `public/admin/` and generates the root redirect `public/index.html`. `firebase.json` defines the hosting root (`public`), ignore patterns, rewrite rules (`/admin/**` -> `/admin/index.html`), and `no-cache` cache-control headers.
 - **Backend API Connectivity**: When hosted on Firebase Hosting (`*.web.app` / `*.firebaseapp.com`), the admin console resolves `https://cabros-bot-production.up.railway.app` by default. `?backend=` and `cabros_backend_origin` overrides are accepted only when their exact origin is the explicit HTTPS allowlist entry `https://cabros-bot-production.up.railway.app`; arbitrary origins, wildcards, HTTP URLs, and malformed values are ignored before any credential-bearing request.
-- **CORS & CSP Policy**: Backend CORS permits requests from the hosted console, and Helmet CSP allows `connect-src` to Google Auth, Firebase Hosting origins, and the backend origin.
+- **CORS & CSP Policy**: Backend CORS permits requests from the explicit allowlist (`https://cabros-bot.web.app`, `https://cabros-bot.firebaseapp.com`, `https://cabros-bot-production.up.railway.app`, `http://localhost:*`, and optional `CORS_ALLOWED_ORIGINS`), and Helmet CSP allows `connect-src` to Google Auth, Firebase Hosting origins, and the backend origin.
 - **CI/CD Deployment**: `.github/workflows/firebase-hosting.yml` automatically deploys pull requests to ephemeral Firebase preview channels and deploys the `live` channel on releases merged to `master`.
 - **Local Testing**: Run `pnpm run build:hosting` then `firebase emulators:start --only hosting` to test the static hosting deployment locally on port 5000.
 - **Rollback**: In the Firebase Console (Hosting > Release history) or via Firebase CLI: `firebase hosting:rollback` / `firebase hosting:clone cabros-bot:previous_version cabros-bot:live`.
@@ -809,7 +832,7 @@ The endpoint stops analysis at `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` (default 60 
     "delivered": 1
   },
   "requestId": "req-abc123",
-  "totalDurationMs": 1200
+  "processingTimeMs": 1200
 }
 ```
 
@@ -845,7 +868,9 @@ Run TradingView MCP `volume_confirmation_analysis` on demand and return structur
       "volume_ratio": 1.7,
       "volume_strength": "HIGH"
     }
-  }
+  },
+  "requestId": "req-vol-123",
+  "processingTimeMs": 310
 }
 ```
 
@@ -929,7 +954,7 @@ Execute multiple market scanner tools on the TradingView MCP server (such as top
   "includeMultiTimeframe": true,
   "timeoutMs": 90000,
   "requestId": "req-xyz789",
-  "totalDurationMs": 1450
+  "processingTimeMs": 1450
 }
 ```
 
@@ -1147,6 +1172,7 @@ List stored alerts ordered by `receivedAt` descending.
 - `before` - Either a legacy ISO-8601 timestamp cursor or the opaque `nextBefore` token from a previous response
 - `source` - Optional source filter. Valid values include `webhook`, `news-monitor`, `market-scanner`, and `expanded-analysis`.
 - `enriched` - Optional boolean filter (`true` or `false`)
+- `include` - Optional projection filter. Allowed value: `enrichment_summary`. When set, each returned alert item includes a sanitized `enrichmentSummary` projection object (with `sentiment`, `sentiment_score`, `setup_type`, `invalidation_level`, `target_level`, `risk_reward_ratio`, `sourceCount`, `sourceDomains`, `tradingViewEnrichmentApplied`, `tradingViewEnrichmentStatus`, and `promptProvenance`) and a sanitized `enrichmentData` payload without requiring N+1 detail fetches.
 
 **Response (200 OK):**
 ```json
