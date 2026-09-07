@@ -1306,6 +1306,24 @@ The market scanner accepts optional `includeMultiTimeframe` enrichment. When ena
 - `src/services/tradingview/marketScannerReport.js` — Request parsing and Telegram/WhatsApp report markers.
 - `tests/unit/market-scanner-scoring.test.js`, `tests/unit/market-scanner-report.test.js`, `tests/unit/market-scanner.test.js`, and `tests/integration/market-scanner-endpoint.test.js` — Scoring, rendering, fail-open, and endpoint coverage.
 
+## Volatility-Adjusted Position Sizing Hints (CB-? / Issue #833)
+
+The market scanner ranked output now exposes ATR-based position sizing hints so traders get a stop distance, suggested position size, and optional minimum RRR alongside the existing score and trend confluence. The hints are emitted only when `ranked=true`, the item carries a finite positive `ATR` (any of `item.atr`, `item.indicators.atr`, or `item.indicators.ATR`) and a positive price (`item.indicators.close` or `item.price`); missing inputs gracefully omit the `positionSizing` field without breaking the score, persistence, or report rendering.
+
+**Core Components**:
+- `src/services/tradingview/marketScannerScoring.js` — New `computePositionSizing()` returns `{ atr, atrPercent, suggestedStopPct, suggestedPositionPct, minRiskRewardRatio }` and is attached to the score result. Exports `DEFAULT_ATR_MULTIPLIER` (2.0) and `DEFAULT_ACCOUNT_RISK_PCT` (1.0) as the documented defaults; both are overridable per call.
+- `src/services/tradingview/marketScannerReport.js` — Reads `SCANNER_ATR_MULTIPLIER` and `SCANNER_ACCOUNT_RISK_PCT` env vars, surfaces a `Position Sizing` line in ranked reports, and propagates the options through `prepareMarketScannerItems()` so scoring and rendering share the same inputs.
+- `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` — `compactScanResults()` includes `positionSizing` in each `scores[]` entry when available, so the API response stays consistent with the rendered report.
+- `tests/unit/market-scanner-scoring.test.js` and `tests/unit/market-scanner-report.test.js` — Cover default/custom multipliers, env override fallback, missing ATR, non-positive price, and integration into both score and report.
+- `tests/integration/market-scanner-endpoint.test.js` — Verifies `positionSizing` is exposed only when ATR is present, omitted otherwise, and that `SCANNER_ATR_MULTIPLIER` / `SCANNER_ACCOUNT_RISK_PCT` flow through the endpoint contract.
+- `README.md`, `.env.example`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` — Document the new fields and env vars with default + valid-value guidance.
+
+**Configuration**:
+- `SCANNER_ATR_MULTIPLIER` — Stop distance in multiples of ATR (default: `2.0`). Non-positive or non-finite values fall back to the default. Classified as **remote-config eligible** for parity — non-secret runtime tuning.
+- `SCANNER_ACCOUNT_RISK_PCT` — Account risk percentage per trade used to derive position size (default: `1.0`). Non-positive or non-finite values fall back to the default. Classified as **remote-config eligible** for parity — non-secret runtime tuning.
+
+No new endpoint, OpenAPI path, Postman request, or notification contract was added; the ranked scan output gains the `positionSizing` field on each score entry.
+
 ## Durable Scanner Preset Storage (CB-88 / Issue #219)
 
 Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` gate. `ScannerPresetService` reuses the lazy Firestore singleton, persists across service instances when available, and falls back to the in-memory `Map` on disabled, initialization, or write failure. Every scanner-preset CRUD success response exposes a non-sensitive `storage` object; `/api/status` and `/api/capabilities` expose the same effective state under `dependencies.scannerPresetStorage`, with `mode: durable|ephemeral` and `backend: firestore|memory`.

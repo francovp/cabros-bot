@@ -689,7 +689,7 @@
                     "value": "application/json"
                   }
                 ],
-                "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true,\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BTCUSDT\", \"score\": 83, \"reason\": \"+3.5% \u00b7 RSI 62.0 \u00b7 Vol 1.8x \u00b7 HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
+                "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true,\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{\n      \"symbol\": \"BTCUSDT\",\n      \"score\": 83,\n      \"reason\": \"+3.5% \u00b7 RSI 62.0 \u00b7 Vol 1.8x \u00b7 HTF aligned +10\",\n      \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 },\n      \"positionSizing\": { \"atr\": 1500, \"atrPercent\": 3, \"suggestedStopPct\": 6, \"suggestedPositionPct\": 0.17, \"minRiskRewardRatio\": null }\n    }]\n  }]\n}"
               }
             ]
           }
