@@ -305,6 +305,45 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('⚠️ Error: MCP server connection refused');
 		});
 
+		it('renders scan error category in parentheses when classified', () => {
+			const results = [
+				{
+					scan: 'top_gainers',
+					status: 'error',
+					error: 'MCP server connection refused',
+					errorCategory: 'mcp_unreachable',
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			expect(report).toContain('⚠️ Error: MCP server connection refused (mcp_unreachable)');
+		});
+
+		it('ignores unknown errorCategory values when rendering', () => {
+			const results = [
+				{
+					scan: 'top_gainers',
+					status: 'error',
+					error: 'MCP server connection refused',
+					errorCategory: 'not_a_real_category',
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			expect(report).not.toContain('not_a_real_category');
+			expect(report).toContain('⚠️ Error: MCP server connection refused');
+		});
+
 		it('highlights high-confidence higher-timeframe alignment in ranked reports', () => {
 			const results = [
 				{
