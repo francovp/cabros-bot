@@ -29,6 +29,7 @@
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
+const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentials');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 
 const COLLECTION_NAME = 'alerts';
@@ -1015,10 +1016,10 @@ function getRawDocCursorValues(doc) {
  * Initialize Firebase Admin (idempotent) and return Firestore client.
  * Returns null when the feature is disabled or initialization fails.
  *
- * Credential resolution order (matches firebase-admin defaults):
- *   1. GOOGLE_APPLICATION_CREDENTIALS env var (path to service-account JSON file)
- *   2. FIREBASE_SERVICE_ACCOUNT_JSON env var   (inline JSON string, preferred for Render secrets)
- *   3. Application Default Credentials          (GCP / Cloud Run managed identity)
+ * Credential resolution is delegated to the shared helper at
+ * src/services/storage/firebaseAdminCredentials.js, which consolidates
+ * FIREBASE_SERVICE_ACCOUNT_JSON / GOOGLE_APPLICATION_CREDENTIALS parsing
+ * and validation that previously lived in this file and three others.
  *
  * @returns {FirebaseFirestore.Firestore | null}
  */
@@ -1032,21 +1033,13 @@ function getFirestore() {
 	}
 
 	try {
-		let credential;
-
-		// Option B: inline JSON (preferred for Render.com secret env vars)
-		if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-			const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-			credential = admin.credential.cert(serviceAccount);
-		}
-		// Option A: GOOGLE_APPLICATION_CREDENTIALS file path handled automatically by initializeApp()
-
+		const loaded = loadFirebaseAdminCredentialsOrNull();
 		const appOptions = {};
-		if (credential) {
-			appOptions.credential = credential;
+		if (loaded && loaded.credential) {
+			appOptions.credential = loaded.credential;
 		}
-		if (process.env.FIREBASE_PROJECT_ID) {
-			appOptions.projectId = process.env.FIREBASE_PROJECT_ID;
+		if (loaded && loaded.projectId) {
+			appOptions.projectId = loaded.projectId;
 		}
 
 		if (!admin.apps.length) {
