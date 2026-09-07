@@ -1148,4 +1148,182 @@ describe('TradingViewMcpService', () => {
 			expect(service.hasActiveOutagePage).toBe(false);
 		});
 	});
+
+	describe('MCP tool inventory', () => {
+		const buildSseBody = (payload) => `event: message\ndata: ${JSON.stringify(payload)}\n\n`;
+
+		it('initializes an inventory and exposes getMcpTools with the static fallback catalog', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			const service = new TradingViewMcpService({
+				maxRetries: 1,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+
+			expect(service.mcpToolInventory).toBeDefined();
+			const snapshot = await service.getMcpTools({ discover: false });
+			expect(snapshot.discoveredSource).toBe('fallback-static-catalog');
+			expect(snapshot.wired.coin_analysis).toEqual(expect.objectContaining({
+				wired: true,
+				callers: ['enrichFromSignal', 'alert/grounding'],
+				lastSuccessAt: null,
+				lastFailureAt: null,
+			}));
+			expect(snapshot.wired.top_gainers).toEqual(expect.objectContaining({
+				wired: true,
+				callers: ['marketScanner'],
+			}));
+		});
+
+		it('records per-tool telemetry on successful and failed MCP calls', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			const service = new TradingViewMcpService({
+				maxRetries: 1,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+			service._callTool = jest.fn().mockResolvedValueOnce({ price_data: { current_price: 70000 } });
+			await service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			});
+
+			service._callTool = jest.fn().mockRejectedValueOnce(new Error('TradingView MCP HTTP 503: upstream down'));
+			await expect(service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			})).rejects.toThrow('HTTP 503');
+
+			const snapshot = await service.getMcpTools({ discover: false });
+			const coinTelemetry = snapshot.wired.coin_analysis;
+			expect(coinTelemetry.lastSuccessAt).not.toBeNull();
+			expect(coinTelemetry.lastFailureAt).not.toBeNull();
+			expect(coinTelemetry.lastCategory).toBe('http_5xx');
+		});
+
+		it('records telemetry for volume confirmation, combined, multi-timeframe, and scanner tools', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			const service = new TradingViewMcpService({
+				maxRetries: 1,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+
+			service._callTool = jest.fn().mockResolvedValueOnce({ confluence: { recommendation: 'BUY', confidence: 0.7 } });
+			await service.callCombinedAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			});
+
+			service._callTool = jest.fn().mockResolvedValueOnce({ alignment: { status: 'aligned' } });
+			await service.callMultiTimeframeAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+			});
+
+			service._callTool = jest.fn().mockResolvedValueOnce({ result: { volume_ratio: 1.4 } });
+			await service.callVolumeConfirmation({
+				symbol: 'BINANCE:BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			});
+
+			service._callTool = jest.fn().mockResolvedValueOnce({ result: [{ symbol: 'BTCUSDT' }] });
+			await service.callScanTool('top_gainers', { exchange: 'BINANCE' });
+
+			const snapshot = await service.getMcpTools({ discover: false });
+			expect(snapshot.wired.combined_analysis.lastSuccessAt).not.toBeNull();
+			expect(snapshot.wired.multi_timeframe_analysis.lastSuccessAt).not.toBeNull();
+			expect(snapshot.wired.volume_confirmation_analysis.lastSuccessAt).not.toBeNull();
+			expect(snapshot.wired.top_gainers.lastSuccessAt).not.toBeNull();
+		});
+
+		it('records a circuit_breaker_open failure when the breaker is open', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			const service = new TradingViewMcpService({
+				maxRetries: 1,
+				breakerThreshold: 1,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+			service.breakerState = 'open';
+			service.breakerOpenedAt = new Date(Date.now() - 1000).toISOString();
+
+			await expect(service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			})).rejects.toThrow('circuit breaker is OPEN');
+
+			const snapshot = await service.getMcpTools({ discover: false });
+			expect(snapshot.wired.coin_analysis.lastCategory).toBe('circuit_breaker_open');
+			expect(snapshot.wired.coin_analysis.lastFailureAt).not.toBeNull();
+		});
+
+		it('discovers upstream tools via tools/list and reports unwired tools with wired: false', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			const service = new TradingViewMcpService({
+				maxRetries: 1,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+
+			const upstreamTools = [
+				{ name: 'coin_analysis' },
+				{ name: 'combined_analysis' },
+				{ name: 'multi_agent_analysis' },
+				{ name: 'market_snapshot' },
+			];
+
+			const fetchMock = jest
+				.fn()
+				.mockResolvedValueOnce({
+					ok: true,
+					status: 200,
+					headers: { get: name => (name === 'mcp-session-id' ? 'session-1' : null) },
+					text: async () => buildSseBody({ jsonrpc: '2.0', id: 'init-1', result: { protocolVersion: '2024-11-05' } }),
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					status: 202,
+					headers: { get: () => null },
+					text: async () => '',
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					status: 200,
+					headers: { get: name => (name === 'content-type' ? 'text/event-stream' : null) },
+					text: async () => buildSseBody({ jsonrpc: '2.0', id: 'list-1', result: { tools: upstreamTools } }),
+				});
+
+			service.mcpToolInventory._fetch = fetchMock;
+			service.mcpToolInventory._url = 'https://example.test/mcp';
+
+			const snapshot = await service.getMcpTools();
+
+			expect(snapshot.discoveredSource).toBe('tools/list');
+			expect(snapshot.discovered).toEqual(['coin_analysis', 'combined_analysis', 'multi_agent_analysis', 'market_snapshot']);
+			expect(snapshot.wired.coin_analysis).toEqual(expect.objectContaining({ wired: true }));
+			expect(snapshot.wired.combined_analysis).toEqual(expect.objectContaining({ wired: true }));
+			expect(snapshot.wired.multi_agent_analysis).toEqual(expect.objectContaining({ wired: false }));
+			expect(snapshot.wired.market_snapshot).toEqual(expect.objectContaining({ wired: false }));
+			expect(snapshot.wired.top_gainers).toBeUndefined();
+		});
+
+		it('falls back to the static catalog when tools/list discovery fails', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			const service = new TradingViewMcpService({
+				maxRetries: 1,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+
+			const fetchMock = jest.fn().mockRejectedValueOnce(new Error('ECONNREFUSED'));
+			service.mcpToolInventory._fetch = fetchMock;
+			service.mcpToolInventory._url = 'https://example.test/mcp';
+
+			const snapshot = await service.getMcpTools();
+
+			expect(snapshot.discoveredSource).toBe('fallback-static-catalog');
+			expect(snapshot.wired.coin_analysis).toEqual(expect.objectContaining({ wired: true }));
+			expect(snapshot.wired.multi_agent_analysis).toEqual(expect.objectContaining({ wired: false }));
+		});
+	});
 });

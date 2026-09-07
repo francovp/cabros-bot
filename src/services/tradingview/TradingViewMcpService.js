@@ -8,6 +8,7 @@ const {
 	getRiskRewardRatio,
 } = require('./expandedAnalysisAlertReport');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { McpToolInventory } = require('./mcpToolInventory');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
 const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -107,6 +108,10 @@ class TradingViewMcpService {
 		this.enrichmentEvents = [];
 		this.notifyAdmin = config.notifyAdmin || null;
 		this.notificationManager = config.notificationManager || null;
+		this.mcpToolInventory = new McpToolInventory({
+			url: config.url || process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL,
+			logger: this.logger,
+		});
 	}
 
 	_resetForTesting() {
@@ -119,6 +124,9 @@ class TradingViewMcpService {
 		this.lastAdminPageSentAt = null;
 		this.hasActiveOutagePage = false;
 		this.enrichmentEvents = [];
+		if (this.mcpToolInventory && typeof this.mcpToolInventory._resetForTesting === 'function') {
+			this.mcpToolInventory._resetForTesting();
+		}
 	}
 
 	isEnabled() {
@@ -151,8 +159,13 @@ class TradingViewMcpService {
 			10,
 		);
 
+		const url = this.config.url || process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL;
+		if (this.mcpToolInventory) {
+			this.mcpToolInventory.setUrl(url);
+		}
+
 		return {
-			url: this.config.url || process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL,
+			url,
 			timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 12000,
 			maxRetries: Number.isFinite(maxRetries) && maxRetries >= 0 ? maxRetries : 3,
 			defaultExchange,
@@ -220,6 +233,18 @@ class TradingViewMcpService {
 
 	getVolumeConfirmationStatus({ enabled = this.isEnabled() } = {}) {
 		return this.getStatus({ enabled, runtimeStatus: this.volumeRuntimeStatus });
+	}
+
+	async getMcpTools({ discover = true } = {}) {
+		if (!this.mcpToolInventory) {
+			return {
+				discovered: [],
+				wired: {},
+				discoveredAt: null,
+				discoveredSource: 'fallback-static-catalog',
+			};
+		}
+		return this.mcpToolInventory.snapshot({ discover });
 	}
 
 	async enrichFromAlertText(alertText, options = {}) {
@@ -427,7 +452,7 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal });
+		}, { signal, toolName: 'coin_analysis' });
 	}
 
 	async analyzeSymbolIdentifier({ raw, exchange, symbol, timeframe, analysisMode, signal }) {
@@ -476,7 +501,7 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal });
+			}, { signal, toolName: 'combined_analysis' });
 	}
 
 	async callMultiTimeframeAnalysis({ symbol, exchange, signal }) {
@@ -496,7 +521,7 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal });
+			}, { signal, toolName: 'multi_timeframe_analysis' });
 	}
 
 	async callVolumeConfirmation({ symbol, exchange, timeframe, signal }) {
@@ -518,7 +543,7 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal, runtimeStatusKey: 'volumeRuntimeStatus' });
+			}, { signal, runtimeStatusKey: 'volumeRuntimeStatus', toolName: 'volume_confirmation_analysis' });
 	}
 
 	async callScanTool(toolName, args = {}, options = {}) {
@@ -540,7 +565,7 @@ class TradingViewMcpService {
 			}
 
 			return this._normalizeScanResult(result.data);
-		}, { signal });
+		}, { signal, toolName });
 	}
 
 	_normalizeScanResult(data) {
@@ -1105,12 +1130,15 @@ class TradingViewMcpService {
 		};
 	}
 
-	async _withRuntimeStatus(operation, { signal, runtimeStatusKey } = {}) {
+	async _withRuntimeStatus(operation, { signal, runtimeStatusKey, toolName } = {}) {
 		const runtimeStatusKeys = runtimeStatusKey ? ['runtimeStatus', runtimeStatusKey] : ['runtimeStatus'];
 
 		if (this.isBreakerOpen()) {
 			const error = new Error('TradingView MCP circuit breaker is OPEN');
 			error.category = 'circuit_breaker_open';
+			if (toolName) {
+				this.mcpToolInventory?.recordCall(toolName, { ok: false, category: 'circuit_breaker_open' });
+			}
 			throw error;
 		}
 
@@ -1118,6 +1146,9 @@ class TradingViewMcpService {
 			const result = await operation();
 			const timestamp = new Date().toISOString();
 			this._recordSuccess();
+			if (toolName) {
+				this.mcpToolInventory?.recordCall(toolName, { ok: true, category: null });
+			}
 			runtimeStatusKeys.forEach((key) => {
 				this[key] = {
 					...this[key],
@@ -1136,6 +1167,9 @@ class TradingViewMcpService {
 
 			const timestamp = new Date().toISOString();
 			this._recordFailure(error);
+			if (toolName) {
+				this.mcpToolInventory?.recordCall(toolName, { ok: false, category: this._getErrorCategory(error) });
+			}
 			runtimeStatusKeys.forEach((key) => {
 				this[key] = {
 					...this[key],

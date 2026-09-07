@@ -176,7 +176,7 @@ function getGeminiQuotaDependency({ gemini }) {
 }
 
 
-function getStatus() {
+async function getStatus() {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
 	const runtimeConfig = remoteConfigService.getRuntimeConfig();
@@ -246,6 +246,7 @@ function getStatus() {
 	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
 		enabled: tradingViewVolumeConfirmationEnabled,
 	});
+	const mcpTools = await tradingViewMcpService.getMcpTools({ discover: true });
 	const firestore = dependencyStatus({
 		enabled: firestoreEnabled,
 		configured: isFirestoreConfigured(),
@@ -389,7 +390,10 @@ function getStatus() {
 			gemini,
 			geminiQuota,
 			groundingCoalescing: getCoalescingStatus(),
-			tradingViewMcp,
+			tradingViewMcp: {
+				...tradingViewMcp,
+				mcpTools,
+			},
 			tradingViewVolumeConfirmation,
 			firestore,
 			firestoreJobStorage,
@@ -441,12 +445,12 @@ function getStatus() {
 }
 
 function getApiStatus(req, res) {
-	try {
-		return res.status(200).json(getStatus());
-	} catch (error) {
-		console.error('[StatusController] getStatus failed:', error);
-		return res.status(500).json({ error: error.message, code: 'INTERNAL_ERROR' });
-	}
+	getStatus()
+		.then((payload) => res.status(200).json(payload))
+		.catch((error) => {
+			console.error('[StatusController] getStatus failed:', error);
+			return res.status(500).json({ error: error.message, code: 'INTERNAL_ERROR' });
+		});
 }
 
 module.exports = {
