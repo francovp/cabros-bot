@@ -217,6 +217,10 @@ describe('ScannerPresetService', () => {
 			}
 			return Promise.resolve();
 		});
+		firestoreAdmin.__mockDocGet.mockImplementation(() => Promise.resolve({
+			exists: true,
+			data: () => ({ name: 'New value', version: 1 }),
+		}));
 
 		const triggerPromise = service.createPreset({ name: 'Trigger flush' });
 		await new Promise((resolve) => setImmediate(resolve));
@@ -491,6 +495,10 @@ describe('ScannerPresetService', () => {
 			}
 			return Promise.resolve();
 		});
+		firestoreAdmin.__mockDocGet.mockImplementation(() => Promise.resolve({
+			exists: true,
+			data: () => ({ name: 'New value', version: 1 }),
+		}));
 
 		const updatePromise = service.updatePreset(created.id, { name: 'New value' });
 		await new Promise((resolve) => setImmediate(resolve));
@@ -558,5 +566,241 @@ describe('ScannerPresetService', () => {
 
 		expect(await service.listPresets()).toEqual([]);
 		expect(await service.getPreset(created.id)).toBeNull();
+	});
+
+	it('initializes version to 1 on create and increments on each successful update', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		const created = await service.createPreset({ name: 'Versioned preset' });
+		expect(created.version).toBe(1);
+
+		const updatedOnce = await service.updatePreset(created.id, { name: 'Versioned preset v2' });
+		expect(updatedOnce.version).toBe(2);
+
+		const updatedTwice = await service.updatePreset(created.id, { limit: 9 });
+		expect(updatedTwice.version).toBe(3);
+
+		const refetched = await service.getPreset(created.id);
+		expect(refetched.version).toBe(3);
+	});
+
+	it('rejects updates with a stale ifMatch token using PRECONDITION_FAILED', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Stale token preset' });
+
+		let caught;
+		try {
+			await service.updatePreset(created.id, { name: 'Should fail' }, { ifMatchVersion: 99 });
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeDefined();
+		expect(caught.name).toBe('MarketScannerRequestError');
+		expect(caught.code).toBe('PRECONDITION_FAILED');
+		expect(caught.statusCode).toBe(412);
+		expect(caught.preset).toMatchObject({ id: created.id, version: 1 });
+
+		const refetched = await service.getPreset(created.id);
+		expect(refetched.name).toBe('Stale token preset');
+		expect(refetched.version).toBe(1);
+	});
+
+	it('accepts updates with a matching ifMatchVersion and increments version', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Matched token preset' });
+
+		const updated = await service.updatePreset(
+			created.id,
+			{ name: 'Matched token preset v2' },
+			{ ifMatchVersion: created.version },
+		);
+		expect(updated.version).toBe(2);
+		expect(updated.name).toBe('Matched token preset v2');
+	});
+
+	it('rejects updates against a locked preset using PRESET_LOCKED', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Locked preset' });
+		const futureLock = new Date(Date.now() + 60000).toISOString();
+		await service.updatePreset(created.id, { lockedUntil: futureLock, lockedBy: 'scheduler' });
+
+		let caught;
+		try {
+			await service.updatePreset(created.id, { name: 'Should fail locked' });
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeDefined();
+		expect(caught.name).toBe('MarketScannerRequestError');
+		expect(caught.code).toBe('PRESET_LOCKED');
+		expect(caught.statusCode).toBe(409);
+		expect(caught.lockedUntil).toBe(futureLock);
+	});
+
+	it('rejects deletes with a stale ifMatch token', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Stale delete preset' });
+
+		let caught;
+		try {
+			await service.deletePreset(created.id, { ifMatchVersion: 42 });
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeDefined();
+		expect(caught.code).toBe('PRECONDITION_FAILED');
+		expect(caught.statusCode).toBe(412);
+
+		expect(await service.getPreset(created.id)).not.toBeNull();
+	});
+
+	it('accepts deletes with a matching ifMatchVersion', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Matched delete preset' });
+
+		const deleted = await service.deletePreset(created.id, { ifMatchVersion: created.version });
+		expect(deleted).toBe(true);
+		expect(await service.getPreset(created.id)).toBeNull();
+	});
+
+	it('returns null from updatePreset and deletePreset when the preset is missing without a token', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		expect(await service.updatePreset('missing-id', { name: 'gone' })).toBeNull();
+		expect(await service.deletePreset('missing-id')).toBe(false);
+	});
+
+	it('persists the version across Firestore writes and reloads', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const serviceA = new ScannerPresetService();
+		const created = await serviceA.createPreset({ name: 'Firestore versioned preset' });
+		expect(created.version).toBe(1);
+
+		const updated = await serviceA.updatePreset(created.id, { name: 'Firestore versioned v2' });
+		expect(updated.version).toBe(2);
+
+		jest.resetModules();
+		const {
+			ScannerPresetService: ReloadedScannerPresetService,
+		} = require('../../src/services/scannerPresets/ScannerPresetService');
+		const fetched = await new ReloadedScannerPresetService().getPreset(created.id);
+		expect(fetched.version).toBe(2);
+		expect(fetched.name).toBe('Firestore versioned v2');
+	});
+
+	it('atomically rejects a stale Firestore write that races a successful one', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Race target preset' });
+
+		const setSpy = firestoreAdmin.__mockDocSet;
+		setSpy.mockClear();
+		// First get: updatePreset's initial getPreset sees the local
+		// in-memory preset (mock returns version 1 to match what create wrote).
+		// Second get: the atomic re-check inside _writeFirestorePreset
+		// sees version 2 (a concurrent writer already won). The atomic
+		// write must be rejected.
+		let getCalls = 0;
+		firestoreAdmin.__mockDocGet.mockImplementation(() => {
+			getCalls += 1;
+			if (getCalls === 1) {
+				return Promise.resolve({ exists: true, data: () => ({ version: 1, name: 'Race target preset' }) });
+			}
+			return Promise.resolve({ exists: true, data: () => ({ version: 2, name: 'Concurrent winner' }) });
+		});
+
+		const stale = await service.updatePreset(created.id, { name: 'Stale concurrent write' });
+		expect(stale).toBeNull();
+		// The stale write never reached Firestore: no set() call was made
+		// because the atomic version check threw first.
+		expect(setSpy).not.toHaveBeenCalled();
+	});
+
+	it('serializes concurrent in-memory updates so only one wins per version', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'In-memory race' });
+
+		const [a, b] = await Promise.all([
+			service.updatePreset(created.id, { name: 'Writer A' }),
+			service.updatePreset(created.id, { name: 'Writer B' }),
+		]);
+
+		const winners = [a, b].filter((preset) => preset !== null);
+		expect(winners).toHaveLength(1);
+		expect(winners[0].version).toBe(2);
+		expect(['Writer A', 'Writer B']).toContain(winners[0].name);
+
+		const refetched = await service.getPreset(created.id);
+		expect(refetched.version).toBe(2);
+	});
+
+	it('rejects a malformed If-Match header instead of disabling the check', () => {
+		const { parseIfMatchHeader } = require('../../src/services/scannerPresets/ScannerPresetService');
+
+		expect(parseIfMatchHeader('"3"')).toEqual({ present: true, version: 3, malformed: false });
+		expect(parseIfMatchHeader('W/"3"')).toEqual({ present: true, version: 3, malformed: false });
+		expect(parseIfMatchHeader('3')).toEqual({ present: true, version: 3, malformed: false });
+		expect(parseIfMatchHeader('"3", "4"')).toEqual({ present: true, version: null, malformed: true });
+		expect(parseIfMatchHeader('*')).toEqual({ present: true, version: null, malformed: true });
+		expect(parseIfMatchHeader('')).toEqual({ present: true, version: null, malformed: true });
+		expect(parseIfMatchHeader(undefined)).toEqual({ present: false, version: null, malformed: false });
+	});
+
+	it('ignores a caller-supplied initial version on createPreset', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		const created = await service.createPreset({ name: 'Version-tampered preset', version: 999 });
+		expect(created.version).toBe(1);
+	});
+
+	it('normalizes unsafe integer versions back to the safe range', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const { normalizeVersion } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		// `normalizeVersion` itself rejects unsafe integers and falls back
+		// to a safe value, so the ETag chain can never loop on the same
+		// tag once an unsafe value is encountered.
+		expect(normalizeVersion(9007199254740992, 1)).toBe(1);
+		expect(normalizeVersion(Number.MAX_SAFE_INTEGER + 1, 1)).toBe(1);
+		expect(normalizeVersion(Number.MAX_SAFE_INTEGER, 1)).toBe(Number.MAX_SAFE_INTEGER);
+		expect(normalizeVersion(-1, 1)).toBe(1);
+		expect(normalizeVersion(0, 1)).toBe(1);
+		expect(normalizeVersion('3', 1)).toBe(3);
+	});
+
+	it('releases the in-memory write lock after the persist completes', async () => {
+		const { ScannerPresetService, _memoryPresets } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Lock release preset' });
+
+		const internal = require('../../src/services/scannerPresets/ScannerPresetService');
+		const inMemoryWriteLocksMap = internal.inMemoryWriteLocks || null;
+
+		await service.updatePreset(created.id, { name: 'Updated once' });
+		await service.deletePreset(created.id);
+
+		// After the writes finish the lock map must be empty so
+		// create/delete churn does not leak memory.
+		const { inMemoryWriteLocks } = require('../../src/services/scannerPresets/ScannerPresetService');
+		// Access via a getter through internal reset helper to verify cleanup.
+		// The internal map is module-scoped; the absence of an exported
+		// handle is itself the contract — repeated updates on the same id
+		// without leaking is verified by the bounded test runtime.
+		expect(inMemoryWriteLocks.size).toBe(0);
 	});
 });

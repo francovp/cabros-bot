@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { MainClient } = require('binance');
 
 const TESTNET_BASE_URL = 'https://testnet.binance.vision';
+const DEMO_BASE_URL = 'https://demo-api.binance.com';
 const LIVE_BASE_URL = 'https://api.binance.com';
 const DEFAULT_BINANCE_DATA_BASE_URL = 'https://api.binance.com';
 const DEFAULT_TIMEOUT_MS = 10000;
@@ -66,6 +67,15 @@ function deriveClientOrderId(idempotencyKey, order) {
 function isOrderNotFoundError(error) {
 	const code = error && (error.code ?? error.body?.code);
 	return Number(code) === -2013 || /unknown order/i.test(error?.message || '');
+}
+
+function isAlreadyTerminalOrderError(error) {
+	// Binance returns -2011 ("Unknown order sent") when the cancel target is no
+	// longer cancelable (already filled, cancelled, expired, or rejected). Map
+	// to ORDER_NOT_FOUND so the operator gets the same clear 404 regardless of
+	// which terminal state the order reached.
+	const code = error && (error.code ?? error.body?.code);
+	return Number(code) === -2011 || /cancel order is not valid|cannot be cancelled|already cancelled|already filled/i.test(error?.message || '');
 }
 
 function getBinanceErrorCode(error) {
@@ -205,7 +215,7 @@ function getConfig() {
 	const enabled = process.env.ENABLE_BINANCE_TRADING === 'true';
 	const configured = hasValue(process.env.BINANCE_API_KEY)
 		&& hasValue(process.env.BINANCE_API_SECRET)
-		&& (environment === 'testnet' || environment === 'live')
+		&& (environment === 'testnet' || environment === 'demo' || environment === 'live')
 		&& allowedSymbols.length > 0
 		&& Number.isFinite(maxNotional)
 		&& maxNotional > 0;
@@ -214,7 +224,7 @@ function getConfig() {
 		enabled,
 		configured,
 		environment,
-		baseUrl: environment === 'live' ? resolveLiveBaseUrl() : TESTNET_BASE_URL,
+		baseUrl: environment === 'live' ? resolveLiveBaseUrl() : environment === 'demo' ? DEMO_BASE_URL : TESTNET_BASE_URL,
 		allowedSymbols,
 		maxNotional,
 		timeoutMs: parseTimeout(process.env.BINANCE_TRADING_TIMEOUT_MS),
@@ -579,6 +589,52 @@ function normalizeOrderQuery(query = {}) {
 	};
 }
 
+function normalizeCancelRequest(body = {}) {
+	if (!body || typeof body !== 'object' || Array.isArray(body)) {
+		throw new BinanceOrderRequestError('Request body must be an object');
+	}
+
+	const allowedKeys = new Set([
+		'symbol', 'orderId', 'origClientOrderId', 'clientOrderId',
+	]);
+	const unknownKey = Object.keys(body).find((key) => !allowedKeys.has(key));
+	if (unknownKey) throw new BinanceOrderRequestError(`Unsupported cancel field: ${unknownKey}`);
+
+	const symbol = typeof body.symbol === 'string' ? body.symbol.trim().toUpperCase() : '';
+	if (!/^[A-Z0-9]{5,20}$/.test(symbol)) {
+		throw new BinanceOrderRequestError('symbol must be a Binance Spot symbol such as BTCUSDT');
+	}
+
+	let orderId;
+	if (hasQueryParam(body.orderId)) {
+		const orderIdStr = String(body.orderId).trim();
+		if (!/^\d+$/.test(orderIdStr) || Number(orderIdStr) <= 0) {
+			throw new BinanceOrderRequestError('orderId must be a positive integer');
+		}
+		orderId = Number.parseInt(orderIdStr, 10);
+	}
+
+	let origClientOrderId;
+	const rawClientOrderId = [body.origClientOrderId, body.clientOrderId].find(hasQueryParam);
+	if (rawClientOrderId !== undefined) {
+		const clientOrderIdStr = String(rawClientOrderId).trim();
+		if (!/^[A-Za-z0-9._:-]{1,36}$/.test(clientOrderIdStr)) {
+			throw new BinanceOrderRequestError('origClientOrderId must contain 1-36 safe characters');
+		}
+		origClientOrderId = clientOrderIdStr;
+	}
+
+	const hasOrderId = orderId !== undefined;
+	const hasOrigClientOrderId = origClientOrderId !== undefined;
+	if (hasOrderId === hasOrigClientOrderId) {
+		throw new BinanceOrderRequestError(
+			'cancel requests require exactly one of orderId or origClientOrderId',
+		);
+	}
+
+	return { symbol, orderId, origClientOrderId };
+}
+
 function createBinanceOrderService({ createClient = createBinanceClient } = {}) {
 	return {
 		getStatus() {
@@ -658,6 +714,69 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					throw new BinanceOrderRequestError('Binance rejected the request', 'BINANCE_REQUEST_REJECTED', 400);
 				}
 				throw new BinanceOrderServiceError('Binance order query failed', 'BINANCE_QUERY_FAILED', 502);
+			}
+		},
+
+		async cancelOrder(body = {}) {
+			const config = getConfig();
+			if (!config.enabled) {
+				throw new BinanceOrderRequestError('Binance trading is disabled', 'FEATURE_DISABLED', 403);
+			}
+			if (!config.configured) {
+				throw new BinanceOrderRequestError(
+					'Binance trading is enabled but not configured',
+					'BINANCE_TRADING_UNAVAILABLE',
+					503,
+				);
+			}
+
+			const { symbol, orderId, origClientOrderId } = normalizeCancelRequest(body);
+
+			if (!config.allowedSymbols.includes(symbol)) {
+				throw new BinanceOrderRequestError('symbol is not allowed for Binance trading');
+			}
+
+			let client;
+			try {
+				client = createClient(config);
+			} catch (error) {
+				throw new BinanceOrderServiceError(
+					'Binance client could not be initialized',
+					'BINANCE_CLIENT_UNAVAILABLE',
+					503,
+				);
+			}
+
+			const params = {
+				symbol,
+				...(orderId !== undefined ? { orderId } : {}),
+				...(origClientOrderId !== undefined ? { origClientOrderId } : {}),
+			};
+
+			try {
+				const response = await client.cancelOrder(params);
+				return {
+					success: true,
+					environment: config.environment,
+					cancelled: true,
+					order: sanitizeOrderResponse(response || {}),
+				};
+			} catch (error) {
+				if (isOrderNotFoundError(error) || isAlreadyTerminalOrderError(error)) {
+					throw new BinanceOrderRequestError('Binance order not found', 'ORDER_NOT_FOUND', 404);
+				}
+				if (isDefinitiveBinanceRejection(error)) {
+					throw new BinanceOrderRequestError(
+						'Binance rejected the cancel request',
+						'BINANCE_REQUEST_REJECTED',
+						400,
+					);
+				}
+				throw new BinanceOrderServiceError(
+					'Binance cancel request failed; the order may still be open, retry the status check before resubmitting',
+					'BINANCE_QUERY_FAILED',
+					502,
+				);
 			}
 		},
 

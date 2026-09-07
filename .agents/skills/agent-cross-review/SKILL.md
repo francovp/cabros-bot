@@ -35,14 +35,22 @@ If a specific PR number is provided (e.g. `PR #894`), target that PR directly:
 
 ### 2. Ensure Agent Attribution Label
 
-Every PR created or updated by an AI agent must carry an attribution label matching `<agent>-<model>` (e.g. `antigravity-gemini-3.7-flash`, `codex-gpt-5.6-luna`, `github-copilot-minimax-m3:free`). If the target PR is missing its attribution label, attach it:
+Every PR created or updated by an AI agent must carry an attribution label matching `<agent>-<model>` corresponding to the **PR's authoring agent and model** (e.g. `codex-gpt-5.6-luna` for Codex, `github-copilot-minimax-m3:free` for Copilot, `claude-3.7-sonnet` for Claude, `opencode-glm-4.5` for OpenCode, `antigravity-gemini-3.7-flash` for Antigravity).
+
+> [!WARNING]
+> **Never apply your own reviewer label to a PR authored by another agent.** An Antigravity reviewer must not label a Codex or Copilot PR as `antigravity-gemini-3.7-flash`. Use `--auto-label` to derive and apply the detected authoring agent label, or explicitly provide `<detected-authoring-agent>-<model>`.
+
+If the target PR is missing its attribution label, attach the detected authoring agent label:
 
 ```bash
-# Via detection script:
-.agents/skills/agent-cross-review/scripts/detect-agent-prs.sh --pr "$PR_NUM" --add-label "antigravity-gemini-3.7-flash"
+# Auto-detect authoring agent and attach corresponding label automatically:
+.agents/skills/agent-cross-review/scripts/detect-agent-prs.sh --pr "$PR_NUM" --auto-label
+
+# Or explicitly pass the detected authoring agent label:
+.agents/skills/agent-cross-review/scripts/detect-agent-prs.sh --pr "$PR_NUM" --add-label "<detected-authoring-agent>-<model>"
 
 # Or directly with gh:
-gh pr edit "$PR_NUM" --add-label "<agent>-<model>"
+gh pr edit "$PR_NUM" --add-label "<detected-authoring-agent>-<model>"
 ```
 
 ### 3. Inspect PR Context and Diff

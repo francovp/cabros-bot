@@ -103,6 +103,17 @@ describe('sendStartupDeploymentNotification', () => {
 		delete process.env.RAILWAY_ENVIRONMENT_NAME;
 		delete process.env.RENDER_GIT_COMMIT;
 		delete process.env.RENDER_GIT_REPO_SLUG;
+		delete process.env.VERCEL_GIT_COMMIT_SHA;
+		delete process.env.VERCEL_GIT_REPO_SLUG;
+		delete process.env.VERCEL_GIT_REPO_OWNER;
+		delete process.env.VERCEL_GIT_REPO_OWNER_NAME;
+		delete process.env.RAILWAY_GIT_COMMIT_SHA;
+		delete process.env.RAILWAY_GIT_REPO_NAME;
+		delete process.env.RAILWAY_GIT_REPO_OWNER;
+		delete process.env.GIT_COMMIT;
+		delete process.env.COMMIT_SHA;
+		delete process.env.GITHUB_SHA;
+		delete process.env.SOURCE_VERSION;
 		delete process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
 	});
 
