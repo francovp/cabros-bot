@@ -60,6 +60,43 @@ function parseEnriched(rawEnriched) {
 	return null;
 }
 
+const ALLOWED_INCLUDE_VALUES = new Set(['enrichment_summary']);
+
+function parseInclude(rawInclude) {
+	if (rawInclude === undefined || rawInclude === null || rawInclude === '') {
+		return { success: true, values: [] };
+	}
+
+	let items = [];
+	if (Array.isArray(rawInclude)) {
+		items = rawInclude.flatMap((item) => (typeof item === 'string' ? item.split(',') : []));
+	} else if (typeof rawInclude === 'string') {
+		items = rawInclude.split(',');
+	} else {
+		return {
+			success: false,
+			error: 'Invalid include parameter. Allowed values: enrichment_summary.',
+		};
+	}
+
+	const normalized = [];
+	for (const item of items) {
+		const trimmed = item.trim();
+		if (!trimmed) {
+			continue;
+		}
+		if (!ALLOWED_INCLUDE_VALUES.has(trimmed)) {
+			return {
+				success: false,
+				error: `Invalid include parameter '${trimmed}'. Allowed values: enrichment_summary.`,
+			};
+		}
+		normalized.push(trimmed);
+	}
+
+	return { success: true, values: Array.from(new Set(normalized)) };
+}
+
 function parseSummaryLimit(rawLimit) {
 	if (rawLimit === undefined) {
 		return DEFAULT_SUMMARY_LIMIT;
@@ -163,12 +200,26 @@ function listAlerts(req, res) {
 			? req.query.source.trim()
 			: undefined;
 
-		const result = await alertStorageService.listAlerts({
+		const parsedInclude = parseInclude(req.query.include);
+		if (!parsedInclude.success) {
+			return res.status(400).json({
+				error: parsedInclude.error,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const listParams = {
 			before,
 			enriched,
 			limit,
 			source,
-		});
+		};
+		if (parsedInclude.values.length > 0) {
+			listParams.include = parsedInclude.values;
+			listParams.includeEnrichmentSummary = parsedInclude.values.includes('enrichment_summary');
+		}
+
+		const result = await alertStorageService.listAlerts(listParams);
 
 		return res.status(200).json({
 			success: true,

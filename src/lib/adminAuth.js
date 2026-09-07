@@ -2,6 +2,7 @@
 
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
+const { loadFirebaseAdminCredentials } = require('../services/storage/firebaseAdminCredentials');
 const { isValidApiKey, validateApiKey } = require('./auth');
 
 const ADMIN_VIEWER = 'admin.viewer';
@@ -15,11 +16,14 @@ function getFirebaseAuth() {
 	try {
 		if (!admin.apps.length) {
 			if (!isFirestoreConfigured()) return null;
+			const loaded = loadFirebaseAdminCredentials();
 			const options = {};
-			if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-				options.credential = admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON));
+			if (loaded && loaded.credential) {
+				options.credential = loaded.credential;
 			}
-			if (process.env.FIREBASE_PROJECT_ID) options.projectId = process.env.FIREBASE_PROJECT_ID;
+			if (loaded && loaded.projectId) {
+				options.projectId = loaded.projectId;
+			}
 			admin.initializeApp(options);
 		}
 		return typeof admin.auth === 'function' ? admin.auth() : null;
