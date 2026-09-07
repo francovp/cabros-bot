@@ -58,7 +58,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/lib/processLifecycle.js` — Coordinates bounded HTTP/process shutdown and cleanup of runtime resources.
 - `src/services/prompts/` — Langfuse-backed PromptService that resolves prompts with file-backed local defaults.
 - `src/controllers/helpers.js` — Small numeric helper (`round10`) used by price formatting.
-- `src/lib/logging.js` — Configures `console.*` levels via `LOG_LEVEL` and emits one-line structured JSON logs.
+- `src/lib/logging.js` — Configures `console.*` levels via `LOG_LEVEL` and emits one-line structured JSON logs with multi-layer secret redaction (sensitive object keys, URL query secrets, JSON string secrets, key-value scalar patterns, Authorization headers, Bearer tokens, Telegram bot tokens, Discord webhook tokens, OpenAI keys, and request-scoped `registerSecretValue` / `clearSecretValue` registry helpers).
 - `src/lib/rateLimiter.js` — Global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`, with safe defaults for invalid values). Core alert/message webhook ingest uses a separate finite 1,000-request bucket per IP and window.
 - `src/lib/cors.js` — Express CORS middleware configuring explicit origin allowlists (`https://cabros-bot.web.app`, `https://cabros-bot.firebaseapp.com`, `https://cabros-bot-production.up.railway.app`, `http://localhost:*`, and `CORS_ALLOWED_ORIGINS`).
 - `src/openapi/openapi.json` — Canonical OpenAPI 3.1 contract for every mounted `/api` operation.
@@ -151,7 +151,7 @@ Implement the following security practices to safeguard endpoints and credential
 - **Timing-Safe API Key Authentication**: Webhook-style write endpoints and news-monitor routes remain protected by `validateApiKey` middleware (`src/lib/auth.js`) which compares keys using timing-safe comparisons (`crypto.timingSafeEqual`) to prevent timing attacks. Supports keys from the `x-api-key` header or the `api-key` query param.
 - **Firebase Admin Authentication**: When `ENABLE_FIREBASE_ADMIN_AUTH=true`, the browser admin routes accept verified Firebase ID tokens in `Authorization: Bearer`; `verifyIdToken(token, true)` fails closed for expired, revoked, disabled, malformed, or wrong-project tokens. `admin.viewer` is read-only and `admin.operator` is required for mutations. Webhook paths continue to require the API-key middleware.
 - **Server-Side Firestore Access**: Client-side read/write access to the `alerts` database collection is denied by Firestore security rules (`firestore.rules`). Access is strictly server-side using the Firebase Admin SDK initialized with service account credentials.
-- **Sensitive Key Redaction**: Sensitive keys (passwords, secrets, tokens, API keys, cookies, DSNs, and auth headers) must be redacted from logs via the centralized logger.
+- **Sensitive Key Redaction**: Sensitive keys (passwords, secrets, tokens, API keys, cookies, DSNs, and auth headers) must be redacted from logs via the centralized logger. The logger automatically redacts bare scalars preceded by sensitive labels, embedded strings (JSON payloads, URL query parameters), well-known token formats (Bearer tokens, Telegram bot tokens, Discord webhooks, OpenAI keys), and provides runtime registry helpers (`registerSecretValue`, `clearSecretValue`, `clearAllSecretValues`) for request-scoped secret lifecycle management.
 - **API Key Fallback Warning**: Using API keys in query parameters is supported for client compatibility but is not recommended due to exposure risk in server logs or proxy middleware.
 - **Authenticated API Requests**: When testing or calling deployed protected endpoints, use the `WEBHOOK_API_KEY` environment variable through the `x-api-key` header. Never expose the value in output, logs, URLs, query strings, or committed files.
 
@@ -764,7 +764,7 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 - If `firebase-admin` initialization fails (bad credentials, wrong project), `db` is set to `null` and a warning is logged; subsequent calls are no-ops
 
 **Read API**:
-- `GET /api/alerts` returns stored alerts ordered by `receivedAt` descending with `limit`, `before`, `source`, and `enriched` query support.
+- `GET /api/alerts` returns stored alerts ordered by `receivedAt` descending with `limit`, `before`, `source`, `enriched`, and `include` query support (`include=enrichment_summary` projects a sanitized, bounded `enrichmentSummary` object and sanitized `enrichmentData` on each alert item, eliminating N+1 detail calls for analysis).
 - `GET /api/alerts/export` returns bounded JSONL or CSV (`format=jsonl|csv`) for stored alerts. It requires both `from` and `to`, caps `limit` at 1000, caps the window at 31 days, supports `source`, `enriched`, and `includeText=true`, and only includes safe export fields. Raw alert text is excluded by default and truncated to 1000 chars when included. CSV prefixes direct or tab/LF/CR-prefixed formula-leading string fields with an apostrophe for spreadsheet safety while leaving finite numeric strings unchanged; JSONL is unchanged.
 - `GET /api/alerts/summary` returns bounded JSON-only analytics for stored alerts, with `from`, `to`, and `limit` query support capped to a 31-day window and 1000 documents.
 - `GET /api/alerts/:alertId` returns a single formatted alert document by Firestore document ID.
@@ -1561,3 +1561,59 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Structured Webhook/API Error Envelope (CB-? / Issue #644)
+
+`src/lib/errorEnvelope.js` introduces a shared builder that produces a standardized error response envelope for `/api/*` endpoints. Every error response now carries:
+
+- `success: false` — always false on error paths
+- `error` — human-readable message (preserves the existing field)
+- `code` — machine-readable code (standardized set: `INVALID_REQUEST`, `FEATURE_DISABLED`, `PROVIDER_UNAVAILABLE`, `PROVIDER_TIMEOUT`, `DELIVERY_FAILED`, `STORAGE_UNAVAILABLE`, `INTERNAL_ERROR`, with arbitrary uppercase codes preserved)
+- `requestId` — request correlation UUID, generated when missing
+- `retryable` — boolean driven by HTTP status code (5xx/429/408/425 = retryable, others = permanent); explicit override supported
+- `details` — optional, only included when present and non-empty
+
+The highest-traffic `/api/webhook/alert` endpoint's catch block (`NotificationRoutingValidationError` path + general error path) now emits this envelope. Upstream error envelopes are merged for `error`, `code`, and `details` so provider-specific contracts stay intact while the standardized fields are always present.
+
+**Scope**: This change intentionally narrows to a single endpoint because `gigachad-senior-dev` flagged the original issue as "too large for a single automated pass" (`automation/skip` Score: 45/100, `Scope is too large for a single automated pass`). The helper is designed for incremental adoption — additional endpoints can adopt it in follow-up PRs without breaking existing behavior. HTTP status codes, fail-open patterns, and existing `code` semantics are preserved; the change is additive.
+
+**Core Components**:
+- `src/lib/errorEnvelope.js` — `buildErrorEnvelope()`, `sendError()`, `isRetryableStatus()`, `normalizeCode()`, `STANDARD_ERROR_CODES`.
+- `src/controllers/webhooks/handlers/alert/alert.js` — Catch block emits standardized envelope; upstream `error.response` envelopes are merged for `error`/`code`/`details`.
+- `src/openapi/openapi.json` — `Error` schema extended with `success`, `code`, `requestId`, `retryable`, `details` (additive, no breaking changes).
+- `tests/unit/error-envelope.test.js` — 29 cases covering envelope shape, retryable inference, code normalization, request-id fallback, and Express response helper.
+
+**Coverage**:
+- `pnpm test -- tests/unit/error-envelope.test.js --testTimeout=5000`
+- `pnpm test -- tests/unit/alert-handler.test.js --testTimeout=5000`
+- `pnpm test -- tests/integration/alert-grounding.test.js --testTimeout=10000`
+
+No environment variable, Remote Config key, endpoint, or feature flag was added. HTTP status codes and existing fail-open/fail-safe patterns are unchanged.
+
+## Structured Webhook/API Error Envelope (CB-? / Issue #644)
+
+`src/lib/errorEnvelope.js` introduces a shared builder that produces a standardized error response envelope for `/api/*` endpoints. Every error response now carries:
+
+- `success: false` — always false on error paths
+- `error` — human-readable message (preserves the existing field)
+- `code` — machine-readable code (standardized set: `INVALID_REQUEST`, `FEATURE_DISABLED`, `PROVIDER_UNAVAILABLE`, `PROVIDER_TIMEOUT`, `DELIVERY_FAILED`, `STORAGE_UNAVAILABLE`, `INTERNAL_ERROR`, with arbitrary uppercase codes preserved)
+- `requestId` — request correlation UUID, generated when missing
+- `retryable` — boolean driven by HTTP status code (5xx/429/408/425 = retryable, others = permanent); explicit override supported
+- `details` — optional, only included when present and non-empty
+
+The highest-traffic `/api/webhook/alert` endpoint's catch block (`NotificationRoutingValidationError` path + general error path) now emits this envelope. Upstream error envelopes are merged for `error`, `code`, and `details` so provider-specific contracts stay intact while the standardized fields are always present.
+
+**Scope**: This change intentionally narrows to a single endpoint because `gigachad-senior-dev` flagged the original issue as "too large for a single automated pass" (`automation/skip` Score: 45/100, `Scope is too large for a single automated pass`). The helper is designed for incremental adoption — additional endpoints can adopt it in follow-up PRs without breaking existing behavior. HTTP status codes, fail-open patterns, and existing `code` semantics are preserved; the change is additive.
+
+**Core Components**:
+- `src/lib/errorEnvelope.js` — `buildErrorEnvelope()`, `sendError()`, `isRetryableStatus()`, `normalizeCode()`, `STANDARD_ERROR_CODES`.
+- `src/controllers/webhooks/handlers/alert/alert.js` — Catch block emits standardized envelope; upstream `error.response` envelopes are merged for `error`/`code`/`details`.
+- `src/openapi/openapi.json` — `Error` schema extended with `success`, `code`, `requestId`, `retryable`, `details` (additive, no breaking changes).
+- `tests/unit/error-envelope.test.js` — 29 cases covering envelope shape, retryable inference, code normalization, request-id fallback, and Express response helper.
+
+**Coverage**:
+- `pnpm test -- tests/unit/error-envelope.test.js --testTimeout=5000`
+- `pnpm test -- tests/unit/alert-handler.test.js --testTimeout=5000`
+- `pnpm test -- tests/integration/alert-grounding.test.js --testTimeout=10000`
+
+No environment variable, Remote Config key, endpoint, or feature flag was added. HTTP status codes and existing fail-open/fail-safe patterns are unchanged.
