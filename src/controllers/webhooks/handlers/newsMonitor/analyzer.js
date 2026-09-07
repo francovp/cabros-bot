@@ -22,6 +22,7 @@ const {
 	getRequestedChannels,
 	validateNotificationRouting,
 } = require('../../../../services/notification/requestRouting');
+const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 
 const promptService = getPromptService();
 
@@ -1194,7 +1195,8 @@ class NewsAnalyzer {
 		}
 
 		if (geminiAnalysis.invalidation_hint && typeof geminiAnalysis.invalidation_hint === 'string' && geminiAnalysis.invalidation_hint.trim()) {
-			context += `\n*Invalidación:* ${geminiAnalysis.invalidation_hint.trim()}`;
+			const escapedInvalidationHint = new MarkdownV2Formatter().format(geminiAnalysis.invalidation_hint.trim());
+			context += `\n*Invalidación:* ${escapedInvalidationHint}`;
 		}
 
 		// Derive outcome barriers when marketContext has a valid numeric price

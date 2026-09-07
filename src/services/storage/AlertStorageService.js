@@ -29,6 +29,7 @@
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
+const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentials');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 
 const COLLECTION_NAME = 'alerts';
@@ -85,7 +86,8 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
 		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true'
 		|| process.env.ENABLE_NOTIFICATION_REDRIVE === 'true'
-		|| process.env.ENABLE_NEWS_MONITOR_SCHEDULER === 'true';
+		|| process.env.ENABLE_NEWS_MONITOR_SCHEDULER === 'true'
+		|| process.env.ENABLE_BINANCE_ORDER_AUDIT === 'true';
 }
 
 function getAlertStorageRetentionDays() {
@@ -164,15 +166,22 @@ function isRetentionExpired(data) {
 		&& eventTimestamp + (getAlertStorageRetentionDays() * DAY_MS) <= Date.now();
 }
 
-function formatAlertDocument(doc) {
+function formatAlertDocument(doc, options = {}) {
 	const data = doc.data() || {};
 	const extracted = extractSymbolAndExchange(data);
+	const includeEnrichmentSummary = Boolean(
+		options.includeEnrichmentSummary ||
+		(Array.isArray(options.include) && options.include.includes('enrichment_summary')) ||
+		options.include === 'enrichment_summary',
+	);
 	const docObj = {
 		id: doc.id,
 		receivedAt: getDocTimestamp(data),
 		text: typeof data.text === 'string' ? data.text : '',
 		enriched: Boolean(data.enriched),
-		enrichmentData: data.enrichmentData || null,
+		enrichmentData: includeEnrichmentSummary
+			? formatEnrichmentSummary(data.enrichmentData, data)
+			: (data.enrichmentData || null),
 		tokenUsage: data.tokenUsage || null,
 		channels: Array.isArray(data.channels) ? data.channels : [],
 		deliveryResults: Array.isArray(data.deliveryResults) ? data.deliveryResults : [],
@@ -180,6 +189,9 @@ function formatAlertDocument(doc) {
 		useTradingViewData: Boolean(data.useTradingViewData),
 		tradingViewEnrichmentApplied: Boolean(data.tradingViewEnrichmentApplied),
 	};
+	if (includeEnrichmentSummary) {
+		docObj.enrichmentSummary = docObj.enrichmentData;
+	}
 	if (typeof data.requestId === 'string' && data.requestId.trim()) {
 		docObj.requestId = data.requestId.trim();
 	}
@@ -435,6 +447,110 @@ function getSourceCount(enrichmentData) {
 	}
 	// Legacy records lacking a sources field count as zero (fail-safe: no crash).
 	return 0;
+}
+
+function extractSourceDomains(sources) {
+	if (!Array.isArray(sources)) {
+		return [];
+	}
+
+	const domains = new Set();
+	for (const source of sources) {
+		let rawUrl = null;
+		if (typeof source === 'string') {
+			rawUrl = source;
+		} else if (source && typeof source === 'object' && typeof source.url === 'string') {
+			rawUrl = source.url;
+		}
+
+		if (rawUrl) {
+			try {
+				const { hostname } = new URL(rawUrl);
+				if (hostname) {
+					domains.add(hostname.toLowerCase().substring(0, 100));
+				}
+			} catch {
+				// Non-URL strings or invalid URLs are safely ignored
+			}
+		}
+	}
+
+	return Array.from(domains).slice(0, 10);
+}
+
+function formatEnrichmentSummary(enrichmentData, docData = {}) {
+	if (!enrichmentData || typeof enrichmentData !== 'object' || Array.isArray(enrichmentData)) {
+		return null;
+	}
+
+	const sentiment = typeof enrichmentData.sentiment === 'string' && enrichmentData.sentiment.trim()
+		? enrichmentData.sentiment.trim().substring(0, 32)
+		: null;
+
+	const sentimentScore = typeof enrichmentData.sentiment_score === 'number' && Number.isFinite(enrichmentData.sentiment_score)
+		? enrichmentData.sentiment_score
+		: (typeof enrichmentData.sentimentScore === 'number' && Number.isFinite(enrichmentData.sentimentScore)
+			? enrichmentData.sentimentScore
+			: null);
+
+	const setupType = typeof enrichmentData.setup_type === 'string' && enrichmentData.setup_type.trim()
+		? enrichmentData.setup_type.trim().substring(0, 64)
+		: (typeof enrichmentData.setupType === 'string' && enrichmentData.setupType.trim()
+			? enrichmentData.setupType.trim().substring(0, 64)
+			: null);
+
+	let invalidationLevel = null;
+	const rawInvalidation = enrichmentData.invalidation_level !== undefined ? enrichmentData.invalidation_level : enrichmentData.invalidationLevel;
+	if (typeof rawInvalidation === 'number' && Number.isFinite(rawInvalidation)) {
+		invalidationLevel = rawInvalidation;
+	} else if (typeof rawInvalidation === 'string' && rawInvalidation.trim()) {
+		invalidationLevel = rawInvalidation.trim().substring(0, 32);
+	}
+
+	let targetLevel = null;
+	const rawTarget = enrichmentData.target_level !== undefined ? enrichmentData.target_level : enrichmentData.targetLevel;
+	if (typeof rawTarget === 'number' && Number.isFinite(rawTarget)) {
+		targetLevel = rawTarget;
+	} else if (typeof rawTarget === 'string' && rawTarget.trim()) {
+		targetLevel = rawTarget.trim().substring(0, 32);
+	}
+
+	let riskRewardRatio = null;
+	const rawRrr = enrichmentData.risk_reward_ratio !== undefined ? enrichmentData.risk_reward_ratio : enrichmentData.riskRewardRatio;
+	if (typeof rawRrr === 'number' && Number.isFinite(rawRrr)) {
+		riskRewardRatio = rawRrr;
+	} else if (typeof rawRrr === 'string' && rawRrr.trim() && Number.isFinite(Number(rawRrr))) {
+		riskRewardRatio = Number(rawRrr);
+	}
+
+	const sourceCount = getSourceCount(enrichmentData);
+	const sourceDomains = extractSourceDomains(enrichmentData.sources);
+
+	const tradingViewEnrichmentApplied = enrichmentData.tradingViewEnrichmentApplied !== undefined
+		? Boolean(enrichmentData.tradingViewEnrichmentApplied)
+		: Boolean(docData.tradingViewEnrichmentApplied);
+
+	const tradingViewEnrichmentStatus = VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(enrichmentData.tradingViewEnrichmentStatus)
+		? enrichmentData.tradingViewEnrichmentStatus
+		: (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(docData.tradingViewEnrichmentStatus)
+			? docData.tradingViewEnrichmentStatus
+			: null);
+
+	const promptProvenance = normalizePromptProvenance(enrichmentData.promptProvenance);
+
+	return {
+		sentiment,
+		sentiment_score: sentimentScore,
+		setup_type: setupType,
+		invalidation_level: invalidationLevel,
+		target_level: targetLevel,
+		risk_reward_ratio: riskRewardRatio,
+		sourceCount,
+		sourceDomains,
+		tradingViewEnrichmentApplied,
+		tradingViewEnrichmentStatus,
+		promptProvenance,
+	};
 }
 
 function recordEvidenceCoverage(bucket, enrichmentData) {
@@ -975,10 +1091,10 @@ function getRawDocCursorValues(doc) {
  * Initialize Firebase Admin (idempotent) and return Firestore client.
  * Returns null when the feature is disabled or initialization fails.
  *
- * Credential resolution order (matches firebase-admin defaults):
- *   1. GOOGLE_APPLICATION_CREDENTIALS env var (path to service-account JSON file)
- *   2. FIREBASE_SERVICE_ACCOUNT_JSON env var   (inline JSON string, preferred for Render secrets)
- *   3. Application Default Credentials          (GCP / Cloud Run managed identity)
+ * Credential resolution is delegated to the shared helper at
+ * src/services/storage/firebaseAdminCredentials.js, which consolidates
+ * FIREBASE_SERVICE_ACCOUNT_JSON / GOOGLE_APPLICATION_CREDENTIALS parsing
+ * and validation that previously lived in this file and three others.
  *
  * @returns {FirebaseFirestore.Firestore | null}
  */
@@ -992,21 +1108,13 @@ function getFirestore() {
 	}
 
 	try {
-		let credential;
-
-		// Option B: inline JSON (preferred for Render.com secret env vars)
-		if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-			const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-			credential = admin.credential.cert(serviceAccount);
-		}
-		// Option A: GOOGLE_APPLICATION_CREDENTIALS file path handled automatically by initializeApp()
-
+		const loaded = loadFirebaseAdminCredentialsOrNull();
 		const appOptions = {};
-		if (credential) {
-			appOptions.credential = credential;
+		if (loaded && loaded.credential) {
+			appOptions.credential = loaded.credential;
 		}
-		if (process.env.FIREBASE_PROJECT_ID) {
-			appOptions.projectId = process.env.FIREBASE_PROJECT_ID;
+		if (loaded && loaded.projectId) {
+			appOptions.projectId = loaded.projectId;
 		}
 
 		if (!admin.apps.length) {
@@ -1175,9 +1283,18 @@ function saveAlert(params) {
  * @param {string|undefined} params.before
  * @param {string|undefined} params.source
  * @param {boolean|undefined} params.enriched
+ * @param {string[]|string|undefined} params.include
+ * @param {boolean|undefined} params.includeEnrichmentSummary
  * @returns {Promise<{alerts: Array, hasMore: boolean, nextBefore: string|null}|null>}
  */
-async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched } = {}) {
+async function listAlerts({
+	limit = DEFAULT_PAGE_SIZE,
+	before,
+	source,
+	enriched,
+	include,
+	includeEnrichmentSummary,
+} = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -1237,7 +1354,7 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 				continue;
 			}
 
-			const formatted = formatAlertDocument(doc);
+			const formatted = formatAlertDocument(doc, { include, includeEnrichmentSummary });
 			if (matchesFilters(formatted, { source, enriched })) {
 				matches.push(formatted);
 				if (matches.length >= targetCount) {
@@ -1856,6 +1973,9 @@ module.exports = {
 	parseSymbolFromText,
 	extractSymbolAndExchange,
 	extractAlertSymbol,
+	formatEnrichmentSummary,
+	extractSourceDomains,
+	formatAlertDocument,
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,
