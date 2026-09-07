@@ -250,6 +250,38 @@
       ]
     },
     {
+      "name": "Get Status - delivery SLA",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing the in-memory per-channel deliveryMetrics section. Counters reset on process restart; the section is omitted entirely until at least one channel records a delivery result."
+      },
+      "response": [
+        {
+          "name": "200 OK - deliveryMetrics populated",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"deliveryChannels\":{\"telegram\":{\"enabled\":true,\"status\":\"ready\"},\"whatsapp\":{\"enabled\":true,\"status\":\"ready\"},\"discord\":{\"enabled\":false,\"status\":\"disabled\"}},\"deliveryMetrics\":{\"window\":{\"startedAt\":\"2026-08-31T22:30:00.000Z\",\"durationMs\":60000},\"success\":3,\"failure\":1,\"total\":4,\"successRate\":0.75,\"averageDeliveryMs\":217.5,\"byChannel\":{\"telegram\":{\"success\":2,\"failure\":1,\"total\":3,\"successRate\":0.6667,\"averageDeliveryMs\":190},\"whatsapp\":{\"success\":1,\"failure\":0,\"total\":1,\"successRate\":1,\"averageDeliveryMs\":300}}}}"
+        }
+      ]
+    },
+    {
       "name": "Get Capabilities",
       "request": {
         "method": "GET",
@@ -807,7 +839,45 @@
                 "volume-confirmation"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "Success - volume confirmed",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"confirmed\": true,\n  \"decision\": \"confirm\",\n  \"volumeRatio\": 1.7,\n  \"analysis\": {\n    \"symbol\": \"BINANCE:BTCUSDT\",\n    \"volume_analysis\": {\n      \"volume_ratio\": 1.7,\n      \"volume_strength\": \"HIGH\"\n    },\n    \"confidence\": 0.91\n  },\n  \"requestId\": \"req-vol-123\",\n  \"processingTimeMs\": 310\n}"
+            },
+            {
+              "name": "400 Invalid symbol",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-vol-400\",\n  \"processingTimeMs\": 12\n}"
+            },
+            {
+              "name": "502 TradingView failure",
+              "status": "Bad Gateway",
+              "code": 502,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"MCP unavailable\",\n  \"code\": \"VOLUME_CONFIRMATION_FAILED\",\n  \"requestId\": \"req-vol-502\",\n  \"processingTimeMs\": 450\n}"
+            }
+          ]
         },
         {
           "name": "POST Single Symbol Analysis",
@@ -846,19 +916,25 @@
               "name": "Success - decision-ready analysis",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*\ud83d\udd34 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*🔴 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  },\n  \"analysisStatus\": \"complete\",\n  \"requestId\": \"req-sym-123\",\n  \"processingTimeMs\": 850\n}"
             },
             {
               "name": "400 Invalid symbol",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\n  \"success\": false,\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+              "body": "{\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-sym-400\",\n  \"processingTimeMs\": 15\n}"
             },
             {
               "name": "502 TradingView failure",
               "status": "Bad Gateway",
               "code": 502,
-              "body": "{\n  \"success\": false,\n  \"error\": \"TradingView MCP unavailable\",\n  \"code\": \"SYMBOL_ANALYSIS_FAILED\"\n}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"TradingView MCP unavailable\",\n  \"code\": \"SYMBOL_ANALYSIS_FAILED\",\n  \"requestId\": \"req-sym-502\",\n  \"processingTimeMs\": 420\n}"
+            },
+            {
+              "name": "504 Analysis timeout",
+              "status": "Gateway Timeout",
+              "code": 504,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Symbol analysis timed out.\",\n  \"code\": \"SYMBOL_ANALYSIS_TIMEOUT\",\n  \"requestId\": \"req-sym-504\",\n  \"processingTimeMs\": 90000\n}"
             }
           ]
         },
@@ -1966,6 +2042,86 @@
               ]
             }
           }
+        },
+        {
+          "name": "GET List Alerts (include=enrichment_summary)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?limit=10&include=enrichment_summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "include",
+                  "value": "enrichment_summary"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - Alerts list with enrichment summary projection",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"alert-123\",\n      \"receivedAt\": \"2026-06-06T12:00:00.000Z\",\n      \"source\": \"webhook\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": true,\n      \"enrichmentData\": {\n        \"sentiment\": \"BULLISH\",\n        \"sentiment_score\": 0.85,\n        \"setup_type\": \"breakout\"\n      },\n      \"enrichmentSummary\": {\n        \"sentiment\": \"BULLISH\",\n        \"sentiment_score\": 0.85,\n        \"setup_type\": \"breakout\",\n        \"invalidation_level\": 64000,\n        \"target_level\": 70000,\n        \"risk_reward_ratio\": 2.5,\n        \"sourceCount\": 2,\n        \"sourceDomains\": [\"coindesk.com\", \"bloomberg.com\"],\n        \"tradingViewEnrichmentApplied\": true,\n        \"tradingViewEnrichmentStatus\": \"full\",\n        \"promptProvenance\": {\n          \"name\": \"market-analysis\",\n          \"source\": \"langfuse\",\n          \"label\": \"production\",\n          \"version\": 3,\n          \"schemaDriftDetected\": false\n        }\n      },\n      \"useTradingViewData\": true,\n      \"tradingViewEnrichmentApplied\": true,\n      \"tradingViewEnrichmentStatus\": \"full\",\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"123\"\n        }\n      ]\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 10,\n    \"nextBefore\": null\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Alerts (invalid include - 400 Bad Request)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?include=invalid_field",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "include",
+                  "value": "invalid_field"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid include parameter",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Invalid include parameter 'invalid_field'. Allowed values: enrichment_summary.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
         },
         {
           "name": "GET List Alerts (filtered)",
