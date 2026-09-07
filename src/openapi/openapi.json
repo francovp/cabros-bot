@@ -280,7 +280,7 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/AnalysisResult"
+            "$ref": "#/components/responses/VolumeConfirmationResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -352,11 +352,17 @@
           },
           {
             "$ref": "#/components/parameters/Enriched"
+          },
+          {
+            "$ref": "#/components/parameters/AlertListInclude"
           }
         ],
         "responses": {
           "200": {
             "$ref": "#/components/responses/AlertList"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -1854,6 +1860,17 @@
           "default": 50
         }
       },
+      "AlertListInclude": {
+        "name": "include",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "enrichment_summary"
+          ]
+        },
+        "description": "Optional projections to include in list records. Allowed values: enrichment_summary."
+      },
       "OutcomeLimit": {
         "name": "limit",
         "in": "query",
@@ -2912,6 +2929,16 @@
           }
         }
       },
+      "VolumeConfirmationResult": {
+        "description": "Structured TradingView MCP volume confirmation data, decision, and timing metadata.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/VolumeConfirmationResult"
+            }
+          }
+        }
+      },
       "OutcomeList": {
         "description": "Signal outcome page",
         "content": {
@@ -3225,6 +3252,104 @@
         "type": "object",
         "additionalProperties": true
       },
+      "DeliveryMetrics": {
+        "type": "object",
+        "description": "Aggregate in-memory delivery SLA counters exposed through /api/status and /api/capabilities. Reset on process restart. Omitted when no channel has recorded any delivery.",
+        "required": [
+          "window",
+          "success",
+          "failure",
+          "total",
+          "successRate",
+          "averageDeliveryMs",
+          "byChannel"
+        ],
+        "properties": {
+          "window": {
+            "type": "object",
+            "required": [
+              "startedAt",
+              "durationMs"
+            ],
+            "properties": {
+              "startedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "durationMs": {
+                "type": "number",
+                "format": "int64"
+              }
+            }
+          },
+          "success": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failure": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "successRate": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "averageDeliveryMs": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "byChannel": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DeliveryChannelMetrics"
+            }
+          }
+        }
+      },
+      "DeliveryChannelMetrics": {
+        "type": "object",
+        "required": [
+          "success",
+          "failure",
+          "total",
+          "successRate",
+          "averageDeliveryMs"
+        ],
+        "properties": {
+          "success": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failure": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "successRate": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "averageDeliveryMs": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          }
+        }
+      },
       "BootstrapReadiness": {
         "type": "object",
         "required": [
@@ -3312,7 +3437,10 @@
       "Error": {
         "type": "object",
         "required": [
-          "error"
+          "error",
+          "success",
+          "code",
+          "retryable"
         ],
         "properties": {
           "error": {
@@ -3324,6 +3452,24 @@
           "jobId": {
             "type": "string",
             "description": "Durably stored job identifier returned when queue acceptance is indeterminate."
+          },
+          "success": {
+            "type": "boolean",
+            "const": false,
+            "description": "Always false on error responses."
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Request correlation UUID; echoes the X-Request-Id header when available."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "True when the client should retry the request (5xx or 429)."
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Optional extra context for the failure; caller is responsible for sanitizing secrets."
           }
         }
       },
@@ -3964,6 +4110,103 @@
           }
         }
       },
+      "EnrichmentSummary": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "description": "Sanitized, bounded summary projection of alert enrichment metadata requested via include=enrichment_summary.",
+        "properties": {
+          "sentiment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Trading sentiment signal (e.g. BULLISH, BEARISH, NEUTRAL)."
+          },
+          "sentiment_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Normalized sentiment score."
+          },
+          "setup_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Technical setup type (e.g. breakout, continuation)."
+          },
+          "invalidation_level": {
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Price level where setup is invalidated."
+          },
+          "target_level": {
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Target take-profit price level."
+          },
+          "risk_reward_ratio": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Calculated risk-reward ratio."
+          },
+          "sourceCount": {
+            "type": "integer",
+            "description": "Number of reference sources attached to the enrichment."
+          },
+          "sourceDomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Up to 10 unique lowercase hostnames extracted from source URLs."
+          },
+          "tradingViewEnrichmentApplied": {
+            "type": "boolean",
+            "description": "Whether TradingView MCP technical data was incorporated."
+          },
+          "tradingViewEnrichmentStatus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Status of TradingView enrichment (e.g. full, partial, none)."
+          },
+          "promptProvenance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PromptProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "StoredAlert": {
         "type": "object",
         "description": "Stored alert document. The `source` field identifies the producing flow (webhook, news-monitor, market-scanner, expanded-analysis). When the report text exceeded the 20,000-character storage cap, `truncated: true` and `originalLength` are populated so consumers and replay can flag the loss; replay will redeliver only the truncated text.",
@@ -3987,6 +4230,9 @@
               "null"
             ],
             "additionalProperties": true
+          },
+          "enrichmentSummary": {
+            "$ref": "#/components/schemas/EnrichmentSummary"
           },
           "tokenUsage": {
             "type": [
@@ -4292,11 +4538,26 @@
                 "type": "object",
                 "description": "Counts TradingView enrichment outcomes; requested alerts without a stored status are reported as unrecorded.",
                 "properties": {
-                  "full": { "type": "integer", "minimum": 0 },
-                  "partial": { "type": "integer", "minimum": 0 },
-                  "failed": { "type": "integer", "minimum": 0 },
-                  "not_applicable": { "type": "integer", "minimum": 0 },
-                  "unrecorded": { "type": "integer", "minimum": 0 }
+                  "full": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "partial": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "failed": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "not_applicable": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "unrecorded": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
                 }
               },
               "riskMetadataCoverage": {
@@ -4314,22 +4575,43 @@
                   "zeroSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "oneToTwoSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "threePlusSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "totalSourceCount": {
@@ -4695,7 +4977,9 @@
           "success",
           "symbol",
           "analysis",
-          "alertText"
+          "alertText",
+          "requestId",
+          "processingTimeMs"
         ],
         "properties": {
           "success": {
@@ -4729,9 +5013,71 @@
           "requestId": {
             "type": "string"
           },
-          "totalDurationMs": {
+          "processingTimeMs": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Total endpoint execution time in milliseconds."
+          }
+        }
+      },
+      "VolumeConfirmationResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "symbol",
+          "exchange",
+          "asset",
+          "timeframe",
+          "decision",
+          "requestId",
+          "processingTimeMs"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          },
+          "confirmed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "confirm",
+              "deny",
+              "unknown"
+            ]
+          },
+          "volumeRatio": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "processingTimeMs": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total endpoint execution time in milliseconds."
           }
         }
       },
@@ -5688,6 +6034,9 @@
           },
           "deliveryChannels": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "deliveryMetrics": {
+            "$ref": "#/components/schemas/DeliveryMetrics"
           },
           "dependencies": {
             "type": "object",
