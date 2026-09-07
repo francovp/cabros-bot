@@ -330,6 +330,7 @@ describe('DiscordService', () => {
 			expect(result.success).toBe(false);
 			expect(result.statusCode).toBe(429);
 			expect(result.error).toContain('Discord webhook 429');
+			expect(result.attemptCount).toBe(1);
 			expect(global.fetch).toHaveBeenCalledTimes(1);
 			expect(mockLogger.warn).toHaveBeenCalledWith(
 				expect.stringContaining('exceeds max retry delay limit'),
@@ -356,6 +357,7 @@ describe('DiscordService', () => {
 
 			expect(result.success).toBe(false);
 			expect(result.statusCode).toBe(429);
+			expect(result.attemptCount).toBe(1);
 			expect(global.fetch).toHaveBeenCalledTimes(1);
 		});
 
