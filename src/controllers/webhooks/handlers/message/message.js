@@ -33,8 +33,15 @@ function validateMessageRequest(body) {
 function postMessage(botOrGetter) {
 	return async (req, res) => {
 		try {
-			const { text, channels, telegramChatId, whatsappChatId, discordWebhookUrl } = validateMessageRequest(req.body);
-			const alert = { text, telegramChatId, whatsappChatId, discordWebhookUrl };
+			const routing = validateMessageRequest(req.body);
+			const alert = {
+				text: routing.text,
+				source: 'generic-message',
+				telegramChatId: routing.telegramChatId,
+				telegramThreadId: routing.telegramThreadId,
+				whatsappChatId: routing.whatsappChatId,
+				discordWebhookUrl: routing.discordWebhookUrl,
+			};
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
@@ -62,7 +69,7 @@ function postMessage(botOrGetter) {
 			const results = await sendWithNotificationRouting(
 				notificationManager,
 				alert,
-				{ channels, telegramChatId, whatsappChatId, discordWebhookUrl },
+				routing,
 				{ http: httpContext },
 			);
 

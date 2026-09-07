@@ -228,8 +228,9 @@ describe('admin deadline budget calculations', () => {
 		expect(adminRequest.LONG_RUNNING_API_REQUEST_TIMEOUT_MS).toBe(990000);
 	});
 
-	it('assigns the derived volume confirmation timeout to /api/webhook/volume-confirmation', () => {
+	it('assigns the derived volume confirmation timeout to /api/webhook/volume-confirmation and /api/webhook/symbol-analysis', () => {
 		expect(adminRequest.getApiRequestTimeout({ path: '/api/webhook/volume-confirmation' })).toBe(390000);
+		expect(adminRequest.getApiRequestTimeout({ path: '/api/webhook/symbol-analysis' })).toBe(390000);
 	});
 
 	it('assigns the derived long-running timeout to all long-running analysis and alert endpoints', () => {

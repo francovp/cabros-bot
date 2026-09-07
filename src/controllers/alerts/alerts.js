@@ -26,6 +26,7 @@ const EXPORT_FIELDS = [
 	'dedupStatus',
 	'channels',
 	'deliveryResults',
+	'suppressedRepeat',
 	'tokenUsage',
 	'text',
 ];
@@ -57,6 +58,43 @@ function parseEnriched(rawEnriched) {
 	}
 
 	return null;
+}
+
+const ALLOWED_INCLUDE_VALUES = new Set(['enrichment_summary']);
+
+function parseInclude(rawInclude) {
+	if (rawInclude === undefined || rawInclude === null || rawInclude === '') {
+		return { success: true, values: [] };
+	}
+
+	let items = [];
+	if (Array.isArray(rawInclude)) {
+		items = rawInclude.flatMap((item) => (typeof item === 'string' ? item.split(',') : []));
+	} else if (typeof rawInclude === 'string') {
+		items = rawInclude.split(',');
+	} else {
+		return {
+			success: false,
+			error: 'Invalid include parameter. Allowed values: enrichment_summary.',
+		};
+	}
+
+	const normalized = [];
+	for (const item of items) {
+		const trimmed = item.trim();
+		if (!trimmed) {
+			continue;
+		}
+		if (!ALLOWED_INCLUDE_VALUES.has(trimmed)) {
+			return {
+				success: false,
+				error: `Invalid include parameter '${trimmed}'. Allowed values: enrichment_summary.`,
+			};
+		}
+		normalized.push(trimmed);
+	}
+
+	return { success: true, values: Array.from(new Set(normalized)) };
 }
 
 function parseSummaryLimit(rawLimit) {
@@ -162,12 +200,26 @@ function listAlerts(req, res) {
 			? req.query.source.trim()
 			: undefined;
 
-		const result = await alertStorageService.listAlerts({
+		const parsedInclude = parseInclude(req.query.include);
+		if (!parsedInclude.success) {
+			return res.status(400).json({
+				error: parsedInclude.error,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const listParams = {
 			before,
 			enriched,
 			limit,
 			source,
-		});
+		};
+		if (parsedInclude.values.length > 0) {
+			listParams.include = parsedInclude.values;
+			listParams.includeEnrichmentSummary = parsedInclude.values.includes('enrichment_summary');
+		}
+
+		const result = await alertStorageService.listAlerts(listParams);
 
 		return res.status(200).json({
 			success: true,
@@ -400,9 +452,70 @@ function getAlertById(req, res) {
 			});
 		}
 
+		let lastReplay = null;
+		try {
+			lastReplay = await alertStorageService.getLatestReplayForAlert(alertId);
+		} catch (error) {
+			// Storage errors are surfaced by the outer handleAsync — never block alert reads.
+			if (error && error.code === alertStorageService.STORAGE_UNAVAILABLE_CODE) {
+				throw error;
+			}
+			console.warn('[AlertsController] Failed to read last replay metadata:', error && error.message);
+		}
+
 		return res.status(200).json({
 			success: true,
 			alert,
+			lastReplay,
+		});
+	});
+}
+
+function listReplays(req, res) {
+	return handleAsync(req, res, '/api/alerts/replays', async () => {
+		if (!alertStorageService.isEnabled()) {
+			return res.status(403).json({
+				error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const limit = parseLimit(req.query.limit);
+		if (limit === null) {
+			return res.status(400).json({
+				error: `Invalid limit. Use an integer between 1 and ${MAX_LIMIT}.`,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const before = typeof req.query.before === 'string' && req.query.before.trim()
+			? req.query.before.trim()
+			: undefined;
+		if (before && !alertStorageService.parseAlertPaginationCursor(before)) {
+			return res.status(400).json({
+				error: alertStorageService.INVALID_CURSOR_MESSAGE,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const alertId = typeof req.query.alertId === 'string' && req.query.alertId.trim()
+			? req.query.alertId.trim()
+			: undefined;
+
+		const result = await alertStorageService.listReplayAttempts({
+			limit,
+			alertId,
+			before,
+		});
+
+		return res.status(200).json({
+			success: true,
+			replays: result.replays,
+			pagination: {
+				hasMore: result.hasMore,
+				limit,
+				nextBefore: result.nextBefore,
+			},
 		});
 	});
 }
@@ -492,13 +605,32 @@ function replayAlert(botOrGetter) {
 				notificationManager = await initializeNotificationServices(bot);
 			}
 
+			let storedTelegramThreadId = storedAlert.telegramThreadId;
+			if (storedTelegramThreadId === undefined && Array.isArray(storedAlert.deliveryResults)) {
+				const telegramResult = storedAlert.deliveryResults.find((r) => r && r.channel === 'telegram');
+				if (telegramResult) {
+					if (typeof telegramResult.threadId === 'number' && Number.isSafeInteger(telegramResult.threadId) && telegramResult.threadId >= 0) {
+						storedTelegramThreadId = telegramResult.threadId;
+					} else if (typeof telegramResult.message_thread_id === 'number' && Number.isSafeInteger(telegramResult.message_thread_id) && telegramResult.message_thread_id >= 0) {
+						storedTelegramThreadId = telegramResult.message_thread_id;
+					}
+				}
+			}
+
 			const replayPayload = {
 				text: storedAlert.text,
 				enriched: storedAlert.enrichmentData || undefined,
+				source: storedAlert.source || 'alert-replay',
 				replay: {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),
 				},
+				...(storedAlert.telegramChatId ? { telegramChatId: storedAlert.telegramChatId } : {}),
+				...(storedTelegramThreadId !== undefined && storedTelegramThreadId !== null
+					? { telegramThreadId: storedTelegramThreadId }
+					: {}),
+				...(storedAlert.whatsappChatId ? { whatsappChatId: storedAlert.whatsappChatId } : {}),
+				...(storedAlert.discordWebhookUrl ? { discordWebhookUrl: storedAlert.discordWebhookUrl } : {}),
 			};
 			const results = await notificationManager.sendToChannels(replayPayload, channels);
 			const replayId = await alertStorageService.saveReplayAttempt({
@@ -558,6 +690,7 @@ function handleAsync(req, res, endpoint, handler) {
 module.exports = {
 	listAlerts,
 	getAlertById,
+	listReplays,
 	replayAlert,
 	summarizeAlerts,
 	exportAlerts,

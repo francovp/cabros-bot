@@ -8,8 +8,8 @@ A PR is ready to merge directly only if all of these are true and the agent is c
 
 1. **No Unresolved Discussions**: No open actionable inline discussions, review threads, or top-level PR conversation comments remain, especially from `@francovp` and Codex. Establish inline state with paginated GraphQL `reviewThreads`, paginate and track every thread comment by ID and `createdAt`/`updatedAt`, and track paginated top-level conversation comments by ID and timestamp; flat comments alone are not proof of inline resolution. Match automated review authors by their actual login, including `chatgpt-codex-connector` when present, before applying the Codex rate-limit fallback below. A thread requiring product authority or human clarification is an explicit `IN_REVIEW` handoff exception, not a merge-ready state.
 2. **All Checks Green**: All required checks are green or conclusively non-blocking.
-3. **Preview Live**: The preview deploy is live and operational.
-4. **Direct Verification**: Direct `curl` verification against the Render preview succeeds.
+3. **Preview Live**: The Railway preview deploy is live and operational (Render is disabled).
+4. **Direct Verification**: Direct `curl` verification against the Railway preview succeeds (see Preview and E2E).
 5. **Criteria Matched**: The implementation matches all issue acceptance criteria.
 6. **No Ownership Conflict**: No active ownership conflicts remain.
 7. **Stability Period**: The head SHA has been stable for at least 5 minutes with no new Codex reviews or unresolved threads appearing.
@@ -18,12 +18,14 @@ If any criterion is uncertain, or a discussion requires human input, keep the sa
 
 ## Preview and E2E
 
-1. **Preview URL Scheme**: Construct the preview URL as `https://${RENDER_SERVICE_NAME}-pr-${PR_NUMBER}.onrender.com`. The `RENDER_SERVICE_NAME` is resolved from the `$RENDER_SERVICE_NAME` env var (natively set by Render), falling back to the GitHub repository name, then to a hardcoded default.
-2. **Deploy Proof**: Perform a direct `curl` call against the preview URL as final deploy proof.
-3. **Healthcheck Ping**: Use `/healthcheck` for signaling status.
+1. **Preview URL Scheme (Railway)**: PR previews are at `https://cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app` (e.g. PR 359 → `https://cabros-bot-cabros-bot-pr-359.up.railway.app`). Production (`master`) is at `https://cabros-bot-production.up.railway.app`. Verify health and new endpoints against those URLs via `scripts/verify-preview.sh`.
+2. **Deploy Proof**: Perform a direct `curl` call against the preview base URL as final deploy proof — at minimum `/healthcheck`, plus `/openapi.json` and any new endpoints introduced by the PR.
+3. **Healthcheck Ping**: Use `/healthcheck` for liveness; use `/openapi.json` for contract reachability; use auth-gated `/api/status` with `x-api-key` when verifying private endpoints.
 4. **Root Route 404s**: Treat `GET /` returning `404` as acceptable only if the service intentionally lacks a root route.
-5. **E2E Executions**: Run the relevant E2E flow against the deployed preview.
+5. **E2E Executions**: Run the relevant E2E flow against the deployed Railway preview (not Render). Pass new-endpoint paths to `scripts/verify-preview.sh <PR_NUMBER> "/healthcheck,/openapi.json,/api/your-new-endpoint"`.
 6. **Repeated Failures**: If preview or E2E checks fail repeatedly due to the same issue-specific blocker, end the run with outcome `LOCAL_DEADLOCK`.
+7. **Railway bounded retry / stale deployment**: If health verification fails with a Railway `429` bounded-retry, `502/504`, or the deployed commit does not match the PR head, attempt the recovery described in SKILL.md Step 5/Step 6 (merge `master` or trigger Railway deploy, wait, re-verify). Only after the retry fails, label `need manual PR deploy`.
+8. **Firebase Hosting previews**: `RESOURCE_EXHAUSTED` / channel quota errors from `firebase hosting:channel:deploy` are NOT a blocker. Run `node scripts/cleanup-preview-channels.js` (or `pnpm run cleanup:preview-channels`) locally to free channels, then retry. Do not mark the PR `GLOBAL_BLOCKED` for this reason.
 
 ## Retry and Livelock Control
 

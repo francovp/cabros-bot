@@ -2,9 +2,10 @@ const express = require('express');
 const { setupTrustProxy } = require('./src/lib/trustProxy');
 
 const app = express();
-const cors = require('cors');
+const { createCorsMiddleware } = require('./src/lib/cors');
 const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
+const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
 
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
@@ -16,7 +17,7 @@ app.use(express.text({ type: 'text/plain' }));
 app.use(express.json());
 
 // Configurar Cabeseras y CORS
-app.use(cors());
+app.use(createCorsMiddleware());
 
 // Use helmet for improved security
 const contentSecurityPolicy = helmet.contentSecurityPolicy.getDefaultDirectives();
@@ -33,6 +34,10 @@ contentSecurityPolicy['connect-src'] = [
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
 
 app.use('/healthcheck', require('express-healthcheck')());
+app.get('/ready', (req, res) => {
+	const status = bootstrapReadiness.getStatus();
+	return res.status(status.ready ? 200 : 503).json(status);
+});
 
 // Rate Limiter (must be after healthcheck to avoid limiting health checks)
 app.use(require('./src/lib/rateLimiter'));

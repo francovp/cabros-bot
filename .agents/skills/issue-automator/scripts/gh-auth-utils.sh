@@ -51,7 +51,7 @@ switch_to_francovp() {
 
   # Only switch if not already francovp
   if [ "$current_user" != "francovp" ]; then
-    gh auth switch --user francovp 2>/dev/null || {
+    gh auth switch --user francovp >/dev/null 2>&1 || {
       echo "Warning: Failed to switch gh auth to francovp. Continuing with current user." >&2
       return 0
     }
@@ -72,7 +72,7 @@ restore_gh_user() {
   unset GH_AUTH_TMP
 
   if [ -n "$original_user" ] && [ "$original_user" != "francovp" ]; then
-    gh auth switch --user "$original_user" 2>/dev/null || {
+    gh auth switch --user "$original_user" >/dev/null 2>&1 || {
       echo "Warning: Failed to restore gh auth to $original_user" >&2
     }
   fi

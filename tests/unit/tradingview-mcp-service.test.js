@@ -70,6 +70,23 @@ describe('TradingViewMcpService', () => {
 		}));
 	});
 
+	it('reports rolling alert-path enrichment rates for the last 24 hours', () => {
+		const service = new TradingViewMcpService();
+
+		service._recordEnrichmentStatus('full');
+		service._recordEnrichmentStatus('partial');
+		service._recordEnrichmentStatus('failed');
+
+		expect(service.getStatus().enrichment.alertPath).toEqual(expect.objectContaining({
+			windowMs: 86400000,
+			totalCount: 3,
+			appliedCount: 2,
+			failedCount: 1,
+			appliedRate24h: 66.67,
+			failureRate24h: 33.33,
+		}));
+	});
+
 	it('does not degrade runtime readiness for caller-cancelled MCP requests', async () => {
 		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
 		const service = new TradingViewMcpService({

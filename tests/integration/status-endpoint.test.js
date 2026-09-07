@@ -11,6 +11,7 @@ const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfi
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../../src/services/grounding/metrics');
+const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -28,6 +29,7 @@ describe('Status endpoints', () => {
 	let savedEnv;
 	let savedTradingViewRuntimeStatus;
 	let savedTradingViewVolumeRuntimeStatus;
+	let savedTradingViewEnrichmentEvents;
 	let app;
 	let tempDir;
 
@@ -35,6 +37,7 @@ describe('Status endpoints', () => {
 		savedEnv = saveEnv();
 		savedTradingViewRuntimeStatus = tradingViewMcpService.runtimeStatus;
 		savedTradingViewVolumeRuntimeStatus = tradingViewMcpService.volumeRuntimeStatus;
+		savedTradingViewEnrichmentEvents = tradingViewMcpService.enrichmentEvents;
 		tradingViewMcpService.runtimeStatus = {
 			status: 'unknown',
 			lastCheckedAt: null,
@@ -53,6 +56,7 @@ describe('Status endpoints', () => {
 			successCount: 0,
 			failureCount: 0,
 		};
+		tradingViewMcpService.enrichmentEvents = [];
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
@@ -94,14 +98,17 @@ describe('Status endpoints', () => {
 		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
+		delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
 	});
 
 	afterEach(() => {
 		remoteConfigService._resetForTesting();
 		geminiQuotaManager.resetForTesting();
 		groundingMetrics.resetForTesting();
+		deliveryMetricsService.resetForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
+		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
 		restoreEnv(savedEnv);
 		if (tempDir) {
 			rmSync(tempDir, { recursive: true, force: true });
@@ -129,6 +136,13 @@ describe('Status endpoints', () => {
 		});
 		expect(response.body.service).not.toHaveProperty('timestamp');
 		expect(response.body.featureFlags.telegramBot).toBe(true);
+		expect(response.body.readiness).toEqual(expect.objectContaining({
+			status: 'pending',
+			ready: false,
+			components: expect.objectContaining({
+				telegramBot: { status: 'pending' },
+			}),
+		}));
 		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: true, status: 'ready' });
 		expect(response.body.dependencies.gemini).toEqual({
 			enabled: true,
@@ -153,6 +167,14 @@ describe('Status endpoints', () => {
 				failureRequests: 0,
 				timeoutRequests: 0,
 			},
+		});
+		expect(response.body.dependencies.groundingCoalescing).toEqual({
+			enabled: false,
+			windowMs: 0,
+			activeEntries: 0,
+			hits: 0,
+			misses: 0,
+			failures: 0,
 		});
 		expect(response.body.dependencies.tradingViewMcp).toEqual({
 			enabled: true,
@@ -190,6 +212,45 @@ describe('Status endpoints', () => {
 		});
 		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
 		expect(response.body.dependencies.sentry.status).toBe('ready');
+		expect(response.body.dependencies.webhookAuth).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
+	it('exposes rolling alert-path MCP enrichment rates', async () => {
+		tradingViewMcpService.runtimeStatus = {
+			status: 'degraded',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
+			enrichment: {
+				lastStatus: null,
+				fullCount: 0,
+				partialCount: 0,
+				failedCount: 0,
+			},
+		};
+		tradingViewMcpService._recordEnrichmentStatus('full');
+		tradingViewMcpService._recordEnrichmentStatus('failed');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.enrichment.alertPath).toEqual(expect.objectContaining({
+			totalCount: 2,
+			appliedCount: 1,
+			failedCount: 1,
+			appliedRate24h: 50,
+			failureRate24h: 50,
+		}));
 	});
 
 	it('reports tradingViewConfluenceEnrichment as true only when explicitly configured to true', async () => {
@@ -383,7 +444,36 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.messageFooterMetadata).toBe(false);
 	});
 
-	it('reports safe Firebase Remote Config load metadata without values', async () => {
+	it('reports alert signal repeat suppression as disabled by default', async () => {
+		delete process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertSignalRepeatSuppression).toBe(false);
+		expect(response.body.dependencies.alertSignalRepeatSuppression).toEqual({
+			enabled: false,
+			suppressedCount: expect.any(Number),
+			lastSuppressedAt: null,
+			activeTrackedSignals: 0,
+		});
+	});
+
+	it('reports alert signal repeat suppression when enabled', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertSignalRepeatSuppression).toBe(true);
+		expect(response.body.dependencies.alertSignalRepeatSuppression.enabled).toBe(true);
+	});
+
+	it('reports safe Firebase Remote Config load metadata without values and honest readiness', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 
 		const response = await request(app)
@@ -395,12 +485,35 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.firebaseRemoteConfig).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
+			ready: false,
+			status: 'unknown',
 			source: 'environment',
 			templateVersion: null,
 			lastSuccessfulLoad: null,
 			lastErrorCategory: null,
+			consecutiveFailures: 0,
 		}));
 		expect(JSON.stringify(response.body.dependencies.firebaseRemoteConfig)).not.toContain('gemini-key');
+
+		// When remote overrides are loaded and fresh, status reports ready: true
+		const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+		remoteConfigService._setRemoteOverridesForTesting({ NEWS_ALERT_THRESHOLD: 0.85 }, Date.now());
+
+		const readyResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(readyResponse.status).toBe(200);
+		expect(readyResponse.body.dependencies.firebaseRemoteConfig).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			source: 'remote',
+			templateVersion: 'test',
+			lastSuccessfulLoad: expect.any(String),
+			consecutiveFailures: 0,
+		}));
 	});
 
 	it('reports signal outcome tracking from the canonical environment variable', async () => {
@@ -1698,5 +1811,70 @@ describe('Status endpoints', () => {
 			maxAttempts: 5,
 		});
 	});
-});
 
+	it('omits deliveryMetrics when no deliveries have been recorded', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body).not.toHaveProperty('deliveryMetrics');
+	});
+
+	it('exposes per-channel deliveryMetrics after recorded results', async () => {
+		deliveryMetricsService.record({ channel: 'telegram', success: true, durationMs: 120 });
+		deliveryMetricsService.record({ channel: 'telegram', success: false, durationMs: 250 });
+		deliveryMetricsService.record({ channel: 'whatsapp', success: true, durationMs: 300 });
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.deliveryMetrics).toEqual(expect.objectContaining({
+			success: 2,
+			failure: 1,
+			total: 3,
+			successRate: expect.closeTo(2 / 3, 4),
+			byChannel: {
+				telegram: expect.objectContaining({
+					success: 1,
+					failure: 1,
+					total: 2,
+					successRate: 0.5,
+					averageDeliveryMs: 185,
+				}),
+				whatsapp: expect.objectContaining({
+					success: 1,
+					failure: 0,
+					total: 1,
+					successRate: 1.0,
+					averageDeliveryMs: 300,
+				}),
+			},
+			window: expect.objectContaining({
+				startedAt: expect.any(String),
+				durationMs: expect.any(Number),
+			}),
+		}));
+		expect(response.body.deliveryMetrics.averageDeliveryMs).toBeCloseTo((120 + 250 + 300) / 3, 1);
+	});
+
+	it('aliases /api/capabilities to expose deliveryMetrics', async () => {
+		deliveryMetricsService.record({ channel: 'discord', success: true, durationMs: 80 });
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.deliveryMetrics).toEqual(expect.objectContaining({
+			success: 1,
+			failure: 0,
+			total: 1,
+			byChannel: expect.objectContaining({
+				discord: expect.objectContaining({ successRate: 1.0 }),
+			}),
+		}));
+	});
+});

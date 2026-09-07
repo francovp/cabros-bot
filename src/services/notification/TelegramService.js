@@ -5,6 +5,7 @@
 
 const NotificationChannel = require('./NotificationChannel');
 const MarkdownV2Formatter = require('./formatters/markdownV2Formatter');
+const { parseTelegramTopicRoutes, resolveTelegramThreadId } = require('./telegramTopicRouting');
 
 const DEFAULT_MAX_MESSAGE_LENGTH = 4000;
 const DEFAULT_MAX_RETRIES = 2;
@@ -39,16 +40,18 @@ function getStatusCode(error) {
 	const rawStatusCode = error?.response?.error_code
 		?? error?.response?.statusCode
 		?? error?.response?.status
-		?? error?.error_code
 		?? error?.statusCode
 		?? error?.status;
-	const statusCode = Number(rawStatusCode);
-	return Number.isFinite(statusCode) ? statusCode : null;
+	if (typeof rawStatusCode === 'number') {
+		return rawStatusCode;
+	}
+	const parsed = Number(rawStatusCode);
+	return Number.isSafeInteger(parsed) && parsed >= 100 && parsed <= 599 ? parsed : null;
 }
 
 function getErrorMessage(error) {
-	if (error?.response?.description || error?.description || error?.message) {
-		return String(error.response?.description || error.description || error.message);
+	if (error?.response?.description || error?.response?.data?.description || error?.description || error?.message) {
+		return String(error.response?.description || error.response?.data?.description || error.description || error.message);
 	}
 	if (error && typeof error === 'object') {
 		return JSON.stringify(error);
@@ -57,25 +60,28 @@ function getErrorMessage(error) {
 }
 
 function getCategory(error, statusCode) {
-	if (statusCode === 429) return 'RATE_LIMITED';
-	if (statusCode !== null && statusCode >= 400 && statusCode < 500) return 'CLIENT_ERROR';
-	if (error?.name === 'AbortError' || /timeout|aborted/i.test(getErrorMessage(error))) return 'TIMEOUT';
+	if (error?.name === 'AbortError' || error?.message?.includes('timeout') || error?.message?.includes('aborted')) {
+		return 'TIMEOUT';
+	}
+	if (statusCode === 429) {
+		return 'RATE_LIMITED';
+	}
+	if (statusCode === 400 || statusCode === 401 || statusCode === 403 || statusCode === 404) {
+		return 'PAYLOAD_ERROR';
+	}
 	return 'PROVIDER_ERROR';
 }
 
 function isRetryable(error, statusCode) {
-	// Telegram has no idempotency key for sendMessage; transport and 5xx failures
-	// may mean Telegram accepted the alert before the response was lost.
 	return statusCode === 429;
 }
 
 function getRetryAfterMs(error, fallbackDelayMs) {
-	const retryAfter = error?.response?.parameters?.retry_after
-		?? error?.response?.parameters?.retryAfter
-		?? error?.parameters?.retry_after
-		?? error?.parameters?.retryAfter;
-	const seconds = Number(retryAfter);
-	return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : fallbackDelayMs;
+	const rawRetryAfter = error?.response?.parameters?.retry_after;
+	if (typeof rawRetryAfter === 'number' && Number.isFinite(rawRetryAfter) && rawRetryAfter > 0) {
+		return Math.max(1, Math.round(rawRetryAfter * 1000));
+	}
+	return fallbackDelayMs;
 }
 
 function stripMarkdownV2Escapes(text) {
@@ -90,6 +96,7 @@ class TelegramService extends NotificationChannel {
    * @param {Object} config.bot - Telegraf bot instance
    * @param {string} config.botToken - Telegram bot token (optional, for validation)
    * @param {string} config.chatId - Destination Telegram chat ID
+   * @param {Object|string} config.topicRoutes - Configured forum topic routes (optional)
    * @param {Object} config.formatter - Message formatter (default: MarkdownV2Formatter)
    * @param {Object} config.logger - Logger instance (optional)
    */
@@ -99,8 +106,11 @@ class TelegramService extends NotificationChannel {
 		this.bot = config.bot;
 		this.botToken = config.botToken || process.env.BOT_TOKEN;
 		this.chatId = config.chatId || process.env.TELEGRAM_CHAT_ID;
-		this.formatter = config.formatter || new MarkdownV2Formatter();
 		this.logger = config.logger;
+		this.topicRoutes = config.topicRoutes !== undefined
+			? parseTelegramTopicRoutes(config.topicRoutes, this.logger)
+			: parseTelegramTopicRoutes(process.env.TELEGRAM_TOPIC_ROUTES, this.logger);
+		this.formatter = config.formatter || new MarkdownV2Formatter();
 		this.maxMessageLength = config.maxMessageLength || DEFAULT_MAX_MESSAGE_LENGTH;
 		this.maxRetries = Number.isInteger(config.maxRetries) && config.maxRetries >= 0 ? config.maxRetries : DEFAULT_MAX_RETRIES;
 		this.fallbackRetryDelayMs = Number.isFinite(config.fallbackRetryDelayMs) && config.fallbackRetryDelayMs >= 0
@@ -161,6 +171,25 @@ class TelegramService extends NotificationChannel {
 	}
 
 	/**
+   * Resolve topic thread ID for an alert
+   * @param {Object} alert
+   * @returns {number|null}
+   */
+	resolveThreadId(alert = {}) {
+		const isCustomChat = Boolean(alert.telegramChatId && String(alert.telegramChatId) !== String(this.chatId));
+		if (isCustomChat) {
+			return resolveTelegramThreadId({
+				telegramThreadId: alert.telegramThreadId,
+				threadId: alert.threadId,
+				messageThreadId: alert.messageThreadId,
+				telegram_thread_id: alert.telegram_thread_id,
+				message_thread_id: alert.message_thread_id,
+			}, {}, this.logger);
+		}
+		return resolveTelegramThreadId(alert, this.topicRoutes, this.logger);
+	}
+
+	/**
    * Send alert to Telegram via Telegraf bot
    * @param {Object} alert - Alert object with text and optional enriched content
 	 * @returns {Promise<{success: boolean, channel: string, messageId?: string, error?: string, statusCode?: number|null, category?: string, attemptCount: number, durationMs: number}>}
@@ -207,7 +236,8 @@ class TelegramService extends NotificationChannel {
 			}
 
 			const chatId = alert.telegramChatId || this.chatId;
-			this.logger?.debug?.(`Sending to Telegram chat ${chatId}`);
+			const threadId = this.resolveThreadId(alert);
+			this.logger?.debug?.(`Sending to Telegram chat ${chatId}${threadId ? ` (topic ${threadId})` : ''}`);
 			const messageParts = splitTelegramMessage(formattedText, this.maxMessageLength);
 			const sendMessage = (targetChatId, messagePart, extra, requestSignal) => {
 				if (typeof this.bot.telegram.callApi === 'function') {
@@ -236,9 +266,10 @@ class TelegramService extends NotificationChannel {
 						messageId: messageIds.join(','),
 						messageCount: messageIds.length,
 						aborted: true,
+						threadId,
 					});
 				}
-				const result = await this.sendMessagePart(sendMessage, chatId, messagePart, !!alert.enriched, signal, retryState);
+				const result = await this.sendMessagePart(sendMessage, chatId, messagePart, !!alert.enriched, signal, retryState, threadId);
 				attemptCount += result.attemptCount;
 				if (!result.success) {
 					if (result.aborted) {
@@ -252,6 +283,7 @@ class TelegramService extends NotificationChannel {
 							messageId: messageIds.join(','),
 							messageCount: messageIds.length,
 							aborted: true,
+							threadId,
 						});
 					}
 					const statusCode = getStatusCode(result.error);
@@ -265,6 +297,7 @@ class TelegramService extends NotificationChannel {
 						messageIds,
 						messageId: messageIds.join(','),
 						messageCount: messageIds.length,
+						threadId,
 					});
 				}
 				messageIds.push(String(result.response.message_id));
@@ -279,6 +312,7 @@ class TelegramService extends NotificationChannel {
 				statusCode: 200,
 				category: 'SUCCESS',
 				attemptCount,
+				threadId,
 			});
 		} catch (error) {
 			this.logger?.error?.(`Failed to send to Telegram: ${error.message}`);
@@ -292,7 +326,7 @@ class TelegramService extends NotificationChannel {
 		}
 	}
 
-	async sendMessagePart(sendMessage, chatId, messagePart, enriched, signal, retryState = { totalWaitMs: 0 }) {
+	async sendMessagePart(sendMessage, chatId, messagePart, enriched, signal, retryState = { totalWaitMs: 0 }, threadId = null) {
 		let totalAttempts = 0;
 		let lastError = null;
 
@@ -306,7 +340,7 @@ class TelegramService extends NotificationChannel {
 				};
 			}
 
-			const result = await this.sendFormattedMessage(sendMessage, chatId, messagePart, enriched, signal);
+			const result = await this.sendFormattedMessage(sendMessage, chatId, messagePart, enriched, signal, threadId);
 			totalAttempts += result.attemptCount;
 			if (result.success) {
 				return { ...result, attemptCount: totalAttempts };
@@ -350,7 +384,7 @@ class TelegramService extends NotificationChannel {
 		};
 	}
 
-	async sendFormattedMessage(sendMessage, chatId, messagePart, enriched, signal) {
+	async sendFormattedMessage(sendMessage, chatId, messagePart, enriched, signal, threadId = null) {
 		const getAbortError = () => new Error(signal?.reason?.message || signal?.reason || 'Operation aborted');
 		const sendAttempt = async (text, extra) => {
 			const attemptController = new AbortController();
@@ -377,35 +411,38 @@ class TelegramService extends NotificationChannel {
 				if (signal && parentAbortListener) signal.removeEventListener('abort', parentAbortListener);
 			}
 		};
+		const topicExtra = threadId ? { message_thread_id: threadId } : {};
 		try {
 			const response = await sendAttempt(messagePart, {
 				parse_mode: 'MarkdownV2',
 				disable_web_page_preview: enriched,
+				...topicExtra,
 			});
 			return { success: true, response, attemptCount: 1 };
-			} catch (error) {
-				if (signal?.aborted) {
-					return { success: false, error: getAbortError(), attemptCount: 1, aborted: true };
-				}
-				const errorMessage = getErrorMessage(error);
-				if (!errorMessage.includes("can't parse entities")) {
-					return { success: false, error, attemptCount: 1 };
-				}
+		} catch (error) {
+			if (signal?.aborted) {
+				return { success: false, error: getAbortError(), attemptCount: 1, aborted: true };
+			}
+			const errorMessage = getErrorMessage(error);
+			if (!errorMessage.includes("can't parse entities")) {
+				return { success: false, error, attemptCount: 1 };
+			}
 
-				this.logger?.warn?.(`Telegram MarkdownV2 parse failed, retrying as plain text: ${errorMessage}`);
-				if (signal?.aborted) {
-					return { success: false, error: getAbortError(), attemptCount: 1, aborted: true };
-				}
-				try {
-					const response = await sendAttempt(stripMarkdownV2Escapes(messagePart), {
-						disable_web_page_preview: enriched,
+			this.logger?.warn?.(`Telegram MarkdownV2 parse failed, retrying as plain text: ${errorMessage}`);
+			if (signal?.aborted) {
+				return { success: false, error: getAbortError(), attemptCount: 1, aborted: true };
+			}
+			try {
+				const response = await sendAttempt(stripMarkdownV2Escapes(messagePart), {
+					disable_web_page_preview: enriched,
+					...topicExtra,
 				});
-					return { success: true, response, attemptCount: 2 };
-				} catch (fallbackError) {
-					if (signal?.aborted) {
-						return { success: false, error: getAbortError(), attemptCount: 2, aborted: true };
-					}
-					return { success: false, error: fallbackError, attemptCount: 2 };
+				return { success: true, response, attemptCount: 2 };
+			} catch (fallbackError) {
+				if (signal?.aborted) {
+					return { success: false, error: getAbortError(), attemptCount: 2, aborted: true };
+				}
+				return { success: false, error: fallbackError, attemptCount: 2 };
 			}
 		}
 	}
