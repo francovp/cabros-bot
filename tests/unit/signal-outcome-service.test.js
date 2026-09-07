@@ -2323,6 +2323,158 @@ describe('SignalOutcomeService', () => {
 			expect(allRes.windows['1h'].totalSignals).toBe(2);
 			expect(allRes.windows['1h'].hitRatePercent).toBe(50);
 		});
+
+		it('collects matching records beyond the initial slice when filters are applied (GH-715)', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const map = new Map();
+			// 600 non-matching (ETH) docs precede the matching BTC docs
+			for (let i = 0; i < 600; i += 1) {
+				map.set(`doc-eth-${i}`, {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: `req-eth-${i}`,
+					source: 'market-scanner',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 3000,
+					score: 0.7,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: -0.5, maxAdverseExcursion: -0.5 },
+					},
+				});
+			}
+			// 5 matching (BTC) docs sit beyond the default 100-doc page slice
+			for (let i = 0; i < 5; i += 1) {
+				map.set(`doc-btc-${i}`, {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: `req-btc-${i}`,
+					source: 'market-scanner',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					score: 0.8,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: 1.0, maxAdverseExcursion: -0.1 },
+					},
+				});
+			}
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			// With a small requested limit (50), filter-before-limit must continue scanning
+			// past the first batch (100 docs) to surface the 5 BTC matches sitting beyond it
+			const res = await SignalOutcomeService.summarizeOutcomes({ symbol: 'BTCUSDT', limit: 50 });
+			expect(res.available).toBe(true);
+			expect(res.totalSignalsReceived).toBe(5);
+			expect(res.totalSignalsEvaluated).toBe(5);
+			expect(res.windows['1h'].totalSignals).toBe(5);
+		});
+
+		it('scopes window aggregation to the requested window filter (GH-715)', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const map = new Map([
+				['doc-1', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-1',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					score: 0.7,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: 1.0, maxAdverseExcursion: -0.1 },
+						'4h': { status: 'evaluated', return: -3.0, maxAdverseExcursion: -4.0 },
+						'1D': { status: 'evaluated', return: 5.0, maxAdverseExcursion: -1.0 },
+					},
+				}],
+				['doc-2', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-2',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 51000,
+					score: 0.7,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: -2.0, maxAdverseExcursion: -2.5 },
+						'4h': { status: 'evaluated', return: 4.0, maxAdverseExcursion: -0.5 },
+						'1D': { status: 'evaluated', return: -1.0, maxAdverseExcursion: -1.5 },
+					},
+				}],
+			]);
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ window: '1h' });
+			expect(res.available).toBe(true);
+			expect(res.windows['1h'].totalSignals).toBe(2);
+			// Only the 1h window should appear — 4h and 1D must not contribute
+			expect(res.windows['4h']).toBeUndefined();
+			expect(res.windows['1D']).toBeUndefined();
+			// hitRatePercent for 1h averages {1.0, -2.0}: 50%
+			expect(res.windows['1h'].hitRatePercent).toBe(50);
+			expect(res.windows['1h'].averageReturnPercent).toBe(-0.5);
+		});
+
+		it('scopes status filter to the requested window when both filters are set (GH-715)', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const map = new Map([
+				['doc-1', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-1',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					score: 0.7,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': { status: 'pending' },
+						'4h': { status: 'evaluated', return: 1.0, maxAdverseExcursion: -0.1 },
+					},
+				}],
+				['doc-2', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-2',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 51000,
+					score: 0.7,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: -2.0, maxAdverseExcursion: -2.5 },
+						'4h': { status: 'pending' },
+					},
+				}],
+			]);
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			// status=pending + window=1h should match only doc-1 (doc-2 has 1h evaluated)
+			const res = await SignalOutcomeService.summarizeOutcomes({ status: 'pending', window: '1h' });
+			expect(res.available).toBe(true);
+			// doc-1 matches {status: pending, window: 1h}; doc-2 does not
+			expect(res.totalSignalsReceived).toBe(1);
+			expect(res.totalSignalsPending).toBe(1);
+			expect(res.totalSignalsEvaluated).toBe(0);
+			// Without window scoping, the 4h evaluated outcome on doc-1 would have marked it as evaluated
+		});
 	});
 
 	describe('worker lifecycle and scheduling', () => {
