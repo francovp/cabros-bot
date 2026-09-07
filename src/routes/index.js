@@ -31,7 +31,7 @@ const {
 	ADMIN_OPERATOR,
 	ADMIN_VIEWER,
 	requireAdminRole,
-	requireConfiguredAdminAccess,
+	requireConfiguredBinanceTradingAccess,
 	validateAdminAccess,
 } = require('../lib/adminAuth');
 
@@ -39,8 +39,8 @@ function getRoutes(botOrGetter) {
 	const router = express.Router();
 	const adminRead = [validateAdminAccess, requireAdminRole(ADMIN_VIEWER)];
 	const adminWrite = [validateAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
-	const binanceOrderRead = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_VIEWER)];
-	const binanceOrderWrite = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
+	const binanceOrderRead = [requireConfiguredBinanceTradingAccess, requireAdminRole(ADMIN_VIEWER)];
+	const binanceOrderWrite = [requireConfiguredBinanceTradingAccess, requireAdminRole(ADMIN_OPERATOR)];
 	router.post('/webhook/alert', validateApiKey, idempotencyMiddleware, postAlert(botOrGetter));
 	router.post('/webhook/message', validateApiKey, idempotencyMiddleware, postMessage(botOrGetter));
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));

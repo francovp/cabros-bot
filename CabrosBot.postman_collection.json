@@ -12,7 +12,17 @@
     },
     {
       "key": "apiKey",
-      "value": "your-api-key-here",
+      "value": "your-webhook-api-key-here",
+      "type": "string"
+    },
+    {
+      "key": "adminApiKey",
+      "value": "your-admin-api-key-here",
+      "type": "string"
+    },
+    {
+      "key": "binanceTradingApiKey",
+      "value": "your-binance-trading-api-key-here",
       "type": "string"
     },
     {

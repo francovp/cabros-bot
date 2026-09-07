@@ -1753,13 +1753,26 @@
       "ApiKeyHeader": {
         "type": "apiKey",
         "in": "header",
-        "name": "x-api-key"
+        "name": "x-api-key",
+        "description": "Webhook-scope API key (env: WEBHOOK_API_KEY). Authenticates /api/webhook/* and /api/news-monitor. Does NOT grant access to admin/operator or Binance trading routes when ADMIN_API_KEY or BINANCE_TRADING_API_KEY is configured."
       },
       "ApiKeyQuery": {
         "type": "apiKey",
         "in": "query",
         "name": "api-key",
         "description": "Legacy compatibility only. Prefer x-api-key because query strings may be logged."
+      },
+      "AdminApiKeyHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "Admin/operator-scope API key (env: ADMIN_API_KEY). Authenticates the browser admin console and the /api/admin/* read/write surfaces (alerts, scanner-presets, jobs, outcomes, status, capabilities, replay). Independent of the webhook key. When unset, falls back to the legacy WEBHOOK_API_KEY for backward compatibility."
+      },
+      "BinanceTradingApiKeyHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "Binance trading-scope API key (env: BINANCE_TRADING_API_KEY). Authenticates POST/GET/DELETE /api/trading/binance/orders. Independent of the webhook and admin keys. When unset, falls back to admin authentication for backward compatibility."
       },
       "FirebaseBearerAuth": {
         "type": "http",
