@@ -200,7 +200,7 @@
             "status"
           ]
         },
-        "description": "Protected runtime status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. When ENABLE_FIREBASE_REMOTE_CONFIG=true, dependencies.firebaseRemoteConfig contains safe loader metadata only; disabled, stale, invalid, or unavailable remote values fall back to environment/default settings."
+        "description": "Protected runtime status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. When ENABLE_FIREBASE_REMOTE_CONFIG=true, dependencies.firebaseRemoteConfig contains safe loader metadata only; disabled, stale, invalid, or unavailable remote values fall back to environment/default settings. dependencies.requestDeadline reports the global API request-deadline middleware budget (defaultMs from API_REQUEST_DEADLINE_MS in [1000, 600000]), the live activeTimers counter, and the exemptPaths list (defaults to /healthcheck, /ready, /openapi.json, /docs). The middleware returns 504 REQUEST_DEADLINE_EXCEEDED with X-Request-Id when the budget is exceeded; per-request overrides via X-Cabros-Request-Deadline-Ms are clamped to the same bounds."
       },
       "response": [
         {
