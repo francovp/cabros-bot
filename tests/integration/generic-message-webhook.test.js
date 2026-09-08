@@ -6,6 +6,12 @@ const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 
+jest.mock('../../src/services/storage/AlertStorageService', () => ({
+	saveAlert: jest.fn().mockResolvedValue('stored-message-id'),
+}));
+
+const alertStorageService = require('../../src/services/storage/AlertStorageService');
+
 describe('POST /api/webhook/message - Generic message webhook', () => {
 	let savedEnv;
 	let mockBot;
@@ -70,6 +76,15 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(res.body.results[0].messageId).toBe('tg-msg-123');
 		expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
 		expect(global.fetch).not.toHaveBeenCalled();
+		expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
+			text: 'Hello from test',
+			source: 'webhook-message',
+			enriched: false,
+			enrichmentData: null,
+			tokenUsage: null,
+			channels: ['telegram'],
+			deliveryResults: res.body.results,
+		}));
 	});
 
 	it('sends a message to whatsapp only', async () => {

@@ -1589,6 +1589,12 @@ The highest-traffic `/api/webhook/alert` endpoint's catch block (`NotificationRo
 
 No environment variable, Remote Config key, endpoint, or feature flag was added. HTTP status codes and existing fail-open/fail-safe patterns are unchanged.
 
+## Generic Message Delivery Storage (Issue #654)
+
+Successful `POST /api/webhook/message` deliveries now reuse `AlertStorageService.saveAlert()` after the response is sent, using `source: webhook-message`. This keeps generic-message deliveries available to the existing alert audit, export, summary, and replay flows when `ENABLE_FIRESTORE_ALERT_STORAGE=true` while preserving fail-open delivery behavior. Integration coverage verifies the persisted payload and the existing full suite remains green.
+
+No environment variable, Remote Config key, endpoint, OpenAPI, or Postman contract changed.
+
 ## Structured Webhook/API Error Envelope (CB-? / Issue #644)
 
 `src/lib/errorEnvelope.js` introduces a shared builder that produces a standardized error response envelope for `/api/*` endpoints. Every error response now carries:
