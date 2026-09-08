@@ -45,11 +45,11 @@
           </div>
           <span class="security-chip">Firebase Auth</span>
         </div>
-        <div id="auth-form" class="auth-form">
-          <label>Email <input id="auth-email" type="email" autocomplete="username"></label>
-          <label>Password <input id="auth-password" type="password" autocomplete="current-password"></label>
-          <button id="sign-in" class="button-primary" type="button">Sign in</button>
-        </div>
+        <form id="auth-form" class="auth-form" aria-describedby="auth-state">
+          <label for="auth-email">Email <input id="auth-email" name="email" type="email" autocomplete="username" required aria-describedby="auth-state"></label>
+          <label for="auth-password">Password <input id="auth-password" name="password" type="password" autocomplete="current-password" required aria-describedby="auth-state"></label>
+          <button id="sign-in" class="button-primary" type="submit">Sign in</button>
+        </form>
         <button id="sign-out" class="button-ghost" type="button" hidden>Sign out</button>
         <p id="auth-state" class="request-state" aria-live="polite">Checking sign-in configuration…</p>
       </section>
@@ -61,9 +61,9 @@
           </div>
           <span class="security-chip">Session-only</span>
         </div>
-        <form id="connection-form" class="connection-row" novalidate>
-          <label class="key-field">API key <input id="api-key" type="password" autocomplete="off"></label>
-          <button id="save-key" class="button-primary" type="button">Use key for this session</button>
+        <form id="connection-form" class="connection-row" aria-describedby="key-state">
+          <label class="key-field" for="api-key">API key <input id="api-key" name="api-key" type="password" autocomplete="off" required aria-describedby="key-state"></label>
+          <button id="save-key" class="button-primary" type="submit">Use key for this session</button>
         </form>
         <p id="key-state" class="request-state" aria-live="polite"></p>
       </section>

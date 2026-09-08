@@ -16,6 +16,7 @@ class FakeElement {
 		this.className = '';
 		this.value = '';
 		this.disabled = false;
+		this.required = false;
 		this._text = '';
 	}
 
@@ -135,13 +136,16 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		'auth-state', 'api-key', 'key-state', 'save-key', 'clear-key', 'connection-form', 'view',
 	].forEach((id) => {
 		const tag = id === 'api-key' ? 'input' : id === 'connection-form' ? 'form'
-			: id === 'view' ? 'section' : id === 'auth-form' ? 'div' : id.endsWith('key') ? 'button' : 'p';
+			: id === 'view' ? 'section' : id === 'auth-form' ? 'form' : id.endsWith('key') ? 'button' : 'p';
 		const node = new FakeElement(tag);
 		node.id = id;
 		node.hidden = false;
 		elementsById[id] = node;
 		body.append(node);
 	});
+	if (elementsById['auth-email']) elementsById['auth-email'].required = true;
+	if (elementsById['auth-password']) elementsById['auth-password'].required = true;
+	if (elementsById['api-key']) elementsById['api-key'].required = true;
 	['overview', 'status', 'alerts', 'outcomes', 'presets', 'jobs', 'analysis', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
@@ -3134,5 +3138,218 @@ describe('admin browser client', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(8);
 		expect(shell).not.toMatch(/[⌂◈◉◇◌✦▷]/);
+	});
+
+	it('uses native forms for admin credential entry', () => {
+		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
+		const authFormMatch = shell.match(/<form[^>]*id="auth-form"[\s\S]*?<\/form>/);
+		const connectionFormMatch = shell.match(/<form[^>]*id="connection-form"[\s\S]*?<\/form>/);
+		expect(authFormMatch).not.toBeNull();
+		expect(connectionFormMatch).not.toBeNull();
+
+		const authFormTag = authFormMatch[0].match(/<form[^>]*>/)[0];
+		const connectionFormTag = connectionFormMatch[0].match(/<form[^>]*>/)[0];
+		expect(authFormTag).toContain('id="auth-form"');
+		expect(authFormTag).not.toContain('novalidate');
+		expect(authFormTag).toContain('aria-describedby="auth-state"');
+		expect(connectionFormTag).toContain('id="connection-form"');
+		expect(connectionFormTag).not.toContain('novalidate');
+		expect(connectionFormTag).toContain('aria-describedby="key-state"');
+
+		const authButtonMatch = authFormMatch[0].match(/<button[^>]*id="sign-in"[^>]*>/);
+		const connectionButtonMatch = connectionFormMatch[0].match(/<button[^>]*id="save-key"[^>]*>/);
+		expect(authButtonMatch).not.toBeNull();
+		expect(connectionButtonMatch).not.toBeNull();
+		expect(authButtonMatch[0]).toContain('type="submit"');
+		expect(connectionButtonMatch[0]).toContain('type="submit"');
+
+		const emailInputMatch = authFormMatch[0].match(/<input[^>]*id="auth-email"[^>]*>/);
+		const passwordInputMatch = authFormMatch[0].match(/<input[^>]*id="auth-password"[^>]*>/);
+		const apiKeyInputMatch = connectionFormMatch[0].match(/<input[^>]*id="api-key"[^>]*>/);
+		expect(emailInputMatch).not.toBeNull();
+		expect(passwordInputMatch).not.toBeNull();
+		expect(apiKeyInputMatch).not.toBeNull();
+		expect(emailInputMatch[0]).toMatch(/\srequired(\s|>)/);
+		expect(emailInputMatch[0]).toMatch(/name="email"/);
+		expect(emailInputMatch[0]).toMatch(/aria-describedby="auth-state"/);
+		expect(passwordInputMatch[0]).toMatch(/\srequired(\s|>)/);
+		expect(passwordInputMatch[0]).toMatch(/name="password"/);
+		expect(passwordInputMatch[0]).toMatch(/aria-describedby="auth-state"/);
+		expect(apiKeyInputMatch[0]).toMatch(/\srequired(\s|>)/);
+		expect(apiKeyInputMatch[0]).toMatch(/name="api-key"/);
+		expect(apiKeyInputMatch[0]).toMatch(/aria-describedby="key-state"/);
+
+		const emailLabelMatch = authFormMatch[0].match(/<label[^>]*for="auth-email"[^>]*>[\s\S]*?<\/label>/);
+		const passwordLabelMatch = authFormMatch[0].match(/<label[^>]*for="auth-password"[^>]*>[\s\S]*?<\/label>/);
+		const apiKeyLabelMatch = connectionFormMatch[0].match(/<label[^>]*for="api-key"[^>]*>[\s\S]*?<\/label>/);
+		expect(emailLabelMatch).not.toBeNull();
+		expect(passwordLabelMatch).not.toBeNull();
+		expect(apiKeyLabelMatch).not.toBeNull();
+	});
+
+	it('submits the Firebase sign-in form from the keyboard', async () => {
+		let authStateChanged;
+		const user = {
+			getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+			getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.viewer'] } }),
+		};
+		const auth = {
+			setPersistence: jest.fn().mockResolvedValue(undefined),
+			onAuthStateChanged: jest.fn((listener) => {
+				authStateChanged = listener;
+				listener(null);
+				return jest.fn();
+			}),
+			signInWithEmailAndPassword: jest.fn(async (...args) => {
+				expect(args).toEqual(['operator@example.com', 'keyboard-password']);
+				await authStateChanged(user);
+				return { user };
+			}),
+			signOut: jest.fn().mockResolvedValue(undefined),
+		};
+		const firebase = { initializeApp: jest.fn(), auth: jest.fn(() => auth) };
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({ enabled: true, configured: true, config: { apiKey: 'k', authDomain: 'a', projectId: 'p' } });
+				}
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+
+		const authForm = browser.elementsById['auth-form'];
+		expect(authForm.tagName).toBe('FORM');
+		const emailInput = browser.elementsById['auth-email'];
+		const passwordInput = browser.elementsById['auth-password'];
+		expect(emailInput.required).toBe(true);
+		expect(passwordInput.required).toBe(true);
+		emailInput.value = 'operator@example.com';
+		passwordInput.value = 'keyboard-password';
+		await authForm.dispatch('submit');
+		await flush();
+		expect(auth.signInWithEmailAndPassword).toHaveBeenCalledTimes(1);
+		expect(auth.signInWithEmailAndPassword).toHaveBeenCalledWith('operator@example.com', 'keyboard-password');
+	});
+
+	it('refuses to submit the Firebase sign-in form when the email is empty', async () => {
+		let authStateChanged;
+		const user = {
+			getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+			getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.viewer'] } }),
+		};
+		const auth = {
+			setPersistence: jest.fn().mockResolvedValue(undefined),
+			onAuthStateChanged: jest.fn((listener) => {
+				authStateChanged = listener;
+				listener(null);
+				return jest.fn();
+			}),
+			signInWithEmailAndPassword: jest.fn(),
+			signOut: jest.fn().mockResolvedValue(undefined),
+		};
+		const firebase = { initializeApp: jest.fn(), auth: jest.fn(() => auth) };
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({ enabled: true, configured: true, config: { apiKey: 'k', authDomain: 'a', projectId: 'p' } });
+				}
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+
+		const authForm = browser.elementsById['auth-form'];
+		browser.elementsById['auth-password'].value = 'some-password';
+		await authForm.dispatch('submit');
+		await flush();
+		expect(auth.signInWithEmailAndPassword).not.toHaveBeenCalled();
+		const state = browser.elementsById['auth-state'];
+		expect(state.className).toBe('response-error');
+		expect(state.textContent).toMatch(/email/i);
+		expect(state.textContent).not.toContain('some-password');
+	});
+
+	it('submits the legacy API-key form from the keyboard when the key is present', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({ enabled: true, configured: false });
+				}
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+
+		const connectionForm = browser.elementsById['connection-form'];
+		expect(connectionForm.tagName).toBe('FORM');
+		const apiKeyInput = browser.elementsById['api-key'];
+		expect(apiKeyInput.required).toBe(true);
+		apiKeyInput.value = 'keyboard-key';
+		await connectionForm.dispatch('submit');
+		await flush();
+		expect(browser.storage.get('cabros-admin-api-key')).toBe('keyboard-key');
+		expect(browser.elementsById['key-state'].textContent).toContain('saved for this browser session');
+	});
+
+	it('refuses to submit the legacy API-key form when the key is empty', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({ enabled: true, configured: false });
+				}
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+
+		const connectionForm = browser.elementsById['connection-form'];
+		await connectionForm.dispatch('submit');
+		await flush();
+		expect(browser.storage.has('cabros-admin-api-key')).toBe(false);
+		const state = browser.elementsById['key-state'];
+		expect(state.textContent).toMatch(/enter|empty|required/i);
+	});
+
+	it('flags the Firebase email field with aria-invalid when it is empty', async () => {
+		let authStateChanged;
+		const auth = {
+			setPersistence: jest.fn().mockResolvedValue(undefined),
+			onAuthStateChanged: jest.fn((listener) => {
+				authStateChanged = listener;
+				listener(null);
+				return jest.fn();
+			}),
+			signInWithEmailAndPassword: jest.fn(),
+			signOut: jest.fn().mockResolvedValue(undefined),
+		};
+		const firebase = { initializeApp: jest.fn(), auth: jest.fn(() => auth) };
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({ enabled: true, configured: true, config: { apiKey: 'k', authDomain: 'a', projectId: 'p' } });
+				}
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+
+		const authForm = browser.elementsById['auth-form'];
+		const emailInput = browser.elementsById['auth-email'];
+		const passwordInput = browser.elementsById['auth-password'];
+		passwordInput.value = 'keyboard-password';
+		await authForm.dispatch('submit');
+		await flush();
+		expect(emailInput.attributes['aria-invalid']).toBe('true');
+		expect(passwordInput.attributes['aria-invalid']).toBe('false');
+		expect(auth.signInWithEmailAndPassword).not.toHaveBeenCalled();
 	});
 });
