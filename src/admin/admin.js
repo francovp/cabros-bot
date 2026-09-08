@@ -575,6 +575,12 @@ const statusNeedsAttention = (detail) => statusDetails(detail)
 const statusDetailFields = [
 	['configured', 'Configured'],
 	['enabled', 'Enabled'],
+	['cooldownActive', 'Cooldown active'],
+	['remainingCooldownMs', 'Remaining cooldown (ms)'],
+	['lastTriggeredAt', 'Last triggered', true],
+	['triggersTotal', 'Triggers total'],
+	['braveFallbacksDuringCooldown', 'Brave fallbacks during cooldown'],
+	['lastBraveFallbackAt', 'Last Brave fallback', true],
 	['lastCheckedAt', 'Last checked', true],
 	['lastSuccessAt', 'Last success', true],
 	['lastFailureAt', 'Last failure', true],
@@ -1316,7 +1322,7 @@ const renderStatusDependencies = (container, entries, filter = 'all', search = '
 		.filter(([name, detail]) => {
 			const toneMatches = filter === 'all'
 				|| (filter === 'attention' && statusNeedsAttention(detail))
-				|| (filter === 'ready' && detail.status === 'ready')
+				|| (filter === 'ready' && detail.status === 'ready' && !statusNeedsAttention(detail))
 				|| (filter === 'disabled' && detail.status === 'disabled')
 				|| (filter === 'unknown' && statusDetails(detail).some((statusDetail) => statusDetail.status === 'unknown'));
 			const searchable = `${displayLabel(name)} ${detail.provider || ''} ${displayStatus(detail.status)}`.toLowerCase();

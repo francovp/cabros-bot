@@ -430,6 +430,43 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('1 need attention');
 		expect(view.textContent).toContain('Profiling');
 		expect(view.textContent).toContain('ProfilingNeeds attention');
+		const tone = find(view, (node) => node.tagName === 'SELECT' && node.name === 'dependency-tone');
+		tone.value = 'ready';
+		await tone.dispatch('change');
+		expect(findAll(view, (node) => node.className.includes('status-detail-card'))).toHaveLength(0);
+	});
+
+	it('renders Gemini quota cooldown telemetry in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				geminiQuota: {
+					status: 'degraded', cooldownActive: true, remainingCooldownMs: 4500,
+					lastTriggeredAt: '2026-09-08T00:00:00Z', triggersTotal: 2,
+					braveFallbacksDuringCooldown: 3, lastBraveFallbackAt: '2026-09-08T00:01:00Z',
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Cooldown activetrue');
+		expect(view.textContent).toContain('Remaining cooldown (ms)4500');
+		expect(view.textContent).toContain('Triggers total2');
+		expect(view.textContent).toContain('Brave fallbacks during cooldown3');
+		expect(view.textContent).toContain('Last triggered');
+		expect(view.textContent).toContain('Last Brave fallback');
 	});
 
 	it('clears every structured status section after a refresh failure', async () => {
