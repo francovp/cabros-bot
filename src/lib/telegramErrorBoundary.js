@@ -68,7 +68,7 @@ async function handleTelegrafUpdateError(err, ctx, options = {}) {
 			command,
 		});
 
-		const sendAlertContent = process.env.SENTRY_SEND_ALERT_CONTENT === 'true';
+		const sendAlertContent = sentryService.shouldSendAlertContent();
 		const extra = {
 			updateType,
 			updateId,
