@@ -77,7 +77,6 @@ function postSymbolAnalysis() {
 				},
 			};
 			const item = { input, analysis: reportAnalysis, multiTimeframe, side };
-
 			const responsePayload = {
 				success: true,
 				symbol: input.raw,
@@ -88,7 +87,7 @@ function postSymbolAnalysis() {
 				analysis: normalized,
 				analysisStatus,
 				requestId,
-				totalDurationMs: Date.now() - startTime,
+				processingTimeMs: Math.max(0, Date.now() - startTime),
 			};
 			if (multiAgent) {
 				responsePayload.multiAgent = multiAgent;
@@ -96,8 +95,9 @@ function postSymbolAnalysis() {
 
 			return res.status(200).json(responsePayload);
 		} catch (error) {
+			const processingTimeMs = Math.max(0, Date.now() - startTime);
 			if (error instanceof ExpandedAnalysisAlertRequestError) {
-				return res.status(400).json({ error: error.message, code: error.code, requestId });
+				return res.status(400).json({ error: error.message, code: error.code, requestId, processingTimeMs });
 			}
 
 			const timedOut = Boolean(deadline && deadline.signal.aborted) || error?.name === 'AbortError';
@@ -117,7 +117,7 @@ function postSymbolAnalysis() {
 					error: 'Symbol analysis timed out.',
 					code: 'SYMBOL_ANALYSIS_TIMEOUT',
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs,
 				});
 			}
 
@@ -138,7 +138,7 @@ function postSymbolAnalysis() {
 					error: error.message,
 					code: 'SYMBOL_ANALYSIS_FAILED',
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs,
 				});
 			}
 
@@ -152,6 +152,7 @@ function postSymbolAnalysis() {
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',
 				requestId,
+				processingTimeMs,
 			});
 		} finally {
 			if (deadline) deadline.clear();

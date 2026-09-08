@@ -492,11 +492,21 @@ The system provides a `POST /api/webhook/market-scanner-alert` endpoint that run
 - Timeout-aborted scans are recorded as status `timeout`. If all scans fail or timeout, the endpoint returns 502/504 respectively.
 - Validation failures (e.g. invalid timeframe, bad scan types) return 400.
 
+**Per-symbol scanner error categorization** (GH-861 / CB-245):
+- Every per-scan result with `status: 'error'` carries a non-empty `errorCategory` drawn from the closed enum in `src/services/tradingview/marketScannerErrorCategories.js`: `mcp_unreachable`, `mcp_timeout`, `mcp_rate_limited`, `mcp_tool_error`, `mcp_suspended`, `symbol_invalid`, `symbol_unsupported`, `unknown`.
+- The Telegram/WhatsApp report renders the category in parentheses next to the message (e.g. `⚠️ Error: MCP server connection refused (mcp_unreachable)`).
+- `summary.errorCategoryCounts` in the response surfaces the totals for every category so operators can distinguish one MCP outage from many symbol-specific failures.
+- `/api/alerts/summary` aggregates the persisted `scannerErrorCategories` from delivered scanner runs and exposes `summary.scanner.{totalRuns, errorCategoryCounts}` under the bounded 31-day window.
+- `/api/status` exposes `dependencies.tradingViewMcp.errorCategoryCounts` (rolling 24h) with the legacy circuit-breaker categorization so spikes in `mcp_rate_limited` / `timeout` are easy to alert on.
+- Sentry captures the category as the `mcp_error_category` tag on scanner failures; alerts remain fail-open.
+
 **Where to look first when extending or debugging**:
 - `src/routes/index.js` for endpoint route definition.
 - `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` for scan orchestration and deadline management.
 - `src/services/tradingview/marketScannerReport.js` for layout and item-specific formatters.
-- Tests in `tests/integration/market-scanner-endpoint.test.js` and `tests/unit/market-scanner-report.test.js` / `tests/unit/market-scanner.test.js`.
+- `src/services/tradingview/marketScannerErrorCategories.js` for the closed enum and classifier.
+- `src/services/storage/AlertStorageService.js` for the `scannerErrorCategories` field sanitization and summary aggregation.
+- Tests in `tests/integration/market-scanner-endpoint.test.js`, `tests/unit/market-scanner-report.test.js`, `tests/unit/market-scanner.test.js`, `tests/unit/market-scanner-error-categories.test.js`, `tests/integration/scanner-expanded-alert-storage.test.js`, `tests/integration/status-endpoint.test.js`, and `tests/integration/alerts-endpoint.test.js`.
 
 ## Asynchronous TradingView Jobs
 
@@ -764,7 +774,7 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 - If `firebase-admin` initialization fails (bad credentials, wrong project), `db` is set to `null` and a warning is logged; subsequent calls are no-ops
 
 **Read API**:
-- `GET /api/alerts` returns stored alerts ordered by `receivedAt` descending with `limit`, `before`, `source`, and `enriched` query support.
+- `GET /api/alerts` returns stored alerts ordered by `receivedAt` descending with `limit`, `before`, `source`, `enriched`, and `include` query support (`include=enrichment_summary` projects a sanitized, bounded `enrichmentSummary` object and sanitized `enrichmentData` on each alert item, eliminating N+1 detail calls for analysis).
 - `GET /api/alerts/export` returns bounded JSONL or CSV (`format=jsonl|csv`) for stored alerts. It requires both `from` and `to`, caps `limit` at 1000, caps the window at 31 days, supports `source`, `enriched`, and `includeText=true`, and only includes safe export fields. Raw alert text is excluded by default and truncated to 1000 chars when included. CSV prefixes direct or tab/LF/CR-prefixed formula-leading string fields with an apostrophe for spreadsheet safety while leaving finite numeric strings unchanged; JSONL is unchanged.
 - `GET /api/alerts/summary` returns bounded JSON-only analytics for stored alerts, with `from`, `to`, and `limit` query support capped to a 31-day window and 1000 documents.
 - `GET /api/alerts/:alertId` returns a single formatted alert document by Firestore document ID.
@@ -1560,3 +1570,59 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Structured Webhook/API Error Envelope (CB-? / Issue #644)
+
+`src/lib/errorEnvelope.js` introduces a shared builder that produces a standardized error response envelope for `/api/*` endpoints. Every error response now carries:
+
+- `success: false` — always false on error paths
+- `error` — human-readable message (preserves the existing field)
+- `code` — machine-readable code (standardized set: `INVALID_REQUEST`, `FEATURE_DISABLED`, `PROVIDER_UNAVAILABLE`, `PROVIDER_TIMEOUT`, `DELIVERY_FAILED`, `STORAGE_UNAVAILABLE`, `INTERNAL_ERROR`, with arbitrary uppercase codes preserved)
+- `requestId` — request correlation UUID, generated when missing
+- `retryable` — boolean driven by HTTP status code (5xx/429/408/425 = retryable, others = permanent); explicit override supported
+- `details` — optional, only included when present and non-empty
+
+The highest-traffic `/api/webhook/alert` endpoint's catch block (`NotificationRoutingValidationError` path + general error path) now emits this envelope. Upstream error envelopes are merged for `error`, `code`, and `details` so provider-specific contracts stay intact while the standardized fields are always present.
+
+**Scope**: This change intentionally narrows to a single endpoint because `gigachad-senior-dev` flagged the original issue as "too large for a single automated pass" (`automation/skip` Score: 45/100, `Scope is too large for a single automated pass`). The helper is designed for incremental adoption — additional endpoints can adopt it in follow-up PRs without breaking existing behavior. HTTP status codes, fail-open patterns, and existing `code` semantics are preserved; the change is additive.
+
+**Core Components**:
+- `src/lib/errorEnvelope.js` — `buildErrorEnvelope()`, `sendError()`, `isRetryableStatus()`, `normalizeCode()`, `STANDARD_ERROR_CODES`.
+- `src/controllers/webhooks/handlers/alert/alert.js` — Catch block emits standardized envelope; upstream `error.response` envelopes are merged for `error`/`code`/`details`.
+- `src/openapi/openapi.json` — `Error` schema extended with `success`, `code`, `requestId`, `retryable`, `details` (additive, no breaking changes).
+- `tests/unit/error-envelope.test.js` — 29 cases covering envelope shape, retryable inference, code normalization, request-id fallback, and Express response helper.
+
+**Coverage**:
+- `pnpm test -- tests/unit/error-envelope.test.js --testTimeout=5000`
+- `pnpm test -- tests/unit/alert-handler.test.js --testTimeout=5000`
+- `pnpm test -- tests/integration/alert-grounding.test.js --testTimeout=10000`
+
+No environment variable, Remote Config key, endpoint, or feature flag was added. HTTP status codes and existing fail-open/fail-safe patterns are unchanged.
+
+## Structured Webhook/API Error Envelope (CB-? / Issue #644)
+
+`src/lib/errorEnvelope.js` introduces a shared builder that produces a standardized error response envelope for `/api/*` endpoints. Every error response now carries:
+
+- `success: false` — always false on error paths
+- `error` — human-readable message (preserves the existing field)
+- `code` — machine-readable code (standardized set: `INVALID_REQUEST`, `FEATURE_DISABLED`, `PROVIDER_UNAVAILABLE`, `PROVIDER_TIMEOUT`, `DELIVERY_FAILED`, `STORAGE_UNAVAILABLE`, `INTERNAL_ERROR`, with arbitrary uppercase codes preserved)
+- `requestId` — request correlation UUID, generated when missing
+- `retryable` — boolean driven by HTTP status code (5xx/429/408/425 = retryable, others = permanent); explicit override supported
+- `details` — optional, only included when present and non-empty
+
+The highest-traffic `/api/webhook/alert` endpoint's catch block (`NotificationRoutingValidationError` path + general error path) now emits this envelope. Upstream error envelopes are merged for `error`, `code`, and `details` so provider-specific contracts stay intact while the standardized fields are always present.
+
+**Scope**: This change intentionally narrows to a single endpoint because `gigachad-senior-dev` flagged the original issue as "too large for a single automated pass" (`automation/skip` Score: 45/100, `Scope is too large for a single automated pass`). The helper is designed for incremental adoption — additional endpoints can adopt it in follow-up PRs without breaking existing behavior. HTTP status codes, fail-open patterns, and existing `code` semantics are preserved; the change is additive.
+
+**Core Components**:
+- `src/lib/errorEnvelope.js` — `buildErrorEnvelope()`, `sendError()`, `isRetryableStatus()`, `normalizeCode()`, `STANDARD_ERROR_CODES`.
+- `src/controllers/webhooks/handlers/alert/alert.js` — Catch block emits standardized envelope; upstream `error.response` envelopes are merged for `error`/`code`/`details`.
+- `src/openapi/openapi.json` — `Error` schema extended with `success`, `code`, `requestId`, `retryable`, `details` (additive, no breaking changes).
+- `tests/unit/error-envelope.test.js` — 29 cases covering envelope shape, retryable inference, code normalization, request-id fallback, and Express response helper.
+
+**Coverage**:
+- `pnpm test -- tests/unit/error-envelope.test.js --testTimeout=5000`
+- `pnpm test -- tests/unit/alert-handler.test.js --testTimeout=5000`
+- `pnpm test -- tests/integration/alert-grounding.test.js --testTimeout=10000`
+
+No environment variable, Remote Config key, endpoint, or feature flag was added. HTTP status codes and existing fail-open/fail-safe patterns are unchanged.
