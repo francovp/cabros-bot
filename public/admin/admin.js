@@ -633,11 +633,15 @@ const statusDetailFields = [
 	['circuitBreaker.openedAt', 'Circuit breaker opened', true],
 	['circuitBreaker.cooldownMs', 'Circuit breaker cooldown (ms)'],
 	['circuitBreaker.consecutiveFailures', 'Circuit breaker consecutive failures'],
+	['enrichment.alertPath.windowMs', 'Alert path window (ms)'],
+	['enrichment.alertPath.totalCount', 'Alert path total'],
+	['enrichment.alertPath.appliedCount', 'Alert path applied'],
+	['enrichment.alertPath.failedCount', 'Alert path failed'],
+	['enrichment.alertPath.appliedRate24h', 'Alert path applied rate (%)'],
+	['enrichment.alertPath.failureRate24h', 'Alert path failure rate (%)'],
 ];
 
-const statusFieldValue = (detail, key) => key.startsWith('circuitBreaker.')
-	? asObject(detail.circuitBreaker)[key.slice('circuitBreaker.'.length)]
-	: detail[key];
+const statusFieldValue = (detail, key) => key.split('.').reduce((value, part) => asObject(value)[part], detail);
 
 const SENTIMENT_TONES = {
 	bullish: 'status-ready',

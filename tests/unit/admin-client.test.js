@@ -598,6 +598,42 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('Last successful load');
 	});
 
+	it('renders alert-path enrichment telemetry in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				tradingViewMcp: {
+					status: 'ready',
+					enrichment: {
+						alertPath: {
+							windowMs: 86400000, totalCount: 5, appliedCount: 3, failedCount: 2,
+							appliedRate24h: 60, failureRate24h: 40,
+						},
+					},
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Alert path total5');
+		expect(view.textContent).toContain('Alert path applied3');
+		expect(view.textContent).toContain('Alert path failed2');
+		expect(view.textContent).toContain('Alert path applied rate (%)60');
+		expect(view.textContent).toContain('Alert path failure rate (%)40');
+	});
+
 	it('waits for an API key before loading protected overview status', async () => {
 		const requests = [];
 		const browser = createBrowser({
