@@ -11,6 +11,7 @@ const {
 	expandedAnalysisCmd,
 	marketScannerCmd,
 	jobsCommand,
+	alertHistoryCommand,
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
@@ -125,6 +126,7 @@ async function bootstrapApplication() {
 		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);
 		bot.command(['scanner'], marketScannerCmd);
 		bot.command(['jobs', 'trabajos'], jobsCommand);
+		bot.command(['history', 'alertas'], alertHistoryCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
 		bot.command(['help', 'start'], helpCmd);
