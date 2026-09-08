@@ -248,7 +248,10 @@ function getStatus() {
 	});
 	const geminiQuota = getGeminiQuotaDependency({ gemini });
 	const tradingViewRuntimeStatus = tradingViewMcpService.getStatus({ enabled: tradingViewMcpEnabled });
-	const tradingViewMcp = tradingViewRuntimeStatus;
+	const tradingViewMcp = {
+		...tradingViewRuntimeStatus,
+		errorCategoryCounts: tradingViewMcpService.getScannerErrorCategoryCounts(),
+	};
 	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
 		enabled: tradingViewVolumeConfirmationEnabled,
 	});
