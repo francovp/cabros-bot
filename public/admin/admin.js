@@ -560,17 +560,17 @@ const hasStatus = (detail) => detail.status !== undefined && detail.status !== n
 const nestedStatusEntries = (detail) => Object.entries(asObject(detail))
 	.filter(([name, nested]) => name === 'profiling' && hasStatus(nested));
 const statusDetails = (detail) => [detail, ...nestedStatusEntries(detail).map(([, nested]) => nested)];
+const effectiveStatus = (detail) => statusDetails(detail).find((statusDetail) => hasStatus(statusDetail)
+	&& !['ready', 'disabled'].includes(statusDetail.status))?.status || detail.status;
 
 const statusCounts = (entries) => entries.reduce((counts, [, detail]) => {
-	statusDetails(detail).forEach((statusDetail) => {
-		if (!hasStatus(statusDetail)) return;
-		counts[statusDetail.status] = (counts[statusDetail.status] || 0) + 1;
-	});
+	const status = effectiveStatus(detail);
+	if (status) counts[status] = (counts[status] || 0) + 1;
 	return counts;
 }, {});
 
-const statusNeedsAttention = (detail) => statusDetails(detail)
-	.some((statusDetail) => hasStatus(statusDetail) && !['ready', 'disabled'].includes(statusDetail.status));
+const statusNeedsAttention = (detail) => hasStatus({ status: effectiveStatus(detail) })
+	&& !['ready', 'disabled'].includes(effectiveStatus(detail));
 
 const statusDetailFields = [
 	['configured', 'Configured'],
@@ -1322,10 +1322,13 @@ const renderStatusDependencies = (container, entries, filter = 'all', search = '
 		.filter(([name, detail]) => {
 			const toneMatches = filter === 'all'
 				|| (filter === 'attention' && statusNeedsAttention(detail))
-				|| (filter === 'ready' && detail.status === 'ready' && !statusNeedsAttention(detail))
+				|| (filter === 'ready' && effectiveStatus(detail) === 'ready')
 				|| (filter === 'disabled' && detail.status === 'disabled')
 				|| (filter === 'unknown' && statusDetails(detail).some((statusDetail) => statusDetail.status === 'unknown'));
-			const searchable = `${displayLabel(name)} ${detail.provider || ''} ${displayStatus(detail.status)}`.toLowerCase();
+			const searchableStatuses = statusDetails(detail)
+				.flatMap((statusDetail) => [statusDetail.status, displayStatus(statusDetail.status)])
+				.join(' ');
+			const searchable = `${displayLabel(name)} ${detail.provider || ''} ${searchableStatuses}`.toLowerCase();
 			return toneMatches && (!query || searchable.includes(query));
 		})
 		.sort(([leftName, left], [rightName, right]) => {

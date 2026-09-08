@@ -428,8 +428,16 @@ describe('admin browser client', () => {
 
 		const view = browser.elementsById.view;
 		expect(view.textContent).toContain('1 need attention');
+		expect(view.textContent).not.toContain('Dependencies1 ready');
 		expect(view.textContent).toContain('Profiling');
 		expect(view.textContent).toContain('ProfilingNeeds attention');
+		const search = find(view, (node) => node.tagName === 'INPUT' && node.name === 'dependency-search');
+		search.value = 'misconfigured';
+		await search.dispatch('input');
+		expect(findAll(view, (node) => node.className.includes('status-detail-card'))).toHaveLength(1);
+		search.value = 'Needs attention';
+		await search.dispatch('input');
+		expect(findAll(view, (node) => node.className.includes('status-detail-card'))).toHaveLength(1);
 		const tone = find(view, (node) => node.tagName === 'SELECT' && node.name === 'dependency-tone');
 		tone.value = 'ready';
 		await tone.dispatch('change');
