@@ -3,6 +3,7 @@ const {
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
 const { rankScannerItems, resolveTrendConfluence } = require('./marketScannerScoring');
+const { SCANNER_ERROR_CATEGORY_DISPLAY, isScannerErrorCategory } = require('./marketScannerErrorCategories');
 
 const SUPPORTED_SCAN_TYPES = new Set([
 	'top_gainers',
@@ -47,10 +48,16 @@ const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 ]);
 
 class MarketScannerRequestError extends Error {
-	constructor(message, code = 'INVALID_REQUEST') {
+	constructor(message, code = 'INVALID_REQUEST', options = {}) {
 		super(message);
 		this.name = 'MarketScannerRequestError';
 		this.code = code;
+		if (options && Number.isInteger(options.statusCode)) {
+			this.statusCode = options.statusCode;
+		}
+		if (options && options.details !== undefined) {
+			this.details = options.details;
+		}
 	}
 }
 
@@ -237,7 +244,8 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 		lines.push(`*${section.emoji} ${section.title}*`);
 
 		if (scanResult.error) {
-			lines.push(`⚠️ Error: ${scanResult.error}`);
+			const errorLabel = formatScannerErrorLine(scanResult);
+			lines.push(`⚠️ Error: ${errorLabel}`);
 			return;
 		}
 
@@ -639,6 +647,15 @@ function numberOrNull(value) {
 	}
 	const number = Number(value);
 	return Number.isFinite(number) ? number : null;
+}
+
+function formatScannerErrorLine(scanResult = {}) {
+	const baseMessage = typeof scanResult.error === 'string' ? scanResult.error : 'Unknown error';
+	if (!isScannerErrorCategory(scanResult.errorCategory)) {
+		return baseMessage;
+	}
+	const display = SCANNER_ERROR_CATEGORY_DISPLAY[scanResult.errorCategory] || scanResult.errorCategory;
+	return `${baseMessage} (${display})`;
 }
 
 // Shared candidate-selection for optional numeric level fields. Skips

@@ -109,6 +109,7 @@ const { nodeProfilingIntegration } = require('@sentry/profiling-node');
 const FEATURE_NAMES = {
 	'http-alert': 'alerts',
 	'news-monitor': 'news-monitor',
+	'market-scanner': 'market-scanner',
 	'telegram': 'telegram-alerts',
 	'whatsapp': 'whatsapp-alerts',
 	'discord': 'discord-alerts',
