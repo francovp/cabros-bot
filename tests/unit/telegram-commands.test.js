@@ -37,6 +37,7 @@ const {
 	buildHelpMessage,
 	getTelegramCommandMenu,
 	parseCommandArgs,
+	telegramCommandRateLimiter,
 } = require('../../src/controllers/commands');
 
 function buildContext(text) {
@@ -55,6 +56,24 @@ function buildContext(text) {
 describe('Telegram TradingView commands', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		telegramCommandRateLimiter.reset();
+		delete process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING;
+		delete process.env.TELEGRAM_COMMAND_RATE_LIMITS_JSON;
+	});
+
+	it('limits expensive commands per chat and returns a cooldown reply', async () => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner'));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+
+		const otherChat = buildContext('/scanner');
+		otherChat.update.message.chat.id = 456;
+		await telegramCommandRateLimiter(otherChat, next);
+		expect(next).toHaveBeenCalledTimes(4);
 	});
 
 	it('parses command args into positionals and key/value options', () => {

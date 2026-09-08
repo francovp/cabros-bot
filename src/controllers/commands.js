@@ -5,6 +5,63 @@ const signalOutcomeService = require('../services/storage/SignalOutcomeService')
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
 
+const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
+	precio: { max: 10, windowMs: 60_000 },
+	analisis: { max: 3, windowMs: 3_600_000 },
+	scanner: { max: 3, windowMs: 3_600_000 },
+	noticias: { max: 3, windowMs: 3_600_000 },
+});
+const telegramCommandRateLimitBuckets = new Map();
+
+function getTelegramCommandRateLimits() {
+	const raw = process.env.TELEGRAM_COMMAND_RATE_LIMITS_JSON;
+	if (!raw) return DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS;
+	try {
+		const configured = JSON.parse(raw);
+		return Object.fromEntries(Object.entries(DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS).map(([command, fallback]) => {
+			const candidate = configured && configured[command];
+			const max = Number(candidate && candidate.max);
+			const windowMs = Number(candidate && candidate.windowMs);
+			return [command, Number.isSafeInteger(max) && max > 0 && Number.isSafeInteger(windowMs) && windowMs > 0
+				? { max, windowMs }
+				: fallback];
+		}));
+	} catch {
+		return DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS;
+	}
+}
+
+async function telegramCommandRateLimiter(context, next) {
+	if (process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING === 'false') return next();
+	const text = String((context.message && context.message.text) || '').trim();
+	const command = text.split(/\s+/, 1)[0].replace(/^\//, '').split('@', 1)[0].toLowerCase();
+	const rule = getTelegramCommandRateLimits()[command];
+	const chatId = getChatId(context);
+	if (!rule || chatId === undefined || chatId === null) return next();
+
+	const now = Date.now();
+	const key = `${chatId}:${command}`;
+	const timestamps = (telegramCommandRateLimitBuckets.get(key) || []).filter((timestamp) => now - timestamp < rule.windowMs);
+	if (timestamps.length >= rule.max) {
+		const retryAfterSeconds = Math.max(1, Math.ceil((timestamps[0] + rule.windowMs - now) / 1000));
+		try {
+			await context.reply(`demasiadas solicitudes para /${command}. Intenta nuevamente en ${retryAfterSeconds} s.`);
+		} catch (error) {
+			console.error('[commands] Failed to send Telegram rate-limit reply:', error.message);
+		}
+		return;
+	}
+
+	if (telegramCommandRateLimitBuckets.size >= 10_000 && !telegramCommandRateLimitBuckets.has(key)) {
+		telegramCommandRateLimitBuckets.delete(telegramCommandRateLimitBuckets.keys().next().value);
+	}
+	timestamps.push(now);
+	telegramCommandRateLimitBuckets.set(key, timestamps);
+	return next();
+}
+
+telegramCommandRateLimiter.reset = () => telegramCommandRateLimitBuckets.clear();
+
 const getPrice = async (context) => {
 	const chatId = getChatId(context);
 	const text = (context.message && context.message.text) || '';
@@ -633,4 +690,5 @@ module.exports = {
 	buildHelpMessage,
 	getTelegramCommandMenu,
 	parseCommandArgs,
+	telegramCommandRateLimiter,
 };
