@@ -1309,7 +1309,7 @@ const renderStatusDependencies = (container, entries, filter = 'all', search = '
 			return toneMatches && (!query || searchable.includes(query));
 		})
 		.sort(([leftName, left], [rightName, right]) => {
-			const priority = (detail) => detail.status === 'ready' ? 2 : detail.status === 'disabled' ? 1 : 0;
+			const priority = (detail) => !hasStatus(detail) ? 1 : detail.status === 'ready' ? 2 : detail.status === 'disabled' ? 1 : 0;
 			return priority(left) - priority(right) || displayLabel(leftName).localeCompare(displayLabel(rightName));
 		});
 	renderStatusCards(container, filtered, 'No dependencies match these filters.', { detailed: true });

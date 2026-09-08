@@ -323,6 +323,8 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('ephemeral');
 		expect(view.textContent).toContain('1 need attention');
 		expect(cards()).toHaveLength(4);
+		expect(cards()[0].textContent).toContain('TradingView MCP');
+		expect(cards()[1].textContent).toContain('Grounding Coalescing');
 		expect(cards().some((card) => card.textContent.includes('TradingView MCP'))).toBe(true);
 		expect(cards().some((card) => card.textContent.includes('Scanner preset storage'))).toBe(true);
 		expect(cards().some((card) => card.textContent.includes('Grounding Coalescing'))).toBe(true);
