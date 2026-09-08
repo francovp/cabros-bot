@@ -53,6 +53,23 @@ describe('Postman collection contract', () => {
 		});
 	});
 
+	it('documents entry price source chains in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).dependencies.signalOutcomeWorker.entryPriceSources).toEqual({
+			configured: false,
+			crypto: ['mcp', 'binance', 'gemini'],
+			equity: ['twelve-data'],
+		});
+		expect(JSON.parse(capabilities.response[0].body).dependencies.signalOutcomeWorker.entryPriceSources).toEqual({
+			configured: true,
+			crypto: ['mcp', 'binance', 'gemini'],
+			equity: ['twelve-data'],
+		});
+	});
+
 	it('documents x-idempotency-key on the alert webhook request', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const sendAlert = findItem(collection.item, 'POST Send Alert');
@@ -246,4 +263,3 @@ describe('Postman collection contract', () => {
 		expect(errorBody.error).toContain('enrichment_summary');
 	});
 });
-

@@ -563,6 +563,25 @@ describe('SignalOutcomeService', () => {
 			expect(saved.outcomes['1h'].status).toBe('pending');
 		});
 
+		it('keeps Gemini failures retryable when Gemini is the configured source', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'gemini';
+			mockFetchGeminiPrice.mockRejectedValue(new Error('Gemini timeout'));
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-gemini-transient',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: null,
+				side: 'BUY',
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved.eligibilityState).toBe('pending_entry_price');
+			expect(saved.outcomeEvaluated).toBe(false);
+			expect(saved.outcomes['1h'].status).toBe('pending');
+		});
+
 		it('marks signal immediately unavailable when Binance getAvgPrice throws structural invalid symbol error', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			mockGetAvgPrice.mockRejectedValue(new Error('Binance 400: Invalid symbol'));

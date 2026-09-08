@@ -3,13 +3,9 @@
 require('dotenv').config();
 require('../../instrument.js');
 const { printWarnings, validateEnv } = require('../../scripts/validate-env');
-const { parseEntryPriceSources } = require('../lib/signalOutcomeEntryPriceSources');
 const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
 
 printWarnings(validateEnv());
-if (process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES) {
-	parseEntryPriceSources(process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES);
-}
 
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');

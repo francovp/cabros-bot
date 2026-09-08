@@ -26,12 +26,14 @@ describe('signal outcome worker bootstrap', () => {
 					...process.env,
 					ENABLE_SIGNAL_OUTCOME_TRACKING: 'true',
 					SIGNAL_OUTCOME_WORKER_ROLE: 'web',
+					SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES: 'wat',
 				},
 			},
 		);
 
 		expect(result.status).toBe(1);
 		expect(`${result.stdout}${result.stderr}`).toContain('expected worker');
+		expect(`${result.stdout}${result.stderr}`).not.toContain('Unknown signal outcome entry-price provider');
 	});
 
 	it('loads Remote Config before starting the dedicated worker', async () => {

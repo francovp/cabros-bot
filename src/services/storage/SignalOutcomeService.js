@@ -29,6 +29,7 @@ const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
 const DEFAULT_BINANCE_DATA_BASE_URL = 'https://api.binance.com';
 const REASON_BINANCE_UNAVAILABLE = 'binance_unavailable';
 const REASON_BINANCE_REGION_BLOCKED = 'binance_region_blocked';
+const REASON_GEMINI_UNAVAILABLE = 'gemini_unavailable';
 const REASON_MARKET_DATA_REGION_BLOCKED = 'market_data_region_blocked';
 const REGION_BLOCK_MESSAGE_PATTERNS = [
 	'restricted location',
@@ -347,6 +348,7 @@ function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProv
 		const isTransient = equityMarketDataService.isTransientReason(entryPriceReason)
 			|| entryPriceReason === REASON_BINANCE_UNAVAILABLE
 			|| entryPriceReason === REASON_BINANCE_REGION_BLOCKED
+			|| entryPriceReason === REASON_GEMINI_UNAVAILABLE
 			|| entryPriceReason === 'twelve_data_unavailable'
 			|| entryPriceReason === 'twelve_data_rate_limited'
 			|| entryPriceReason === 'twelve_data_timeout';
@@ -497,7 +499,9 @@ async function recordSignalInternal({
 						entryPriceSource = 'gemini-grounding';
 						entryPriceReason = null;
 					}
+					if (entryPrice === null && !entryPriceReason) entryPriceReason = REASON_GEMINI_UNAVAILABLE;
 				} catch (geminiErr) {
+					if (!entryPriceReason) entryPriceReason = geminiErr.reason || REASON_GEMINI_UNAVAILABLE;
 					console.warn('[SignalOutcomeService] Failed to fetch entry price from Gemini:', geminiErr.message);
 				}
 				continue;
@@ -782,6 +786,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 								resolvedPrice = geminiResult.price;
 								resolvedPriceSource = 'gemini-grounding';
 							}
+							if (resolvedPrice === null) entryPriceError = new Error(REASON_GEMINI_UNAVAILABLE);
 						} catch (err) {
 							entryPriceError = err;
 						}

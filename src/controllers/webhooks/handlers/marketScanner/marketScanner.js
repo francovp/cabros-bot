@@ -228,6 +228,7 @@ function postMarketScannerAlert(botOrGetter) {
 								score: itemScore,
 								side: itemSide,
 								price: validPrice,
+								priceSource: validPrice !== null ? 'tradingview-mcp' : null,
 								stop: stopLoss,
 								target: takeProfit,
 								sources: [],
