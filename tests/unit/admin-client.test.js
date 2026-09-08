@@ -401,6 +401,35 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('Last run redriven3');
 	});
 
+	it('includes nested profiling health in dependency attention', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				sentry: {
+					status: 'ready',
+					profiling: { status: 'misconfigured', enabled: true, configured: false },
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('1 need attention');
+		expect(view.textContent).toContain('Profiling');
+		expect(view.textContent).toContain('ProfilingNeeds attention');
+	});
+
 	it('clears every structured status section after a refresh failure', async () => {
 		let statusRequests = 0;
 		const status = {

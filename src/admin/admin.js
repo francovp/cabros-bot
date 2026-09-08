@@ -557,14 +557,20 @@ const statusEntries = (value) => Object.entries(asObject(value))
 	.filter(([, detail]) => detail && typeof detail === 'object');
 
 const hasStatus = (detail) => detail.status !== undefined && detail.status !== null && detail.status !== '';
+const nestedStatusEntries = (detail) => Object.entries(asObject(detail))
+	.filter(([name, nested]) => name === 'profiling' && hasStatus(nested));
+const statusDetails = (detail) => [detail, ...nestedStatusEntries(detail).map(([, nested]) => nested)];
 
 const statusCounts = (entries) => entries.reduce((counts, [, detail]) => {
-	if (!hasStatus(detail)) return counts;
-	counts[detail.status] = (counts[detail.status] || 0) + 1;
+	statusDetails(detail).forEach((statusDetail) => {
+		if (!hasStatus(statusDetail)) return;
+		counts[statusDetail.status] = (counts[statusDetail.status] || 0) + 1;
+	});
 	return counts;
 }, {});
 
-const statusNeedsAttention = (detail) => hasStatus(detail) && !['ready', 'disabled'].includes(detail.status);
+const statusNeedsAttention = (detail) => statusDetails(detail)
+	.some((statusDetail) => hasStatus(statusDetail) && !['ready', 'disabled'].includes(statusDetail.status));
 
 const statusDetailFields = [
 	['configured', 'Configured'],
@@ -1277,6 +1283,14 @@ const renderStatusCards = (container, entries, emptyText, { detailed = false } =
 				value.append(timestamp ? createTimestamp(detail[key]) : element('span', { text: String(detail[key]) }));
 				list.append(element('dt', { text: label }), value);
 			});
+			nestedStatusEntries(detail).forEach(([name, nested]) => {
+				const value = element('dd');
+				value.append(createStatusBadge(nested.status));
+				list.append(
+					element('dt', { text: displayLabel(name) }),
+					value,
+				);
+			});
 			card.append(summary, list);
 			container.append(card);
 			return;
@@ -1309,7 +1323,7 @@ const renderStatusDependencies = (container, entries, filter = 'all', search = '
 			return toneMatches && (!query || searchable.includes(query));
 		})
 		.sort(([leftName, left], [rightName, right]) => {
-			const priority = (detail) => !hasStatus(detail) ? 1 : detail.status === 'ready' ? 2 : detail.status === 'disabled' ? 1 : 0;
+			const priority = (detail) => statusNeedsAttention(detail) ? 0 : !hasStatus(detail) ? 1 : detail.status === 'ready' ? 2 : 1;
 			return priority(left) - priority(right) || displayLabel(leftName).localeCompare(displayLabel(rightName));
 		});
 	renderStatusCards(container, filtered, 'No dependencies match these filters.', { detailed: true });
