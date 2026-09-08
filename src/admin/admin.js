@@ -556,12 +556,15 @@ const statusTone = (value) => ['ready', 'disabled', 'misconfigured'].includes(va
 const statusEntries = (value) => Object.entries(asObject(value))
 	.filter(([, detail]) => detail && typeof detail === 'object');
 
+const hasStatus = (detail) => detail.status !== undefined && detail.status !== null && detail.status !== '';
+
 const statusCounts = (entries) => entries.reduce((counts, [, detail]) => {
+	if (!hasStatus(detail)) return counts;
 	counts[detail.status] = (counts[detail.status] || 0) + 1;
 	return counts;
 }, {});
 
-const statusNeedsAttention = (detail) => !['ready', 'disabled'].includes(detail.status);
+const statusNeedsAttention = (detail) => hasStatus(detail) && !['ready', 'disabled'].includes(detail.status);
 
 const statusDetailFields = [
 	['configured', 'Configured'],
@@ -572,6 +575,16 @@ const statusDetailFields = [
 	['lastErrorCategory', 'Last error'],
 	['successCount', 'Successes'],
 	['failureCount', 'Failures'],
+	['windowMs', 'Window (ms)'],
+	['activeEntries', 'Active entries'],
+	['hits', 'Hits'],
+	['misses', 'Misses'],
+	['failures', 'Coalescing failures'],
+	['suppressedCount', 'Suppressed'],
+	['lastSuppressedAt', 'Last suppressed', true],
+	['activeTrackedSignals', 'Active tracked signals'],
+	['intervalMs', 'Interval (ms)'],
+	['batchLimit', 'Batch limit'],
 	['mode', 'Mode'],
 	['backend', 'Backend'],
 	['role', 'Worker role'],
@@ -583,6 +596,9 @@ const statusDetailFields = [
 	['consecutiveFailures', 'Consecutive failures'],
 	['lastRunAt', 'Last run', true],
 	['lastRunDurationMs', 'Last run duration (ms)'],
+	['lastRunSymbolCount', 'Last run symbols'],
+	['lastRunExecutedCount', 'Last run executed'],
+	['lastRunRedrivenCount', 'Last run redriven'],
 	['lastRunScannedCount', 'Last run scanned'],
 	['lastRunEvaluatedCount', 'Last run evaluated'],
 	['lastRunPendingCount', 'Last run pending'],
@@ -1282,7 +1298,7 @@ const renderStatusDependencies = (container, entries, filter = 'all', search = '
 				|| (filter === 'attention' && statusNeedsAttention(detail))
 				|| (filter === 'ready' && detail.status === 'ready')
 				|| (filter === 'disabled' && detail.status === 'disabled')
-				|| (filter === 'unknown' && statusTone(detail.status) === 'unknown');
+				|| (filter === 'unknown' && hasStatus(detail) && statusTone(detail.status) === 'unknown');
 			const searchable = `${displayLabel(name)} ${detail.provider || ''} ${displayStatus(detail.status)}`.toLowerCase();
 			return toneMatches && (!query || searchable.includes(query));
 		})
@@ -1299,7 +1315,7 @@ const renderStatusDashboard = ({ metrics, channelGrid, dependencyGrid, featureGr
 	const channels = statusEntries(status.deliveryChannels);
 	const dependencies = statusEntries(status.dependencies);
 	const dependencyCounts = statusCounts(dependencies);
-	const attentionCount = dependencies.filter(([, detail]) => !['ready', 'disabled'].includes(detail.status)).length;
+	const attentionCount = dependencies.filter(([, detail]) => statusNeedsAttention(detail)).length;
 
 	metrics.replaceChildren(
 		createMetricCard('Service', service.name || 'Unknown service', service.version ? `Version ${service.version}` : 'Version unavailable'),
@@ -1321,6 +1337,14 @@ const renderStatusDashboard = ({ metrics, channelGrid, dependencyGrid, featureGr
 		className: 'capability-chip',
 		text: displayLabel(name),
 	})));
+};
+
+const renderStatusUnavailable = ({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }) => {
+	metrics.replaceChildren(element('p', { className: 'request-state', text: 'Status unavailable. Check the API key and service logs.' }));
+	lastChecked.textContent = 'Status unavailable.';
+	renderStatusCards(channelGrid, [], 'Status unavailable.');
+	renderStatusCards(dependencyGrid, [], 'Status unavailable.');
+	featureGrid.replaceChildren(createEmptyState('Status unavailable.'));
 };
 
 const createStatusExplorer = () => {
@@ -1416,8 +1440,7 @@ const createStatusExplorer = () => {
 			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status, { renderDependencies });
 		} else {
 			dependencies = [];
-			renderDependencies();
-			metrics.replaceChildren(element('p', { className: 'request-state', text: 'Status unavailable. Check the API key and service logs.' }));
+			renderStatusUnavailable({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked });
 		}
 	};
 	refreshButton.addEventListener('click', () => { loadStatus(); });
@@ -1488,7 +1511,7 @@ const createOverviewDashboard = () => {
 			rawCopyButton.hidden = false;
 			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status);
 		} else {
-			metrics.replaceChildren(element('p', { className: 'request-state', text: 'Status unavailable. Check the API key and service logs.' }));
+			renderStatusUnavailable({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked });
 		}
 	};
 	refreshButton.addEventListener('click', () => { loadStatus(); });

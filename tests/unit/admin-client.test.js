@@ -321,6 +321,7 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('<img src=x onerror=alert(1)>');
 		expect(view.textContent).toContain('Successes4');
 		expect(view.textContent).toContain('ephemeral');
+		expect(view.textContent).toContain('1 need attention');
 		expect(cards()).toHaveLength(4);
 		expect(cards().some((card) => card.textContent.includes('TradingView MCP'))).toBe(true);
 		expect(cards().some((card) => card.textContent.includes('Scanner preset storage'))).toBe(true);
@@ -340,6 +341,95 @@ describe('admin browser client', () => {
 		await tone.dispatch('change');
 		expect(cards()).toHaveLength(1);
 		expect(cards()[0].textContent).toContain('Telegram');
+
+		tone.value = 'attention';
+		await tone.dispatch('change');
+		expect(cards()).toHaveLength(1);
+		expect(cards()[0].textContent).toContain('TradingView MCP');
+
+		tone.value = 'unknown';
+		await tone.dispatch('change');
+		expect(cards()).toHaveLength(1);
+		expect(cards()[0].textContent).toContain('TradingView MCP');
+	});
+
+	it('renders safe operational counters in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				groundingCoalescing: { enabled: true, windowMs: 5000, activeEntries: 2, hits: 3, misses: 4, failures: 1 },
+				alertSignalRepeatSuppression: {
+					enabled: true,
+					suppressedCount: 7,
+					lastSuppressedAt: '2026-09-08T00:00:00Z',
+					activeTrackedSignals: 2,
+				},
+				newsMonitorScheduler: {
+					status: 'ready', intervalMs: 300000, batchLimit: 10, lastRunExecutedCount: 4, lastRunErrorCount: 1,
+				},
+				notificationRedrive: {
+					status: 'ready', intervalMs: 60000, batchLimit: 25, lastRunScannedCount: 8, lastRunRedrivenCount: 3,
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Window (ms)5000');
+		expect(view.textContent).toContain('Active entries2');
+		expect(view.textContent).toContain('Hits3');
+		expect(view.textContent).toContain('Misses4');
+		expect(view.textContent).toContain('Suppressed7');
+		expect(view.textContent).toContain('Active tracked signals2');
+		expect(view.textContent).toContain('Interval (ms)300000');
+		expect(view.textContent).toContain('Batch limit10');
+		expect(view.textContent).toContain('Last run executed4');
+		expect(view.textContent).toContain('Last run scanned8');
+		expect(view.textContent).toContain('Last run redriven3');
+	});
+
+	it('clears every structured status section after a refresh failure', async () => {
+		let statusRequests = 0;
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: { telegramBot: true },
+			deliveryChannels: { telegram: { status: 'ready' } },
+			dependencies: { telegram: { status: 'ready' } },
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return ++statusRequests === 1 ? response(status) : response({ error: 'temporary failure' }, 503);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Telegram');
+		expect(view.textContent).toContain('Last checked');
+
+		await findButton(view, 'Refresh status').dispatch('click');
+		await flush();
+
+		expect(view.textContent).not.toContain('Telegram');
+		expect(view.textContent).not.toContain('Telegram Bot');
+		expect(view.textContent).not.toContain('Last checked');
+		expect(view.textContent).toContain('Status unavailable. Check the API key and service logs.');
 	});
 
 	it('waits for an API key before loading protected overview status', async () => {
