@@ -37,6 +37,49 @@ jobs:
         node-version-file: .node-version
         cache: pnpm
     - run: pnpm install --frozen-lockfile
+    # Production dependency audit gate. See GitHub issue #760.
+    # Critical-severity findings fail the build; high+moderate are reported
+    # and tracked in `.pnpm-workspace.yaml` overrides. Mod-dev trees may still
+    # contain dev-only advisories (build-chain chains) — see `pnpm audit` for
+    # the dev report. JSON output is uploaded as an artifact for triage.
+    - name: Production dependency audit (fail on critical)
+      run: |
+        set +e
+        pnpm audit --prod --json --audit-level critical > audit-prod-critical.json 2>audit-prod-critical.stderr
+        CRITICAL_RC=$?
+        set -e
+        if [ "$CRITICAL_RC" -ne 0 ]; then
+          echo "::error::Critical production dependency advisories detected (pnpm audit exit $CRITICAL_RC)."
+          echo "--- summary ---"
+          cat audit-prod-critical.stderr || true
+          echo "--- JSON ---"
+          cat audit-prod-critical.json || true
+          exit "$CRITICAL_RC"
+        fi
+        echo "No critical production dependency advisories."
+    - name: Production dependency audit report (non-blocking)
+      if: always()
+      run: |
+        set +e
+        pnpm audit --prod --audit-level high > audit-prod-high.txt 2>&1
+        HIGH_RC=$?
+        set -e
+        if [ "$HIGH_RC" -ne 0 ]; then
+          echo "::warning::High-severity production dependency advisories detected. See audit-prod-high.txt artifact for the full report."
+          cat audit-prod-high.txt
+        else
+          echo "No high-severity production dependency advisories."
+        fi
+    - name: Upload audit artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: pnpm-audit-report
+        path: |
+          audit-prod-critical.json
+          audit-prod-critical.stderr
+          audit-prod-high.txt
+        if-no-files-found: ignore
     - name: Setup Java for Firebase Firestore emulator
       uses: actions/setup-java@v4
       with:
