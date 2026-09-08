@@ -54,8 +54,12 @@ function getPercentage(value, total) {
 function createToolResultError(errorMessage) {
 	const message = String(errorMessage);
 	const error = new Error(message);
-	error.category = /^No data found\b/i.test(message) ? 'not_found' : 'upstream_tool_error';
-	error.retryable = false;
+	if (/^No data found\b/i.test(message)) {
+		error.category = 'not_found';
+		error.retryable = false;
+	} else {
+		error.category = 'upstream_tool_error';
+	}
 	return error;
 }
 
@@ -624,7 +628,7 @@ class TradingViewMcpService {
 
 		if (callResult.isError) {
 			const errorMessage = this._extractContentText(callResult) || `TradingView MCP tool ${toolName} returned isError=true`;
-			throw new Error(errorMessage);
+			throw createToolResultError(errorMessage);
 		}
 
 		if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
