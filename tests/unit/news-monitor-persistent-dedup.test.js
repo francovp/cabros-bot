@@ -1066,3 +1066,313 @@ describe('NewsDedupStorageService — updateEntry()', () => {
 		}));
 	});
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Issue #871: race-safe persistence state — concurrent setEntry preserves
+// channel-scoped deltas, terminal state protects against stale pending writes,
+// and crashed `claimed` ownership is reclaimable within a bounded deadline.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('NewsDedupStorageService — setEntry() race safety (Issue #871)', () => {
+	const originalNow = admin.firestore.Timestamp.now;
+	const originalFromMillis = admin.firestore.Timestamp.fromMillis;
+
+	afterEach(() => {
+		jest.clearAllMocks();
+		admin.firestore.mockClear();
+		admin.firestore.Timestamp.now = originalNow;
+		admin.firestore.Timestamp.fromMillis = originalFromMillis;
+		delete process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP;
+	});
+
+	it('merges channel-scoped delivery deltas so concurrent setEntry retries do not erase them', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const now = { toMillis: () => 10_000 };
+		const expiresAt = { toMillis: () => 15_000 };
+		const createdAt = { toMillis: () => 1_000 };
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({
+					createdAt,
+					expiresAt,
+					data: {
+						deliveryResults: [
+							{ channel: 'telegram', success: true },
+							{ channel: 'whatsapp', success: false },
+						],
+						routing: {
+							channels: ['telegram', 'whatsapp'],
+							telegramChatId: 'telegram-a',
+							whatsappChatId: 'whatsapp-a',
+						},
+					},
+				}),
+			}),
+			set: jest.fn(),
+		};
+		const runTransaction = jest.fn(async callback => callback(transaction));
+
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => docRef }),
+			runTransaction,
+		});
+		admin.firestore.Timestamp.now = jest.fn(() => now);
+		admin.firestore.Timestamp.fromMillis = jest.fn(() => expiresAt);
+
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.setEntry(
+			'BTCUSDT:price_surge',
+			5_000,
+			{
+				deliveryResults: [{ channel: 'whatsapp', success: true }],
+				routing: {
+					channels: ['whatsapp'],
+					whatsappChatId: 'whatsapp-b',
+				},
+			},
+			{ deliveryChannels: ['whatsapp'] },
+		)).resolves.toBeUndefined();
+
+		expect(transaction.set).toHaveBeenCalledWith(docRef, expect.objectContaining({
+			data: {
+				deliveryResults: [
+					{ channel: 'telegram', success: true },
+					{ channel: 'whatsapp', success: true },
+				],
+				routing: {
+					channels: ['whatsapp'],
+					telegramChatId: 'telegram-a',
+					whatsappChatId: 'whatsapp-b',
+				},
+			},
+		}));
+	});
+
+	it('drops a late pending state when the durable side already resolved to terminal owned', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const now = { toMillis: () => 10_000 };
+		const expiresAt = { toMillis: () => 15_000 };
+		const createdAt = { toMillis: () => 1_000 };
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({
+					createdAt,
+					expiresAt,
+					data: { originalPersistedState: 'owned' },
+				}),
+			}),
+			set: jest.fn(),
+		};
+		const runTransaction = jest.fn(async callback => callback(transaction));
+
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => docRef }),
+			runTransaction,
+		});
+		admin.firestore.Timestamp.now = jest.fn(() => now);
+		admin.firestore.Timestamp.fromMillis = jest.fn(() => expiresAt);
+
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.setEntry(
+			'BTCUSDT:price_surge',
+			5_000,
+			{ originalPersistedState: 'pending' },
+		)).resolves.toBeUndefined();
+
+		expect(transaction.set).toHaveBeenCalledWith(docRef, expect.objectContaining({
+			data: { originalPersistedState: 'owned' },
+		}));
+	});
+
+	it('keeps the terminal value when an older pending state is encountered on the durable side', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const now = { toMillis: () => 10_000 };
+		const expiresAt = { toMillis: () => 15_000 };
+		const createdAt = { toMillis: () => 1_000 };
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({
+					createdAt,
+					expiresAt,
+					data: { originalPersistedState: 'pending' },
+				}),
+			}),
+			set: jest.fn(),
+		};
+		const runTransaction = jest.fn(async callback => callback(transaction));
+
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => docRef }),
+			runTransaction,
+		});
+		admin.firestore.Timestamp.now = jest.fn(() => now);
+		admin.firestore.Timestamp.fromMillis = jest.fn(() => expiresAt);
+
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.setEntry(
+			'BTCUSDT:price_surge',
+			5_000,
+			{ originalPersistedState: 'owned' },
+		)).resolves.toBeUndefined();
+
+		expect(transaction.set).toHaveBeenCalledWith(docRef, expect.objectContaining({
+			data: { originalPersistedState: 'owned' },
+		}));
+	});
+});
+
+describe('NewsDedupStorageService — updateEntry() expected-expirable guard (Issue #871)', () => {
+	const originalNow = admin.firestore.Timestamp.now;
+
+	afterEach(() => {
+		jest.clearAllMocks();
+		admin.firestore.mockClear();
+		admin.firestore.Timestamp.now = originalNow;
+		delete process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP;
+	});
+
+	it('rejects a usage-ownership claim when an active claimed lock has not yet expired', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const now = { toMillis: () => 100_000 };
+		const expiresAt = { toMillis: () => 200_000 };
+		const createdAt = { toMillis: () => 50_000 };
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({
+					createdAt,
+					expiresAt,
+					data: {
+						originalPersistedState: 'claimed',
+						claimDeadline: 150_000,
+					},
+				}),
+			}),
+			set: jest.fn(),
+		};
+		const runTransaction = jest.fn(async callback => callback(transaction));
+
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => ({}) }),
+			runTransaction,
+		});
+		admin.firestore.Timestamp.now = jest.fn(() => now);
+
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.updateEntry(
+			'BTCUSDT:price_surge',
+			{ originalPersistedState: 'claimed', claimDeadline: 160_000 },
+			{
+				mergeFields: ['originalPersistedState', 'claimDeadline'],
+				expectedField: 'originalPersistedState',
+				expectedValues: ['none', 'claimed'],
+				expectedExpirableValues: ['claimed'],
+				expectedExpirableField: 'claimDeadline',
+			},
+		)).resolves.toBe(false);
+		expect(transaction.set).not.toHaveBeenCalled();
+	});
+
+	it('allows takeover when the prior claimed lock has expired', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const now = { toMillis: () => 100_000 };
+		const expiresAt = { toMillis: () => 200_000 };
+		const createdAt = { toMillis: () => 50_000 };
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({
+					createdAt,
+					expiresAt,
+					data: {
+						originalPersistedState: 'claimed',
+						claimDeadline: 90_000,
+					},
+				}),
+			}),
+			set: jest.fn(),
+		};
+		const runTransaction = jest.fn(async callback => callback(transaction));
+
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => docRef }),
+			runTransaction,
+		});
+		admin.firestore.Timestamp.now = jest.fn(() => now);
+
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.updateEntry(
+			'BTCUSDT:price_surge',
+			{ originalPersistedState: 'claimed', claimDeadline: 160_000 },
+			{
+				mergeFields: ['originalPersistedState', 'claimDeadline'],
+				expectedField: 'originalPersistedState',
+				expectedValues: ['none', 'claimed'],
+				expectedExpirableValues: ['claimed'],
+				expectedExpirableField: 'claimDeadline',
+			},
+		)).resolves.toBe(true);
+		expect(transaction.set).toHaveBeenCalledWith(docRef, expect.objectContaining({
+			data: {
+				originalPersistedState: 'claimed',
+				claimDeadline: 160_000,
+			},
+		}));
+	});
+
+	it('rejects a pending write when the durable state has already resolved to terminal owned', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const now = { toMillis: () => 100_000 };
+		const expiresAt = { toMillis: () => 200_000 };
+		const createdAt = { toMillis: () => 50_000 };
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({
+					createdAt,
+					expiresAt,
+					data: { originalPersistedState: 'owned' },
+				}),
+			}),
+			set: jest.fn(),
+		};
+		const runTransaction = jest.fn(async callback => callback(transaction));
+
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => ({}) }),
+			runTransaction,
+		});
+		admin.firestore.Timestamp.now = jest.fn(() => now);
+
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.updateEntry(
+			'BTCUSDT:price_surge',
+			{ originalPersistedState: 'pending' },
+			{
+				mergeFields: ['originalPersistedState'],
+				expectedField: 'originalPersistedState',
+				expectedValues: ['pending'],
+			},
+		)).resolves.toBe(false);
+		expect(transaction.set).not.toHaveBeenCalled();
+	});
+});

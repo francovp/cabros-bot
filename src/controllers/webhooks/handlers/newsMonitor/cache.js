@@ -20,6 +20,7 @@ const { randomUUID } = require('node:crypto');
 
 const DELIVERY_LOCK_TTL_MS = 30_000;
 const DELIVERY_LOCK_RENEW_INTERVAL_MS = 10_000;
+const USAGE_CLAIM_DEADLINE_MS = 60_000;
 const DELIVERY_ROUTING_FIELDS = {
 	telegram: 'telegramChatId',
 	whatsapp: 'whatsappChatId',
@@ -340,7 +341,10 @@ class NewsCache {
 	 * failed before any document owned it. Updates the local entry
 	 * synchronously and, when persistent dedup is enabled, merges ONLY this
 	 * field into the durable Firestore payload transactionally so concurrent
-	 * delivery updates from other replicas are preserved. Fail-open.
+	 * delivery updates from other replicas are preserved. A late `'pending'`
+	 * write that arrives after a terminal `'owned'`/`'none'` value is
+	 * rejected on the durable side so it cannot resurrect ownership that has
+	 * already been resolved on another replica. Fail-open.
 	 *
 	 * @param {string} symbol
 	 * @param {string} eventCategory
@@ -357,10 +361,18 @@ class NewsCache {
 
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
 			try {
+				const options = { mergeFields: ['originalPersistedState'] };
+				if (state === 'pending') {
+					// Guard against late pending writes that race past a
+					// terminal `'owned'`/`'none'` already committed by
+					// another replica.
+					options.expectedField = 'originalPersistedState';
+					options.expectedValues = ['pending'];
+				}
 				await newsDedupStorageService.updateEntry(
 					key,
 					{ originalPersistedState: state },
-					{ mergeFields: ['originalPersistedState'] },
+					options,
 				);
 			} catch (error) {
 				console.warn('[NewsCache] Failed to persist original-write state (fail-open):', error.message);
@@ -374,25 +386,41 @@ class NewsCache {
 	 * Performs a synchronized local check-and-set first, then — when
 	 * persistent dedup is enabled — commits the claim with an expected-state
 	 * guard inside the Firestore transaction so concurrent replicas cannot
-	 * double-claim. Callers must release via markOriginalPersistState('none')
-	 * when the claimed record fails to persist. Fail-open: storage errors
-	 * roll the local claim back.
+	 * double-claim. The claim carries a bounded `claimDeadline` (default
+	 * USAGE_CLAIM_DEADLINE_MS) so a crashed prior owner's lock cannot block
+	 * later redeliveries until the full dedup TTL expires. Callers must
+	 * release via markOriginalPersistState('none') when the claimed record
+	 * fails to persist. Fail-open: storage errors roll the local claim back.
 	 *
 	 * @param {string} symbol
 	 * @param {string} eventCategory
+	 * @param {{claimDeadlineMs?: number}} [options] - Override claim deadline
 	 * @returns {Promise<boolean>} true when the caller holds the usage claim
 	 */
-	async claimUsageOwnership(symbol, eventCategory) {
+	async claimUsageOwnership(symbol, eventCategory, options = {}) {
 		const key = this.generateKey(symbol, eventCategory);
 		const entry = this.cache.get(key);
 		if (!entry || this.isExpired(entry)) {
 			return false;
 		}
 		const previousState = entry.data.originalPersistedState;
-		if (previousState === 'owned' || previousState === 'pending' || previousState === 'claimed') {
+		if (previousState === 'owned' || previousState === 'pending') {
 			return false;
 		}
-		entry.data = { ...entry.data, originalPersistedState: 'claimed' };
+		if (previousState === 'claimed') {
+			const previousDeadline = entry.data.claimDeadline;
+			if (Number.isFinite(previousDeadline) && previousDeadline > Date.now()) {
+				return false;
+			}
+			// Expired claim — fall through and take over.
+		}
+		const claimDeadlineMs = Date.now() + USAGE_CLAIM_DEADLINE_MS;
+		const previousClaimDeadline = entry.data.claimDeadline;
+		entry.data = {
+			...entry.data,
+			originalPersistedState: 'claimed',
+			claimDeadline: claimDeadlineMs,
+		};
 
 		if (!newsDedupStorageService.isEnabled() || !newsDedupStorageService.isReady()) {
 			return true;
@@ -400,11 +428,13 @@ class NewsCache {
 		try {
 			const committed = await newsDedupStorageService.updateEntry(
 				key,
-				{ originalPersistedState: 'claimed' },
+				{ originalPersistedState: 'claimed', claimDeadline: claimDeadlineMs },
 				{
-					mergeFields: ['originalPersistedState'],
+					mergeFields: ['originalPersistedState', 'claimDeadline'],
 					expectedField: 'originalPersistedState',
-					expectedValues: ['none'],
+					expectedValues: ['none', 'claimed'],
+					expectedExpirableValues: ['claimed'],
+					expectedExpirableField: 'claimDeadline',
 				},
 			);
 			if (committed) {
@@ -413,19 +443,29 @@ class NewsCache {
 		} catch (error) {
 			console.warn('[NewsCache] Usage-ownership claim failed (fail-open):', error.message);
 		}
-		entry.data = { ...entry.data, originalPersistedState: previousState ?? 'none' };
+		entry.data = {
+			...entry.data,
+			originalPersistedState: previousState ?? 'none',
+			claimDeadline: previousClaimDeadline,
+		};
 		return false;
 	}
 
 	/**
 	 * Release a claim acquired via claimUsageOwnership after its record
-	 * failed to persist, restoring 'none' so a later redelivery can own it.
+	 * failed to persist, restoring 'none' and clearing `claimDeadline` so a
+	 * later redelivery can own it.
 	 *
 	 * @param {string} symbol
 	 * @param {string} eventCategory
 	 * @returns {Promise<void>}
 	 */
 	async releaseUsageOwnershipClaim(symbol, eventCategory) {
+		const key = this.generateKey(symbol, eventCategory);
+		const entry = this.cache.get(key);
+		if (entry && !this.isExpired(entry)) {
+			delete entry.data.claimDeadline;
+		}
 		await this.markOriginalPersistState(symbol, eventCategory, 'none');
 	}
 
