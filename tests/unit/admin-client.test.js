@@ -432,6 +432,38 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('Status unavailable. Check the API key and service logs.');
 	});
 
+	it('renders safe queue telemetry in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				jobExecutionQueue: {
+					status: 'disabled', mode: 'local', enqueued: 12, claimed: 10, completed: 9, failed: 1,
+					lastErrorCode: 'QUEUE_TIMEOUT', lastEnqueuedAt: '2026-09-08T00:00:00Z',
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Enqueued12');
+		expect(view.textContent).toContain('Claimed10');
+		expect(view.textContent).toContain('Completed9');
+		expect(view.textContent).toContain('Failed1');
+		expect(view.textContent).toContain('Last error codeQUEUE_TIMEOUT');
+		expect(view.textContent).toContain('Last enqueued');
+	});
+
 	it('waits for an API key before loading protected overview status', async () => {
 		const requests = [];
 		const browser = createBrowser({
