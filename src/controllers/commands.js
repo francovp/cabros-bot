@@ -34,15 +34,18 @@ function getTelegramCommandRateLimits() {
 async function telegramCommandRateLimiter(context, next) {
 	if (process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING === 'false') return next();
 	const message = context.message || {};
-	const text = String((context.message && context.message.text) || '').trim();
-	const commandToken = text.split(/\s+/, 1)[0];
+	const text = String(message.text || '');
 	const commandEntity = Array.isArray(message.entities)
 		&& message.entities.find((entity) => entity.type === 'bot_command'
-			&& entity.offset === 0
-			&& entity.length === commandToken.length);
+			&& entity.offset === 0);
 	if (!commandEntity) return next();
-	const rawCommand = commandToken.replace(/^\//, '').split('@', 1)[0].toLowerCase();
-	const command = { analysis: 'analisis', news: 'noticias' }[rawCommand] || rawCommand;
+	const commandToken = text.slice(commandEntity.offset, commandEntity.offset + commandEntity.length);
+	if (!commandToken.startsWith('/')) return next();
+	const [rawCommand, recipient] = commandToken.slice(1).split('@', 2);
+	if (recipient !== undefined
+		&& (!context.me || recipient.toLowerCase() !== String(context.me).replace(/^@/, '').toLowerCase())) return next();
+	const normalizedCommand = rawCommand.toLowerCase();
+	const command = { analysis: 'analisis', news: 'noticias' }[normalizedCommand] || normalizedCommand;
 	const rule = getTelegramCommandRateLimits()[command];
 	const chatId = getChatId(context);
 	if (!rule || chatId === undefined || chatId === null) return next();

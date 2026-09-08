@@ -107,6 +107,30 @@ describe('Telegram TradingView commands', () => {
 		expect(fourthCommand.reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
 	});
 
+	it('uses the bot command entity when punctuation follows the command', async () => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner,'));
+		for (const context of contexts) {
+			context.message.entities = [{ type: 'bot_command', offset: 0, length: '/scanner'.length }];
+			await telegramCommandRateLimiter(context, next);
+		}
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
+	it('does not charge commands addressed to another bot', async () => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner@other_bot'));
+		for (const context of contexts) {
+			context.me = 'cabros_bot';
+			await telegramCommandRateLimiter(context, next);
+		}
+
+		expect(next).toHaveBeenCalledTimes(4);
+		expect(contexts[3].reply).not.toHaveBeenCalled();
+	});
+
 	it('parses command args into positionals and key/value options', () => {
 		expect(parseCommandArgs(buildContext('/analisis BINANCE:BTCUSDT,NASDAQ:NVDA timeframe=1D mtf=true'))).toEqual({
 			positionals: ['BINANCE:BTCUSDT,NASDAQ:NVDA'],
