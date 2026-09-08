@@ -1,9 +1,43 @@
 const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoSymbol');
 const { jobService } = require('../services/jobs/JobService');
 const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor');
+const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
+
+const READINESS_ERROR_LABELS = {
+	http_5xx: 'error HTTP 5xx del servidor TradingView',
+	http_4xx: 'error HTTP 4xx del servidor TradingView',
+	timeout: 'timeout de TradingView',
+	invalid_response: 'respuesta inválida de TradingView',
+	request_failed: 'fallo de petición a TradingView',
+	circuit_breaker_open: 'circuit breaker abierto por fallos consecutivos',
+};
+
+function formatReadinessErrorLabel(category) {
+	if (typeof category !== 'string' || !category) return null;
+	return READINESS_ERROR_LABELS[category] || null;
+}
+
+function getTradingViewReadinessWarning() {
+	if (!tradingViewMcpService || typeof tradingViewMcpService.getStatus !== 'function') {
+		return null;
+	}
+	let status;
+	try {
+		status = tradingViewMcpService.getStatus({ enabled: true });
+	} catch (error) {
+		// Fail open: a broken readiness probe must never block job creation.
+		return null;
+	}
+	if (!status || status.status !== 'degraded') {
+		return null;
+	}
+	const categoryLabel = formatReadinessErrorLabel(status.lastErrorCategory);
+	const detail = categoryLabel ? ` (último error: ${categoryLabel})` : '';
+	return `⚠️ TradingView MCP está degradado${detail}. El job se creará pero puede fallar.`;
+}
 
 const getPrice = async (context) => {
 	const chatId = getChatId(context);
@@ -69,6 +103,15 @@ const createTradingViewJobCommand = (type, command, buildPayload) => async (cont
 	});
 
 	try {
+		const readinessWarning = getTradingViewReadinessWarning();
+		if (readinessWarning) {
+			try {
+				await context.reply(readinessWarning);
+			} catch (replyError) {
+				// A failed warning reply must never block job creation.
+				console.error('Failed to send MCP readiness warning:', replyError.message);
+			}
+		}
 		const payload = {
 			...buildPayload(args),
 			...(chatId !== undefined && chatId !== null ? { telegramChatId: String(chatId) } : {}),
@@ -633,4 +676,6 @@ module.exports = {
 	buildHelpMessage,
 	getTelegramCommandMenu,
 	parseCommandArgs,
+	getTradingViewReadinessWarning,
+	formatReadinessErrorLabel,
 };
