@@ -154,6 +154,7 @@ describe('Telegram TradingView commands', () => {
 		await telegramCommandRateLimiter(activeChatAfterCap, next);
 
 		expect(activeChatAfterCap.reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+		expect(newChat.reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
 	});
 
 	it('parses command args into positionals and key/value options', () => {

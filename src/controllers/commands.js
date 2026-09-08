@@ -72,8 +72,15 @@ async function telegramCommandRateLimiter(context, next) {
 				telegramCommandRateLimitBuckets.delete(bucketKey);
 			}
 		}
-		// ponytail: saturated active buckets bypass new-chat tracking; use an LRU cache if this matters.
-		if (telegramCommandRateLimitBuckets.size >= 10_000) return next();
+		// ponytail: reject new buckets at the cap; use an overflow/LRU bucket if this ceiling matters.
+		if (telegramCommandRateLimitBuckets.size >= 10_000) {
+			try {
+				await context.reply(`demasiadas solicitudes para /${command}. Intenta nuevamente más tarde.`);
+			} catch (error) {
+				console.error('[commands] Failed to send Telegram rate-limit reply:', error.message);
+			}
+			return;
+		}
 	}
 	timestamps.push(now);
 	telegramCommandRateLimitBuckets.set(key, timestamps);
