@@ -7,6 +7,10 @@ const geminiPriceService = require('../grounding/geminiPriceService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { MainClient } = require('binance');
+const {
+	parseEntryPriceSources,
+	getEntryPriceSourceChains: buildEntryPriceSourceChains,
+} = require('../../lib/signalOutcomeEntryPriceSources');
 
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
@@ -50,6 +54,27 @@ let lastRunErrorCount = 0;
 let lastRunRegionBlockedCount = 0;
 let lastEvaluatedDoc = null;
 let lastRetentionWarningValue = null;
+let lastEntryPriceSourcesWarningValue = null;
+
+function getEntryPriceSourceChains() {
+	const rawValue = getRuntimeConfig?.().SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES;
+	try {
+		const chains = buildEntryPriceSourceChains(rawValue);
+		lastEntryPriceSourcesWarningValue = null;
+		return chains;
+	} catch (error) {
+		if (lastEntryPriceSourcesWarningValue !== rawValue) {
+			console.warn('[SignalOutcomeService] Invalid SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES configuration, using existing fallback chains');
+			lastEntryPriceSourcesWarningValue = rawValue;
+		}
+		return buildEntryPriceSourceChains();
+	}
+}
+
+function getEntryPriceSourceChain(exchange, assetClass) {
+	const chains = getEntryPriceSourceChains();
+	return exchange === 'BINANCE' || assetClass === 'crypto' ? chains.crypto : chains.equity;
+}
 
 function getSignalOutcomeRetentionDays() {
 	const rawValue = process.env.SIGNAL_OUTCOME_RETENTION_DAYS;
@@ -394,50 +419,57 @@ async function recordSignalInternal({
 			: null;
 		let entryPriceReason = null;
 
-		if (entryPrice === null && normSymbolInfo.exchange === 'BINANCE') {
-			let abortController = null;
-			let timerId = null;
-			try {
-				abortController = new AbortController();
-				const requestOptions = {
-					timeout: 5000,
-					signal: abortController.signal,
-				};
-				const client = getBinanceClient(requestOptions);
-				const timeoutPromise = new Promise((_, reject) => {
-					timerId = setTimeout(() => {
-						abortController.abort();
-						reject(new Error('Binance getAvgPrice timeout (5000ms)'));
-					}, 5000);
-				});
-				const avgPricePromise = client.getAvgPrice({ symbol: normSymbolInfo.symbol });
-				const avgPriceResult = await Promise.race([avgPricePromise, timeoutPromise]);
-				if (avgPriceResult && avgPriceResult.price) {
-					const parsedAvg = parseFloat(avgPriceResult.price);
-					if (Number.isFinite(parsedAvg) && parsedAvg > 0) {
-						entryPrice = parsedAvg;
-						entryPriceSource = 'binance';
+		for (const provider of getEntryPriceSourceChain(normSymbolInfo.exchange, normAssetClass)) {
+			if (entryPrice !== null) break;
+			if (provider === 'mcp') continue;
+
+			if (provider === 'binance' && normSymbolInfo.exchange === 'BINANCE') {
+				let abortController = null;
+				let timerId = null;
+				try {
+					abortController = new AbortController();
+					const requestOptions = {
+						timeout: 5000,
+						signal: abortController.signal,
+					};
+					const client = getBinanceClient(requestOptions);
+					const timeoutPromise = new Promise((_, reject) => {
+						timerId = setTimeout(() => {
+							abortController.abort();
+							reject(new Error('Binance getAvgPrice timeout (5000ms)'));
+						}, 5000);
+					});
+					const avgPriceResult = await Promise.race([client.getAvgPrice({ symbol: normSymbolInfo.symbol }), timeoutPromise]);
+					if (avgPriceResult && avgPriceResult.price) {
+						const parsedAvg = parseFloat(avgPriceResult.price);
+						if (Number.isFinite(parsedAvg) && parsedAvg > 0) {
+							entryPrice = parsedAvg;
+							entryPriceSource = 'binance';
+						}
 					}
+				} catch (err) {
+					const isRegionBlocked = isRegionBlockedError(err);
+					const isInvalidSymbol = err.message
+						&& (err.message.includes('400')
+							|| err.message.includes('UNKNOWN_SYMBOL')
+							|| err.message.includes('Invalid symbol'));
+					if (isRegionBlocked) {
+						entryPriceReason = REASON_BINANCE_REGION_BLOCKED;
+					} else if (isInvalidSymbol) {
+						entryPriceReason = 'binance_invalid_symbol';
+					} else {
+						entryPriceReason = REASON_BINANCE_UNAVAILABLE;
+					}
+					console.warn('[SignalOutcomeService] Failed to fetch entry price from Binance:', err.message);
+					if (isInvalidSymbol) break;
+				} finally {
+					if (timerId) clearTimeout(timerId);
 				}
-			} catch (err) {
-				const isRegionBlocked = isRegionBlockedError(err);
-				const isInvalidSymbol = err.message
-					&& (err.message.includes('400')
-						|| err.message.includes('UNKNOWN_SYMBOL')
-						|| err.message.includes('Invalid symbol'));
-				if (isRegionBlocked) {
-					entryPriceReason = REASON_BINANCE_REGION_BLOCKED;
-				} else if (isInvalidSymbol) {
-					entryPriceReason = 'binance_invalid_symbol';
-				} else {
-					entryPriceReason = REASON_BINANCE_UNAVAILABLE;
-				}
-				console.warn('[SignalOutcomeService] Failed to fetch entry price from Binance:', err.message);
-			} finally {
-				if (timerId) clearTimeout(timerId);
+				continue;
 			}
 
-			if (entryPrice === null && entryPriceReason !== 'binance_invalid_symbol' && geminiPriceService.isGeminiGroundingEnabled({ requireGroundingFlag: true })) {
+			if (provider === 'gemini' && normSymbolInfo.exchange === 'BINANCE'
+				&& geminiPriceService.isGeminiGroundingEnabled({ requireGroundingFlag: true })) {
 				try {
 					const geminiResult = await geminiPriceService.fetchGeminiPrice(normSymbolInfo.symbol, {
 						timeoutMs: 5000,
@@ -450,21 +482,22 @@ async function recordSignalInternal({
 						entryPriceReason = null;
 					}
 				} catch (geminiErr) {
-					console.warn('[SignalOutcomeService] Failed to fetch tertiary entry price from Gemini:', geminiErr.message);
+					console.warn('[SignalOutcomeService] Failed to fetch entry price from Gemini:', geminiErr.message);
 				}
+				continue;
 			}
-		} else if (entryPrice === null && equityProviderName) {
-			try {
-				entryPrice = await equityMarketDataService.getEntryPrice({
-					symbol: normSymbolInfo.symbol,
-					exchange: normSymbolInfo.exchange === 'UNKNOWN' ? undefined : normSymbolInfo.exchange,
-				});
-				if (entryPrice !== null) {
-					entryPriceSource = equityProviderName;
+
+			if (provider === 'twelve-data' && normSymbolInfo.exchange !== 'BINANCE' && equityProviderName) {
+				try {
+					entryPrice = await equityMarketDataService.getEntryPrice({
+						symbol: normSymbolInfo.symbol,
+						exchange: normSymbolInfo.exchange === 'UNKNOWN' ? undefined : normSymbolInfo.exchange,
+					});
+					if (entryPrice !== null) entryPriceSource = equityProviderName;
+				} catch (err) {
+					entryPriceReason = err.reason || equityMarketDataService.REASONS.UNAVAILABLE;
+					console.warn('[SignalOutcomeService] Failed to fetch equity entry price:', entryPriceReason);
 				}
-			} catch (err) {
-				entryPriceReason = err.reason || equityMarketDataService.REASONS.UNAVAILABLE;
-				console.warn('[SignalOutcomeService] Failed to fetch equity entry price:', entryPriceReason);
 			}
 		}
 
@@ -662,91 +695,118 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 					break;
 				}
 
-				if (data.exchange === 'BINANCE') {
-					let abortController = null;
-					let timerId = null;
-					try {
-						abortController = new AbortController();
-						const requestOptions = {
-							timeout: Math.max(1, remainingMs),
-							signal: abortController.signal,
-						};
-						const sweepClient = getBinanceClient(requestOptions);
-						const timeoutPromise = new Promise((_, reject) => {
-							timerId = setTimeout(() => {
-								abortController.abort();
-								reject(new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`));
-							}, remainingMs);
-						});
+				for (const source of getEntryPriceSourceChain(data.exchange, data.assetClass)) {
+					if (resolvedPrice !== null) break;
+					if (source === 'mcp') continue;
+					const sourceRemainingMs = effectiveMaxDurationMs - (Date.now() - startTime);
+					if (sourceRemainingMs <= 0) {
+						allResolved = false;
+						sweepDeadlineExceeded = true;
+						break;
+					}
 
-						const klinesPromise = sweepClient.getKlines({
-							symbol: data.symbol,
-							interval: '5m',
-							startTime: receivedAtMs,
-							limit: 1,
-						});
-						const klines = await Promise.race([klinesPromise, timeoutPromise]);
-						if (Array.isArray(klines) && klines.length > 0 && klines[0][1]) {
-							const parsed = parseFloat(klines[0][1]);
-							if (Number.isFinite(parsed) && parsed > 0) {
-								resolvedPrice = parsed;
-								resolvedPriceSource = 'binance';
-							}
-						}
-						if (!resolvedPrice) {
-							const remainingAfterKlines = effectiveMaxDurationMs - (Date.now() - startTime);
-							if (remainingAfterKlines <= 0) {
-								throw new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`);
-							}
-							const avgPromise = sweepClient.getAvgPrice({ symbol: data.symbol });
-							const avgRes = await Promise.race([avgPromise, timeoutPromise]);
-							if (avgRes && avgRes.price) {
-								const parsed = parseFloat(avgRes.price);
+					if (source === 'binance' && data.exchange === 'BINANCE') {
+						let abortController = null;
+						let timerId = null;
+						try {
+							abortController = new AbortController();
+							const sweepClient = getBinanceClient({
+								timeout: Math.max(1, sourceRemainingMs),
+								signal: abortController.signal,
+							});
+							const timeoutPromise = new Promise((_, reject) => {
+								timerId = setTimeout(() => {
+									abortController.abort();
+									reject(new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`));
+								}, sourceRemainingMs);
+							});
+							const klines = await Promise.race([sweepClient.getKlines({
+								symbol: data.symbol,
+								interval: '5m',
+								startTime: receivedAtMs,
+								limit: 1,
+							}), timeoutPromise]);
+							if (Array.isArray(klines) && klines.length > 0 && klines[0][1]) {
+								const parsed = parseFloat(klines[0][1]);
 								if (Number.isFinite(parsed) && parsed > 0) {
 									resolvedPrice = parsed;
 									resolvedPriceSource = 'binance';
 								}
 							}
-						}
-					} catch (err) {
-						entryPriceError = err;
-					} finally {
-						if (timerId) clearTimeout(timerId);
-					}
-				} else {
-					try {
-						const bars = await equityMarketDataService.getHistoricalBars({
-							symbol: data.symbol,
-							exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
-							interval: '5m',
-							startTime: receivedAtMs,
-							endTime: receivedAtMs + 2 * 60 * 60 * 1000,
-							timeoutMs: remainingMs,
-						});
-						if (Array.isArray(bars) && bars.length > 0 && bars[0][1]) {
-							const parsed = parseFloat(bars[0][1]);
-							if (Number.isFinite(parsed) && parsed > 0) {
-								resolvedPrice = parsed;
-								resolvedPriceSource = equityProviderName;
-							}
-						}
-					} catch (err) {
-						entryPriceError = err;
-					}
-					if (!resolvedPrice) {
-						try {
-							const quotePrice = await equityMarketDataService.getEntryPrice({
-								symbol: data.symbol,
-								exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
-								timeoutMs: remainingMs,
-							});
-							if (typeof quotePrice === 'number' && Number.isFinite(quotePrice) && quotePrice > 0) {
-								resolvedPrice = quotePrice;
-								resolvedPriceSource = equityProviderName;
-								entryPriceError = null;
+							if (!resolvedPrice) {
+								const remainingAfterKlines = effectiveMaxDurationMs - (Date.now() - startTime);
+								if (remainingAfterKlines <= 0) throw new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`);
+								const avgRes = await Promise.race([sweepClient.getAvgPrice({ symbol: data.symbol }), timeoutPromise]);
+								if (avgRes && avgRes.price) {
+									const parsed = parseFloat(avgRes.price);
+									if (Number.isFinite(parsed) && parsed > 0) {
+										resolvedPrice = parsed;
+										resolvedPriceSource = 'binance';
+									}
+								}
 							}
 						} catch (err) {
-							if (!entryPriceError) entryPriceError = err;
+							entryPriceError = err;
+						} finally {
+							if (timerId) clearTimeout(timerId);
+						}
+						continue;
+					}
+
+					if (source === 'gemini' && data.exchange === 'BINANCE'
+						&& geminiPriceService.isGeminiGroundingEnabled({ requireGroundingFlag: true })) {
+						try {
+							const geminiResult = await geminiPriceService.fetchGeminiPrice(data.symbol, {
+								timeoutMs: sourceRemainingMs,
+								tokenUsage: data.tokenUsage,
+								requireGroundingFlag: true,
+							});
+							if (geminiResult && typeof geminiResult.price === 'number'
+								&& Number.isFinite(geminiResult.price) && geminiResult.price > 0) {
+								resolvedPrice = geminiResult.price;
+								resolvedPriceSource = 'gemini-grounding';
+							}
+						} catch (err) {
+							entryPriceError = err;
+						}
+						continue;
+					}
+
+					if (source === 'twelve-data' && data.exchange !== 'BINANCE' && equityProviderName) {
+						try {
+							const bars = await equityMarketDataService.getHistoricalBars({
+								symbol: data.symbol,
+								exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
+								interval: '5m',
+								startTime: receivedAtMs,
+								endTime: receivedAtMs + 2 * 60 * 60 * 1000,
+								timeoutMs: sourceRemainingMs,
+							});
+							if (Array.isArray(bars) && bars.length > 0 && bars[0][1]) {
+								const parsed = parseFloat(bars[0][1]);
+								if (Number.isFinite(parsed) && parsed > 0) {
+									resolvedPrice = parsed;
+									resolvedPriceSource = equityProviderName;
+								}
+							}
+						} catch (err) {
+							entryPriceError = err;
+						}
+						if (!resolvedPrice) {
+							try {
+								const quotePrice = await equityMarketDataService.getEntryPrice({
+									symbol: data.symbol,
+									exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
+									timeoutMs: Math.max(1, effectiveMaxDurationMs - (Date.now() - startTime)),
+								});
+								if (typeof quotePrice === 'number' && Number.isFinite(quotePrice) && quotePrice > 0) {
+									resolvedPrice = quotePrice;
+									resolvedPriceSource = equityProviderName;
+									entryPriceError = null;
+								}
+							} catch (err) {
+								if (!entryPriceError) entryPriceError = err;
+							}
 						}
 					}
 				}
@@ -1249,6 +1309,7 @@ function getWorkerStatus() {
 		maxDurationMs,
 		maxRetryAttempts,
 		maxRetryAgeMs,
+		entryPriceSources: getEntryPriceSourceChains(),
 		isEvaluating,
 		lastRunAt,
 		lastRunDurationMs,
@@ -2047,6 +2108,7 @@ async function listOutcomes({
 
 function _resetForTesting() {
 	lastRetentionWarningValue = null;
+	lastEntryPriceSourcesWarningValue = null;
 	binanceClient = null;
 	lastEvaluatedDoc = null;
 	isEvaluating = false;
@@ -2074,6 +2136,8 @@ module.exports = {
 	stopWorker,
 	getWorkerStatus,
 	getWorkerRole,
+	parseEntryPriceSources,
+	getEntryPriceSourceChains,
 	COLLECTION_NAME,
 	HEARTBEAT_COLLECTION_NAME,
 	STORAGE_UNAVAILABLE_CODE,

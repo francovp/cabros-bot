@@ -296,7 +296,7 @@
             "capabilities"
           ]
         },
-        "description": "Alias for /api/status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. Remote Config metadata is safe for operational inspection and does not include configured parameter values or secrets."
+      "description": "Alias for /api/status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters; dependencies.signalOutcomeWorker.entryPriceSources reports the active non-secret crypto/equity provider chains. Remote Config metadata is safe for operational inspection and does not include configured parameter values or secrets."
       },
       "response": [
         {

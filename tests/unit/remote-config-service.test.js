@@ -382,6 +382,16 @@ describe('RemoteConfigService', () => {
 		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS');
 	});
 
+	it('keeps the request-time signal outcome entry-price chain eligible for Remote Config', () => {
+		process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'mcp,binance,gemini';
+
+		expect(remoteConfigService.PARAMETER_SCHEMA.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES).toEqual(expect.objectContaining({
+			type: 'string',
+			defaultValue: '',
+		}));
+		expect(remoteConfigService.getRuntimeConfig().SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES).toBe('mcp,binance,gemini');
+	});
+
 	it('enforces bounds on new operational parameters in env parsing', () => {
 		process.env.GROUNDING_MAX_SOURCES = '50'; // max 20
 		process.env.GROUNDING_TIMEOUT_MS = '-5'; // min 1

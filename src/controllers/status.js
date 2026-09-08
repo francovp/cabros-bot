@@ -417,6 +417,7 @@ function getStatus() {
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,
+				entryPriceSources: signalOutcomeWorkerStatus.entryPriceSources,
 				role: signalOutcomeWorkerStatus.role,
 				running: signalOutcomeWorkerStatus.running,
 				shutdownRequested: signalOutcomeWorkerStatus.shutdownRequested,

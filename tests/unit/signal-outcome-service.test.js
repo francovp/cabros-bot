@@ -49,6 +49,7 @@ describe('SignalOutcomeService', () => {
 		EquityMarketDataService._resetPacerForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
+		delete process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_EQUITY_MARKET_DATA;
@@ -64,6 +65,7 @@ describe('SignalOutcomeService', () => {
 		EquityMarketDataService._resetPacerForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
+		delete process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_EQUITY_MARKET_DATA;
@@ -93,6 +95,30 @@ describe('SignalOutcomeService', () => {
 		it('returns true when ENABLE_SIGNAL_OUTCOME_TRACKING is "true"', () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			expect(SignalOutcomeService.isEnabled()).toBe(true);
+		});
+	});
+
+	describe('entry price source configuration', () => {
+		it('keeps the existing crypto and equity fallback chains by default', () => {
+			expect(SignalOutcomeService.getEntryPriceSourceChains()).toEqual({
+				configured: false,
+				crypto: ['mcp', 'binance', 'gemini'],
+				equity: ['twelve-data'],
+			});
+		});
+
+		it('preserves the configured provider order for both asset classes', () => {
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'mcp, twelve-data, binance, gemini';
+
+			expect(SignalOutcomeService.getEntryPriceSourceChains()).toEqual({
+				configured: true,
+				crypto: ['mcp', 'twelve-data', 'binance', 'gemini'],
+				equity: ['mcp', 'twelve-data', 'binance', 'gemini'],
+			});
+		});
+
+		it('rejects unknown providers', () => {
+			expect(() => SignalOutcomeService.parseEntryPriceSources('mcp,unknown')).toThrow(/unknown/i);
 		});
 	});
 
