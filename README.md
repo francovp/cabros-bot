@@ -312,6 +312,26 @@ The response and audit logs include only sanitized order metadata. API credentia
 - `NEWS_MONITOR_SCHEDULER_TIMEOUT_MS` - Per-sweep execution deadline in milliseconds (default: `90000`, bounds `1000`-`600000`).
 - `dependencies.newsMonitorScheduler` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `role`, `running`, `lastRunAt`, `lastRunDurationMs`, `lastRunSymbolCount`, `lastRunExecutedCount`, `lastRunErrorCount`, and `lastError` without secrets.
 
+#### Backlog Hygiene Workflow
+
+The optional `.github/workflows/backlog-hygiene.yml` workflow calls [`scripts/backlog-hygiene.js`](scripts/backlog-hygiene.js) to keep the open-issue backlog in a useful state. The workflow is **strictly opt-in**:
+
+- `workflow_dispatch` is always available. Set the `apply` input to `true` to actually mutate labels / post duplicate-detection comments; the default is dry-run, which only writes `backlog-report.md`.
+- The `schedule` cron trigger is wired through the `BACKLOG_HYGIENE_CRON` repository variable. The default empty value disables scheduled runs; set it to a non-empty cron expression (e.g. `0 3 1 * *` for monthly at 03:00 UTC) to enable the schedule.
+- The script fails closed when `gh` is not authenticated, mirrors the safety pattern from `detect-unused-features` (no auth → no mutation), and never opens or modifies PRs. It caps `gh` calls per run to the configured `--max-issues` cap (default `200`) and respects the duplicate-window deduplication (default `30` days).
+- Optional `SENTRY_AUTH_TOKEN` repository secret enables the production-evidence appender for `priority/1-roi` issues; the workflow silently no-ops when the secret is unset.
+
+CLI usage (run locally with `gh` authenticated against the repository):
+
+```bash
+node scripts/backlog-hygiene.js                                    # dry-run, default report path
+node scripts/backlog-hygiene.js --apply                            # actually mutate labels/comments
+node scripts/backlog-hygiene.js --project francovp/cabros-bot --max-issues 50
+node scripts/backlog-hygiene.js --json                             # print the report as JSON
+```
+
+Tests: `pnpm test -- tests/unit/backlog-hygiene.test.js`.
+
 ## Setup
 
 ### Supported Runtime

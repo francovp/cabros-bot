@@ -1,0 +1,111 @@
+name: Backlog hygiene pass
+
+# Strictly opt-in:
+#   - `workflow_dispatch` is always available so operators can run it on demand.
+#   - The `schedule` trigger is enabled only when the `BACKLOG_HYGIENE_CRON`
+#     repository variable is set to a non-empty cron expression. The default
+#     empty value disables scheduled runs.
+#
+# Safety:
+#   - Permissions are limited to `contents: read` and `issues: write`; the
+#     script never opens or modifies PRs.
+#   - The script defaults to dry-run; --apply is required to mutate labels
+#     and post duplicate-detection comments. The schedule trigger passes
+#     --apply so the monthly run actually maintains the backlog; on-demand
+#     runs default to dry-run unless --apply is supplied.
+#   - The Sentry appender uses the existing SENTRY_AUTH_TOKEN secret and
+#     silently no-ops when the token is missing; the workflow never fails
+#     because of this path.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Apply mutations (label refresh, duplicate comments, stale retirement)'
+        required: false
+        default: 'false'
+      project:
+        description: 'owner/name override (defaults to the current repo)'
+        required: false
+        default: ''
+  schedule:
+    - cron: ${{ vars.BACKLOG_HYGIENE_CRON || '' }}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: backlog-hygiene
+  cancel-in-progress: false
+
+jobs:
+  backlog-hygiene:
+    name: Run backlog hygiene pass
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify gh auth
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh auth status; then
+            echo "::error::gh is not authenticated; backlog-hygiene cannot run safely."
+            exit 1
+          fi
+
+      - name: Run backlog hygiene (dry-run, default on workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch' && inputs.apply != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          args="--report backlog-report.md"
+          if [ -n "${{ github.event.inputs.project }}" ]; then
+            args="$args --project '${{ github.event.inputs.project }}'"
+          fi
+          node scripts/backlog-hygiene.js $args
+
+      - name: Run backlog hygiene (apply, on workflow_dispatch when apply=true)
+        if: github.event_name == 'workflow_dispatch' && inputs.apply == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN || '' }}
+        run: |
+          args="--apply --report backlog-report.md"
+          if [ -n "${{ github.event.inputs.project }}" ]; then
+            args="$args --project '${{ github.event.inputs.project }}'"
+          fi
+          node scripts/backlog-hygiene.js $args
+
+      - name: Run backlog hygiene (scheduled, always applies)
+        if: github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN || '' }}
+        run: |
+          node scripts/backlog-hygiene.js --apply --report backlog-report.md
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backlog-report
+          path: backlog-report.md
+          if-no-files-found: ignore
+          retention-days: 30
