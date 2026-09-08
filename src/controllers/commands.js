@@ -621,6 +621,12 @@ async function replyValidationError(context, error) {
 	await context.reply(`Comando inválido: ${suffix}`);
 }
 
+const {
+	handleSubscribeCommand,
+	handleListSubscriptionsCommand,
+	handleUnsubscribeCommand,
+} = require('./commands/handlers/core/chatSubscriptionCommands');
+
 module.exports = {
 	getPrice,
 	cryptoBotCmd,
@@ -633,4 +639,7 @@ module.exports = {
 	buildHelpMessage,
 	getTelegramCommandMenu,
 	parseCommandArgs,
+	handleSubscribeCommand,
+	handleListSubscriptionsCommand,
+	handleUnsubscribeCommand,
 };
