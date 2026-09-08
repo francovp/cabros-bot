@@ -4,6 +4,8 @@ const {
 	normalizeSignalSide,
 	deriveAssetContext,
 	deriveCleanSearchQuery,
+	resolveExchangeAlias,
+	EXCHANGE_ALIASES,
 } = require('../../src/services/tradingview/parseTradingViewSignal');
 
 describe('TradingView signal parser', () => {
@@ -185,5 +187,41 @@ describe('TradingView signal parser', () => {
 		const unicodeWord = 'SOLÍA subir después del anuncio';
 		expect(deriveAssetContext(unicodeWord)).toBeNull();
 		expect(deriveCleanSearchQuery(unicodeWord)).toBe(unicodeWord);
+	});
+});
+
+describe('resolveExchangeAlias', () => {
+	it('maps BATS to its known supported venue on the MCP server', () => {
+		expect(resolveExchangeAlias('BATS')).toBe('NASDAQ');
+		expect(resolveExchangeAlias('bats')).toBe('NASDAQ');
+	});
+
+	it('maps ARCA and NYSE_ARCA to NYSE (canonical listing venue)', () => {
+		expect(resolveExchangeAlias('ARCA')).toBe('NYSE');
+		expect(resolveExchangeAlias('NYSE_ARCA')).toBe('NYSE');
+		expect(resolveExchangeAlias('NYSE ARCA')).toBe('NYSE');
+	});
+
+	it('passes through known crypto and stock venues unchanged', () => {
+		for (const venue of ['BINANCE', 'NASDAQ', 'NYSE', 'AMEX', 'FX_IDC', 'SPCFD']) {
+			expect(resolveExchangeAlias(venue)).toBe(venue);
+		}
+	});
+
+	it('returns null for null/undefined/empty input', () => {
+		expect(resolveExchangeAlias(null)).toBeNull();
+		expect(resolveExchangeAlias(undefined)).toBeNull();
+		expect(resolveExchangeAlias('')).toBeNull();
+	});
+
+	it('returns the input unchanged when no alias mapping is configured', () => {
+		expect(resolveExchangeAlias('LSE')).toBe('LSE');
+		expect(resolveExchangeAlias('TSE')).toBe('TSE');
+	});
+
+	it('exposes EXCHANGE_ALIASES as a frozen object literal', () => {
+		expect(typeof EXCHANGE_ALIASES).toBe('object');
+		expect(Object.isFrozen(EXCHANGE_ALIASES)).toBe(true);
+		expect(EXCHANGE_ALIASES.BATS).toBe('NASDAQ');
 	});
 });

@@ -97,6 +97,35 @@ function parseTradingViewSignal(text, options = {}) {
 const STOCK_EXCHANGES = new Set(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'SPCFD', 'CBOE', 'NYSE_ARCA', 'NYSE ARCA', 'ARCA']);
 const NON_EQUITY_EXCHANGES = new Set(['FX_IDC', 'CME_MINI', 'CBOT_MINI']);
 const CRYPTO_EXCHANGES = new Set(['BINANCE', 'BYBIT', 'COINBASE', 'OKX', 'KRAKEN', 'BITFINEX', 'KUCOIN']);
+
+/**
+ * Exchange alias map for TradingView MCP compatibility.
+ *
+ * Live probes (2026-08-24/25) showed the configured MCP server cannot resolve
+ * several equity/FX prefixes used by the production screener and silently
+ * falls back to KUCOIN before returning "No data found". Each entry maps an
+ * alert exchange prefix to the venue the MCP server actually serves for that
+ * symbol universe. The original prefix is preserved elsewhere in stored
+ * metadata so observability stays intact.
+ */
+const EXCHANGE_ALIASES = Object.freeze({
+	BATS: 'NASDAQ',
+	ARCA: 'NYSE',
+	NYSE_ARCA: 'NYSE',
+	'NYSE ARCA': 'NYSE',
+});
+
+function resolveExchangeAlias(rawExchange) {
+	if (typeof rawExchange !== 'string') {
+		return null;
+	}
+	const normalized = rawExchange.trim().toUpperCase();
+	if (!normalized) {
+		return null;
+	}
+	const mapped = EXCHANGE_ALIASES[normalized];
+	return mapped || normalized;
+}
 const CRYPTO_SUFFIXES = ['USDT', 'BUSD', 'USDC', 'BTC', 'ETH', 'SOL', 'PERP'];
 const BARE_CRYPTO_SYMBOLS = ['BTC', 'ETH', 'SOL', 'PERP'];
 
@@ -219,6 +248,8 @@ module.exports = {
 	normalizeSignalSide,
 	deriveAssetContext,
 	deriveCleanSearchQuery,
+	resolveExchangeAlias,
+	EXCHANGE_ALIASES,
 	SUPPORTED_MCP_TIMEFRAMES,
 	TIMEFRAME_MAP,
 };

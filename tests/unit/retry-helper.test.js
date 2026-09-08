@@ -152,6 +152,45 @@ describe('retryHelper', () => {
 			expect(result.attemptCount).toBe(0);
 			expect(mockSendFn).not.toHaveBeenCalled();
 		});
+
+		it('should stop retrying when shouldStop returns true on a non-terminal error', async () => {
+			const mockSendFn = jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'test',
+				error: 'No data found for TSLA on KUCOIN',
+			});
+
+			const result = await sendWithRetry(mockSendFn, 5, null, {
+				shouldStop: ({ error }) => Boolean(error && /No data found/i.test(error.error || '')),
+			});
+
+			expect(result.success).toBe(false);
+			expect(result.error).toBe('No data found for TSLA on KUCOIN');
+			expect(result.attemptCount).toBe(1);
+			expect(result.stoppedEarly).toBe(true);
+			expect(mockSendFn).toHaveBeenCalledTimes(1);
+		});
+
+		it('should keep retrying when shouldStop returns false on transient errors', async () => {
+			let attempt = 0;
+			const mockSendFn = jest.fn().mockImplementation(async () => {
+				attempt += 1;
+				return {
+					success: false,
+					channel: 'test',
+					error: 'timeout',
+				};
+			});
+
+			const result = await sendWithRetry(mockSendFn, 3, null, {
+				shouldStop: () => false,
+			});
+
+			expect(result.success).toBe(false);
+			expect(result.attemptCount).toBe(3);
+			expect(result.stoppedEarly).toBeUndefined();
+			expect(mockSendFn).toHaveBeenCalledTimes(3);
+		});
 	});
 
 	describe('sleep', () => {
