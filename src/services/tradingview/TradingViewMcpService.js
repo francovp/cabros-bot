@@ -541,6 +541,10 @@ class TradingViewMcpService {
 			const result = await sendWithRetry(async () => {
 				try {
 					const rpcResult = await this._callTool(toolName, args, { signal });
+					const normalizedResult = this._unwrapSchemaResult(rpcResult);
+					if (normalizedResult && normalizedResult.error) {
+						throw createToolResultError(normalizedResult.error);
+					}
 					return { success: true, channel: 'tradingview-mcp', data: rpcResult };
 				} catch (error) {
 					return {

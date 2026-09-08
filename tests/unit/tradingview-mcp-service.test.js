@@ -777,6 +777,19 @@ describe('TradingViewMcpService', () => {
 		expect(service.getStatus().lastErrorCategory).toBe('not_found');
 	});
 
+	it('rejects parsed scanner error payloads as terminal failures', async () => {
+		const service = new TradingViewMcpService({ maxRetries: 3, logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() } });
+		service._callTool = jest.fn().mockResolvedValue({ error: 'No data found for BTCUSDT on BINANCE' });
+
+		await expect(service.callScanTool('top_gainers')).rejects.toMatchObject({
+			category: 'not_found',
+			retryable: false,
+		});
+
+		expect(service._callTool).toHaveBeenCalledTimes(1);
+		expect(service.getStatus().lastErrorCategory).toBe('not_found');
+	});
+
 	it('calls combined_analysis tool and unwraps result in callCombinedAnalysis', async () => {
 		const service = new TradingViewMcpService({ logger: { warn: jest.fn(), error: jest.fn() } });
 		service._callTool = jest.fn().mockResolvedValue({
