@@ -1,7 +1,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
@@ -27,6 +27,7 @@ describe('Alert TradingView MCP Integration', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'test-message-id' });
 		const bot = {

@@ -6,7 +6,7 @@ const { getRoutes } = require('../../src/routes');
 const NotificationManager = require('../../src/services/notification/NotificationManager');
 const WhatsAppService = require('../../src/services/notification/WhatsAppService');
 const TelegramService = require('../../src/services/notification/TelegramService');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 
 describe('WhatsApp Webhook Error Handling & Resiliency (GH-337 / CB-136)', () => {
 	const API_KEY = 'test-api-key';
@@ -45,6 +45,7 @@ describe('WhatsApp Webhook Error Handling & Resiliency (GH-337 / CB-136)', () =>
 				getMe: jest.fn().mockResolvedValue({ id: 1, username: 'testbot' }),
 			},
 		};
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 		router = getRoutes(() => mockBot);
 		app.use('/api', router);

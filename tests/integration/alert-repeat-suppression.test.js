@@ -4,7 +4,7 @@ const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { getCooldownChannelIdentity } = require('../../src/controllers/webhooks/handlers/alert/alert');
-const { initializeNotificationServices, getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, getNotificationManager, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { signalRepeatCooldown } = require('../../src/services/alerts/signalRepeatCooldown');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('../../src/services/notification/NotificationRedriveService');
@@ -29,6 +29,7 @@ describe('Alert repeat suppression endpoint behavior', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 		signalRepeatCooldown.reset();
 		notificationRedriveService._resetForTesting();
 

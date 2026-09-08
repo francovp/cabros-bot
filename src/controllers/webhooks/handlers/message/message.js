@@ -1,6 +1,9 @@
 require('dotenv').config();
 const sentryService = require('../../../../services/monitoring/SentryService');
-const { getNotificationManager, initializeNotificationServices } = require('../alert/alert');
+const {
+	getNotificationManager,
+	getOrInitializeNotificationManager,
+} = require('../alert/alert');
 const {
 	VALID_CHANNELS,
 	NotificationRoutingValidationError,
@@ -49,8 +52,7 @@ function postMessage(botOrGetter) {
 
 				const bot = typeof botOrGetter === 'function' ? botOrGetter() : (botOrGetter || null);
 				if (bot) {
-					await initializeNotificationServices(bot);
-					notificationManager = getNotificationManager();
+					notificationManager = await getOrInitializeNotificationManager(bot);
 				}
 
 				if (!notificationManager) {
