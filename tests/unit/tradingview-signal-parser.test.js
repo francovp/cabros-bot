@@ -187,3 +187,67 @@ describe('TradingView signal parser', () => {
 		expect(deriveCleanSearchQuery(unicodeWord)).toBe(unicodeWord);
 	});
 });
+
+describe('TradingView signal parser - BATS exchange prefix bug (GH-835)', () => {
+	it('classifies BATS:TSM as stock even when symbol ends with USDT suffix', () => {
+		const context = deriveAssetContext('BATS:TSMUSDT(1D) pasó a señal de VENTA');
+		expect(context).toEqual(expect.objectContaining({
+			symbol: 'TSMUSDT',
+			exchange: 'BATS',
+			assetClass: 'stock',
+		}));
+	});
+
+	it('classifies BATS:BTCUSDT as stock because exchange wins over suffix', () => {
+		const context = deriveAssetContext('BATS:BTCUSDT(1D) pasó a señal de COMPRA');
+		expect(context).toEqual(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			exchange: 'BATS',
+			assetClass: 'stock',
+		}));
+	});
+
+	it('classifies BATS:INTC as stock', () => {
+		const context = deriveAssetContext('BATS:INTC(1D) pasó a señal de COMPRA');
+		expect(context).toEqual(expect.objectContaining({
+			symbol: 'INTC',
+			exchange: 'BATS',
+			assetClass: 'stock',
+		}));
+	});
+
+	it('classifies NASDAQ:TSLAUSDT as stock because exchange wins over suffix', () => {
+		const context = deriveAssetContext('NASDAQ:TSLAUSDT(1D) pasó a señal de VENTA');
+		expect(context).toEqual(expect.objectContaining({
+			symbol: 'TSLAUSDT',
+			exchange: 'NASDAQ',
+			assetClass: 'stock',
+		}));
+	});
+
+	it('classifies NYSE:ETHUSDT as stock because exchange wins over suffix', () => {
+		const context = deriveAssetContext('NYSE:ETHUSDT(1D) pasó a señal de COMPRA');
+		expect(context).toEqual(expect.objectContaining({
+			symbol: 'ETHUSDT',
+			exchange: 'NYSE',
+			assetClass: 'stock',
+		}));
+	});
+
+	it('classifies BINANCE:BTCUSDT as crypto', () => {
+		const context = deriveAssetContext('BINANCE:BTCUSDT(1D) pasó a señal de COMPRA');
+		expect(context).toEqual(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+			assetClass: 'crypto',
+		}));
+	});
+
+	it('classifies bare BTCUSDT (no exchange) as crypto via suffix fallback', () => {
+		const context = deriveAssetContext('BTCUSDT(1D) pasó a señal de VENTA');
+		expect(context).toEqual(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			assetClass: 'crypto',
+		}));
+	});
+});
