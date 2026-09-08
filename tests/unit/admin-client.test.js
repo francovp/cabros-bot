@@ -373,7 +373,12 @@ describe('admin browser client', () => {
 					status: 'ready', intervalMs: 300000, batchLimit: 10, lastRunExecutedCount: 4, lastRunErrorCount: 1,
 				},
 				notificationRedrive: {
-					status: 'ready', intervalMs: 60000, batchLimit: 25, lastRunScannedCount: 8, lastRunRedrivenCount: 3,
+					status: 'ready', intervalMs: 60000, batchLimit: 25, pendingCount: 2, deliveredCount: 9,
+					exhaustedCount: 1, zeroChannelBroadcasts: 4, lastRunScannedCount: 8, lastRunRedrivenCount: 3,
+				},
+				whatsappCommandBridge: {
+					status: 'degraded', lastPollAt: '2026-09-08T00:00:00Z',
+					lastError: 'poll failed', lastErrorAt: '2026-09-08T00:01:00Z',
 				},
 			},
 		};
@@ -401,6 +406,13 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('Last run executed4');
 		expect(view.textContent).toContain('Last run scanned8');
 		expect(view.textContent).toContain('Last run redriven3');
+		expect(view.textContent).toContain('Pending2');
+		expect(view.textContent).toContain('Delivered9');
+		expect(view.textContent).toContain('Exhausted1');
+		expect(view.textContent).toContain('Zero-channel broadcasts4');
+		expect(view.textContent).toContain('Last poll');
+		expect(view.textContent).toContain('Last error detailpoll failed');
+		expect(view.textContent).toContain('Last error at');
 	});
 
 	it('includes nested profiling health in dependency attention', async () => {
