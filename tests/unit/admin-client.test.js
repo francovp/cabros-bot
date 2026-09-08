@@ -299,6 +299,7 @@ describe('admin browser client', () => {
 					windowMs: 5000,
 					hits: 3,
 				},
+				unknownDependency: { status: 'unknown' },
 			},
 		};
 		const browser = createBrowser({
@@ -321,10 +322,11 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('<img src=x onerror=alert(1)>');
 		expect(view.textContent).toContain('Successes4');
 		expect(view.textContent).toContain('ephemeral');
-		expect(view.textContent).toContain('1 need attention');
-		expect(cards()).toHaveLength(4);
+		expect(view.textContent).toContain('2 need attention');
+		expect(cards()).toHaveLength(5);
 		expect(cards()[0].textContent).toContain('TradingView MCP');
-		expect(cards()[1].textContent).toContain('Grounding Coalescing');
+		expect(cards()[1].textContent).toContain('Unknown Dependency');
+		expect(cards()[2].textContent).toContain('Grounding Coalescing');
 		expect(cards().some((card) => card.textContent.includes('TradingView MCP'))).toBe(true);
 		expect(cards().some((card) => card.textContent.includes('Scanner preset storage'))).toBe(true);
 		expect(cards().some((card) => card.textContent.includes('Grounding Coalescing'))).toBe(true);
@@ -346,13 +348,13 @@ describe('admin browser client', () => {
 
 		tone.value = 'attention';
 		await tone.dispatch('change');
-		expect(cards()).toHaveLength(1);
+		expect(cards()).toHaveLength(2);
 		expect(cards()[0].textContent).toContain('TradingView MCP');
 
 		tone.value = 'unknown';
 		await tone.dispatch('change');
 		expect(cards()).toHaveLength(1);
-		expect(cards()[0].textContent).toContain('TradingView MCP');
+		expect(cards()[0].textContent).toContain('Unknown Dependency');
 	});
 
 	it('renders safe operational counters in dependency details', async () => {

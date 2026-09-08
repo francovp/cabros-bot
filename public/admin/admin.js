@@ -1318,7 +1318,7 @@ const renderStatusDependencies = (container, entries, filter = 'all', search = '
 				|| (filter === 'attention' && statusNeedsAttention(detail))
 				|| (filter === 'ready' && detail.status === 'ready')
 				|| (filter === 'disabled' && detail.status === 'disabled')
-				|| (filter === 'unknown' && hasStatus(detail) && statusTone(detail.status) === 'unknown');
+				|| (filter === 'unknown' && statusDetails(detail).some((statusDetail) => statusDetail.status === 'unknown'));
 			const searchable = `${displayLabel(name)} ${detail.provider || ''} ${displayStatus(detail.status)}`.toLowerCase();
 			return toneMatches && (!query || searchable.includes(query));
 		})
