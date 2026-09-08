@@ -731,7 +731,7 @@ describe('Alert Handler', () => {
 			expect(result.sentiment_score).toBe(-0.65);
 			expect(result.sentimentConflict).toBe(true);
 			expect(warnSpy).toHaveBeenCalledWith(
-				expect.stringContaining('[Alert] Sentiment conflict between Gemini and TradingView MCP; selecting MCP indicators over LLM prose')
+				expect.stringContaining('[Alert] Sentiment conflict between Gemini and TradingView MCP; selecting MCP indicators over LLM prose'),
 			);
 
 			warnSpy.mockRestore();
@@ -971,6 +971,106 @@ describe('Alert Handler', () => {
 
 			expect(result.sentiment).toBe('BEARISH');
 			expect(result.sentiment_score).toBe(-0.5);
+
+			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		});
+	});
+
+	describe('Token usage attribution by source', () => {
+		const { TokenUsageTracker } = require('../../src/lib/tokenUsage');
+
+		it('attributes token usage by source when multiple enrichment providers are active (Gemini + MCP)', async () => {
+			const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+			tradingViewMcpService.isEnabled.mockReturnValue(true);
+			tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+				original_text: 'BINANCE:BTCUSDT(240) pasó a señal de COMPRA',
+				tradingViewEnrichmentApplied: true,
+				sentiment: 'BULLISH',
+				sentiment_score: 0.5,
+				tokenUsage: { inputTokens: 1000, outputTokens: 200 },
+				volumeTokenUsage: { inputTokens: 150, outputTokens: 50 },
+			});
+
+			groundAlert.mockImplementation(async ({ options }) => {
+				if (options && options.tokenUsage) {
+					options.tokenUsage.addUsage({ inputTokens: 800, outputTokens: 400 }, 'gemini-2.5-flash');
+				}
+				return {
+					sentiment: 'BULLISH',
+					sentiment_score: 0.6,
+					insights: ['Gemini insight'],
+					sources: [],
+					truncated: false,
+					modelUsed: 'gemini-2.5-flash',
+				};
+			});
+
+			const tokenUsage = new TokenUsageTracker();
+			await enrichAlert(
+				{ text: 'BINANCE:BTCUSDT(240) pasó a señal de COMPRA' },
+				{ tokenUsage, useTradingViewData: true },
+			);
+
+			const json = tokenUsage.toJSON();
+			expect(json.bySource).toBeDefined();
+			expect(json.bySource.geminiGrounding).toEqual({
+				inputTokens: 800,
+				outputTokens: 400,
+				totalTokens: 1200,
+			});
+			expect(json.bySource.tradingviewMcp).toEqual({
+				inputTokens: 1000,
+				outputTokens: 200,
+				totalTokens: 1200,
+			});
+			expect(json.bySource.volumeConfirmation).toEqual({
+				inputTokens: 150,
+				outputTokens: 50,
+				totalTokens: 200,
+			});
+			expect(json.totalTokens).toBe(2600);
+			expect(json.inputTokens).toBe(1950);
+			expect(json.outputTokens).toBe(650);
+			expect(tokenUsage.formatSummary()).toContain('Total 2600');
+
+			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		});
+
+		it('attributes token usage to geminiGrounding when only Gemini is active', async () => {
+			const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+			tradingViewMcpService.isEnabled.mockReturnValue(false);
+
+			groundAlert.mockImplementation(async ({ options }) => {
+				if (options && options.tokenUsage) {
+					options.tokenUsage.addUsage({ inputTokens: 500, outputTokens: 200 });
+				}
+				return {
+					sentiment: 'BULLISH',
+					sentiment_score: 0.5,
+					insights: [],
+					sources: [],
+					truncated: false,
+				};
+			});
+
+			const tokenUsage = new TokenUsageTracker();
+			await enrichAlert(
+				{ text: 'BTC update' },
+				{ tokenUsage },
+			);
+
+			const json = tokenUsage.toJSON();
+			expect(json.bySource).toBeDefined();
+			expect(json.bySource.geminiGrounding).toEqual({
+				inputTokens: 500,
+				outputTokens: 200,
+				totalTokens: 700,
+			});
+			expect(json.totalTokens).toBe(700);
 
 			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 		});

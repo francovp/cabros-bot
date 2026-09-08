@@ -5,6 +5,7 @@
  */
 
 function toNumber(value) {
+	if (value === null || value === undefined || value === '') return null;
 	const num = Number(value);
 	return Number.isFinite(num) ? num : null;
 }
@@ -47,12 +48,12 @@ function normalizeUsageMetadata(usageMetadata) {
 	const outputTokens = toNumber(firstDefined(meta.candidatesTokenCount, meta.outputTokens, meta.completionTokens, meta.completion_tokens)) || 0;
 
 	const explicitTotal = toNumber(firstDefined(meta.totalTokenCount, meta.totalTokens, meta.total_tokens));
-	const totalTokens = explicitTotal != null ? explicitTotal : inputTokens + outputTokens;
+	const totalTokens = (explicitTotal != null && explicitTotal > 0) ? explicitTotal : inputTokens + outputTokens;
 
 	return {
 		inputTokens,
 		outputTokens,
-		totalTokens: totalTokens != null ? totalTokens : inputTokens + outputTokens,
+		totalTokens,
 	};
 }
 
@@ -62,6 +63,7 @@ class TokenUsageTracker {
 		this.outputTokens = 0;
 		this.inputCost = 0;
 		this.outputCost = 0;
+		this.bySource = {};
 	}
 
 	/**
@@ -117,19 +119,84 @@ class TokenUsageTracker {
 		}
 	}
 
+	/**
+	 * Add a usage record attributed to a named source
+	 * @param {string} name - Name of the enrichment source (e.g. 'geminiGrounding', 'tradingviewMcp')
+	 * @param {Object|null|undefined} usage - Raw metadata, normalized object, or TokenUsageTracker
+	 * @param {string} [model] - Model name for pricing calculation
+	 */
+	addSource(name, usage, model) {
+		if (!name || typeof name !== 'string') return;
+		const rawUsage = (usage && typeof usage.toJSON === 'function') ? usage.toJSON() : usage;
+		const normalized = normalizeUsageMetadata(rawUsage);
+		if (!normalized) return;
+
+		const currentInput = normalized.inputTokens || 0;
+		let currentOutput = normalized.outputTokens || 0;
+
+		// If only totalTokens is available, spread remainder into outputTokens
+		const remainder = (normalized.totalTokens || 0) - currentInput - currentOutput;
+		if (remainder > 0) {
+			currentOutput += remainder;
+		}
+
+		if (!this.bySource[name]) {
+			this.bySource[name] = {
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+			};
+		}
+
+		this.bySource[name].inputTokens += currentInput;
+		this.bySource[name].outputTokens += currentOutput;
+		this.bySource[name].totalTokens = this.bySource[name].inputTokens + this.bySource[name].outputTokens;
+
+		this.inputTokens += currentInput;
+		this.outputTokens += currentOutput;
+
+		if (rawUsage && typeof rawUsage.inputCost === 'number' && typeof rawUsage.outputCost === 'number') {
+			this.inputCost += rawUsage.inputCost;
+			this.outputCost += rawUsage.outputCost;
+		} else if (model) {
+			const { inputCost, outputCost } = this.calculateCost(currentInput, currentOutput, model);
+			this.inputCost += inputCost;
+			this.outputCost += outputCost;
+		}
+	}
+
 	merge(otherTracker) {
 		if (!otherTracker) return;
-		const { inputTokens, outputTokens, inputCost, outputCost } = otherTracker.toJSON();
-		this.inputTokens += inputTokens;
-		this.outputTokens += outputTokens;
+		const otherData = typeof otherTracker.toJSON === 'function' ? otherTracker.toJSON() : otherTracker;
+		const { inputTokens, outputTokens, inputCost, outputCost, bySource } = otherData;
+		this.inputTokens += (inputTokens || 0);
+		this.outputTokens += (outputTokens || 0);
 		this.inputCost += (inputCost || 0);
 		this.outputCost += (outputCost || 0);
+
+		if (bySource && typeof bySource === 'object') {
+			for (const [sourceName, sourceUsage] of Object.entries(bySource)) {
+				if (!sourceUsage) continue;
+				if (!this.bySource[sourceName]) {
+					this.bySource[sourceName] = {
+						inputTokens: 0,
+						outputTokens: 0,
+						totalTokens: 0,
+					};
+				}
+				const sIn = sourceUsage.inputTokens || 0;
+				const sOut = sourceUsage.outputTokens || 0;
+				this.bySource[sourceName].inputTokens += sIn;
+				this.bySource[sourceName].outputTokens += sOut;
+				this.bySource[sourceName].totalTokens = this.bySource[sourceName].inputTokens + this.bySource[sourceName].outputTokens;
+			}
+		}
 	}
 
 	toJSON() {
 		const totalTokens = this.inputTokens + this.outputTokens;
 		const totalCost = this.inputCost + this.outputCost;
-		return {
+		const result = {
 			inputTokens: this.inputTokens,
 			outputTokens: this.outputTokens,
 			totalTokens,
@@ -137,6 +204,18 @@ class TokenUsageTracker {
 			outputCost: this.outputCost,
 			totalCost,
 		};
+		const sourceKeys = Object.keys(this.bySource || {});
+		if (sourceKeys.length > 0) {
+			result.bySource = {};
+			for (const key of sourceKeys) {
+				result.bySource[key] = {
+					inputTokens: this.bySource[key].inputTokens,
+					outputTokens: this.bySource[key].outputTokens,
+					totalTokens: this.bySource[key].totalTokens,
+				};
+			}
+		}
+		return result;
 	}
 
 	/**
@@ -144,7 +223,7 @@ class TokenUsageTracker {
 	 * @returns {string}
 	 */
 	formatSummary() {
-		const { inputTokens, outputTokens, totalTokens, inputCost, outputCost, totalCost } = this.toJSON();
+		const { inputTokens, outputTokens, totalTokens, inputCost, outputCost, totalCost, bySource } = this.toJSON();
 
 		// Helper to format currency (up to 6 decimal places for small amounts)
 		const fmt = (val) => {
@@ -152,10 +231,19 @@ class TokenUsageTracker {
 			return val < 0.01 ? val.toPrecision(3) : val.toFixed(4);
 		};
 
-		return `Token usage:
+		let summary = `Token usage:
 - In ${inputTokens} ($${fmt(inputCost)})
 - Out ${outputTokens} ($${fmt(outputCost)})
 - Total ${totalTokens} ($${fmt(totalCost)})`;
+
+		if (bySource && Object.keys(bySource).length > 1) {
+			const sourceBreakdowns = Object.entries(bySource)
+				.map(([name, s]) => `  • ${name}: ${s.totalTokens || (s.inputTokens + s.outputTokens)} (${s.inputTokens} in / ${s.outputTokens} out)`)
+				.join('\n');
+			summary += `\nBy source:\n${sourceBreakdowns}`;
+		}
+
+		return summary;
 	}
 }
 
