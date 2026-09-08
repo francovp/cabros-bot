@@ -52,6 +52,41 @@ function normalizeChannels(rawChannels, options = {}) {
 	return uniqueChannels;
 }
 
+function validateThreadIdOverride(field, value) {
+	if (value === undefined) {
+		return undefined;
+	}
+
+	if (typeof value === 'number') {
+		if (!Number.isSafeInteger(value) || value < 0) {
+			throw new NotificationRoutingValidationError(`"${field}" must be a non-negative integer if provided`, {
+				field,
+			});
+		}
+		return value;
+	}
+
+	if (typeof value === 'string') {
+		const trimmed = value.trim();
+		if (!/^\d+$/.test(trimmed)) {
+			throw new NotificationRoutingValidationError(`"${field}" must be a non-negative integer if provided`, {
+				field,
+			});
+		}
+		const parsed = Number.parseInt(trimmed, 10);
+		if (!Number.isSafeInteger(parsed) || parsed < 0) {
+			throw new NotificationRoutingValidationError(`"${field}" must be a non-negative integer if provided`, {
+				field,
+			});
+		}
+		return parsed;
+	}
+
+	throw new NotificationRoutingValidationError(`"${field}" must be a non-negative integer if provided`, {
+		field,
+	});
+}
+
 function validateChatOverride(field, value) {
 	if (value === undefined) {
 		return undefined;
@@ -123,10 +158,19 @@ function parseNotificationRouting(raw = {}, options = {}) {
 		return {
 			channels: undefined,
 			telegramChatId: undefined,
+			telegramThreadId: undefined,
 			whatsappChatId: undefined,
 			discordWebhookUrl: undefined,
 		};
 	}
+
+	const rawThreadId = raw.telegramThreadId !== undefined
+		? raw.telegramThreadId
+		: raw.messageThreadId !== undefined
+			? raw.messageThreadId
+			: raw.telegram_thread_id !== undefined
+				? raw.telegram_thread_id
+				: raw.message_thread_id;
 
 	return {
 		channels: normalizeChannels(raw.channels, {
@@ -134,6 +178,7 @@ function parseNotificationRouting(raw = {}, options = {}) {
 			allowCsvString: allowQueryChannels,
 		}),
 		telegramChatId: validateChatOverride('telegramChatId', raw.telegramChatId),
+		telegramThreadId: validateThreadIdOverride('telegramThreadId', rawThreadId),
 		whatsappChatId: validateChatOverride('whatsappChatId', raw.whatsappChatId),
 		discordWebhookUrl: validateDiscordWebhookOverride('discordWebhookUrl', raw.discordWebhookUrl),
 	};
@@ -143,6 +188,7 @@ async function sendWithNotificationRouting(notificationManager, alert, routing =
 	const alertPayload = {
 		...alert,
 		telegramChatId: routing.telegramChatId,
+		telegramThreadId: routing.telegramThreadId,
 		whatsappChatId: routing.whatsappChatId,
 		discordWebhookUrl: routing.discordWebhookUrl,
 	};

@@ -42,6 +42,22 @@ describe('Telegram command menu', () => {
 		expect(onLaunchError).not.toHaveBeenCalled();
 	});
 
+	it('notifies readiness from the Telegram launch callback', async () => {
+		const telegram = { setMyCommands: jest.fn().mockResolvedValue(true) };
+		const bot = {
+			launch: jest.fn((onLaunch) => {
+				onLaunch();
+				return Promise.resolve();
+			}),
+			telegram,
+		};
+		const onLaunch = jest.fn();
+
+		await launchTelegramBot(bot, jest.fn(), onLaunch);
+
+		expect(onLaunch).toHaveBeenCalledTimes(1);
+	});
+
 	it('does not block polling when menu registration never settles', async () => {
 		const telegram = {
 			setMyCommands: jest.fn(() => new Promise(() => {})),

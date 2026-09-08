@@ -21,9 +21,10 @@ async function registerTelegramCommandMenu(telegram) {
 	}
 }
 
-function launchTelegramBot(bot, onLaunchError) {
+function launchTelegramBot(bot, onLaunchError, onLaunch) {
 	const launchPromise = bot.launch(() => {
 		void registerTelegramCommandMenu(bot.telegram);
+		onLaunch?.();
 	});
 	void launchPromise.catch(onLaunchError);
 	return launchPromise;

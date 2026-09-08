@@ -27,6 +27,11 @@ const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
+const {
+	buildErrorEnvelope,
+	sendError,
+	STANDARD_ERROR_CODES,
+} = require('../../../../lib/errorEnvelope');
 
 // Initialize services
 let notificationManager = null;
@@ -156,13 +161,22 @@ function resolveDryRun(req) {
 }
 
 function getCooldownDestination(channel, routing = {}) {
+	const defaultTelegramChatId = process.env.TELEGRAM_CHAT_ID;
+	const telegramChatId = routing.telegramChatId || defaultTelegramChatId;
+	const telegramThreadId = (typeof routing.telegramThreadId === 'number' && Number.isSafeInteger(routing.telegramThreadId))
+		? routing.telegramThreadId
+		: undefined;
+	const telegramDestination = telegramChatId
+		? (telegramThreadId !== undefined ? `${telegramChatId}:${telegramThreadId}` : telegramChatId)
+		: undefined;
+
 	const overrideByChannel = {
-		telegram: routing.telegramChatId,
+		telegram: telegramDestination,
 		whatsapp: routing.whatsappChatId,
 		discord: routing.discordWebhookUrl,
 	};
 	const envByChannel = {
-		telegram: process.env.TELEGRAM_CHAT_ID,
+		telegram: defaultTelegramChatId,
 		whatsapp: (isPreviewEnvironment() && process.env.WHATSAPP_PREVIEW_CHAT_ID) || process.env.WHATSAPP_CHAT_ID,
 		discord: process.env.DISCORD_WEBHOOK_URL,
 	};
@@ -205,7 +219,10 @@ function postAlert(botOrGetter) {
 			}
 
 			const { text } = validateAlert(alertText);
-			alert = { text };
+			const source = (typeof body === 'object' && body && typeof body.source === 'string' && body.source.trim())
+				? body.source.trim()
+				: 'webhook-alert';
+			alert = { text, source };
 
 			const tokenUsage = new TokenUsageTracker();
 			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan });
@@ -431,6 +448,11 @@ function postAlert(botOrGetter) {
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
 				suppressedRepeat,
+				source: body.source || 'webhook-alert',
+				telegramChatId: routing.telegramChatId,
+				telegramThreadId: routing.telegramThreadId,
+				whatsappChatId: routing.whatsappChatId,
+				discordWebhookUrl: routing.discordWebhookUrl,
 			}).catch(() => {}); // errors already logged inside AlertStorageService
 
 			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
@@ -481,11 +503,11 @@ function postAlert(botOrGetter) {
 			}
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(error.statusCode).json({
-					success: false,
+				return sendError(res, error.statusCode, {
 					error: error.message,
-					details: error.details,
+					code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 					requestId,
+					details: error.details,
 				});
 			}
 
@@ -510,8 +532,17 @@ function postAlert(botOrGetter) {
 			});
 
 			const status = (error.response && error.response.error_code) || 500;
-			const errorResponse = error.response || { error: 'Internal server error', details: error.message, requestId };
-			res.status(status).send(errorResponse);
+			const upstreamEnvelope = error.response && typeof error.response === 'object'
+				? error.response
+				: null;
+			const envelope = buildErrorEnvelope({
+				error: (upstreamEnvelope && upstreamEnvelope.error) || error.message || 'Internal server error',
+				code: (upstreamEnvelope && upstreamEnvelope.code) || STANDARD_ERROR_CODES.INTERNAL_ERROR,
+				requestId,
+				statusCode: status,
+				details: (upstreamEnvelope && upstreamEnvelope.details) || undefined,
+			});
+			res.status(status).json(envelope);
 		}
 	};
 }

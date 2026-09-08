@@ -48,6 +48,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 300000 },
 	SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	SIGNAL_OUTCOME_MAX_RETRY_AGE_MS: { type: 'number', defaultValue: 604800000, integer: true, min: 60000, max: 2592000000 },
+	SIGNAL_OUTCOME_RETENTION_DAYS: { type: 'number', defaultValue: 365, integer: true, min: 1, max: 3650 },
 	EQUITY_MARKET_DATA_RPM: { type: 'number', defaultValue: 8, integer: true, min: 0, max: 1200 },
 	NOTIFICATION_REDRIVE_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
 	NOTIFICATION_REDRIVE_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
@@ -55,6 +56,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	NOTIFICATION_REDRIVE_MAX_AGE_MS: { type: 'number', defaultValue: 3600000, integer: true, min: 60000, max: 86400000 },
 	SCANNER_PRESET_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
 	SCANNER_PRESET_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
+	NEWS_MONITOR_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 10000, max: 3600000 },
+	NEWS_MONITOR_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	ENABLE_GEMINI_GROUNDING: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_MCP_ENRICHMENT: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION: { type: 'boolean', defaultValue: false },
@@ -65,6 +68,11 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_BINANCE_ORDER_AUDIT: { type: 'boolean', defaultValue: false },
+	BINANCE_ORDER_AUDIT_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
+	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
+	// notification destinations — must remain deployment-controlled.
+	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
 });
 
 let remoteOverrides = {};
@@ -74,6 +82,7 @@ let lastSuccessfulLoad = null;
 let lastErrorCategory = null;
 let refreshTimer = null;
 let loadingPromise = null;
+let consecutiveFailures = 0;
 
 function isEnabled() {
 	return process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true';
@@ -233,15 +242,32 @@ function getStatus() {
 	const enabled = isEnabled();
 	const configured = isFirestoreConfigured();
 	const stale = remoteLoadedAt !== null && !hasFreshRemoteConfig();
+	const effectiveErrorCategory = stale ? 'stale' : lastErrorCategory;
+	const isReady = enabled && configured && lastSuccessfulLoad !== null && hasFreshRemoteConfig() && !stale;
+
+	let status;
+	if (!enabled) {
+		status = 'disabled';
+	} else if (!configured) {
+		status = 'misconfigured';
+	} else if (isReady) {
+		status = 'ready';
+	} else if (lastSuccessfulLoad === null && effectiveErrorCategory === null) {
+		status = 'unknown';
+	} else {
+		status = 'degraded';
+	}
+
 	return {
 		enabled,
 		configured,
-		ready: enabled && configured,
-		status: !enabled ? 'disabled' : configured ? 'ready' : 'misconfigured',
+		ready: isReady,
+		status,
 		source: getSource(),
 		templateVersion,
 		lastSuccessfulLoad,
-		lastErrorCategory: stale ? 'stale' : lastErrorCategory,
+		lastErrorCategory: effectiveErrorCategory,
+		consecutiveFailures,
 		refreshIntervalMs: getRefreshIntervalMs(),
 		maxAgeMs: getMaxAgeMs(),
 	};
@@ -358,6 +384,7 @@ async function loadNow(options = {}) {
 			templateVersion = getTemplateVersion(template);
 			lastSuccessfulLoad = new Date(remoteLoadedAt).toISOString();
 			lastErrorCategory = invalidValue ? 'invalid_value' : null;
+			consecutiveFailures = 0;
 			if (invalidValue) {
 				console.warn('[RemoteConfigService] Ignored invalid allow-listed value');
 			}
@@ -366,6 +393,7 @@ async function loadNow(options = {}) {
 			remoteOverrides = {};
 			remoteLoadedAt = null;
 			lastErrorCategory = getErrorCategory(error);
+			consecutiveFailures += 1;
 			console.warn('[RemoteConfigService] Remote Config load failed:', lastErrorCategory);
 			return false;
 		} finally {
@@ -406,6 +434,7 @@ function resetForTesting() {
 	lastSuccessfulLoad = null;
 	lastErrorCategory = null;
 	loadingPromise = null;
+	consecutiveFailures = 0;
 }
 
 module.exports = {
@@ -419,5 +448,9 @@ module.exports = {
 	_setRemoteOverridesForTesting(overrides, loadedAt = Date.now()) {
 		remoteOverrides = { ...overrides };
 		remoteLoadedAt = loadedAt;
+		templateVersion = 'test';
+		lastSuccessfulLoad = new Date(loadedAt).toISOString();
+		lastErrorCategory = null;
+		consecutiveFailures = 0;
 	},
 };

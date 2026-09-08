@@ -122,6 +122,29 @@ describe('Postman collection contract', () => {
 		}));
 	});
 
+	it('documents lastReplay in the stored alert detail response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const detail = findItem(collection.item, 'GET Get Alert by ID');
+
+		expect(detail.response).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				code: 200,
+				body: expect.stringContaining('"lastReplay"'),
+			}),
+		]));
+	});
+
+	it('includes runnable replay cursor and invalid-input variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const cursor = findItem(collection.item, 'GET List Replay Attempts (before cursor)');
+		const invalid = findItem(collection.item, 'GET List Replay Attempts (invalid input)');
+
+		expect(cursor.request.url.query).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'before', value: '{{replayBefore}}' }),
+		]));
+		expect(invalid.request.url.raw).toContain('limit=999&before=not-a-cursor');
+	});
+
 	it('includes createdAt in both x-header job success examples', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const job = findItem(collection.item, 'POST Create TradingView Analysis Job (x-idempotency-key header)');
@@ -200,6 +223,27 @@ describe('Postman collection contract', () => {
 		expect(marketBuyResp.order.quoteOrderQty).toBe('50');
 		expect(marketBuyResp.order.newOrderRespType).toBe('FULL');
 		expect(marketBuyResp.order.newClientOrderId).toBeUndefined();
+	});
+
+	it('documents include=enrichment_summary success and invalid 400 response in GET List Alerts', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const includeItem = findItem(collection.item, 'GET List Alerts (include=enrichment_summary)');
+		const invalidIncludeItem = findItem(collection.item, 'GET List Alerts (invalid include - 400 Bad Request)');
+
+		expect(includeItem).toBeDefined();
+		expect(includeItem.request.url.raw).toContain('include=enrichment_summary');
+		const successBody = JSON.parse(includeItem.response[0].body);
+		expect(successBody.success).toBe(true);
+		expect(successBody.alerts[0].enrichmentSummary).toBeDefined();
+		expect(successBody.alerts[0].enrichmentSummary.sentiment).toBe('BULLISH');
+		expect(successBody.alerts[0].enrichmentSummary.promptProvenance).toBeDefined();
+
+		expect(invalidIncludeItem).toBeDefined();
+		expect(invalidIncludeItem.request.url.raw).toContain('include=invalid_field');
+		expect(invalidIncludeItem.response[0].code).toBe(400);
+		const errorBody = JSON.parse(invalidIncludeItem.response[0].body);
+		expect(errorBody.code).toBe('INVALID_REQUEST');
+		expect(errorBody.error).toContain('enrichment_summary');
 	});
 });
 

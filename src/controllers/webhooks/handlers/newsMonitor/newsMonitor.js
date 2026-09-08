@@ -219,6 +219,10 @@ class NewsMonitorHandler {
 						confidence: result.alert.confidence,
 						sentimentScore: result.alert.sentimentScore,
 						dedupStatus: isCachedRedelivery ? 'cached' : 'fresh',
+						telegramChatId: routing.telegramChatId,
+						telegramThreadId: routing.telegramThreadId,
+						whatsappChatId: routing.whatsappChatId,
+						discordWebhookUrl: routing.discordWebhookUrl,
 						processingTimeMs: result.totalDurationMs,
 					}).then((savedId) => {
 						if (isCachedRedelivery) {

@@ -109,6 +109,16 @@ describe('validate-env', () => {
 		expect(warnings.map((w) => w.variable)).toContain('FIREBASE_CREDENTIALS');
 	});
 
+	it('validates TELEGRAM_TOPIC_ROUTES format and values', () => {
+		process.env.TELEGRAM_TOPIC_ROUTES = 'invalid-format-without-colon';
+		let warnings = validateEnv();
+		expect(warnings.map((w) => w.variable)).toContain('TELEGRAM_TOPIC_ROUTES');
+
+		process.env.TELEGRAM_TOPIC_ROUTES = 'webhook-signal:101,market-scanner:202';
+		warnings = validateEnv();
+		expect(warnings.map((w) => w.variable)).not.toContain('TELEGRAM_TOPIC_ROUTES');
+	});
+
 	it('formats warnings with remediation and no raw value', () => {
 		const warning = formatWarning({ variable: 'GEMINI_API_KEY', message: 'is missing' });
 

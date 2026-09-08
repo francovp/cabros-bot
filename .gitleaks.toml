@@ -1,0 +1,10 @@
+title = "Cabros Bot Gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Known public Firebase browser key in Render blueprint"
+condition = "AND"
+paths = ['''^render\.yaml$''']
+regexes = ['''AIzaSyDskGc5b0hpVX6YIUW-IYqwuH7_ZIP07O0''']

@@ -12,3 +12,9 @@ updates:
     # Check the npm registry for updates every day (weekdays)
     schedule:
       interval: "weekly"
+    # Suppress express major-version bumps (PR #510 stuck red) until a
+    # deliberate migration is recorded in
+    # https://github.com/francovp/cabros-bot/issues/558 (CB-259).
+    ignore:
+      - dependency-name: "express"
+        update-types: ["version-update:semver-major"]
