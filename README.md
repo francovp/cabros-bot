@@ -2057,7 +2057,20 @@ pnpm test:coverage
 
 # Run the opt-in Firestore emulator integration suite
 pnpm test:firebase
+
+# Run the opt-in k6 load test and dependency-outage drill (requires k6)
+pnpm test:perf
+
+# Include the 30-minute soak profile and /diag memory/event-loop samples
+pnpm test:perf -- --soak
 ```
+
+The performance harness boots a local API-only server, exercises 10/50/200 RPS
+profiles, and checks the p95 ceilings in `tests/performance/budgets.json`.
+The soak profile is schedule/manual-workflow tooling only; it is not part of
+the default Jest suite. Install k6 from the official distribution before
+running it locally. `/diag` is available only while the harness runs the app
+with `NODE_ENV=test` and requires `x-api-key`.
 
 ## Architecture
 

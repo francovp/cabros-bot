@@ -34,6 +34,9 @@ contentSecurityPolicy['connect-src'] = [
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
 
 app.use('/healthcheck', require('express-healthcheck')());
+if (process.env.NODE_ENV === 'test') {
+	app.get('/diag', require('./src/lib/auth').validateApiKey, require('./src/lib/performanceDiagnostics').performanceDiagnosticsHandler);
+}
 app.get('/ready', (req, res) => {
 	const status = bootstrapReadiness.getStatus();
 	return res.status(status.ready ? 200 : 503).json(status);
