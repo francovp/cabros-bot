@@ -25,7 +25,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `TELEGRAM_CHAT_ID` - Telegram chat ID where alerts are sent
 - `ENABLE_TELEGRAM_BOT` - Enable Telegram bot (`true` or `false`)
 - `ENABLE_TELEGRAM_COMMAND_RATE_LIMITING` - Enable per-chat throttling for expensive Telegram commands (`true` by default; security control, excluded from Remote Config)
-- `TELEGRAM_COMMAND_RATE_LIMITS_JSON` - Optional JSON overrides for per-command `max` and `windowMs`; defaults are `/precio` 10 per 60 seconds and `/analisis`, `/scanner`, `/noticias` 3 per hour (security control, excluded from Remote Config)
+- `TELEGRAM_COMMAND_RATE_LIMITS_JSON` - Optional JSON overrides for per-command `max` and `windowMs`; defaults are `/precio` 10 per 60 seconds and `/analisis`, `/scanner`, `/noticias` 3 per hour. Values are bounded to `max` 1-1000 and `windowMs` 1-86400000; invalid values use defaults (security control, excluded from Remote Config)
 
 ### Optional Variables
 

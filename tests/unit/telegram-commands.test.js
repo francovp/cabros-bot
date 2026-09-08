@@ -131,6 +131,34 @@ describe('Telegram TradingView commands', () => {
 		expect(contexts[3].reply).not.toHaveBeenCalled();
 	});
 
+	it('falls back when a command max override exceeds the operational bound', async () => {
+		process.env.TELEGRAM_COMMAND_RATE_LIMITS_JSON = JSON.stringify({
+			scanner: { max: 1001, windowMs: 60_000 },
+		});
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner'));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
+	it('falls back when a command window override exceeds the operational bound', async () => {
+		jest.useFakeTimers({ now: 0 });
+		process.env.TELEGRAM_COMMAND_RATE_LIMITS_JSON = JSON.stringify({
+			scanner: { max: 1, windowMs: 86_400_001 },
+		});
+		const next = jest.fn();
+
+		await telegramCommandRateLimiter(buildContext('/scanner'), next);
+		jest.advanceTimersByTime(2 * 60 * 60 * 1000);
+		await telegramCommandRateLimiter(buildContext('/scanner'), next);
+
+		expect(next).toHaveBeenCalledTimes(2);
+		jest.useRealTimers();
+	});
+
 	it('does not evict an active bucket when the chat map reaches its cap', async () => {
 		const next = jest.fn();
 		const activeChat = 0;

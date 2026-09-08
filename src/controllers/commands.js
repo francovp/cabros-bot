@@ -11,6 +11,8 @@ const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	scanner: { max: 3, windowMs: 3_600_000 },
 	noticias: { max: 3, windowMs: 3_600_000 },
 });
+const MAX_TELEGRAM_COMMAND_RATE_LIMIT = 1_000;
+const MAX_TELEGRAM_COMMAND_WINDOW_MS = 86_400_000;
 const telegramCommandRateLimitBuckets = new Map();
 
 function getTelegramCommandRateLimits() {
@@ -22,7 +24,8 @@ function getTelegramCommandRateLimits() {
 			const candidate = configured && configured[command];
 			const max = Number(candidate && candidate.max);
 			const windowMs = Number(candidate && candidate.windowMs);
-			return [command, Number.isSafeInteger(max) && max > 0 && Number.isSafeInteger(windowMs) && windowMs > 0
+			return [command, Number.isSafeInteger(max) && max > 0 && max <= MAX_TELEGRAM_COMMAND_RATE_LIMIT
+				&& Number.isSafeInteger(windowMs) && windowMs > 0 && windowMs <= MAX_TELEGRAM_COMMAND_WINDOW_MS
 				? { max, windowMs }
 				: fallback];
 		}));
