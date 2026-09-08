@@ -25,6 +25,7 @@ const { listAlerts, getAlertById, replayAlert, summarizeAlerts, exportAlerts, li
 const { listOutcomes, summarizeOutcomes } = require('../controllers/outcomes/outcomes');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
+const { getMetrics } = require('../controllers/observability/metrics');
 const { postBinanceOrder, getBinanceOrders, deleteBinanceOrder } = require('../controllers/trading/binanceOrders');
 const { idempotencyMiddleware } = require('../lib/idempotency');
 const {
@@ -80,6 +81,7 @@ function getRoutes(botOrGetter) {
 
 	router.get('/status', ...adminRead, getApiStatus);
 	router.get('/capabilities', ...adminRead, getApiStatus);
+	router.get('/metrics', ...adminRead, getMetrics);
 
 	return router;
 }
