@@ -70,6 +70,14 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
 	ENABLE_BINANCE_ORDER_AUDIT: { type: 'boolean', defaultValue: false },
 	BINANCE_ORDER_AUDIT_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
+	// Per-window budget for authenticated (x-api-key) callers. Default 0 falls
+	// back to RATE_LIMIT_MAX in src/lib/rateLimiter.js. Eligible for Remote
+	// Config because it is operator-tunable, non-secret, request-time tuning.
+	RATE_LIMIT_API_KEY_MAX: { type: 'number', defaultValue: 0, integer: true, min: 0, max: 100000 },
+	// RATE_LIMIT_FINGERPRINT_SECRET and WEBHOOK_API_KEYS are intentionally
+	// excluded from Remote Config: the first is the HMAC secret used to derive
+	// the bucket fingerprint (credential material), the second carries API-key
+	// credentials. Both must remain deployment-controlled environment values.
 	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
 	// notification destinations — must remain deployment-controlled.
 	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
