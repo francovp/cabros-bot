@@ -412,14 +412,30 @@ async function recordSignalInternal({
 		const normSide = normalizeSide(side);
 		const now = new Date();
 		const equityProviderName = equityMarketDataService.getProviderName(normSymbolInfo.exchange, normAssetClass);
+		const entryPriceSourceChains = getEntryPriceSourceChains();
+		const entryPriceSourceChain = normSymbolInfo.exchange === 'BINANCE' || normAssetClass === 'crypto'
+			? entryPriceSourceChains.crypto
+			: entryPriceSourceChains.equity;
 
 		let entryPrice = typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : null;
 		let entryPriceSource = entryPrice !== null
 			? (priceSource || (normSymbolInfo.exchange === 'BINANCE' ? 'tradingview-mcp' : (equityProviderName || 'direct')))
 			: null;
 		let entryPriceReason = null;
+		if (entryPrice !== null && entryPriceSourceChains.configured) {
+			const incomingProvider = {
+				'tradingview-mcp': 'mcp',
+				'gemini-grounding': 'gemini',
+				'twelve-data': 'twelve-data',
+				binance: 'binance',
+			}[entryPriceSource] || entryPriceSource;
+			if (!entryPriceSourceChain.includes(incomingProvider)) {
+				entryPrice = null;
+				entryPriceSource = null;
+			}
+		}
 
-		for (const provider of getEntryPriceSourceChain(normSymbolInfo.exchange, normAssetClass)) {
+		for (const provider of entryPriceSourceChain) {
 			if (entryPrice !== null) break;
 			if (provider === 'mcp') continue;
 

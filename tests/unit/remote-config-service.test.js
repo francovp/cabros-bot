@@ -135,6 +135,18 @@ describe('RemoteConfigService', () => {
 		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
 	});
 
+	it('rejects invalid remote entry-price chains and preserves the environment chain', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'binance';
+		mockTemplate({ SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES: 'wat' });
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getRuntimeConfig().SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES).toBe('binance');
+		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
+	});
+
 	it('applies validated allow-listed values and records safe template metadata', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{"not-a-secret":"redacted-in-test"}';

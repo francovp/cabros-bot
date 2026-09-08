@@ -16,9 +16,10 @@ describe('signal outcome worker bootstrap', () => {
 	});
 
 	it('refuses to run when the service role is not worker', () => {
+		const workerPath = path.join(__dirname, '../../src/workers/signalOutcomeWorker.js');
 		const result = spawnSync(
 			process.execPath,
-			[path.join(__dirname, '../../src/workers/signalOutcomeWorker.js')],
+			[workerPath],
 			{
 				encoding: 'utf8',
 				env: {
@@ -31,5 +32,38 @@ describe('signal outcome worker bootstrap', () => {
 
 		expect(result.status).toBe(1);
 		expect(`${result.stdout}${result.stderr}`).toContain('expected worker');
+	});
+
+	it('loads Remote Config before starting the dedicated worker', async () => {
+		const startRemoteConfig = jest.fn().mockResolvedValue(true);
+		const startWorker = jest.fn().mockReturnValue(true);
+		const stopWorker = jest.fn().mockResolvedValue(undefined);
+		const processOnce = jest.spyOn(process, 'once').mockImplementation(() => process);
+
+		process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'worker';
+		let main;
+		jest.isolateModules(() => {
+			jest.doMock('../../src/services/remoteConfig/RemoteConfigService', () => ({
+				start: startRemoteConfig,
+				stop: jest.fn(),
+			}));
+			jest.doMock('../../src/services/storage/SignalOutcomeService', () => ({
+				getWorkerStatus: jest.fn(() => ({ role: 'worker' })),
+				startWorker,
+				stopWorker,
+			}));
+			jest.doMock('../../src/services/monitoring/SentryService', () => ({
+				init: jest.fn(),
+				flush: jest.fn().mockResolvedValue(true),
+			}));
+
+			main = require('../../src/workers/signalOutcomeWorker').main;
+		});
+
+		await main();
+		expect(startRemoteConfig).toHaveBeenCalledTimes(1);
+		expect(startWorker).toHaveBeenCalledTimes(1);
+		processOnce.mockRestore();
+		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
 	});
 });

@@ -117,6 +117,25 @@ describe('SignalOutcomeService', () => {
 			});
 		});
 
+		it('honors the configured provider before an incoming MCP price', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'binance';
+			mockGetAvgPrice.mockResolvedValue({ price: '68100.50' });
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-configured-source-order',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 64863.03,
+				side: 'BUY',
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(mockGetAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+			expect(saved.price).toBe(68100.50);
+			expect(saved.entryPriceSource).toBe('binance');
+		});
+
 		it('rejects unknown providers', () => {
 			expect(() => SignalOutcomeService.parseEntryPriceSources('mcp,unknown')).toThrow(/unknown/i);
 		});

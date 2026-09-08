@@ -4,6 +4,7 @@ require('dotenv').config();
 require('../../instrument.js');
 const { printWarnings, validateEnv } = require('../../scripts/validate-env');
 const { parseEntryPriceSources } = require('../lib/signalOutcomeEntryPriceSources');
+const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
 
 printWarnings(validateEnv());
 if (process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES) {
@@ -13,11 +14,20 @@ if (process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES) {
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');
 
-const status = SignalOutcomeService.getWorkerStatus();
-if (status.role !== 'worker') {
-	console.error(`[SignalOutcomeWorker] Refusing to start with SIGNAL_OUTCOME_WORKER_ROLE=${status.role}; expected worker.`);
-	process.exitCode = 1;
-} else {
+async function main() {
+	try {
+		await remoteConfigService.start();
+	} catch (error) {
+		console.warn('[SignalOutcomeWorker] Remote Config failed to start; continuing with environment/default values:', error.message);
+	}
+
+	const status = SignalOutcomeService.getWorkerStatus();
+	if (status.role !== 'worker') {
+		console.error(`[SignalOutcomeWorker] Refusing to start with SIGNAL_OUTCOME_WORKER_ROLE=${status.role}; expected worker.`);
+		process.exitCode = 1;
+		return;
+	}
+
 	let keepAlive = null;
 	let shutdownPromise = null;
 	const started = SignalOutcomeService.startWorker({ source: 'worker', unref: false });
@@ -41,6 +51,7 @@ if (status.role !== 'worker') {
 				if (keepAlive) {
 					clearInterval(keepAlive);
 				}
+				remoteConfigService.stop();
 				return sentryService.flush(2000);
 			})
 			.finally(() => {
@@ -53,3 +64,12 @@ if (status.role !== 'worker') {
 	process.once('SIGINT', () => { void shutdown('SIGINT'); });
 	process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
 }
+
+if (require.main === module) {
+	main().catch((error) => {
+		console.error('[SignalOutcomeWorker] Failed to start:', error.message);
+		process.exitCode = 1;
+	});
+}
+
+module.exports = { main };
