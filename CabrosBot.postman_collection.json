@@ -212,6 +212,39 @@
       ]
     },
     {
+      "name": "Get Public Status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/public/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "public",
+            "status"
+          ]
+        },
+        "description": "Public, unauthenticated service status snapshot. No API key required. Returns a redacted view of service identity, uptime, enabled notification channels, and per-dependency readiness booleans. Cached for 30 seconds per process. Returns HTTP 503 with code SERVICE_NOT_READY when the process is still bootstrapping or shutting down."
+      },
+      "response": [
+        {
+          "name": "Success",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"status\":{\"ok\":true,\"uptimeSeconds\":42319,\"lastUpdated\":\"2026-08-27T19:30:00.000Z\",\"shuttingDown\":false},\"channels\":{\"enabled\":[\"telegram\"]},\"dependencies\":{\"gemini\":{\"ready\":true},\"tradingview\":{\"ready\":true},\"firestore\":{\"ready\":true}}}"
+        },
+        {
+          "name": "503 - service not ready",
+          "status": "Service Unavailable",
+          "code": 503,
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"status\":{\"ok\":false,\"uptimeSeconds\":2,\"lastUpdated\":\"2026-08-27T19:30:00.000Z\",\"shuttingDown\":false},\"channels\":{\"enabled\":[]},\"dependencies\":{\"gemini\":{\"ready\":false},\"tradingview\":{\"ready\":false},\"firestore\":{\"ready\":false}},\"error\":\"service_not_ready\",\"code\":\"SERVICE_NOT_READY\"}"
+        }
+      ]
+    },
+    {
       "name": "Get Status - alert enrichment metrics",
       "request": {
         "method": "GET",
