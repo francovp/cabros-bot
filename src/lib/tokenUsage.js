@@ -31,6 +31,18 @@ const PRICING_PER_1M = {
 	'default': { input: 0.00, output: 0.00 },
 };
 
+const VALID_FEATURES = new Set([
+	'grounding',
+	'news-analysis',
+	'expanded-analysis',
+	'scanner',
+	'enrichment',
+]);
+
+function normalizeFeature(feature) {
+	return VALID_FEATURES.has(feature) ? feature : null;
+}
+
 /**
  * Normalize usage metadata from various providers into a common shape.
  * Supports Gemini usageMetadata ({ promptTokenCount, candidatesTokenCount, totalTokenCount }),
@@ -57,11 +69,13 @@ function normalizeUsageMetadata(usageMetadata) {
 }
 
 class TokenUsageTracker {
-	constructor() {
+	constructor(defaultFeature = null) {
 		this.inputTokens = 0;
 		this.outputTokens = 0;
 		this.inputCost = 0;
 		this.outputCost = 0;
+		this.defaultFeature = normalizeFeature(defaultFeature);
+		this.byFeature = {};
 	}
 
 	/**
@@ -94,7 +108,7 @@ class TokenUsageTracker {
 	 * @param {Object|null|undefined} usage
 	 * @param {string} [model] - Model name for pricing calculation
 	 */
-	addUsage(usage, model) {
+	addUsage(usage, model, feature = this.defaultFeature) {
 		const normalized = normalizeUsageMetadata(usage);
 		if (!normalized) return;
 
@@ -110,26 +124,60 @@ class TokenUsageTracker {
 		this.inputTokens += currentInput;
 		this.outputTokens += currentOutput;
 
+		const { inputCost, outputCost } = this.calculateCost(currentInput, currentOutput, model);
 		if (model) {
-			const { inputCost, outputCost } = this.calculateCost(currentInput, currentOutput, model);
 			this.inputCost += inputCost;
 			this.outputCost += outputCost;
+		}
+
+		const featureName = normalizeFeature(feature);
+		if (featureName) {
+			const bucket = this.byFeature[featureName] || (this.byFeature[featureName] = {
+				calls: 0,
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+				inputCost: 0,
+				outputCost: 0,
+				totalCost: 0,
+			});
+			bucket.calls += 1;
+			bucket.inputTokens += currentInput;
+			bucket.outputTokens += currentOutput;
+			bucket.totalTokens += currentInput + currentOutput;
+			bucket.inputCost += inputCost;
+			bucket.outputCost += outputCost;
+			bucket.totalCost += inputCost + outputCost;
 		}
 	}
 
 	merge(otherTracker) {
 		if (!otherTracker) return;
-		const { inputTokens, outputTokens, inputCost, outputCost } = otherTracker.toJSON();
+		const { inputTokens, outputTokens, inputCost, outputCost, byFeature } = otherTracker.toJSON();
 		this.inputTokens += inputTokens;
 		this.outputTokens += outputTokens;
 		this.inputCost += (inputCost || 0);
 		this.outputCost += (outputCost || 0);
+		for (const [feature, usage] of Object.entries(byFeature || {})) {
+			const bucket = this.byFeature[feature] || (this.byFeature[feature] = {
+				calls: 0,
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+				inputCost: 0,
+				outputCost: 0,
+				totalCost: 0,
+			});
+			for (const field of Object.keys(bucket)) {
+				bucket[field] += Number(usage[field]) || 0;
+			}
+		}
 	}
 
 	toJSON() {
 		const totalTokens = this.inputTokens + this.outputTokens;
 		const totalCost = this.inputCost + this.outputCost;
-		return {
+		const result = {
 			inputTokens: this.inputTokens,
 			outputTokens: this.outputTokens,
 			totalTokens,
@@ -137,6 +185,10 @@ class TokenUsageTracker {
 			outputCost: this.outputCost,
 			totalCost,
 		};
+		if (Object.keys(this.byFeature).length > 0) {
+			result.byFeature = this.byFeature;
+		}
+		return result;
 	}
 
 	/**

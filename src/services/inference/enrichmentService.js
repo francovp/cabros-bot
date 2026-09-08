@@ -117,6 +117,9 @@ class EnrichmentService {
 					const result = await this.azureClient.chatCompletion(systemPrompt, userPrompt, { signal: activeSignal });
 					const durationMs = Date.now() - startTime;
 					const usage = normalizeUsageMetadata(result?.usage) || { inputTokens: 0, outputTokens: 0 };
+					if (options?.tokenUsage && result?.usage) {
+						options.tokenUsage.addUsage(result.usage, process.env.AZURE_LLM_MODEL || 'azure-llm', 'enrichment');
+					}
 
 					sentryService.captureLlmMetric({ model: process.env.AZURE_LLM_MODEL || 'unknown', inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, durationMs });
 					const rawText = typeof result === 'string' ? result : result?.text;
