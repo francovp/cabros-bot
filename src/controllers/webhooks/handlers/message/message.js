@@ -1,6 +1,10 @@
 require('dotenv').config();
 const sentryService = require('../../../../services/monitoring/SentryService');
-const { getNotificationManager, initializeNotificationServices } = require('../alert/alert');
+const {
+	getNotificationManager,
+	initializeNotificationServices,
+	resolveRequestId,
+} = require('../alert/alert');
 const {
 	VALID_CHANNELS,
 	NotificationRoutingValidationError,
@@ -32,6 +36,7 @@ function validateMessageRequest(body) {
 
 function postMessage(botOrGetter) {
 	return async (req, res) => {
+		const requestId = resolveRequestId(req);
 		try {
 			const routing = validateMessageRequest(req.body);
 			const alert = {
@@ -57,6 +62,7 @@ function postMessage(botOrGetter) {
 					return res.status(503).json({
 						success: false,
 						error: 'Notification services not initialized',
+						requestId,
 					});
 				}
 			}
@@ -64,6 +70,7 @@ function postMessage(botOrGetter) {
 			const httpContext = {
 				endpoint: '/api/webhook/message',
 				method: 'POST',
+				requestId,
 			};
 
 			const results = await sendWithNotificationRouting(
@@ -73,13 +80,14 @@ function postMessage(botOrGetter) {
 				{ http: httpContext },
 			);
 
-			res.json({ success: true, results });
+			res.json({ success: true, results, requestId });
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
 				return res.status(error.statusCode).json({
 					success: false,
 					error: error.message,
 					details: error.details,
+					requestId,
 				});
 			}
 
@@ -94,6 +102,7 @@ function postMessage(botOrGetter) {
 					endpoint: '/api/webhook/message',
 					method: 'POST',
 					statusCode: 500,
+					requestId,
 				},
 				extra: {
 					category: 'http_webhook_error',
@@ -103,6 +112,7 @@ function postMessage(botOrGetter) {
 			res.status(500).json({
 				success: false,
 				error: 'Internal server error',
+				requestId,
 			});
 		}
 	};
@@ -113,4 +123,5 @@ module.exports = {
 	MessageValidationError: NotificationRoutingValidationError,
 	VALID_CHANNELS,
 	MAX_MESSAGE_LENGTH,
+	resolveRequestId,
 };

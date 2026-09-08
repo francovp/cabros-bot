@@ -140,6 +140,9 @@
           },
           {
             "$ref": "#/components/parameters/IdempotencyKeyQuerySnake"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -2815,7 +2818,7 @@
         }
       },
       "MessageDeliveryResult": {
-        "description": "Generic-message delivery response. A replay returns the cached body with idempotencyReplayed=true and Idempotency-Replay: true.",
+        "description": "Generic-message delivery response. A replay returns the cached body with idempotencyReplayed=true and Idempotency-Replay: true. The requestId field mirrors the inbound x-request-id header (sanitized) or a generated UUIDv4 so callers can correlate the response with logs, Sentry, and admin paging.",
         "headers": {
           "Idempotency-Replay": {
             "description": "false for the first accepted request, true for a cached replay.",
@@ -2849,6 +2852,7 @@
               "success": {
                 "value": {
                   "success": true,
+                  "requestId": "msg-correlation-001",
                   "results": [
                     {
                       "channel": "telegram",
@@ -2862,6 +2866,7 @@
                 "value": {
                   "success": true,
                   "idempotencyReplayed": true,
+                  "requestId": "msg-correlation-001",
                   "results": [
                     {
                       "channel": "telegram",

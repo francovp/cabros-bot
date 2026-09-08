@@ -170,6 +170,7 @@ describe('OpenAPI contract', () => {
 			{ $ref: '#/components/parameters/IdempotencyKeyHeader' },
 			{ $ref: '#/components/parameters/IdempotencyKeyQueryCamel' },
 			{ $ref: '#/components/parameters/IdempotencyKeyQuerySnake' },
+			{ $ref: '#/components/parameters/XRequestIdHeader' },
 		]));
 		expect(operation.responses['200']).toEqual({
 			$ref: '#/components/responses/MessageDeliveryResult',
@@ -181,6 +182,10 @@ describe('OpenAPI contract', () => {
 		expect(contract.components.schemas.MessageRequest.properties.idempotency_key).toBeDefined();
 		expect(contract.components.responses.MessageDeliveryResult.content['application/json'].examples.replay.value)
 			.toMatchObject({ success: true, idempotencyReplayed: true });
+		expect(contract.components.responses.MessageDeliveryResult.content['application/json'].examples.replay.value.requestId)
+			.toEqual(expect.any(String));
+		expect(contract.components.responses.MessageDeliveryResult.content['application/json'].examples.success.value.requestId)
+			.toEqual(expect.any(String));
 		expect(contract.components.responses.IdempotencyConflict.description)
 			.toBe('The idempotency key was reused with a different request fingerprint');
 		expect(contract.components.responses.MessageIdempotencyConflict.content['application/json'].example).toEqual({
