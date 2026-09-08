@@ -542,6 +542,46 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('Last enqueued');
 	});
 
+	it('renders circuit breaker and Remote Config timestamps in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				tradingViewMcp: {
+					status: 'degraded',
+					circuitBreaker: {
+						state: 'open',
+						openedAt: '2026-09-08T00:00:00Z',
+						cooldownMs: 120000,
+						consecutiveFailures: 3,
+					},
+				},
+				remoteConfig: {
+					status: 'ready',
+					lastSuccessfulLoad: '2026-09-08T00:01:00Z',
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Circuit breaker stateopen');
+		expect(view.textContent).toContain('Circuit breaker opened');
+		expect(view.textContent).toContain('Circuit breaker cooldown (ms)120000');
+		expect(view.textContent).toContain('Circuit breaker consecutive failures3');
+		expect(view.textContent).toContain('Last successful load');
+	});
+
 	it('waits for an API key before loading protected overview status', async () => {
 		const requests = [];
 		const browser = createBrowser({

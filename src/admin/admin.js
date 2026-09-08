@@ -575,6 +575,7 @@ const statusNeedsAttention = (detail) => hasStatus({ status: effectiveStatus(det
 const statusDetailFields = [
 	['configured', 'Configured'],
 	['enabled', 'Enabled'],
+	['lastSuccessfulLoad', 'Last successful load', true],
 	['cooldownActive', 'Cooldown active'],
 	['remainingCooldownMs', 'Remaining cooldown (ms)'],
 	['lastTriggeredAt', 'Last triggered', true],
@@ -621,7 +622,15 @@ const statusDetailFields = [
 	['lastRunEvaluatedCount', 'Last run evaluated'],
 	['lastRunPendingCount', 'Last run pending'],
 	['lastRunErrorCount', 'Last run errors'],
+	['circuitBreaker.state', 'Circuit breaker state'],
+	['circuitBreaker.openedAt', 'Circuit breaker opened', true],
+	['circuitBreaker.cooldownMs', 'Circuit breaker cooldown (ms)'],
+	['circuitBreaker.consecutiveFailures', 'Circuit breaker consecutive failures'],
 ];
+
+const statusFieldValue = (detail, key) => key.startsWith('circuitBreaker.')
+	? asObject(detail.circuitBreaker)[key.slice('circuitBreaker.'.length)]
+	: detail[key];
 
 const SENTIMENT_TONES = {
 	bullish: 'status-ready',
@@ -1284,9 +1293,10 @@ const renderStatusCards = (container, entries, emptyText, { detailed = false } =
 			summary.append(copy, createStatusBadge(detail.status));
 			const list = element('dl', { className: 'status-detail-list' });
 			statusDetailFields.forEach(([key, label, timestamp]) => {
-				if (detail[key] === undefined || detail[key] === null || detail[key] === '') return;
+				const fieldValue = statusFieldValue(detail, key);
+				if (fieldValue === undefined || fieldValue === null || fieldValue === '') return;
 				const value = element('dd');
-				value.append(timestamp ? createTimestamp(detail[key]) : element('span', { text: String(detail[key]) }));
+				value.append(timestamp ? createTimestamp(fieldValue) : element('span', { text: String(fieldValue) }));
 				list.append(element('dt', { text: label }), value);
 			});
 			nestedStatusEntries(detail).forEach(([name, nested]) => {
