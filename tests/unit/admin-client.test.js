@@ -294,6 +294,11 @@ describe('admin browser client', () => {
 					mode: 'ephemeral',
 					backend: 'memory',
 				},
+				groundingCoalescing: {
+					enabled: true,
+					windowMs: 5000,
+					hits: 3,
+				},
 			},
 		};
 		const browser = createBrowser({
@@ -316,8 +321,10 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('<img src=x onerror=alert(1)>');
 		expect(view.textContent).toContain('Successes4');
 		expect(view.textContent).toContain('ephemeral');
-		expect(cards()[0].textContent).toContain('TradingView MCP');
-		expect(cards()[1].textContent).toContain('Scanner preset storage');
+		expect(cards()).toHaveLength(4);
+		expect(cards().some((card) => card.textContent.includes('TradingView MCP'))).toBe(true);
+		expect(cards().some((card) => card.textContent.includes('Scanner preset storage'))).toBe(true);
+		expect(cards().some((card) => card.textContent.includes('Grounding Coalescing'))).toBe(true);
 		expect(findAll(view, (node) => node.tagName === 'IMG')).toHaveLength(0);
 
 		const search = find(view, (node) => node.tagName === 'INPUT' && node.name === 'dependency-search');

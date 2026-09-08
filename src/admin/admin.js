@@ -554,7 +554,7 @@ const displayStatus = (value) => STATUS_LABELS[value] || displayLabel(value || '
 const statusTone = (value) => ['ready', 'disabled', 'misconfigured'].includes(value) ? value : 'unknown';
 
 const statusEntries = (value) => Object.entries(asObject(value))
-	.filter(([, detail]) => detail && typeof detail === 'object' && typeof detail.status === 'string');
+	.filter(([, detail]) => detail && typeof detail === 'object');
 
 const statusCounts = (entries) => entries.reduce((counts, [, detail]) => {
 	counts[detail.status] = (counts[detail.status] || 0) + 1;
