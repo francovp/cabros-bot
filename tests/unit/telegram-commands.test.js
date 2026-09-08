@@ -41,8 +41,14 @@ const {
 } = require('../../src/controllers/commands');
 
 function buildContext(text) {
+	const commandToken = text.trim().split(/\s+/, 1)[0];
 	return {
-		message: { text },
+		message: {
+			text,
+			entities: commandToken.startsWith('/')
+				? [{ type: 'bot_command', offset: 0, length: commandToken.length }]
+				: [],
+		},
 		update: {
 			message: {
 				chat: { id: 123 },
@@ -74,6 +80,31 @@ describe('Telegram TradingView commands', () => {
 		otherChat.update.message.chat.id = 456;
 		await telegramCommandRateLimiter(otherChat, next);
 		expect(next).toHaveBeenCalledTimes(4);
+	});
+
+	it.each(['/analysis', '/news'])('applies canonical limits to the %s alias', async (command) => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext(command));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
+	it('does not charge plain text against a command bucket', async () => {
+		const next = jest.fn();
+		const plainText = buildContext('scanner');
+
+		await telegramCommandRateLimiter(plainText, next);
+		for (const context of Array.from({ length: 3 }, () => buildContext('/scanner'))) {
+			await telegramCommandRateLimiter(context, next);
+		}
+		const fourthCommand = buildContext('/scanner');
+		await telegramCommandRateLimiter(fourthCommand, next);
+
+		expect(next).toHaveBeenCalledTimes(4);
+		expect(fourthCommand.reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
 	});
 
 	it('parses command args into positionals and key/value options', () => {

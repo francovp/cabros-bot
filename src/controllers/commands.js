@@ -33,8 +33,16 @@ function getTelegramCommandRateLimits() {
 
 async function telegramCommandRateLimiter(context, next) {
 	if (process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING === 'false') return next();
+	const message = context.message || {};
 	const text = String((context.message && context.message.text) || '').trim();
-	const command = text.split(/\s+/, 1)[0].replace(/^\//, '').split('@', 1)[0].toLowerCase();
+	const commandToken = text.split(/\s+/, 1)[0];
+	const commandEntity = Array.isArray(message.entities)
+		&& message.entities.find((entity) => entity.type === 'bot_command'
+			&& entity.offset === 0
+			&& entity.length === commandToken.length);
+	if (!commandEntity) return next();
+	const rawCommand = commandToken.replace(/^\//, '').split('@', 1)[0].toLowerCase();
+	const command = { analysis: 'analisis', news: 'noticias' }[rawCommand] || rawCommand;
 	const rule = getTelegramCommandRateLimits()[command];
 	const chatId = getChatId(context);
 	if (!rule || chatId === undefined || chatId === null) return next();
