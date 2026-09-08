@@ -1,6 +1,7 @@
 'use strict';
 
 const request = require('supertest');
+const { assertWithinBudget } = require('../helpers/perfBudget');
 const app = require('../../app');
 const admin = require('firebase-admin');
 const { getRoutes } = require('../../src/routes');
@@ -68,10 +69,13 @@ describe('Jobs API Integration Tests', () => {
 	});
 
 	it('returns 401 when POST /api/jobs/tradingview-analysis lacks valid api key', async () => {
+		const start = process.hrtime.bigint();
 		await request(app)
 			.post('/api/jobs/tradingview-analysis')
 			.send({ type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] })
 			.expect(401);
+		const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+		assertWithinBudget('/api/jobs/tradingview-analysis', durationMs);
 	});
 
 	it('returns 503 instead of accepting work when render-worker mode is unavailable', async () => {
@@ -318,9 +322,12 @@ describe('Jobs API Integration Tests', () => {
 	});
 
 	it('returns 401 when GET /api/jobs lacks valid api key', async () => {
+		const start = process.hrtime.bigint();
 		await request(app)
 			.get('/api/jobs')
 			.expect(401);
+		const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+		assertWithinBudget('/api/jobs', durationMs);
 	});
 
 	it('lists bounded sanitized in-memory jobs with status and type filters', async () => {

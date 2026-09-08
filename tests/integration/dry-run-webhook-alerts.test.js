@@ -5,6 +5,7 @@ const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+const { assertWithinBudget } = require('../helpers/perfBudget');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
@@ -58,11 +59,14 @@ describe('Dry-run mode for webhook alert endpoints', () => {
 	// ---------------------------------------------------------------------------
 	describe('POST /api/webhook/alert', () => {
 		it('returns dryRun:true via query string and skips delivery', async () => {
+			const start = process.hrtime.bigint();
 			const res = await request(app)
 				.post('/api/webhook/alert?dryRun=true')
 				.set('x-api-key', 'test-key')
 				.send({ text: 'Bitcoin breaks $50,000 mark' })
 				.expect(200);
+			const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+			assertWithinBudget('/api/webhook/alert', durationMs);
 
 			expect(res.body.success).toBe(true);
 			expect(res.body.dryRun).toBe(true);

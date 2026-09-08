@@ -1,4 +1,5 @@
 const request = require('supertest');
+const { assertWithinBudget } = require('../helpers/perfBudget');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
@@ -137,11 +138,14 @@ describe('Symbol analysis endpoint', () => {
 	});
 
 	it('rejects malformed symbols before calling TradingView MCP', async () => {
+		const start = process.hrtime.bigint();
 		const res = await request(app)
 			.post('/api/webhook/symbol-analysis')
 			.set('x-api-key', 'test-key')
 			.send({ symbol: 'BTCUSDT' })
 			.expect(400);
+		const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+		assertWithinBudget('/api/webhook/symbol-analysis', durationMs);
 
 		expect(res.body).toEqual(expect.objectContaining({ code: 'INVALID_REQUEST' }));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);

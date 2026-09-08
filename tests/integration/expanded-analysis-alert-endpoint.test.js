@@ -1,4 +1,5 @@
 const request = require('supertest');
+const { assertWithinBudget } = require('../helpers/perfBudget');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
@@ -260,11 +261,14 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	});
 
 	it('returns 400 when neither body symbols nor EXPANDED_ANALYSIS_ALERT_SYMBOLS are defined', async () => {
+		const start = process.hrtime.bigint();
 		const res = await request(app)
 			.post('/api/webhook/expanded-analysis-alert')
 			.set('x-api-key', 'test-key')
 			.send({})
 			.expect(400);
+		const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+		assertWithinBudget('/api/webhook/expanded-analysis-alert', durationMs);
 
 		expect(res.body).toEqual(expect.objectContaining({
 			code: 'NO_SYMBOLS',

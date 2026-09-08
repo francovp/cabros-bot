@@ -1,0 +1,48 @@
+name: Perf Budget Guard
+
+on:
+  pull_request:
+    branches: ["master"]
+  push:
+    branches: ["master"]
+  workflow_dispatch:
+
+# Reuse the same minimal permissions the other workflows request (CB-257).
+permissions:
+  contents: read
+
+# Cancel superseded PR runs; preserve pushes so a freshly merged commit never
+# cancels its own follow-up run (issue #565).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  perf-budget:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Soft-fail for at least one sprint while the team baselines the budget
+    # numbers (see GH-795 rollout plan). Flip to a hard failure once the
+    # baselines stabilize in `tests/performance/baselines/`.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Boot the app in API-only mode and hit each budgeted route via the
+      # dedicated integration suite. The suite emits `console.warn` on
+      # the soft envelope and fails on 2x unless PERF_BUDGET_RELAXED=true.
+      - name: Run perf-budget integration tests
+        env:
+          ENABLE_API_ONLY_MODE: 'true'
+          BOT_TOKEN: 'perf-budget-dummy-token'
+          WEBHOOK_API_KEY: 'perf-budget-test-key'
+        run: pnpm test -- tests/integration/perf-budget.test.js --testTimeout=60000
