@@ -431,6 +431,10 @@ describe('admin browser client', () => {
 		expect(view.textContent).not.toContain('Dependencies1 ready');
 		expect(view.textContent).toContain('Profiling');
 		expect(view.textContent).toContain('ProfilingNeeds attention');
+		const dependencyCard = find(view, (node) => node.className.includes('status-detail-card'));
+		const summaryBadge = find(dependencyCard, (node) => node.className.includes('status-badge'));
+		expect(summaryBadge.className).toContain('status-misconfigured');
+		expect(summaryBadge.textContent).toBe('Needs attention');
 		const search = find(view, (node) => node.tagName === 'INPUT' && node.name === 'dependency-search');
 		search.value = 'misconfigured';
 		await search.dispatch('input');

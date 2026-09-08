@@ -1283,14 +1283,15 @@ const renderStatusCards = (container, entries, emptyText, { detailed = false } =
 	}
 	entries.forEach(([name, detail]) => {
 		if (detailed) {
+			const status = effectiveStatus(detail);
 			const card = element('details', { className: 'status-card status-detail-card' });
 			const summary = element('summary', { className: 'status-detail-summary' });
 			const copy = element('div');
 			copy.append(
 				element('strong', { text: displayLabel(name) }),
-				element('small', { text: detail.provider ? `Provider: ${detail.provider}` : displayStatus(detail.status) }),
+				element('small', { text: detail.provider ? `Provider: ${detail.provider}` : displayStatus(status) }),
 			);
-			summary.append(copy, createStatusBadge(detail.status));
+			summary.append(copy, createStatusBadge(status));
 			const list = element('dl', { className: 'status-detail-list' });
 			statusDetailFields.forEach(([key, label, timestamp]) => {
 				const fieldValue = statusFieldValue(detail, key);
