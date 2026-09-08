@@ -2,6 +2,11 @@ const NotificationChannel = require('./NotificationChannel');
 const WhatsAppMarkdownFormatter = require('./formatters/whatsappMarkdownFormatter');
 const { splitMessageIntoChunks } = require('../../lib/messageHelper');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const {
+	parseDiscordSourceRouting,
+	resolveDiscordWebhookForAlert,
+	getAggregateStats: getDiscordSourceRoutingAggregateStats,
+} = require('./discordSourceRouting');
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -50,6 +55,12 @@ class DiscordService extends NotificationChannel {
 		this._configFallbackRetryDelayMs = config.fallbackRetryDelayMs;
 		this._configMaxRetryDelayMs = config.maxRetryDelayMs;
 		this._configMaxTotalRetryWaitMs = config.maxTotalRetryWaitMs;
+		this.sourceRoutingEnabled = config.sourceRoutingEnabled !== undefined
+			? Boolean(config.sourceRoutingEnabled)
+			: process.env.ENABLE_DISCORD_SOURCE_ROUTING === 'true';
+		this.sourceRoutes = config.sourceRoutes !== undefined
+			? config.sourceRoutes
+			: parseDiscordSourceRouting(process.env.DISCORD_SOURCE_ROUTING_JSON, this.logger);
 	}
 
 	get maxRetries() {
@@ -113,7 +124,8 @@ class DiscordService extends NotificationChannel {
 
 	async send(alert = {}, options = {}) {
 		try {
-			const webhookUrl = alert.discordWebhookUrl || this.webhookUrl;
+			const routingResult = this._resolveWebhookUrl(alert);
+			const webhookUrl = routingResult.webhookUrl;
 			if (!webhookUrl) {
 				return {
 					success: false,
@@ -132,9 +144,9 @@ class DiscordService extends NotificationChannel {
 				totalAttempts += result.attemptCount || 0;
 				if (!result.success) {
 					if (result.statusCode === 429) {
-						return { ...result, attemptCount: totalAttempts };
+						return { ...result, attemptCount: totalAttempts, routeKey: routingResult.routeKey };
 					}
-					return result;
+					return { ...result, routeKey: routingResult.routeKey };
 				}
 				messageIds.push(result.messageId);
 			}
@@ -145,6 +157,7 @@ class DiscordService extends NotificationChannel {
 				messageId: messageIds.join(','),
 				messageIds,
 				messageCount: messageIds.length,
+				routeKey: routingResult.routeKey,
 			};
 		} catch (error) {
 			this.logger?.error?.(`Failed to send to Discord: ${error.message}`);
@@ -154,6 +167,37 @@ class DiscordService extends NotificationChannel {
 				error: error.message,
 			};
 		}
+	}
+
+	_resolveWebhookUrl(alert = {}) {
+		if (alert.discordWebhookUrl) {
+			return { webhookUrl: alert.discordWebhookUrl, routeKey: 'per-request' };
+		}
+
+		if (!this.sourceRoutingEnabled) {
+			return { webhookUrl: this.webhookUrl, routeKey: null };
+		}
+
+		if (!this.sourceRoutes || Object.keys(this.sourceRoutes).length === 0) {
+			return { webhookUrl: this.webhookUrl, routeKey: null };
+		}
+
+		return resolveDiscordWebhookForAlert(
+			alert,
+			this.sourceRoutes,
+			this.webhookUrl,
+			this.logger,
+		);
+	}
+
+	getSourceRoutingStatus() {
+		const aggregate = getDiscordSourceRoutingAggregateStats();
+		return {
+			enabled: this.sourceRoutingEnabled,
+			routesConfigured: this.sourceRoutes ? Object.keys(this.sourceRoutes).length : 0,
+			decisions: aggregate.decisions,
+			fallbacks: aggregate.fallbacks,
+		};
 	}
 
 	getExecutionUrl(webhookUrl = this.webhookUrl) {

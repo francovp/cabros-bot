@@ -68,12 +68,13 @@ describe('DiscordService', () => {
 
 			const result = await service.send({ text: 'Discord alert' });
 
-			expect(result).toEqual({
+			expect(result).toMatchObject({
 				success: true,
 				channel: 'discord',
 				messageId: 'discord-msg-123',
 				messageIds: ['discord-msg-123'],
 				messageCount: 1,
+				routeKey: null,
 			});
 			expect(global.fetch).toHaveBeenCalledWith(
 				'https://discord.com/api/webhooks/123/token?wait=true',
@@ -95,12 +96,13 @@ describe('DiscordService', () => {
 			const customWebhook = 'https://discord.com/api/webhooks/999/override-token';
 			const result = await service.send({ text: 'Custom Discord alert', discordWebhookUrl: customWebhook });
 
-			expect(result).toEqual({
+			expect(result).toMatchObject({
 				success: true,
 				channel: 'discord',
 				messageId: 'discord-msg-override',
 				messageIds: ['discord-msg-override'],
 				messageCount: 1,
+				routeKey: 'per-request',
 			});
 			expect(global.fetch).toHaveBeenCalledWith(
 				'https://discord.com/api/webhooks/999/override-token?wait=true',
@@ -152,7 +154,7 @@ describe('DiscordService', () => {
 
 			const result = await service.send({ text: 'Discord alert' });
 
-			expect(result).toEqual({
+			expect(result).toMatchObject({
 				success: true,
 				channel: 'discord',
 				messageId: 'discord-msg-retried',
@@ -188,7 +190,7 @@ describe('DiscordService', () => {
 
 			const result = await service.send({ text: 'Discord alert' });
 
-			expect(result).toEqual({
+			expect(result).toMatchObject({
 				success: true,
 				channel: 'discord',
 				messageId: 'discord-msg-body-retried',
@@ -395,7 +397,7 @@ describe('DiscordService', () => {
 			const longMessage = `${'A'.repeat(1995)} ${'B'.repeat(1995)}`;
 			const result = await service.send({ text: longMessage });
 
-			expect(result).toEqual({
+			expect(result).toMatchObject({
 				success: true,
 				channel: 'discord',
 				messageId: 'discord-msg-1,discord-msg-2',
@@ -407,6 +409,141 @@ describe('DiscordService', () => {
 				const payload = JSON.parse(call[1].body);
 				expect(payload.content.length).toBeLessThanOrEqual(2000);
 			});
+		});
+	});
+
+	describe('source routing', () => {
+		const defaultWebhook = 'https://discord.com/api/webhooks/000/default';
+		const scannerWebhook = 'https://discord.com/api/webhooks/111/scanner';
+		const newsWebhook = 'https://discord.com/api/webhooks/222/news';
+
+		beforeEach(() => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = defaultWebhook;
+			process.env.ENABLE_DISCORD_SOURCE_ROUTING = 'true';
+			process.env.DISCORD_SOURCE_ROUTING_JSON = JSON.stringify({
+				scanner: scannerWebhook,
+				'news-monitor': newsWebhook,
+			});
+		});
+
+		afterEach(() => {
+			delete process.env.ENABLE_DISCORD_SOURCE_ROUTING;
+			delete process.env.DISCORD_SOURCE_ROUTING_JSON;
+		});
+
+		it('routes scanner alerts to the scanner webhook', async () => {
+			global.fetch.mockResolvedValue({
+				ok: true,
+				json: async () => ({ id: 'discord-msg-scanner' }),
+			});
+			service = new DiscordService({ logger: mockLogger });
+			await service.validate();
+
+			const result = await service.send({ text: 'Alert', source: 'scanner' });
+
+			expect(result.success).toBe(true);
+			expect(result.routeKey).toBe('scanner');
+			expect(global.fetch).toHaveBeenCalledWith(
+				`${scannerWebhook}?wait=true`,
+				expect.objectContaining({
+					method: 'POST',
+					body: JSON.stringify({ content: 'Alert' }),
+				}),
+			);
+		});
+
+		it('routes news-monitor alerts to the news webhook', async () => {
+			global.fetch.mockResolvedValue({
+				ok: true,
+				json: async () => ({ id: 'discord-msg-news' }),
+			});
+			service = new DiscordService({ logger: mockLogger });
+			await service.validate();
+
+			await service.send({ text: 'News', source: 'news-monitor' });
+
+			expect(global.fetch).toHaveBeenCalledWith(
+				`${newsWebhook}?wait=true`,
+				expect.anything(),
+			);
+		});
+
+		it('falls back to default webhook when source is unknown', async () => {
+			global.fetch.mockResolvedValue({
+				ok: true,
+				json: async () => ({ id: 'discord-msg-default' }),
+			});
+			service = new DiscordService({ logger: mockLogger });
+			await service.validate();
+
+			const result = await service.send({ text: 'Alert', source: 'unknown-source' });
+
+			expect(result.success).toBe(true);
+			expect(result.routeKey).toBeNull();
+			expect(global.fetch).toHaveBeenCalledWith(
+				`${defaultWebhook}?wait=true`,
+				expect.anything(),
+			);
+		});
+
+		it('per-request discordWebhookUrl override always wins over source routing', async () => {
+			global.fetch.mockResolvedValue({
+				ok: true,
+				json: async () => ({ id: 'discord-msg-override' }),
+			});
+			service = new DiscordService({ logger: mockLogger });
+			await service.validate();
+
+			const customWebhook = 'https://discord.com/api/webhooks/999/override-token';
+			await service.send({
+				text: 'Override',
+				source: 'scanner',
+				discordWebhookUrl: customWebhook,
+			});
+
+			expect(global.fetch).toHaveBeenCalledWith(
+				`${customWebhook}?wait=true`,
+				expect.anything(),
+			);
+		});
+
+		it('skips source routing when sourceRoutingEnabled is false', async () => {
+			global.fetch.mockResolvedValue({
+				ok: true,
+				json: async () => ({ id: 'discord-msg' }),
+			});
+			service = new DiscordService({
+				logger: mockLogger,
+				sourceRoutingEnabled: false,
+				sourceRoutes: { scanner: scannerWebhook },
+			});
+			await service.validate();
+
+			await service.send({ text: 'Alert', source: 'scanner' });
+
+			expect(global.fetch).toHaveBeenCalledWith(
+				`${defaultWebhook}?wait=true`,
+				expect.anything(),
+			);
+		});
+
+		it('exposes source routing status with aggregate counters', async () => {
+			global.fetch.mockResolvedValue({
+				ok: true,
+				json: async () => ({ id: 'discord-msg' }),
+			});
+			service = new DiscordService({ logger: mockLogger });
+			await service.validate();
+
+			await service.send({ text: 'scanner alert', source: 'scanner' });
+			await service.send({ text: 'unknown alert', source: 'unknown' });
+
+			const status = service.getSourceRoutingStatus();
+			expect(status.enabled).toBe(true);
+			expect(status.routesConfigured).toBe(2);
+			expect(status.decisions).toBeGreaterThanOrEqual(2);
+			expect(status.fallbacks).toBeGreaterThanOrEqual(1);
 		});
 	});
 });

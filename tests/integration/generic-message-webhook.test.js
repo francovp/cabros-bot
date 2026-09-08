@@ -386,7 +386,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.expect(200);
 
 		expect(res.body.success).toBe(true);
-		expect(res.body.results).toEqual([
+		expect(res.body.results).toMatchObject([
 			{
 				success: true,
 				channel: 'discord',
