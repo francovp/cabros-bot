@@ -64,7 +64,16 @@ async function telegramCommandRateLimiter(context, next) {
 	}
 
 	if (telegramCommandRateLimitBuckets.size >= 10_000 && !telegramCommandRateLimitBuckets.has(key)) {
-		telegramCommandRateLimitBuckets.delete(telegramCommandRateLimitBuckets.keys().next().value);
+		const configuredLimits = getTelegramCommandRateLimits();
+		for (const [bucketKey, bucket] of telegramCommandRateLimitBuckets) {
+			const bucketCommand = bucketKey.slice(bucketKey.lastIndexOf(':') + 1);
+			const bucketRule = configuredLimits[bucketCommand];
+			if (!bucketRule || bucket.every((timestamp) => now - timestamp >= bucketRule.windowMs)) {
+				telegramCommandRateLimitBuckets.delete(bucketKey);
+			}
+		}
+		// ponytail: saturated active buckets bypass new-chat tracking; use an LRU cache if this matters.
+		if (telegramCommandRateLimitBuckets.size >= 10_000) return next();
 	}
 	timestamps.push(now);
 	telegramCommandRateLimitBuckets.set(key, timestamps);

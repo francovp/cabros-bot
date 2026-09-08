@@ -131,6 +131,31 @@ describe('Telegram TradingView commands', () => {
 		expect(contexts[3].reply).not.toHaveBeenCalled();
 	});
 
+	it('does not evict an active bucket when the chat map reaches its cap', async () => {
+		const next = jest.fn();
+		const activeChat = 0;
+
+		for (const context of Array.from({ length: 3 }, () => buildContext('/scanner'))) {
+			context.update.message.chat.id = activeChat;
+			await telegramCommandRateLimiter(context, next);
+		}
+		for (let chatId = 1; chatId <= 9999; chatId += 1) {
+			const context = buildContext('/scanner');
+			context.update.message.chat.id = chatId;
+			await telegramCommandRateLimiter(context, next);
+		}
+
+		const newChat = buildContext('/scanner');
+		newChat.update.message.chat.id = 10000;
+		await telegramCommandRateLimiter(newChat, next);
+
+		const activeChatAfterCap = buildContext('/scanner');
+		activeChatAfterCap.update.message.chat.id = activeChat;
+		await telegramCommandRateLimiter(activeChatAfterCap, next);
+
+		expect(activeChatAfterCap.reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
 	it('parses command args into positionals and key/value options', () => {
 		expect(parseCommandArgs(buildContext('/analisis BINANCE:BTCUSDT,NASDAQ:NVDA timeframe=1D mtf=true'))).toEqual({
 			positionals: ['BINANCE:BTCUSDT,NASDAQ:NVDA'],
