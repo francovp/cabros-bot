@@ -268,6 +268,7 @@ class MarkdownV2Formatter {
 			timeHorizon,
 			invalidation_hint,
 			invalidationHint,
+			barriers,
 		} = enriched;
 
 		// Escape title
@@ -281,13 +282,13 @@ class MarkdownV2Formatter {
 		}
 
 		const horizonVal = time_horizon || timeHorizon;
+		const horizonLabels = {
+			very_short_term: 'Muy corto plazo',
+			short_term: 'Corto plazo',
+			medium_term: 'Medio plazo',
+			long_term: 'Largo plazo',
+		};
 		if (horizonVal && typeof horizonVal === 'string' && horizonVal.trim() && (!summary || !summary.includes('Horizonte:'))) {
-			const horizonLabels = {
-				very_short_term: 'Muy corto plazo',
-				short_term: 'Corto plazo',
-				medium_term: 'Medio plazo',
-				long_term: 'Largo plazo',
-			};
 			const horizonLabel = horizonLabels[horizonVal.toLowerCase()] || horizonVal;
 			message += `\n\n*Horizonte:* ${smartEscapeMarkdownV2(normalizeBackslashes(horizonLabel))}`;
 		}
@@ -295,6 +296,31 @@ class MarkdownV2Formatter {
 		const invalidationVal = invalidation_hint || invalidationHint;
 		if (invalidationVal && typeof invalidationVal === 'string' && invalidationVal.trim() && (!summary || !summary.includes('Invalidación:'))) {
 			message += `\n\n*Invalidación:* ${smartEscapeMarkdownV2(normalizeBackslashes(invalidationVal.trim()))}`;
+		}
+
+		// Surface derived-barrier provenance so traders know they are acting
+		// on a heuristic stop/target rather than provider-supplied levels.
+		// See issue #809 / CB-???.
+		if (barriers && barriers.source === 'derived') {
+			const horizonLabelForBarrier = horizonLabels[(barriers.timeHorizon || '').toLowerCase()]
+				|| barriers.timeHorizon
+				|| 'Corto plazo';
+			// Format the stop percentage without trailing decimals when the
+			// value is an integer (e.g. "2%" rather than "2.0%" so MarkdownV2
+			// escape does not produce "2\.0%"). Use one decimal otherwise.
+			let stopPctPercent = '?';
+			if (typeof barriers.stopPct === 'number') {
+				const pctValue = barriers.stopPct * 100;
+				if (Number.isInteger(pctValue)) {
+					stopPctPercent = String(pctValue);
+				} else {
+					stopPctPercent = pctValue.toFixed(1);
+				}
+			}
+			const rr = typeof barriers.rewardMultiplier === 'number'
+				? barriers.rewardMultiplier.toFixed(1)
+				: '?';
+			message += `\n\n_Niveles derivados (${smartEscapeMarkdownV2(normalizeBackslashes(horizonLabelForBarrier))}, ${smartEscapeMarkdownV2(stopPctPercent)}% stop, R\\:R ${smartEscapeMarkdownV2(rr)})_`;
 		}
 
 		// Citations

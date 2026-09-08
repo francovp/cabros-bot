@@ -2204,6 +2204,11 @@ describe('SignalOutcomeService', () => {
 				providerBreakdown: {},
 				entryPriceSourceBreakdown: {},
 				eligibilityBreakdown: {},
+				barrierSourceBreakdown: {
+					derived: { received: 0, eligible: 0, targetHitRatePercent: 0, stopHitRatePercent: 0, targetEligible: 0, stopEligible: 0 },
+					marketContext: { received: 0, eligible: 0, targetHitRatePercent: 0, stopHitRatePercent: 0, targetEligible: 0, stopEligible: 0 },
+					none: { received: 0, eligible: 0, targetHitRatePercent: 0, stopHitRatePercent: 0, targetEligible: 0, stopEligible: 0 },
+				},
 				windows: {},
 				drawdownProxy: {
 					averageMaxAdverseExcursionPercent: 0,
@@ -2475,6 +2480,151 @@ describe('SignalOutcomeService', () => {
 			expect(res.totalSignalsEvaluated).toBe(0);
 			// Without window scoping, the 4h evaluated outcome on doc-1 would have marked it as evaluated
 		});
+	});
+
+	describe('summarizeOutcomes() barrierSourceBreakdown (issue #809 / CB-???)', () => {
+			it('counts received/eligible per barrier source and exposes hit-rate breakdown', async () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+				const now = new Date();
+				global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+					['derived-1', {
+						receivedAt: admin.firestore.Timestamp.fromDate(now),
+						source: 'news-monitor',
+						symbol: 'BTCUSDT',
+						exchange: 'BINANCE',
+						marketDataProvider: 'binance',
+						entryPriceSource: 'binance',
+						side: 'BUY',
+						price: 100,
+						stop: 98,
+						target: 103,
+						eligibilityState: 'supported_provider',
+						barriers: { source: 'derived', side: 'BUY', stopPct: 0.02, rewardMultiplier: 1.5 },
+						outcomeEvaluated: true,
+						outcomes: {
+							'1h': {
+								status: 'evaluated',
+								return: 0.03,
+								maxFavorableExcursion: 0.04,
+								maxAdverseExcursion: -0.01,
+								targetHit: true,
+								stopHit: false,
+								firstHit: 'target',
+								rMultiple: 1.5,
+							},
+						},
+					}],
+					['market-1', {
+						receivedAt: admin.firestore.Timestamp.fromDate(now),
+						source: 'news-monitor',
+						symbol: 'ETHUSDT',
+						exchange: 'BINANCE',
+						marketDataProvider: 'binance',
+						entryPriceSource: 'binance',
+						side: 'SELL',
+						price: 200,
+						stop: 210,
+						target: 185,
+						eligibilityState: 'supported_provider',
+						barriers: { source: 'marketContext' },
+						outcomeEvaluated: true,
+						outcomes: {
+							'1h': {
+								status: 'evaluated',
+								return: -0.02,
+								maxFavorableExcursion: 0.01,
+								maxAdverseExcursion: -0.03,
+								targetHit: false,
+								stopHit: true,
+								firstHit: 'stop',
+								rMultiple: -1.0,
+							},
+						},
+					}],
+					['none-1', {
+						receivedAt: admin.firestore.Timestamp.fromDate(now),
+						source: 'news-monitor',
+						symbol: 'SOLUSDT',
+						exchange: 'BINANCE',
+						marketDataProvider: 'binance',
+						entryPriceSource: 'binance',
+						side: 'BUY',
+						price: 50,
+						// No stop/target and no barriers.source
+						eligibilityState: 'supported_provider',
+						outcomeEvaluated: true,
+						outcomes: {
+							'1h': {
+								status: 'evaluated',
+								return: 0.01,
+								maxFavorableExcursion: 0.02,
+								maxAdverseExcursion: -0.005,
+							},
+						},
+					}],
+				]));
+
+				const res = await SignalOutcomeService.summarizeOutcomes();
+
+				expect(res.available).toBe(true);
+				expect(res.barrierSourceBreakdown.derived.received).toBe(1);
+				expect(res.barrierSourceBreakdown.derived.eligible).toBe(1);
+				expect(res.barrierSourceBreakdown.derived.targetEligible).toBe(1);
+				expect(res.barrierSourceBreakdown.derived.targetHits).toBe(1);
+				expect(res.barrierSourceBreakdown.derived.targetHitRatePercent).toBe(100);
+				expect(res.barrierSourceBreakdown.derived.stopEligible).toBe(1);
+				expect(res.barrierSourceBreakdown.derived.stopHits).toBe(0);
+				expect(res.barrierSourceBreakdown.derived.stopHitRatePercent).toBe(0);
+
+				expect(res.barrierSourceBreakdown.marketContext.received).toBe(1);
+				expect(res.barrierSourceBreakdown.marketContext.targetEligible).toBe(1);
+				expect(res.barrierSourceBreakdown.marketContext.targetHits).toBe(0);
+				expect(res.barrierSourceBreakdown.marketContext.stopEligible).toBe(1);
+				expect(res.barrierSourceBreakdown.marketContext.stopHits).toBe(1);
+				expect(res.barrierSourceBreakdown.marketContext.stopHitRatePercent).toBe(100);
+
+				expect(res.barrierSourceBreakdown.none.received).toBe(1);
+				expect(res.barrierSourceBreakdown.none.targetEligible).toBe(0);
+				expect(res.barrierSourceBreakdown.none.stopEligible).toBe(0);
+				expect(res.barrierSourceBreakdown.none.targetHitRatePercent).toBe(0);
+				expect(res.barrierSourceBreakdown.none.stopHitRatePercent).toBe(0);
+			});
+
+			it('counts signals with no barriers payload under the "none" bucket', async () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+				const now = new Date();
+				global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+					['no-barriers', {
+						receivedAt: admin.firestore.Timestamp.fromDate(now),
+						source: 'news-monitor',
+						symbol: 'BTCUSDT',
+						exchange: 'BINANCE',
+						marketDataProvider: 'binance',
+						entryPriceSource: 'binance',
+						side: 'BUY',
+						price: 100,
+						eligibilityState: 'supported_provider',
+						outcomeEvaluated: true,
+						outcomes: {
+							'1h': {
+								status: 'evaluated',
+								return: 0.01,
+								maxFavorableExcursion: 0.02,
+								maxAdverseExcursion: -0.005,
+							},
+						},
+					}],
+				]));
+
+				const res = await SignalOutcomeService.summarizeOutcomes();
+
+				expect(res.barrierSourceBreakdown.none.received).toBe(1);
+				expect(res.barrierSourceBreakdown.derived.received).toBe(0);
+			});
 	});
 
 	describe('worker lifecycle and scheduling', () => {
