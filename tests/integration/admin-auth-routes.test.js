@@ -58,6 +58,13 @@ describe('Firebase admin route authorization', () => {
 
 		expect(response.status).toBe(403);
 		expect(response.body.code).toBe('ADMIN_ROLE_REQUIRED');
+
+		const dryRunResponse = await request(app)
+			.post('/api/scanner-presets/preset-123/run?dryRun=true')
+			.set('Authorization', 'Bearer firebase-token');
+
+		expect(dryRunResponse.status).toBe(403);
+		expect(dryRunResponse.body.code).toBe('ADMIN_ROLE_REQUIRED');
 	});
 
 	it('keeps Firebase bearer tokens out of protected webhook authentication', async () => {

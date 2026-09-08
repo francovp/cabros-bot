@@ -11,6 +11,10 @@ const VIEWS = {
 	jobs: [{ method: 'POST', path: '/api/jobs/tradingview-analysis', label: 'Create job' }],
 	analysis: [
 		{
+			method: 'POST', path: '/api/webhook/symbol-analysis', label: 'Symbol analysis',
+			renderSuccess: (data) => symbolAnalysisResult(data),
+		},
+		{
 			method: 'POST', path: '/api/webhook/expanded-analysis-alert', label: 'Expanded analysis',
 			renderSuccess: (data) => analysisReportResult(data),
 		},
@@ -191,7 +195,10 @@ const getApiRequestTimeout = (definition) => {
 		return window.CabrosAdminRequest.getApiRequestTimeout(definition);
 	}
 	if (!definition || !definition.path) return API_REQUEST_TIMEOUT_MS;
-	if (definition.path === '/api/webhook/volume-confirmation') return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+	if (definition.path === '/api/webhook/volume-confirmation'
+		|| definition.path === '/api/webhook/symbol-analysis') {
+		return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+	}
 	return LONG_RUNNING_REQUEST_PATHS.has(definition.path)
 		? LONG_RUNNING_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS;
 };
@@ -560,6 +567,14 @@ const SENTIMENT_TONES = {
 	neutral: 'status-disabled',
 };
 
+const DECISION_ACTION_TONES = {
+	buy: 'status-ready',
+	sell: 'status-danger',
+	no_trade: 'status-disabled',
+	hold: 'status-disabled',
+	neutral: 'status-disabled',
+};
+
 const JOB_ACTIVE_STATUSES = ['pending', 'processing'];
 const JOB_STATUS_TONES = {
 	completed: 'status-ready',
@@ -730,7 +745,152 @@ const createJobPanel = (data) => {
 	return panel;
 };
 
-	const volumeConfirmationResult = (data) => {
+const symbolAnalysisResult = (data) => {
+	const panel = element('article', { className: 'operation-card verdict-panel symbol-analysis-result' });
+	panel.append(element('p', { className: 'eyebrow', text: 'Symbol analysis' }));
+
+	const analysis = asObject(data.analysis);
+	const decision = asObject(analysis.decision);
+	const actionStr = String(decision.action || '').trim();
+	const badges = element('div', { className: 'badge-row' });
+
+	if (actionStr) {
+		const actionKey = actionStr.toLowerCase();
+		const tone = DECISION_ACTION_TONES[actionKey] || 'status-unknown';
+		badges.append(element('span', { className: `status-badge ${tone}`, text: actionStr.toUpperCase() }));
+	}
+
+	if (decision.dataSufficient === false) {
+		badges.append(element('span', { className: 'status-badge status-misconfigured', text: 'Insufficient data' }));
+	}
+
+	if (data.analysisStatus) {
+		badges.append(element('span', {
+			className: `capability-chip ${data.analysisStatus === 'complete' ? 'delivery-ok' : 'status-unknown'}`,
+			text: `Status: ${displayLabel(data.analysisStatus)}`,
+		}));
+	}
+	if (badges.children.length) panel.append(badges);
+
+	const identity = [data.symbol || analysis.symbol, data.timeframe || analysis.timeframe].filter(Boolean).join(' · ');
+	if (identity) panel.append(element('p', { className: 'request-state', text: identity }));
+
+	const confidence = asFiniteNumber(decision.confidence);
+	if (confidence !== null) {
+		const normConfidence = confidence > 1 ? confidence / 100 : confidence;
+		panel.append(createMeter(normConfidence, `${Math.round(normConfidence * 100)}% confidence`));
+	}
+
+	const reasons = Array.isArray(decision.reasons) ? decision.reasons.filter(Boolean) : [];
+	const warnings = Array.isArray(decision.warnings) ? decision.warnings.filter(Boolean) : [];
+	if (reasons.length || warnings.length) {
+		const block = element('div', { className: 'detail-block' });
+		if (reasons.length) {
+			block.append(element('h4', { text: 'Decision reasons' }));
+			const ul = element('ul', { className: 'detail-list' });
+			reasons.forEach((reason) => ul.append(element('li', { text: String(reason) })));
+			block.append(ul);
+		}
+		if (warnings.length) {
+			block.append(element('h4', { text: 'Warnings' }));
+			const ul = element('ul', { className: 'detail-list' });
+			warnings.forEach((warning) => ul.append(element('li', { text: String(warning) })));
+			block.append(ul);
+		}
+		panel.append(block);
+	}
+
+	const risk = asObject(analysis.risk);
+	const priceData = asObject(analysis.price_data);
+	const entryPrice = risk.entry_price ?? priceData.current_price ?? priceData.close;
+	if (entryPrice !== undefined && entryPrice !== null) {
+		const riskBlock = element('div', { className: 'detail-block' });
+		riskBlock.append(element('h4', { text: 'Price & Risk Levels' }));
+		const grid = element('div', { className: 'levels-grid' });
+
+		const entryCard = element('div', { className: 'metric-card' });
+		entryCard.append(
+			element('p', { className: 'metric-label', text: 'Entry Price' }),
+			element('p', { className: 'levels-value', text: formatJobValue(entryPrice) }),
+		);
+
+		const slCard = element('div', { className: 'metric-card' });
+		slCard.append(
+			element('p', { className: 'metric-label', text: 'Stop Loss' }),
+			element('p', { className: 'levels-value', text: formatJobValue(risk.stop_loss ?? risk.invalidation_level) }),
+		);
+
+		const targetCard = element('div', { className: 'metric-card' });
+		targetCard.append(
+			element('p', { className: 'metric-label', text: 'Target' }),
+			element('p', { className: 'levels-value', text: formatJobValue(risk.target) }),
+		);
+
+		const rrCard = element('div', { className: 'metric-card' });
+		rrCard.append(
+			element('p', { className: 'metric-label', text: 'Risk / Reward' }),
+			element('p', { className: 'levels-value', text: risk.risk_reward_ratio !== null && risk.risk_reward_ratio !== undefined ? `${risk.risk_reward_ratio}:1` : '—' }),
+		);
+
+		grid.append(entryCard, slCard, targetCard, rrCard);
+		riskBlock.append(grid);
+		panel.append(riskBlock);
+	}
+
+	const indicators = asObject(analysis.technical_indicators);
+	const volume = asObject(analysis.volume_analysis);
+	const indicatorEntries = [
+		['RSI', indicators.RSI],
+		['MACD', indicators.MACD],
+		['BB Position', indicators.BB_position],
+		['ATR', indicators.ATR],
+		['ADX', indicators.ADX],
+		['SMA20', indicators.SMA20],
+		['Volume Ratio', volume.volume_ratio !== null && volume.volume_ratio !== undefined ? `${volume.volume_ratio}x` : null],
+		['Volume Strength', volume.volume_strength],
+	].filter(([, val]) => val !== null && val !== undefined);
+
+	if (indicatorEntries.length) {
+		const indBlock = element('div', { className: 'detail-block' });
+		indBlock.append(element('h4', { text: 'Technical Indicators' }));
+		const indChips = element('div', { className: 'chip-grid' });
+		indicatorEntries.forEach(([label, val]) => {
+			indChips.append(element('span', { className: 'capability-chip', text: `${label}: ${val}` }));
+		});
+		indBlock.append(indChips);
+		panel.append(indBlock);
+	}
+
+	const mtf = asObject(analysis.multi_timeframe);
+	if (Object.keys(mtf).length) {
+		const mtfBlock = element('div', { className: 'detail-block' });
+		mtfBlock.append(element('h4', { text: 'Multi-timeframe Analysis' }));
+		const mtfChips = element('div', { className: 'chip-grid' });
+		Object.entries(mtf).forEach(([tf, tfData]) => {
+			const tfObj = asObject(tfData);
+			const tfTrend = tfObj.trend || tfObj.direction || tfObj.status || (typeof tfData === 'string' ? tfData : null);
+			if (tfTrend) {
+				mtfChips.append(element('span', { className: 'capability-chip', text: `${tf}: ${displayLabel(tfTrend)}` }));
+			}
+		});
+		if (mtfChips.children.length) {
+			mtfBlock.append(mtfChips);
+			panel.append(mtfBlock);
+		}
+	}
+
+	const reportText = typeof data.alertText === 'string' && data.alertText.trim()
+		? data.alertText
+		: asObject(data.payload).alertText;
+	if (typeof reportText === 'string' && reportText.trim()) {
+		panel.append(element('h4', { text: 'Report preview' }));
+		panel.append(element('pre', { className: 'report-text', text: reportText }));
+	}
+
+	return panel;
+};
+
+const volumeConfirmationResult = (data) => {
 		const panel = element('article', { className: 'operation-card verdict-panel' });
 		panel.append(element('p', { className: 'eyebrow', text: 'Volume confirmation' }));
 		const badges = element('div', { className: 'badge-row' });

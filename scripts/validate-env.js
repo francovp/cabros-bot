@@ -14,6 +14,7 @@ const INTEGER_RULES = {
 	GROUNDING_MAX_SOURCES: [1, 20],
 	RATE_LIMIT_WINDOW_MS: [1000, 86400000],
 	RATE_LIMIT_MAX: [1, 100000],
+	SIGNAL_OUTCOME_RETENTION_DAYS: [1, 3650],
 };
 
 function hasValue(value) {
@@ -80,6 +81,18 @@ function validateEnv(env = process.env) {
 	if (isEnabled(env, 'ENABLE_TELEGRAM_BOT')) {
 		addMissing(warnings, 'BOT_TOKEN', env.BOT_TOKEN);
 		addMissing(warnings, 'TELEGRAM_CHAT_ID', env.TELEGRAM_CHAT_ID);
+	}
+
+	if (hasValue(env.TELEGRAM_TOPIC_ROUTES)) {
+		try {
+			const { parseTelegramTopicRoutes } = require('../src/services/notification/telegramTopicRouting');
+			const parsedRoutes = parseTelegramTopicRoutes(env.TELEGRAM_TOPIC_ROUTES);
+			if (Object.keys(parsedRoutes).length === 0) {
+				addInvalid(warnings, 'TELEGRAM_TOPIC_ROUTES', 'must contain valid category:threadId mappings');
+			}
+		} catch (_) {
+			addInvalid(warnings, 'TELEGRAM_TOPIC_ROUTES', 'must contain valid category:threadId mappings');
+		}
 	}
 
 	const isPreview = isPreviewEnvironment(env) || env.IS_PULL_REQUEST === 'true';
@@ -159,8 +172,8 @@ function validateEnv(env = process.env) {
 		addMissing(warnings, 'BINANCE_API_SECRET', env.BINANCE_API_SECRET);
 		addMissing(warnings, 'BINANCE_TRADING_ALLOWED_SYMBOLS', env.BINANCE_TRADING_ALLOWED_SYMBOLS);
 		addMissing(warnings, 'BINANCE_TRADING_MAX_NOTIONAL', env.BINANCE_TRADING_MAX_NOTIONAL);
-		if (hasValue(env.BINANCE_TRADING_ENV) && !['testnet', 'live'].includes(env.BINANCE_TRADING_ENV.trim().toLowerCase())) {
-			addInvalid(warnings, 'BINANCE_TRADING_ENV', 'must be testnet or live');
+		if (hasValue(env.BINANCE_TRADING_ENV) && !['testnet', 'demo', 'live'].includes(env.BINANCE_TRADING_ENV.trim().toLowerCase())) {
+			addInvalid(warnings, 'BINANCE_TRADING_ENV', 'must be testnet, demo, or live');
 		}
 		if (hasValue(env.BINANCE_TRADING_MAX_NOTIONAL) && !isPositiveNumber(env.BINANCE_TRADING_MAX_NOTIONAL)) {
 			addInvalid(warnings, 'BINANCE_TRADING_MAX_NOTIONAL', 'must be a positive number');

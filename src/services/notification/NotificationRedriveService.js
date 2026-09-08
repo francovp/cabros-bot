@@ -257,7 +257,9 @@ class NotificationRedriveService {
 				status: 'pending',
 				alert: {
 					text: typeof alert?.text === 'string' ? alert.text : '',
+					source: alert?.source || null,
 					telegramChatId: alert?.telegramChatId || null,
+					telegramThreadId: alert?.telegramThreadId !== undefined ? alert.telegramThreadId : null,
 					whatsappChatId: alert?.whatsappChatId || null,
 					discordWebhookUrl: alert?.discordWebhookUrl || null,
 					enriched: Boolean(alert?.enriched),
