@@ -1591,7 +1591,7 @@ No environment variable, Remote Config key, endpoint, or feature flag was added.
 
 ## Generic Message Delivery Storage (Issue #654)
 
-Successful `POST /api/webhook/message` deliveries now reuse `AlertStorageService.saveAlert()` after the response is sent, using `source: webhook-message`. This keeps generic-message deliveries available to the existing alert audit, export, summary, and replay flows when `ENABLE_FIRESTORE_ALERT_STORAGE=true` while preserving fail-open delivery behavior. Integration coverage verifies the persisted payload and the existing full suite remains green.
+Successful `POST /api/webhook/message` deliveries now reuse `AlertStorageService.saveAlert()` after the response is sent, using `source: webhook-message`. This keeps generic-message deliveries available to the existing alert audit, export, summary, and replay flows when `ENABLE_FIRESTORE_ALERT_STORAGE=true` while preserving fail-open delivery behavior, including unexpected storage promise rejections. Integration coverage verifies the persisted payload and rejection handling; the existing full suite remains green.
 
 No environment variable, Remote Config key, endpoint, OpenAPI, or Postman contract changed.
 

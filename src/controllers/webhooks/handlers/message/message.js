@@ -91,7 +91,7 @@ function postMessage(botOrGetter) {
 				telegramThreadId: routing.telegramThreadId,
 				whatsappChatId: routing.whatsappChatId,
 				discordWebhookUrl: routing.discordWebhookUrl,
-			});
+			}).catch(() => {});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
 				return res.status(error.statusCode).json({

@@ -103,6 +103,20 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(global.fetch).toHaveBeenCalledTimes(1);
 	});
 
+	it('keeps delivery successful when alert storage rejects', async () => {
+		alertStorageService.saveAlert.mockRejectedValueOnce(new Error('storage unavailable'));
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Storage failure is fail-open', channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.results[0].success).toBe(true);
+		expect(alertStorageService.saveAlert).toHaveBeenCalledTimes(1);
+	});
+
 	it('sends a message to both channels', async () => {
 		const res = await request(app)
 			.post('/api/webhook/message')
