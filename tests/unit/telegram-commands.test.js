@@ -92,6 +92,19 @@ describe('Telegram TradingView commands', () => {
 		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
 	});
 
+	it('does not charge uppercase command entities that Telegraf will not dispatch', async () => {
+		const next = jest.fn();
+		for (const context of Array.from({ length: 3 }, () => buildContext('/SCANNER'))) {
+			await telegramCommandRateLimiter(context, next);
+		}
+
+		const lowercaseCommand = buildContext('/scanner');
+		await telegramCommandRateLimiter(lowercaseCommand, next);
+
+		expect(next).toHaveBeenCalledTimes(4);
+		expect(lowercaseCommand.reply).not.toHaveBeenCalled();
+	});
+
 	it('does not charge plain text against a command bucket', async () => {
 		const next = jest.fn();
 		const plainText = buildContext('scanner');
@@ -157,6 +170,19 @@ describe('Telegram TradingView commands', () => {
 
 		expect(next).toHaveBeenCalledTimes(2);
 		jest.useRealTimers();
+	});
+
+	it('falls back when command limit overrides are not JSON numbers', async () => {
+		process.env.TELEGRAM_COMMAND_RATE_LIMITS_JSON = JSON.stringify({
+			scanner: { max: '3', windowMs: true },
+		});
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner'));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
 	});
 
 	it('does not evict an active bucket when the chat map reaches its cap', async () => {

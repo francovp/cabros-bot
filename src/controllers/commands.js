@@ -22,8 +22,8 @@ function getTelegramCommandRateLimits() {
 		const configured = JSON.parse(raw);
 		return Object.fromEntries(Object.entries(DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS).map(([command, fallback]) => {
 			const candidate = configured && configured[command];
-			const max = Number(candidate && candidate.max);
-			const windowMs = Number(candidate && candidate.windowMs);
+			const max = candidate && typeof candidate.max === 'number' ? candidate.max : NaN;
+			const windowMs = candidate && typeof candidate.windowMs === 'number' ? candidate.windowMs : NaN;
 			return [command, Number.isSafeInteger(max) && max > 0 && max <= MAX_TELEGRAM_COMMAND_RATE_LIMIT
 				&& Number.isSafeInteger(windowMs) && windowMs > 0 && windowMs <= MAX_TELEGRAM_COMMAND_WINDOW_MS
 				? { max, windowMs }
@@ -47,8 +47,7 @@ async function telegramCommandRateLimiter(context, next) {
 	const [rawCommand, recipient] = commandToken.slice(1).split('@', 2);
 	if (recipient !== undefined
 		&& (!context.me || recipient.toLowerCase() !== String(context.me).replace(/^@/, '').toLowerCase())) return next();
-	const normalizedCommand = rawCommand.toLowerCase();
-	const command = { analysis: 'analisis', news: 'noticias' }[normalizedCommand] || normalizedCommand;
+	const command = { analysis: 'analisis', news: 'noticias' }[rawCommand] || rawCommand;
 	const rule = getTelegramCommandRateLimits()[command];
 	const chatId = getChatId(context);
 	if (!rule || chatId === undefined || chatId === null) return next();
