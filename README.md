@@ -1616,6 +1616,29 @@ Query aggregated performance and coverage metrics for recorded signal outcomes, 
 }
 ```
 
+#### GET /api/outcomes/:outcomeId
+
+Fetch a single stored signal outcome by its Firestore document id. Requires `x-api-key` header (or `api-key` query parameter) or Firebase bearer with `admin.viewer`/`admin.operator` role. Returns `404 NOT_FOUND` for unknown or retention-expired ids, `403 FEATURE_DISABLED` if `ENABLE_SIGNAL_OUTCOME_TRACKING !== 'true'`, and `503 STORAGE_UNAVAILABLE` when Firestore is enabled but unreadable. The response shape and sanitized fields mirror the records returned by `GET /api/outcomes`.
+
+#### GET /api/outcomes/export
+
+Stream a bounded window of recorded signal outcomes as JSONL or CSV. The export mirrors `GET /api/alerts/export`: it caps `limit ≤ 1000` and the time window at 31 days, requires both `from` and `to` ISO-8601 timestamps, applies the same CSV safety rules (apostrophe-prefix for formula-leading strings; commas, quotes, and newlines escaped per RFC 4180), and never exposes `rawMcpPayload`, prompt text, provider responses, or credentials. Optional `symbol`, `exchange`, and `setupType` filters narrow the result set.
+
+**Query Parameters:**
+- `from` (required) - ISO-8601 lower bound timestamp
+- `to` (required) - ISO-8601 upper bound timestamp
+- `format` - `jsonl` (default) or `csv`
+- `limit` - Maximum number of outcomes to return (1-1000, default: 100)
+- `symbol` - Filter by trading symbol
+- `exchange` - Filter by exchange identifier
+- `setupType` - Filter by outcome setup type (e.g. `breakout`, `mean-reversion`)
+
+**Response (200 OK):** JSONL or CSV blob with `Content-Disposition: attachment; filename="outcomes-YYYY-MM-DD-YYYY-MM-DD.{jsonl|csv}"`. CSV header row:
+
+```
+id,receivedAt,source,symbol,exchange,side,price,setupType,score,outcomes
+```
+
 ## Multi-Channel Alerts (002)
 
 The alert webhook system supports simultaneous delivery to multiple channels (Telegram, WhatsApp, and Discord) with independent retry logic and graceful degradation.

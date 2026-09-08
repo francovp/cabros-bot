@@ -4,10 +4,17 @@ const httpMocks = require('node-mocks-http');
 const {
 	listOutcomes,
 	summarizeOutcomes,
+	getOutcomeById,
+	exportOutcomes,
 	parseLimit,
 	parseStatus,
 	parseWindow,
 	parseOptionalTimestamp,
+	parseExportLimit,
+	parseExportFormat,
+	parseOptionalSetupType,
+	escapeCsvValue,
+	buildOutcomeCsv,
 } = require('../../src/controllers/outcomes/outcomes');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const sentryService = require('../../src/services/monitoring/SentryService');
@@ -16,6 +23,8 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	isEnabled: jest.fn(),
 	listOutcomes: jest.fn(),
 	summarizeOutcomes: jest.fn(),
+	getOutcomeById: jest.fn(),
+	exportOutcomes: jest.fn(),
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
 	INVALID_CURSOR_MESSAGE: 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.',
 }));
@@ -592,6 +601,359 @@ describe('Outcomes Controller Unit Tests', () => {
 				code: 'INTERNAL_ERROR',
 			});
 			expect(sentryService.captureRuntimeError).toHaveBeenCalled();
+		});
+	});
+
+	describe('helpers for export endpoints', () => {
+		describe('parseExportLimit', () => {
+			it('returns 100 by default', () => {
+				expect(parseExportLimit(undefined)).toBe(100);
+			});
+
+			it('parses valid integer limits within [1, 1000]', () => {
+				expect(parseExportLimit('1')).toBe(1);
+				expect(parseExportLimit('500')).toBe(500);
+				expect(parseExportLimit('1000')).toBe(1000);
+			});
+
+			it('returns null for invalid limits', () => {
+				expect(parseExportLimit('0')).toBeNull();
+				expect(parseExportLimit('1001')).toBeNull();
+				expect(parseExportLimit('abc')).toBeNull();
+			});
+		});
+
+		describe('parseExportFormat', () => {
+			it('returns jsonl by default', () => {
+				expect(parseExportFormat(undefined)).toBe('jsonl');
+			});
+
+			it('returns the format case-insensitively', () => {
+				expect(parseExportFormat('jsonl')).toBe('jsonl');
+				expect(parseExportFormat('JSONL')).toBe('jsonl');
+				expect(parseExportFormat('csv')).toBe('csv');
+				expect(parseExportFormat('CSV')).toBe('csv');
+			});
+
+			it('returns null for invalid formats', () => {
+				expect(parseExportFormat('xlsx')).toBeNull();
+				expect(parseExportFormat('yaml')).toBeNull();
+				expect(parseExportFormat(123)).toBeNull();
+			});
+		});
+
+		describe('parseOptionalSetupType', () => {
+			it('returns undefined for non-strings', () => {
+				expect(parseOptionalSetupType(undefined)).toBeUndefined();
+				expect(parseOptionalSetupType(123)).toBeUndefined();
+				expect(parseOptionalSetupType(null)).toBeUndefined();
+			});
+
+			it('returns the trimmed value for non-empty strings', () => {
+				expect(parseOptionalSetupType('breakout')).toBe('breakout');
+				expect(parseOptionalSetupType('  momentum  ')).toBe('momentum');
+			});
+
+			it('returns undefined for empty strings', () => {
+				expect(parseOptionalSetupType('')).toBeUndefined();
+				expect(parseOptionalSetupType('   ')).toBeUndefined();
+			});
+		});
+
+		describe('escapeCsvValue', () => {
+			it('returns empty string for null and undefined', () => {
+				expect(escapeCsvValue(null)).toBe('');
+				expect(escapeCsvValue(undefined)).toBe('');
+			});
+
+			it('serializes objects as JSON', () => {
+				expect(escapeCsvValue({ a: 1 })).toBe('"{""a"":1}"');
+			});
+
+			it('neutralizes formula-leading strings without breaking numbers', () => {
+				expect(escapeCsvValue('=plain')).toBe(`'=plain`);
+				expect(escapeCsvValue('+boom')).toBe(`'+boom`);
+				expect(escapeCsvValue('-1')).toBe('-1');
+				expect(escapeCsvValue('@host')).toBe(`'@host`);
+				expect(escapeCsvValue('\t=attack')).toBe(`'\t=attack`);
+				expect(escapeCsvValue('\r=attack')).toBe(`"'\r=attack"`);
+				expect(escapeCsvValue('=SUM(1,1)')).toBe(`"'=SUM(1,1)"`);
+				expect(escapeCsvValue('=@SUM(1,1), "quoted"\r\n+next')).toBe(`"'=@SUM(1,1), ""quoted""\r\n+next"`);
+			});
+
+			it('quotes values containing commas, quotes, or newlines', () => {
+				expect(escapeCsvValue('a,b')).toBe('"a,b"');
+				expect(escapeCsvValue('say "hi"')).toBe('"say ""hi"""');
+				expect(escapeCsvValue('line1\nline2')).toBe('"line1\nline2"');
+			});
+		});
+
+		describe('buildOutcomeCsv', () => {
+			it('returns the header row for an empty list', () => {
+				expect(buildOutcomeCsv([])).toBe('id,receivedAt,source,symbol,exchange,side,price,setupType,score,outcomes');
+			});
+
+			it('renders one CSV row per outcome', () => {
+				const csv = buildOutcomeCsv([
+					{
+						id: 'outcome-1',
+						receivedAt: '2026-08-23T12:00:00.000Z',
+						source: 'webhook',
+						symbol: 'BTCUSDT',
+						exchange: 'BINANCE',
+						side: 'BUY',
+						price: 65000,
+						setupType: 'breakout',
+						score: 0.9,
+						outcomes: { '1h': { status: 'evaluated' } },
+					},
+				]);
+				const lines = csv.split('\n');
+				expect(lines[0]).toBe('id,receivedAt,source,symbol,exchange,side,price,setupType,score,outcomes');
+				expect(lines[1]).toBe('outcome-1,2026-08-23T12:00:00.000Z,webhook,BTCUSDT,BINANCE,BUY,65000,breakout,0.9,"{""1h"":{""status"":""evaluated""}}"');
+			});
+		});
+	});
+
+	describe('getOutcomeById', () => {
+		it('returns 403 when feature is disabled', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(false);
+			const req = httpMocks.createRequest({ method: 'GET', url: '/api/outcomes/outcome-1', params: { outcomeId: 'outcome-1' } });
+			const res = httpMocks.createResponse();
+
+			await getOutcomeById(req, res);
+
+			expect(res.statusCode).toBe(403);
+			expect(res._getJSONData().code).toBe('FEATURE_DISABLED');
+		});
+
+		it('returns 400 when outcomeId is missing', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({ method: 'GET', url: '/api/outcomes/', params: {} });
+			const res = httpMocks.createResponse();
+
+			await getOutcomeById(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData()).toEqual({
+				error: 'Missing outcomeId parameter',
+				code: 'INVALID_REQUEST',
+			});
+		});
+
+		it('returns 404 when service returns null', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomeById.mockResolvedValue(null);
+			const req = httpMocks.createRequest({ method: 'GET', url: '/api/outcomes/missing', params: { outcomeId: 'missing' } });
+			const res = httpMocks.createResponse();
+
+			await getOutcomeById(req, res);
+
+			expect(res.statusCode).toBe(404);
+			expect(res._getJSONData()).toEqual({
+				error: 'Outcome not found',
+				code: 'NOT_FOUND',
+			});
+			expect(signalOutcomeService.getOutcomeById).toHaveBeenCalledWith('missing');
+		});
+
+		it('returns 503 when storage is unavailable', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const error = new Error('Firestore is unavailable');
+			error.code = 'STORAGE_UNAVAILABLE';
+			signalOutcomeService.getOutcomeById.mockRejectedValue(error);
+			const req = httpMocks.createRequest({ method: 'GET', url: '/api/outcomes/outcome-1', params: { outcomeId: 'outcome-1' } });
+			const res = httpMocks.createResponse();
+
+			await getOutcomeById(req, res);
+
+			expect(res.statusCode).toBe(503);
+			expect(res._getJSONData().code).toBe('STORAGE_UNAVAILABLE');
+		});
+
+		it('returns the outcome on success', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomeById.mockResolvedValue({
+				id: 'outcome-1',
+				receivedAt: '2026-08-23T12:00:00.000Z',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				side: 'BUY',
+				price: 65000,
+				outcomes: { '1h': { status: 'evaluated' } },
+			});
+
+			const req = httpMocks.createRequest({ method: 'GET', url: '/api/outcomes/outcome-1', params: { outcomeId: 'outcome-1' } });
+			const res = httpMocks.createResponse();
+
+			await getOutcomeById(req, res);
+
+			expect(res.statusCode).toBe(200);
+			expect(res._getJSONData()).toEqual({
+				success: true,
+				outcome: {
+					id: 'outcome-1',
+					receivedAt: '2026-08-23T12:00:00.000Z',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 65000,
+					outcomes: { '1h': { status: 'evaluated' } },
+				},
+			});
+		});
+	});
+
+	describe('exportOutcomes', () => {
+		it('returns 403 when feature is disabled', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(false);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/export',
+				query: { from: '2026-08-23T00:00:00.000Z', to: '2026-08-24T00:00:00.000Z' },
+			});
+			const res = httpMocks.createResponse();
+
+			await exportOutcomes(req, res);
+
+			expect(res.statusCode).toBe(403);
+			expect(res._getJSONData().code).toBe('FEATURE_DISABLED');
+		});
+
+		it('returns 400 when format is invalid', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/export',
+				query: { format: 'xml', from: '2026-08-23T00:00:00.000Z', to: '2026-08-24T00:00:00.000Z' },
+			});
+			const res = httpMocks.createResponse();
+
+			await exportOutcomes(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData()).toEqual({
+				error: 'Invalid export format. Use jsonl or csv.',
+				code: 'INVALID_REQUEST',
+			});
+		});
+
+		it('returns 400 when limit is invalid', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/export',
+				query: { limit: '0', from: '2026-08-23T00:00:00.000Z', to: '2026-08-24T00:00:00.000Z' },
+			});
+			const res = httpMocks.createResponse();
+
+			await exportOutcomes(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData()).toEqual({
+				error: 'Invalid limit. Use an integer between 1 and 1000.',
+				code: 'INVALID_REQUEST',
+			});
+		});
+
+		it('returns 400 when from/to bounds are missing', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/export',
+				query: { format: 'jsonl' },
+			});
+			const res = httpMocks.createResponse();
+
+			await exportOutcomes(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData()).toEqual({
+				error: 'Export requests require bounded from and to ISO-8601 timestamps.',
+				code: 'INVALID_REQUEST',
+			});
+		});
+
+		it('returns 400 when window exceeds 31 days', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/export',
+				query: { from: '2026-01-01T00:00:00.000Z', to: '2026-03-01T00:00:00.000Z' },
+			});
+			const res = httpMocks.createResponse();
+
+			await exportOutcomes(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData().code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 200 with jsonl when format is jsonl', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.exportOutcomes.mockResolvedValue({
+				window: { from: '2026-08-23T00:00:00.000Z', to: '2026-08-24T00:00:00.000Z', limit: 100, maxDays: 31 },
+				outcomes: [
+					{ id: 'outcome-1', receivedAt: '2026-08-23T12:00:00.000Z', symbol: 'BTCUSDT', side: 'BUY' },
+				],
+			});
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/export',
+				query: { format: 'jsonl', from: '2026-08-23T00:00:00.000Z', to: '2026-08-24T00:00:00.000Z' },
+			});
+			const res = httpMocks.createResponse();
+
+			await exportOutcomes(req, res);
+
+			expect(res.statusCode).toBe(200);
+			expect(res.getHeader('Content-Disposition')).toContain('outcomes-2026-08-23-2026-08-24.jsonl');
+			expect(res.getHeader('Content-Type')).toContain('application/x-ndjson');
+			expect(res._getData().trim().split('\n')).toEqual([
+				JSON.stringify({ id: 'outcome-1', receivedAt: '2026-08-23T12:00:00.000Z', symbol: 'BTCUSDT', side: 'BUY' }),
+			]);
+		});
+
+		it('returns 200 with csv when format is csv', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.exportOutcomes.mockResolvedValue({
+				window: { from: '2026-08-23T00:00:00.000Z', to: '2026-08-24T00:00:00.000Z', limit: 100, maxDays: 31 },
+				outcomes: [
+					{ id: 'outcome-1', receivedAt: '2026-08-23T12:00:00.000Z', symbol: 'BTCUSDT', side: 'BUY' },
+				],
+			});
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/export',
+				query: { format: 'csv', from: '2026-08-23T00:00:00.000Z', to: '2026-08-24T00:00:00.000Z' },
+			});
+			const res = httpMocks.createResponse();
+
+			await exportOutcomes(req, res);
+
+			expect(res.statusCode).toBe(200);
+			expect(res.getHeader('Content-Disposition')).toContain('outcomes-2026-08-23-2026-08-24.csv');
+			expect(res.getHeader('Content-Type')).toContain('text/csv');
+			expect(res._getData()).toContain('id,receivedAt,source,symbol,exchange,side,price,setupType,score,outcomes');
+			expect(res._getData()).toContain('outcome-1,2026-08-23T12:00:00.000Z,,BTCUSDT,,BUY,');
+		});
+
+		it('returns 503 when storage is unavailable', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const error = new Error('Firestore is unavailable');
+			error.code = 'STORAGE_UNAVAILABLE';
+			signalOutcomeService.exportOutcomes.mockRejectedValue(error);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/export',
+				query: { from: '2026-08-23T00:00:00.000Z', to: '2026-08-24T00:00:00.000Z' },
+			});
+			const res = httpMocks.createResponse();
+
+			await exportOutcomes(req, res);
+
+			expect(res.statusCode).toBe(503);
+			expect(res._getJSONData().code).toBe('STORAGE_UNAVAILABLE');
 		});
 	});
 });
