@@ -757,8 +757,24 @@ describe('TradingViewMcpService', () => {
 
 		await expect(service._callTool('coin_analysis', { symbol: 'BTCUSDT' })).rejects.toMatchObject({
 			category: 'not_found',
+			 retryable: false,
+		});
+	});
+
+	it('preserves terminal tool error metadata through scanner retries', async () => {
+		const service = new TradingViewMcpService({ maxRetries: 3, logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() } });
+		const error = new Error('No data found for BTCUSDT on BINANCE');
+		error.category = 'not_found';
+		error.retryable = false;
+		service._callTool = jest.fn().mockRejectedValue(error);
+
+		await expect(service.callScanTool('top_gainers')).rejects.toMatchObject({
+			category: 'not_found',
 			retryable: false,
 		});
+
+		expect(service._callTool).toHaveBeenCalledTimes(1);
+		expect(service.getStatus().lastErrorCategory).toBe('not_found');
 	});
 
 	it('calls combined_analysis tool and unwraps result in callCombinedAnalysis', async () => {

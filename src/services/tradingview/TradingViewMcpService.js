@@ -543,12 +543,21 @@ class TradingViewMcpService {
 					const rpcResult = await this._callTool(toolName, args, { signal });
 					return { success: true, channel: 'tradingview-mcp', data: rpcResult };
 				} catch (error) {
-					return { success: false, channel: 'tradingview-mcp', error: error.message };
+					return {
+						success: false,
+						channel: 'tradingview-mcp',
+						error: error.message,
+						...(error.category ? { category: error.category } : {}),
+						...(error.retryable === false ? { retryable: false } : {}),
+					};
 				}
 			}, cfg.maxRetries, this.logger, { signal });
 
 			if (!result.success) {
-				throw new Error(`TradingView MCP scan ${toolName} failed: ${result.error || 'unknown error'}`);
+				const error = new Error(`TradingView MCP scan ${toolName} failed: ${result.error || 'unknown error'}`);
+				if (result.category) error.category = result.category;
+				if (result.retryable === false) error.retryable = false;
+				throw error;
 			}
 
 			return this._normalizeScanResult(result.data);
