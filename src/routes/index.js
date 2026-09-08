@@ -81,6 +81,13 @@ function getRoutes(botOrGetter) {
 	router.get('/status', ...adminRead, getApiStatus);
 	router.get('/capabilities', ...adminRead, getApiStatus);
 
+	const {
+		getReleaseNotes,
+		getReleaseNotesVersion,
+	} = require('../controllers/releaseNotes/releaseNotes');
+	router.get('/release-notes', ...adminRead, getReleaseNotes);
+	router.get('/release-notes/:version', ...adminRead, getReleaseNotesVersion);
+
 	return router;
 }
 
