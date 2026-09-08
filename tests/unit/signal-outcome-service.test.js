@@ -60,6 +60,17 @@ describe('SignalOutcomeService', () => {
 		delete process.env.TWELVE_DATA_RPM;
 	});
 
+	it('declares the composite Firestore index required by tradingSignalOutcomes pagination reads', () => {
+		const fs = require('fs');
+		const path = require('path');
+		const indexes = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../firestore.indexes.json'), 'utf8'));
+		const outcomesIndex = indexes.indexes.find(index => index.collectionGroup === 'tradingSignalOutcomes'
+			&& index.fields.some(field => field.fieldPath === 'receivedAt' && field.order === 'DESCENDING')
+			&& index.fields.some(field => field.fieldPath === '__name__' && field.order === 'DESCENDING'));
+
+		expect(outcomesIndex).toBeDefined();
+	});
+
 	afterEach(() => {
 		EquityMarketDataService._resetPacerForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
