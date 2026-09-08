@@ -235,6 +235,13 @@ function loadFirebaseAdminCredentials(options = {}) {
 		}
 	}
 
+	if (hasStringValue(env.FIREBASE_PROJECT_ID)) {
+		return {
+			projectId: env.FIREBASE_PROJECT_ID.trim(),
+			source: 'adc',
+		};
+	}
+
 	return null;
 }
 
@@ -247,9 +254,6 @@ function loadFirebaseAdminCredentials(options = {}) {
 function loadFirebaseAdminCredentialsOrNull(options = {}) {
 	try {
 		const result = loadFirebaseAdminCredentials(options);
-		if (result === null) {
-			warnOnce('No Firebase admin credentials configured; continuing with in-memory fallback.');
-		}
 		return result;
 	} catch (error) {
 		if (error instanceof FirebaseAdminCredentialsError) {
