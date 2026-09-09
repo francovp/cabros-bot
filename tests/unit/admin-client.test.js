@@ -357,6 +357,37 @@ describe('admin browser client', () => {
 		expect(cards()[0].textContent).toContain('Unknown Dependency');
 	});
 
+	it('renders Binance trading safety fields in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				binanceTrading: {
+					status: 'ready',
+					environment: 'testnet',
+					allowedSymbols: ['BTCUSDT', 'ETHUSDT'],
+					maxNotionalConfigured: true,
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const card = find(browser.elementsById.view, (node) => node.className.includes('status-detail-card'));
+		expect(card.textContent).toContain('Environmenttestnet');
+		expect(card.textContent).toContain('Allowed symbolsBTCUSDT, ETHUSDT');
+		expect(card.textContent).toContain('Max notional configuredtrue');
+	});
+
 	it('renders safe operational counters in dependency details', async () => {
 		const status = {
 			service: { name: 'cabros-bot', environment: 'production' },

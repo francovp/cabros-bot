@@ -575,6 +575,9 @@ const statusNeedsAttention = (detail) => hasStatus({ status: effectiveStatus(det
 const statusDetailFields = [
 	['configured', 'Configured'],
 	['enabled', 'Enabled'],
+	['environment', 'Environment'],
+	['allowedSymbols', 'Allowed symbols'],
+	['maxNotionalConfigured', 'Max notional configured'],
 	['lastSuccessfulLoad', 'Last successful load', true],
 	['cooldownActive', 'Cooldown active'],
 	['remainingCooldownMs', 'Remaining cooldown (ms)'],
@@ -1308,7 +1311,7 @@ const renderStatusCards = (container, entries, emptyText, { detailed = false } =
 				const fieldValue = statusFieldValue(detail, key);
 				if (fieldValue === undefined || fieldValue === null || fieldValue === '') return;
 				const value = element('dd');
-				value.append(timestamp ? createTimestamp(fieldValue) : element('span', { text: String(fieldValue) }));
+				value.append(timestamp ? createTimestamp(fieldValue) : element('span', { text: Array.isArray(fieldValue) ? fieldValue.join(', ') : String(fieldValue) }));
 				list.append(element('dt', { text: label }), value);
 			});
 			nestedStatusEntries(detail).forEach(([name, nested]) => {
