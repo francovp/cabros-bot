@@ -66,7 +66,7 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(capabilities.response[0].body).dependencies.signalOutcomeWorker.entryPriceSources).toEqual({
 			configured: true,
 			crypto: ['mcp', 'binance', 'gemini'],
-			equity: ['twelve-data'],
+			equity: ['mcp', 'binance', 'gemini'],
 		});
 	});
 

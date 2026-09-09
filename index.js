@@ -2,12 +2,8 @@
 require('dotenv').config();
 require('./instrument.js');
 const { printWarnings, validateEnv } = require('./scripts/validate-env');
-const { parseEntryPriceSources } = require('./src/lib/signalOutcomeEntryPriceSources');
 
 printWarnings(validateEnv());
-if (process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES) {
-	parseEntryPriceSources(process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES);
-}
 
 const {
 	getPrice,
