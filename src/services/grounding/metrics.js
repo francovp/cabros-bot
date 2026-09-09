@@ -54,6 +54,10 @@ function recordFailure(reason, error, promptType = 'UNKNOWN') {
 	});
 }
 
+// Process start timestamp for uptime tracking (ISO string)
+const processStartTime = new Date();
+let uptimeSince = processStartTime.toISOString();
+
 /**
  * Get snapshot of grounding request metrics
  * @returns {object}
@@ -64,6 +68,26 @@ function getSnapshot() {
 		successRequests,
 		failureRequests,
 		timeoutRequests,
+	};
+}
+
+/**
+ * Get operational metrics for grounding requests including calculated success rate and uptime
+ * Note: Counters are in-memory, process-local, and reset on process restart.
+ * @returns {{totalRequests: number, successRequests: number, failureRequests: number, timeoutRequests: number, successRate: number, uptimeSince: string}}
+ */
+function getMetrics() {
+	const successRate = totalRequests > 0
+		? Math.round((successRequests / totalRequests) * 1000) / 1000
+		: 0;
+
+	return {
+		totalRequests,
+		successRequests,
+		failureRequests,
+		timeoutRequests,
+		successRate,
+		uptimeSince,
 	};
 }
 
@@ -91,8 +115,9 @@ function getCoalescingSnapshot() {
 
 /**
  * Reset metrics counters for testing
+ * @param {string|null} [customUptimeSince] Optional uptime string to set for testing
  */
-function resetForTesting() {
+function resetForTesting(customUptimeSince = null) {
 	totalRequests = 0;
 	successRequests = 0;
 	failureRequests = 0;
@@ -100,12 +125,16 @@ function resetForTesting() {
 	coalescingHits = 0;
 	coalescingMisses = 0;
 	coalescingFailures = 0;
+	if (customUptimeSince) {
+		uptimeSince = customUptimeSince;
+	}
 }
 
 module.exports = {
 	recordSuccess,
 	recordFailure,
 	getSnapshot,
+	getMetrics,
 	recordCoalescingHit,
 	recordCoalescingMiss,
 	recordCoalescingFailure,

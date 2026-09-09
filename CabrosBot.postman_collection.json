@@ -200,7 +200,7 @@
             "status"
           ]
         },
-        "description": "Protected runtime status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. When ENABLE_FIREBASE_REMOTE_CONFIG=true, dependencies.firebaseRemoteConfig contains safe loader metadata only; disabled, stale, invalid, or unavailable remote values fall back to environment/default settings."
+        "description": "Protected runtime status. dependencies.grounding reports operational metrics (total/success/failure/timeout counts, successRate, and uptimeSince) when ENABLE_GEMINI_GROUNDING=true. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. When ENABLE_FIREBASE_REMOTE_CONFIG=true, dependencies.firebaseRemoteConfig contains safe loader metadata only; disabled, stale, invalid, or unavailable remote values fall back to environment/default settings."
       },
       "response": [
         {
@@ -240,6 +240,38 @@
           "status": "OK",
           "code": 200,
           "body": "{\"dependencies\":{\"tradingViewMcp\":{\"enrichment\":{\"alertPath\":{\"windowMs\":86400000,\"totalCount\":3,\"appliedCount\":2,\"failedCount\":1,\"appliedRate24h\":66.67,\"failureRate24h\":33.33}}}}}"
+        }
+      ]
+    },
+    {
+      "name": "Get Status - grounding operational metrics",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Valid protected status request showing grounding operational metrics (total/success/failure/timeout counts, successRate, and uptimeSince) when ENABLE_GEMINI_GROUNDING=true."
+      },
+      "response": [
+        {
+          "name": "200 OK - Grounding operational metrics",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"grounding\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"metrics\":{\"totalRequests\":1234,\"successRequests\":1180,\"failureRequests\":40,\"timeoutRequests\":14,\"successRate\":0.956,\"uptimeSince\":\"2026-08-25T10:00:00Z\"}}}}"
         }
       ]
     },
