@@ -193,6 +193,12 @@ function applyTtlPolicy(data, collectionName, ttlPolicy = 'refresh', retentionDa
 	return data;
 }
 
+function createFirestoreDouble(value) {
+	return {
+		toProto: () => ({ doubleValue: value }),
+	};
+}
+
 function deserializeValue(val, firestore) {
 	if (val === null || val === undefined) {
 		return val;
@@ -220,6 +226,14 @@ function deserializeValue(val, firestore) {
 				throw new Error('Invalid Integer serialization');
 			}
 			return BigInt(val.value);
+		}
+
+		if (val.__type === 'Double') {
+			const doubleValue = Number(val.value);
+			if (typeof val.value !== 'string' || val.value.trim() === '' || !Number.isFinite(doubleValue)) {
+				throw new Error('Invalid Double serialization');
+			}
+			return createFirestoreDouble(doubleValue);
 		}
 
 		if (val.__type === 'Bytes' && typeof val.base64 === 'string') {

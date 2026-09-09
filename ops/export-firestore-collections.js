@@ -97,6 +97,13 @@ function serializeValue(val) {
 		};
 	}
 
+	if (typeof val === 'number' && Number.isFinite(val) && Number.isInteger(val)) {
+		return {
+			__type: 'Double',
+			value: Object.is(val, -0) ? '-0' : String(val),
+		};
+	}
+
 	if (typeof val === 'number' && !Number.isFinite(val)) {
 		return {
 			__type: 'Number',

@@ -69,14 +69,14 @@ describe('Firestore Backup & Export Tooling', () => {
 	describe('Serialization & Deserialization', () => {
 		it('serializes primitives, null, and undefined correctly', () => {
 			expect(serializeValue('test-string')).toBe('test-string');
-			expect(serializeValue(12345)).toBe(12345);
+			expect(serializeValue(12345.5)).toBe(12345.5);
 			expect(serializeValue(true)).toBe(true);
 			expect(serializeValue(null)).toBeNull();
 			expect(serializeValue(undefined)).toBeUndefined();
 		});
 
 		it('preserves ordinary maps with seconds and nanoseconds fields', () => {
-			const duration = { seconds: 12, nanoseconds: 345, label: 'cooldown' };
+			const duration = { seconds: 12.5, nanoseconds: 345.5, label: 'cooldown' };
 
 			expect(serializeValue(duration)).toEqual(duration);
 		});
@@ -117,6 +117,16 @@ describe('Firestore Backup & Export Tooling', () => {
 
 			expect(serialized).toEqual({ __type: 'Integer', value: '9007199254740993' });
 			expect(deserializeValue(serialized)).toBe(original);
+		});
+
+		it('round-trips integral Firestore doubles as tagged double values', () => {
+			for (const original of [1, -0, 9007199254740992]) {
+				const serialized = serializeValue(original);
+				const expectedValue = Object.is(original, -0) ? '-0' : String(original);
+
+				expect(serialized).toEqual({ __type: 'Double', value: expectedValue });
+				expect(deserializeValue(serialized).toProto()).toEqual({ doubleValue: original });
+			}
 		});
 
 		it('configures export and restore Firestore clients for lossless integer reads', () => {
@@ -1189,12 +1199,15 @@ describe('Firestore Backup & Export Tooling', () => {
 			const scriptPath = path.join(__dirname, '../../ops/restore-firestore-managed.sh');
 			const script = fs.readFileSync(scriptPath, 'utf8');
 			const runbook = fs.readFileSync(path.join(__dirname, '../../docs/firestore-backup-and-restore.md'), 'utf8');
+			const envExample = fs.readFileSync(path.join(__dirname, '../../.env.example'), 'utf8');
 
 			expect(script).toContain('restore_target_mode" != "dedicated"');
 			expect(script).toContain('dedicated recovery project with TTL disabled');
 			expect(script).not.toContain('restore_target_mode" != "stopped"');
 			expect(runbook).toContain('dedicated recovery project with TTL disabled');
 			expect(runbook).not.toContain('or "stopped"');
+			expect(envExample).toContain('valid values: dedicated');
+			expect(envExample).not.toContain('valid values: dedicated or stopped');
 		});
 
 		it('bounds failure notification requests in the scheduled workflow', () => {
