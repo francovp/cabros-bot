@@ -23,11 +23,20 @@ function validateMessageRequest(body) {
 	}
 	const routing = parseNotificationRouting(body);
 
-	const text = message.length > MAX_MESSAGE_LENGTH
+	const originalLength = message.length;
+	const truncated = originalLength > MAX_MESSAGE_LENGTH;
+	const text = truncated
 		? message.substring(0, MAX_MESSAGE_LENGTH) + '...'
 		: message;
+	const deliveredLength = text.length;
 
-	return { text, ...routing };
+	if (truncated) {
+		console.warn(
+			`[MessageWebhook] Message truncated: originalLength=${originalLength}, deliveredLength=${deliveredLength}, max=${MAX_MESSAGE_LENGTH}`,
+		);
+	}
+
+	return { text, truncated, originalLength, deliveredLength, ...routing };
 }
 
 function postMessage(botOrGetter) {
@@ -73,7 +82,14 @@ function postMessage(botOrGetter) {
 				{ http: httpContext },
 			);
 
-			res.json({ success: true, results });
+			const responseBody = { success: true, results };
+			if (routing.truncated) {
+				responseBody.truncated = true;
+				responseBody.originalLength = routing.originalLength;
+				responseBody.deliveredLength = routing.deliveredLength;
+			}
+
+			res.json(responseBody);
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
 				return res.status(error.statusCode).json({

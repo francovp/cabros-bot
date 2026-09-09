@@ -698,4 +698,73 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 		expect(res.body.error).toContain('Forbidden');
 	});
+
+	// ---------------------------------------------------------------------------
+	// Truncation metadata (GH-602)
+	// ---------------------------------------------------------------------------
+	it('omits truncation metadata when message fits within MAX_MESSAGE_LENGTH', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'short message', channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body).not.toHaveProperty('truncated');
+		expect(res.body).not.toHaveProperty('originalLength');
+		expect(res.body).not.toHaveProperty('deliveredLength');
+	});
+
+	it('exposes truncated flag, originalLength and deliveredLength when message exceeds MAX_MESSAGE_LENGTH', async () => {
+		const longMessage = 'A'.repeat(6000);
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: longMessage, channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.truncated).toBe(true);
+		expect(res.body.originalLength).toBe(6000);
+		expect(res.body.deliveredLength).toBe(4003); // 4000 chars + '...'
+		// The truncated text was delivered to the requested chat; the trailing
+		// ellipsis may be stripped by MarkdownV2 escaping so we only assert the
+		// response metadata.
+		const userCall = mockBot.telegram.sendMessage.mock.calls.find(
+			(call) => call[0] === '123456789',
+		);
+		expect(userCall).toBeDefined();
+		expect(userCall[1].length).toBeGreaterThan(0);
+	});
+
+	it('warns via console.warn when truncation occurs', async () => {
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+		const longMessage = 'B'.repeat(5000);
+		await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: longMessage, channels: ['telegram'] })
+			.expect(200);
+
+		const truncationWarnings = warnSpy.mock.calls.filter((call) =>
+			typeof call[0] === 'string' && call[0].includes('[MessageWebhook] Message truncated'),
+		);
+		expect(truncationWarnings.length).toBeGreaterThan(0);
+		warnSpy.mockRestore();
+	});
+
+	it('does not warn when message fits within MAX_MESSAGE_LENGTH', async () => {
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+		await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'short', channels: ['telegram'] })
+			.expect(200);
+
+		const truncationWarnings = warnSpy.mock.calls.filter((call) =>
+			typeof call[0] === 'string' && call[0].includes('[MessageWebhook] Message truncated'),
+		);
+		expect(truncationWarnings.length).toBe(0);
+		warnSpy.mockRestore();
+	});
 });
