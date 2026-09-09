@@ -111,7 +111,7 @@ export FIREBASE_PROJECT_ID="cabros-bot"
 ./ops/restore-firestore-managed.sh gs://cabros-bot-backups/firestore-backups/2026-08-30T04-00-00Z alerts,tradingSignalOutcomes
 ```
 
-Managed restores first require every requested collection to be empty and abort before `gcloud firestore import` when that preflight fails. After import, only `alerts` and `alertReplays` receive a refreshed `expiresAt` using `ALERT_STORAGE_RETENTION_DAYS` (or 90 days when unset); other collections keep their source TTL values and are not rewritten with alert retention. This prevents unrelated live documents from being extended and avoids corrupting collection-specific TTL windows. The restore runner must have Node.js and the same Firebase Admin credentials available to the `gcloud` import.
+Managed restores first require every requested collection to be empty and abort before `gcloud firestore import` when that preflight fails. After import, `alerts` and `alertReplays` receive a refreshed `expiresAt` using `ALERT_STORAGE_RETENTION_DAYS` (or 90 days when unset), while `tradingSignalOutcomes` have `expiresAt` removed and are marked `retentionPolicy: "archive"` so historical outcomes remain queryable and are not removed by native TTL. Other collections keep their source TTL values and are not rewritten with alert retention. This prevents unrelated live documents from being extended and avoids corrupting collection-specific TTL windows. The restore runner must have Node.js and the same Firebase Admin credentials available to the `gcloud` import.
 
 ---
 
@@ -142,9 +142,10 @@ CLI Options:
 - `--dry-run`: Test parse and count documents without writing to Firestore.
 - `--no-overwrite`: Skip existing documents to protect live/newer data from being rolled back by older backups.
 - `--ttl-policy=<refresh|clear|preserve>`: Policy for historical TTL / `expiresAt` fields (default: `refresh`).
-  - `refresh`: For `alerts` and `alertReplays`, computes a new `expiresAt` based on current time + retention window (default 90 days). Other collections keep their existing `expiresAt` unchanged.
-  - `clear`: Removes the `expiresAt` field from restored documents to prevent automated TTL deletion.
+  - `refresh`: For `alerts` and `alertReplays`, computes a new `expiresAt` based on current time + retention window (default 90 days). `tradingSignalOutcomes` are archived as described below; other collections keep their existing `expiresAt` unchanged.
+  - `clear`: Removes the `expiresAt` field from restored documents to prevent automated TTL deletion. Restored `tradingSignalOutcomes` are also marked `retentionPolicy: "archive"` so read-time retention filtering does not hide historical outcomes.
   - `preserve`: Keeps the exact original `expiresAt` timestamp from the backup.
+- Under the default `refresh` policy, restored `tradingSignalOutcomes` are archived in the same collection by removing `expiresAt` and setting `retentionPolicy: "archive"`; `SignalOutcomeService` exempts those records from retention filtering. Use `preserve` only when the source retention behavior is intentional.
 - `--retention-days=<num>`: Retention days used when `--ttl-policy=refresh` (default: `ALERT_STORAGE_RETENTION_DAYS` or 90).
 - `--project=<projectId>`: Target Firebase project ID.
 

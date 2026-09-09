@@ -113,6 +113,10 @@ function buildRetentionExpiryTimestamp(baseDate = new Date()) {
 }
 
 function isRetentionExpired(data) {
+	if (data && data.retentionPolicy === 'archive') {
+		return false;
+	}
+
 	const now = Date.now();
 	const explicitExpiry = getTimestampMillis(data && data.expiresAt);
 	if (explicitExpiry !== null && explicitExpiry <= now) {

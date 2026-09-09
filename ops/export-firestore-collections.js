@@ -51,6 +51,8 @@ function parseArgs(args = process.argv.slice(2)) {
 			options.format = arg.split('=')[1].trim().toLowerCase();
 		} else if (arg.startsWith('--project=')) {
 			options.projectId = arg.split('=')[1].trim();
+		} else {
+			throw new Error(`Unsupported export argument: "${arg}"`);
 		}
 	}
 

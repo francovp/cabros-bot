@@ -11,6 +11,7 @@ const DEFAULT_RETENTION_DAYS = 90;
 const MAX_RETENTION_DAYS = 3650;
 const VALID_TTL_POLICIES = ['refresh', 'clear', 'preserve'];
 const TTL_REFRESH_COLLECTIONS = new Set(['alerts', 'alertReplays']);
+const ARCHIVE_RESTORE_COLLECTIONS = new Set(['tradingSignalOutcomes']);
 const SERIALIZED_MAP_MARKER = '__cabros_firestore_map__';
 
 function getDefaultRetentionDays() {
@@ -85,6 +86,12 @@ function parseArgs(args = process.argv.slice(2)) {
 
 function applyTtlPolicy(data, collectionName, ttlPolicy = 'refresh', retentionDays = 90) {
 	if (!data || typeof data !== 'object') {
+		return data;
+	}
+
+	if (ARCHIVE_RESTORE_COLLECTIONS.has(collectionName) && ttlPolicy !== 'preserve') {
+		delete data.expiresAt;
+		data.retentionPolicy = 'archive';
 		return data;
 	}
 
@@ -249,15 +256,8 @@ function deserializeDocument(record, firestore) {
 		};
 	}
 
-	// Envelope format with _id: { _id: 'docId', data: { ... } } (when keys are strictly _id and data)
-	if ('_id' in record && 'data' in record && Object.keys(record).length === 2 && record.data && typeof record.data === 'object' && !Array.isArray(record.data)) {
-		return {
-			id: record._id,
-			data: deserializeValue(record.data, firestore),
-		};
-	}
-
-	// Legacy flattened format: { _id, ...fields }
+	// Legacy flattened format: { _id, ...fields }. Only __id is an envelope marker;
+	// a legacy document may legitimately have a sole field named data.
 	const id = record._id || record.id || null;
 	const data = {};
 
@@ -482,7 +482,8 @@ async function refreshCollectionTtls(firestore, collectionNames, options = {}) {
 	}
 
 	for (const collectionName of collectionNames) {
-		if (!TTL_REFRESH_COLLECTIONS.has(collectionName)) {
+		const isArchiveCollection = ARCHIVE_RESTORE_COLLECTIONS.has(collectionName);
+		if (!TTL_REFRESH_COLLECTIONS.has(collectionName) && !isArchiveCollection) {
 			results.skippedCollections.push(collectionName);
 			results.collections[collectionName] = 0;
 			continue;
@@ -499,10 +500,16 @@ async function refreshCollectionTtls(firestore, collectionNames, options = {}) {
 			const batch = firestore.batch();
 			let pending = 0;
 			for (const doc of snapshot.docs) {
-				const data = typeof doc.data === 'function' ? (doc.data() || {}) : {};
-				const expiresAt = applyTtlPolicy({}, collectionName, 'refresh', retentionDays).expiresAt;
 				const docRef = doc.ref || firestore.collection(collectionName).doc(doc.id);
-				batch.update(docRef, { expiresAt });
+				if (isArchiveCollection) {
+					batch.update(docRef, {
+						expiresAt: admin.firestore.FieldValue.delete(),
+						retentionPolicy: 'archive',
+					});
+				} else {
+					const expiresAt = applyTtlPolicy({}, collectionName, 'refresh', retentionDays).expiresAt;
+					batch.update(docRef, { expiresAt });
+				}
 				pending += 1;
 			}
 

@@ -216,6 +216,35 @@ describe('SignalOutcomeService Retention and TTL', () => {
 			jest.useRealTimers();
 		});
 
+		it('includes archived restored documents regardless of historical retention timestamps', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const now = new Date('2026-08-01T12:00:00.000Z');
+			jest.useFakeTimers().setSystemTime(now);
+
+			const archivedDoc = {
+				requestId: 'archived-restore-req',
+				source: 'market-scanner',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				price: 50000,
+				side: 'BUY',
+				receivedAt: admin.firestore.Timestamp.fromDate(new Date('2024-01-01T10:00:00.000Z')),
+				expiresAt: admin.firestore.Timestamp.fromDate(new Date('2025-01-01T10:00:00.000Z')),
+				retentionPolicy: 'archive',
+				outcomeEvaluated: true,
+				outcomes: {},
+			};
+
+			const firestore = AlertStorageService.getFirestore();
+			await firestore.collection(SignalOutcomeService.COLLECTION_NAME).doc('archived-restore-id').set(archivedDoc);
+
+			const result = await SignalOutcomeService.listOutcomes({ limit: 10 });
+			expect(result.outcomes).toHaveLength(1);
+			expect(result.outcomes[0].requestId).toBe('archived-restore-req');
+
+			jest.useRealTimers();
+		});
+
 		it('excludes retention-expired documents in summarizeOutcomes', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			const now = new Date('2026-08-01T12:00:00.000Z');
@@ -411,4 +440,3 @@ describe('SignalOutcomeService Retention and TTL', () => {
 		});
 	});
 });
-

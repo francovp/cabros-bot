@@ -244,6 +244,17 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(data.amount).toBe(100);
 			expect(data._id).toBeUndefined();
 		});
+
+		it('preserves a legacy document whose only field is data', () => {
+			const legacyRecord = {
+				_id: 'legacy-data-doc',
+				data: { source: 'legacy', value: 42 },
+			};
+
+			const { id, data } = deserializeDocument(legacyRecord);
+			expect(id).toBe('legacy-data-doc');
+			expect(data).toEqual({ data: { source: 'legacy', value: 42 } });
+		});
 	});
 
 	describe('CLI Argument Parsing', () => {
@@ -274,6 +285,10 @@ describe('Firestore Backup & Export Tooling', () => {
 		it('rejects empty or duplicate export collection lists', () => {
 			expect(() => parseExportArgs(['--collections='])).toThrow('must not be empty');
 			expect(() => parseExportArgs(['--collections=alerts,alerts'])).toThrow('must not contain duplicates');
+		});
+
+		it('rejects unsupported export arguments', () => {
+			expect(() => parseExportArgs(['--projet=cabros-bot'])).toThrow('Unsupported export argument');
 		});
 
 		it('parses restore CLI arguments', () => {
@@ -655,6 +670,32 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(saved.expiresAt).toBeDefined();
 		});
 
+		it('restores signal outcomes as archival records under the default TTL policy', async () => {
+			const jsonlFile = path.join(tempDir, 'tradingSignalOutcomes.jsonl');
+			fs.writeFileSync(jsonlFile, JSON.stringify({
+				__id: 'outcome-1',
+				data: {
+					receivedAt: { __type: 'Timestamp', iso: '2025-01-01T00:00:00.000Z', seconds: 1735689600, nanoseconds: 0 },
+					expiresAt: { __type: 'Timestamp', iso: '2026-01-01T00:00:00.000Z', seconds: 1767225600, nanoseconds: 0 },
+				},
+			}) + '\n');
+
+			const mockBatch = {
+				set: jest.fn(),
+				commit: jest.fn().mockResolvedValue(undefined),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue({ doc: (id) => ({ id }) }),
+				batch: jest.fn().mockReturnValue(mockBatch),
+			};
+
+			await restoreCollectionFile(mockFirestore, 'tradingSignalOutcomes', jsonlFile);
+
+			const saved = mockBatch.set.mock.calls[0][1];
+			expect(saved.retentionPolicy).toBe('archive');
+			expect(saved).not.toHaveProperty('expiresAt');
+		});
+
 		it('runRestore throws when an explicitly requested collection file is missing', async () => {
 			const mockFirestore = {
 				collection: jest.fn(),
@@ -761,6 +802,40 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(batch.commit).toHaveBeenCalledTimes(1);
 		});
 
+		it('marks managed-imported signal outcomes as archival records', async () => {
+			const docs = [
+				{
+					id: 'outcome-1',
+					ref: { id: 'outcome-1' },
+					data: () => ({ expiresAt: { seconds: 1 } }),
+				},
+			];
+			const query = {
+				orderBy: jest.fn().mockReturnThis(),
+				limit: jest.fn().mockReturnThis(),
+				startAfter: jest.fn().mockReturnThis(),
+				get: jest.fn()
+					.mockResolvedValueOnce({ empty: false, docs })
+					.mockResolvedValueOnce({ empty: true, docs: [] }),
+			};
+			const batch = {
+				update: jest.fn(),
+				commit: jest.fn().mockResolvedValue(undefined),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue(query),
+				batch: jest.fn().mockReturnValue(batch),
+			};
+
+			const result = await refreshCollectionTtls(mockFirestore, ['tradingSignalOutcomes'], { allowNonEmpty: true });
+
+			expect(result.totalUpdated).toBe(1);
+			expect(batch.update).toHaveBeenCalledWith(docs[0].ref, {
+				expiresAt: { __deleteField: true },
+				retentionPolicy: 'archive',
+			});
+		});
+
 		it('requires an explicit non-empty override and skips unsupported TTL collections', async () => {
 			const docs = [{
 				id: 'job-1',
@@ -819,6 +894,13 @@ describe('Firestore Backup & Export Tooling', () => {
 			const content = fs.readFileSync(workflowPath, 'utf8');
 
 			expect(content).toContain('retention-days: 120');
+		});
+
+		it('authenticates gcloud before running a managed export', () => {
+			const workflowPath = path.join(__dirname, '../../.github/workflows/firestore-backup.yml');
+			const content = fs.readFileSync(workflowPath, 'utf8');
+
+			expect(content).toContain('gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"');
 		});
 
 		it('export-firestore-managed.sh requires project and bucket', () => {

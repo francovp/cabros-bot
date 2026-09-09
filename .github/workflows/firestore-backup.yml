@@ -53,6 +53,7 @@ jobs:
         run: |
           if [ -n "$GCS_BACKUP_BUCKET" ] && command -v gcloud >/dev/null 2>&1; then
             echo "Running managed GCS export..."
+            gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS" --project="$FIREBASE_PROJECT_ID"
             COLLECTION_IDS="$COLLECTIONS_INPUT" bash ops/export-firestore-managed.sh
           else
             echo "Running node JSONL backup..."
