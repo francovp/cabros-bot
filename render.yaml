@@ -325,6 +325,51 @@ services:
       name: cabros-crypto-bot-telegram-iac
       type: web
       envVarKey: ENABLE_MESSAGE_FOOTER_METADATA
+  - key: ENABLE_FIREBASE_REMOTE_CONFIG
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_FIREBASE_REMOTE_CONFIG
+  - key: FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS
+  - key: FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS
+  - key: FIREBASE_REMOTE_CONFIG_MAX_AGE_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: FIREBASE_REMOTE_CONFIG_MAX_AGE_MS
+  - key: TRADINGVIEW_MCP_DEFAULT_EXCHANGE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: TRADINGVIEW_MCP_DEFAULT_EXCHANGE
+  - key: MARKET_SCANNER_DEFAULT_EXCHANGE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: MARKET_SCANNER_DEFAULT_EXCHANGE
+  - key: EXPANDED_ANALYSIS_ALERT_SYMBOLS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: EXPANDED_ANALYSIS_ALERT_SYMBOLS
+  - key: ZERO_CHANNEL_ALERT_COOLDOWN_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ZERO_CHANNEL_ALERT_COOLDOWN_MS
+  - key: ENABLE_API_ONLY_MODE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_API_ONLY_MODE
 - type: keyvalue
   plan: starter
   region: frankfurt
