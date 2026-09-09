@@ -312,6 +312,8 @@ describe('RemoteConfigService', () => {
 			TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD: 10,
 			TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS: 300000,
 			TRADINGVIEW_MCP_PAGE_COOLDOWN_MS: 1800000,
+			CIRCUIT_BREAKER_THRESHOLD: 8,
+			CIRCUIT_BREAKER_COOLDOWN_MS: 45000,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -345,6 +347,8 @@ describe('RemoteConfigService', () => {
 		expect(config.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD).toBe(10);
 		expect(config.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS).toBe(300000);
 		expect(config.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS).toBe(1800000);
+		expect(config.CIRCUIT_BREAKER_THRESHOLD).toBe(8);
+		expect(config.CIRCUIT_BREAKER_COOLDOWN_MS).toBe(45000);
 	});
 
 	it('validates and applies safe request-time feature flags from remote config', async () => {

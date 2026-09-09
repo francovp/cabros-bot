@@ -23,6 +23,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 100 },
 	TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS: { type: 'number', defaultValue: 600000, integer: true, min: 1000, max: 86400000 },
 	TRADINGVIEW_MCP_PAGE_COOLDOWN_MS: { type: 'number', defaultValue: 3600000, integer: true, min: 1000, max: 86400000 },
+	CIRCUIT_BREAKER_THRESHOLD: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 100 },
+	CIRCUIT_BREAKER_COOLDOWN_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 86400000 },
 	ENABLE_MESSAGE_FOOTER_METADATA: { type: 'boolean', defaultValue: true },
 	GROUNDING_MAX_SOURCES: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	GROUNDING_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 120000 },

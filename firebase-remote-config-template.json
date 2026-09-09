@@ -77,6 +77,20 @@
       "description": "Operator degradation paging cooldown in milliseconds between admin notifications",
       "valueType": "NUMBER"
     },
+    "CIRCUIT_BREAKER_THRESHOLD": {
+      "defaultValue": {
+        "value": "5"
+      },
+      "description": "Consecutive external API provider failures before circuit breaker opens",
+      "valueType": "NUMBER"
+    },
+    "CIRCUIT_BREAKER_COOLDOWN_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Cooldown duration in milliseconds before circuit breaker allows half-open probe",
+      "valueType": "NUMBER"
+    },
     "ENABLE_MESSAGE_FOOTER_METADATA": {
       "defaultValue": {
         "value": "true"

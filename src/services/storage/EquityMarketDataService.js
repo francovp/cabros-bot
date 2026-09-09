@@ -1,6 +1,9 @@
 'use strict';
 
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { CircuitBreaker } = require('../../lib/circuitBreaker');
+
+const twelveDataCircuitBreaker = new CircuitBreaker({ name: 'twelve-data' });
 
 const PROVIDER_NAME = 'twelve-data';
 const DEFAULT_BASE_URL = 'https://api.twelvedata.com';
@@ -25,12 +28,14 @@ const REASONS = Object.freeze({
 	INVALID_RESPONSE: 'twelve_data_invalid_response',
 	NO_DATA: 'twelve_data_no_data',
 	UNAVAILABLE: 'twelve_data_unavailable',
+	CIRCUIT_BREAKER_OPEN: 'twelve_data_circuit_breaker_open',
 });
 
 const TRANSIENT_REASONS = Object.freeze(new Set([
 	REASONS.RATE_LIMITED,
 	REASONS.TIMEOUT,
 	REASONS.UNAVAILABLE,
+	REASONS.CIRCUIT_BREAKER_OPEN,
 	'binance_unavailable',
 	'market_data_unavailable',
 ]));
@@ -206,9 +211,14 @@ function getConfig() {
 
 function getStatus() {
 	const config = getConfig();
-	const status = !config.enabled
+	const breakerStatus = twelveDataCircuitBreaker.getStatus();
+	let status = !config.enabled
 		? 'disabled'
 		: config.configured ? 'ready' : 'misconfigured';
+
+	if (status === 'ready' && breakerStatus.state === 'open') {
+		status = 'degraded';
+	}
 
 	return {
 		provider: config.provider || null,
@@ -216,6 +226,7 @@ function getStatus() {
 		configured: config.configured,
 		ready: status === 'ready',
 		status,
+		circuitBreaker: breakerStatus,
 		supportedExchanges: [...SUPPORTED_EXCHANGES],
 		timeoutMs: config.timeoutMs,
 		rpm: config.rpm,
@@ -268,6 +279,10 @@ async function requestJson(path, params, timeoutOverride) {
 		throw new EquityMarketDataError(REASONS.NOT_CONFIGURED);
 	}
 
+	if (!twelveDataCircuitBreaker.canExecute()) {
+		throw new EquityMarketDataError(REASONS.CIRCUIT_BREAKER_OPEN, { status: 503 });
+	}
+
 	const totalTimeoutMs = timeoutOverride === undefined ? config.timeoutMs : parseTimeout(timeoutOverride);
 	const startMs = Date.now();
 
@@ -316,15 +331,23 @@ async function requestJson(path, params, timeoutOverride) {
 			throw new EquityMarketDataError(reason, { status: response.status });
 		}
 
+		twelveDataCircuitBreaker.recordSuccess();
 		return body;
 	} catch (error) {
 		if (error instanceof EquityMarketDataError) {
+			if (error.reason !== REASONS.NO_DATA && error.reason !== REASONS.CIRCUIT_BREAKER_OPEN) {
+				twelveDataCircuitBreaker.recordFailure(error);
+			}
 			throw error;
 		}
 		if (error && error.name === 'AbortError') {
-			throw new EquityMarketDataError(REASONS.TIMEOUT);
+			const timeoutError = new EquityMarketDataError(REASONS.TIMEOUT);
+			twelveDataCircuitBreaker.recordFailure(timeoutError);
+			throw timeoutError;
 		}
-		throw new EquityMarketDataError(REASONS.UNAVAILABLE, { cause: error });
+		const unavailError = new EquityMarketDataError(REASONS.UNAVAILABLE, { cause: error });
+		twelveDataCircuitBreaker.recordFailure(unavailError);
+		throw unavailError;
 	} finally {
 		clearTimeout(timeoutId);
 	}
@@ -442,5 +465,8 @@ module.exports = {
 	normalizeExchange,
 	normalizeSymbol,
 	resolveQueryExchange,
+	getCircuitBreakerStatus: () => twelveDataCircuitBreaker.getStatus(),
+	_getCircuitBreakerForTesting: () => twelveDataCircuitBreaker,
+	_resetCircuitBreakerForTesting: () => twelveDataCircuitBreaker.reset(),
 	_resetPacerForTesting,
 };
