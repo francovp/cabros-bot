@@ -447,6 +447,48 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(JSON.parse(content[1])).toEqual({ __id: 'doc-2', data: { name: 'Doc 2' } });
 		});
 
+		it('waits for JSONL stream backpressure before continuing', async () => {
+			const docs = [
+				{ id: 'doc-1', data: () => ({ name: 'Doc 1' }) },
+				{ id: 'doc-2', data: () => ({ name: 'Doc 2' }) },
+			];
+			const query = {
+				orderBy: jest.fn().mockReturnThis(),
+				limit: jest.fn().mockReturnThis(),
+				startAfter: jest.fn().mockReturnThis(),
+				get: jest.fn()
+					.mockResolvedValueOnce({ empty: false, docs })
+					.mockResolvedValueOnce({ empty: true, docs: [] }),
+			};
+			const mockFirestore = { collection: jest.fn().mockReturnValue(query) };
+			let releaseDrain;
+			const writeStream = {
+				write: jest.fn().mockReturnValueOnce(false).mockReturnValue(true),
+				once: jest.fn((event, callback) => {
+					if (event === 'drain') releaseDrain = callback;
+				}),
+				removeListener: jest.fn(),
+				end: jest.fn((callback) => callback()),
+			};
+			const createWriteStream = jest.spyOn(fs, 'createWriteStream').mockReturnValue(writeStream);
+
+			try {
+				const exportPromise = exportCollection(mockFirestore, 'testCol', {
+					pageSize: 2,
+					outputFilePath: path.join(tempDir, 'backpressure.jsonl'),
+				});
+
+				await new Promise((resolve) => setImmediate(resolve));
+				expect(writeStream.write).toHaveBeenCalledTimes(1);
+				expect(releaseDrain).toEqual(expect.any(Function));
+				releaseDrain();
+				await exportPromise;
+				expect(writeStream.write).toHaveBeenCalledTimes(2);
+			} finally {
+				createWriteStream.mockRestore();
+			}
+		});
+
 		it('dry-run counts documents without writing files', async () => {
 			const docs = [{ id: 'doc-1', data: () => ({ name: 'Doc 1' }) }];
 			const query = {
@@ -566,6 +608,41 @@ describe('Firestore Backup & Export Tooling', () => {
 				expect(mockBatch.set).not.toHaveBeenCalled();
 				expect(mockBatch.commit).not.toHaveBeenCalled();
 			}
+		});
+
+		it('rejects document IDs that violate Firestore constraints before writing', async () => {
+			for (const id of ['.', '..', '__reserved__', 'a'.repeat(1501)]) {
+				const jsonlFile = path.join(tempDir, 'alerts.jsonl');
+				fs.writeFileSync(jsonlFile, JSON.stringify({ __id: id, data: {} }) + '\n', 'utf8');
+				const mockBatch = { set: jest.fn(), commit: jest.fn() };
+				const mockFirestore = {
+					batch: jest.fn().mockReturnValue(mockBatch),
+					collection: jest.fn().mockReturnValue({ doc: jest.fn() }),
+				};
+
+				await expect(restoreCollectionFile(mockFirestore, 'alerts', jsonlFile))
+					.rejects.toThrow('invalid document ID');
+				expect(mockBatch.set).not.toHaveBeenCalled();
+				expect(mockBatch.commit).not.toHaveBeenCalled();
+			}
+		});
+
+		it('rejects duplicate document IDs before writing', async () => {
+			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
+			fs.writeFileSync(jsonlFile, [
+				JSON.stringify({ __id: 'duplicate', data: { version: 1 } }),
+				JSON.stringify({ __id: 'duplicate', data: { version: 2 } }),
+			].join('\n') + '\n', 'utf8');
+			const mockBatch = { set: jest.fn(), commit: jest.fn() };
+			const mockFirestore = {
+				batch: jest.fn().mockReturnValue(mockBatch),
+				collection: jest.fn().mockReturnValue({ doc: jest.fn() }),
+			};
+
+			await expect(restoreCollectionFile(mockFirestore, 'alerts', jsonlFile))
+				.rejects.toThrow('duplicate document ID');
+			expect(mockBatch.set).not.toHaveBeenCalled();
+			expect(mockBatch.commit).not.toHaveBeenCalled();
 		});
 
 		it('splits large restore batches before the request-size limit', async () => {

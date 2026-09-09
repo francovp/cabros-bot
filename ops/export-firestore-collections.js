@@ -204,7 +204,20 @@ async function exportCollection(firestore, collectionName, options = {}) {
 				count += 1;
 				if (writeStream) {
 					const record = serializeDocument(doc);
-					writeStream.write(JSON.stringify(record) + '\n');
+					if (!writeStream.write(JSON.stringify(record) + '\n')) {
+						await new Promise((resolve, reject) => {
+							const onDrain = () => {
+								writeStream.removeListener('error', onError);
+								resolve();
+							};
+							const onError = (err) => {
+								writeStream.removeListener('drain', onDrain);
+								reject(err);
+							};
+							writeStream.once('drain', onDrain);
+							writeStream.once('error', onError);
+						});
+					}
 				}
 			}
 

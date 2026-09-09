@@ -15,6 +15,19 @@ const VALID_TTL_POLICIES = ['refresh', 'clear', 'preserve'];
 const TTL_REFRESH_COLLECTIONS = new Set(['alerts', 'alertReplays']);
 const ARCHIVE_RESTORE_COLLECTIONS = new Set(['tradingSignalOutcomes']);
 const SERIALIZED_MAP_MARKER = '__cabros_firestore_map__';
+const MAX_DOCUMENT_ID_BYTES = 1500;
+const RESERVED_DOCUMENT_ID_PATTERN = /^__.*__$/;
+
+function isValidDocumentId(id) {
+	return typeof id === 'string'
+		&& id.length > 0
+		&& Buffer.from(id, 'utf8').toString('utf8') === id
+		&& Buffer.byteLength(id, 'utf8') <= MAX_DOCUMENT_ID_BYTES
+		&& id !== '.'
+		&& id !== '..'
+		&& !id.includes('/')
+		&& !RESERVED_DOCUMENT_ID_PATTERN.test(id);
+}
 
 function normalizeCollectionList(collections) {
 	if (!Array.isArray(collections)) {
@@ -393,6 +406,7 @@ async function* readValidatedRecords(filePath, firestore) {
 		crlfDelay: Infinity,
 	});
 	let lineNumber = 0;
+	const seenIds = new Set();
 
 	try {
 		for await (const line of rl) {
@@ -413,9 +427,13 @@ async function* readValidatedRecords(filePath, firestore) {
 			if (!id) {
 				throw new Error(`Backup record missing document ID in ${filePath} at line ${lineNumber}`);
 			}
-			if (typeof id !== 'string' || id.includes('/')) {
+			if (!isValidDocumentId(id)) {
 				throw new Error(`Backup record has invalid document ID in ${filePath} at line ${lineNumber}`);
 			}
+			if (seenIds.has(id)) {
+				throw new Error(`Backup contains duplicate document ID in ${filePath} at line ${lineNumber}: ${id}`);
+			}
+			seenIds.add(id);
 			if (estimateRecordBytes({ id, data }) > MAX_ESTIMATED_BATCH_BYTES) {
 				throw new Error(`Backup record exceeds the estimated Firestore request size limit in ${filePath} at line ${lineNumber}`);
 			}
