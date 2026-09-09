@@ -7,12 +7,37 @@ const admin = require('firebase-admin');
 
 const DEFAULT_COLLECTIONS = ['alerts', 'alertReplays', 'tradingSignalOutcomes', 'scannerPresets'];
 const BATCH_SIZE = 400;
+const MAX_ESTIMATED_BATCH_BYTES = 8 * 1024 * 1024;
+const ESTIMATED_RECORD_OVERHEAD_BYTES = 1024;
 const DEFAULT_RETENTION_DAYS = 90;
 const MAX_RETENTION_DAYS = 3650;
 const VALID_TTL_POLICIES = ['refresh', 'clear', 'preserve'];
 const TTL_REFRESH_COLLECTIONS = new Set(['alerts', 'alertReplays']);
 const ARCHIVE_RESTORE_COLLECTIONS = new Set(['tradingSignalOutcomes']);
 const SERIALIZED_MAP_MARKER = '__cabros_firestore_map__';
+
+function normalizeCollectionList(collections) {
+	if (!Array.isArray(collections)) {
+		throw new Error('Restore collections must be an array');
+	}
+
+	const normalized = collections.map((value) => String(value).trim()).filter(Boolean);
+	if (normalized.length === 0) {
+		throw new Error('Restore collection list must not be empty');
+	}
+	if (normalized.some((value) => value.includes('/') || value.includes('\\'))) {
+		throw new Error('Collection selectors must be single collection IDs without path separators');
+	}
+	if (new Set(normalized).size !== normalized.length) {
+		throw new Error('Restore collection list must not contain duplicates');
+	}
+
+	return normalized;
+}
+
+function estimateRecordBytes(record) {
+	return Buffer.byteLength(JSON.stringify(record), 'utf8') + ESTIMATED_RECORD_OVERHEAD_BYTES;
+}
 
 function getDefaultRetentionDays() {
 	const rawValue = process.env.ALERT_STORAGE_RETENTION_DAYS;
@@ -85,6 +110,9 @@ function parseArgs(args = process.argv.slice(2)) {
 
 	if (!options.inputDir) {
 		throw new Error('Missing required argument: --input-dir=<path_to_export_directory>');
+	}
+	if (options.collections) {
+		options.collections = normalizeCollectionList(options.collections);
 	}
 
 	return options;
@@ -373,6 +401,9 @@ async function* readValidatedRecords(filePath, firestore) {
 			if (typeof id !== 'string' || id.includes('/')) {
 				throw new Error(`Backup record has invalid document ID in ${filePath} at line ${lineNumber}`);
 			}
+			if (estimateRecordBytes({ id, data }) > MAX_ESTIMATED_BATCH_BYTES) {
+				throw new Error(`Backup record exceeds the estimated Firestore request size limit in ${filePath} at line ${lineNumber}`);
+			}
 
 			yield { id, data };
 		}
@@ -420,11 +451,9 @@ async function restoreCollectionFile(firestore, collectionName, filePath, option
 
 	let totalRestored = 0;
 	let chunk = [];
-	for await (const record of readValidatedRecords(filePath, firestore)) {
-		chunk.push(record);
-		if (chunk.length < batchSize) {
-			continue;
-		}
+	let chunkBytes = 0;
+	const flushChunk = async () => {
+		if (chunk.length === 0) return;
 
 		const count = await writeBatchChunk(firestore, collectionName, chunk, {
 			isDryRun,
@@ -434,17 +463,18 @@ async function restoreCollectionFile(firestore, collectionName, filePath, option
 		});
 		totalRestored += count;
 		chunk = [];
-	}
+		chunkBytes = 0;
+	};
 
-	if (chunk.length > 0) {
-		const count = await writeBatchChunk(firestore, collectionName, chunk, {
-			isDryRun,
-			overwrite,
-			ttlPolicy,
-			retentionDays,
-		});
-		totalRestored += count;
+	for await (const record of readValidatedRecords(filePath, firestore)) {
+		const recordBytes = estimateRecordBytes(record);
+		if (chunk.length > 0 && (chunk.length >= batchSize || chunkBytes + recordBytes > MAX_ESTIMATED_BATCH_BYTES)) {
+			await flushChunk();
+		}
+		chunk.push(record);
+		chunkBytes += recordBytes;
 	}
+	await flushChunk();
 
 	return {
 		collection: collectionName,
@@ -634,7 +664,9 @@ async function runRestore(options = {}) {
 	const hasExplicitCollections = Array.isArray(options.collections) && options.collections.length > 0;
 
 	let targetCollections = options.collections;
-	if (!hasExplicitCollections) {
+	if (hasExplicitCollections) {
+		targetCollections = normalizeCollectionList(options.collections);
+	} else {
 		targetCollections = await validateManifest(inputDir);
 	}
 

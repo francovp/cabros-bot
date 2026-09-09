@@ -17,6 +17,9 @@ function normalizeCollectionList(collections) {
 	if (normalized.length === 0) {
 		throw new Error('Export collection list must not be empty');
 	}
+	if (normalized.some((value) => value.includes('/') || value.includes('\\'))) {
+		throw new Error('Collection selectors must be single collection IDs without path separators');
+	}
 	if (new Set(normalized).size !== normalized.length) {
 		throw new Error('Export collection list must not contain duplicates');
 	}

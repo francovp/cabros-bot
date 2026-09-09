@@ -296,6 +296,7 @@ describe('Firestore Backup & Export Tooling', () => {
 		it('rejects empty or duplicate export collection lists', () => {
 			expect(() => parseExportArgs(['--collections='])).toThrow('must not be empty');
 			expect(() => parseExportArgs(['--collections=alerts,alerts'])).toThrow('must not contain duplicates');
+			expect(() => parseExportArgs(['--collections=../archive/alerts'])).toThrow('single collection ID');
 		});
 
 		it('rejects an explicitly empty export project', () => {
@@ -338,6 +339,16 @@ describe('Firestore Backup & Export Tooling', () => {
 				'--input-dir=/tmp/test-export',
 				'--project=',
 			])).toThrow('project must not be empty');
+
+			expect(() => parseRestoreArgs([
+				'--input-dir=/tmp/test-export',
+				'--collections=alerts,alerts',
+			])).toThrow('must not contain duplicates');
+
+			expect(() => parseRestoreArgs([
+				'--input-dir=/tmp/test-export',
+				'--collections=../archive/alerts',
+			])).toThrow('single collection ID');
 		});
 
 		it('defaults restore retentionDays from ALERT_STORAGE_RETENTION_DAYS environment variable', () => {
@@ -541,6 +552,31 @@ describe('Firestore Backup & Export Tooling', () => {
 				expect(mockBatch.set).not.toHaveBeenCalled();
 				expect(mockBatch.commit).not.toHaveBeenCalled();
 			}
+		});
+
+		it('splits large restore batches before the request-size limit', async () => {
+			const payload = 'x'.repeat(4 * 1024 * 1024);
+			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
+			fs.writeFileSync(jsonlFile, [
+				JSON.stringify({ _id: 'a1', payload }),
+				JSON.stringify({ _id: 'a2', payload }),
+			].join('\n') + '\n', 'utf8');
+
+			const mockBatch = {
+				set: jest.fn(),
+				commit: jest.fn().mockResolvedValue(undefined),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue({ doc: (id) => ({ id }) }),
+				batch: jest.fn().mockReturnValue(mockBatch),
+			};
+
+			const result = await restoreCollectionFile(mockFirestore, 'alerts', jsonlFile, {
+				batchSize: 400,
+			});
+
+			expect(result.totalRestored).toBe(2);
+			expect(mockBatch.commit).toHaveBeenCalledTimes(2);
 		});
 
 		it('validates every JSONL record before writing any batch', async () => {
@@ -955,6 +991,11 @@ describe('Firestore Backup & Export Tooling', () => {
 	});
 
 	describe('Managed Shell Scripts Validation', () => {
+		it('keeps local Firestore backup artifacts out of the worktree', () => {
+			const gitignore = fs.readFileSync(path.join(__dirname, '../../.gitignore'), 'utf8');
+			expect(gitignore).toContain('\nbackups/\n');
+		});
+
 		it('keeps fallback artifacts longer than the default alert retention window', () => {
 			const workflowPath = path.join(__dirname, '../../.github/workflows/firestore-backup.yml');
 			const content = fs.readFileSync(workflowPath, 'utf8');

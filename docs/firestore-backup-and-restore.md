@@ -76,7 +76,7 @@ gcloud storage buckets update gs://cabros-bot-backups --lifecycle-file=lifecycle
 Exports documents directly to JSONL format with lossless Firestore type serialization (`Timestamp`, `GeoPoint`, `DocumentReference`).
 
 ```bash
-# Export default high-value collections to ./backups/
+# Export default high-value collections to ./backups/ (gitignored local artifacts)
 pnpm run backup:firestore
 
 # Or specify custom options:
@@ -118,7 +118,7 @@ Managed restores fail closed unless `FIRESTORE_RESTORE_TARGET_MODE` is `dedicate
 
 ### Restoring from JSONL Node Export
 
-Restores documents from local JSONL export files with automatic batching (400 items per batch) and type deserialization:
+Restores documents from local JSONL export files with automatic batching (up to 400 items and a conservative estimated 8 MiB request-size budget per commit) and type deserialization:
 
 When `--collections` is omitted, `manifest.json` is required. The restore validates every listed JSONL file, its parseability, and its document count before writing any document. Use `--collections` explicitly to restore a deliberately selected file without manifest discovery.
 
