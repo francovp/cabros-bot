@@ -332,6 +332,23 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 			warn.mockRestore();
 		});
 
+		it('keeps the bare price when the 24h range is inverted', async () => {
+			mockGetAvgPrice.mockResolvedValueOnce({ price: 65432.1 });
+			mockGet24hrChangeStatistics.mockResolvedValueOnce({
+				priceChangePercent: '2.4',
+				highPrice: '90',
+				lowPrice: '100',
+				quoteVolume: '1234567890',
+			});
+			const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			const result = await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
+
+			expect(result.message).toBe('Precio de BTCUSDT es 65432');
+			expect(warn).toHaveBeenCalledWith('Unable to enrich Binance price with 24h ticker:', 'Invalid 24h ticker payload');
+			warn.mockRestore();
+		});
+
 		it('fetches and formats crypto price from Binance', async () => {
 			mockGetAvgPrice.mockResolvedValueOnce({ price: 65432.1 });
 			const context = buildContext('/precio BTCUSDT');

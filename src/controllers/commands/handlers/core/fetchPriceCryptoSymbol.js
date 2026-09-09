@@ -51,7 +51,12 @@ function formatCryptoTicker(ticker, symbol) {
 	const highPrice = formatTickerPrice(ticker?.highPrice);
 	const lowPrice = formatTickerPrice(ticker?.lowPrice);
 	const quoteVolume = Number(ticker?.quoteVolume);
-	if (!Number.isFinite(changePercent) || !Number.isFinite(quoteVolume) || quoteVolume < 0) {
+	if (
+		!Number.isFinite(changePercent)
+		|| !Number.isFinite(quoteVolume)
+		|| quoteVolume < 0
+		|| lowPrice > highPrice
+	) {
 		throw new Error('Invalid 24h ticker payload');
 	}
 
