@@ -600,6 +600,7 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(mockBatch.set).toHaveBeenCalledTimes(1);
 			const writtenData = mockBatch.set.mock.calls[0][1];
 			expect(writtenData.expiresAt).toBeUndefined();
+			expect(writtenData.retentionPolicy).toBe('archive');
 		});
 
 		it('does not apply alert retention to custom collection TTL fields', async () => {
@@ -747,6 +748,28 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(result.totalDocuments).toBe(2);
 			expect(result.collections.alerts.totalRestored).toBe(1);
 			expect(result.collections.tradingSignalOutcomes.totalRestored).toBe(1);
+		});
+
+		it('validates every selected collection before writing any collection', async () => {
+			fs.writeFileSync(path.join(tempDir, 'alerts.jsonl'), JSON.stringify({ _id: 'a1' }) + '\n');
+			fs.writeFileSync(path.join(tempDir, 'tradingSignalOutcomes.jsonl'), JSON.stringify({ text: 'missing id' }) + '\n');
+
+			const mockBatch = {
+				set: jest.fn(),
+				commit: jest.fn().mockResolvedValue(undefined),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue({ doc: (id) => ({ id }) }),
+				batch: jest.fn().mockReturnValue(mockBatch),
+			};
+
+			await expect(runRestore({
+				firestore: mockFirestore,
+				inputDir: tempDir,
+				collections: ['alerts', 'tradingSignalOutcomes'],
+			})).rejects.toThrow('document ID');
+			expect(mockBatch.set).not.toHaveBeenCalled();
+			expect(mockBatch.commit).not.toHaveBeenCalled();
 		});
 
 		it('rejects auto-discovered restores without a completed manifest before writes', async () => {
@@ -929,6 +952,7 @@ describe('Firestore Backup & Export Tooling', () => {
 			const content = fs.readFileSync(scriptPath, 'utf8');
 
 			expect(content).toContain('FIRESTORE_EXPORT_URI');
+			expect(content).toContain('FIRESTORE_RESTORE_TARGET_MODE');
 			expect(content).toContain('gcloud firestore import');
 			expect(content).toContain('tradingSignalOutcomes');
 			expect(content).not.toContain('signalOutcomes,');

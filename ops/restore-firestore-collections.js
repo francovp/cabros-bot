@@ -99,12 +99,18 @@ function applyTtlPolicy(data, collectionName, ttlPolicy = 'refresh', retentionDa
 		if ('expiresAt' in data) {
 			delete data.expiresAt;
 		}
+		if (TTL_REFRESH_COLLECTIONS.has(collectionName)) {
+			data.retentionPolicy = 'archive';
+		}
 		return data;
 	}
 
 	if (ttlPolicy === 'refresh') {
 		if (!TTL_REFRESH_COLLECTIONS.has(collectionName)) {
 			return data;
+		}
+		if (data.retentionPolicy === 'archive') {
+			delete data.retentionPolicy;
 		}
 		if (data.expiresAt !== undefined || collectionName === 'alerts' || collectionName === 'alertReplays') {
 			const safeDays = (typeof retentionDays === 'number' && retentionDays >= 1) ? retentionDays : getDefaultRetentionDays();
@@ -331,6 +337,51 @@ async function writeBatchChunk(firestore, collectionName, chunk, options = {}) {
 	return writeCount;
 }
 
+async function* readValidatedRecords(filePath, firestore) {
+	const fileStream = fs.createReadStream(filePath, { encoding: 'utf8' });
+	const rl = readline.createInterface({
+		input: fileStream,
+		crlfDelay: Infinity,
+	});
+	let lineNumber = 0;
+
+	try {
+		for await (const line of rl) {
+			const trimmed = line.trim();
+			if (!trimmed) {
+				continue;
+			}
+
+			lineNumber += 1;
+			let parsed;
+			try {
+				parsed = JSON.parse(trimmed);
+			} catch (err) {
+				throw new Error(`Invalid JSON in ${filePath} at line ${lineNumber}: ${err.message}`);
+			}
+
+			const { id, data } = deserializeDocument(parsed, firestore);
+			if (!id) {
+				throw new Error(`Backup record missing document ID in ${filePath} at line ${lineNumber}`);
+			}
+
+			yield { id, data };
+		}
+	} finally {
+		rl.close();
+		fileStream.destroy();
+	}
+}
+
+async function validateCollectionFile(filePath, firestore) {
+	let totalRead = 0;
+	for await (const record of readValidatedRecords(filePath, firestore)) {
+		void record;
+		totalRead += 1;
+	}
+	return totalRead;
+}
+
 async function restoreCollectionFile(firestore, collectionName, filePath, options = {}) {
 	const batchSize = options.batchSize || BATCH_SIZE;
 	const isDryRun = Boolean(options.dryRun);
@@ -346,41 +397,38 @@ async function restoreCollectionFile(firestore, collectionName, filePath, option
 		throw new Error(`Collection file not found: ${filePath}`);
 	}
 
-	const fileStream = fs.createReadStream(filePath, { encoding: 'utf8' });
-	const rl = readline.createInterface({
-		input: fileStream,
-		crlfDelay: Infinity,
-	});
-
-	let totalRead = 0;
-	// ponytail: stage the full JSONL file before writes to guarantee all-or-nothing validation; stream-to-disk staging for very large backups.
-	const records = [];
-
-	for await (const line of rl) {
-		const trimmed = line.trim();
-		if (!trimmed) {
-			continue;
-		}
-
-		totalRead += 1;
-		let parsed;
-		try {
-			parsed = JSON.parse(trimmed);
-		} catch (err) {
-			throw new Error(`Invalid JSON in ${filePath} at line ${totalRead}: ${err.message}`);
-		}
-		const { id, data } = deserializeDocument(parsed, firestore);
-
-		if (!id) {
-			throw new Error(`Backup record missing document ID in ${filePath} at line ${totalRead}`);
-		}
-
-		records.push({ id, data });
+	const totalRead = Number.isInteger(options.validatedCount)
+		? options.validatedCount
+		: await validateCollectionFile(filePath, firestore);
+	if (isDryRun) {
+		return {
+			collection: collectionName,
+			totalRead,
+			totalRestored: totalRead,
+			file: filePath,
+		};
 	}
 
 	let totalRestored = 0;
-	for (let offset = 0; offset < records.length; offset += batchSize) {
-		const count = await writeBatchChunk(firestore, collectionName, records.slice(offset, offset + batchSize), {
+	let chunk = [];
+	for await (const record of readValidatedRecords(filePath, firestore)) {
+		chunk.push(record);
+		if (chunk.length < batchSize) {
+			continue;
+		}
+
+		const count = await writeBatchChunk(firestore, collectionName, chunk, {
+			isDryRun,
+			overwrite,
+			ttlPolicy,
+			retentionDays,
+		});
+		totalRestored += count;
+		chunk = [];
+	}
+
+	if (chunk.length > 0) {
+		const count = await writeBatchChunk(firestore, collectionName, chunk, {
 			isDryRun,
 			overwrite,
 			ttlPolicy,
@@ -589,6 +637,7 @@ async function runRestore(options = {}) {
 		totalDocuments: 0,
 	};
 
+	const selectedFiles = [];
 	for (const colName of targetCollections) {
 		const filePath = path.join(inputDir, `${colName}.jsonl`);
 		if (!fs.existsSync(filePath)) {
@@ -602,13 +651,21 @@ async function runRestore(options = {}) {
 			}));
 			continue;
 		}
+		selectedFiles.push({ colName, filePath });
+	}
 
+	for (const selectedFile of selectedFiles) {
+		selectedFile.totalRead = await validateCollectionFile(selectedFile.filePath, firestore);
+	}
+
+	for (const { colName, filePath, totalRead } of selectedFiles) {
 		const colResult = await restoreCollectionFile(firestore, colName, filePath, {
 			batchSize: options.batchSize || BATCH_SIZE,
 			dryRun: isDryRun,
 			overwrite: options.overwrite !== false,
 			ttlPolicy,
 			retentionDays,
+			validatedCount: totalRead,
 		});
 
 		results.collections[colName] = colResult;

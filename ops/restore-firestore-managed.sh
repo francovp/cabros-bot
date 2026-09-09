@@ -19,6 +19,12 @@ fi
 
 collections="${2:-${COLLECTION_IDS:-alerts,alertReplays,tradingSignalOutcomes,scannerPresets}}"
 
+restore_target_mode="${FIRESTORE_RESTORE_TARGET_MODE:-}"
+if [[ "$restore_target_mode" != "dedicated" && "$restore_target_mode" != "stopped" ]]; then
+	echo "Error: Set FIRESTORE_RESTORE_TARGET_MODE to 'dedicated' or 'stopped' for managed restores." >&2
+	exit 1
+fi
+
 if ! command -v gcloud >/dev/null 2>&1; then
 	echo "Error: gcloud CLI is required for managed Firestore imports." >&2
 	exit 1
