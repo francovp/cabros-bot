@@ -1532,7 +1532,7 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
 
 #### GET /api/outcomes/summary
 
-Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range. When no outcomes match the filters or tracking is enabled with an empty dataset, the endpoint returns `200 OK` with `available: false` and a typed empty summary structure. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
+Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range. Explicit `from`/`to` ranges may include archived records restored from backups; requests without `from` remain bounded by the configured retention window. When no outcomes match the filters or tracking is enabled with an empty dataset, the endpoint returns `200 OK` with `available: false` and a typed empty summary structure. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
 
 **Query Parameters:**
 - `limit` - Maximum number of recent outcomes to aggregate (integer between `1` and `100`, default: `50`)

@@ -1406,7 +1406,9 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 
 	const retentionDays = getSignalOutcomeRetentionDays();
 	const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
-	const effectiveFromMs = Math.max(parsedFrom.getTime(), retentionCutoffMs);
+	const effectiveFromMs = from
+		? parsedFrom.getTime()
+		: Math.max(parsedFrom.getTime(), retentionCutoffMs);
 	if (effectiveFromMs > parsedTo.getTime()) {
 		return createEmptyMetricsSummary();
 	}

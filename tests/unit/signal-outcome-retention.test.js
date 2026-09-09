@@ -245,6 +245,58 @@ describe('SignalOutcomeService Retention and TTL', () => {
 			jest.useRealTimers();
 		});
 
+		it('includes archived documents in summaries when an explicit historical range is requested', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const now = new Date('2026-08-01T12:00:00.000Z');
+			const archivedReceivedAt = new Date('2024-01-01T10:00:00.000Z');
+			const archivedDoc = {
+				requestId: 'archived-summary-req',
+				source: 'market-scanner',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				price: 50000,
+				side: 'BUY',
+				receivedAt: admin.firestore.Timestamp.fromDate(archivedReceivedAt),
+				expiresAt: admin.firestore.Timestamp.fromDate(new Date('2025-01-01T10:00:00.000Z')),
+				retentionPolicy: 'archive',
+				outcomeEvaluated: true,
+				outcomes: {},
+			};
+			const archivedSnapshot = { id: 'archived-summary-id', data: () => archivedDoc };
+			let lowerBound;
+			let upperBound;
+			const query = {
+				where: jest.fn((field, operator, value) => {
+					if (field === 'receivedAt' && operator === '>=') lowerBound = value.toDate();
+					if (field === 'receivedAt' && operator === '<=') upperBound = value.toDate();
+					return query;
+				}),
+				limit: jest.fn().mockReturnThis(),
+				get: jest.fn(async () => {
+					const included = archivedReceivedAt >= lowerBound && archivedReceivedAt <= upperBound;
+					return included ? { empty: false, docs: [archivedSnapshot] } : { empty: true, docs: [] };
+				}),
+			};
+			const firestoreSpy = jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue({
+				collection: jest.fn().mockReturnValue(query),
+			});
+			jest.useFakeTimers().setSystemTime(now);
+
+			try {
+				const summary = await SignalOutcomeService.summarizeOutcomes({
+					from: '2024-01-01T00:00:00.000Z',
+					to: '2026-08-01T12:00:00.000Z',
+					limit: 10,
+				});
+
+				expect(summary.totalSignalsReceived).toBe(1);
+				expect(lowerBound.toISOString()).toBe('2024-01-01T00:00:00.000Z');
+			} finally {
+				firestoreSpy.mockRestore();
+				jest.useRealTimers();
+			}
+		});
+
 		it('excludes retention-expired documents in summarizeOutcomes', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			const now = new Date('2026-08-01T12:00:00.000Z');

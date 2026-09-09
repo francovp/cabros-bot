@@ -79,6 +79,17 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(serializeValue(duration)).toEqual(duration);
 		});
 
+		it('serializes maps with an own constructor field without losing nested Firestore types', () => {
+			const metadata = {
+				constructor: 'provider',
+				createdAt: buildMockTimestamp('2026-08-30T00:00:00.000Z'),
+			};
+
+			const serialized = serializeValue(metadata);
+			expect(serialized.constructor).toBe('provider');
+			expect(serialized.createdAt.__type).toBe('Timestamp');
+		});
+
 		it('escapes ordinary maps that use reserved serialization tags', () => {
 			const metadata = { __type: 'Bytes', base64: 'not-a-buffer', source: 'provider' };
 

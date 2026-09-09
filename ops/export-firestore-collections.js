@@ -129,7 +129,8 @@ function serializeValue(val) {
 	}
 
 	// Plain Object
-	if (typeof val === 'object' && val.constructor === Object) {
+	const prototype = Object.getPrototypeOf(val);
+	if (prototype === Object.prototype || prototype === null) {
 		const result = {};
 		for (const [key, value] of Object.entries(val)) {
 			result[key] = serializeValue(value);
