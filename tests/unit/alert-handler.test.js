@@ -70,7 +70,7 @@ describe('Alert Handler', () => {
 			sentiment: 'BULLISH',
 			sentiment_score: 0.55,
 			sentiment_score_raw: 0.9,
-			insights: [],
+			insights: ['Bitcoin market rally continues'],
 			sources: [],
 			truncated: false,
 		});
@@ -79,6 +79,21 @@ describe('Alert Handler', () => {
 
 		expect(result.sentiment_score).toBe(0.55);
 		expect(result.sentiment_score_raw).toBe(0.9);
+	});
+
+	it('discards Gemini output that lacks renderable insights/sources/levels', async () => {
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.4,
+			insights: [],
+			sources: [],
+			truncated: false,
+		});
+
+		const result = await enrichAlert({ text: 'Bitcoin rally' });
+
+		expect(result).toBeNull();
+		expect(groundAlert).toHaveBeenCalled();
 	});
 
 	it('should handle empty text', async () => {
