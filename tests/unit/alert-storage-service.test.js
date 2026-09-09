@@ -1818,6 +1818,14 @@ describe('AlertStorageService', () => {
 	});
 
 		describe('summarizeAlerts()', () => {
+		beforeEach(() => {
+			jest.useFakeTimers({ now: new Date('2026-06-06T13:00:00.000Z') });
+		});
+
+		afterEach(() => {
+			jest.useRealTimers();
+		});
+
 		it('counts recorded, not-applicable, and legacy unrecorded TradingView outcomes separately', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({

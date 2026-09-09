@@ -74,9 +74,17 @@ function getRoutes(botOrGetter) {
 	router.delete('/trading/binance/orders', ...binanceOrderWrite, deleteBinanceOrder);
 
 	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
+	const {
+		postPauseNewsMonitor,
+		postResumeNewsMonitor,
+		getNewsMonitorStatus,
+	} = require('../controllers/webhooks/handlers/newsMonitor/pauseState');
 	const newsMonitor = getNewsMonitor();
 	router.post('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
 	router.get('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
+	router.post('/news-monitor/pause', ...adminWrite, postPauseNewsMonitor);
+	router.post('/news-monitor/resume', ...adminWrite, postResumeNewsMonitor);
+	router.get('/news-monitor/status', ...adminRead, getNewsMonitorStatus);
 
 	router.get('/status', ...adminRead, getApiStatus);
 	router.get('/capabilities', ...adminRead, getApiStatus);
