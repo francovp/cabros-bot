@@ -33,4 +33,10 @@ Use focused Jest tests, then `pnpm test` once as the final repository check. Kee
 
 ## Evidence from recent reviews
 
-The last 100 repository PRs contained repeated unresolved findings in PRs #348, #346, #343, #315, #274, #265, #263, #262, #247, and #246 covering cooldown races, stale deadlines, open response bodies, worker starvation, invalid timer parsing, shutdown flushes, Discord retry delays, and attempt-count telemetry.
+Current unresolved inline findings as of the latest scan:
+
+- **PR #1123** (`TradingViewMcpService.js`) — 5 unresolved P2 threads: transient vs. terminal error classification for tool-body failures (`upstream_tool_error`/`not_found`); network-error count vs. tool-error count separation; `sendWithRetry` must preserve original error category when `retryable: false`; parsed-response parse failures must reject immediately; retry accounting must distinguish network attempts from tool-body attempts.
+- **PR #1122** (`SignalOutcomeService.js`) — 5 unresolved P2 threads: late-result storage for outcomes arriving after the evaluation window; pre-open session anchor labeling for equity markets; ARR normalization across annualized and flat return formats; next-yield logic when the underlying has no upcoming session; per-outcome retry count must not underflow.
+- **PR #1126** (`SignalOutcomeService.js`) — 1 unresolved P1 thread: entry-price source selection must try earlier price snapshots before falling back to the alert price.
+
+Recurring patterns across these PRs (and earlier PRs #346, #343, #315, #274, #265, #263, #262, #247, #246): cooldown races, stale deadlines, open response bodies, worker starvation, invalid timer parsing, shutdown flushes, Discord retry delays, and attempt-count telemetry.

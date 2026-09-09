@@ -88,6 +88,7 @@ Review the diff systematically against [cabros-bot-review-rubric.md](references/
    - Does API key validation use `crypto.timingSafeEqual`?
    - In production (`NODE_ENV=production`, Render, Railway), does missing `WEBHOOK_API_KEY` fail closed with HTTP 503?
    - Are secrets, credentials, or API tokens strictly protected from logs, URL query strings, and output?
+   - **CodeQL / GHAS alerts** (evidence: PR #1100): are there open `github-advanced-security` inline review threads? Common findings in this codebase: clear-text logging of sensitive auth values (`src/lib/auth.js`) and sensitive data read from GET query parameters. Treat open CodeQL threads as blockers; they must be resolved before merge, not deferred.
 
 5. **Contract & Configuration Parity**:
    - Is `.env.example` updated for new application-owned environment variables?
@@ -147,6 +148,7 @@ Assemble the review using this standard structure:
 - [ ] Telegram MarkdownV2 escaping
 - [ ] Firestore undefined sanitization
 - [ ] Timing-safe auth & fail-closed production check
+- [ ] No open CodeQL / GHAS inline threads (clear-text logging, GET query param secrets)
 - [ ] `.env.example` & Remote Config parity
 - [ ] OpenAPI 3.1 & Postman collection sync
 - [ ] Agent & Model attribution label (`<agent>-<model>`)

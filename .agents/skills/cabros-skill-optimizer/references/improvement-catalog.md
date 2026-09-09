@@ -19,7 +19,8 @@ Add a rule or helper only when a recent PR, review, session, command failure, or
 | --- | --- | --- |
 | GitHub | Confirm `gh auth status`; preserve the `francovp` write-account helper and restore it. | Keep local analysis/tests; mark GitHub writes blocked. |
 | Linear | Check the configured CLI only before tracker work; send Markdown through `--description-file`. | Keep GitHub/code work; report Linear sync blocked. |
-| Render | Inspect live service/key state; mutate one env-var key and explicitly create a deploy. | Keep code/preview work; report production propagation unverified. |
+| Railway | Inspect live service via `https://cabros-bot-production.up.railway.app/healthcheck`; use Railway dashboard or `railway` CLI for env-var mutations and explicit deploys. | Keep code/preview work; report production propagation unverified (`INTEGRATION_BLOCKED`). |
+| Render (deprecated) | `render` CLI is unavailable — classify as `INTEGRATION_BLOCKED` and continue Railway/local work. Do not block source analysis or tests on missing `render` CLI. | Report `render CLI unavailable`; use Railway production URL for any live verification. |
 | Protected API | Require the key before parsing; feed `x-api-key` by stdin via `curl -H @-`; disable redirects. | Return a named `AUTH_BLOCKED`/`SKIPPED` outcome without leaking the key. |
 | Sentry/observability | Treat denied or absent metrics as unavailable evidence. | Report `No measurements found`; do not infer a regression. |
 
