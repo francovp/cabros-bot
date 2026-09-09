@@ -53,6 +53,22 @@ describe('Postman collection contract', () => {
 		});
 	});
 
+	it('documents scannerPresetScheduler dependency and lastRunDeferredByFloorCount in the Get Status and Get Capabilities response examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(status).toBeDefined();
+		const statusBody = JSON.parse(status.response[0].body);
+		expect(statusBody.dependencies.scannerPresetScheduler).toBeDefined();
+		expect(statusBody.dependencies.scannerPresetScheduler.lastRunDeferredByFloorCount).toBe(0);
+
+		expect(capabilities).toBeDefined();
+		const capabilitiesBody = JSON.parse(capabilities.response[0].body);
+		expect(capabilitiesBody.dependencies.scannerPresetScheduler).toBeDefined();
+		expect(capabilitiesBody.dependencies.scannerPresetScheduler.lastRunDeferredByFloorCount).toBe(0);
+	});
+
 	it('documents x-idempotency-key on the alert webhook request', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const sendAlert = findItem(collection.item, 'POST Send Alert');
