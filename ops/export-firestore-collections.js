@@ -7,6 +7,19 @@ const admin = require('firebase-admin');
 const DEFAULT_COLLECTIONS = ['alerts', 'alertReplays', 'tradingSignalOutcomes', 'scannerPresets'];
 const PAGE_SIZE = 400;
 const SERIALIZED_MAP_MARKER = '__cabros_firestore_map__';
+const MAX_FIRESTORE_ID_BYTES = 1500;
+const RESERVED_FIRESTORE_ID_PATTERN = /^__.*__$/;
+
+function isValidFirestoreId(id) {
+	return typeof id === 'string'
+		&& id.length > 0
+		&& Buffer.from(id, 'utf8').toString('utf8') === id
+		&& Buffer.byteLength(id, 'utf8') <= MAX_FIRESTORE_ID_BYTES
+		&& id !== '.'
+		&& id !== '..'
+		&& !id.includes('/')
+		&& !RESERVED_FIRESTORE_ID_PATTERN.test(id);
+}
 
 function normalizeCollectionList(collections) {
 	if (!Array.isArray(collections)) {
@@ -17,8 +30,8 @@ function normalizeCollectionList(collections) {
 	if (normalized.length === 0) {
 		throw new Error('Export collection list must not be empty');
 	}
-	if (normalized.some((value) => value.includes('/') || value.includes('\\'))) {
-		throw new Error('Collection selectors must be single collection IDs without path separators');
+	if (normalized.some((value) => !isValidFirestoreId(value))) {
+		throw new Error('Collection selectors must be valid single collection ID segments without path separators or reserved IDs');
 	}
 	if (new Set(normalized).size !== normalized.length) {
 		throw new Error('Export collection list must not contain duplicates');
@@ -75,6 +88,13 @@ function parseArgs(args = process.argv.slice(2)) {
 function serializeValue(val) {
 	if (val === null || val === undefined) {
 		return val;
+	}
+
+	if (typeof val === 'bigint') {
+		return {
+			__type: 'Integer',
+			value: val.toString(),
+		};
 	}
 
 	if (typeof val === 'number' && !Number.isFinite(val)) {
@@ -262,7 +282,14 @@ function initializeFirestore(projectId = null) {
 		admin.initializeApp(appOptions);
 	}
 
-	return admin.firestore();
+	return configureFirestoreForLosslessIntegers(admin.firestore());
+}
+
+function configureFirestoreForLosslessIntegers(firestore) {
+	if (firestore && typeof firestore.settings === 'function') {
+		firestore.settings({ useBigInt: true });
+	}
+	return firestore;
 }
 
 async function runExport(options = {}) {
@@ -349,6 +376,7 @@ module.exports = {
 	DEFAULT_COLLECTIONS,
 	exportCollection,
 	initializeFirestore,
+	configureFirestoreForLosslessIntegers,
 	parseArgs,
 	runExport,
 	serializeDocument,

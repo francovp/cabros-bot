@@ -38,8 +38,8 @@ function normalizeCollectionList(collections) {
 	if (normalized.length === 0) {
 		throw new Error('Restore collection list must not be empty');
 	}
-	if (normalized.some((value) => value.includes('/') || value.includes('\\'))) {
-		throw new Error('Collection selectors must be single collection IDs without path separators');
+	if (normalized.some((value) => !isValidDocumentId(value))) {
+		throw new Error('Restore collections must be valid single collection ID segments without path separators or reserved IDs');
 	}
 	if (new Set(normalized).size !== normalized.length) {
 		throw new Error('Restore collection list must not contain duplicates');
@@ -213,6 +213,13 @@ function deserializeValue(val, firestore) {
 
 		if (val.__type === 'Number' && ['NaN', 'Infinity', '-Infinity'].includes(val.value)) {
 			return Number(val.value);
+		}
+
+		if (val.__type === 'Integer') {
+			if (typeof val.value !== 'string' || !/^-?\d+$/.test(val.value)) {
+				throw new Error('Invalid Integer serialization');
+			}
+			return BigInt(val.value);
 		}
 
 		if (val.__type === 'Bytes' && typeof val.base64 === 'string') {
@@ -678,7 +685,14 @@ function initializeFirestore(projectId = null) {
 		admin.initializeApp(appOptions);
 	}
 
-	return admin.firestore();
+	return configureFirestoreForLosslessIntegers(admin.firestore());
+}
+
+function configureFirestoreForLosslessIntegers(firestore) {
+	if (firestore && typeof firestore.settings === 'function') {
+		firestore.settings({ useBigInt: true });
+	}
+	return firestore;
 }
 
 async function runRestore(options = {}) {
@@ -796,6 +810,7 @@ module.exports = {
 	deserializeValue,
 	assertCollectionsEmpty,
 	initializeFirestore,
+	configureFirestoreForLosslessIntegers,
 	parseArgs,
 	refreshCollectionTtls,
 	restoreCollectionFile,

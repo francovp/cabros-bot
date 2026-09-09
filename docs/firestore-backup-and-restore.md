@@ -103,7 +103,7 @@ Restores all or specific collections into Firestore:
 
 ```bash
 export FIREBASE_PROJECT_ID="cabros-bot"
-export FIRESTORE_RESTORE_TARGET_MODE="dedicated" # or "stopped" during a maintenance window
+export FIRESTORE_RESTORE_TARGET_MODE="dedicated"
 
 # Restore all collections in export
 ./ops/restore-firestore-managed.sh gs://cabros-bot-backups/firestore-backups/2026-08-30T04-00-00Z
@@ -112,7 +112,7 @@ export FIRESTORE_RESTORE_TARGET_MODE="dedicated" # or "stopped" during a mainten
 ./ops/restore-firestore-managed.sh gs://cabros-bot-backups/firestore-backups/2026-08-30T04-00-00Z alerts,tradingSignalOutcomes
 ```
 
-Managed restores fail closed unless `FIRESTORE_RESTORE_TARGET_MODE` is `dedicated` or `stopped`. Use a dedicated empty recovery project, or stop all application writers for the full preflight/import/refresh window; the empty-collection preflight remains non-transactional. After import, `alerts` and `alertReplays` receive a refreshed `expiresAt` using `ALERT_STORAGE_RETENTION_DAYS` (or 90 days when unset), while `tradingSignalOutcomes` have `expiresAt` removed and are marked `retentionPolicy: "archive"` so historical outcomes remain queryable and are not removed by native TTL. Other collections keep their source TTL values and are not rewritten with alert retention. The restore runner must have Node.js and the same Firebase Admin credentials available to the `gcloud` import.
+Managed restores fail closed unless `FIRESTORE_RESTORE_TARGET_MODE` is `dedicated`. Use a dedicated recovery project with TTL disabled until the import and post-import refresh complete; do not run the managed restore against a stopped production project because expired `expiresAt` values can be deleted before the refresh. The empty-collection preflight remains non-transactional. After import, `alerts` and `alertReplays` receive a refreshed `expiresAt` using `ALERT_STORAGE_RETENTION_DAYS` (or 90 days when unset), while `tradingSignalOutcomes` have `expiresAt` removed and are marked `retentionPolicy: "archive"` so historical outcomes remain queryable and are not removed by native TTL. Other collections keep their source TTL values and are not rewritten with alert retention. The restore runner must have Node.js and the same Firebase Admin credentials available to the `gcloud` import.
 
 ---
 

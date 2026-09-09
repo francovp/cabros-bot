@@ -13,6 +13,7 @@ const {
 	serializeDocument,
 	serializeValue,
 	initializeFirestore: initializeExportFirestore,
+	configureFirestoreForLosslessIntegers: configureExportFirestoreForLosslessIntegers,
 } = require('../../ops/export-firestore-collections');
 
 const {
@@ -23,6 +24,7 @@ const {
 	restoreCollectionFile,
 	runRestore,
 	initializeFirestore: initializeRestoreFirestore,
+	configureFirestoreForLosslessIntegers: configureRestoreFirestoreForLosslessIntegers,
 } = require('../../ops/restore-firestore-collections');
 
 function buildMockTimestamp(isoString) {
@@ -107,6 +109,24 @@ describe('Firestore Backup & Export Tooling', () => {
 				expect(serialized).toEqual({ __type: 'Number', value: String(value) });
 				expect(deserializeValue(serialized)).toBe(value);
 			}
+		});
+
+		it('round-trips Firestore 64-bit integers as tagged BigInt values', () => {
+			const original = 9007199254740993n;
+			const serialized = serializeValue(original);
+
+			expect(serialized).toEqual({ __type: 'Integer', value: '9007199254740993' });
+			expect(deserializeValue(serialized)).toBe(original);
+		});
+
+		it('configures export and restore Firestore clients for lossless integer reads', () => {
+			const exportFirestore = { settings: jest.fn() };
+			const restoreFirestore = { settings: jest.fn() };
+
+			expect(configureExportFirestoreForLosslessIntegers(exportFirestore)).toBe(exportFirestore);
+			expect(configureRestoreFirestoreForLosslessIntegers(restoreFirestore)).toBe(restoreFirestore);
+			expect(exportFirestore.settings).toHaveBeenCalledWith({ useBigInt: true });
+			expect(restoreFirestore.settings).toHaveBeenCalledWith({ useBigInt: true });
 		});
 
 		it('serializes and deserializes Firestore Timestamps with nanosecond precision', () => {
@@ -363,6 +383,14 @@ describe('Firestore Backup & Export Tooling', () => {
 				'--input-dir=/tmp/test-export',
 				'--collections=../archive/alerts',
 			])).toThrow('single collection ID');
+		});
+
+		it('rejects invalid Firestore collection ID segments', () => {
+			expect(() => parseExportArgs(['--collections=.'])).toThrow('valid single collection ID');
+			expect(() => parseRestoreArgs([
+				'--input-dir=/tmp/test-export',
+				'--collections=__metadata__',
+			])).toThrow('valid single collection ID');
 		});
 
 		it('defaults restore retentionDays from ALERT_STORAGE_RETENTION_DAYS environment variable', () => {
@@ -1155,6 +1183,25 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(content).toContain('gcloud firestore import');
 			expect(content).toContain('tradingSignalOutcomes');
 			expect(content).not.toContain('signalOutcomes,');
+		});
+
+		it('requires managed restores to use a dedicated TTL-safe project', () => {
+			const scriptPath = path.join(__dirname, '../../ops/restore-firestore-managed.sh');
+			const script = fs.readFileSync(scriptPath, 'utf8');
+			const runbook = fs.readFileSync(path.join(__dirname, '../../docs/firestore-backup-and-restore.md'), 'utf8');
+
+			expect(script).toContain('restore_target_mode" != "dedicated"');
+			expect(script).toContain('dedicated recovery project with TTL disabled');
+			expect(script).not.toContain('restore_target_mode" != "stopped"');
+			expect(runbook).toContain('dedicated recovery project with TTL disabled');
+			expect(runbook).not.toContain('or "stopped"');
+		});
+
+		it('bounds failure notification requests in the scheduled workflow', () => {
+			const workflowPath = path.join(__dirname, '../../.github/workflows/firestore-backup.yml');
+			const content = fs.readFileSync(workflowPath, 'utf8');
+
+			expect(content).toContain('curl --connect-timeout 10 --max-time 30');
 		});
 	});
 });

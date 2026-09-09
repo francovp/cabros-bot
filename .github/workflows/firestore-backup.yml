@@ -76,7 +76,7 @@ jobs:
           NOTIFY_API_KEY: ${{ secrets.WEBHOOK_API_KEY || secrets.NOTIFY_API_KEY || '' }}
         run: |
           if [ -n "$NOTIFY_API_KEY" ]; then
-            curl -s -X POST "$NOTIFY_WEBHOOK_URL" \
+            curl --connect-timeout 10 --max-time 30 --silent --show-error -X POST "$NOTIFY_WEBHOOK_URL" \
               -H "Content-Type: application/json" \
               -H "x-api-key: $NOTIFY_API_KEY" \
               -d '{
