@@ -77,6 +77,13 @@
       "description": "Operator degradation paging cooldown in milliseconds between admin notifications",
       "valueType": "NUMBER"
     },
+    "TRADINGVIEW_MCP_CACHE_TTL_MS": {
+      "defaultValue": {
+        "value": "90000"
+      },
+      "description": "TTL for successful process-local TradingView MCP tool results in milliseconds",
+      "valueType": "NUMBER"
+    },
     "ENABLE_MESSAGE_FOOTER_METADATA": {
       "defaultValue": {
         "value": "true"
@@ -306,6 +313,13 @@
         "value": "false"
       },
       "description": "Enable TradingView MCP alert enrichment",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_TRADINGVIEW_MCP_CACHE": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable process-local caching of successful TradingView MCP tool results",
       "valueType": "BOOLEAN"
     },
     "ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION": {
