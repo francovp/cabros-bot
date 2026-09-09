@@ -698,4 +698,114 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 		expect(res.body.error).toContain('Forbidden');
 	});
+
+	// ---------------------------------------------------------------------------
+	// Chunk estimation & dryValidate mode (GH-614)
+	// ---------------------------------------------------------------------------
+	describe('chunk estimation and dryValidate mode', () => {
+		it('returns estimatedChunks without sending when dryValidate: true is provided', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({
+					message: 'Short dry validation message',
+					dryValidate: true,
+				})
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.dryValidate).toBe(true);
+			expect(res.body.estimatedChunks).toEqual({
+				telegram: 1,
+				whatsapp: 1,
+				discord: 1,
+			});
+			expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+			expect(global.fetch).not.toHaveBeenCalled();
+		});
+
+		it('returns per-channel chunk estimates for long message with dryValidate: true', async () => {
+			const longMessage = 'x'.repeat(50000);
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({
+					message: longMessage,
+					dryValidate: true,
+				})
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.dryValidate).toBe(true);
+			expect(res.body.estimatedChunks).toEqual({
+				telegram: 1,
+				whatsapp: 3,
+				discord: 25,
+			});
+			expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+			expect(global.fetch).not.toHaveBeenCalled();
+		});
+
+		it('returns 400 when dryValidate is not a boolean', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({
+					message: 'Validation test',
+					dryValidate: 'invalid-boolean',
+				})
+				.expect(400);
+
+			expect(res.body.success).toBe(false);
+			expect(res.body.error).toContain('must be a boolean');
+			expect(res.body.details).toEqual({ field: 'dryValidate' });
+		});
+
+		it('omits estimatedChunks for messages under channel limits on normal send', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({
+					message: 'Short message under all limits',
+					channels: ['telegram'],
+				})
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results).toBeDefined();
+			expect(res.body.estimatedChunks).toBeUndefined();
+			expect(res.body.channelDetails).toBeUndefined();
+			expect(res.body.delivered).toBeUndefined();
+		});
+
+		it('includes estimatedChunks, delivered, and channelDetails when message exceeds single-chunk size', async () => {
+			const text3k = 'y'.repeat(3000);
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({
+					message: text3k,
+					channels: ['telegram', 'whatsapp'],
+				})
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results).toHaveLength(2);
+			expect(res.body.delivered).toEqual(['telegram', 'whatsapp']);
+			expect(res.body.channelDetails).toBeDefined();
+			expect(res.body.channelDetails.telegram).toMatchObject({
+				success: true,
+				messageId: 'tg-msg-123',
+			});
+			expect(res.body.channelDetails.whatsapp).toMatchObject({
+				success: true,
+				messageId: 'wa-msg-456',
+			});
+			expect(res.body.estimatedChunks).toEqual({
+				telegram: 1,
+				whatsapp: 1,
+				discord: 2,
+			});
+		});
+	});
 });
