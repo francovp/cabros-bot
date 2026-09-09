@@ -265,6 +265,25 @@ describe('admin browser client', () => {
 		expect(overview.textContent).not.toContain('undefined');
 	});
 
+	it('uses effective dependency health in overview cards', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				sentry: { status: 'ready', profiling: { status: 'misconfigured' } },
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => url === '/openapi.json' ? response(contract) : response(status),
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		expect(browser.elementsById.view.textContent).toContain('SentryNeeds attention');
+	});
+
 	it('renders the status view as a searchable dependency explorer', async () => {
 		const status = {
 			service: { name: 'cabros-bot', environment: 'production', commit: 'abc123' },
@@ -500,6 +519,7 @@ describe('admin browser client', () => {
 					status: 'degraded', cooldownActive: true, remainingCooldownMs: 4500,
 					lastTriggeredAt: '2026-09-08T00:00:00Z', triggersTotal: 2,
 					braveFallbacksDuringCooldown: 3, lastBraveFallbackAt: '2026-09-08T00:01:00Z',
+					metrics: { totalRequests: 10, successRequests: 7, failureRequests: 2, timeoutRequests: 1 },
 				},
 			},
 		};
@@ -522,6 +542,10 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('Brave fallbacks during cooldown3');
 		expect(view.textContent).toContain('Last triggered');
 		expect(view.textContent).toContain('Last Brave fallback');
+		expect(view.textContent).toContain('Total requests10');
+		expect(view.textContent).toContain('Success requests7');
+		expect(view.textContent).toContain('Failure requests2');
+		expect(view.textContent).toContain('Timeout requests1');
 	});
 
 	it('clears every structured status section after a refresh failure', async () => {

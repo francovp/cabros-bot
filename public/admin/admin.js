@@ -632,6 +632,10 @@ const statusDetailFields = [
 	['lastPollAt', 'Last poll', true],
 	['lastError', 'Last error detail'],
 	['lastErrorAt', 'Last error at', true],
+	['metrics.totalRequests', 'Total requests'],
+	['metrics.successRequests', 'Success requests'],
+	['metrics.failureRequests', 'Failure requests'],
+	['metrics.timeoutRequests', 'Timeout requests'],
 	['circuitBreaker.state', 'Circuit breaker state'],
 	['circuitBreaker.openedAt', 'Circuit breaker opened', true],
 	['circuitBreaker.cooldownMs', 'Circuit breaker cooldown (ms)'],
@@ -1327,14 +1331,15 @@ const renderStatusCards = (container, entries, emptyText, { detailed = false } =
 			return;
 		}
 		const card = element('article', { className: 'status-card' });
+		const status = effectiveStatus(detail);
 		const copy = element('div');
 		copy.append(
 			element('strong', { text: displayLabel(name) }),
-			element('small', { text: detail.provider ? `Provider: ${detail.provider}` : displayStatus(detail.status) }),
+			element('small', { text: detail.provider ? `Provider: ${detail.provider}` : displayStatus(status) }),
 		);
 		const badge = element('span', {
-			className: `status-badge status-${statusTone(detail.status)}`,
-			text: displayStatus(detail.status),
+			className: `status-badge status-${statusTone(status)}`,
+			text: displayStatus(status),
 		});
 		card.append(copy, badge);
 		container.append(card);
