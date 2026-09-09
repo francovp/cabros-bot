@@ -1940,9 +1940,128 @@ describe('SignalOutcomeService', () => {
 			expect(res).not.toBe('No measurements found');
 			expect(res.falsePositiveCandidates).toHaveLength(2);
 			expect(res.falsePositiveCandidates).toEqual(expect.arrayContaining([
-				expect.objectContaining({ symbol: 'BTCUSDT', score: 0.85, side: 'BUY' }),
-				expect.objectContaining({ symbol: 'ETHUSDT', score: -0.85, side: 'SELL' }),
+				expect.objectContaining({ symbol: 'BTCUSDT', score: 0.85, side: 'BUY', confidence: 0.85 }),
+				expect.objectContaining({ symbol: 'ETHUSDT', score: -0.85, side: 'SELL', confidence: 0.85 }),
 			]));
+		});
+
+		it('drops sign-coherence mismatches and null-score candidates from false-positive list', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			const now = new Date();
+			const map = new Map([
+				['sign-mismatch-buy', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-sign-mismatch-buy',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					score: -0.85,
+					price: 60000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 58000,
+							return: -3.33,
+							maxAdverseExcursion: -4.0,
+							targetHit: false,
+							stopHit: true,
+							rMultiple: -1.0,
+						},
+					},
+				}],
+				['sign-mismatch-sell', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-sign-mismatch-sell',
+					source: 'alert',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'SELL',
+					score: 0.85,
+					price: 3000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 3150,
+							return: -5.0,
+							maxAdverseExcursion: -6.0,
+							targetHit: false,
+							stopHit: true,
+							rMultiple: -1.0,
+						},
+					},
+				}],
+				['null-score', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-null-score',
+					source: 'alert',
+					symbol: 'SOLUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 100,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 95,
+							return: -5.0,
+							maxAdverseExcursion: -6.0,
+							targetHit: false,
+							stopHit: true,
+							rMultiple: -1.0,
+						},
+					},
+				}],
+				['aligned-bearish', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-aligned-bearish',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'SELL',
+					score: -0.9,
+					price: 60000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 62000,
+							return: -3.33,
+							maxAdverseExcursion: -4.0,
+							targetHit: false,
+							stopHit: true,
+							rMultiple: -1.0,
+						},
+					},
+				}],
+			]);
+
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+			expect(res).not.toBe('No measurements found');
+			expect(res.falsePositiveCandidates).toHaveLength(1);
+			expect(res.falsePositiveCandidates[0]).toEqual(expect.objectContaining({
+				symbol: 'BTCUSDT',
+				side: 'SELL',
+				score: -0.9,
+				confidence: 0.9,
+			}));
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('sign-coherence mismatch'));
+			warnSpy.mockRestore();
 		});
 
 		it('splits window stats by side and setup type with same metric shape as parent window', async () => {
