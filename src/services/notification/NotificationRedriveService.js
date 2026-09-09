@@ -165,6 +165,38 @@ function getRedriveRouting(channel, routing, repeatCooldown) {
 	return { ...(routing || {}), [field]: destination };
 }
 
+/**
+ * Build a deterministic idempotency key for a redrive dispatch.
+ *
+ * Shape: `redrive:<deadLetterId>:<channel>:<attemptNumber>`. The key is
+ * deterministic across replicas and processes so a redrive sweep that
+ * re-runs after a partial crash always reuses the same dedupe key for the
+ * same `(deadLetterId, channel, attemptNumber)` tuple. Downstream consumers
+ * can use the prefix `redrive:` to dedupe accidental replays even when
+ * `deadLetterId` format evolves.
+ *
+ * @param {string|number|null|undefined} deadLetterId - Stable redrive record id
+ * @param {string|undefined|null} channel - Channel name being dispatched to
+ * @param {number|string|null|undefined} attemptNumber - 0-based attempt counter
+ * @returns {string}
+ */
+function buildRedriveIdempotencyKey(deadLetterId, channel, attemptNumber) {
+	const safeId = deadLetterId === null || deadLetterId === undefined || deadLetterId === ''
+		? 'unknown'
+		: String(deadLetterId);
+	const safeChannel = typeof channel === 'string' && channel.length > 0 ? channel : 'unknown';
+	let attempt = 0;
+	if (typeof attemptNumber === 'number' && Number.isFinite(attemptNumber)) {
+		attempt = Math.max(0, Math.floor(attemptNumber));
+	} else if (typeof attemptNumber === 'string') {
+		const parsed = Number.parseInt(attemptNumber, 10);
+		if (Number.isFinite(parsed)) {
+			attempt = Math.max(0, parsed);
+		}
+	}
+	return `redrive:${safeId}:${safeChannel}:${attempt}`;
+}
+
 class NotificationRedriveService {
 	constructor(options = {}) {
 		this.inMemoryStore = new Map();
@@ -270,6 +302,7 @@ class NotificationRedriveService {
 				attemptCount: 0,
 				lastError: failure.error ? String(failure.error) : 'Unknown delivery failure',
 				lastStatusCode: typeof failure.statusCode === 'number' ? failure.statusCode : null,
+				lastIdempotencyKey: buildRedriveIdempotencyKey(recordId, channel, 0),
 					repeatCooldown: options.repeatCooldown && options.repeatCooldown.key
 						? {
 							key: String(options.repeatCooldown.key),
@@ -1026,12 +1059,25 @@ class NotificationRedriveService {
 
 					let results;
 					try {
+						const redriveAttemptNumber = (claimed.attemptCount || 0) + 1;
+						const redriveIdempotencyKey = buildRedriveIdempotencyKey(claimed.id, claimed.channel, claimed.attemptCount || 0);
+						const idempotencyKeysByChannel = { [claimed.channel]: redriveIdempotencyKey };
 						results = await notificationManager.sendToChannels(
-							alertPayload,
+							{
+								...alertPayload,
+								idempotencyKey: redriveIdempotencyKey,
+								idempotencyKeysByChannel,
+								redrive: {
+									attemptNumber: redriveAttemptNumber,
+									idempotencyKey: redriveIdempotencyKey,
+									deadLetterId: claimed.id,
+								},
+							},
 							[claimed.channel],
 							{
 								...options,
 								isRedrive: true,
+								idempotencyKey: redriveIdempotencyKey,
 								parentSpan: options.parentSpan,
 								signal: dispatchSignal,
 							},
@@ -1268,4 +1314,5 @@ module.exports = {
 	notificationRedriveService,
 	stripUndefinedFieldsDeep,
 	calculateBackoffMs,
+	buildRedriveIdempotencyKey,
 };

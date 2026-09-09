@@ -420,6 +420,53 @@
           ]
         },
         {
+          "name": "POST Send Alert (with caller-supplied idempotencyKey)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT: Replay with caller-supplied idempotencyKey\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"idempotencyKey\": \"caller-key-123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success (caller key surfaces on every SendResult)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\",\"idempotencyKey\":\"caller-key-123\"}],\"enriched\":false}"
+            },
+            {
+              "name": "Error (oversize idempotencyKey)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\"error\":\"\\\"idempotencyKey\\\" must be at most 256 characters\",\"code\":\"INVALID_REQUEST\"}"
+            }
+          ]
+        },
+        {
           "name": "POST Send Alert (with TradingView data)",
           "request": {
             "method": "POST",
