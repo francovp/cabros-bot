@@ -91,6 +91,13 @@ function serializeValue(val) {
 		};
 	}
 
+	if (typeof admin.firestore.VectorValue === 'function' && val instanceof admin.firestore.VectorValue) {
+		return {
+			__type: 'VectorValue',
+			values: val.toArray(),
+		};
+	}
+
 	// Firestore Timestamp or JavaScript Date
 	const isFirestoreTimestamp = typeof val.toDate === 'function'
 		&& (typeof val.toMillis === 'function'

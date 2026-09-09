@@ -182,6 +182,20 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(deserializeValue(serialized)).toEqual(original);
 		});
 
+		it('serializes and deserializes Firestore VectorValue instances', () => {
+			const original = new admin.firestore.VectorValue([1, -2.5, 3]);
+			const serialized = serializeValue(original);
+
+			expect(serialized).toEqual({
+				__type: 'VectorValue',
+				values: [1, -2.5, 3],
+			});
+
+			const deserialized = deserializeValue(serialized);
+			expect(deserialized).toBeInstanceOf(admin.firestore.VectorValue);
+			expect(deserialized.toArray()).toEqual([1, -2.5, 3]);
+		});
+
 		it('serializes and deserializes nested objects and arrays recursively', () => {
 			const data = {
 				name: 'Alert 1',
@@ -596,6 +610,24 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(mockBatch.commit).not.toHaveBeenCalled();
 		});
 
+		it('rejects a tagged scalar when a backup document data field is not a map', async () => {
+			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
+			fs.writeFileSync(jsonlFile, JSON.stringify({
+				__id: 'a1',
+				data: { __type: 'Bytes', base64: 'AA==' },
+			}) + '\n', 'utf8');
+			const mockBatch = { set: jest.fn(), commit: jest.fn() };
+			const mockFirestore = {
+				batch: jest.fn().mockReturnValue(mockBatch),
+				collection: jest.fn(),
+			};
+
+			await expect(restoreCollectionFile(mockFirestore, 'alerts', jsonlFile))
+				.rejects.toThrow('document data must be a map');
+			expect(mockBatch.set).not.toHaveBeenCalled();
+			expect(mockBatch.commit).not.toHaveBeenCalled();
+		});
+
 		it('supports dry-run mode for restoration without calling Firestore', async () => {
 			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
 			fs.writeFileSync(jsonlFile, JSON.stringify({ _id: 'a1', text: 'Alert' }) + '\n', 'utf8');
@@ -869,6 +901,23 @@ describe('Firestore Backup & Export Tooling', () => {
 				firestore: mockFirestore,
 				inputDir: tempDir,
 			})).rejects.toThrow('document count');
+			expect(mockFirestore.batch).not.toHaveBeenCalled();
+		});
+
+		it('rejects path-bearing collection IDs discovered from a manifest', async () => {
+			fs.writeFileSync(path.join(tempDir, 'manifest.json'), JSON.stringify({
+				totalDocuments: 0,
+				collections: { '../outside': { documentCount: 0 } },
+			}) + '\n');
+			const mockFirestore = {
+				batch: jest.fn(),
+				collection: jest.fn(),
+			};
+
+			await expect(runRestore({
+				firestore: mockFirestore,
+				inputDir: tempDir,
+			})).rejects.toThrow('single collection ID');
 			expect(mockFirestore.batch).not.toHaveBeenCalled();
 		});
 

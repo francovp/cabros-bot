@@ -206,6 +206,16 @@ function deserializeValue(val, firestore) {
 			return Buffer.from(val.base64, 'base64');
 		}
 
+		if (val.__type === 'VectorValue') {
+			if (!Array.isArray(val.values) || !val.values.every(Number.isFinite)) {
+				throw new Error('Invalid VectorValue serialization');
+			}
+			if (typeof admin.firestore.VectorValue !== 'function') {
+				throw new Error('Firestore VectorValue support is unavailable');
+			}
+			return new admin.firestore.VectorValue(val.values);
+		}
+
 		if (val.__type === 'Timestamp') {
 			let result;
 			if (typeof admin.firestore.Timestamp === 'function' && typeof val.seconds === 'number') {
@@ -290,9 +300,14 @@ function deserializeDocument(record, firestore) {
 
 	// Envelope format: { __id: 'docId', data: { ... } }
 	if ('__id' in record && 'data' in record && record.data && typeof record.data === 'object' && !Array.isArray(record.data)) {
+		const data = deserializeValue(record.data, firestore);
+		const prototype = data && typeof data === 'object' ? Object.getPrototypeOf(data) : null;
+		if (!data || prototype !== Object.prototype && prototype !== null) {
+			throw new Error('Backup document data must be a map');
+		}
 		return {
 			id: record.__id,
-			data: deserializeValue(record.data, firestore),
+			data,
 		};
 	}
 
@@ -515,8 +530,14 @@ async function validateManifest(inputDir) {
 		throw new Error('Invalid manifest.json: collections must not be empty');
 	}
 
+	const collectionNames = normalizeCollectionList(entries.map(([collectionName]) => collectionName));
+	if (collectionNames.length !== entries.length || collectionNames.some((name, index) => name !== entries[index][0])) {
+		throw new Error('Manifest collection IDs must be normalized single collection IDs');
+	}
+
 	let expectedTotal = 0;
-	for (const [collectionName, metadata] of entries) {
+	for (const collectionName of collectionNames) {
+		const metadata = manifest.collections[collectionName];
 		const expectedCount = metadata?.documentCount;
 		if (!Number.isSafeInteger(expectedCount) || expectedCount < 0) {
 			throw new Error(`Invalid manifest document count for ${collectionName}`);
@@ -555,7 +576,7 @@ async function validateManifest(inputDir) {
 		throw new Error(`Manifest document count mismatch: expected total ${manifest.totalDocuments}, found ${expectedTotal}`);
 	}
 
-	return entries.map(([collectionName]) => collectionName);
+	return collectionNames;
 }
 
 async function refreshCollectionTtls(firestore, collectionNames, options = {}) {
