@@ -68,8 +68,9 @@ function hasCompleteRiskMetadata(value = {}) {
 
 function selectRiskMetadata(gemini, mcp) {
 	const source = hasCompleteRiskMetadata(mcp) ? mcp : hasCompleteRiskMetadata(gemini) ? gemini : null;
-	const setupType = pickSetupType(gemini.setup_type, mcp.setup_type);
-	const setupEvidence = setupType && (setupType === gemini.setup_type ? gemini.setup_evidence : mcp.setup_evidence);
+	const mcpApplied = hasAppliedMcpLevels(mcp);
+	const setupType = pickSetupType(mcpApplied ? mcp.setup_type : undefined, gemini.setup_type);
+	const setupEvidence = setupType && (setupType === gemini.setup_type ? gemini.setup_evidence : (mcpApplied ? mcp.setup_evidence : undefined));
 	if (!source) {
 		return {
 			...(setupType ? { setup_type: setupType } : {}),
@@ -91,12 +92,17 @@ function selectRiskMetadata(gemini, mcp) {
 // (status failed/undefined or enrichment never ran), and are provenance-tagged so
 // downstream consumers can distinguish provider quality.
 function hasAppliedMcpLevels(mcp = {}) {
+	if (!mcp) return false;
 	const status = mcp.tradingViewEnrichmentStatus;
 	if (status === 'full' || status === 'partial') {
 		return true;
 	}
 
-	return mcp.tradingViewEnrichmentApplied === true && status !== 'failed';
+	if (mcp.tradingViewEnrichmentApplied === true && status !== 'failed') {
+		return true;
+	}
+
+	return hasCompleteRiskMetadata(mcp) && status !== 'failed';
 }
 
 function buildMergedTechnicalLevels(gemini = {}, mcp = {}) {
@@ -289,7 +295,8 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 						invalidation_level: fallback.invalidation_level,
 						target_level: fallback.target_level,
 						risk_reward_ratio: fallback.risk_reward_ratio,
-						setup_type: optionalRiskMetadata.setup_type || fallback.setup_type,
+						...(optionalRiskMetadata.setup_type || fallback.setup_type ? { setup_type: optionalRiskMetadata.setup_type || fallback.setup_type } : {}),
+						...(optionalRiskMetadata.setup_evidence ? { setup_evidence: optionalRiskMetadata.setup_evidence } : {}),
 					};
 					if (!levelsSource) {
 						levelsSource = 'derived-quote';
@@ -483,7 +490,7 @@ async function enrichAlert(alert, options = {}) {
 					invalidation_level: fallbackPlan.invalidation_level,
 					target_level: fallbackPlan.target_level,
 					risk_reward_ratio: fallbackPlan.risk_reward_ratio,
-					setup_type: fallbackPlan.setup_type,
+					...(fallbackPlan.setup_type ? { setup_type: fallbackPlan.setup_type } : {}),
 					levelsSource: 'derived-quote',
 					sources: [],
 					truncated: false,
@@ -531,7 +538,7 @@ async function enrichAlert(alert, options = {}) {
 						invalidation_level: result.invalidation_level ?? fallbackPlan.invalidation_level,
 						target_level: result.target_level ?? fallbackPlan.target_level,
 						risk_reward_ratio: result.risk_reward_ratio ?? fallbackPlan.risk_reward_ratio,
-						setup_type: result.setup_type || fallbackPlan.setup_type,
+						...(result.setup_type || fallbackPlan.setup_type ? { setup_type: result.setup_type || fallbackPlan.setup_type } : {}),
 						levelsSource: result.levelsSource || 'derived-quote',
 					};
 				}
@@ -567,7 +574,7 @@ async function enrichAlert(alert, options = {}) {
 				invalidation_level: fallbackPlan.invalidation_level,
 				target_level: fallbackPlan.target_level,
 				risk_reward_ratio: fallbackPlan.risk_reward_ratio,
-				setup_type: fallbackPlan.setup_type,
+				...(fallbackPlan.setup_type ? { setup_type: fallbackPlan.setup_type } : {}),
 				levelsSource: 'derived-quote',
 				sources: [],
 				truncated: false,

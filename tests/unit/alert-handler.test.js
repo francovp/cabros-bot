@@ -619,7 +619,6 @@ describe('Alert Handler', () => {
 			invalidation_level: 83725,
 			target_level: 89250,
 			risk_reward_ratio: 2,
-			setup_type: 'trend_continuation',
 			levelsSource: 'derived-quote',
 		});
 
@@ -629,7 +628,7 @@ describe('Alert Handler', () => {
 		expect(result.invalidation_level).toBeDefined();
 		expect(result.target_level).toBeDefined();
 		expect(result.risk_reward_ratio).toBe(2);
-		expect(result.setup_type).toBe('trend_continuation');
+		expect(result).not.toHaveProperty('setup_type');
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
@@ -649,7 +648,6 @@ describe('Alert Handler', () => {
 			invalidation_level: 3120,
 			target_level: 3360,
 			risk_reward_ratio: 2,
-			setup_type: 'trend_continuation',
 			levelsSource: 'derived-quote',
 		});
 
@@ -661,6 +659,7 @@ describe('Alert Handler', () => {
 		expect(result.invalidation_level).toBeDefined();
 		expect(result.target_level).toBeDefined();
 		expect(result.risk_reward_ratio).toBe(2);
+		expect(result).not.toHaveProperty('setup_type');
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});

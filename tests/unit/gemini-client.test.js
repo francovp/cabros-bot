@@ -91,7 +91,7 @@ describe('Gemini Service', () => {
 			// sources are not returned by generateEnrichedAlert
 		});
 
-		it('should preserve valid optional risk metadata and setup_evidence from the model response', async () => {
+		it('should preserve valid optional risk metadata and setup_evidence from the model response when structural evidence is present', async () => {
 			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({
 					...mockEnrichedResponse,
@@ -105,7 +105,11 @@ describe('Gemini Service', () => {
 
 			const result = await generateEnrichedAlert({
 				text: 'Bitcoin breaks 83k after a volatile session',
-				searchResults: [],
+				searchResults: [{
+					title: 'BTC breakout',
+					snippet: 'Bitcoin breaks above key resistance level in sharp breakout move',
+					url: 'https://test.com',
+				}],
 			});
 
 			expect(result).toEqual(expect.objectContaining({
@@ -115,6 +119,42 @@ describe('Gemini Service', () => {
 				setup_evidence: 'Price broke above range high with volume',
 				risk_reward_ratio: '2.5:1',
 			}));
+		});
+
+		it('should omit setup_type and setup_evidence when searchResults has 0 sources or lacks structural evidence', async () => {
+			genaiClient.llmCallv2.mockResolvedValue({
+				text: JSON.stringify({
+					...mockEnrichedResponse,
+					invalidation_level: '$80,000',
+					target_level: 90000,
+					setup_type: 'trend_continuation',
+					setup_evidence: 'Continuation in trend',
+					risk_reward_ratio: '2.5:1',
+				}),
+			});
+
+			// 0 sources
+			const resultZeroSources = await generateEnrichedAlert({
+				text: 'Bitcoin price update',
+				searchResults: [],
+			});
+
+			expect(resultZeroSources).not.toHaveProperty('setup_type');
+			expect(resultZeroSources).not.toHaveProperty('setup_evidence');
+			expect(resultZeroSources.invalidation_level).toBe('$80,000');
+
+			// Sources without structural keywords
+			const resultNonStructural = await generateEnrichedAlert({
+				text: 'Bitcoin price update',
+				searchResults: [{
+					title: 'CEO Interview',
+					snippet: 'Company announces new quarterly conference dates and regulatory filing',
+					url: 'https://test.com',
+				}],
+			});
+
+			expect(resultNonStructural).not.toHaveProperty('setup_type');
+			expect(resultNonStructural).not.toHaveProperty('setup_evidence');
 		});
 
 		it('should calibrate generated scores when grounding returns no sources', async () => {
