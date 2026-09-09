@@ -324,6 +324,18 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(opts.projectId).toBe('custom-proj');
 		});
 
+		it('rejects empty explicit restore collections and project values', () => {
+			expect(() => parseRestoreArgs([
+				'--input-dir=/tmp/test-export',
+				'--collections=',
+			])).toThrow('collections must not be empty');
+
+			expect(() => parseRestoreArgs([
+				'--input-dir=/tmp/test-export',
+				'--project=',
+			])).toThrow('project must not be empty');
+		});
+
 		it('defaults restore retentionDays from ALERT_STORAGE_RETENTION_DAYS environment variable', () => {
 			const origEnv = process.env.ALERT_STORAGE_RETENTION_DAYS;
 			try {

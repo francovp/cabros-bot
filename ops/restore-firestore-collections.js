@@ -46,6 +46,9 @@ function parseArgs(args = process.argv.slice(2)) {
 		} else if (arg.startsWith('--collections=')) {
 			const raw = arg.split('=')[1];
 			options.collections = raw.split(',').map((s) => s.trim()).filter(Boolean);
+			if (options.collections.length === 0) {
+				throw new Error('Explicit restore collections must not be empty');
+			}
 		} else if (arg.startsWith('--batch-size=')) {
 			const size = Number(arg.split('=')[1]);
 			if (Number.isSafeInteger(size) && size > 0) {
@@ -72,6 +75,9 @@ function parseArgs(args = process.argv.slice(2)) {
 			}
 		} else if (arg.startsWith('--project=')) {
 			options.projectId = arg.split('=')[1].trim();
+			if (!options.projectId) {
+				throw new Error('Explicit restore project must not be empty');
+			}
 		} else {
 			throw new Error(`Unsupported restore argument: "${arg}"`);
 		}
