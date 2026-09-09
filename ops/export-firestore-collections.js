@@ -50,7 +50,11 @@ function parseArgs(args = process.argv.slice(2)) {
 		} else if (arg.startsWith('--format=')) {
 			options.format = arg.split('=')[1].trim().toLowerCase();
 		} else if (arg.startsWith('--project=')) {
-			options.projectId = arg.split('=')[1].trim();
+			const projectId = arg.split('=')[1].trim();
+			if (!projectId) {
+				throw new Error('Explicit export project must not be empty');
+			}
+			options.projectId = projectId;
 		} else {
 			throw new Error(`Unsupported export argument: "${arg}"`);
 		}

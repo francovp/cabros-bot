@@ -298,6 +298,10 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(() => parseExportArgs(['--collections=alerts,alerts'])).toThrow('must not contain duplicates');
 		});
 
+		it('rejects an explicitly empty export project', () => {
+			expect(() => parseExportArgs(['--project='])).toThrow('Explicit export project must not be empty');
+		});
+
 		it('rejects unsupported export arguments', () => {
 			expect(() => parseExportArgs(['--projet=cabros-bot'])).toThrow('Unsupported export argument');
 		});
@@ -521,6 +525,22 @@ describe('Firestore Backup & Export Tooling', () => {
 			await expect(restoreCollectionFile(mockFirestore, 'alerts', jsonlFile)).rejects.toThrow('document ID');
 			expect(mockBatch.set).not.toHaveBeenCalled();
 			expect(mockBatch.commit).not.toHaveBeenCalled();
+		});
+
+		it('rejects non-string or multi-segment document IDs before writing', async () => {
+			for (const record of [{ __id: 123, data: {} }, { __id: 'nested/id', data: {} }]) {
+				const jsonlFile = path.join(tempDir, 'alerts.jsonl');
+				fs.writeFileSync(jsonlFile, JSON.stringify(record) + '\n', 'utf8');
+				const mockBatch = { set: jest.fn(), commit: jest.fn() };
+				const mockFirestore = {
+					batch: jest.fn().mockReturnValue(mockBatch),
+					collection: jest.fn(),
+				};
+
+				await expect(restoreCollectionFile(mockFirestore, 'alerts', jsonlFile)).rejects.toThrow('invalid document ID');
+				expect(mockBatch.set).not.toHaveBeenCalled();
+				expect(mockBatch.commit).not.toHaveBeenCalled();
+			}
 		});
 
 		it('validates every JSONL record before writing any batch', async () => {

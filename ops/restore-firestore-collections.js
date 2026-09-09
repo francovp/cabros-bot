@@ -370,6 +370,9 @@ async function* readValidatedRecords(filePath, firestore) {
 			if (!id) {
 				throw new Error(`Backup record missing document ID in ${filePath} at line ${lineNumber}`);
 			}
+			if (typeof id !== 'string' || id.includes('/')) {
+				throw new Error(`Backup record has invalid document ID in ${filePath} at line ${lineNumber}`);
+			}
 
 			yield { id, data };
 		}
