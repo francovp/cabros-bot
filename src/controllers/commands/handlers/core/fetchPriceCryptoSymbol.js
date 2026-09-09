@@ -41,6 +41,12 @@ function formatTickerPrice(value) {
 }
 
 function formatCryptoTicker(ticker, symbol) {
+	const hasValue = (value) => value !== null && value !== undefined
+		&& (typeof value !== 'string' || value.trim() !== '');
+	if (!hasValue(ticker?.priceChangePercent) || !hasValue(ticker?.quoteVolume)) {
+		throw new Error('Invalid 24h ticker payload');
+	}
+
 	const changePercent = Number(ticker?.priceChangePercent);
 	const highPrice = formatTickerPrice(ticker?.highPrice);
 	const lowPrice = formatTickerPrice(ticker?.lowPrice);
@@ -158,7 +164,10 @@ async function fetchCryptoPrice(symbol, options = {}) {
 			},
 		});
 		try {
-			const tickerClient = new MainClient({ beautifyResponses: true }, {
+			const tickerClient = new MainClient({
+				beautifyResponses: true,
+				baseUrl: resolveBinanceBaseUrl(),
+			}, {
 				timeout: getRuntimeConfig().BINANCE_FETCH_TIMEOUT_MS,
 			});
 			ticker = formatCryptoTicker(await tickerClient.get24hrChangeStatistics({ symbol }), symbol);

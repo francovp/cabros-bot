@@ -255,10 +255,40 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 
 			await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
 
-			expect(mockMainClient).toHaveBeenCalledWith({ beautifyResponses: true }, { timeout: 1234 });
+			expect(mockMainClient).toHaveBeenCalledWith(
+				{ beautifyResponses: true, baseUrl: 'https://api.binance.com' },
+				{ timeout: 1234 },
+			);
 			remoteConfigService._resetForTesting();
 			if (previousEnabled === undefined) delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
 			else process.env.ENABLE_FIREBASE_REMOTE_CONFIG = previousEnabled;
+		});
+
+		it('forwards the configured Binance base URL to ticker requests', async () => {
+			const previousBaseUrl = process.env.BINANCE_DATA_BASE_URL;
+			process.env.BINANCE_DATA_BASE_URL = 'https://data-api.binance.vision';
+			mockGetAvgPrice.mockResolvedValueOnce({ price: 65432.1 });
+			mockGet24hrChangeStatistics.mockResolvedValueOnce({
+				priceChangePercent: '2.4',
+				highPrice: '66000',
+				lowPrice: '64000',
+				quoteVolume: '1234567890',
+			});
+
+			try {
+				await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
+
+				expect(mockMainClient).toHaveBeenLastCalledWith(
+					{
+						beautifyResponses: true,
+						baseUrl: 'https://data-api.binance.vision',
+					},
+					expect.objectContaining({ timeout: expect.any(Number) }),
+				);
+			} finally {
+				if (previousBaseUrl === undefined) delete process.env.BINANCE_DATA_BASE_URL;
+				else process.env.BINANCE_DATA_BASE_URL = previousBaseUrl;
+			}
 		});
 
 		it('keeps the bare price when the 24h ticker fails', async () => {
@@ -276,6 +306,23 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 		it('keeps the bare price when the 24h ticker payload is malformed', async () => {
 			mockGetAvgPrice.mockResolvedValueOnce({ price: 65432.1 });
 			mockGet24hrChangeStatistics.mockResolvedValueOnce({ priceChangePercent: '2.4' });
+			const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			const result = await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
+
+			expect(result.message).toBe('Precio de BTCUSDT es 65432');
+			expect(warn).toHaveBeenCalledWith('Unable to enrich Binance price with 24h ticker:', 'Invalid 24h ticker payload');
+			warn.mockRestore();
+		});
+
+		it('keeps the bare price when required ticker fields are null', async () => {
+			mockGetAvgPrice.mockResolvedValueOnce({ price: 65432.1 });
+			mockGet24hrChangeStatistics.mockResolvedValueOnce({
+				priceChangePercent: null,
+				highPrice: '66000',
+				lowPrice: '64000',
+				quoteVolume: '',
+			});
 			const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
 			const result = await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
