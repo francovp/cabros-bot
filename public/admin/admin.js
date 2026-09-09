@@ -2393,6 +2393,270 @@ const getQueryEnum = (contract, definition, name) => {
 	return parameter && parameter.schema && parameter.schema.enum || [];
 };
 
+const formatOrderValue = (value) => value === undefined || value === null || value === '' ? '—' : String(value);
+
+const formatOrderEnvironment = (environment) => {
+	if (environment === 'live') return element('span', {
+		className: 'status-badge status-blocked',
+		text: 'Environment: live',
+	});
+	if (environment === 'testnet') return element('span', {
+		className: 'status-badge status-ready',
+		text: 'Environment: testnet',
+	});
+	return element('span', {
+		className: 'status-badge status-disabled',
+		text: `Environment: ${formatOrderValue(environment)}`,
+	});
+};
+
+const ORDER_SUMMARY_FIELDS = [
+	['Symbol', 'symbol'],
+	['Side', 'side'],
+	['Type', 'type'],
+	['Status', 'status'],
+	['Price', 'price'],
+	['Orig qty', 'origQty'],
+	['Executed qty', 'executedQty'],
+	['Cumulative quote', 'cummulativeQuoteQty'],
+	['Time in force', 'timeInForce'],
+	['Stop price', 'stopPrice'],
+];
+
+const ORDER_IDENTIFIER_FIELDS = [
+	['Order ID', 'orderId'],
+	['Client order ID', 'clientOrderId'],
+];
+
+const createOrderCard = (order) => {
+	const card = element('article', { className: 'operation-card order-card' });
+	const symbol = formatOrderValue(order && order.symbol);
+	const heading = element('h3');
+	heading.append(
+		element('span', { text: symbol }),
+		createCopyButton(() => `${formatOrderValue(order && order.symbol)} · ${formatOrderValue(order && order.orderId)}`, 'Copy summary'),
+	);
+	card.append(heading);
+
+	const identifiers = element('dl');
+	ORDER_IDENTIFIER_FIELDS.forEach(([label, key]) => {
+		if (!order || order[key] === undefined || order[key] === null) return;
+		const dd = element('dd');
+		dd.append(element('span', { text: formatOrderValue(order[key]) }));
+		dd.append(createCopyButton(() => formatOrderValue(order[key]), 'Copy'));
+		identifiers.append(element('dt', { text: label }), dd);
+	});
+	if (identifiers.children.length) card.append(identifiers);
+
+	const details = element('dl');
+	ORDER_SUMMARY_FIELDS.forEach(([label, key]) => {
+		details.append(
+			element('dt', { text: label }),
+			element('dd', { text: formatOrderValue(order && order[key]) }),
+		);
+	});
+	card.append(details);
+
+	const timestamps = element('dl');
+	const stampFields = [
+		['Created', order && order.time],
+		['Transact', order && order.transactTime],
+		['Working', order && order.workingTime],
+		['Updated', order && order.updateTime],
+	];
+	stampFields.forEach(([label, value]) => {
+		const dd = element('dd');
+		if (value !== undefined && value !== null && value !== '') dd.append(createTimestamp(value));
+		else dd.textContent = '—';
+		timestamps.append(element('dt', { text: label }), dd);
+	});
+	card.append(timestamps);
+
+	const fills = Array.isArray(order && order.fills) ? order.fills : [];
+	if (fills.length) {
+		const fillsBlock = element('div', { className: 'order-fills' });
+		fillsBlock.append(element('h4', { text: `Fills (${fills.length})` }));
+		const list = element('dl');
+		fills.forEach((fill) => {
+			['price', 'qty', 'commission', 'commissionAsset', 'tradeId'].forEach((key) => {
+				if (fill[key] === undefined || fill[key] === null) return;
+				list.append(element('dt', { text: key }), element('dd', { text: formatOrderValue(fill[key]) }));
+			});
+		});
+		fillsBlock.append(list);
+		card.append(fillsBlock);
+	}
+
+	return card;
+};
+
+const ORDER_LIST_QUERY_VALIDATION = {
+	symbol: (value) => typeof value === 'string' && /^[A-Z0-9]{5,20}$/.test(String(value).trim().toUpperCase()),
+	limit: (value) => {
+		const normalized = String(value).trim();
+		const parsed = Number(normalized);
+		return /^\d+$/.test(normalized) && Number.isFinite(parsed) && parsed >= 1 && parsed <= 100;
+	},
+	orderId: (value) => {
+		const normalized = String(value).trim();
+		const parsed = Number(normalized);
+		return /^\d+$/.test(normalized) && Number.isFinite(parsed) && parsed > 0;
+	},
+};
+
+const trimFormValue = (value) => (value === undefined || value === null ? '' : String(value).trim());
+
+const createOrderListForm = () => {
+	const definition = { method: 'GET', path: '/api/trading/binance/orders', label: 'Load recent orders' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const symbol = addField(form, 'Symbol', 'symbol', { placeholder: 'BTCUSDT', required: true });
+	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: —' });
+	const list = element('div', { className: 'form-fields' });
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	form.append(button, environmentBadge, list, output);
+
+	let listRequestVersion = 0;
+	const invalidateListRequest = () => {
+		listRequestVersion += 1;
+		list.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
+		button.disabled = false;
+		output.className = 'response-block request-state';
+		output.textContent = 'Filters changed. Submit to load recent orders.';
+	};
+	symbol.addEventListener('input', invalidateListRequest);
+	limit.addEventListener('input', invalidateListRequest);
+
+	const renderOrders = (orders, environment) => {
+		list.replaceChildren();
+		environmentBadge.replaceChildren(formatOrderEnvironment(environment));
+		if (!orders.length) {
+			list.append(createEmptyState('No recent orders found.'));
+			return;
+		}
+		orders.forEach((order) => list.append(createOrderCard(order)));
+	};
+
+	form.addEventListener('submit', async (event) => {
+		event.preventDefault();
+		list.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
+		const requestVersion = ++listRequestVersion;
+		const query = {};
+		const symbolValue = trimFormValue(symbol.value).toUpperCase();
+		if (ORDER_LIST_QUERY_VALIDATION.symbol(symbolValue)) query.symbol = symbolValue;
+		const limitValue = trimFormValue(limit.value);
+		if (limitValue && ORDER_LIST_QUERY_VALIDATION.limit(limitValue)) query.limit = String(Number(limitValue));
+		if (!query.symbol) {
+			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button,
+			output,
+			isCurrent: () => requestVersion === listRequestVersion,
+			formatResponse: ({ summary, status: responseStatus, elapsed }) => (
+				`${summary}\nHTTP ${responseStatus} · ${elapsed} ms`
+			),
+		});
+		if (requestVersion === listRequestVersion && data && Array.isArray(data.orders)) {
+			renderOrders(data.orders, data.environment);
+		}
+	});
+
+	return form;
+};
+
+const createOrderLookupForm = () => {
+	const definition = { method: 'GET', path: '/api/trading/binance/orders', label: 'Get single order' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const symbol = addField(form, 'Symbol', 'symbol', { placeholder: 'BTCUSDT', required: true });
+	const orderId = addField(form, 'Order ID', 'path-orderId', { type: 'number', min: 1, placeholder: 'Binance numeric order ID' });
+	const origClientOrderId = addField(form, 'origClientOrderId', 'path-origClientOrderId', {
+		placeholder: '1-36 safe characters (A-Z a-z 0-9 . _ : -)',
+	});
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: —' });
+	const result = element('div');
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const hint = element('p', { className: 'hint', text: 'Provide either orderId or origClientOrderId to query a single order.' });
+	form.append(button, environmentBadge, hint, result, output);
+
+	let lookupRequestVersion = 0;
+	const invalidateLookup = () => {
+		lookupRequestVersion += 1;
+		result.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
+		button.disabled = false;
+		output.className = 'response-block request-state';
+		output.textContent = 'Filters changed. Submit to load order.';
+	};
+	symbol.addEventListener('input', invalidateLookup);
+	orderId.addEventListener('input', invalidateLookup);
+	origClientOrderId.addEventListener('input', invalidateLookup);
+
+	form.addEventListener('submit', async (event) => {
+		event.preventDefault();
+		result.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
+		const requestVersion = ++lookupRequestVersion;
+		const symbolValue = trimFormValue(symbol.value).toUpperCase();
+		const orderIdValue = trimFormValue(orderId.value);
+		const origClientOrderIdValue = trimFormValue(origClientOrderId.value);
+		if (!ORDER_LIST_QUERY_VALIDATION.symbol(symbolValue)) {
+			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+		if (!orderIdValue && !origClientOrderIdValue) {
+			showError(output, 'orderId or origClientOrderId is required for single-order lookup.');
+			return;
+		}
+		if (orderIdValue && origClientOrderIdValue) {
+			showError(output, 'Provide exactly one order identifier.');
+			return;
+		}
+		if (orderIdValue && !ORDER_LIST_QUERY_VALIDATION.orderId(orderIdValue)) {
+			showError(output, 'orderId must be a positive integer.');
+			return;
+		}
+		const query = { symbol: symbolValue };
+		if (orderIdValue) query.orderId = orderIdValue.replace(/^0+(?=\d)/, '');
+		else if (origClientOrderIdValue) query.origClientOrderId = origClientOrderIdValue;
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button,
+			output,
+			isCurrent: () => requestVersion === lookupRequestVersion,
+			formatResponse: ({ summary, status: responseStatus, elapsed }) => (
+				`${summary}\nHTTP ${responseStatus} · ${elapsed} ms`
+			),
+		});
+		if (requestVersion === lookupRequestVersion && data && data.order) {
+			environmentBadge.replaceChildren(formatOrderEnvironment(data.environment));
+			result.replaceChildren(createOrderCard(data.order));
+		}
+	});
+
+	return form;
+};
+
 const formatJobValue = (value) => value === undefined || value === null || value === '' ? '—' : String(value);
 
 const formatJobProgress = (progress) => {
@@ -2872,6 +3136,11 @@ const renderView = async (name) => {
 			view.append(createJobListForm(contract, status.selectJob));
 			VIEWS.jobs.forEach((definition) => view.append(createOperationForm(contract, definition)));
 			view.append(status.form);
+			return;
+		}
+		if (name === 'orders') {
+			view.append(createOrderListForm());
+			view.append(createOrderLookupForm());
 			return;
 		}
 		[...(VIEWS[name] || []), ...(VIEW_ACTIONS[name] || [])]
