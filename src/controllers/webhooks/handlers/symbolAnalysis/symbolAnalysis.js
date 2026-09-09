@@ -1,6 +1,5 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const {
 	ExpandedAnalysisAlertRequestError,
@@ -16,8 +15,8 @@ const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteCo
 
 function postSymbolAnalysis() {
 	return async (req, res) => {
-		const requestId = uuidv4();
-		const startTime = Date.now();
+		const requestId = (req && req.requestId) || undefined;
+		const startTime = (req && req.startTime) || Date.now();
 		let deadline;
 
 		try {

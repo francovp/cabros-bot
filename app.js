@@ -16,6 +16,10 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.text({ type: 'text/plain' }));
 app.use(express.json());
 
+// Attach a stable requestId/startTime to every request so handlers,
+// enrichment, notifications, and storage all share one correlation id.
+app.use(require('./src/lib/requestContext').requestContextMiddleware());
+
 // Configurar Cabeseras y CORS
 app.use(createCorsMiddleware());
 
