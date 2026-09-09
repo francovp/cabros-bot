@@ -25,6 +25,15 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	getMetricsSummary: jest.fn(),
 }));
 
+jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
+	tradingViewMcpService: {
+		enrichFromAlertText: jest.fn(),
+		enrichFromSignal: jest.fn(),
+		getStatus: jest.fn().mockReturnValue({ enabled: true, configured: true, ready: true, status: 'ready' }),
+	},
+	DEFAULT_TRADINGVIEW_MCP_URL: 'https://example.test/mcp',
+}));
+
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
@@ -34,6 +43,7 @@ const signalOutcomeService = require('../../src/services/storage/SignalOutcomeSe
 const { encodeAlertPaginationCursor } = require('../../src/services/storage/alertPaginationCursor');
 
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
+const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 
 describe('Alerts API Integration Tests', () => {
 	let savedEnv;
@@ -45,6 +55,7 @@ describe('Alerts API Integration Tests', () => {
 		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_FIRESTORE_ALERT_STORAGE: 'true',
+			ENABLE_TRADINGVIEW_MCP_ENRICHMENT: 'true',
 		});
 
 		jest.clearAllMocks();
@@ -59,6 +70,8 @@ describe('Alerts API Integration Tests', () => {
 		alertStorageService.getLatestReplayForAlert.mockResolvedValue(null);
 		signalOutcomeService.isEnabled.mockReturnValue(false);
 		signalOutcomeService.getMetricsSummary.mockResolvedValue('No measurements found');
+		tradingViewMcpService.enrichFromAlertText.mockReset();
+		tradingViewMcpService.enrichFromSignal.mockReset();
 		const { parseAlertPaginationCursor: actualParseCursor } = jest.requireActual('../../src/services/storage/alertPaginationCursor');
 		alertStorageService.parseAlertPaginationCursor.mockImplementation(actualParseCursor);
 		app.use('/api', getRoutes(null));
@@ -786,6 +799,143 @@ describe('Alerts API Integration Tests', () => {
 			deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
 		});
 		expect(res.body.success).toBe(true);
+	});
+
+	it('re-enriches with fresh TradingView MCP analysis when reEnrich=true is provided', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'BINANCE:BTCUSDT (1h) long breakout',
+			enriched: true,
+			enrichmentData: { sentiment: 'bullish', insights: ['stored insight'] },
+			tokenUsage: { totalTokens: 42 },
+			deliveryResults: [{ channel: 'telegram', success: true }],
+			source: 'webhook',
+			useTradingViewData: true,
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+			tradingViewEnrichmentApplied: true,
+			tradingViewEnrichmentStatus: 'full',
+		});
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			sentiment: 'bullish',
+			insights: ['fresh insight', 'volume confirmed'],
+			sources: ['https://example.test/mcp'],
+			tradingViewEnrichmentStatus: 'full',
+			tradingViewEnrichmentApplied: true,
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?reEnrich=true')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-reenrich-1')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(tradingViewMcpService.enrichFromAlertText).toHaveBeenCalledWith(
+			'BINANCE:BTCUSDT (1h) long breakout',
+			expect.objectContaining({ useTradingViewData: true })
+		);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'BINANCE:BTCUSDT (1h) long breakout',
+				enriched: expect.objectContaining({
+					sentiment: 'bullish',
+					insights: ['fresh insight', 'volume confirmed'],
+				}),
+				replay: expect.objectContaining({
+					originalAlertId: 'alert-123',
+					reEnrich: true,
+				}),
+			}),
+			['telegram'],
+		);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith(expect.objectContaining({
+			alertId: 'alert-123',
+			idempotencyKey: 'replay-reenrich-1',
+			channels: ['telegram'],
+			reEnrich: true,
+			originalEnrichment: { sentiment: 'bullish', insights: ['stored insight'] },
+			reEnriched: expect.objectContaining({
+				sentiment: 'bullish',
+				insights: ['fresh insight', 'volume confirmed'],
+			}),
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: true,
+			alertId: 'alert-123',
+			replayId: 'replay-1',
+			reEnrich: true,
+			originalEnrichment: { sentiment: 'bullish', insights: ['stored insight'] },
+			reEnriched: expect.objectContaining({
+				sentiment: 'bullish',
+				insights: ['fresh insight', 'volume confirmed'],
+			}),
+			results: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+		}));
+	});
+
+	it('falls back to stored enrichment when reEnrich=true but MCP analysis fails', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-456',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'BINANCE:ETHUSDT (4h) short rejection',
+			enriched: true,
+			enrichmentData: { sentiment: 'bearish', insights: ['stored bear insight'] },
+			tokenUsage: null,
+			deliveryResults: [],
+			source: 'webhook',
+			useTradingViewData: true,
+			symbol: 'ETHUSDT',
+			exchange: 'BINANCE',
+		});
+		tradingViewMcpService.enrichFromAlertText.mockRejectedValue(new Error('MCP timeout'));
+
+		const res = await request(app)
+			.post('/api/alerts/alert-456/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-fail-1')
+			.query({ reEnrich: 'true' })
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(tradingViewMcpService.enrichFromAlertText).toHaveBeenCalledTimes(1);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				enriched: { sentiment: 'bearish', insights: ['stored bear insight'] },
+			}),
+			['telegram'],
+		);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith(expect.objectContaining({
+			alertId: 'alert-456',
+			idempotencyKey: 'replay-fail-1',
+			reEnrich: true,
+			originalEnrichment: { sentiment: 'bearish', insights: ['stored bear insight'] },
+			reEnriched: null,
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: true,
+			alertId: 'alert-456',
+			reEnrich: true,
+			originalEnrichment: { sentiment: 'bearish', insights: ['stored bear insight'] },
+			reEnriched: null,
+		}));
+	});
+
+	it('returns 400 when reEnrich is not a boolean', async () => {
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-bad-flag')
+			.query({ reEnrich: 'maybe' })
+			.send({ channels: ['telegram'] })
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: 'reEnrich must be a boolean (true or false).',
+			code: 'INVALID_REQUEST',
+		});
+		expect(tradingViewMcpService.enrichFromAlertText).not.toHaveBeenCalled();
 	});
 
 	it('returns 400 when replay is missing an idempotency key', async () => {

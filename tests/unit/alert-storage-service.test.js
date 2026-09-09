@@ -1197,7 +1197,69 @@ describe('AlertStorageService', () => {
 				code: 'STORAGE_UNAVAILABLE',
 			});
 		});
+
+		it('persists reEnrich audit fields when the replay requested fresh TradingView MCP analysis', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			await AlertStorageService.saveReplayAttempt({
+				alertId: 'alert-123',
+				idempotencyKey: 'replay-reenrich-1',
+				channels: ['telegram'],
+				deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+				reEnrich: true,
+				reEnrichApplied: true,
+				originalEnrichment: { sentiment: 'bullish', insights: ['stored insight'] },
+				reEnriched: { sentiment: 'bullish', insights: ['fresh insight', 'volume confirmed'] },
+			});
+
+			const document = mockDocSet.mock.calls[0][0];
+			expect(document.reEnrich).toBe(true);
+			expect(document.reEnrichApplied).toBe(true);
+			expect(document.reEnrichReason).toBeUndefined();
+			expect(document.originalEnrichment).toEqual({ sentiment: 'bullish', insights: ['stored insight'] });
+			expect(document.reEnriched).toEqual({ sentiment: 'bullish', insights: ['fresh insight', 'volume confirmed'] });
 		});
+
+		it('persists reEnrich fail-open metadata (reEnrichApplied=false + reason) when MCP did not produce data', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			await AlertStorageService.saveReplayAttempt({
+				alertId: 'alert-456',
+				idempotencyKey: 'replay-reenrich-2',
+				channels: ['telegram'],
+				deliveryResults: [],
+				reEnrich: true,
+				reEnrichApplied: false,
+				reEnrichReason: 'mcp-error',
+				originalEnrichment: { sentiment: 'bearish' },
+			});
+
+			const document = mockDocSet.mock.calls[0][0];
+			expect(document.reEnrich).toBe(true);
+			expect(document.reEnrichApplied).toBe(false);
+			expect(document.reEnrichReason).toBe('mcp-error');
+			expect(document.originalEnrichment).toEqual({ sentiment: 'bearish' });
+			expect(document.reEnriched).toBeUndefined();
+		});
+
+		it('omits reEnrich fields entirely for legacy replays that did not opt in', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			await AlertStorageService.saveReplayAttempt({
+				alertId: 'alert-789',
+				idempotencyKey: 'replay-legacy-1',
+				channels: ['telegram'],
+				deliveryResults: [],
+			});
+
+			const document = mockDocSet.mock.calls[0][0];
+			expect(document.reEnrich).toBeUndefined();
+			expect(document.reEnrichApplied).toBeUndefined();
+			expect(document.reEnrichReason).toBeUndefined();
+			expect(document.originalEnrichment).toBeUndefined();
+			expect(document.reEnriched).toBeUndefined();
+		});
+	});
 
 
 	describe('listReplayAttempts()', () => {
