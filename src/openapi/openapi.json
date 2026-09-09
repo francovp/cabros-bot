@@ -4882,7 +4882,9 @@
           },
           "telegramChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^-?\\d{5,20}$",
+            "description": "Optional Telegram chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match a numeric chat ID (5-20 digits, optional '-' prefix); free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "telegramThreadId": {
             "type": "integer",
@@ -4891,7 +4893,9 @@
           },
           "whatsappChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^\\d{6,20}@(c|g)\\.us$",
+            "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
           }
         }
       },
@@ -4919,7 +4923,9 @@
           },
           "telegramChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^-?\\d{5,20}$",
+            "description": "Optional Telegram chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match a numeric chat ID (5-20 digits, optional '-' prefix); free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "telegramThreadId": {
             "type": "integer",
@@ -4928,7 +4934,9 @@
           },
           "whatsappChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^\\d{6,20}@(c|g)\\.us$",
+            "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "discordWebhookUrl": {
             "type": "string",
@@ -4997,7 +5005,9 @@
           },
           "telegramChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^-?\\d{5,20}$",
+            "description": "Optional Telegram chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match a numeric chat ID (5-20 digits, optional '-' prefix); free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "telegramThreadId": {
             "type": "integer",
@@ -5006,7 +5016,9 @@
           },
           "whatsappChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^\\d{6,20}@(c|g)\\.us$",
+            "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
           }
         }
       },
@@ -5068,7 +5080,9 @@
           },
           "telegramChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^-?\\d{5,20}$",
+            "description": "Optional Telegram chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match a numeric chat ID (5-20 digits, optional '-' prefix); free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "telegramThreadId": {
             "type": "integer",
@@ -5077,7 +5091,9 @@
           },
           "whatsappChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^\\d{6,20}@(c|g)\\.us$",
+            "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
           }
         }
       },
@@ -5379,13 +5395,17 @@
             }
           },
           "telegramChatId": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^-?\\d{5,20}$",
+            "description": "Optional Telegram chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match a numeric chat ID (5-20 digits, optional '-' prefix); free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "telegramThreadId": {
             "type": "integer"
           },
           "whatsappChatId": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^\\d{6,20}@(c|g)\\.us$",
+            "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "discordWebhookUrl": {
             "type": "string"
@@ -5494,7 +5514,9 @@
             }
           },
           "telegramChatId": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^-?\\d{5,20}$",
+            "description": "Optional Telegram chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match a numeric chat ID (5-20 digits, optional '-' prefix); free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "telegramThreadId": {
             "type": "integer",
@@ -5503,7 +5525,9 @@
             "description": "Optional Telegram forum topic message_thread_id override (0 routes to the chat general topic)."
           },
           "whatsappChatId": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^\\d{6,20}@(c|g)\\.us$",
+            "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "discordWebhookUrl": {
             "type": "string",
@@ -5743,7 +5767,9 @@
           },
           "telegramChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^-?\\d{5,20}$",
+            "description": "Optional Telegram chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match a numeric chat ID (5-20 digits, optional '-' prefix); free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "telegramThreadId": {
             "type": "integer",
@@ -5752,7 +5778,9 @@
           },
           "whatsappChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^\\d{6,20}@(c|g)\\.us$",
+            "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
           }
         }
       },
