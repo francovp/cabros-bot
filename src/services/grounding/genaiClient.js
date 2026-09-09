@@ -156,6 +156,7 @@ class GenaiClient {
 		}
 
 		let abortCleanup = null;
+		geminiQuotaManager.recordRequest();
 		let generatePromise = this.genAI.models.generateContent({
 			model: model,
 			contents: query,
@@ -343,6 +344,7 @@ class GenaiClient {
 		}
 
 		let abortCleanup = null;
+		geminiQuotaManager.recordRequest();
 		let generatePromise = this.genAI.models.generateContent({
 			model,
 			contents: prompt,
