@@ -1818,6 +1818,14 @@ describe('AlertStorageService', () => {
 	});
 
 		describe('summarizeAlerts()', () => {
+		beforeEach(() => {
+			jest.useFakeTimers({ now: new Date('2026-06-06T13:00:00.000Z') });
+		});
+
+		afterEach(() => {
+			jest.useRealTimers();
+		});
+
 		it('counts recorded, not-applicable, and legacy unrecorded TradingView outcomes separately', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
@@ -2029,6 +2037,19 @@ describe('AlertStorageService', () => {
 					byChannel: {
 						telegram: { total: 2, success: 1, failure: 1 },
 						whatsapp: { total: 1, success: 1, failure: 0 },
+					},
+				},
+				scanner: {
+					totalRuns: 0,
+					errorCategoryCounts: {
+						mcp_unreachable: 0,
+						mcp_timeout: 0,
+						mcp_rate_limited: 0,
+						mcp_tool_error: 0,
+						mcp_suspended: 0,
+						symbol_invalid: 0,
+						symbol_unsupported: 0,
+						unknown: 0,
 					},
 				},
 				latency: {
