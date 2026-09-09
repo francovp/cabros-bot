@@ -33,6 +33,7 @@ echo "Starting managed Firestore import for project '${project}' from '${export_
 echo "Collections: ${collections}"
 
 echo "Verifying managed restore target collections are empty before import..."
+# ponytail: the preflight/import window is not transactional; use a dedicated empty restore project for strict isolation.
 node ops/refresh-firestore-ttl.js \
 	--collections="$collections" \
 	--project="$project"

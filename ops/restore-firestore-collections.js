@@ -353,6 +353,7 @@ async function restoreCollectionFile(firestore, collectionName, filePath, option
 	});
 
 	let totalRead = 0;
+	// ponytail: stage the full JSONL file before writes to guarantee all-or-nothing validation; stream-to-disk staging for very large backups.
 	const records = [];
 
 	for await (const line of rl) {
