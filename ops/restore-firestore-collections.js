@@ -10,6 +10,8 @@ const BATCH_SIZE = 400;
 const DEFAULT_RETENTION_DAYS = 90;
 const MAX_RETENTION_DAYS = 3650;
 const VALID_TTL_POLICIES = ['refresh', 'clear', 'preserve'];
+const TTL_REFRESH_COLLECTIONS = new Set(['alerts', 'alertReplays']);
+const SERIALIZED_MAP_MARKER = '__cabros_firestore_map__';
 
 function getDefaultRetentionDays() {
 	const rawValue = process.env.ALERT_STORAGE_RETENTION_DAYS;
@@ -94,6 +96,9 @@ function applyTtlPolicy(data, collectionName, ttlPolicy = 'refresh', retentionDa
 	}
 
 	if (ttlPolicy === 'refresh') {
+		if (!TTL_REFRESH_COLLECTIONS.has(collectionName)) {
+			return data;
+		}
 		if (data.expiresAt !== undefined || collectionName === 'alerts' || collectionName === 'alertReplays') {
 			const safeDays = (typeof retentionDays === 'number' && retentionDays >= 1) ? retentionDays : getDefaultRetentionDays();
 			const refreshDate = new Date(Date.now() + (safeDays * 86400000));
@@ -134,6 +139,18 @@ function deserializeValue(val, firestore) {
 	}
 
 	if (typeof val === 'object') {
+		if (val.__type === 'Map'
+			&& val[SERIALIZED_MAP_MARKER] === true
+			&& val.value
+			&& typeof val.value === 'object'
+			&& !Array.isArray(val.value)) {
+			const deserialized = {};
+			for (const [key, value] of Object.entries(val.value)) {
+				deserialized[key] = deserializeValue(value, firestore);
+			}
+			return deserialized;
+		}
+
 		if (val.__type === 'Number' && ['NaN', 'Infinity', '-Infinity'].includes(val.value)) {
 			return Number(val.value);
 		}
@@ -336,8 +353,7 @@ async function restoreCollectionFile(firestore, collectionName, filePath, option
 	});
 
 	let totalRead = 0;
-	let totalRestored = 0;
-	let currentChunk = [];
+	const records = [];
 
 	for await (const line of rl) {
 		const trimmed = line.trim();
@@ -346,29 +362,24 @@ async function restoreCollectionFile(firestore, collectionName, filePath, option
 		}
 
 		totalRead += 1;
-		const parsed = JSON.parse(trimmed);
+		let parsed;
+		try {
+			parsed = JSON.parse(trimmed);
+		} catch (err) {
+			throw new Error(`Invalid JSON in ${filePath} at line ${totalRead}: ${err.message}`);
+		}
 		const { id, data } = deserializeDocument(parsed, firestore);
 
 		if (!id) {
 			throw new Error(`Backup record missing document ID in ${filePath} at line ${totalRead}`);
 		}
 
-		currentChunk.push({ id, data });
-
-		if (currentChunk.length >= batchSize) {
-			const count = await writeBatchChunk(firestore, collectionName, currentChunk, {
-				isDryRun,
-				overwrite,
-				ttlPolicy,
-				retentionDays,
-			});
-			totalRestored += count;
-			currentChunk = [];
-		}
+		records.push({ id, data });
 	}
 
-	if (currentChunk.length > 0) {
-		const count = await writeBatchChunk(firestore, collectionName, currentChunk, {
+	let totalRestored = 0;
+	for (let offset = 0; offset < records.length; offset += batchSize) {
+		const count = await writeBatchChunk(firestore, collectionName, records.slice(offset, offset + batchSize), {
 			isDryRun,
 			overwrite,
 			ttlPolicy,
@@ -383,6 +394,15 @@ async function restoreCollectionFile(firestore, collectionName, filePath, option
 		totalRestored,
 		file: filePath,
 	};
+}
+
+async function assertCollectionsEmpty(firestore, collectionNames) {
+	for (const collectionName of collectionNames) {
+		const snapshot = await firestore.collection(collectionName).limit(1).get();
+		if (!snapshot.empty) {
+			throw new Error(`Managed restore target collection must be empty before import: ${collectionName}`);
+		}
+	}
 }
 
 async function validateManifest(inputDir) {
@@ -453,9 +473,20 @@ async function validateManifest(inputDir) {
 async function refreshCollectionTtls(firestore, collectionNames, options = {}) {
 	const pageSize = options.pageSize || BATCH_SIZE;
 	const retentionDays = options.retentionDays || getDefaultRetentionDays();
-	const results = { totalUpdated: 0, collections: {} };
+	const allowNonEmpty = options.allowNonEmpty === true;
+	const results = { totalUpdated: 0, collections: {}, skippedCollections: [] };
+
+	if (!allowNonEmpty) {
+		await assertCollectionsEmpty(firestore, collectionNames);
+	}
 
 	for (const collectionName of collectionNames) {
+		if (!TTL_REFRESH_COLLECTIONS.has(collectionName)) {
+			results.skippedCollections.push(collectionName);
+			results.collections[collectionName] = 0;
+			continue;
+		}
+
 		let lastDocument = null;
 		let updated = 0;
 		while (true) {
@@ -468,9 +499,6 @@ async function refreshCollectionTtls(firestore, collectionNames, options = {}) {
 			let pending = 0;
 			for (const doc of snapshot.docs) {
 				const data = typeof doc.data === 'function' ? (doc.data() || {}) : {};
-				if (data.expiresAt === undefined && collectionName !== 'alerts' && collectionName !== 'alertReplays') {
-					continue;
-				}
 				const expiresAt = applyTtlPolicy({}, collectionName, 'refresh', retentionDays).expiresAt;
 				const docRef = doc.ref || firestore.collection(collectionName).doc(doc.id);
 				batch.update(docRef, { expiresAt });
@@ -498,11 +526,8 @@ function initializeFirestore(projectId = null) {
 	if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
 		try {
 			credential = admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON));
-		} catch (err) {
-			console.warn(JSON.stringify({
-				event: 'firestore_restore_invalid_service_account_json',
-				error: err.message,
-			}));
+		} catch {
+			throw new Error('Invalid FIREBASE_SERVICE_ACCOUNT_JSON');
 		}
 	}
 
@@ -624,6 +649,7 @@ if (require.main === module) {
 module.exports = {
 	deserializeDocument,
 	deserializeValue,
+	assertCollectionsEmpty,
 	initializeFirestore,
 	parseArgs,
 	refreshCollectionTtls,

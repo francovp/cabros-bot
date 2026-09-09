@@ -6,6 +6,23 @@ const admin = require('firebase-admin');
 
 const DEFAULT_COLLECTIONS = ['alerts', 'alertReplays', 'tradingSignalOutcomes', 'scannerPresets'];
 const PAGE_SIZE = 400;
+const SERIALIZED_MAP_MARKER = '__cabros_firestore_map__';
+
+function normalizeCollectionList(collections) {
+	if (!Array.isArray(collections)) {
+		throw new Error('Export collections must be an array');
+	}
+
+	const normalized = collections.map((value) => String(value).trim()).filter(Boolean);
+	if (normalized.length === 0) {
+		throw new Error('Export collection list must not be empty');
+	}
+	if (new Set(normalized).size !== normalized.length) {
+		throw new Error('Export collection list must not contain duplicates');
+	}
+
+	return normalized;
+}
 
 function parseArgs(args = process.argv.slice(2)) {
 	const options = {
@@ -20,7 +37,7 @@ function parseArgs(args = process.argv.slice(2)) {
 	for (const arg of args) {
 		if (arg.startsWith('--collections=')) {
 			const raw = arg.split('=')[1];
-			options.collections = raw.split(',').map((s) => s.trim()).filter(Boolean);
+			options.collections = raw.split(',');
 		} else if (arg.startsWith('--output-dir=')) {
 			options.outputDir = arg.split('=')[1].trim();
 		} else if (arg.startsWith('--page-size=')) {
@@ -41,6 +58,7 @@ function parseArgs(args = process.argv.slice(2)) {
 		const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 		options.outputDir = path.join(process.cwd(), 'backups', `firestore-export-${timestamp}`);
 	}
+	options.collections = normalizeCollectionList(options.collections);
 
 	return options;
 }
@@ -113,6 +131,13 @@ function serializeValue(val) {
 		const result = {};
 		for (const [key, value] of Object.entries(val)) {
 			result[key] = serializeValue(value);
+		}
+		if (Object.prototype.hasOwnProperty.call(val, '__type')) {
+			return {
+				__type: 'Map',
+				[SERIALIZED_MAP_MARKER]: true,
+				value: result,
+			};
 		}
 		return result;
 	}
@@ -189,11 +214,8 @@ function initializeFirestore(projectId = null) {
 	if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
 		try {
 			credential = admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON));
-		} catch (err) {
-			console.warn(JSON.stringify({
-				event: 'firestore_export_invalid_service_account_json',
-				error: err.message,
-			}));
+		} catch {
+			throw new Error('Invalid FIREBASE_SERVICE_ACCOUNT_JSON');
 		}
 	}
 
@@ -222,6 +244,7 @@ async function runExport(options = {}) {
 		projectId: null,
 		...options,
 	};
+	opts.collections = normalizeCollectionList(opts.collections);
 
 	const firestore = opts.firestore || initializeFirestore(opts.projectId);
 	const results = {

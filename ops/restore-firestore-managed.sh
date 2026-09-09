@@ -32,6 +32,11 @@ fi
 echo "Starting managed Firestore import for project '${project}' from '${export_uri}'..."
 echo "Collections: ${collections}"
 
+echo "Verifying managed restore target collections are empty before import..."
+node ops/refresh-firestore-ttl.js \
+	--collections="$collections" \
+	--project="$project"
+
 gcloud firestore import "$export_uri" \
 	--collection-ids="$collections" \
 	--project="$project"
@@ -39,6 +44,7 @@ gcloud firestore import "$export_uri" \
 echo "Managed import completed; refreshing TTL fields for the configured retention window..."
 node ops/refresh-firestore-ttl.js \
 	--collections="$collections" \
-	--project="$project"
+	--project="$project" \
+	--allow-nonempty
 
 echo "Managed import and TTL refresh completed successfully."

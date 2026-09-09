@@ -8,6 +8,7 @@ function parseArgs(args = process.argv.slice(2)) {
 	const options = {
 		collections: DEFAULT_COLLECTIONS,
 		projectId: process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT,
+		allowNonEmpty: false,
 	};
 
 	for (const arg of args) {
@@ -15,6 +16,8 @@ function parseArgs(args = process.argv.slice(2)) {
 			options.collections = arg.split('=')[1].split(',').map((value) => value.trim()).filter(Boolean);
 		} else if (arg.startsWith('--project=')) {
 			options.projectId = arg.split('=')[1].trim();
+		} else if (arg === '--allow-nonempty') {
+			options.allowNonEmpty = true;
 		} else {
 			throw new Error(`Unsupported TTL refresh argument: "${arg}"`);
 		}
@@ -28,6 +31,7 @@ async function main() {
 	const result = await refreshCollectionTtls(
 		initializeFirestore(options.projectId),
 		options.collections,
+		{ allowNonEmpty: options.allowNonEmpty },
 	);
 	console.log(JSON.stringify({ event: 'firestore_ttl_refresh_completed', ...result }));
 }

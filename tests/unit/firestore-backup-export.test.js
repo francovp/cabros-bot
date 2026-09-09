@@ -12,6 +12,7 @@ const {
 	runExport,
 	serializeDocument,
 	serializeValue,
+	initializeFirestore: initializeExportFirestore,
 } = require('../../ops/export-firestore-collections');
 
 const {
@@ -21,6 +22,7 @@ const {
 	parseArgs: parseRestoreArgs,
 	restoreCollectionFile,
 	runRestore,
+	initializeFirestore: initializeRestoreFirestore,
 } = require('../../ops/restore-firestore-collections');
 
 function buildMockTimestamp(isoString) {
@@ -75,6 +77,16 @@ describe('Firestore Backup & Export Tooling', () => {
 			const duration = { seconds: 12, nanoseconds: 345, label: 'cooldown' };
 
 			expect(serializeValue(duration)).toEqual(duration);
+		});
+
+		it('escapes ordinary maps that use reserved serialization tags', () => {
+			const metadata = { __type: 'Bytes', base64: 'not-a-buffer', source: 'provider' };
+
+			const serialized = serializeValue(metadata);
+
+			expect(serialized.__type).toBe('Map');
+			expect(serialized.value).toEqual(metadata);
+			expect(deserializeValue(serialized)).toEqual(metadata);
 		});
 
 		it('round-trips non-finite Firestore doubles explicitly', () => {
@@ -257,6 +269,11 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(opts.pageSize).toBe(250);
 			expect(opts.dryRun).toBe(true);
 			expect(opts.projectId).toBe('my-custom-project');
+		});
+
+		it('rejects empty or duplicate export collection lists', () => {
+			expect(() => parseExportArgs(['--collections='])).toThrow('must not be empty');
+			expect(() => parseExportArgs(['--collections=alerts,alerts'])).toThrow('must not contain duplicates');
 		});
 
 		it('parses restore CLI arguments', () => {
@@ -468,6 +485,23 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(mockBatch.commit).not.toHaveBeenCalled();
 		});
 
+		it('validates every JSONL record before writing any batch', async () => {
+			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
+			fs.writeFileSync(jsonlFile, [
+				JSON.stringify({ _id: 'a1', text: 'valid' }),
+				'{malformed-json}',
+			].join('\n') + '\n', 'utf8');
+			const mockBatch = { set: jest.fn(), commit: jest.fn() };
+			const mockFirestore = {
+				batch: jest.fn().mockReturnValue(mockBatch),
+				collection: jest.fn(),
+			};
+
+			await expect(restoreCollectionFile(mockFirestore, 'alerts', jsonlFile)).rejects.toThrow('Invalid JSON');
+			expect(mockBatch.set).not.toHaveBeenCalled();
+			expect(mockBatch.commit).not.toHaveBeenCalled();
+		});
+
 		it('supports dry-run mode for restoration without calling Firestore', async () => {
 			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
 			fs.writeFileSync(jsonlFile, JSON.stringify({ _id: 'a1', text: 'Alert' }) + '\n', 'utf8');
@@ -540,6 +574,26 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(mockBatch.set).toHaveBeenCalledTimes(1);
 			const writtenData = mockBatch.set.mock.calls[0][1];
 			expect(writtenData.expiresAt).toBeUndefined();
+		});
+
+		it('does not apply alert retention to custom collection TTL fields', async () => {
+			const jsonlFile = path.join(tempDir, 'tradingviewJobs.jsonl');
+			fs.writeFileSync(jsonlFile, JSON.stringify({
+				_id: 'job-1',
+				expiresAt: { __type: 'Timestamp', seconds: 100, nanoseconds: 0 },
+			}) + '\n', 'utf8');
+			const mockBatch = {
+				set: jest.fn(),
+				commit: jest.fn().mockResolvedValue(undefined),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue({ doc: (id) => ({ id }) }),
+				batch: jest.fn().mockReturnValue(mockBatch),
+			};
+
+			await restoreCollectionFile(mockFirestore, 'tradingviewJobs', jsonlFile, { ttlPolicy: 'refresh' });
+
+			expect(mockBatch.set.mock.calls[0][1].expiresAt.seconds).toBe(100);
 		});
 
 		it('skips existing documents atomically when --no-overwrite is set', async () => {
@@ -700,11 +754,62 @@ describe('Firestore Backup & Export Tooling', () => {
 				batch: jest.fn().mockReturnValue(batch),
 			};
 
-			const result = await refreshCollectionTtls(mockFirestore, ['alerts'], { retentionDays: 30 });
+			const result = await refreshCollectionTtls(mockFirestore, ['alerts'], { retentionDays: 30, allowNonEmpty: true });
 
 			expect(result.totalUpdated).toBe(1);
 			expect(batch.update).toHaveBeenCalledWith(docs[0].ref, { expiresAt: expect.anything() });
 			expect(batch.commit).toHaveBeenCalledTimes(1);
+		});
+
+		it('requires an explicit non-empty override and skips unsupported TTL collections', async () => {
+			const docs = [{
+				id: 'job-1',
+				ref: { id: 'job-1' },
+				data: () => ({ expiresAt: { seconds: 1 } }),
+			}];
+			const query = {
+				orderBy: jest.fn().mockReturnThis(),
+				limit: jest.fn().mockReturnThis(),
+				startAfter: jest.fn().mockReturnThis(),
+				get: jest.fn().mockResolvedValue({ empty: false, docs }),
+			};
+			const batch = { update: jest.fn(), commit: jest.fn() };
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue(query),
+				batch: jest.fn().mockReturnValue(batch),
+			};
+
+			await expect(refreshCollectionTtls(mockFirestore, ['tradingviewJobs'])).rejects.toThrow('empty');
+			const result = await refreshCollectionTtls(mockFirestore, ['tradingviewJobs'], { allowNonEmpty: true });
+
+			expect(result.totalUpdated).toBe(0);
+			expect(batch.update).not.toHaveBeenCalled();
+		});
+	});
+
+	describe('Credential safety', () => {
+		it('fails closed when restore credentials are malformed', () => {
+			const original = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{malformed';
+
+			try {
+				expect(() => initializeRestoreFirestore('cabros-bot')).toThrow('Invalid FIREBASE_SERVICE_ACCOUNT_JSON');
+			} finally {
+				if (original === undefined) delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+				else process.env.FIREBASE_SERVICE_ACCOUNT_JSON = original;
+			}
+		});
+
+		it('fails closed when export credentials are malformed', () => {
+			const original = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{malformed';
+
+			try {
+				expect(() => initializeExportFirestore('cabros-bot')).toThrow('Invalid FIREBASE_SERVICE_ACCOUNT_JSON');
+			} finally {
+				if (original === undefined) delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+				else process.env.FIREBASE_SERVICE_ACCOUNT_JSON = original;
+			}
 		});
 	});
 
