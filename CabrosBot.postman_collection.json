@@ -276,6 +276,38 @@
       ]
     },
     {
+      "name": "Get Status - news monitor cache metrics",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request showing dependencies.newsMonitorCache with hit/miss metrics and memory footprint estimation when ENABLE_NEWS_MONITOR=true."
+      },
+      "response": [
+        {
+          "name": "200 OK - news monitor cache metrics",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"newsMonitorCache\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"mode\":\"persistent\",\"backend\":\"firestore\",\"metrics\":{\"hits\":47,\"misses\":23,\"hitRate\":0.671,\"totalEntries\":12,\"evictions\":5,\"estimatedMemoryBytes\":1234,\"lastHitAt\":\"2026-08-25T10:15:00.000Z\",\"lastMissAt\":\"2026-08-25T10:14:30.000Z\"}}}}"
+        }
+      ]
+    },
+    {
       "name": "Get Capabilities",
       "request": {
         "method": "GET",

@@ -141,6 +141,81 @@ class NewsCache {
 		}
 		this.cleanupInterval = null;
 		this.deliveryLocks = new Map();
+		this.resetMetrics();
+	}
+
+	resetMetrics() {
+		this._metrics = {
+			hits: 0,
+			misses: 0,
+			evictions: 0,
+			lastHitAt: null,
+			lastMissAt: null,
+		};
+	}
+
+	_recordHit() {
+		this._metrics.hits++;
+		this._metrics.lastHitAt = new Date().toISOString();
+	}
+
+	_recordMiss() {
+		this._metrics.misses++;
+		this._metrics.lastMissAt = new Date().toISOString();
+	}
+
+	_estimateMemoryBytes() {
+		let bytes = 0;
+		for (const [key, entry] of this.cache.entries()) {
+			if (this.isExpired(entry)) continue;
+			bytes += (key.length * 2) + 80;
+			if (entry.data) {
+				try {
+					bytes += Buffer.byteLength(JSON.stringify(entry.data));
+				} catch {
+					bytes += 128;
+				}
+			}
+		}
+		return bytes;
+	}
+
+	getMetrics() {
+		const totalReads = this._metrics.hits + this._metrics.misses;
+		const hitRate = totalReads > 0
+			? parseFloat((this._metrics.hits / totalReads).toFixed(3))
+			: 0;
+
+		let totalEntries = 0;
+		for (const entry of this.cache.values()) {
+			if (!this.isExpired(entry)) {
+				totalEntries++;
+			}
+		}
+
+		return {
+			hits: this._metrics.hits,
+			misses: this._metrics.misses,
+			hitRate,
+			totalEntries,
+			evictions: this._metrics.evictions,
+			estimatedMemoryBytes: this._estimateMemoryBytes(),
+			lastHitAt: this._metrics.lastHitAt,
+			lastMissAt: this._metrics.lastMissAt,
+		};
+	}
+
+	getStatus(enabled = true) {
+		const dedup = this.dedupMode;
+		return {
+			enabled,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			mode: dedup.mode,
+			backend: dedup.backend,
+			metrics: this.getMetrics(),
+		};
 	}
 
 	get ttlMs() {
@@ -227,6 +302,7 @@ class NewsCache {
 		if (entry) {
 			if (this.isExpired(entry)) {
 				this.cache.delete(key);
+				this._metrics.evictions++;
 			} else {
 				localData = entry.data;
 			}
@@ -249,6 +325,7 @@ class NewsCache {
 						? mergeDeliveryData(entryRecord.data, refreshedLocalData, localOnlyChannels)
 						: entryRecord.data;
 					if (refreshedLocalData && refreshedLocalData.status !== 'claiming' && entryRecord.data?.status === 'claiming') {
+						this._recordHit();
 						return refreshedLocalData;
 					}
 					// Warm the local cache to avoid repeated Firestore lookups
@@ -259,6 +336,7 @@ class NewsCache {
 						data: refreshedData,
 						localOnlyChannels,
 					});
+					this._recordHit();
 					return refreshedData;
 				}
 			} catch (error) {
@@ -266,7 +344,13 @@ class NewsCache {
 			}
 		}
 
-		return localData;
+		if (localData !== null && localData !== undefined) {
+			this._recordHit();
+			return localData;
+		}
+
+		this._recordMiss();
+		return null;
 	}
 
 	/**
@@ -584,6 +668,7 @@ class NewsCache {
 			if (this.isExpired(entry)) {
 				this.cache.delete(key);
 				removed++;
+				this._metrics.evictions++;
 			}
 		}
 		if (removed > 0) {
