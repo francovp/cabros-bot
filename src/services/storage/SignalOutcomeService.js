@@ -424,6 +424,9 @@ async function recordSignalInternal({
 			? (priceSource || (normSymbolInfo.exchange === 'BINANCE' ? 'tradingview-mcp' : (equityProviderName || 'direct')))
 			: null;
 		let entryPriceReason = null;
+		let suppliedEntryPrice = null;
+		let suppliedEntryPriceSource = null;
+		let entryPriceProvidersToTry = entryPriceSourceChain;
 		if (entryPrice !== null && entryPriceSourceChains.configured) {
 			const incomingProvider = {
 				'tradingview-mcp': 'mcp',
@@ -431,13 +434,22 @@ async function recordSignalInternal({
 				'twelve-data': 'twelve-data',
 				binance: 'binance',
 			}[entryPriceSource] || entryPriceSource;
-			if (!entryPriceSourceChain.includes(incomingProvider)) {
+			const incomingProviderIndex = entryPriceSourceChain.indexOf(incomingProvider);
+			if (incomingProviderIndex === -1) {
 				entryPrice = null;
 				entryPriceSource = null;
+			} else if (incomingProviderIndex > 0) {
+				suppliedEntryPrice = entryPrice;
+				suppliedEntryPriceSource = entryPriceSource;
+				entryPrice = null;
+				entryPriceSource = null;
+				entryPriceProvidersToTry = entryPriceSourceChain.slice(0, incomingProviderIndex);
+			} else {
+				entryPriceProvidersToTry = [];
 			}
 		}
 
-		for (const provider of entryPriceSourceChain) {
+		for (const provider of entryPriceProvidersToTry) {
 			if (entryPrice !== null) break;
 			if (provider === 'mcp') continue;
 
@@ -519,6 +531,11 @@ async function recordSignalInternal({
 					console.warn('[SignalOutcomeService] Failed to fetch equity entry price:', entryPriceReason);
 				}
 			}
+		}
+		if (entryPrice === null && suppliedEntryPrice !== null) {
+			entryPrice = suppliedEntryPrice;
+			entryPriceSource = suppliedEntryPriceSource;
+			entryPriceReason = null;
 		}
 
 		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason);

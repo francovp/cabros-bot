@@ -136,6 +136,44 @@ describe('SignalOutcomeService', () => {
 			expect(saved.entryPriceSource).toBe('binance');
 		});
 
+		it('tries providers before an incoming price when they precede its source', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'binance,mcp';
+			mockGetAvgPrice.mockResolvedValue({ price: '68100.50' });
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-configured-source-prefix',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 64863.03,
+				side: 'BUY',
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(mockGetAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+			expect(saved.price).toBe(68100.50);
+			expect(saved.entryPriceSource).toBe('binance');
+		});
+
+		it('keeps the incoming price when earlier providers do not resolve', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'binance,mcp';
+			mockGetAvgPrice.mockRejectedValue(new Error('Binance unavailable'));
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-configured-source-fallback',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 64863.03,
+				side: 'BUY',
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(mockGetAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+			expect(saved.price).toBe(64863.03);
+			expect(saved.entryPriceSource).toBe('tradingview-mcp');
+		});
+
 		it('rejects unknown providers', () => {
 			expect(() => SignalOutcomeService.parseEntryPriceSources('mcp,unknown')).toThrow(/unknown/i);
 		});
