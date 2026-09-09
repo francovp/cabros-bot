@@ -4,14 +4,73 @@
  */
 const timersPromises = require('timers/promises');
 const { sendWithRetry } = require('../../../../lib/retryHelper');
+const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+
+const DEFAULT_URL_SHORTENER_CACHE_MAX_ENTRIES = 1000;
+const DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES = 32;
+
+function parsePositiveInteger(value, fallback, envVarName) {
+	if (value === undefined || value === null) {
+		return fallback;
+	}
+	const str = String(value).trim();
+	if (str === '') {
+		return fallback;
+	}
+	if (!/^\d+$/.test(str)) {
+		console.warn(`[URLShortener] Invalid ${envVarName} configuration, using default`);
+		return fallback;
+	}
+	const parsed = Number(str);
+	if (!Number.isFinite(parsed) || parsed < 1) {
+		console.warn(`[URLShortener] Invalid ${envVarName} configuration, using default`);
+		return fallback;
+	}
+	return parsed;
+}
 
 /**
  * URLShortenerCache - Session-scoped in-memory cache
  */
 class URLShortenerCache {
-	constructor() {
+	constructor(options = {}) {
 		this.cache = new Map();
 		this.ttlMs = 60 * 60 * 1000; // 1 hour session cache
+		this._explicitMaxEntries = options.maxEntries !== undefined
+			? parsePositiveInteger(options.maxEntries, DEFAULT_URL_SHORTENER_CACHE_MAX_ENTRIES, 'maxEntries')
+			: undefined;
+		this._evictionCount = 0;
+	}
+
+	get maxEntries() {
+		if (this._explicitMaxEntries !== undefined) {
+			return this._explicitMaxEntries;
+		}
+		const runtime = getRuntimeConfig().URL_SHORTENER_CACHE_MAX_ENTRIES;
+		return parsePositiveInteger(runtime, DEFAULT_URL_SHORTENER_CACHE_MAX_ENTRIES, 'URL_SHORTENER_CACHE_MAX_ENTRIES');
+	}
+
+	get evictionCount() {
+		return this._evictionCount;
+	}
+
+	_evictIfOverCapacity() {
+		const max = this.maxEntries;
+		if (this.cache.size <= max) {
+			return;
+		}
+		let evicted = 0;
+		while (this.cache.size > max) {
+			const oldestKey = this.cache.keys().next().value;
+			if (oldestKey === undefined) {
+				break;
+			}
+			this.cache.delete(oldestKey);
+			evicted++;
+		}
+		if (evicted > 0) {
+			this._evictionCount += evicted;
+		}
 	}
 
 	get(url) {
@@ -29,10 +88,12 @@ class URLShortenerCache {
 	}
 
 	set(url, shortUrl) {
+		this.cache.delete(url);
 		this.cache.set(url, {
 			shortUrl,
 			timestamp: Date.now(),
 		});
+		this._evictIfOverCapacity();
 	}
 
 	clear() {
@@ -42,6 +103,14 @@ class URLShortenerCache {
 	size() {
 		return this.cache.size;
 	}
+
+	getStats() {
+		return {
+			size: this.cache.size,
+			maxEntries: this.maxEntries,
+			evictionCount: this._evictionCount,
+		};
+	}
 }
 
 /**
@@ -49,11 +118,15 @@ class URLShortenerCache {
  * Supports: Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw
  */
 class URLShortener {
-	constructor() {
+	constructor(options = {}) {
 		this.primaryService = (process.env.URL_SHORTENER_SERVICE || 'picsee').toLowerCase();
 		this.timeout = 60000; // 5s timeout per call
-		this.cache = new URLShortenerCache();
+		this.cache = new URLShortenerCache(options.cacheOptions);
 		this.serviceFailures = new Map(); // Track consecutive failures per service
+		this._explicitServiceFailuresMaxEntries = options.serviceFailuresMaxEntries !== undefined
+			? parsePositiveInteger(options.serviceFailuresMaxEntries, DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES, 'serviceFailuresMaxEntries')
+			: undefined;
+		this._serviceFailureEvictionCount = 0;
 
 		// Validate service
 		this.validServices = [
@@ -174,7 +247,51 @@ class URLShortener {
 	recordServiceFailure(service) {
 		const count = (this.serviceFailures.get(service) || 0) + 1;
 		this.serviceFailures.set(service, count);
+		this._evictServiceFailuresIfOverCapacity();
 		return count;
+	}
+
+	get serviceFailuresMaxEntries() {
+		if (this._explicitServiceFailuresMaxEntries !== undefined) {
+			return this._explicitServiceFailuresMaxEntries;
+		}
+		const runtime = getRuntimeConfig().URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES;
+		return parsePositiveInteger(
+			runtime,
+			DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES,
+			'URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES',
+		);
+	}
+
+	get _serviceFailuresMaxEntries() {
+		return this.serviceFailuresMaxEntries;
+	}
+
+	_evictServiceFailuresIfOverCapacity() {
+		const max = this.serviceFailuresMaxEntries;
+		if (this.serviceFailures.size <= max) {
+			return;
+		}
+		let evicted = 0;
+		while (this.serviceFailures.size > max) {
+			const oldestKey = this.serviceFailures.keys().next().value;
+			if (oldestKey === undefined) {
+				break;
+			}
+			this.serviceFailures.delete(oldestKey);
+			evicted++;
+		}
+		if (evicted > 0) {
+			this._serviceFailureEvictionCount += evicted;
+		}
+	}
+
+	get serviceFailuresStats() {
+		return {
+			size: this.serviceFailures.size,
+			maxEntries: this.serviceFailuresMaxEntries,
+			evictionCount: this._serviceFailureEvictionCount,
+		};
 	}
 
 	/**
@@ -199,6 +316,7 @@ class URLShortener {
 	recordServiceFailure(service) {
 		const count = (this.serviceFailures.get(service) || 0) + 1;
 		this.serviceFailures.set(service, count);
+		this._evictServiceFailuresIfOverCapacity();
 		return count;
 	}
 
