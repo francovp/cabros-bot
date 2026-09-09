@@ -124,17 +124,42 @@ class DiscordService extends NotificationChannel {
 
 			const content = await this.formatAlert(alert);
 			const chunks = splitMessageIntoChunks(content, DISCORD_MESSAGE_LIMIT);
+			const isChunked = chunks.length > 1;
+			const resumeFromChunk = Number.isInteger(options.startChunk) && options.startChunk > 0
+				? Math.min(options.startChunk, chunks.length - 1)
+				: 0;
 			const messageIds = [];
 			let totalAttempts = 0;
+			const startedAt = Date.now();
 
-			for (const chunk of chunks) {
-				const result = await this.sendChunk(chunk, webhookUrl, options.signal);
+			for (let index = resumeFromChunk; index < chunks.length; index += 1) {
+				const result = await this.sendChunk(chunks[index], webhookUrl, options.signal);
 				totalAttempts += result.attemptCount || 0;
 				if (!result.success) {
 					if (result.statusCode === 429) {
-						return { ...result, attemptCount: totalAttempts };
+						return {
+							...result,
+							attemptCount: totalAttempts,
+							messageIds,
+							messageCount: messageIds.length,
+							...(isChunked ? {
+								splitMessageCount: chunks.length,
+								failedPart: index + 1,
+								resumedFromChunk: resumeFromChunk,
+							} : {}),
+						};
 					}
-					return result;
+					return {
+						...result,
+						messageIds,
+						messageCount: messageIds.length,
+						...(isChunked ? {
+							splitMessageCount: chunks.length,
+							failedPart: index + 1,
+							durationMs: Date.now() - startedAt,
+							resumedFromChunk: resumeFromChunk,
+						} : {}),
+					};
 				}
 				messageIds.push(result.messageId);
 			}
@@ -145,6 +170,11 @@ class DiscordService extends NotificationChannel {
 				messageId: messageIds.join(','),
 				messageIds,
 				messageCount: messageIds.length,
+				...(isChunked ? {
+					splitMessageCount: chunks.length,
+					durationMs: Date.now() - startedAt,
+					resumedFromChunk: resumeFromChunk,
+				} : {}),
 			};
 		} catch (error) {
 			this.logger?.error?.(`Failed to send to Discord: ${error.message}`);
