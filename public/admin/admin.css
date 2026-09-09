@@ -107,6 +107,10 @@ textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas
 .capability-chip { padding: .45rem .65rem; border: 1px solid #2e5d77; border-radius: 999px; background: #12334a; color: #bfeaff; font-size: .78rem; }
 .raw-status summary { cursor: pointer; color: var(--muted); font-size: .78rem; }
 .raw-status[open] summary { margin-bottom: .7rem; }
+.dashboard-controls { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+.interval-select-label { display: flex; align-items: center; gap: .45rem; font-size: .82rem; color: var(--muted); font-weight: 600; }
+.interval-select-label select { width: auto; padding: .45rem .6rem; font-size: .8rem; }
+.dashboard-healthy-card { display: flex; align-items: center; gap: .75rem; padding: .85rem 1rem; border: 1px solid #2a6d62; border-radius: var(--radius-md); background: #0e2926; color: #a4ecd2; font-size: .85rem; }
 
 .nav-icon { width: 1.05rem; height: 1.05rem; flex: 0 0 auto; color: var(--accent); }
 .loading-state { display: inline-flex; align-items: center; gap: .55rem; color: #a7c6e5; font-size: .85rem; }
