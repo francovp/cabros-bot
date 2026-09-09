@@ -1264,6 +1264,10 @@ const createOverviewDashboard = () => {
 		element('p', { className: 'eyebrow', text: 'Live control plane' }),
 		element('h2', { text: 'Operational overview' }),
 		element('p', { text: 'A quick read on service readiness, enabled capabilities and delivery health.' }),
+		element('p', {
+			className: 'dashboard-subtitle',
+			text: 'New here? See docs/PRODUCT.md for the human-readable capability map and first-24-hours operator journey.',
+		}),
 		lastChecked,
 	);
 	const refreshButton = element('button', { className: 'button-primary', text: 'Refresh dashboard' });
