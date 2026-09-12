@@ -25,6 +25,7 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	getMetricsSummary: jest.fn(),
 }));
 
+const crypto = require('crypto');
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
@@ -947,12 +948,13 @@ describe('Alerts API Integration Tests', () => {
 		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
 
+		const expectedHashPrefix1 = crypto.createHash('sha256').update('replay-dry-key-1').digest('hex').slice(0, 12);
 		expect(res.body).toEqual({
 			success: true,
 			dryRun: true,
 			alertId: 'alert-123',
 			channels: ['telegram'],
-			idempotencyKey: 'replay-dry-key-1',
+			idempotencyKeyHashPrefix: expectedHashPrefix1,
 			payloadPreview: {
 				text: 'Replay me (dry-run)',
 				enriched: { sentiment: 'bullish' },
@@ -963,6 +965,7 @@ describe('Alerts API Integration Tests', () => {
 				},
 			},
 		});
+		expect(res.body.idempotencyKey).toBeUndefined();
 	});
 
 	it('returns payload preview when dryRun is provided via query string', async () => {
@@ -976,6 +979,8 @@ describe('Alerts API Integration Tests', () => {
 			source: 'webhook',
 		});
 
+		delete process.env.WHATSAPP_CHAT_ID;
+
 		const res = await request(app)
 			.post('/api/alerts/alert-456/replay?dryRun=true')
 			.set('x-api-key', 'test-key')
@@ -986,14 +991,107 @@ describe('Alerts API Integration Tests', () => {
 		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
 
+		const expectedHashPrefix2 = crypto.createHash('sha256').update('replay-dry-key-2').digest('hex').slice(0, 12);
 		expect(res.body.dryRun).toBe(true);
 		expect(res.body.alertId).toBe('alert-456');
 		expect(res.body.channels).toEqual(['whatsapp']);
-		expect(res.body.idempotencyKey).toBe('replay-dry-key-2');
+		expect(res.body.idempotencyKeyHashPrefix).toBe(expectedHashPrefix2);
+		expect(res.body.idempotencyKey).toBeUndefined();
 		expect(res.body.payloadPreview).toEqual({
 			text: 'Body-less dry-run',
 			enriched: null,
 			channelRouting: {},
+		});
+	});
+
+	it('resolves effective channel routing and topic routes from environment when stored alert lacks overrides', async () => {
+		process.env.TELEGRAM_CHAT_ID = '-100123456789';
+		process.env.TELEGRAM_TOPIC_ROUTES = 'webhook-signal:88,alert-replay:99';
+		process.env.WHATSAPP_CHAT_ID = '12345@c.us';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/xyz';
+
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-effective-1',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Effective routing preview',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [{ channel: 'telegram', success: false }],
+			source: 'webhook-signal',
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-effective-1/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-effective-key')
+			.send({ channels: ['telegram', 'whatsapp', 'discord'], dryRun: true })
+			.expect(200);
+
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+
+		const expectedHashPrefix = crypto.createHash('sha256').update('replay-effective-key').digest('hex').slice(0, 12);
+		expect(res.body.dryRun).toBe(true);
+		expect(res.body.idempotencyKeyHashPrefix).toBe(expectedHashPrefix);
+		expect(res.body.idempotencyKey).toBeUndefined();
+		expect(res.body.payloadPreview.channelRouting).toEqual({
+			telegramChatId: '-100123456789',
+			telegramThreadId: 88,
+			whatsappChatId: '12345@c.us',
+			discordWebhookUrl: 'https://discord.com/api/webhooks/123/xyz',
+		});
+	});
+
+	it('resolves alert-replay topic route when stored alert has no source and env routes are present', async () => {
+		process.env.TELEGRAM_CHAT_ID = '-100123456789';
+		process.env.TELEGRAM_TOPIC_ROUTES = 'webhook-signal:88,alert-replay:99';
+
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-effective-2',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay fallback topic route',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [],
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-effective-2/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-fallback-source')
+			.send({ channels: ['telegram'], dryRun: true })
+			.expect(200);
+
+		expect(res.body.payloadPreview.channelRouting).toEqual({
+			telegramChatId: '-100123456789',
+			telegramThreadId: 99,
+		});
+	});
+
+	it('preserves custom chat without applying topic routes from environment', async () => {
+		process.env.TELEGRAM_CHAT_ID = '-100123456789';
+		process.env.TELEGRAM_TOPIC_ROUTES = 'webhook-signal:88,alert-replay:99';
+
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-effective-3',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Custom chat without topic route',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [],
+			source: 'webhook-signal',
+			telegramChatId: '-100999999999',
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-effective-3/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-custom-chat')
+			.send({ channels: ['telegram'], dryRun: true })
+			.expect(200);
+
+		expect(res.body.payloadPreview.channelRouting).toEqual({
+			telegramChatId: '-100999999999',
 		});
 	});
 

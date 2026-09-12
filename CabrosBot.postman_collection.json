@@ -3758,7 +3758,7 @@
               },
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"alertId\": \"alert-123\",\n  \"channels\": [\"telegram\"],\n  \"idempotencyKey\": \"replay-key-1\",\n  \"payloadPreview\": {\n    \"text\": \"BINANCE:ETHUSDT(240) pasó a señal de COMPRA\",\n    \"enriched\": {\n      \"sentiment\": \"BULLISH\",\n      \"sentiment_score\": 0.62,\n      \"insights\": [\"Volume confirms: YES (1.4x avg)\"],\n      \"technical_levels\": { \"supports\": [\"3200\"], \"resistances\": [\"3350\"] }\n    },\n    \"channelRouting\": {\n      \"telegramChatId\": \"111\",\n      \"telegramThreadId\": 7,\n      \"whatsappChatId\": \"222\"\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"alertId\": \"alert-123\",\n  \"channels\": [\"telegram\"],\n  \"idempotencyKeyHashPrefix\": \"06bdeddf2a29\",\n  \"payloadPreview\": {\n    \"text\": \"BINANCE:ETHUSDT(240) pasó a señal de COMPRA\",\n    \"enriched\": {\n      \"sentiment\": \"BULLISH\",\n      \"sentiment_score\": 0.62,\n      \"insights\": [\"Volume confirms: YES (1.4x avg)\"],\n      \"technical_levels\": { \"supports\": [\"3200\"], \"resistances\": [\"3350\"] }\n    },\n    \"channelRouting\": {\n      \"telegramChatId\": \"111\",\n      \"telegramThreadId\": 7,\n      \"whatsappChatId\": \"222\"\n    }\n  }\n}"
             },
             {
               "name": "Not found (dry-run, alert missing)",

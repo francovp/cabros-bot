@@ -1,8 +1,10 @@
 'use strict';
 
+const crypto = require('crypto');
 const alertStorageService = require('../../services/storage/AlertStorageService');
 const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
+const { parseTelegramTopicRoutes, resolveTelegramThreadId } = require('../../services/notification/telegramTopicRouting');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -580,7 +582,7 @@ function resolveDryRun(req) {
 	return Boolean(queryFlag || bodyFlag);
 }
 
-function buildChannelRouting(storedAlert, storedTelegramThreadId) {
+function buildStoredChannelRouting(storedAlert, storedTelegramThreadId) {
 	return {
 		...(storedAlert.telegramChatId ? { telegramChatId: storedAlert.telegramChatId } : {}),
 		...(storedTelegramThreadId !== undefined && storedTelegramThreadId !== null
@@ -589,6 +591,47 @@ function buildChannelRouting(storedAlert, storedTelegramThreadId) {
 		...(storedAlert.whatsappChatId ? { whatsappChatId: storedAlert.whatsappChatId } : {}),
 		...(storedAlert.discordWebhookUrl ? { discordWebhookUrl: storedAlert.discordWebhookUrl } : {}),
 	};
+}
+
+function buildDryRunChannelRouting(storedAlert, storedTelegramThreadId, channels) {
+	const routing = buildStoredChannelRouting(storedAlert, storedTelegramThreadId);
+
+	if (Array.isArray(channels)) {
+		if (channels.includes('telegram')) {
+			if (!routing.telegramChatId && process.env.TELEGRAM_CHAT_ID) {
+				routing.telegramChatId = process.env.TELEGRAM_CHAT_ID;
+			}
+			if (routing.telegramThreadId === undefined) {
+				const isCustomChat = Boolean(
+					routing.telegramChatId
+					&& process.env.TELEGRAM_CHAT_ID
+					&& String(routing.telegramChatId) !== String(process.env.TELEGRAM_CHAT_ID)
+				);
+				const topicRoutes = isCustomChat ? {} : parseTelegramTopicRoutes(process.env.TELEGRAM_TOPIC_ROUTES);
+				const resolvedThread = resolveTelegramThreadId(
+					{ ...storedAlert, source: storedAlert.source || 'alert-replay' },
+					topicRoutes
+				);
+				if (resolvedThread !== null && resolvedThread !== undefined) {
+					routing.telegramThreadId = resolvedThread;
+				}
+			}
+		}
+
+		if (channels.includes('whatsapp')) {
+			if (!routing.whatsappChatId && process.env.WHATSAPP_CHAT_ID) {
+				routing.whatsappChatId = process.env.WHATSAPP_CHAT_ID;
+			}
+		}
+
+		if (channels.includes('discord')) {
+			if (!routing.discordWebhookUrl && process.env.DISCORD_WEBHOOK_URL) {
+				routing.discordWebhookUrl = process.env.DISCORD_WEBHOOK_URL;
+			}
+		}
+	}
+
+	return routing;
 }
 
 function replayAlert(botOrGetter) {
@@ -655,16 +698,22 @@ function replayAlert(botOrGetter) {
 				}
 			}
 
-			const channelRouting = buildChannelRouting(storedAlert, storedTelegramThreadId);
+			const storedChannelRouting = buildStoredChannelRouting(storedAlert, storedTelegramThreadId);
 
 			if (dryRun) {
 				console.debug('[AlertsController] Replay dry-run: skipping delivery and persistence for alert', alertId);
+				const channelRouting = buildDryRunChannelRouting(storedAlert, storedTelegramThreadId, channels);
+				const idempotencyKeyHashPrefix = crypto
+					.createHash('sha256')
+					.update(idempotencyKey.trim())
+					.digest('hex')
+					.slice(0, 12);
 				return res.status(200).json({
 					success: true,
 					dryRun: true,
 					alertId,
 					channels,
-					idempotencyKey: idempotencyKey.trim(),
+					idempotencyKeyHashPrefix,
 					payloadPreview: {
 						text: storedAlert.text,
 						enriched: storedAlert.enrichmentData || null,
@@ -688,7 +737,7 @@ function replayAlert(botOrGetter) {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),
 				},
-				...channelRouting,
+				...storedChannelRouting,
 			};
 			const results = await notificationManager.sendToChannels(replayPayload, channels);
 			const replayId = await alertStorageService.saveReplayAttempt({

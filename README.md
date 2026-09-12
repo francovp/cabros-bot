@@ -1355,7 +1355,7 @@ For rollout validation, first verify the active prompt provenance and coverage i
 
 Replay a stored alert through the configured notification channels. The endpoint requires an idempotency key (`idempotency-key`/`x-idempotency-key` header or `idempotencyKey` body/query field) and an `ENABLE_FIRESTORE_ALERT_STORAGE=true` gate. Successful replays persist a `alertReplays` audit document with a SHA-256 hash of the key.
 
-**Dry-run mode:** add `dryRun: true` to the body (or `?dryRun=true` to the URL) to fetch the stored alert and build the would-be payload, then return it without dispatching to any channel and without persisting a replay attempt. Use this to preview the text, enrichment data, and per-channel routing before triggering a real replay. The dry-run response echoes the raw `idempotencyKey` (the live endpoint never returns it).
+**Dry-run mode:** add `dryRun: true` to the body (or `?dryRun=true` to the URL) to fetch the stored alert and build the would-be payload, then return it without dispatching to any channel and without persisting a replay attempt. Use this to preview the text, enrichment data, and per-channel routing (resolving channel service defaults and `TELEGRAM_TOPIC_ROUTES` when the stored alert lacks explicit overrides) before triggering a real replay. The dry-run response returns the 12-character SHA-256 hash prefix `idempotencyKeyHashPrefix` without leaking the raw key into upstream caches (the live endpoint never returns it).
 
 **Request body:**
 ```json
@@ -1372,7 +1372,7 @@ Replay a stored alert through the configured notification channels. The endpoint
   "dryRun": true,
   "alertId": "alert-123",
   "channels": ["telegram"],
-  "idempotencyKey": "replay-key-1",
+  "idempotencyKeyHashPrefix": "06bdeddf2a29",
   "payloadPreview": {
     "text": "BINANCE:ETHUSDT(240) pasó a señal de COMPRA",
     "enriched": { "sentiment": "BULLISH", "sentiment_score": 0.62 },
