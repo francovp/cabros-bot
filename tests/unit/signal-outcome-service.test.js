@@ -147,6 +147,135 @@ describe('SignalOutcomeService', () => {
 		});
 	});
 
+	describe('getSessionContext()', () => {
+		it('flags a post-close daily equity signal and points to the next session open', () => {
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-08-25T20:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'after_hours',
+				measurementCohort: 'raw_received_at_after_hours',
+				anchorMode: 'raw_received_at',
+				calendarId: 'nyse',
+				calendarTimeZone: 'America/New_York',
+				decisionBarClosedAt: '2026-08-25T20:00:00.000Z',
+				tradableAt: '2026-08-26T13:30:00.000Z',
+			}));
+		});
+
+		it('preserves DST-aware session times and skips US holidays', () => {
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'NASDAQ_DLY',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-11-26T20:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'market_holiday',
+				decisionBarClosedAt: null,
+				tradableAt: '2026-11-27T14:30:00.000Z',
+			}));
+
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-11-27T18:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'after_hours',
+				decisionBarClosedAt: '2026-11-27T18:00:00.000Z',
+				tradableAt: '2026-11-30T14:30:00.000Z',
+			}));
+		});
+
+		it('uses the correct DST offset after a Friday close', () => {
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'BATS',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-11-02T21:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				decisionBarClosedAt: '2026-11-02T21:00:00.000Z',
+				tradableAt: '2026-11-03T14:30:00.000Z',
+			}));
+		});
+
+		it('does not add equity session assumptions to crypto signals', () => {
+			const receivedAt = new Date('2026-08-25T20:01:00.000Z');
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'BINANCE',
+				assetClass: 'crypto',
+				timeframe: '1D',
+				receivedAt,
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'crypto_24_7',
+				measurementCohort: 'raw_received_at',
+				tradableAt: receivedAt.toISOString(),
+			}));
+		});
+
+		it('labels pre-open observations as pre_open', () => {
+			// Wednesday 2026-08-26 09:00 EDT = 13:00 UTC
+			const preOpen = new Date('2026-08-26T13:00:00.000Z');
+			const context = SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				receivedAt: preOpen,
+			});
+			expect(context.sessionContext).toBe('pre_open');
+			expect(context.measurementCohort).toBe('raw_pre_open');
+			expect(context.tradableAt).toBe('2026-08-26T13:30:00.000Z');
+		});
+
+		it('normalizes ARCA and ARCA_DLY aliases to regular equity exchange', () => {
+			// 10:30 EDT = 14:30 UTC
+			const regularTime = new Date('2026-08-26T14:30:00.000Z');
+			const arcaContext = SignalOutcomeService.getSessionContext({
+				exchange: 'ARCA',
+				assetClass: 'stock',
+				receivedAt: regularTime,
+			});
+			expect(arcaContext.sessionContext).toBe('regular');
+			expect(arcaContext.calendarId).toBe('nyse');
+
+			const arcaDlyContext = SignalOutcomeService.getSessionContext({
+				exchange: 'ARCA_DLY',
+				assetClass: 'stock',
+				receivedAt: regularTime,
+			});
+			expect(arcaDlyContext.sessionContext).toBe('regular');
+			expect(arcaDlyContext.calendarId).toBe('nyse');
+		});
+
+		it('accounts for weekend Independence Day early close on the preceding trading day', () => {
+			// In 2026, July 4 is Saturday. Thursday July 2 is the early-close day (13:00 EDT / 17:00 UTC).
+			// Alert at 14:00 EDT = 18:00 UTC on July 2 is after early close.
+			const afterEarlyClose = new Date('2026-07-02T18:00:00.000Z');
+			const context = SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				receivedAt: afterEarlyClose,
+			});
+			expect(context.sessionContext).toBe('after_hours');
+			expect(context.decisionBarClosedAt).toBe('2026-07-02T17:00:00.000Z');
+			// Friday July 3 is observed holiday for July 4, so next open is Monday July 6 09:30 EDT = 13:30 UTC
+			expect(context.tradableAt).toBe('2026-07-06T13:30:00.000Z');
+		});
+
+		it('checks next year observed New Years closure on December 31 when Jan 1 is Saturday', () => {
+			// In 2027, Dec 31 is Friday. Jan 1 2028 is Saturday. Observed holiday is Friday Dec 31, 2027.
+			const observedNewYear = new Date('2027-12-31T15:00:00.000Z');
+			const context = SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				receivedAt: observedNewYear,
+			});
+			expect(context.sessionContext).toBe('market_holiday');
+			expect(context.tradableAt).toBe('2028-01-03T14:30:00.000Z');
+		});
+	});
+
 	describe('recordSignal()', () => {
 		it('returns null when feature is disabled', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'false';
@@ -188,6 +317,34 @@ describe('SignalOutcomeService', () => {
 			expect(saved.source).toBe('market-scanner');
 			expect(saved.price).toBe(50000);
 			expect(saved.side).toBe('BUY');
+		});
+
+		it('persists equity session context without mixing post-close windows into a tradable cohort', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+			process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+			process.env.TWELVE_DATA_API_KEY = 'test-twelve-data-key';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-25T20:01:00.000Z'));
+
+			try {
+				const resId = await SignalOutcomeService.recordSignal({
+					requestId: 'req-post-close-session',
+					source: 'market-scanner',
+					symbol: 'NYSE:AAPL',
+					timeframe: '1D',
+					assetClass: 'stock',
+					price: 150,
+				});
+
+				const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+				expect(saved.sessionContext).toBe('after_hours');
+				expect(saved.measurementCohort).toBe('raw_received_at_after_hours');
+				expect(saved.anchorMode).toBe('raw_received_at');
+				expect(saved.tradablePrice).toBeNull();
+				expect(saved.outcomes['1h'].measurementCohort).toBe('raw_received_at_after_hours');
+			} finally {
+				jest.useRealTimers();
+			}
 		});
 
 		it('saves a normalised document when enabled with alert storage', async () => {
@@ -1306,6 +1463,50 @@ describe('SignalOutcomeService', () => {
 			expect(updated.outcomes['1h'].return).toBe(2);
 		});
 
+		it('stores late-resolved prices in tradablePrice when resolved at or after tradableAt for closed-session equity', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const tradableAtDate = new Date(Date.now() - 1 * 60 * 60 * 1000);
+			const mockDocId = 'test-equity-late-resolved';
+
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-equity-late',
+					source: 'news-monitor',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: null,
+					observedPrice: null,
+					tradablePrice: null,
+					sessionContext: 'after_hours',
+					tradableAt: tradableAtDate.toISOString(),
+					eligibilityState: 'pending_entry_price',
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			mockGetKlines.mockResolvedValue([
+				[receivedAtDate.getTime(), '50000', '52000', '49000', '51000'],
+			]);
+
+			await SignalOutcomeService.evaluatePendingOutcomes();
+
+			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
+			expect(updated).toBeDefined();
+			expect(updated.price).toBe(50000);
+			expect(updated.tradablePrice).toBe(50000);
+			expect(updated.observedPrice).toBeNull();
+		});
 
 		it('enforces sweep max duration budget on slow or hanging getKlines requests', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
