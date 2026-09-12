@@ -78,6 +78,7 @@ function postMessage(botOrGetter) {
 			res.json({ success: true, results });
 
 			// Fire-and-forget: persist after responding so storage never blocks delivery.
+			// Do not persist raw discordWebhookUrl to avoid storing sensitive webhook credentials.
 			alertStorageService.saveAlert({
 				text: alert.text,
 				enriched: false,
@@ -90,7 +91,6 @@ function postMessage(botOrGetter) {
 				telegramChatId: routing.telegramChatId,
 				telegramThreadId: routing.telegramThreadId,
 				whatsappChatId: routing.whatsappChatId,
-				discordWebhookUrl: routing.discordWebhookUrl,
 			}).catch(() => {});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
