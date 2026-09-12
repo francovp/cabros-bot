@@ -3510,6 +3510,174 @@
           ]
         },
         {
+          "name": "POST Batch Replay Alerts",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alertIds\": [\"{{alertId}}\"],\n  \"channels\": [\"telegram\"],\n  \"dryRun\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/batch/replay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "batch",
+                "replay"
+              ]
+            },
+            "description": "Replays multiple stored alerts (up to 50) to selected notification channels with per-alert idempotency."
+          },
+          "response": [
+            {
+              "name": "200 OK - Batch replay results",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"alertId\": \"{{alertId}}\",\n      \"success\": true,\n      \"replayId\": \"{{alertId}}_hash_1700000000000_attempt-1\",\n      \"results\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"12345\"\n        }\n      ]\n    }\n  ]\n}"
+            },
+            {
+              "name": "400 Bad Request - Missing or invalid alertIds",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"alertIds must be a non-empty array of up to 50 alert IDs.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Batch Export Alerts",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alertIds\": [\"{{alertId}}\"],\n  \"format\": \"jsonl\",\n  \"includeText\": false,\n  \"includeEnrichment\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/batch/export",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "batch",
+                "export"
+              ]
+            },
+            "description": "Exports specific stored alerts (up to 1000) by their document IDs in JSONL or CSV format with Content-Disposition attachment."
+          },
+          "response": [
+            {
+              "name": "200 OK - JSONL batch export",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "text",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/x-ndjson; charset=utf-8"
+                },
+                {
+                  "key": "Content-Disposition",
+                  "value": "attachment; filename=\"alerts-batch-export-2026-09-12.jsonl\""
+                }
+              ],
+              "body": "{\"id\":\"{{alertId}}\",\"receivedAt\":\"2026-09-12T00:00:00.000Z\",\"source\":\"webhook\"}\n"
+            },
+            {
+              "name": "400 Bad Request - Empty alertIds",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"alertIds must be a non-empty array of up to 1000 alert IDs.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Batch Delete Alerts",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alertIds\": [\"{{alertId}}\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/batch/delete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "batch",
+                "delete"
+              ]
+            },
+            "description": "Deletes multiple stored alerts (up to 500) from Firestore using batched writes. Requires admin.operator permissions."
+          },
+          "response": [
+            {
+              "name": "200 OK - Batch delete count",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"deleted\": 1\n}"
+            },
+            {
+              "name": "400 Bad Request - Missing alertIds",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"alertIds must be a non-empty array of up to 500 alert IDs.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Replay Alert (telegram)",
           "request": {
             "method": "POST",

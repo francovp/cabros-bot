@@ -4,6 +4,10 @@ jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	isEnabled: jest.fn(),
 	listAlerts: jest.fn(),
 	getAlertById: jest.fn(),
+	getAlertsByIds: jest.fn(),
+	exportAlertsByIds: jest.fn(),
+	deleteAlerts: jest.fn(),
+	batchReplayAlerts: jest.fn(),
 	saveReplayAttempt: jest.fn(),
 	listReplayAttempts: jest.fn(),
 	getLatestReplayForAlert: jest.fn(),
@@ -1307,5 +1311,257 @@ describe('Alerts API Integration Tests', () => {
 			.expect(200);
 
 		expect(res.body.lastReplay).toBeNull();
+	});
+
+	describe('POST /api/alerts/batch/replay', () => {
+		it('returns 401 when request lacks valid api key', async () => {
+			await request(app)
+				.post('/api/alerts/batch/replay')
+				.send({ alertIds: ['alert-1'] })
+				.expect(401);
+		});
+
+		it('returns 403 when alert storage is disabled', async () => {
+			alertStorageService.isEnabled.mockReturnValue(false);
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], idempotencyKey: 'k-1' })
+				.expect(403);
+			expect(res.body.code).toBe('FEATURE_DISABLED');
+		});
+
+		it('returns 400 when alertIds is missing or empty', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: [], idempotencyKey: 'k-1' })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when alertIds exceeds MAX_BATCH_REPLAY_LIMIT (50)', async () => {
+			const tooMany = Array.from({ length: 51 }, (_, i) => `alert-${i}`);
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: tooMany, idempotencyKey: 'k-1' })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when idempotency key is missing', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'] })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when channels contain invalid names', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], idempotencyKey: 'k-1', channels: ['telegram', 'slack'] })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('replays alerts live to selected channels and records attempts', async () => {
+			alertStorageService.getAlertById
+				.mockResolvedValueOnce({
+					id: 'alert-1',
+					text: 'Alert 1 body',
+					source: 'webhook',
+					telegramChatId: '-100123',
+				})
+				.mockResolvedValueOnce({
+					id: 'alert-2',
+					text: 'Alert 2 body',
+					source: 'webhook',
+				});
+			alertStorageService.saveReplayAttempt
+				.mockResolvedValueOnce('replay-doc-1')
+				.mockResolvedValueOnce('replay-doc-2');
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.set('x-idempotency-key', 'batch-k-1')
+				.send({ alertIds: ['alert-1', 'alert-2'], channels: ['telegram'] })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results).toHaveLength(2);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'alert-1',
+				success: true,
+				replayId: 'replay-doc-1',
+				results: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+			});
+			expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(2);
+			expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledTimes(2);
+		});
+
+		it('handles missing or expired alerts gracefully in the results list', async () => {
+			alertStorageService.getAlertById
+				.mockResolvedValueOnce(null)
+				.mockResolvedValueOnce({ id: 'alert-2', text: 'Live alert' });
+			alertStorageService.saveReplayAttempt.mockResolvedValueOnce('replay-doc-2');
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['missing-alert', 'alert-2'], idempotencyKey: 'batch-k-2' })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'missing-alert',
+				success: false,
+				error: 'Alert not found',
+				code: 'NOT_FOUND',
+			});
+			expect(res.body.results[1].success).toBe(true);
+		});
+
+		it('supports dryRun preview without sending notifications or writing to Firestore', async () => {
+			alertStorageService.getAlertById.mockResolvedValueOnce({
+				id: 'alert-1',
+				text: 'Dry run alert',
+				enrichmentData: { sentiment: 'BULLISH' },
+				telegramChatId: '12345',
+			});
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], dryRun: true, idempotencyKey: 'batch-dry-1' })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.dryRun).toBe(true);
+			expect(res.body.results[0].dryRun).toBe(true);
+			expect(res.body.results[0].payloadPreview.text).toBe('Dry run alert');
+			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+	});
+
+	describe('POST /api/alerts/batch/export', () => {
+		it('returns 401 when lacking valid api key', async () => {
+			await request(app)
+				.post('/api/alerts/batch/export')
+				.send({ alertIds: ['alert-1'] })
+				.expect(401);
+		});
+
+		it('returns 400 when alertIds is missing or invalid', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/export')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: [] })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when alertIds exceeds 1000', async () => {
+			const tooMany = Array.from({ length: 1001 }, (_, i) => `alert-${i}`);
+			const res = await request(app)
+				.post('/api/alerts/batch/export')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: tooMany })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when format is invalid', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/export')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], format: 'xml' })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('exports batch alerts as JSONL by default', async () => {
+			alertStorageService.exportAlertsByIds.mockResolvedValueOnce({
+				alerts: [
+					{ id: 'alert-1', receivedAt: '2026-06-06T12:00:00.000Z', source: 'webhook' },
+					{ id: 'alert-2', receivedAt: '2026-06-06T13:00:00.000Z', source: 'webhook' },
+				],
+			});
+
+			const res = await request(app)
+				.post('/api/alerts/batch/export')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1', 'alert-2'] })
+				.expect(200);
+
+			expect(res.headers['content-type']).toContain('application/x-ndjson');
+			expect(res.headers['content-disposition']).toContain('attachment; filename="alerts-batch-export-');
+			expect(res.text).toContain('alert-1');
+			expect(res.text).toContain('alert-2');
+		});
+
+		it('exports batch alerts as CSV when requested', async () => {
+			alertStorageService.exportAlertsByIds.mockResolvedValueOnce({
+				alerts: [
+					{ id: 'alert-1', receivedAt: '2026-06-06T12:00:00.000Z', source: 'webhook', deliverySummary: { total: 1, sent: 1, failed: 0 } },
+				],
+			});
+
+			const res = await request(app)
+				.post('/api/alerts/batch/export')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], format: 'csv' })
+				.expect(200);
+
+			expect(res.headers['content-type']).toContain('text/csv');
+			expect(res.text).toContain('id,requestId,receivedAt');
+			expect(res.text).toContain('alert-1');
+		});
+	});
+
+	describe('POST /api/alerts/batch/delete', () => {
+		it('returns 401 when lacking valid api key', async () => {
+			await request(app)
+				.post('/api/alerts/batch/delete')
+				.send({ alertIds: ['alert-1'] })
+				.expect(401);
+		});
+
+		it('returns 400 when alertIds is missing or invalid', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/delete')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: [] })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when alertIds exceeds MAX_BATCH_DELETE_LIMIT (500)', async () => {
+			const tooMany = Array.from({ length: 501 }, (_, i) => `alert-${i}`);
+			const res = await request(app)
+				.post('/api/alerts/batch/delete')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: tooMany })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('deletes batch of alerts and returns deleted count', async () => {
+			alertStorageService.deleteAlerts.mockResolvedValueOnce({ deleted: 3 });
+
+			const res = await request(app)
+				.post('/api/alerts/batch/delete')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1', 'alert-2', 'alert-3'] })
+				.expect(200);
+
+			expect(res.body).toEqual({ success: true, deleted: 3 });
+			expect(alertStorageService.deleteAlerts).toHaveBeenCalledWith(['alert-1', 'alert-2', 'alert-3']);
+		});
 	});
 });

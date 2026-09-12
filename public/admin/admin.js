@@ -47,6 +47,17 @@ const VIEW_ACTIONS = {
 				return chips.children.length ? chips : null;
 			},
 		},
+		{
+			method: 'POST', path: '/api/alerts/batch/replay', label: 'Batch replay alerts',
+			confirm: 'Replay selected alerts?',
+		},
+		{
+			method: 'POST', path: '/api/alerts/batch/export', label: 'Batch export alerts',
+		},
+		{
+			method: 'POST', path: '/api/alerts/batch/delete', label: 'Batch delete alerts',
+			confirm: 'Delete selected alerts? This action cannot be undone.',
+		},
 	],
 	presets: [
 		{ method: 'PUT', path: '/api/scanner-presets/{id}', label: 'Update preset' },
@@ -1236,9 +1247,20 @@ const createAlertDetailPanel = (alert) => {
 	return panel;
 };
 
-const createAlertCard = (alert) => {
+const createAlertCard = (alert, { onSelect, isSelected = false, registerCheckbox } = {}) => {
 	const card = element('article', { className: 'operation-card alert-card' });
 	const headCopy = element('div');
+	if (alert && alert.id && typeof onSelect === 'function') {
+		const selectLabel = element('label', { className: 'alert-select-label' });
+		const checkbox = element('input', { className: 'alert-select-checkbox' });
+		checkbox.type = 'checkbox';
+		checkbox.checked = Boolean(isSelected);
+		checkbox.setAttribute('aria-label', `Select alert ${alert.id}`);
+		checkbox.addEventListener('change', () => onSelect(alert.id, checkbox.checked));
+		if (typeof registerCheckbox === 'function') registerCheckbox(checkbox);
+		selectLabel.append(checkbox);
+		headCopy.append(selectLabel);
+	}
 	headCopy.append(element('p', {
 		className: 'eyebrow',
 		text: alert && alert.source ? `Source: ${alert.source}` : 'Stored alert',
@@ -1708,7 +1730,160 @@ const createAlertListForm = () => {
 		rawCopyButton,
 		rawOutput,
 	);
-	form.append(button, prev, next, output, alertList, rawToggle);
+
+	const batchToolbar = element('div', { className: 'batch-toolbar' });
+	const selectAllLabel = element('label', { className: 'alert-select-all-label' });
+	const selectAllCheckbox = element('input', { className: 'alert-select-all' });
+	selectAllCheckbox.type = 'checkbox';
+	selectAllCheckbox.checked = false;
+	selectAllCheckbox.setAttribute('aria-label', 'Select all alerts on page');
+	selectAllLabel.append(selectAllCheckbox, element('span', { text: 'Select all' }));
+
+	const selectionCount = element('span', { className: 'batch-selection-count', text: '0 selected' });
+
+	const batchReplayButton = element('button', { className: 'button-secondary batch-replay-btn', text: 'Replay selected' });
+	batchReplayButton.type = 'button';
+	batchReplayButton.disabled = true;
+
+	const batchExportButton = element('button', { className: 'button-secondary batch-export-btn', text: 'Export selected' });
+	batchExportButton.type = 'button';
+	batchExportButton.disabled = true;
+
+	const batchDeleteButton = element('button', { className: 'button-secondary destructive-action batch-delete-btn', text: 'Delete selected' });
+	batchDeleteButton.type = 'button';
+	batchDeleteButton.disabled = true;
+
+	const batchOutput = element('pre', { className: 'response-block batch-output' });
+	batchOutput.hidden = true;
+
+	batchToolbar.append(selectAllLabel, selectionCount, batchReplayButton, batchExportButton, batchDeleteButton, batchOutput);
+
+	form.append(button, prev, next, output, batchToolbar, alertList, rawToggle);
+
+	let currentAlerts = [];
+	const selectedAlertIds = new Set();
+	const cardCheckboxes = [];
+
+	const updateBatchToolbar = () => {
+		const count = selectedAlertIds.size;
+		selectionCount.textContent = `${count} selected`;
+		const hasSelection = count > 0;
+		const isOperator = canPerformMutation();
+
+		batchReplayButton.disabled = !hasSelection || !isOperator;
+		if (!isOperator) batchReplayButton.title = 'Requires admin.operator role';
+		else batchReplayButton.removeAttribute('title');
+
+		batchExportButton.disabled = !hasSelection;
+
+		batchDeleteButton.disabled = !hasSelection || !isOperator;
+		if (!isOperator) batchDeleteButton.title = 'Requires admin.operator role';
+		else batchDeleteButton.removeAttribute('title');
+
+		const selectable = currentAlerts.filter((a) => a && a.id);
+		selectAllCheckbox.checked = selectable.length > 0 && selectedAlertIds.size === selectable.length;
+	};
+
+	const onAlertSelect = (alertId, isChecked) => {
+		if (isChecked) {
+			selectedAlertIds.add(alertId);
+		} else {
+			selectedAlertIds.delete(alertId);
+		}
+		updateBatchToolbar();
+	};
+
+	selectAllCheckbox.addEventListener('change', () => {
+		const shouldSelect = selectAllCheckbox.checked;
+		currentAlerts.forEach((alert) => {
+			if (alert && alert.id) {
+				if (shouldSelect) {
+					selectedAlertIds.add(alert.id);
+				} else {
+					selectedAlertIds.delete(alert.id);
+				}
+			}
+		});
+		cardCheckboxes.forEach((cb) => {
+			cb.checked = shouldSelect;
+		});
+		updateBatchToolbar();
+	});
+
+	batchReplayButton.addEventListener('click', async () => {
+		const ids = Array.from(selectedAlertIds);
+		if (!ids.length) return;
+		if (!canPerformMutation()) return;
+
+		batchOutput.hidden = false;
+		await sendRequest({
+			definition: {
+				method: 'POST',
+				path: '/api/alerts/batch/replay',
+				label: 'Batch replay alerts',
+				confirm: 'Replay selected alerts?',
+			},
+			path: '/api/alerts/batch/replay',
+			button: batchReplayButton,
+			output: batchOutput,
+			body: { alertIds: ids },
+			formatResponse: ({ summary, status, elapsed, data }) => {
+				const count = data && Array.isArray(data.results) ? data.results.length : 0;
+				const successful = data && Array.isArray(data.results) ? data.results.filter((r) => r.success).length : 0;
+				return `${summary}\nHTTP ${status} · ${elapsed} ms\n\nBatch replay complete: ${successful}/${count} succeeded.`;
+			},
+		});
+		updateBatchToolbar();
+	});
+
+	batchExportButton.addEventListener('click', async () => {
+		const ids = Array.from(selectedAlertIds);
+		if (!ids.length) return;
+
+		batchOutput.hidden = false;
+		await sendRequest({
+			definition: { method: 'POST', path: '/api/alerts/batch/export', label: 'Batch export alerts' },
+			path: '/api/alerts/batch/export',
+			button: batchExportButton,
+			output: batchOutput,
+			body: { alertIds: ids, format: 'jsonl' },
+			parseSuccessResponse: parseAlertExportResponse('jsonl'),
+			formatResponse: ({ summary, status, elapsed, data }) => (
+				`${summary}\nHTTP ${status} · ${elapsed} ms\n\nDownloaded ${data.filename} (${data.contentType || 'unknown content type'}).`
+			),
+		});
+		updateBatchToolbar();
+	});
+
+	batchDeleteButton.addEventListener('click', async () => {
+		const ids = Array.from(selectedAlertIds);
+		if (!ids.length) return;
+		if (!canPerformMutation()) return;
+
+		batchOutput.hidden = false;
+		const res = await sendRequest({
+			definition: {
+				method: 'POST',
+				path: '/api/alerts/batch/delete',
+				label: 'Batch delete alerts',
+				confirm: 'Delete selected alerts? This action cannot be undone.',
+			},
+			path: '/api/alerts/batch/delete',
+			button: batchDeleteButton,
+			output: batchOutput,
+			body: { alertIds: ids },
+			formatResponse: ({ summary, status, elapsed, data }) => (
+				`${summary}\nHTTP ${status} · ${elapsed} ms\n\nBatch delete complete: ${data && data.deleted ? data.deleted : 0} alerts deleted.`
+			),
+		});
+		if (res && res.success) {
+			selectedAlertIds.clear();
+			updateBatchToolbar();
+			requestPage(before.value);
+		} else {
+			updateBatchToolbar();
+		}
+	});
 
 	let nextBefore;
 	let backCursors = [];
@@ -1736,6 +1911,11 @@ const createAlertListForm = () => {
 		});
 		if (generation !== pageGeneration) return false;
 		if (data && Array.isArray(data.alerts)) {
+			currentAlerts = data.alerts;
+			selectedAlertIds.clear();
+			cardCheckboxes.length = 0;
+			selectAllCheckbox.checked = false;
+			updateBatchToolbar();
 			lastRawJson = JSON.stringify(data, null, 2);
 			rawOutput.textContent = lastRawJson;
 			rawCopyButton.hidden = false;
@@ -1743,9 +1923,18 @@ const createAlertListForm = () => {
 			if (!data.alerts.length) {
 				alertList.append(createEmptyState('No stored alerts match these filters.'));
 			} else {
-				data.alerts.forEach((alert) => alertList.append(createAlertCard(alert)));
+				data.alerts.forEach((alert) => alertList.append(createAlertCard(alert, {
+					onSelect: onAlertSelect,
+					isSelected: selectedAlertIds.has(alert.id),
+					registerCheckbox: (cb) => cardCheckboxes.push(cb),
+				})));
 			}
 		} else {
+			currentAlerts = [];
+			selectedAlertIds.clear();
+			cardCheckboxes.length = 0;
+			selectAllCheckbox.checked = false;
+			updateBatchToolbar();
 			lastRawJson = '';
 			rawOutput.textContent = '';
 			rawCopyButton.hidden = true;
@@ -1767,6 +1956,11 @@ const createAlertListForm = () => {
 		pageGeneration += 1;
 		nextBefore = undefined;
 		backCursors = [];
+		currentAlerts = [];
+		selectedAlertIds.clear();
+		cardCheckboxes.length = 0;
+		selectAllCheckbox.checked = false;
+		updateBatchToolbar();
 		next.disabled = true;
 		prev.disabled = true;
 		button.disabled = false;

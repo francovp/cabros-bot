@@ -56,6 +56,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_PROCESSING_TIME_MS = 24 * 60 * 60 * 1000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
+const MAX_BATCH_REPLAY_LIMIT = 50;
+const MAX_BATCH_DELETE_LIMIT = 500;
 const RISK_METADATA_FIELDS = [
 	'invalidation_level',
 	'target_level',
@@ -1770,6 +1772,164 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 }
 
 /**
+ * Retrieve active (non-expired) stored alert documents by their IDs.
+ *
+ * @param {string[]} alertIds
+ * @returns {Promise<Array|null>}
+ */
+async function getAlertsByIds(alertIds) {
+	if (!isEnabled()) {
+		return null;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+	if (!Array.isArray(alertIds) || alertIds.length === 0) {
+		return [];
+	}
+	const uniqueIds = Array.from(new Set(alertIds.filter(id => typeof id === 'string' && id.trim())));
+	if (uniqueIds.length === 0) {
+		return [];
+	}
+
+	const snapshots = await Promise.all(
+		uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get().catch(err => {
+			console.warn('[AlertStorageService] Failed to read alert:', id, err.message);
+			return null;
+		}))
+	);
+
+	const validDocs = [];
+	for (const snap of snapshots) {
+		if (snap && snap.exists && !isRetentionExpired(snap.data() || {})) {
+			validDocs.push(snap);
+		}
+	}
+	return validDocs;
+}
+
+/**
+ * Export specific alerts by their IDs.
+ *
+ * @param {Object} params
+ * @param {string[]} params.alertIds
+ * @param {boolean} [params.includeText=false]
+ * @param {boolean} [params.includeEnrichment=false]
+ * @returns {Promise<{ alerts: Array }|null>}
+ */
+async function exportAlertsByIds({ alertIds, includeText = false, includeEnrichment = false } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+	const docs = await getAlertsByIds(alertIds);
+	const alerts = (docs || []).map(doc => formatExportRecord(doc, { includeText, includeEnrichment }));
+	return {
+		alerts,
+	};
+}
+
+/**
+ * Delete a batch of stored alerts by their IDs using Firestore batch writes.
+ *
+ * @param {string[]} alertIds
+ * @returns {Promise<{ deleted: number }|null>}
+ */
+async function deleteAlerts(alertIds) {
+	if (!isEnabled()) {
+		return null;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+	if (!Array.isArray(alertIds) || alertIds.length === 0) {
+		return { deleted: 0 };
+	}
+	const uniqueIds = Array.from(new Set(alertIds.filter(id => typeof id === 'string' && id.trim())));
+	if (uniqueIds.length === 0) {
+		return { deleted: 0 };
+	}
+
+	let totalDeleted = 0;
+	const BATCH_SIZE = 500;
+	for (let i = 0; i < uniqueIds.length; i += BATCH_SIZE) {
+		const chunk = uniqueIds.slice(i, i + BATCH_SIZE);
+		const batch = firestore.batch();
+		for (const id of chunk) {
+			const docRef = firestore.collection(COLLECTION_NAME).doc(id);
+			batch.delete(docRef);
+		}
+		try {
+			await batch.commit();
+			totalDeleted += chunk.length;
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to commit alert batch delete:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+	}
+
+	return { deleted: totalDeleted };
+}
+
+/**
+ * Persist multiple replay attempts in a batch write.
+ *
+ * @param {Array<Object>} attempts
+ * @returns {Promise<Array<string>|null>} Array of replayIds
+ */
+async function batchReplayAlerts(attempts) {
+	if (!isEnabled()) {
+		return null;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+	if (!Array.isArray(attempts) || attempts.length === 0) {
+		return [];
+	}
+
+	const replayIds = [];
+	const BATCH_SIZE = 500;
+	for (let i = 0; i < attempts.length; i += BATCH_SIZE) {
+		const chunk = attempts.slice(i, i + BATCH_SIZE);
+		const batch = firestore.batch();
+		for (const attempt of chunk) {
+			const { alertId, idempotencyKey, channels, deliveryResults } = attempt;
+			const idempotencyKeyHash = crypto.createHash('sha256').update(idempotencyKey).digest('hex');
+			const attemptId = `${Date.now()}_${crypto.randomUUID()}`;
+			const replayId = `${alertId}_${idempotencyKeyHash}_${attemptId}`;
+			const document = {
+				alertId,
+				idempotencyKeyHash,
+				attemptId,
+				channels: Array.isArray(channels) ? channels : [],
+				deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
+				replayedAt: admin.firestore.FieldValue.serverTimestamp(),
+				expiresAt: buildRetentionExpiryTimestamp(),
+				source: 'alert-replay',
+			};
+			const docRef = firestore.collection(REPLAY_COLLECTION_NAME).doc(replayId);
+			batch.set(docRef, document, { merge: false });
+			replayIds.push(replayId);
+		}
+		try {
+			await batch.commit();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to commit batch replay attempts:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+	}
+
+	return replayIds;
+}
+
+/**
  * Build bounded aggregate metrics for stored alerts.
  *
  * The endpoint intentionally returns counts and totals only. Raw alert text,
@@ -1967,6 +2127,10 @@ module.exports = {
 	getAlertById,
 	summarizeAlerts,
 	exportAlerts,
+	exportAlertsByIds,
+	getAlertsByIds,
+	deleteAlerts,
+	batchReplayAlerts,
 	saveReplayAttempt,
 	listReplayAttempts,
 	getLatestReplayForAlert,
@@ -1980,6 +2144,8 @@ module.exports = {
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,
 	MAX_ALERT_TEXT_LENGTH,
+	MAX_BATCH_REPLAY_LIMIT,
+	MAX_BATCH_DELETE_LIMIT,
 	// Exported for testing
 	getFirestore,
 	COLLECTION_NAME,

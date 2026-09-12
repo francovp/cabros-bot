@@ -12,6 +12,8 @@
 }(typeof window === 'undefined' ? globalThis : window, () => {
 	const confirmations = {
 		'POST /api/alerts/{alertId}/replay': 'Replay this alert?',
+		'POST /api/alerts/batch/replay': 'Replay selected alerts?',
+		'POST /api/alerts/batch/delete': 'Delete selected alerts? This action cannot be undone.',
 		'POST /api/scanner-presets/{id}/run': 'Run this scanner preset?',
 		'DELETE /api/scanner-presets/{id}': 'Delete this scanner preset?',
 		'POST /api/jobs/{jobId}/cancel': 'Cancel this job?',

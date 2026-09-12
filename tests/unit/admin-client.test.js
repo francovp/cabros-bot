@@ -16,6 +16,7 @@ class FakeElement {
 		this.className = '';
 		this.value = '';
 		this.disabled = false;
+		this.checked = false;
 		this._text = '';
 		this.name = '';
 	}
@@ -2236,6 +2237,165 @@ describe('admin browser client', () => {
 		const summary = find(rawToggle, (node) => node.tagName === 'SUMMARY');
 		expect(summary.textContent).toContain('Show raw response');
 		expect(findButton(listForm, 'Copy JSON').hidden).toBe(false);
+	});
+
+	it('supports bulk alert selection, select-all toggle, and batch operations', async () => {
+		const requests = [];
+		const alertsData = {
+			alerts: [
+				{ id: 'alert-1', text: 'first alert', source: 'tradingview', enriched: false },
+				{ id: 'alert-2', text: 'second alert', source: 'tradingview', enriched: true },
+			],
+			pagination: { hasMore: false },
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				if (url.startsWith('/api/alerts') && (!options || !options.method || options.method === 'GET')) {
+					return response(alertsData);
+				}
+				if (url === '/api/alerts/batch/replay') {
+					return response({
+						success: true,
+						results: [
+							{ alertId: 'alert-1', success: true, channels: ['telegram'] },
+							{ alertId: 'alert-2', success: true, channels: ['telegram'] },
+						],
+					});
+				}
+				if (url === '/api/alerts/batch/export') {
+					return {
+						ok: true,
+						status: 200,
+						headers: { get: (name) => (name === 'content-type' ? 'application/x-ndjson' : null) },
+						blob: async () => ({ type: 'application/x-ndjson' }),
+						text: async () => 'export body',
+					};
+				}
+				if (url === '/api/alerts/batch/delete') {
+					return response({ success: true, requested: 2, deleted: 2 });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const selectAll = find(listForm, (node) => node.tagName === 'INPUT' && node.className.includes('alert-select-all'));
+		const countSpan = find(listForm, (node) => node.className && node.className.includes('batch-selection-count'));
+		const replayBtn = findButton(listForm, 'Replay selected');
+		const exportBtn = findButton(listForm, 'Export selected');
+		const deleteBtn = findButton(listForm, 'Delete selected');
+		const checkboxes = findAll(listForm, (node) => node.className && node.className.includes('alert-select-checkbox'));
+
+		expect(selectAll).toBeDefined();
+		expect(countSpan.textContent).toBe('0 selected');
+		expect(replayBtn.disabled).toBe(true);
+		expect(exportBtn.disabled).toBe(true);
+		expect(deleteBtn.disabled).toBe(true);
+		expect(checkboxes.length).toBe(2);
+
+		// Select first alert
+		checkboxes[0].checked = true;
+		await checkboxes[0].dispatch('change');
+		expect(countSpan.textContent).toBe('1 selected');
+		expect(replayBtn.disabled).toBe(false);
+		expect(exportBtn.disabled).toBe(false);
+		expect(deleteBtn.disabled).toBe(false);
+		expect(selectAll.checked).toBe(false);
+
+		// Select-all
+		selectAll.checked = true;
+		await selectAll.dispatch('change');
+		expect(countSpan.textContent).toBe('2 selected');
+		expect(checkboxes[0].checked).toBe(true);
+		expect(checkboxes[1].checked).toBe(true);
+		expect(selectAll.checked).toBe(true);
+
+		// Batch replay
+		await replayBtn.dispatch('click');
+		await flush();
+		const replayRequest = requests.find(([url]) => url === '/api/alerts/batch/replay');
+		expect(replayRequest).toBeDefined();
+		expect(JSON.parse(replayRequest[1].body)).toEqual({ alertIds: ['alert-1', 'alert-2'] });
+		expect(listForm.textContent).toContain('Batch replay complete: 2/2 succeeded.');
+
+		// Batch export
+		await exportBtn.dispatch('click');
+		await flush();
+		const exportRequest = requests.find(([url]) => url === '/api/alerts/batch/export');
+		expect(exportRequest).toBeDefined();
+		expect(JSON.parse(exportRequest[1].body)).toEqual({ alertIds: ['alert-1', 'alert-2'], format: 'jsonl' });
+		expect(browser.downloads.length).toBeGreaterThan(0);
+
+		// Batch delete
+		await deleteBtn.dispatch('click');
+		await flush();
+		const deleteRequest = requests.find(([url]) => url === '/api/alerts/batch/delete');
+		expect(deleteRequest).toBeDefined();
+		expect(JSON.parse(deleteRequest[1].body)).toEqual({ alertIds: ['alert-1', 'alert-2'] });
+		expect(listForm.textContent).toContain('Batch delete complete: 2 alerts deleted.');
+	});
+
+	it('disables batch replay and delete for admin.viewer role', async () => {
+		const auth = {
+			onAuthStateChanged: (listener) => {
+				listener({
+					getIdToken: async () => 'viewer-token',
+					getIdTokenResult: async () => ({ claims: { role: 'admin.viewer' } }),
+				});
+				return () => {};
+			},
+			signInWithEmailAndPassword: jest.fn(),
+			signOut: jest.fn(),
+		};
+		const firebase = {
+			initializeApp: jest.fn(),
+			auth: jest.fn(() => auth),
+		};
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({
+						enabled: true,
+						configured: true,
+						config: { apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros' },
+					});
+				}
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					return response({
+						alerts: [{ id: 'alert-1', text: 'some alert', enriched: false }],
+						pagination: { hasMore: false },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const checkbox = find(listForm, (node) => node.className && node.className.includes('alert-select-checkbox'));
+		checkbox.checked = true;
+		await checkbox.dispatch('change');
+
+		const replayBtn = findButton(listForm, 'Replay selected');
+		const exportBtn = findButton(listForm, 'Export selected');
+		const deleteBtn = findButton(listForm, 'Delete selected');
+
+		expect(exportBtn.disabled).toBe(false);
+		expect(replayBtn.disabled).toBe(true);
+		expect(deleteBtn.disabled).toBe(true);
 	});
 
 	it('paginates stored alerts backward through visited cursors', async () => {
