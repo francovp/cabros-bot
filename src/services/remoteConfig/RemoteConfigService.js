@@ -93,6 +93,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
 	// notification destinations — must remain deployment-controlled.
 	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
+	ENABLE_TEST_ALERT: { type: 'boolean', defaultValue: true },
+	TEST_ALERT_DAILY_LIMIT: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 1000 },
 });
 
 let remoteOverrides = {};
