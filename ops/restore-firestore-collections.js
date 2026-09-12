@@ -49,7 +49,38 @@ function normalizeCollectionList(collections) {
 }
 
 function estimateRecordBytes(record) {
-	return Buffer.byteLength(JSON.stringify(record), 'utf8') + ESTIMATED_RECORD_OVERHEAD_BYTES;
+	let replacerBytes = 0;
+	try {
+		const serialized = JSON.stringify(record, (_key, val) => {
+			if (typeof val === 'bigint') {
+				return val.toString();
+			}
+			if (val && typeof val.toProto === 'function') {
+				try {
+					const proto = val.toProto();
+					if (proto && typeof proto === 'object') {
+						return proto;
+					}
+				} catch {
+					// Fallback to safe representation
+				}
+				return { doubleValue: 0.0 };
+			}
+			if (Buffer.isBuffer(val)) {
+				return val.toString('base64');
+			}
+			return val;
+		});
+		replacerBytes = Buffer.byteLength(serialized, 'utf8');
+	} catch {
+		replacerBytes = 0;
+	}
+
+	const rawBytes = (record && typeof record.rawBytes === 'number' && record.rawBytes > 0)
+		? record.rawBytes
+		: 0;
+
+	return Math.max(rawBytes, replacerBytes) + ESTIMATED_RECORD_OVERHEAD_BYTES;
 }
 
 function getDefaultRetentionDays() {
@@ -444,6 +475,7 @@ async function* readValidatedRecords(filePath, firestore) {
 				throw new Error(`Invalid JSON in ${filePath} at line ${lineNumber}: ${err.message}`);
 			}
 
+			const rawBytes = Buffer.byteLength(trimmed, 'utf8');
 			const { id, data } = deserializeDocument(parsed, firestore);
 			if (!id) {
 				throw new Error(`Backup record missing document ID in ${filePath} at line ${lineNumber}`);
@@ -455,11 +487,11 @@ async function* readValidatedRecords(filePath, firestore) {
 				throw new Error(`Backup contains duplicate document ID in ${filePath} at line ${lineNumber}: ${id}`);
 			}
 			seenIds.add(id);
-			if (estimateRecordBytes({ id, data }) > MAX_ESTIMATED_BATCH_BYTES) {
+			if (estimateRecordBytes({ id, data, rawBytes }) > MAX_ESTIMATED_BATCH_BYTES) {
 				throw new Error(`Backup record exceeds the estimated Firestore request size limit in ${filePath} at line ${lineNumber}`);
 			}
 
-			yield { id, data };
+			yield { id, data, rawBytes };
 		}
 	} finally {
 		rl.close();
@@ -829,4 +861,5 @@ module.exports = {
 	refreshCollectionTtls,
 	restoreCollectionFile,
 	runRestore,
+	estimateRecordBytes,
 };

@@ -25,6 +25,7 @@ const {
 	runRestore,
 	initializeFirestore: initializeRestoreFirestore,
 	configureFirestoreForLosslessIntegers: configureRestoreFirestoreForLosslessIntegers,
+	estimateRecordBytes,
 } = require('../../ops/restore-firestore-collections');
 
 function buildMockTimestamp(isoString) {
@@ -708,6 +709,32 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(mockBatch.commit).toHaveBeenCalledTimes(2);
 		});
 
+		it('splits large restore batches when records contain large numeric arrays of integral doubles', async () => {
+			const doubleArray = Array.from({ length: 100000 }, () => ({ __type: 'Double', value: '1' }));
+			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
+			fs.writeFileSync(jsonlFile, [
+				JSON.stringify({ _id: 'd1', values: doubleArray }),
+				JSON.stringify({ _id: 'd2', values: doubleArray }),
+				JSON.stringify({ _id: 'd3', values: doubleArray }),
+			].join('\n') + '\n', 'utf8');
+
+			const mockBatch = {
+				set: jest.fn(),
+				commit: jest.fn().mockResolvedValue(undefined),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue({ doc: (id) => ({ id }) }),
+				batch: jest.fn().mockReturnValue(mockBatch),
+			};
+
+			const result = await restoreCollectionFile(mockFirestore, 'alerts', jsonlFile, {
+				batchSize: 400,
+			});
+
+			expect(result.totalRestored).toBe(3);
+			expect(mockBatch.commit).toHaveBeenCalledTimes(2);
+		});
+
 		it('validates every JSONL record before writing any batch', async () => {
 			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
 			fs.writeFileSync(jsonlFile, [
@@ -1215,6 +1242,61 @@ describe('Firestore Backup & Export Tooling', () => {
 			const content = fs.readFileSync(workflowPath, 'utf8');
 
 			expect(content).toContain('curl --connect-timeout 10 --max-time 30');
+		});
+
+		it('encrypts fallback backup archive before uploading artifact', () => {
+			const workflowPath = path.join(__dirname, '../../.github/workflows/firestore-backup.yml');
+			const content = fs.readFileSync(workflowPath, 'utf8');
+
+			expect(content).toContain('openssl enc -aes-256-cbc -pbkdf2');
+			expect(content).toContain('FIRESTORE_BACKUP_PASSPHRASE');
+			expect(content).toContain('tar.gz.enc');
+		});
+
+		it('fails closed when GCS bucket is unset and FIRESTORE_BACKUP_PASSPHRASE is missing', () => {
+			const workflowPath = path.join(__dirname, '../../.github/workflows/firestore-backup.yml');
+			const content = fs.readFileSync(workflowPath, 'utf8');
+
+			expect(content).toContain('GCS_BACKUP_BUCKET is unset and FIRESTORE_BACKUP_PASSPHRASE secret is missing');
+			expect(content).toContain('exit 1');
+		});
+	});
+
+	describe('estimateRecordBytes', () => {
+		it('handles BigInt fields without throwing TypeError', () => {
+			const record = {
+				id: 'doc1',
+				data: { bigNumber: 9007199254740995n },
+			};
+			expect(() => estimateRecordBytes(record)).not.toThrow();
+			const bytes = estimateRecordBytes(record);
+			expect(bytes).toBeGreaterThan(1024);
+		});
+
+		it('estimates encoded doubles with toProto conservatively instead of treating as empty object', () => {
+			const recordWithEmptyObj = {
+				id: 'doc1',
+				data: { val: {} },
+			};
+			const recordWithToProto = {
+				id: 'doc1',
+				data: { val: { toProto: () => ({ doubleValue: 42.0 }) } },
+			};
+
+			const emptyBytes = estimateRecordBytes(recordWithEmptyObj);
+			const protoBytes = estimateRecordBytes(recordWithToProto);
+
+			expect(protoBytes).toBeGreaterThan(emptyBytes);
+		});
+
+		it('prioritizes larger estimate between rawBytes and replacerBytes', () => {
+			const record = {
+				id: 'doc1',
+				data: { val: 'short' },
+				rawBytes: 5000,
+			};
+			const bytes = estimateRecordBytes(record);
+			expect(bytes).toBeGreaterThanOrEqual(5000 + 1024);
 		});
 	});
 });

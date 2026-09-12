@@ -60,8 +60,28 @@ jobs:
             node ops/export-firestore-collections.js --collections="$COLLECTIONS_INPUT" --output-dir="$RUNNER_TEMP/firestore-backup"
           fi
 
-      - name: Upload JSONL backup artifact
-        if: always()
+      - name: Encrypt fallback backup archive
+        if: success()
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.FIRESTORE_BACKUP_PASSPHRASE || secrets.BACKUP_ENCRYPTION_KEY }}
+        run: |
+          if [ -d "$RUNNER_TEMP/firestore-backup" ] && [ -n "$(ls -A "$RUNNER_TEMP/firestore-backup" 2>/dev/null)" ]; then
+            if [ -z "$BACKUP_PASSPHRASE" ]; then
+              echo "::error::GCS_BACKUP_BUCKET is unset and FIRESTORE_BACKUP_PASSPHRASE secret is missing. Fallback backups must be encrypted before artifact upload to prevent exposing sensitive alert data and credentials."
+              exit 1
+            fi
+            echo "Encrypting JSONL fallback backup files..."
+            mkdir -p "$RUNNER_TEMP/firestore-backup-encrypted"
+            tar -czf - -C "$RUNNER_TEMP/firestore-backup" . | \
+              openssl enc -aes-256-cbc -pbkdf2 -salt -out "$RUNNER_TEMP/firestore-backup-encrypted/firestore-backup-${{ github.run_id }}.tar.gz.enc" -pass env:BACKUP_PASSPHRASE
+            rm -rf "$RUNNER_TEMP/firestore-backup"
+            mkdir -p "$RUNNER_TEMP/firestore-backup"
+            mv "$RUNNER_TEMP/firestore-backup-encrypted/firestore-backup-${{ github.run_id }}.tar.gz.enc" "$RUNNER_TEMP/firestore-backup/"
+            rm -rf "$RUNNER_TEMP/firestore-backup-encrypted"
+          fi
+
+      - name: Upload encrypted backup artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: firestore-backup-${{ github.run_id }}

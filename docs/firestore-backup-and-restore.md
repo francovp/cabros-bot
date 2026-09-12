@@ -156,4 +156,23 @@ CLI Options:
 
 The GitHub Actions workflow [`.github/workflows/firestore-backup.yml`](../.github/workflows/firestore-backup.yml) runs weekly on Sundays at 04:00 UTC and can also be triggered manually via `workflow_dispatch`.
 
-It uses the `FIREBASE_SERVICE_ACCOUNT_JSON` repository secret and `GCS_BACKUP_BUCKET` variable. Backups generated via the JSONL fallback path are automatically uploaded to GitHub Actions run artifacts with 120-day retention. In the event of a backup failure, it dispatches an alert to configured notification channels.
+It uses the `FIREBASE_SERVICE_ACCOUNT_JSON` repository secret and `GCS_BACKUP_BUCKET` variable. When `GCS_BACKUP_BUCKET` is configured, snapshots export directly to access-controlled GCS buckets.
+
+When `GCS_BACKUP_BUCKET` is unset, the workflow executes the JSONL fallback export and encrypts the archive with AES-256-CBC (PBKDF2) using the `FIRESTORE_BACKUP_PASSPHRASE` (or `BACKUP_ENCRYPTION_KEY`) secret before artifact upload. This prevents exposing sensitive alert text, webhook credentials (`discordWebhookUrl`), and recipient chat IDs in readable GitHub artifacts. If neither `GCS_BACKUP_BUCKET` nor `FIRESTORE_BACKUP_PASSPHRASE` is set, the workflow fails closed.
+
+### Restoring from an Encrypted Backup Artifact
+
+To restore from an encrypted fallback artifact downloaded from GitHub Actions:
+
+```bash
+# Decrypt the encrypted archive
+openssl enc -d -aes-256-cbc -pbkdf2 -in firestore-backup-<run_id>.tar.gz.enc -out firestore-backup.tar.gz -pass env:FIRESTORE_BACKUP_PASSPHRASE
+
+# Extract the archive into a local directory
+mkdir -p ./backups/my-restored-backup
+tar -xzf firestore-backup.tar.gz -C ./backups/my-restored-backup
+
+# Restore collections into Firestore
+node ops/restore-firestore-collections.js --input-dir=./backups/my-restored-backup
+```
+
