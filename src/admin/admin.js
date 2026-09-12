@@ -601,6 +601,8 @@ const statusDetailFields = [
 	['activeTrackedSignals', 'Active tracked signals'],
 	['intervalMs', 'Interval (ms)'],
 	['batchLimit', 'Batch limit'],
+	['maxAttempts', 'Max attempts'],
+	['maxAgeMs', 'Max age (ms)'],
 	['enqueued', 'Enqueued'],
 	['claimed', 'Claimed'],
 	['completed', 'Completed'],

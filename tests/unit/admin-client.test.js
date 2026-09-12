@@ -423,7 +423,7 @@ describe('admin browser client', () => {
 					status: 'ready', intervalMs: 300000, batchLimit: 10, lastRunExecutedCount: 4, lastRunErrorCount: 1,
 				},
 				notificationRedrive: {
-					status: 'ready', intervalMs: 60000, batchLimit: 25, pendingCount: 2, deliveredCount: 9,
+					status: 'ready', intervalMs: 60000, batchLimit: 25, maxAttempts: 5, maxAgeMs: 86400000, pendingCount: 2, deliveredCount: 9,
 					exhaustedCount: 1, zeroChannelBroadcasts: 4, lastRunScannedCount: 8, lastRunRedrivenCount: 3,
 				},
 				whatsappCommandBridge: {
@@ -453,6 +453,8 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('Active tracked signals2');
 		expect(view.textContent).toContain('Interval (ms)300000');
 		expect(view.textContent).toContain('Batch limit10');
+		expect(view.textContent).toContain('Max attempts5');
+		expect(view.textContent).toContain('Max age (ms)86400000');
 		expect(view.textContent).toContain('Last run executed4');
 		expect(view.textContent).toContain('Last run scanned8');
 		expect(view.textContent).toContain('Last run redriven3');
