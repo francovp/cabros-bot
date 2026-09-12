@@ -5,7 +5,7 @@ const signalOutcomeService = require('../services/storage/SignalOutcomeService')
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
-const { smartEscapeMarkdownV2 } = require('../services/notification/formatters/MarkdownV2Formatter');
+const { smartEscapeMarkdownV2 } = require('../services/notification/formatters/markdownV2Formatter');
 
 const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	precio: { max: 10, windowMs: 60_000 },
