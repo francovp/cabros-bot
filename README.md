@@ -317,6 +317,17 @@ The response and audit logs include only sanitized order metadata. API credentia
 - `NEWS_MONITOR_SCHEDULER_TIMEOUT_MS` - Per-sweep execution deadline in milliseconds (default: `90000`, bounds `1000`-`600000`).
 - `dependencies.newsMonitorScheduler` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `role`, `running`, `lastRunAt`, `lastRunDurationMs`, `lastRunSymbolCount`, `lastRunExecutedCount`, `lastRunErrorCount`, and `lastError` without secrets.
 
+#### Alert Scheduler
+
+- `ENABLE_ALERT_SCHEDULER` - Enable JSON-defined recurring background runner for news-monitor and market-scanner runs (default: `false`).
+- `ALERT_SCHEDULER_WORKER_ROLE` - Scheduler worker role: `web` (default), `worker`, or `disabled`.
+- `ALERT_SCHEDULER_INTERVAL_MS` - Background sweep interval in milliseconds (default: `60000`, bounds `1000`-`3600000`).
+- `ALERT_SCHEDULER_BATCH_LIMIT` - Maximum due schedules processed per sweep (default: `10`, bounds `1`-`100`).
+- `ALERT_SCHEDULER_TIMEOUT_MS` - Per-sweep execution deadline in milliseconds (default: `90000`, bounds `1000`-`600000`).
+- `ALERT_SCHEDULER_LEASE_MS` - Distributed concurrency lock lease duration in milliseconds (default: `120000`, bounds `10000`-`600000`).
+- `ALERT_SCHEDULER_SCHEDULES` - JSON array defining recurring news and scanner schedules.
+- `dependencies.alertScheduler` in `/api/status` exposes `enabled`, `configured`, `ready`, `status`, `role`, `running`, `scheduleCount`, `lastRunAt`, `lastRunDurationMs`, `lastRunExecutedCount`, `lastRunErrorCount`, and `lastError` without secrets.
+
 ## Setup
 
 ### Supported Runtime

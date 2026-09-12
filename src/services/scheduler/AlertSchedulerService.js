@@ -11,6 +11,7 @@ const requestRoutingModule = require('../notification/requestRouting');
 const sentryService = require('../monitoring/SentryService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { getAnalyzer, setNotificationManager } = require('../../controllers/webhooks/handlers/newsMonitor/analyzer');
+const { isNewsMonitorPaused } = require('../../controllers/webhooks/handlers/newsMonitor/pauseState');
 const { alertStorageService } = require('../storage/AlertStorageService');
 
 const COLLECTION_NAME = 'alertSchedulerLocks';
@@ -132,11 +133,18 @@ function normalizeRoutingChannels(channels) {
 	return normalized.length > 0 ? normalized : undefined;
 }
 
+function resolveBot(botOrGetter) {
+	if (typeof botOrGetter === 'function') {
+		return botOrGetter();
+	}
+	return botOrGetter || null;
+}
+
 function buildScheduleId(schedule, index) {
 	const label = typeof schedule.name === 'string' && schedule.name.trim().length > 0
 		? schedule.name.trim()
 		: `schedule-${index}`;
-	return `${schedule.type || 'unknown'}-${label}`;
+	return `${schedule.type || 'unknown'}-${index}-${label}`;
 }
 
 function parseNewsSchedule(entry, index) {
@@ -699,7 +707,7 @@ class AlertSchedulerService {
 					sentryService.captureRuntimeError({
 						channel: 'alert-scheduler',
 						error: err,
-						metadata: { scheduleId: schedule.id, scheduleType: schedule.type },
+						extra: { scheduleId: schedule.id, scheduleType: schedule.type },
 					});
 				}
 			}
@@ -744,6 +752,9 @@ class AlertSchedulerService {
 		if (!parseEnvBool(process.env.ENABLE_NEWS_MONITOR, false)) {
 			return { status: 'skipped', error: 'news-monitor-disabled' };
 		}
+		if (isNewsMonitorPaused()) {
+			return { status: 'skipped', error: 'news-monitor-paused' };
+		}
 
 		const symbols = [...schedule.symbols.crypto, ...schedule.symbols.stocks]
 			.map((s) => String(s).trim().toUpperCase())
@@ -755,7 +766,14 @@ class AlertSchedulerService {
 
 		try {
 			const analyzer = this.getAnalyzerFn();
-			const notificationManager = this.getNotificationManagerFn();
+			let notificationManager = this.getNotificationManagerFn();
+			if (!notificationManager && this.botGetter) {
+				try {
+					notificationManager = await alertModule.initializeNotificationServices(resolveBot(this.botGetter));
+				} catch (err) {
+					console.warn('[AlertScheduler] Could not initialize notification manager via botGetter:', err.message);
+				}
+			}
 			if (notificationManager) {
 				try {
 					if (typeof this.setNotificationManagerFn === 'function') {
@@ -793,6 +811,9 @@ class AlertSchedulerService {
 			);
 
 			if (Array.isArray(results)) {
+				if (results.length === 0) {
+					return { status: 'success' };
+				}
 				const errored = results.filter((r) => r && (r.status === 'error' || r.status === 'timeout'));
 				if (errored.length === results.length) {
 					return { status: 'error', error: `All ${results.length} symbol(s) failed` };
@@ -841,7 +862,15 @@ class AlertSchedulerService {
 				now: new Date(),
 			});
 
-			const notificationManager = this.getNotificationManagerFn();
+			let notificationManager = this.getNotificationManagerFn();
+			if (!notificationManager && this.botGetter) {
+				try {
+					notificationManager = await alertModule.initializeNotificationServices(resolveBot(this.botGetter));
+				} catch (err) {
+					console.warn('[AlertScheduler] Could not initialize notification manager via botGetter:', err.message);
+				}
+			}
+
 			if (notificationManager) {
 				const routing = schedule.channels && schedule.channels.length > 0
 					? { channels: schedule.channels }

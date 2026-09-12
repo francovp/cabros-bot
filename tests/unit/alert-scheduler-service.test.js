@@ -483,6 +483,87 @@ describe('AlertSchedulerService', () => {
 			expect(result.skipped).toBe('lease-held');
 			expect(result.executedCount).toBe(0);
 		});
+
+		it('skips news-monitor schedule when news monitor is paused', async () => {
+			const { pauseNewsMonitor, resumeNewsMonitor } = require('../../src/controllers/webhooks/handlers/newsMonitor/pauseState');
+			try {
+				pauseNewsMonitor({ reason: 'testing' });
+				process.env.ENABLE_ALERT_SCHEDULER = 'true';
+				process.env.ENABLE_NEWS_MONITOR = 'true';
+				process.env.ALERT_SCHEDULER_SCHEDULES = JSON.stringify([
+					{ type: 'news-monitor', symbols: { crypto: ['BTCUSDT'] }, interval: '1h' },
+				]);
+
+				const scheduler = new AlertSchedulerService();
+				jest.spyOn(scheduler, '_acquireLease').mockResolvedValue(true);
+				jest.spyOn(scheduler, '_releaseLease').mockResolvedValue();
+
+				const result = await scheduler.sweep();
+				expect(result.executedCount).toBe(1);
+				const schedule = scheduler.schedules[0];
+				const state = scheduler.scheduleState.get(schedule.id);
+				expect(state.lastStatus).toBe('skipped');
+				expect(state.lastError).toBe('news-monitor-paused');
+			} finally {
+				resumeNewsMonitor();
+			}
+		});
+
+		it('initializes notification manager via botGetter when not present', async () => {
+			process.env.ENABLE_ALERT_SCHEDULER = 'true';
+			process.env.ENABLE_MARKET_SCANNER = 'true';
+			process.env.ALERT_SCHEDULER_SCHEDULES = JSON.stringify([
+				{ type: 'scanner', exchange: 'BINANCE', timeframe: '4h', scans: ['top_gainers'], interval: '1h' },
+			]);
+
+			const mockBot = { telegram: {} };
+			const mockNotificationManager = {
+				sendWithNotificationRouting: jest.fn().mockResolvedValue({ success: true }),
+				sendToAll: jest.fn().mockResolvedValue({ success: true }),
+			};
+			const alertModule = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const initSpy = jest.spyOn(alertModule, 'initializeNotificationServices').mockReturnValue(mockNotificationManager);
+			const marketScannerModule = require('../../src/controllers/webhooks/handlers/marketScanner/marketScanner');
+			jest.spyOn(marketScannerModule, 'runScans').mockResolvedValue([
+				{ scan: 'top_gainers', status: 'success', items: [{ symbol: 'BTCUSDT' }] },
+			]);
+
+			const scheduler = new AlertSchedulerService({
+				getNotificationManager: () => null,
+			});
+			scheduler.botGetter = () => mockBot;
+			jest.spyOn(scheduler, '_acquireLease').mockResolvedValue(true);
+			jest.spyOn(scheduler, '_releaseLease').mockResolvedValue();
+
+			const result = await scheduler.sweep();
+			expect(result.executedCount).toBe(1);
+			expect(initSpy).toHaveBeenCalledWith(mockBot);
+
+			initSpy.mockRestore();
+		});
+
+		it('succeeds when news analyzer returns an empty array', async () => {
+			process.env.ENABLE_ALERT_SCHEDULER = 'true';
+			process.env.ENABLE_NEWS_MONITOR = 'true';
+			process.env.ALERT_SCHEDULER_SCHEDULES = JSON.stringify([
+				{ type: 'news-monitor', symbols: { crypto: ['BTCUSDT'] }, interval: '1h' },
+			]);
+
+			const scheduler = new AlertSchedulerService({
+				getAnalyzer: () => ({
+					analyzeSymbols: jest.fn().mockResolvedValue([]),
+				}),
+			});
+			jest.spyOn(scheduler, '_acquireLease').mockResolvedValue(true);
+			jest.spyOn(scheduler, '_releaseLease').mockResolvedValue();
+
+			const result = await scheduler.sweep();
+			expect(result.executedCount).toBe(1);
+			expect(result.errorCount).toBe(0);
+			const schedule = scheduler.schedules[0];
+			const state = scheduler.scheduleState.get(schedule.id);
+			expect(state.lastStatus).toBe('success');
+		});
 	});
 
 	describe('lifecycle', () => {
