@@ -53,6 +53,7 @@ const VIEW_ACTIONS = {
 		{
 			method: 'POST', path: '/api/scanner-presets/{id}/run', label: 'Run preset',
 			confirm: 'Run this scanner preset?',
+			renderSuccess: (data) => analysisReportResult(data),
 		},
 		{
 			method: 'DELETE', path: '/api/scanner-presets/{id}', label: 'Delete preset',
@@ -2965,7 +2966,445 @@ const createJobStatusForm = () => {
 	};
 };
 
-const createOperationForm = (contract, definition) => {
+const PRESET_SCAN_TYPES = [
+	{ id: 'top_gainers', label: 'Top gainers' },
+	{ id: 'top_losers', label: 'Top losers' },
+	{ id: 'bollinger_scan', label: 'Bollinger bands' },
+	{ id: 'volume_breakout_scanner', label: 'Volume breakout' },
+	{ id: 'smart_volume_scanner', label: 'Smart volume' },
+];
+
+const PRESET_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1D', '1W', '1M'];
+
+const canPerformMutation = () => !authState.enabled
+	|| (Boolean(authState.user) && window.CabrosAdminRequest.canAccess({ requiredRole: 'admin.operator' }, authState.role));
+
+const createPresetSummary = (preset, { onEdit, onRun, onDelete }) => {
+	const card = element('article', { className: 'operation-card preset-card' });
+	const id = String(preset && preset.id || '—');
+	const name = String(preset && preset.name || 'Unnamed preset');
+
+	const header = element('div', { className: 'preset-card-header' });
+	const titleHeading = element('h3');
+	titleHeading.append(element('span', { text: name }));
+	const monoId = element('span', { className: 'mono-line' });
+	monoId.append(
+		element('code', { text: id }),
+		createCopyButton(id, 'Copy ID'),
+	);
+	header.append(titleHeading, monoId);
+	card.append(header);
+
+	const summaryLine = element('p', {
+		className: 'job-meta',
+		text: `${preset.exchange || 'BINANCE'} · ${preset.timeframe || '4h'} · Limit ${preset.limit || 5}`,
+	});
+	card.append(summaryLine);
+
+	const chips = element('div', { className: 'chip-grid' });
+	(Array.isArray(preset.scans) ? preset.scans : []).forEach((scan) => {
+		chips.append(element('span', { className: 'capability-chip', text: scan }));
+	});
+
+	if (preset.schedule && preset.schedule.enabled !== false && (preset.schedule.cadence || preset.schedule.cadenceMs)) {
+		const cadence = preset.schedule.cadence || `${Math.round(preset.schedule.cadenceMs / 60000)}m`;
+		chips.append(element('span', { className: 'status-badge status-active', text: `Schedule: ${cadence}` }));
+	}
+
+	if (preset.ranked) {
+		chips.append(element('span', { className: 'status-badge status-ready', text: 'Ranked' }));
+	}
+	if (preset.includeMultiTimeframe) {
+		chips.append(element('span', { className: 'status-badge status-ready', text: 'MTF' }));
+	}
+	if (preset.bbwThreshold !== undefined && preset.bbwThreshold !== null) {
+		chips.append(element('span', { className: 'capability-chip', text: `BBW: ${preset.bbwThreshold}` }));
+	}
+	if (chips.children.length) card.append(chips);
+
+	if (preset.lastRunAt || preset.lastStatus) {
+		const dl = element('dl', { className: 'status-detail-list' });
+		if (preset.lastStatus) {
+			dl.append(element('dt', { text: 'Last status' }), element('dd', { text: preset.lastStatus }));
+		}
+		if (preset.lastRunAt) {
+			const dd = element('dd');
+			dd.append(createTimestamp(preset.lastRunAt));
+			dl.append(element('dt', { text: 'Last run' }), dd);
+		}
+		card.append(dl);
+	}
+
+	const actions = element('div', { className: 'preset-actions' });
+	const runBtn = element('button', { text: 'Run', className: 'button-primary' });
+	runBtn.type = 'button';
+	runBtn.setAttribute('aria-label', `Run preset ${name}`);
+	const editBtn = element('button', { text: 'Edit' });
+	editBtn.type = 'button';
+	editBtn.setAttribute('aria-label', `Edit preset ${name}`);
+	const deleteBtn = element('button', { text: 'Delete', className: 'destructive-action' });
+	deleteBtn.type = 'button';
+	deleteBtn.setAttribute('aria-label', `Delete preset ${name}`);
+
+	const isOperator = canPerformMutation();
+	if (!isOperator) {
+		runBtn.disabled = true;
+		runBtn.title = 'Requires admin.operator role';
+		editBtn.disabled = true;
+		editBtn.title = 'Requires admin.operator role';
+		deleteBtn.disabled = true;
+		deleteBtn.title = 'Requires admin.operator role';
+	}
+
+	const resultHost = element('div');
+	const output = element('pre', { className: 'response-block', text: '' });
+	output.hidden = true;
+	let lastRawJson = '';
+	const rawOutput = element('pre', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.hidden = true;
+	rawToggle.append(element('summary', { text: 'Show raw run response' }), rawCopyButton, rawOutput);
+
+	runBtn.addEventListener('click', () => {
+		onRun(preset, runBtn, card, output, resultHost, rawToggle, rawOutput, rawCopyButton);
+	});
+	editBtn.addEventListener('click', () => {
+		onEdit(preset);
+	});
+	deleteBtn.addEventListener('click', () => {
+		onDelete(preset, deleteBtn, card);
+	});
+
+	actions.append(runBtn, editBtn, deleteBtn);
+	card.append(actions, resultHost, output, rawToggle);
+
+	return card;
+};
+
+const createPresetListForm = (contract, { onEdit, onStorageUpdate }) => {
+	const definition = { method: 'GET', path: '/api/scanner-presets', label: 'Load presets' };
+	const form = element('form', { className: 'operation-card preset-list-panel' });
+
+	const titleRow = element('div', { className: 'section-heading' });
+	const title = element('h3', { text: 'Scanner presets' });
+	const storageBadge = element('span', { className: 'status-badge status-unknown', text: 'Storage: checking…' });
+	titleRow.append(title, storageBadge);
+	const route = element('code', { text: `${definition.method} ${definition.path}` });
+	form.append(titleRow, route);
+
+	const updateStorageBadge = (storage) => {
+		if (!storage || typeof storage !== 'object') return;
+		const mode = String(storage.mode || 'unknown');
+		const backend = String(storage.backend || 'unknown');
+		const isDurable = mode.toLowerCase() === 'durable';
+		storageBadge.className = `status-badge ${isDurable ? 'status-ready' : 'status-disabled'}`;
+		storageBadge.textContent = `${displayLabel(mode)} · ${displayLabel(backend)}`;
+	};
+
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+
+	const listContainer = element('div', { className: 'form-fields preset-list' });
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+
+	let lastListRawJson = '';
+	const rawOutput = element('pre', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastListRawJson, 'Copy JSON');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.hidden = true;
+	rawToggle.append(element('summary', { text: 'Show raw presets response' }), rawCopyButton, rawOutput);
+
+	form.append(button, listContainer, output, rawToggle);
+
+	const onRunPreset = async (preset, runBtn, card, cardOutput, cardResultHost, cardRawToggle, cardRawOutput, cardRawCopy) => {
+		const runDef = {
+			method: 'POST',
+			path: '/api/scanner-presets/{id}/run',
+			label: 'Run preset',
+			confirm: 'Run this scanner preset?',
+			requiredRole: 'admin.operator',
+		};
+		cardResultHost.replaceChildren();
+		cardRawToggle.hidden = true;
+		cardOutput.hidden = false;
+		cardOutput.className = 'response-block request-state';
+		cardOutput.textContent = 'Running scanner preset…';
+		try {
+			const data = await sendRequest({
+				definition: runDef,
+				path: `/api/scanner-presets/${encodeURIComponent(preset.id)}/run`,
+				query: { dryRun: false },
+				button: runBtn,
+				output: cardOutput,
+				formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+			});
+			if (!data) {
+				cardOutput.hidden = true;
+				return;
+			}
+			if (data.storage) {
+				updateStorageBadge(data.storage);
+				if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
+			}
+			const rawJson = JSON.stringify(data, null, 2);
+			cardRawOutput.textContent = rawJson;
+			cardRawCopy.hidden = false;
+			cardRawToggle.hidden = false;
+			const rendered = analysisReportResult(data);
+			cardResultHost.replaceChildren(...(rendered ? [rendered] : []));
+		} catch (error) {
+			showError(cardOutput, error.message);
+		}
+	};
+
+	const onDeletePreset = async (preset, deleteBtn, card) => {
+		const deleteDef = {
+			method: 'DELETE',
+			path: '/api/scanner-presets/{id}',
+			label: 'Delete preset',
+			confirm: 'Delete this scanner preset?',
+			requiredRole: 'admin.operator',
+		};
+		try {
+			const data = await sendRequest({
+				definition: deleteDef,
+				path: `/api/scanner-presets/${encodeURIComponent(preset.id)}`,
+				button: deleteBtn,
+				output,
+			});
+			if (data && data.success) {
+				card.remove();
+				if (data.storage) {
+					updateStorageBadge(data.storage);
+					if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
+				}
+				await loadPresets();
+			}
+		} catch (error) {
+			showError(output, error.message);
+		}
+	};
+
+	const loadPresets = async () => {
+		listContainer.replaceChildren(element('div', { className: 'loading-state', text: 'Loading presets…' }));
+		rawToggle.hidden = true;
+		try {
+			const data = await sendRequest({
+				definition,
+				path: definition.path,
+				button,
+				output,
+				formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+			});
+			if (!data) {
+				listContainer.replaceChildren();
+				return;
+			}
+			if (data.storage) {
+				updateStorageBadge(data.storage);
+				if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
+			}
+			lastListRawJson = JSON.stringify(data, null, 2);
+			rawOutput.textContent = lastListRawJson;
+			rawCopyButton.hidden = false;
+			rawToggle.hidden = false;
+
+			const presets = Array.isArray(data.presets) ? data.presets : [];
+			listContainer.replaceChildren();
+			if (!presets.length) {
+				listContainer.append(createEmptyState('No scanner presets found.'));
+				return;
+			}
+			presets.forEach((preset) => {
+				const card = createPresetSummary(preset, {
+					onEdit,
+					onRun: onRunPreset,
+					onDelete: onDeletePreset,
+				});
+				listContainer.append(card);
+			});
+		} catch (error) {
+			showError(output, error.message);
+		}
+	};
+
+	form.refresh = () => loadPresets();
+	form.updateStorage = (storage) => updateStorageBadge(storage);
+
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		Promise.resolve(loadPresets()).catch(() => {});
+	});
+
+	return form;
+};
+
+const addPresetStructuredFields = (form, contract, operation) => {
+	const bodyExample = getBodyExample(contract, operation) || {};
+	let isAdvancedDirty = false;
+
+	const nameInput = addField(form, 'Preset name', 'name', {
+		required: true,
+		placeholder: 'e.g. Daily Momentum',
+		value: bodyExample.name || '',
+	});
+
+	const exchangeInput = addField(form, 'Exchange', 'exchange', {
+		placeholder: 'BINANCE',
+		value: bodyExample.exchange || 'BINANCE',
+	});
+
+	const timeframeSelect = addField(form, 'Timeframe', 'timeframe', { tag: 'select' });
+	PRESET_TIMEFRAMES.forEach((tf) => {
+		const option = element('option', { text: tf });
+		option.value = tf;
+		if (tf === (bodyExample.timeframe || '4h')) option.selected = true;
+		timeframeSelect.append(option);
+	});
+	timeframeSelect.value = bodyExample.timeframe || '4h';
+
+	const scansFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	scansFieldset.append(element('legend', { text: 'Scan types' }));
+	const initialScans = Array.isArray(bodyExample.scans) && bodyExample.scans.length
+		? bodyExample.scans
+		: ['top_gainers', 'top_losers', 'volume_breakout_scanner'];
+	const scanInputs = [];
+	PRESET_SCAN_TYPES.forEach((scan) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `scan_${scan.id}`;
+		cb.value = scan.id;
+		cb.checked = initialScans.includes(scan.id);
+		label.append(cb, element('span', { text: scan.label }));
+		scansFieldset.append(label);
+		scanInputs.push(cb);
+	});
+	form.presetScanInputs = scanInputs;
+	form.append(scansFieldset);
+
+	const limitInput = addField(form, 'Scan limit', 'limit', {
+		type: 'number',
+		min: 1,
+		max: 20,
+		value: bodyExample.limit || 5,
+	});
+	limitInput.addEventListener('change', () => {
+		const val = parseInt(limitInput.value, 10);
+		if (Number.isFinite(val)) {
+			limitInput.value = Math.max(1, Math.min(20, val));
+		}
+	});
+
+	const bbwInput = addField(form, 'BBW threshold', 'bbwThreshold', {
+		type: 'number',
+		step: '0.01',
+		min: 0,
+		placeholder: '0.05',
+		value: bodyExample.bbwThreshold !== undefined && bodyExample.bbwThreshold !== null ? bodyExample.bbwThreshold : '',
+	});
+
+	const flagsRow = element('div', { className: 'badge-row' });
+	const rankedLabel = element('label', { className: 'checkbox-label' });
+	const rankedCb = element('input', { type: 'checkbox' });
+	rankedCb.name = 'ranked';
+	rankedCb.checked = Boolean(bodyExample.ranked);
+	rankedLabel.append(rankedCb, element('span', { text: 'Ranked results' }));
+
+	const mtfLabel = element('label', { className: 'checkbox-label' });
+	const mtfCb = element('input', { type: 'checkbox' });
+	mtfCb.name = 'includeMultiTimeframe';
+	mtfCb.checked = Boolean(bodyExample.includeMultiTimeframe);
+	mtfLabel.append(mtfCb, element('span', { text: 'Include multi-timeframe' }));
+	flagsRow.append(rankedLabel, mtfLabel);
+	form.append(flagsRow);
+
+	const scheduleInput = addField(form, 'Schedule cadence (optional)', 'schedule', {
+		placeholder: 'e.g. 1h, 4h, 1d',
+		value: (bodyExample.schedule && (bodyExample.schedule.cadence || (bodyExample.schedule.cadenceMs && `${Math.round(bodyExample.schedule.cadenceMs / 60000)}m`))) || '',
+	});
+
+	const advancedDetails = element('details', { className: 'raw-status' });
+	advancedDetails.append(element('summary', { text: 'Advanced request body' }));
+	addJsonField(advancedDetails, 'Request body JSON', 'body', bodyExample);
+	form.append(advancedDetails);
+
+	const syncBody = () => {
+		if (isAdvancedDirty) return undefined;
+		const name = (nameInput.value || '').trim();
+		const exchange = (exchangeInput.value || '').trim() || 'BINANCE';
+		const timeframe = timeframeSelect.value || '4h';
+		const rawLimit = parseInt(limitInput.value, 10);
+		const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(20, rawLimit)) : 5;
+		const selectedScans = scanInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+		const bbw = parseFloat(bbwInput.value);
+		const ranked = Boolean(rankedCb.checked);
+		const includeMultiTimeframe = Boolean(mtfCb.checked);
+		const schedule = (scheduleInput.value || '').trim();
+
+		const payload = {
+			name,
+			exchange,
+			timeframe,
+			scans: selectedScans.length ? selectedScans : ['top_gainers', 'top_losers', 'volume_breakout_scanner'],
+			limit,
+		};
+		if (Number.isFinite(bbw)) payload.bbwThreshold = bbw;
+		if (ranked) payload.ranked = true;
+		if (includeMultiTimeframe) payload.includeMultiTimeframe = true;
+		if (schedule) payload.schedule = { enabled: true, cadence: schedule };
+
+		if (form.elements.body) {
+			form.elements.body.value = JSON.stringify(payload, null, 2);
+		}
+		return payload;
+	};
+
+	[nameInput, exchangeInput, limitInput, bbwInput, scheduleInput].forEach((input) => {
+		input.addEventListener('input', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+	});
+	[timeframeSelect, rankedCb, mtfCb, ...scanInputs].forEach((input) => {
+		input.addEventListener('change', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+	});
+
+	if (form.elements.body) {
+		form.elements.body.addEventListener('input', () => {
+			isAdvancedDirty = true;
+		});
+	}
+
+	form.populatePreset = (preset) => {
+		isAdvancedDirty = false;
+		if (form.elements['path-id'] && preset.id) {
+			form.elements['path-id'].value = preset.id;
+		}
+		nameInput.value = preset.name || '';
+		exchangeInput.value = preset.exchange || 'BINANCE';
+		timeframeSelect.value = preset.timeframe || '4h';
+		limitInput.value = preset.limit || 5;
+		bbwInput.value = preset.bbwThreshold !== undefined && preset.bbwThreshold !== null ? preset.bbwThreshold : '';
+		rankedCb.checked = Boolean(preset.ranked);
+		mtfCb.checked = Boolean(preset.includeMultiTimeframe);
+		scheduleInput.value = (preset.schedule && (preset.schedule.cadence || (preset.schedule.cadenceMs && `${Math.round(preset.schedule.cadenceMs / 60000)}m`))) || '';
+		const targetScans = Array.isArray(preset.scans) ? preset.scans : [];
+		scanInputs.forEach((cb) => {
+			cb.checked = targetScans.includes(cb.value);
+		});
+		syncBody();
+	};
+
+	syncBody();
+};
+
+const createOperationForm = (contract, definition, options = {}) => {
 	const operation = getOperation(contract, definition);
 	const form = element('form', { className: 'operation-card' });
 	const title = element('h3', { text: definition.label });
@@ -2973,10 +3412,15 @@ const createOperationForm = (contract, definition) => {
 	form.append(title, route);
 	const pathNames = addPathFields(form, definition.path);
 
+	const isPresetUpsert = (definition.path === '/api/scanner-presets' && definition.method === 'POST') ||
+		(definition.path === '/api/scanner-presets/{id}' && definition.method === 'PUT');
+
 	if (definition.method === 'GET' || getParameters(contract, operation).some((parameter) => parameter.in === 'query')) {
 		addJsonField(form, 'Query JSON', 'query', getQueryExample(contract, operation));
 	}
-	if (definition.method !== 'GET' && operation && operation.requestBody) {
+	if (isPresetUpsert) {
+		addPresetStructuredFields(form, contract, operation);
+	} else if (definition.method !== 'GET' && operation && operation.requestBody) {
 		addJsonField(form, 'Request body JSON', 'body', getBodyExample(contract, operation));
 	}
 
@@ -3027,6 +3471,12 @@ const createOperationForm = (contract, definition) => {
 					? ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`
 					: undefined,
 			})).then((data) => {
+				if (options && typeof options.onStorageUpdate === 'function' && data && data.storage) {
+					options.onStorageUpdate(data.storage);
+				}
+				if (options && typeof options.onSuccess === 'function' && data) {
+					options.onSuccess(data);
+				}
 				if (!resultHost) return;
 				if (!data) {
 					resultHost.replaceChildren();
@@ -3134,6 +3584,59 @@ const renderView = async (name) => {
 			view.append(createJobListForm(contract, status.selectJob));
 			VIEWS.jobs.forEach((definition) => view.append(createOperationForm(contract, definition)));
 			view.append(status.form);
+			return;
+		}
+		if (name === 'presets') {
+			let updateForm = null;
+			let listForm = null;
+			const onEdit = (preset) => {
+				if (updateForm && typeof updateForm.populatePreset === 'function') {
+					updateForm.populatePreset(preset);
+					if (typeof updateForm.scrollIntoView === 'function') {
+						updateForm.scrollIntoView({ behavior: 'smooth' });
+					}
+					if (updateForm.elements?.name && typeof updateForm.elements.name.focus === 'function') {
+						updateForm.elements.name.focus();
+					}
+				}
+			};
+			const onStorageUpdate = (storage) => {
+				if (listForm && typeof listForm.updateStorage === 'function') {
+					listForm.updateStorage(storage);
+				}
+			};
+			const onPresetMutated = async (storage) => {
+				if (storage) onStorageUpdate(storage);
+				if (listForm && typeof listForm.refresh === 'function') {
+					await listForm.refresh();
+				}
+			};
+			listForm = createPresetListForm(contract, { onEdit, onStorageUpdate });
+			view.append(listForm);
+
+			VIEWS.presets.forEach((definition) => {
+				if (definition.method === 'GET') return;
+				const form = createOperationForm(contract, definition, {
+					onStorageUpdate: onPresetMutated,
+					onSuccess: () => {
+						if (listForm && typeof listForm.refresh === 'function') listForm.refresh();
+					},
+				});
+				view.append(form);
+			});
+
+			VIEW_ACTIONS.presets.forEach((definition) => {
+				const form = createOperationForm(contract, definition, {
+					onStorageUpdate: onPresetMutated,
+					onSuccess: () => {
+						if (listForm && typeof listForm.refresh === 'function') listForm.refresh();
+					},
+				});
+				if (definition.method === 'PUT') {
+					updateForm = form;
+				}
+				view.append(form);
+			});
 			return;
 		}
 		[...(VIEWS[name] || []), ...(VIEW_ACTIONS[name] || [])]
