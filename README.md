@@ -1222,6 +1222,7 @@ Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string 
 - `limit` - Integer between `1` and `1000` (default: `500`)
 - `source` / `enriched` - Optional filters
 - `includeText` - Optional boolean; raw alert text is excluded unless `true`
+- `includeEnrichment` - Optional boolean; safe bounded projection of `enrichmentData` is excluded unless `true`
 
 #### GET /api/alerts/summary
 
