@@ -17,6 +17,7 @@ class FakeElement {
 		this.value = '';
 		this.disabled = false;
 		this._text = '';
+		this.name = '';
 	}
 
 	get textContent() {
@@ -60,6 +61,7 @@ class FakeElement {
 
 	setAttribute(name, value) {
 		this.attributes[name] = String(value);
+		if (name === 'name') this.name = String(value);
 	}
 
 	removeAttribute(name) {
@@ -76,9 +78,28 @@ class FakeElement {
 
 	select() {}
 
+	querySelector(selector) {
+		const results = this.querySelectorAll(selector);
+		return results[0] || null;
+	}
+
 	querySelectorAll(selector) {
 		if (selector === '[data-view]') return findAll(this, (node) => node.dataset.view);
-		return [];
+		// Simple querySelectorAll for common selectors used in the builder functions
+		return findAll(this, (node) => {
+			if (selector.startsWith('select[name=') || selector.startsWith('input[name=') || selector.startsWith('textarea[name=')) {
+				const attrMatch = selector.match(/\[name=([^\]]+)\]/);
+				if (attrMatch && node.attributes['name'] === attrMatch[1]) return true;
+				if (attrMatch && node.name === attrMatch[1]) return true;
+			}
+			if (selector === 'textarea[name=body]') {
+				return node.tagName === 'TEXTAREA' && node.name === 'body';
+			}
+			if (selector.startsWith('option:checked')) {
+				return node.tagName === 'OPTION' && node.selected;
+			}
+			return false;
+		});
 	}
 }
 
@@ -3231,7 +3252,9 @@ describe('admin browser client', () => {
 		await flush();
 		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
 
-		form.elements.body.value = '{ invalid';
+		// Use form.elements to find the raw textarea by name
+		const rawTextarea = form.elements.body;
+		rawTextarea.value = '{ invalid';
 		await form.dispatch('submit');
 		await flush();
 
@@ -3885,5 +3908,114 @@ describe('admin browser client', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(8);
 		expect(shell).not.toMatch(/[⌂◈◉◇◌✦▷]/);
+	});
+});
+
+
+describe('structured analysis forms', () => {
+	it('renders structured controls for analysis operations and provides raw JSON sync', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'analysis');
+		await flush();
+
+		const view = browser.elementsById.view;
+
+		// 1. Volume Confirmation Form
+		const vcForm = findForm(view, 'POST /api/webhook/volume-confirmation');
+		expect(vcForm).toBeDefined();
+		expect(vcForm.elements.symbol).toBeDefined();
+		expect(vcForm.elements.timeframe).toBeDefined();
+		expect(vcForm.elements.body).toBeDefined();
+
+		// Real-time synchronization
+		vcForm.elements.symbol.value = 'BINANCE:ETHUSDT';
+		await vcForm.elements.symbol.dispatch('input');
+		await flush();
+		const vcParsed = JSON.parse(vcForm.elements.body.value);
+		expect(vcParsed.symbol).toBe('BINANCE:ETHUSDT');
+
+		// 2. Expanded Analysis Form
+		const expForm = findForm(view, 'POST /api/webhook/expanded-analysis-alert');
+		expect(expForm).toBeDefined();
+		expect(expForm.elements.symbols).toBeDefined();
+		expect(expForm.elements.timeframe).toBeDefined();
+		expect(expForm.elements.analysisMode).toBeDefined();
+		expect(expForm.elements.includeMultiTimeframe).toBeDefined();
+		expect(expForm.elements.channel_telegram).toBeDefined();
+		expect(expForm.elements.channel_whatsapp).toBeDefined();
+		expect(expForm.elements.channel_discord).toBeDefined();
+		expect(expForm.elements.body).toBeDefined();
+
+		// 3. Market Scanner Form
+		const scanForm = findForm(view, 'POST /api/webhook/market-scanner-alert');
+		expect(scanForm).toBeDefined();
+		expect(scanForm.elements.exchange).toBeDefined();
+		expect(scanForm.elements.timeframe).toBeDefined();
+		expect(scanForm.elements.scan_top_gainers).toBeDefined();
+		expect(scanForm.elements.scan_top_losers).toBeDefined();
+		expect(scanForm.elements.scan_volume_breakout_scanner).toBeDefined();
+		expect(scanForm.elements.scan_smart_volume_scanner).toBeDefined();
+		expect(scanForm.elements.scan_bollinger_scan).toBeDefined();
+		expect(scanForm.elements.limit).toBeDefined();
+		expect(scanForm.elements.bbw_threshold).toBeDefined();
+		expect(scanForm.elements.body).toBeDefined();
+
+		// 4. Symbol Analysis Form
+		const symForm = findForm(view, 'POST /api/webhook/symbol-analysis');
+		expect(symForm).toBeDefined();
+		expect(symForm.elements.symbol).toBeDefined();
+		expect(symForm.elements.timeframe).toBeDefined();
+		expect(symForm.elements.analysisMode).toBeDefined();
+		expect(symForm.elements.body).toBeDefined();
+
+		// 5. News Monitor Form (POST)
+		const newsPostForm = findForm(view, 'POST /api/news-monitor');
+		expect(newsPostForm).toBeDefined();
+		expect(newsPostForm.elements.crypto).toBeDefined();
+		expect(newsPostForm.elements.stocks).toBeDefined();
+		expect(newsPostForm.elements.channel_telegram).toBeDefined();
+		expect(newsPostForm.elements.channel_whatsapp).toBeDefined();
+		expect(newsPostForm.elements.channel_discord).toBeDefined();
+		expect(newsPostForm.elements.body).toBeDefined();
+
+		// News monitor sync
+		newsPostForm.elements.crypto.value = 'SOLUSDT,ADAUSDT';
+		await newsPostForm.elements.crypto.dispatch('input');
+		await flush();
+		const newsParsed = JSON.parse(newsPostForm.elements.body.value);
+		expect(newsParsed.crypto).toEqual(['SOLUSDT', 'ADAUSDT']);
+	});
+
+	it('validates symbol format on structured analysis submit and prevents invalid requests', async () => {
+		let requestedUrl = null;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				requestedUrl = url;
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'analysis');
+		await flush();
+
+		const vcForm = findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation');
+		vcForm.elements.symbol.value = 'MALFORMED_SYMBOL';
+		await vcForm.elements.symbol.dispatch('input');
+		await flush();
+
+		await vcForm.dispatch('submit');
+		await flush();
+
+		expect(requestedUrl).toBeNull();
+		expect(vcForm.textContent).toContain('Malformed symbol');
 	});
 });

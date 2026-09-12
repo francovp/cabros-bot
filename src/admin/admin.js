@@ -454,7 +454,7 @@ const parseJson = (value, label) => {
 
 const resolveRef = (contract, value) => {
 	if (!value || !value.$ref) return value;
-	return value.$ref.slice(2).split('/').reduce((current, key) => current[key], contract);
+	return value.$ref.slice(2).split('/').reduce((current, key) => current && current[key], contract);
 };
 
 const getOperation = (contract, definition) => contract.paths[definition.path]
@@ -3547,6 +3547,734 @@ const renderPlayground = (contract, view) => {
 	renderFields();
 };
 
+const getBodySchema = (contract, operation) => {
+	const requestBody = resolveRef(contract, operation && operation.requestBody);
+	const json = requestBody && requestBody.content && requestBody.content['application/json'];
+	if (!json || !json.schema) return null;
+	return resolveRef(contract, json.schema);
+};
+
+const getQueryEnumValues = (contract, definition, paramName) => {
+	const operation = getOperation(contract, definition);
+	const parameter = getParameters(contract, operation).find((p) => p.name === paramName);
+	if (!parameter || !parameter.schema) return [];
+	if (Array.isArray(parameter.schema.enum)) return parameter.schema.enum;
+	if (parameter.schema.items && Array.isArray(parameter.schema.items.enum)) {
+		return parameter.schema.items.enum;
+	}
+	return [];
+};
+
+const getBodySchemaEnum = (contract, operation, propertyName) => {
+	const schema = getBodySchema(contract, operation);
+	if (!schema || !schema.properties || !schema.properties[propertyName]) return [];
+	const prop = resolveRef(contract, schema.properties[propertyName]);
+	if (Array.isArray(prop.enum)) return prop.enum;
+	if (prop.items) {
+		const items = resolveRef(contract, prop.items);
+		if (items && Array.isArray(items.enum)) return items.enum;
+	}
+	return [];
+};
+
+const SYMBOL_PATTERN = /^[A-Za-z0-9_]+:[A-Za-z0-9._-]+$/;
+
+const createStructuredAnalysisForm = (contract, definition, builder) => {
+	const operation = getOperation(contract, definition);
+	const form = element('form', { className: 'operation-card structured-form' });
+	const title = element('h3', { text: definition.label });
+	const route = element('code', { text: `${definition.method} ${definition.path}` });
+	form.append(title, route);
+	const pathNames = addPathFields(form, definition.path);
+
+	const isGet = definition.method === 'GET';
+	const fields = element('div', { className: 'form-fields' });
+	const builderResult = (builder && builder(contract, operation, fields, definition)) || {};
+
+	let isAdvancedDirty = false;
+	const bodyExample = getBodyExample(contract, operation) || {};
+
+	if (!isGet) {
+		const advancedDetails = element('details', { className: 'raw-status' });
+		advancedDetails.append(element('summary', { text: 'Advanced request body' }));
+		addJsonField(advancedDetails, 'Request body JSON', 'body', bodyExample);
+		form.append(fields, advancedDetails);
+	} else {
+		form.append(fields);
+	}
+
+	const syncBody = () => {
+		if (isGet || isAdvancedDirty || !form.elements.body) return undefined;
+		let payload = {};
+		if (typeof builderResult.getBody === 'function') {
+			try {
+				payload = builderResult.getBody();
+			} catch (_) {
+				return undefined;
+			}
+		}
+		form.elements.body.value = JSON.stringify(payload, null, 2);
+		return payload;
+	};
+
+	if (!isGet && form.elements.body) {
+		form.elements.body.addEventListener('input', () => {
+			isAdvancedDirty = true;
+		});
+
+		fields.addEventListener('input', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+		fields.addEventListener('change', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+
+		if (Array.isArray(builderResult.inputs)) {
+			builderResult.inputs.forEach((input) => {
+				if (input && typeof input.addEventListener === 'function') {
+					input.addEventListener('input', () => {
+						isAdvancedDirty = false;
+						syncBody();
+					});
+					input.addEventListener('change', () => {
+						isAdvancedDirty = false;
+						syncBody();
+					});
+				}
+			});
+		}
+
+		syncBody();
+	}
+
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	if (definition.confirm) button.className = 'destructive-action';
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const hasStructuredResult = typeof definition.renderSuccess === 'function';
+	const resultHost = hasStructuredResult ? element('div') : null;
+	let lastRawJson = '';
+	let rawOutputEl = null;
+	let rawCopyButton = null;
+
+	if (hasStructuredResult) {
+		rawOutputEl = element('pre', { className: 'response-block' });
+		rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+		rawCopyButton.hidden = true;
+		const rawToggle = element('details', { className: 'raw-status' });
+		rawToggle.append(
+			element('summary', { text: 'Show raw response' }),
+			rawCopyButton,
+			rawOutputEl,
+		);
+		form.append(button, resultHost, output, rawToggle);
+	} else {
+		form.append(button, output);
+	}
+
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		if (resultHost) resultHost.replaceChildren();
+		if (rawCopyButton) {
+			lastRawJson = '';
+			rawOutputEl.textContent = '';
+			rawCopyButton.hidden = true;
+		}
+
+		try {
+			let query;
+			let body;
+
+			if (isGet) {
+				if (typeof builderResult.getQuery === 'function') {
+					query = builderResult.getQuery();
+				} else if (form.elements.query) {
+					query = window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query'));
+				}
+			} else {
+				if (!isAdvancedDirty && typeof builderResult.validate === 'function') {
+					const validationError = builderResult.validate();
+					if (validationError) {
+						showError(output, validationError);
+						return;
+					}
+				}
+				const input = form.elements.body;
+				body = input ? parseJson(input.value, 'Request body') : undefined;
+				body = withReplayIdempotencyKey(definition, body);
+				if (input && body && body.replayIdempotencyKey) {
+					input.value = JSON.stringify(body, null, 2);
+				}
+			}
+
+			Promise.resolve(sendRequest({
+				definition,
+				path: fillPath(definition.path, pathNames, form),
+				query,
+				body,
+				button,
+				output,
+				formatResponse: hasStructuredResult
+					? ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`
+					: undefined,
+			})).then((data) => {
+				if (!resultHost) return;
+				if (!data) {
+					resultHost.replaceChildren();
+					rawOutputEl.textContent = '';
+					rawCopyButton.hidden = true;
+					return;
+				}
+				lastRawJson = JSON.stringify(data, null, 2);
+				rawOutputEl.textContent = lastRawJson;
+				rawCopyButton.hidden = false;
+				const rendered = definition.renderSuccess(data);
+				resultHost.replaceChildren(...(rendered ? [rendered] : []));
+			}).catch(() => {});
+		} catch (error) {
+			showError(output, error.message);
+		}
+	});
+
+	return form;
+};
+
+const buildExpandedAnalysisForm = (contract, operation, fields) => {
+	const bodyExample = getBodyExample(contract, operation) || {};
+	const timeframeEnum = getBodySchemaEnum(contract, operation, 'timeframe');
+	const analysisModeEnum = getBodySchemaEnum(contract, operation, 'analysisMode');
+	const channelsEnum = getBodySchemaEnum(contract, operation, 'channels');
+
+	const initialSymbols = Array.isArray(bodyExample.symbols) && bodyExample.symbols.length
+		? bodyExample.symbols.join('\n')
+		: (bodyExample.symbol || 'BINANCE:BTCUSDT');
+
+	const symbolsInput = addField(fields, 'Symbols (EXCHANGE:SYMBOL, one per line)', 'symbols', {
+		tag: 'textarea',
+		rows: 4,
+		placeholder: 'BINANCE:BTCUSDT\nNASDAQ:NVDA',
+		value: initialSymbols,
+	});
+
+	const feedback = element('div', { className: 'field-feedback' });
+	fields.append(feedback);
+
+	const timeframeSelect = addField(fields, 'Timeframe', 'timeframe', { tag: 'select' });
+	const availableTimeframes = timeframeEnum.length ? timeframeEnum : ['5m', '15m', '1h', '4h', '1D', '1W', '1M'];
+	availableTimeframes.forEach((tf) => {
+		const opt = element('option', { text: tf });
+		opt.value = tf;
+		timeframeSelect.append(opt);
+	});
+	timeframeSelect.value = bodyExample.timeframe || (availableTimeframes.includes('1D') ? '1D' : availableTimeframes[0]);
+
+	const analysisModeSelect = addField(fields, 'Analysis mode', 'analysisMode', { tag: 'select' });
+	const availableModes = analysisModeEnum.length ? analysisModeEnum : ['standard', 'combined'];
+	availableModes.forEach((mode) => {
+		const opt = element('option', { text: mode });
+		opt.value = mode;
+		analysisModeSelect.append(opt);
+	});
+	analysisModeSelect.value = bodyExample.analysisMode || 'standard';
+
+	const includeMTF = addField(fields, 'Include multi-timeframe analysis', 'includeMultiTimeframe', {
+		type: 'checkbox',
+	});
+	includeMTF.checked = Boolean(bodyExample.includeMultiTimeframe);
+
+	const dryRun = addField(fields, 'Dry run (simulate without sending alerts)', 'dryRun', {
+		type: 'checkbox',
+	});
+	dryRun.checked = Boolean(bodyExample.dryRun);
+
+	const channelsFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	channelsFieldset.append(element('legend', { text: 'Notification channels' }));
+	const availableChannels = channelsEnum.length ? channelsEnum : ['telegram', 'whatsapp', 'discord'];
+	const channelInputs = [];
+	const initialChannels = Array.isArray(bodyExample.channels) ? bodyExample.channels : [];
+	availableChannels.forEach((ch) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `channel_${ch}`;
+		cb.value = ch;
+		cb.checked = initialChannels.includes(ch);
+		label.append(cb, element('span', { text: ch.charAt(0).toUpperCase() + ch.slice(1) }));
+		channelsFieldset.append(label);
+		channelInputs.push(cb);
+	});
+	fields.append(channelsFieldset);
+
+	const tgChatInput = addField(fields, 'Telegram Chat ID (optional)', 'telegramChatId', {
+		value: bodyExample.telegramChatId || '',
+	});
+	const tgThreadInput = addField(fields, 'Telegram Thread ID (optional, 0 for general)', 'telegramThreadId', {
+		type: 'number',
+		min: 0,
+		value: bodyExample.telegramThreadId !== undefined ? bodyExample.telegramThreadId : '',
+	});
+	const waChatInput = addField(fields, 'WhatsApp Chat ID (optional)', 'whatsappChatId', {
+		value: bodyExample.whatsappChatId || '',
+	});
+
+	const validate = () => {
+		const text = (symbolsInput.value || '').trim();
+		if (!text) {
+			feedback.textContent = 'At least one symbol is required.';
+			feedback.className = 'field-feedback error';
+			return 'At least one symbol is required.';
+		}
+		const symbols = text.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+		const invalid = symbols.filter((s) => !SYMBOL_PATTERN.test(s));
+		if (invalid.length > 0) {
+			const msg = `Malformed symbol(s): ${invalid.join(', ')}. Expected EXCHANGE:SYMBOL format (e.g. BINANCE:BTCUSDT).`;
+			feedback.textContent = msg;
+			feedback.className = 'field-feedback error';
+			return msg;
+		}
+		feedback.textContent = '';
+		feedback.className = 'field-feedback';
+		return null;
+	};
+
+	symbolsInput.addEventListener('input', validate);
+
+	const getBody = () => {
+		const text = (symbolsInput.value || '').trim();
+		const symbols = text ? text.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean) : [];
+		const selectedChannels = channelInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+		const payload = {
+			symbols,
+			timeframe: timeframeSelect.value,
+			analysisMode: analysisModeSelect.value,
+		};
+		if (includeMTF.checked) payload.includeMultiTimeframe = true;
+		if (dryRun.checked) payload.dryRun = true;
+		if (selectedChannels.length > 0) payload.channels = selectedChannels;
+		const tgChat = (tgChatInput.value || '').trim();
+		if (tgChat) payload.telegramChatId = tgChat;
+		const tgThread = (tgThreadInput.value || '').trim();
+		if (tgThread !== '') payload.telegramThreadId = parseInt(tgThread, 10);
+		const waChat = (waChatInput.value || '').trim();
+		if (waChat) payload.whatsappChatId = waChat;
+		return payload;
+	};
+
+	return {
+		getBody,
+		validate,
+		inputs: [symbolsInput, timeframeSelect, analysisModeSelect, includeMTF, dryRun, ...channelInputs, tgChatInput, tgThreadInput, waChatInput],
+	};
+};
+
+const buildMarketScannerForm = (contract, operation, fields) => {
+	const bodyExample = getBodyExample(contract, operation) || {};
+	const timeframeEnum = getBodySchemaEnum(contract, operation, 'timeframe');
+	const scansEnum = getBodySchemaEnum(contract, operation, 'scans');
+	const channelsEnum = getBodySchemaEnum(contract, operation, 'channels');
+
+	const exchangeInput = addField(fields, 'Exchange', 'exchange', {
+		placeholder: 'BINANCE',
+		value: bodyExample.exchange || 'BINANCE',
+	});
+
+	const timeframeSelect = addField(fields, 'Timeframe', 'timeframe', { tag: 'select' });
+	const availableTimeframes = timeframeEnum.length ? timeframeEnum : ['15m', '1h', '4h', '1D'];
+	availableTimeframes.forEach((tf) => {
+		const opt = element('option', { text: tf });
+		opt.value = tf;
+		timeframeSelect.append(opt);
+	});
+	timeframeSelect.value = bodyExample.timeframe || (availableTimeframes.includes('4h') ? '4h' : availableTimeframes[0]);
+
+	const scansFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	scansFieldset.append(element('legend', { text: 'Scans' }));
+	const availableScans = scansEnum.length ? scansEnum : ['top_gainers', 'top_losers', 'volume_breakout_scanner', 'smart_volume_scanner', 'bollinger_scan'];
+	const scanInputs = [];
+	const initialScans = Array.isArray(bodyExample.scans) && bodyExample.scans.length
+		? bodyExample.scans
+		: ['top_gainers', 'top_losers', 'volume_breakout_scanner'];
+	availableScans.forEach((scan) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `scan_${scan}`;
+		cb.value = scan;
+		cb.checked = initialScans.includes(scan);
+		label.append(cb, element('span', { text: scan.replace(/_/g, ' ') }));
+		scansFieldset.append(label);
+		scanInputs.push(cb);
+	});
+	fields.append(scansFieldset);
+
+	const limitInput = addField(fields, 'Scan limit (1-20)', 'limit', {
+		type: 'number',
+		min: 1,
+		max: 20,
+		value: bodyExample.limit || 5,
+	});
+
+	const bbwInput = addField(fields, 'BBW threshold', 'bbw_threshold', {
+		type: 'number',
+		step: '0.01',
+		value: bodyExample.bbw_threshold !== undefined ? bodyExample.bbw_threshold : 0.05,
+	});
+
+	const ratingInput = addField(fields, 'Rating (-3 to 3)', 'rating', {
+		type: 'number',
+		min: -3,
+		max: 3,
+		value: bodyExample.rating !== undefined ? bodyExample.rating : 3,
+	});
+
+	const patternSelect = addField(fields, 'Pattern type', 'pattern_type', { tag: 'select' });
+	['bullish', 'bearish'].forEach((pt) => {
+		const opt = element('option', { text: pt });
+		opt.value = pt;
+		patternSelect.append(opt);
+	});
+	patternSelect.value = bodyExample.pattern_type || 'bullish';
+
+	const candleInput = addField(fields, 'Candle count (2-5)', 'candle_count', {
+		type: 'number',
+		min: 2,
+		max: 5,
+		value: bodyExample.candle_count || 3,
+	});
+
+	const minGrowthInput = addField(fields, 'Min growth (optional)', 'min_growth', {
+		type: 'number',
+		step: '0.01',
+		value: bodyExample.min_growth !== undefined ? bodyExample.min_growth : '',
+	});
+
+	const maxDeclineInput = addField(fields, 'Max decline (optional)', 'max_decline', {
+		type: 'number',
+		step: '0.01',
+		value: bodyExample.max_decline !== undefined ? bodyExample.max_decline : '',
+	});
+
+	const rankedCb = addField(fields, 'Ranked results', 'ranked', { type: 'checkbox' });
+	rankedCb.checked = Boolean(bodyExample.ranked);
+
+	const mtfCb = addField(fields, 'Include multi-timeframe', 'includeMultiTimeframe', { type: 'checkbox' });
+	mtfCb.checked = Boolean(bodyExample.includeMultiTimeframe);
+
+	const dryRunCb = addField(fields, 'Dry run (simulate without sending alerts)', 'dryRun', { type: 'checkbox' });
+	dryRunCb.checked = Boolean(bodyExample.dryRun);
+
+	const channelsFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	channelsFieldset.append(element('legend', { text: 'Notification channels' }));
+	const availableChannels = channelsEnum.length ? channelsEnum : ['telegram', 'whatsapp', 'discord'];
+	const channelInputs = [];
+	const initialChannels = Array.isArray(bodyExample.channels) ? bodyExample.channels : [];
+	availableChannels.forEach((ch) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `channel_${ch}`;
+		cb.value = ch;
+		cb.checked = initialChannels.includes(ch);
+		label.append(cb, element('span', { text: ch.charAt(0).toUpperCase() + ch.slice(1) }));
+		channelsFieldset.append(label);
+		channelInputs.push(cb);
+	});
+	fields.append(channelsFieldset);
+
+	const tgChatInput = addField(fields, 'Telegram Chat ID (optional)', 'telegramChatId', {
+		value: bodyExample.telegramChatId || '',
+	});
+	const tgThreadInput = addField(fields, 'Telegram Thread ID (optional, 0 for general)', 'telegramThreadId', {
+		type: 'number',
+		min: 0,
+		value: bodyExample.telegramThreadId !== undefined ? bodyExample.telegramThreadId : '',
+	});
+	const waChatInput = addField(fields, 'WhatsApp Chat ID (optional)', 'whatsappChatId', {
+		value: bodyExample.whatsappChatId || '',
+	});
+
+	const getBody = () => {
+		const exchange = (exchangeInput.value || '').trim() || 'BINANCE';
+		const timeframe = timeframeSelect.value || '4h';
+		const selectedScans = scanInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+		const rawLimit = parseInt(limitInput.value, 10);
+		const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(20, rawLimit)) : 5;
+		const bbw = parseFloat(bbwInput.value);
+		const rating = parseInt(ratingInput.value, 10);
+		const candleCount = parseInt(candleInput.value, 10);
+		const minGrowth = parseFloat(minGrowthInput.value);
+		const maxDecline = parseFloat(maxDeclineInput.value);
+		const selectedChannels = channelInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+
+		const payload = {
+			exchange,
+			timeframe,
+			scans: selectedScans.length ? selectedScans : ['top_gainers', 'top_losers', 'volume_breakout_scanner'],
+			limit,
+			pattern_type: patternSelect.value || 'bullish',
+		};
+		if (Number.isFinite(bbw)) payload.bbw_threshold = bbw;
+		if (Number.isFinite(rating)) payload.rating = rating;
+		if (Number.isFinite(candleCount)) payload.candle_count = candleCount;
+		if (Number.isFinite(minGrowth)) payload.min_growth = minGrowth;
+		if (Number.isFinite(maxDecline)) payload.max_decline = maxDecline;
+		if (rankedCb.checked) payload.ranked = true;
+		if (mtfCb.checked) payload.includeMultiTimeframe = true;
+		if (dryRunCb.checked) payload.dryRun = true;
+		if (selectedChannels.length > 0) payload.channels = selectedChannels;
+		const tgChat = (tgChatInput.value || '').trim();
+		if (tgChat) payload.telegramChatId = tgChat;
+		const tgThread = (tgThreadInput.value || '').trim();
+		if (tgThread !== '') payload.telegramThreadId = parseInt(tgThread, 10);
+		const waChat = (waChatInput.value || '').trim();
+		if (waChat) payload.whatsappChatId = waChat;
+		return payload;
+	};
+
+	return {
+		getBody,
+		inputs: [
+			exchangeInput, timeframeSelect, ...scanInputs, limitInput, bbwInput,
+			ratingInput, patternSelect, candleInput, minGrowthInput, maxDeclineInput,
+			rankedCb, mtfCb, dryRunCb, ...channelInputs, tgChatInput, tgThreadInput, waChatInput,
+		],
+	};
+};
+
+const buildVolumeConfirmationForm = (contract, operation, fields) => {
+	const bodyExample = getBodyExample(contract, operation) || {};
+	const timeframeEnum = getBodySchemaEnum(contract, operation, 'timeframe');
+
+	const symbolInput = addField(fields, 'Symbol (EXCHANGE:SYMBOL)', 'symbol', {
+		placeholder: 'BINANCE:BTCUSDT',
+		value: bodyExample.symbol || 'BINANCE:BTCUSDT',
+	});
+
+	const feedback = element('div', { className: 'field-feedback' });
+	fields.append(feedback);
+
+	let timeframeControl;
+	if (timeframeEnum.length > 0) {
+		timeframeControl = addField(fields, 'Timeframe', 'timeframe', { tag: 'select' });
+		timeframeEnum.forEach((tf) => {
+			const opt = element('option', { text: tf });
+			opt.value = tf;
+			timeframeControl.append(opt);
+		});
+		timeframeControl.value = bodyExample.timeframe || timeframeEnum[0];
+	} else {
+		timeframeControl = addField(fields, 'Timeframe', 'timeframe', {
+			placeholder: '1h',
+			value: bodyExample.timeframe || '1h',
+		});
+	}
+
+	const validate = () => {
+		const sym = (symbolInput.value || '').trim();
+		if (!sym) {
+			feedback.textContent = 'Symbol is required.';
+			feedback.className = 'field-feedback error';
+			return 'Symbol is required.';
+		}
+		if (!SYMBOL_PATTERN.test(sym)) {
+			const msg = `Malformed symbol: "${sym}". Expected EXCHANGE:SYMBOL format (e.g. BINANCE:BTCUSDT).`;
+			feedback.textContent = msg;
+			feedback.className = 'field-feedback error';
+			return msg;
+		}
+		feedback.textContent = '';
+		feedback.className = 'field-feedback';
+		return null;
+	};
+
+	symbolInput.addEventListener('input', validate);
+
+	const getBody = () => ({
+		symbol: (symbolInput.value || '').trim(),
+		timeframe: (timeframeControl.value || '').trim() || '1h',
+	});
+
+	return {
+		getBody,
+		validate,
+		inputs: [symbolInput, timeframeControl],
+	};
+};
+
+const buildSymbolAnalysisForm = (contract, operation, fields) => {
+	const bodyExample = getBodyExample(contract, operation) || {};
+	const timeframeEnum = getBodySchemaEnum(contract, operation, 'timeframe');
+	const analysisModeEnum = getBodySchemaEnum(contract, operation, 'analysisMode');
+
+	const symbolInput = addField(fields, 'Symbol (EXCHANGE:SYMBOL)', 'symbol', {
+		placeholder: 'BINANCE:BTCUSDT',
+		value: bodyExample.symbol || 'BINANCE:BTCUSDT',
+	});
+
+	const feedback = element('div', { className: 'field-feedback' });
+	fields.append(feedback);
+
+	let timeframeControl;
+	if (timeframeEnum.length > 0) {
+		timeframeControl = addField(fields, 'Timeframe', 'timeframe', { tag: 'select' });
+		timeframeEnum.forEach((tf) => {
+			const opt = element('option', { text: tf });
+			opt.value = tf;
+			timeframeControl.append(opt);
+		});
+		timeframeControl.value = bodyExample.timeframe || (timeframeEnum.includes('1D') ? '1D' : timeframeEnum[0]);
+	} else {
+		timeframeControl = addField(fields, 'Timeframe', 'timeframe', {
+			placeholder: '1D',
+			value: bodyExample.timeframe || '1D',
+		});
+	}
+
+	const analysisModeSelect = addField(fields, 'Analysis mode', 'analysisMode', { tag: 'select' });
+	const availableModes = analysisModeEnum.length ? analysisModeEnum : ['standard', 'combined'];
+	availableModes.forEach((mode) => {
+		const opt = element('option', { text: mode });
+		opt.value = mode;
+		analysisModeSelect.append(opt);
+	});
+	analysisModeSelect.value = bodyExample.analysisMode || 'standard';
+
+	const validate = () => {
+		const sym = (symbolInput.value || '').trim();
+		if (!sym) {
+			feedback.textContent = 'Symbol is required.';
+			feedback.className = 'field-feedback error';
+			return 'Symbol is required.';
+		}
+		if (!SYMBOL_PATTERN.test(sym)) {
+			const msg = `Malformed symbol: "${sym}". Expected EXCHANGE:SYMBOL format (e.g. BINANCE:BTCUSDT).`;
+			feedback.textContent = msg;
+			feedback.className = 'field-feedback error';
+			return msg;
+		}
+		feedback.textContent = '';
+		feedback.className = 'field-feedback';
+		return null;
+	};
+
+	symbolInput.addEventListener('input', validate);
+
+	const getBody = () => ({
+		symbol: (symbolInput.value || '').trim(),
+		timeframe: (timeframeControl.value || '').trim() || '1D',
+		analysisMode: analysisModeSelect.value || 'standard',
+	});
+
+	return {
+		getBody,
+		validate,
+		inputs: [symbolInput, timeframeControl, analysisModeSelect],
+	};
+};
+
+const buildNewsMonitorForm = (contract, operation, fields, definition) => {
+	const isGet = definition.method === 'GET';
+
+	if (isGet) {
+		const queryExample = getQueryExample(contract, operation) || {};
+		const cryptoInput = addField(fields, 'Crypto symbols (comma-separated)', 'crypto', {
+			placeholder: 'BTCUSDT,ETHUSDT',
+			value: queryExample.crypto || 'BTCUSDT',
+		});
+		const stocksInput = addField(fields, 'Stock symbols (comma-separated)', 'stocks', {
+			placeholder: 'NVDA,MSFT',
+			value: queryExample.stocks || 'NVDA',
+		});
+		const dryRunCb = addField(fields, 'Dry run (analyze only, no delivery)', 'dryRun', { type: 'checkbox' });
+		dryRunCb.checked = Boolean(queryExample.dryRun);
+
+		return {
+			getQuery: () => {
+				const query = {};
+				const crypto = (cryptoInput.value || '').trim();
+				const stocks = (stocksInput.value || '').trim();
+				if (crypto) query.crypto = crypto;
+				if (stocks) query.stocks = stocks;
+				if (dryRunCb.checked) query.dryRun = true;
+				return query;
+			},
+			inputs: [cryptoInput, stocksInput, dryRunCb],
+		};
+	}
+
+	const bodyExample = getBodyExample(contract, operation) || {};
+	const channelsEnum = getBodySchemaEnum(contract, operation, 'channels');
+
+	const initialCrypto = Array.isArray(bodyExample.crypto)
+		? bodyExample.crypto.join(',')
+		: (bodyExample.crypto || 'BTCUSDT');
+	const initialStocks = Array.isArray(bodyExample.stocks)
+		? bodyExample.stocks.join(',')
+		: (bodyExample.stocks || 'NVDA');
+
+	const cryptoInput = addField(fields, 'Crypto symbols (comma-separated)', 'crypto', {
+		placeholder: 'BTCUSDT,ETHUSDT',
+		value: initialCrypto,
+	});
+	const stocksInput = addField(fields, 'Stock symbols (comma-separated)', 'stocks', {
+		placeholder: 'NVDA,MSFT',
+		value: initialStocks,
+	});
+	const dryRunCb = addField(fields, 'Dry run (analyze only, no delivery)', 'dryRun', { type: 'checkbox' });
+	dryRunCb.checked = Boolean(bodyExample.dryRun);
+
+	const channelsFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	channelsFieldset.append(element('legend', { text: 'Notification channels' }));
+	const availableChannels = channelsEnum.length ? channelsEnum : ['telegram', 'whatsapp', 'discord'];
+	const channelInputs = [];
+	const initialChannels = Array.isArray(bodyExample.channels) ? bodyExample.channels : [];
+	availableChannels.forEach((ch) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `channel_${ch}`;
+		cb.value = ch;
+		cb.checked = initialChannels.includes(ch);
+		label.append(cb, element('span', { text: ch.charAt(0).toUpperCase() + ch.slice(1) }));
+		channelsFieldset.append(label);
+		channelInputs.push(cb);
+	});
+	fields.append(channelsFieldset);
+
+	const tgChatInput = addField(fields, 'Telegram Chat ID (optional)', 'telegramChatId', {
+		value: bodyExample.telegramChatId || '',
+	});
+	const tgThreadInput = addField(fields, 'Telegram Thread ID (optional, 0 for general)', 'telegramThreadId', {
+		type: 'number',
+		min: 0,
+		value: bodyExample.telegramThreadId !== undefined ? bodyExample.telegramThreadId : '',
+	});
+	const waChatInput = addField(fields, 'WhatsApp Chat ID (optional)', 'whatsappChatId', {
+		value: bodyExample.whatsappChatId || '',
+	});
+
+	const getBody = () => {
+		const crypto = (cryptoInput.value || '').trim();
+		const stocks = (stocksInput.value || '').trim();
+		const selectedChannels = channelInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+		const payload = {};
+		if (crypto) payload.crypto = crypto.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+		if (stocks) payload.stocks = stocks.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+		if (dryRunCb.checked) payload.dryRun = true;
+		if (selectedChannels.length > 0) payload.channels = selectedChannels;
+		const tgChat = (tgChatInput.value || '').trim();
+		if (tgChat) payload.telegramChatId = tgChat;
+		const tgThread = (tgThreadInput.value || '').trim();
+		if (tgThread !== '') payload.telegramThreadId = parseInt(tgThread, 10);
+		const waChat = (waChatInput.value || '').trim();
+		if (waChat) payload.whatsappChatId = waChat;
+		return payload;
+	};
+
+	return {
+		getBody,
+		inputs: [cryptoInput, stocksInput, dryRunCb, ...channelInputs, tgChatInput, tgThreadInput, waChatInput],
+	};
+};
+
 const renderView = async (name) => {
 	const view = document.getElementById('view');
 	if (typeof detachActiveViewPoll === 'function') detachActiveViewPoll();
@@ -3636,6 +4364,26 @@ const renderView = async (name) => {
 					updateForm = form;
 				}
 				view.append(form);
+			});
+			return;
+		}
+		if (name === 'analysis') {
+			const definitions = [...(VIEWS[name] || []), ...(VIEW_ACTIONS[name] || [])];
+			definitions.forEach((definition) => {
+				const path = definition.path;
+				if (path === '/api/webhook/expanded-analysis-alert') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildExpandedAnalysisForm));
+				} else if (path === '/api/webhook/market-scanner-alert') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildMarketScannerForm));
+				} else if (path === '/api/webhook/volume-confirmation') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildVolumeConfirmationForm));
+				} else if (path === '/api/webhook/symbol-analysis') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildSymbolAnalysisForm));
+				} else if (path === '/api/news-monitor') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildNewsMonitorForm));
+				} else {
+					view.append(createOperationForm(contract, definition));
+				}
 			});
 			return;
 		}
