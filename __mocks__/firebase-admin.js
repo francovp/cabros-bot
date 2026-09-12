@@ -26,6 +26,22 @@ const mockWhere = jest.fn(() => null);
 const mockLimit = jest.fn(() => null);
 const mockStartAfter = jest.fn(() => null);
 
+class MockVectorValue {
+	constructor(values) {
+		this._values = [...(values || [])];
+	}
+
+	toArray() {
+		return [...this._values];
+	}
+
+	isEqual(other) {
+		return other instanceof MockVectorValue
+			&& this._values.length === other._values.length
+			&& this._values.every((value, index) => value === other._values[index]);
+	}
+}
+
 const mockState = global.__firebaseAdminMockState || (global.__firebaseAdminMockState = {
 	collections: new Map(),
 	docCounter: 0,
@@ -220,6 +236,7 @@ const firestore = jest.fn(() => ({ collection: mockCollection }));
 firestore.FieldValue = { serverTimestamp: mockServerTimestamp, delete: mockDeleteFieldValue };
 firestore.Timestamp = { fromDate: mockTimestampFromDate, fromSeconds: mockTimestampFromSeconds };
 firestore.FieldPath = { documentId: mockDocumentId };
+firestore.VectorValue = MockVectorValue;
 
 const mock = {
 	get apps() { return apps; },
