@@ -1357,19 +1357,14 @@ The service caps the queried window at 31 days to keep routine operator usage ch
       "averageDeliveryMs": 150,
       "byChannel": {
         "telegram": {
-          "averageMs": 180,
-          "p95Ms": 420,
-          "sampleCount": 120
+          "averageMs": 170,
+          "p95Ms": 200,
+          "sampleCount": 2
         },
         "whatsapp": {
-          "averageMs": 320,
-          "p95Ms": 890,
-          "sampleCount": 85
-        },
-        "discord": {
-          "averageMs": 95,
-          "p95Ms": 210,
-          "sampleCount": 45
+          "averageMs": 110,
+          "p95Ms": 110,
+          "sampleCount": 1
         }
       }
     }

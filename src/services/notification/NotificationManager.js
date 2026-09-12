@@ -268,10 +268,19 @@ class NotificationManager {
 					},
 				});
 
+				const channelStartTime = Date.now();
 				return Promise.resolve()
 					.then(() => ch.send(alert, {
 						...options,
 						signal: options.signalByChannel?.[ch.name] || options.signal,
+					}))
+					.then((value) => ({
+						value,
+						durationMs: Date.now() - channelStartTime,
+					}))
+					.catch((error) => Promise.reject({
+						error,
+						durationMs: Date.now() - channelStartTime,
 					}))
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
@@ -288,13 +297,18 @@ class NotificationManager {
 		const formattedResults = results.map((r, idx) => {
 			const chName = channels[idx] ? channels[idx].name : 'unknown';
 			if (r.status === 'fulfilled') {
-				if (r.value && typeof r.value === 'object') {
+				const val = r.value && r.value.value;
+				const fallbackDuration = (r.value && typeof r.value.durationMs === 'number')
+					? r.value.durationMs
+					: Math.max(Date.now() - startTime, 0);
+
+				if (val && typeof val === 'object') {
 					const item = {
 						channel: chName,
-						...r.value,
+						...val,
 					};
 					if (typeof item.durationMs !== 'number' || !Number.isFinite(item.durationMs) || item.durationMs < 0) {
-						item.durationMs = totalDurationMs;
+						item.durationMs = fallbackDuration;
 					}
 					return item;
 				}
@@ -302,14 +316,20 @@ class NotificationManager {
 					success: false,
 					channel: chName,
 					error: 'Channel returned empty response',
-					durationMs: totalDurationMs,
+					durationMs: fallbackDuration,
 				};
 			}
+
+			const reasonErr = r.reason && r.reason.error !== undefined ? r.reason.error : r.reason;
+			const fallbackDuration = (r.reason && typeof r.reason.durationMs === 'number')
+				? r.reason.durationMs
+				: Math.max(Date.now() - startTime, 0);
+
 			return {
 				success: false,
 				channel: chName,
-				error: (r.reason && (r.reason.message || String(r.reason))) || 'Unknown error',
-				durationMs: totalDurationMs,
+				error: (reasonErr && (reasonErr.message || String(reasonErr))) || 'Unknown error',
+				durationMs: fallbackDuration,
 			};
 		});
 
@@ -474,10 +494,19 @@ class NotificationManager {
 					},
 				});
 
+				const channelStartTime = Date.now();
 				return Promise.resolve()
 					.then(() => ch.send(alert, {
 						...options,
 						signal: options.signalByChannel?.[ch.name] || options.signal,
+					}))
+					.then((value) => ({
+						value,
+						durationMs: Date.now() - channelStartTime,
+					}))
+					.catch((error) => Promise.reject({
+						error,
+						durationMs: Date.now() - channelStartTime,
 					}))
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
@@ -494,13 +523,18 @@ class NotificationManager {
 		const formattedResults = results.map((r, idx) => {
 			const chName = enabledChannels[idx] ? enabledChannels[idx].name : 'unknown';
 			if (r.status === 'fulfilled') {
-				if (r.value && typeof r.value === 'object') {
+				const val = r.value && r.value.value;
+				const fallbackDuration = (r.value && typeof r.value.durationMs === 'number')
+					? r.value.durationMs
+					: Math.max(Date.now() - startTime, 0);
+
+				if (val && typeof val === 'object') {
 					const item = {
 						channel: chName,
-						...r.value,
+						...val,
 					};
 					if (typeof item.durationMs !== 'number' || !Number.isFinite(item.durationMs) || item.durationMs < 0) {
-						item.durationMs = totalDurationMs;
+						item.durationMs = fallbackDuration;
 					}
 					return item;
 				}
@@ -508,14 +542,20 @@ class NotificationManager {
 					success: false,
 					channel: chName,
 					error: 'Channel returned empty response',
-					durationMs: totalDurationMs,
+					durationMs: fallbackDuration,
 				};
 			}
+
+			const reasonErr = r.reason && r.reason.error !== undefined ? r.reason.error : r.reason;
+			const fallbackDuration = (r.reason && typeof r.reason.durationMs === 'number')
+				? r.reason.durationMs
+				: Math.max(Date.now() - startTime, 0);
+
 			return {
 				success: false,
 				channel: chName,
-				error: (r.reason && (r.reason.message || String(r.reason))) || 'Unknown error',
-				durationMs: totalDurationMs,
+				error: (reasonErr && (reasonErr.message || String(reasonErr))) || 'Unknown error',
+				durationMs: fallbackDuration,
 			};
 		});
 
