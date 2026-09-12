@@ -3997,7 +3997,7 @@
           },
           "sessionContext": {
             "type": ["string", "null"],
-            "enum": ["crypto_24_7", "regular", "pre_close", "after_hours", "market_holiday", "non_regular_market", null]
+            "enum": ["crypto_24_7", "regular", "pre_open", "pre_close", "after_hours", "market_holiday", "non_regular_market", null]
           },
           "measurementCohort": {
             "type": ["string", "null"],

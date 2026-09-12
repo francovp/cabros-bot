@@ -217,6 +217,7 @@ function isUsMarketHoliday(dateKey) {
 	const [year, month, day] = dateKey.split('-').map(Number);
 	const fixed = new Set([
 		getObservedFixedHoliday(year, 1, 1),
+		getObservedFixedHoliday(year + 1, 1, 1),
 		getObservedFixedHoliday(year, 6, 19),
 		getObservedFixedHoliday(year, 7, 4),
 		getObservedFixedHoliday(year, 12, 25),
@@ -236,8 +237,12 @@ function isUsMarketHalfDay(dateKey) {
 	const [year, month, day] = dateKey.split('-').map(Number);
 	const thanksgiving = getNthWeekday(year, 11, 4, 4);
 	const julyFourth = localDateKey({ year, month: 7, day: 4 });
+	const julyFourthWeekday = getWeekday(julyFourth);
+	const isJulyEarlyClose = (julyFourthWeekday === 6 || julyFourthWeekday === 0)
+		? dateKey === localDateKey({ year, month: 7, day: 2 })
+		: (julyFourthWeekday >= 2 && julyFourthWeekday <= 5 && dateKey === localDateKey({ year, month: 7, day: 3 }));
 	return dateKey === addLocalDays(thanksgiving, 1)
-		|| (dateKey === localDateKey({ year, month: 7, day: 3 }) && getWeekday(julyFourth) >= 1 && getWeekday(julyFourth) <= 5)
+		|| isJulyEarlyClose
 		|| (dateKey === localDateKey({ year, month: 12, day: 24 }) && getWeekday(localDateKey({ year, month: 12, day: 25 })) >= 1 && getWeekday(localDateKey({ year, month: 12, day: 25 })) <= 5);
 }
 
@@ -289,9 +294,8 @@ function getSessionContext({ exchange, assetClass, receivedAt = new Date() } = {
 		return { ...base, sessionContext: 'crypto_24_7' };
 	}
 
-	const normalizedExchange = String(exchange || '').trim().toUpperCase()
-		.replace(/_DLY$/, '')
-		.replace(/^NYSE_ARCA$/, 'NYSE ARCA');
+	const normalizedExchange = equityMarketDataService.normalizeExchange(exchange)
+		|| String(exchange || '').trim().toUpperCase().replace(/_DLY$/, '');
 	if (!REGULAR_EQUITY_EXCHANGES.has(normalizedExchange)) {
 		return { ...base, sessionContext: 'non_regular_market' };
 	}
@@ -319,7 +323,7 @@ function getSessionContext({ exchange, assetClass, receivedAt = new Date() } = {
 		return {
 			...base,
 			...calendarFields,
-			sessionContext: 'pre_close',
+			sessionContext: 'pre_open',
 			tradableAt: schedule.openAt.toISOString(),
 			measurementCohort: 'raw_pre_open',
 		};
@@ -1318,9 +1322,15 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 				const updateFields = { outcomes };
 				if (data.price !== undefined && data.price !== null) {
 					updateFields.price = data.price;
-					updateFields.observedPrice = data.price;
-					if (data.sessionContext === 'crypto_24_7' || data.sessionContext === 'regular') {
+					const tradableAtMs = getTimestampMillis(data.tradableAt);
+					const isRegularOrCrypto = data.sessionContext === 'crypto_24_7' || data.sessionContext === 'regular';
+					if (isRegularOrCrypto) {
+						updateFields.observedPrice = data.price;
 						updateFields.tradablePrice = data.price;
+					} else if (tradableAtMs !== null && Date.now() >= tradableAtMs) {
+						updateFields.tradablePrice = data.price;
+					} else {
+						updateFields.observedPrice = data.price;
 					}
 				}
 				if (data.entryPriceSource) {
