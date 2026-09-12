@@ -883,7 +883,7 @@ describe('AlertStorageService', () => {
 			expect(result.alerts[0]).not.toHaveProperty('enrichmentSummary');
 		});
 
-		it('hides expired alerts and ages legacy records from receivedAt', async () => {
+		it('hides expired alerts, ages legacy records, and preserves archived records', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
 			mockGet.mockResolvedValueOnce({
@@ -903,12 +903,17 @@ describe('AlertStorageService', () => {
 					buildQueryDoc('legacy-active-alert', {
 						receivedAt: buildTimestamp('2026-08-12T00:00:00.000Z'),
 					}),
+					buildQueryDoc('archived-alert', {
+						receivedAt: buildTimestamp('2025-01-01T00:00:00.000Z'),
+						expiresAt: buildTimestamp('2025-02-01T00:00:00.000Z'),
+						retentionPolicy: 'archive',
+					}),
 				],
 			});
 
 			const result = await AlertStorageService.listAlerts({ limit: 10 });
 
-			expect(result.alerts.map(alert => alert.id)).toEqual(['active-alert', 'legacy-active-alert']);
+			expect(result.alerts.map(alert => alert.id)).toEqual(['active-alert', 'legacy-active-alert', 'archived-alert']);
 		});
 
 		it('uses bounded scan batches for small retention-filtered pages', async () => {
@@ -2759,4 +2764,3 @@ describe('AlertStorageService', () => {
 		});
 	});
 });
-
