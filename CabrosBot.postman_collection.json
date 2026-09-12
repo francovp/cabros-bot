@@ -276,6 +276,44 @@
       ]
     },
     {
+      "name": "Get Status - API key rotation",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing dependencies.webhookAuth.apiKeyRotation. When ENABLE_API_KEY_ROTATION=true, the response reports the active slots (current, previous, next) and the optional previousExpiresAt timestamp; the request itself can be authenticated with the active or previous key. The X-Cabros-Key-Slot response header identifies which slot accepted the request."
+      },
+      "response": [
+        {
+          "name": "200 OK - rotation enabled with previous overlap",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"webhookAuth\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"slots\":[\"current\",\"previous\"],\"previousExpiresAt\":\"2026-12-31T23:59:59.000Z\"}}}"
+        },
+        {
+          "name": "200 OK - rotation disabled (default)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"webhookAuth\":{\"enabled\":false,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"slots\":[\"current\"],\"previousExpiresAt\":null}}}"
+        }
+      ]
+    },
+    {
       "name": "Get Capabilities",
       "request": {
         "method": "GET",
