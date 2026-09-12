@@ -401,6 +401,21 @@ describe('RemoteConfigService', () => {
 		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS');
 	});
 
+	it('keeps test-alert security controls and enablement gate out of Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.ENABLE_TEST_ALERT = 'true';
+		process.env.TEST_ALERT_DAILY_LIMIT = '30';
+		mockTemplate({ ENABLE_TEST_ALERT: false, TEST_ALERT_DAILY_LIMIT: 50 });
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('ENABLE_TEST_ALERT');
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('TEST_ALERT_DAILY_LIMIT');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('ENABLE_TEST_ALERT');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('TEST_ALERT_DAILY_LIMIT');
+	});
+
 	it('keeps the request-time signal outcome entry-price chain eligible for Remote Config', () => {
 		process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'mcp,binance,gemini';
 

@@ -370,4 +370,73 @@ describe('Admin Test Alert Controller Unit Tests', () => {
 			}),
 		);
 	});
+
+	it('rejects non-boolean dryRun values with 400 Bad Request', async () => {
+		const handler = postTestAlert();
+
+		for (const invalidValue of [1, 'TRUE', 'yes', {}, []]) {
+			_resetForTesting();
+			const invalidRes = {
+				headers: {},
+				set: jest.fn(function (k, v) { this.headers[k] = v; return this; }),
+				status: jest.fn(function (c) { this.statusCode = c; return this; }),
+				json: jest.fn(function (d) { this.data = d; return this; }),
+			};
+			req.body = { dryRun: invalidValue };
+			await handler(req, invalidRes);
+
+			expect(invalidRes.status).toHaveBeenCalledWith(400);
+			expect(invalidRes.data).toEqual({
+				error: 'dryRun must be a boolean',
+				code: 'INVALID_REQUEST',
+			});
+		}
+	});
+
+	it('rejects non-boolean includeEnrichment values with 400 Bad Request', async () => {
+		const handler = postTestAlert();
+		req.body = { includeEnrichment: 'yes' };
+		await handler(req, res);
+
+		expect(res.status).toHaveBeenCalledWith(400);
+		expect(res.data).toEqual({
+			error: 'includeEnrichment must be a boolean',
+			code: 'INVALID_REQUEST',
+		});
+	});
+
+	it('rejects invalid dryRun query parameters with 400 Bad Request', async () => {
+		const handler = postTestAlert();
+		req.body = {};
+		req.query = { dryRun: 'invalid' };
+		await handler(req, res);
+
+		expect(res.status).toHaveBeenCalledWith(400);
+		expect(res.data).toEqual({
+			error: 'dryRun query parameter must be a boolean',
+			code: 'INVALID_REQUEST',
+		});
+	});
+
+	it('marks live probe delivery as ineligible for redrive to prevent duplicate stale deliveries', async () => {
+		req.body = {
+			channels: ['telegram'],
+		};
+		const handler = postTestAlert();
+		await handler(req, res);
+
+		expect(res.status).toHaveBeenCalledWith(200);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				isProbe: true,
+				redriveEligible: false,
+				source: 'test-alert',
+			}),
+			['telegram'],
+			expect.objectContaining({
+				isProbe: true,
+				redriveEligible: false,
+			}),
+		);
+	});
 });

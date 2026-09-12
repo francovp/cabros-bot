@@ -8,7 +8,6 @@ const MarkdownV2Formatter = require('../../services/notification/formatters/mark
 const WhatsAppMarkdownFormatter = require('../../services/notification/formatters/whatsappMarkdownFormatter');
 const { parseTradingViewSignal } = require('../../services/tradingview/parseTradingViewSignal');
 const sentryService = require('../../services/monitoring/SentryService');
-const { getRuntimeConfig } = require('../../services/remoteConfig/RemoteConfigService');
 const {
 	parseNotificationRouting,
 	validateNotificationRouting,
@@ -28,12 +27,7 @@ let lastRunAt = null;
 let lastRunStatus = null;
 
 function getDailyLimit() {
-	const runtimeConfig = getRuntimeConfig();
-	const val = Number(
-		runtimeConfig.TEST_ALERT_DAILY_LIMIT
-		?? process.env.TEST_ALERT_DAILY_LIMIT
-		?? 30,
-	);
+	const val = Number(process.env.TEST_ALERT_DAILY_LIMIT ?? 30);
 	return Number.isSafeInteger(val) && val >= 1 && val <= 1000 ? val : 30;
 }
 
@@ -52,10 +46,6 @@ function checkAndIncrementDailyLimit() {
 }
 
 function isTestAlertEnabled() {
-	const runtimeConfig = getRuntimeConfig();
-	if (runtimeConfig.ENABLE_TEST_ALERT !== undefined) {
-		return runtimeConfig.ENABLE_TEST_ALERT === true || runtimeConfig.ENABLE_TEST_ALERT === 'true';
-	}
 	if (process.env.ENABLE_TEST_ALERT !== undefined) {
 		return process.env.ENABLE_TEST_ALERT === 'true' || process.env.ENABLE_TEST_ALERT === true;
 	}
@@ -137,12 +127,36 @@ function postTestAlert(botOrGetter) {
 		adminRateLimits.set(adminKey, now);
 
 		const body = req.body && typeof req.body === 'object' ? req.body : {};
-		const dryRun = Boolean(
-			body.dryRun === true ||
-			body.dryRun === 'true' ||
-			(req.query && (req.query.dryRun === true || req.query.dryRun === 'true')),
-		);
-		const includeEnrichment = Boolean(body.includeEnrichment === true || body.includeEnrichment === 'true');
+
+		if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') {
+			return res.status(400).json({
+				error: 'dryRun must be a boolean',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		if (body.includeEnrichment !== undefined && typeof body.includeEnrichment !== 'boolean') {
+			return res.status(400).json({
+				error: 'includeEnrichment must be a boolean',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		let dryRun = body.dryRun === true;
+		if (body.dryRun === undefined && req.query && req.query.dryRun !== undefined) {
+			if (req.query.dryRun === 'true' || req.query.dryRun === true) {
+				dryRun = true;
+			} else if (req.query.dryRun === 'false' || req.query.dryRun === false) {
+				dryRun = false;
+			} else {
+				return res.status(400).json({
+					error: 'dryRun query parameter must be a boolean',
+					code: 'INVALID_REQUEST',
+				});
+			}
+		}
+
+		const includeEnrichment = body.includeEnrichment === true;
 		const defaultMarkerText = `[TEST-ALERT] cabros-bot smoke probe ${new Date().toISOString()}`;
 		const rawText = body.text === undefined ? defaultMarkerText : body.text;
 
@@ -261,6 +275,8 @@ function postTestAlert(botOrGetter) {
 			text: alert.text,
 			enriched: alert.enriched,
 			source: 'test-alert',
+			isProbe: true,
+			redriveEligible: false,
 		};
 		const effectiveRouting = {
 			...routing,
@@ -273,6 +289,7 @@ function postTestAlert(botOrGetter) {
 				notificationManager,
 				deliveryPayload,
 				effectiveRouting,
+				{ isProbe: true, redriveEligible: false },
 			);
 		} catch (sendErr) {
 			console.error('[AdminTestAlert] Delivery error:', sendErr);
