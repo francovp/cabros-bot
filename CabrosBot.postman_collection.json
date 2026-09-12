@@ -207,7 +207,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0,\"entryPriceSources\":{\"configured\":false,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"twelve-data\"]}},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false,\"alertScheduler\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0,\"entryPriceSources\":{\"configured\":false,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"twelve-data\"]}},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"alertScheduler\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":10,\"scheduleCount\":0,\"activeCount\":0,\"lastRunAt\":null,\"lastRunDurationMs\":null,\"lastRunExecutedCount\":0,\"lastRunErrorCount\":0,\"lastError\":null,\"schedules\":[]}}}"
         }
       ]
     },
@@ -296,7 +296,7 @@
             "capabilities"
           ]
         },
-      "description": "Alias for /api/status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters; dependencies.signalOutcomeWorker.entryPriceSources reports the active non-secret crypto/equity provider chains. Remote Config metadata is safe for operational inspection and does not include configured parameter values or secrets."
+        "description": "Alias for /api/status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters; dependencies.signalOutcomeWorker.entryPriceSources reports the active non-secret crypto/equity provider chains. Remote Config metadata is safe for operational inspection and does not include configured parameter values or secrets."
       },
       "response": [
         {
@@ -437,7 +437,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"BTCUSDT(240) pas\u00f3 a se\u00f1al de VENTA\"\n}"
+              "raw": "{\n  \"text\": \"BTCUSDT(240) pasó a señal de VENTA\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert?useTradingViewData=true",
@@ -476,7 +476,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\"\n}"
+              "raw": "{\n  \"text\": \"BTCUSDT(240) pasó a señal de COMPRA\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert?useTradingViewData=true&dryRun=true",
@@ -505,19 +505,19 @@
               "name": "Dry run - full TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.8,\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.8,\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
             },
             {
               "name": "Dry run - partial TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"partial\",\"sentiment\":\"BULLISH\",\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"partial\",\"sentiment\":\"BULLISH\",\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
             },
             {
               "name": "Dry run - failed TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"failed\",\"sentiment\":\"NEUTRAL\",\"insights\":[\"RSI cercano a sobreventa\"],\"technical_levels\":{\"supports\":[\"79,500\"],\"resistances\":[\"82,300\"]},\"levelsSource\":\"gemini-grounding\"}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"failed\",\"sentiment\":\"NEUTRAL\",\"insights\":[\"RSI cercano a sobreventa\"],\"technical_levels\":{\"supports\":[\"79,500\"],\"resistances\":[\"82,300\"]},\"levelsSource\":\"gemini-grounding\"}}}"
             },
             {
               "name": "Dry run - TradingView not applicable",
@@ -689,7 +689,7 @@
                     "value": "application/json"
                   }
                 ],
-                "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true,\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BTCUSDT\", \"score\": 83, \"reason\": \"+3.5% \u00b7 RSI 62.0 \u00b7 Vol 1.8x \u00b7 HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
+                "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true,\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BTCUSDT\", \"score\": 83, \"reason\": \"+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
               }
             ]
           }
@@ -1024,7 +1024,7 @@
               "name": "Success - with multi-agent consensus",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"alertText\": \"*\ud83d\udfe2 SOBREVENTA*\\nBTCUSDT $77,103.55 (+1.2%) | RSI 28.5...\",\n  \"analysis\": {\n    \"decision\": {\n      \"action\": \"BUY\",\n      \"confidence\": \"HIGH\",\n      \"dataSufficient\": true,\n      \"multiAgent\": {\n        \"decision\": \"BUY\",\n        \"confidence\": \"High\",\n        \"net_score\": 2,\n        \"agents\": {\n          \"technical_analyst\": {\n            \"stance\": \"Bullish\"\n          }\n        }\n      }\n    }\n  },\n  \"multiAgent\": {\n    \"decision\": \"BUY\",\n    \"confidence\": \"High\",\n    \"net_score\": 2,\n    \"agents\": {\n      \"technical_analyst\": {\n        \"stance\": \"Bullish\"\n      }\n    }\n  },\n  \"analysisStatus\": \"complete\"\n}"
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"alertText\": \"*🟢 SOBREVENTA*\\nBTCUSDT $77,103.55 (+1.2%) | RSI 28.5...\",\n  \"analysis\": {\n    \"decision\": {\n      \"action\": \"BUY\",\n      \"confidence\": \"HIGH\",\n      \"dataSufficient\": true,\n      \"multiAgent\": {\n        \"decision\": \"BUY\",\n        \"confidence\": \"High\",\n        \"net_score\": 2,\n        \"agents\": {\n          \"technical_analyst\": {\n            \"stance\": \"Bullish\"\n          }\n        }\n      }\n    }\n  },\n  \"multiAgent\": {\n    \"decision\": \"BUY\",\n    \"confidence\": \"High\",\n    \"net_score\": 2,\n    \"agents\": {\n      \"technical_analyst\": {\n        \"stance\": \"Bullish\"\n      }\n    }\n  },\n  \"analysisStatus\": \"complete\"\n}"
             },
             {
               "name": "400 Invalid symbol",
@@ -1499,7 +1499,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA \u2014 repeated signal\"\n}"
+                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — repeated signal\"\n}"
                 },
                 "url": {
                   "raw": "{{baseUrl}}/api/webhook/alert",
@@ -1824,7 +1824,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"\ud83d\udce1 *SCANNER DE MERCADO \u2014 ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"totalDurationMs\": 1450\n}"
+              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"📡 *SCANNER DE MERCADO — ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"totalDurationMs\": 1450\n}"
             }
           ]
         },
@@ -3889,7 +3889,7 @@
                 "replay"
               ]
             },
-            "description": "Replays a stored expanded-analysis alert (delivered multi-symbol Spanish report from POST /api/webhook/expanded-analysis-alert). If the original report exceeded the 20,000-character cap, the replay will only redeliver the truncated text \u2014 verify truncated/originalLength before replaying large reports."
+            "description": "Replays a stored expanded-analysis alert (delivered multi-symbol Spanish report from POST /api/webhook/expanded-analysis-alert). If the original report exceeded the 20,000-character cap, the replay will only redeliver the truncated text — verify truncated/originalLength before replaying large reports."
           },
           "response": [
             {
@@ -5103,7 +5103,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"type\": \"market-scanner\",\n  \"status\": \"completed\",\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BINANCE:BTCUSDT\", \"score\": 80, \"reason\": \"+3.5% \u00b7 RSI 62.0 \u00b7 Vol 1.8x \u00b7 HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"type\": \"market-scanner\",\n  \"status\": \"completed\",\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BINANCE:BTCUSDT\", \"score\": 80, \"reason\": \"+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
             }
           ]
         },

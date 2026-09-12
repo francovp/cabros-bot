@@ -5,6 +5,7 @@ const {
 	scannerPresetSchedulerService,
 } = require('../services/scannerPresets');
 const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
+const { alertSchedulerService } = require('../services/scheduler');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
@@ -24,6 +25,7 @@ const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStorageService');
 const {
 	isNewsMonitorPaused,
 	getNewsMonitorPauseState,
@@ -349,8 +351,10 @@ function getStatus() {
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
+			firestoreNewsAnalysis: newsAnalysisStorageService.isEnabled(),
 			scannerPresetScheduler: scannerPresetSchedulerService.isEnabled(),
 			newsMonitorScheduler: newsMonitorSchedulerService.isEnabled(),
+			alertScheduler: alertSchedulerService.isEnabled(),
 			sentryMonitoring: sentryEnabled,
 			sentryProfiling: sentryService.isProfilingEnabled(),
 			langfusePrompts: langfusePromptsEnabled,
@@ -425,6 +429,7 @@ function getStatus() {
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
 			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
+			alertScheduler: alertSchedulerService.getStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,

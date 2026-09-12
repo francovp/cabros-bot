@@ -71,6 +71,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	SCANNER_PRESET_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	NEWS_MONITOR_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 10000, max: 3600000 },
 	NEWS_MONITOR_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
+	ALERT_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	ALERT_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 10, integer: true, min: 1, max: 100 },
 	ENABLE_GEMINI_GROUNDING: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_MCP_ENRICHMENT: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION: { type: 'boolean', defaultValue: false },
@@ -86,6 +88,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_SYMBOL_ANALYSIS_STORAGE: { type: 'boolean', defaultValue: false },
 	SYMBOL_ANALYSIS_RETENTION_DAYS: { type: 'number', defaultValue: 7, integer: true, min: 1, max: 365 },
 	ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT: { type: 'boolean', defaultValue: false },
+	ENABLE_FIRESTORE_NEWS_ANALYSIS: { type: 'boolean', defaultValue: false },
+	NEWS_ANALYSIS_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
 	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
 	// notification destinations — must remain deployment-controlled.
 	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },

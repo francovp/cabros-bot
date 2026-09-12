@@ -53,6 +53,23 @@ describe('Postman collection contract', () => {
 		});
 	});
 
+	it('documents alertScheduler feature flag and dependency in the Get Status response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+
+		expect(status).toBeDefined();
+		const responseBody = JSON.parse(status.response[0].body);
+		expect(responseBody.featureFlags.alertScheduler).toBe(false);
+		expect(responseBody.dependencies.alertScheduler).toEqual(expect.objectContaining({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+			role: 'web',
+			running: false,
+		}));
+	});
+
 	it('documents entry price source chains in status and capabilities examples', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');
