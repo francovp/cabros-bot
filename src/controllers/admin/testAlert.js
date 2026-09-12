@@ -1,6 +1,5 @@
 'use strict';
 
-const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { validateAlert } = require('../../lib/validation');
 const { TokenUsageTracker } = require('../../lib/tokenUsage');
@@ -64,13 +63,10 @@ function isTestAlertEnabled() {
 
 function getAdminKey(req) {
 	if (req.user && (req.user.uid || req.user.email)) {
-		return req.user.uid || req.user.email;
+		return `user:${req.user.uid || req.user.email}`;
 	}
-	const apiKey = req.headers['x-api-key'] || (req.query && req.query['api-key']);
-	if (apiKey && typeof apiKey === 'string') {
-		return crypto.createHash('sha256').update(apiKey).digest('hex').slice(0, 16);
-	}
-	return req.ip || 'unknown';
+	const ip = req.ip || req.socket?.remoteAddress || '127.0.0.1';
+	return `ip:${ip}`;
 }
 
 function getRateLimitState() {
@@ -221,7 +217,9 @@ function postTestAlert(botOrGetter) {
 		const telegramText = alert.enriched && typeof alert.enriched === 'object'
 			? telegramFormatter.formatEnriched(alert.enriched)
 			: telegramFormatter.format(alert.text);
-		const whatsappText = typeof alert.text === 'string' ? alert.text.replace(/<[^>]*>/g, '') : '';
+		const whatsappText = alert.enriched && typeof alert.enriched === 'object'
+			? (alert.enriched.analysis || alert.text)
+			: (typeof alert.text === 'string' ? alert.text : '');
 		const discordText = alert.enriched && typeof alert.enriched === 'object'
 			? (alert.enriched.analysis || alert.text)
 			: alert.text;
