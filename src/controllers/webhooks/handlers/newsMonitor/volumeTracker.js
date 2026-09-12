@@ -74,14 +74,17 @@ class NewsAlertVolumeTracker {
 		this.customMaxAlertsPerWindow = options.maxAlertsPerWindow;
 		this.customWindowMs = options.windowMs;
 
-		this.alertsDelivered = 0;
-		this.alertsThrottled = 0;
-		this.windowStartedAt = Date.now();
+		this.deliveries = [];
+		this.throttled = [];
+		this.reservations = [];
 	}
 
 	getMaxAlertsPerBatch() {
 		if (typeof this.customMaxAlertsPerBatch === 'number') {
 			return this.customMaxAlertsPerBatch;
+		}
+		if (typeof this.maxAlertsPerBatch === 'number') {
+			return this.maxAlertsPerBatch;
 		}
 		const runtimeConfig = getRemoteConfig();
 		if (typeof runtimeConfig.NEWS_MAX_ALERTS_PER_BATCH === 'number') {
@@ -94,6 +97,9 @@ class NewsAlertVolumeTracker {
 		if (typeof this.customMaxAlertsPerWindow === 'number') {
 			return this.customMaxAlertsPerWindow;
 		}
+		if (typeof this.maxAlertsPerWindow === 'number') {
+			return this.maxAlertsPerWindow;
+		}
 		const runtimeConfig = getRemoteConfig();
 		if (typeof runtimeConfig.NEWS_MAX_ALERTS_PER_WINDOW === 'number') {
 			return runtimeConfig.NEWS_MAX_ALERTS_PER_WINDOW;
@@ -105,6 +111,9 @@ class NewsAlertVolumeTracker {
 		if (typeof this.customWindowMs === 'number') {
 			return this.customWindowMs;
 		}
+		if (typeof this.windowMs === 'number') {
+			return this.windowMs;
+		}
 		const runtimeConfig = getRemoteConfig();
 		if (typeof runtimeConfig.NEWS_MAX_ALERTS_PER_WINDOW_MS === 'number') {
 			return runtimeConfig.NEWS_MAX_ALERTS_PER_WINDOW_MS;
@@ -112,31 +121,30 @@ class NewsAlertVolumeTracker {
 		return parseNewsMaxAlertsPerWindowMs(process.env.NEWS_MAX_ALERTS_PER_WINDOW_MS, 300000);
 	}
 
-	checkAndResetWindow(now = Date.now()) {
+	prune(now = Date.now()) {
 		const windowMs = this.getWindowMs();
-		if (now >= this.windowStartedAt + windowMs) {
-			this.alertsDelivered = 0;
-			this.alertsThrottled = 0;
-			this.windowStartedAt = now;
+		const cutoff = now - windowMs;
+		while (this.deliveries.length > 0 && this.deliveries[0] <= cutoff) {
+			this.deliveries.shift();
+		}
+		while (this.throttled.length > 0 && this.throttled[0] <= cutoff) {
+			this.throttled.shift();
+		}
+		while (this.reservations.length > 0 && this.reservations[0].expiresAt <= now) {
+			this.reservations.shift();
 		}
 	}
 
-	recordDelivered(count = 1, now = Date.now()) {
-		if (count <= 0) return;
-		this.checkAndResetWindow(now);
-		this.alertsDelivered += count;
-	}
-
-	recordThrottled(count = 1, now = Date.now()) {
-		if (count <= 0) return;
-		this.checkAndResetWindow(now);
-		this.alertsThrottled += count;
+	getReservedCount(now = Date.now()) {
+		this.prune(now);
+		return this.reservations.reduce((sum, r) => sum + r.count, 0);
 	}
 
 	getRemainingWindowQuota(now = Date.now()) {
-		this.checkAndResetWindow(now);
+		this.prune(now);
 		const maxPerWindow = this.getMaxAlertsPerWindow();
-		return Math.max(0, maxPerWindow - this.alertsDelivered);
+		const activeUsage = this.deliveries.length + this.getReservedCount(now);
+		return Math.max(0, maxPerWindow - activeUsage);
 	}
 
 	getEffectiveBatchCapacity(now = Date.now()) {
@@ -145,19 +153,79 @@ class NewsAlertVolumeTracker {
 		return Math.min(maxPerBatch, remainingInWindow);
 	}
 
+	reserveCapacity(count, now = Date.now(), ttlMs = 60000) {
+		if (count <= 0) return null;
+		this.prune(now);
+		const remaining = this.getRemainingWindowQuota(now);
+		const toReserve = Math.min(count, remaining);
+		if (toReserve <= 0) return null;
+		const reservation = {
+			id: Math.random().toString(36).substring(2) + Date.now().toString(36),
+			count: toReserve,
+			expiresAt: now + ttlMs,
+		};
+		this.reservations.push(reservation);
+		return reservation;
+	}
+
+	commitReservation(reservation, deliveredCount = null, now = Date.now()) {
+		if (!reservation) return;
+		this.prune(now);
+		const idx = this.reservations.findIndex((r) => r.id === reservation.id);
+		if (idx !== -1) {
+			this.reservations.splice(idx, 1);
+		}
+		const actualDelivered = typeof deliveredCount === 'number' ? deliveredCount : reservation.count;
+		for (let i = 0; i < actualDelivered; i++) {
+			this.deliveries.push(now);
+		}
+	}
+
+	releaseReservation(reservation, now = Date.now()) {
+		if (!reservation) return;
+		this.prune(now);
+		const idx = this.reservations.findIndex((r) => r.id === reservation.id);
+		if (idx !== -1) {
+			this.reservations.splice(idx, 1);
+		}
+	}
+
+	recordDelivered(count = 1, now = Date.now()) {
+		if (count <= 0) return;
+		this.prune(now);
+		for (let i = 0; i < count; i++) {
+			this.deliveries.push(now);
+		}
+	}
+
+	recordThrottled(count = 1, now = Date.now()) {
+		if (count <= 0) return;
+		this.prune(now);
+		for (let i = 0; i < count; i++) {
+			this.throttled.push(now);
+		}
+	}
+
 	getWindowUsage(now = Date.now()) {
-		this.checkAndResetWindow(now);
+		this.prune(now);
+		const windowMs = this.getWindowMs();
+		let resetsAtMs;
+		if (this.deliveries.length > 0) {
+			resetsAtMs = this.deliveries[0] + windowMs;
+		} else {
+			resetsAtMs = now + windowMs;
+		}
 		return {
-			alertsDelivered: this.alertsDelivered,
-			alertsThrottled: this.alertsThrottled,
-			windowResetsAt: new Date(this.windowStartedAt + this.getWindowMs()).toISOString(),
+			alertsDelivered: this.deliveries.length,
+			alertsThrottled: this.throttled.length,
+			windowResetsAt: new Date(resetsAtMs).toISOString(),
 		};
 	}
 
 	resetForTesting(now = Date.now()) {
-		this.alertsDelivered = 0;
-		this.alertsThrottled = 0;
-		this.windowStartedAt = now;
+		this.deliveries = [];
+		this.throttled = [];
+		this.reservations = [];
 	}
 }
 

@@ -294,5 +294,164 @@ describe('News Monitor Volume Throttling & Adaptive Caps', () => {
 			expect(freshResult.status).toBe(AnalysisStatus.ANALYZED);
 			expect(freshResult.deliveryResults).toEqual([{ channel: 'telegram', success: true }]);
 		});
+
+		it('applies volume cap to cached redeliveries when retrying unattempted channels', async () => {
+			process.env.NEWS_MAX_ALERTS_PER_BATCH = '1';
+
+			const analyzer = new NewsAnalyzer();
+
+			analyzer.analyzeSymbol = jest.fn(async (symbol) => {
+				if (symbol === 'CACHED_RETRY') {
+					return {
+						symbol,
+						status: AnalysisStatus.CACHED,
+						cached: true,
+						alert: { symbol, confidence: 0.7 },
+						deliveryResults: [{ channel: 'telegram', success: true }],
+						_pendingDelivery: {
+							type: 'cached_retry',
+							symbol,
+							retryChannels: ['discord'],
+							activeCachedDeliveryResults: [{ channel: 'telegram', success: true }],
+						},
+					};
+				}
+				return {
+					symbol,
+					status: AnalysisStatus.ANALYZED,
+					alert: { symbol, confidence: 0.9 },
+					deliveryResults: [],
+					_pendingDelivery: { type: 'new', notificationMgr: {}, alert: { symbol, confidence: 0.9 } },
+				};
+			});
+
+			analyzer.executePendingDelivery = jest.fn(async (candidate) => {
+				candidate.deliveryResults = [{ channel: 'telegram', success: true }, { channel: 'discord', success: true }];
+			});
+
+			const results = await analyzer.analyzeSymbols(
+				['CACHED_RETRY', 'FRESH_HIGH_CONF'],
+				'req-cached-retry-test',
+				null,
+				{},
+				{},
+			);
+
+			const freshResult = results.find((r) => r.symbol === 'FRESH_HIGH_CONF');
+			const cachedResult = results.find((r) => r.symbol === 'CACHED_RETRY');
+
+			// Fresh symbol has higher confidence (0.9 vs 0.7) and gets the 1 slot
+			expect(freshResult.status).toBe(AnalysisStatus.ANALYZED);
+
+			// Cached retry was throttled by volume cap: stays CACHED with original results
+			expect(cachedResult.status).toBe(AnalysisStatus.CACHED);
+			expect(cachedResult.deliveryResults).toEqual([{ channel: 'telegram', success: true }]);
+			expect(cachedResult._pendingDelivery).toBeUndefined();
+		});
+	});
+
+	describe('deadline and AbortSignal propagation', () => {
+		it('aborts pending deliveries when signal is aborted', async () => {
+			process.env.NEWS_MAX_ALERTS_PER_BATCH = '5';
+			const analyzer = new NewsAnalyzer();
+
+			const controller = new AbortController();
+			controller.abort(); // already aborted
+
+			let deliveryAttempted = false;
+			analyzer.executePendingDelivery = jest.fn(async () => {
+				deliveryAttempted = true;
+			});
+
+			const results = [
+				{
+					symbol: 'BTCUSDT',
+					status: AnalysisStatus.ANALYZED,
+					alert: { symbol: 'BTCUSDT', confidence: 0.9 },
+					deliveryResults: [],
+					_pendingDelivery: { type: 'new', alert: { symbol: 'BTCUSDT', confidence: 0.9 } },
+				},
+			];
+
+			await analyzer.applyVolumeThrottling(results, 'req-abort', {}, { signal: controller.signal });
+			expect(deliveryAttempted).toBe(false);
+		});
+
+		it('aborts pending deliveries when deadline is exceeded', async () => {
+			process.env.NEWS_MAX_ALERTS_PER_BATCH = '5';
+			const analyzer = new NewsAnalyzer();
+
+			let deliveryAttempted = false;
+			analyzer.executePendingDelivery = jest.fn(async () => {
+				deliveryAttempted = true;
+			});
+
+			const results = [
+				{
+					symbol: 'BTCUSDT',
+					status: AnalysisStatus.ANALYZED,
+					alert: { symbol: 'BTCUSDT', confidence: 0.9 },
+					deliveryResults: [],
+					_pendingDelivery: { type: 'new', alert: { symbol: 'BTCUSDT', confidence: 0.9 } },
+				},
+			];
+
+			await analyzer.applyVolumeThrottling(results, 'req-deadline', {}, { deadline: Date.now() - 1000 });
+			expect(deliveryAttempted).toBe(false);
+		});
+	});
+
+	describe('concurrent quota reservation', () => {
+		it('prevents concurrent sweeps from exceeding window capacity', async () => {
+			const tracker = getVolumeTracker();
+			tracker.resetForTesting(Date.now());
+			tracker.maxAlertsPerWindow = 2;
+			tracker.maxAlertsPerBatch = 2;
+
+			const analyzer = new NewsAnalyzer();
+			analyzer.volumeTracker = tracker;
+
+			// First batch of 2 alerts
+			const batch1 = [
+				{
+					symbol: 'SYM1',
+					status: AnalysisStatus.ANALYZED,
+					alert: { symbol: 'SYM1', confidence: 0.9 },
+					deliveryResults: [],
+					_pendingDelivery: { type: 'new', alert: { symbol: 'SYM1', confidence: 0.9 } },
+				},
+				{
+					symbol: 'SYM2',
+					status: AnalysisStatus.ANALYZED,
+					alert: { symbol: 'SYM2', confidence: 0.8 },
+					deliveryResults: [],
+					_pendingDelivery: { type: 'new', alert: { symbol: 'SYM2', confidence: 0.8 } },
+				},
+			];
+
+			// Second batch of 2 alerts
+			const batch2 = [
+				{
+					symbol: 'SYM3',
+					status: AnalysisStatus.ANALYZED,
+					alert: { symbol: 'SYM3', confidence: 0.95 },
+					deliveryResults: [],
+					_pendingDelivery: { type: 'new', alert: { symbol: 'SYM3', confidence: 0.95 } },
+				},
+			];
+
+			// Delay executePendingDelivery on batch1 so it holds reservation
+			analyzer.executePendingDelivery = jest.fn(async (candidate) => {
+				candidate.deliveryResults = [{ channel: 'telegram', success: true }];
+			});
+
+			await Promise.all([
+				analyzer.applyVolumeThrottling(batch1, 'req-1', {}, {}),
+				analyzer.applyVolumeThrottling(batch2, 'req-2', {}, {}),
+			]);
+
+			const totalDelivered = tracker.getWindowUsage().alertsDelivered;
+			expect(totalDelivered).toBeLessThanOrEqual(2);
+		});
 	});
 });

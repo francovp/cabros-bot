@@ -68,7 +68,7 @@ describe('NewsAlertVolumeTracker', () => {
 			expect(tracker.getRemainingWindowQuota()).toBe(20);
 		});
 
-		it('resets window counts and windowResetsAt when time expires', () => {
+		it('resets window counts and windowResetsAt when time expires per sliding window', () => {
 			const start = 1700000000000;
 			const tracker = new NewsAlertVolumeTracker({ windowMs: 60000 });
 			tracker.resetForTesting(start);
@@ -79,13 +79,80 @@ describe('NewsAlertVolumeTracker', () => {
 			const usageMid = tracker.getWindowUsage(start + 5000);
 			expect(usageMid.alertsDelivered).toBe(8);
 			expect(usageMid.alertsThrottled).toBe(4);
-			expect(usageMid.windowResetsAt).toBe(new Date(start + 60000).toISOString());
+			expect(usageMid.windowResetsAt).toBe(new Date(start + 1000 + 60000).toISOString());
 
-			// After window expires (start + 60001)
-			const usageExpired = tracker.getWindowUsage(start + 60001);
-			expect(usageExpired.alertsDelivered).toBe(0);
-			expect(usageExpired.alertsThrottled).toBe(0);
-			expect(usageExpired.windowResetsAt).toBe(new Date(start + 60001 + 60000).toISOString());
+			// After first delivery expires (start + 61001)
+			const usageDeliveredExpired = tracker.getWindowUsage(start + 61001);
+			expect(usageDeliveredExpired.alertsDelivered).toBe(0);
+			expect(usageDeliveredExpired.alertsThrottled).toBe(4); // throttled at start + 2000 expires at start + 62000
+
+			// After throttled alerts also expire (start + 62001)
+			const usageAllExpired = tracker.getWindowUsage(start + 62001);
+			expect(usageAllExpired.alertsDelivered).toBe(0);
+			expect(usageAllExpired.alertsThrottled).toBe(0);
+			expect(usageAllExpired.windowResetsAt).toBe(new Date(start + 62001 + 60000).toISOString());
+		});
+
+		it('enforces sliding window limits across window boundaries', () => {
+			const start = 1700000000000;
+			const tracker = new NewsAlertVolumeTracker({ maxAlertsPerWindow: 20, maxAlertsPerBatch: 20, windowMs: 60000 });
+			tracker.resetForTesting(start);
+
+			// Deliver 10 at T=10s
+			tracker.recordDelivered(10, start + 10000);
+			expect(tracker.getRemainingWindowQuota(start + 15000)).toBe(10);
+
+			// Deliver 10 at T=50s (quota is now full: 20 delivered in last 60s)
+			tracker.recordDelivered(10, start + 50000);
+			expect(tracker.getRemainingWindowQuota(start + 55000)).toBe(0);
+
+			// At T=65s (5s after fixed 60s boundary):
+			// Old 10 from T=10s are not yet expired (< 60s since 10s: expires at 70s).
+			expect(tracker.getRemainingWindowQuota(start + 65000)).toBe(0);
+
+			// At T=71s:
+			// The 10 from T=10s have expired (> 60s). Only 10 from T=50s remain in window!
+			expect(tracker.getRemainingWindowQuota(start + 71000)).toBe(10);
+			expect(tracker.getWindowUsage(start + 71000).alertsDelivered).toBe(10);
+		});
+
+		describe('capacity reservations', () => {
+			it('synchronously reserves capacity and reduces available quota', () => {
+				const tracker = new NewsAlertVolumeTracker({ maxAlertsPerWindow: 20 });
+				expect(tracker.getRemainingWindowQuota()).toBe(20);
+
+				const reservation = tracker.reserveCapacity(5);
+				expect(reservation).toBeDefined();
+				expect(reservation.count).toBe(5);
+				expect(tracker.getRemainingWindowQuota()).toBe(15);
+
+				// Committing converts reservation into actual deliveries
+				tracker.commitReservation(reservation, 3);
+				expect(tracker.getRemainingWindowQuota()).toBe(17);
+				expect(tracker.getWindowUsage().alertsDelivered).toBe(3);
+			});
+
+			it('releases capacity when delivery is cancelled or fails', () => {
+				const tracker = new NewsAlertVolumeTracker({ maxAlertsPerWindow: 20 });
+				const reservation = tracker.reserveCapacity(5);
+				expect(tracker.getRemainingWindowQuota()).toBe(15);
+
+				tracker.releaseReservation(reservation);
+				expect(tracker.getRemainingWindowQuota()).toBe(20);
+			});
+
+			it('caps reservation at remaining window quota', () => {
+				const tracker = new NewsAlertVolumeTracker({ maxAlertsPerWindow: 5 });
+				tracker.recordDelivered(3);
+				expect(tracker.getRemainingWindowQuota()).toBe(2);
+
+				const reservation = tracker.reserveCapacity(10);
+				expect(reservation.count).toBe(2);
+				expect(tracker.getRemainingWindowQuota()).toBe(0);
+
+				const secondReservation = tracker.reserveCapacity(5);
+				expect(secondReservation).toBeNull();
+			});
 		});
 	});
 
