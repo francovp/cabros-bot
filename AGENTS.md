@@ -1622,6 +1622,12 @@ No environment variable, Remote Config key, endpoint, OpenAPI, or Postman contra
 
 `index.js` installs `telegramCommandRateLimiter` before Telegraf command handlers. It applies process-local per-chat fixed-window limits to the expensive `/precio`, `/analisis`/`/analysis`, `/scanner`, and `/noticias`/`/news` commands, with bounded storage for 10,000 chat-command buckets. It defaults to 10 `/precio` calls per minute and 3 calls per hour for the other commands; `ENABLE_TELEGRAM_COMMAND_RATE_LIMITING=false` disables it, and `TELEGRAM_COMMAND_RATE_LIMITS_JSON` provides optional per-command `{max,windowMs}` overrides bounded to `max` 1-1000 and `windowMs` 1-86400000, with invalid values falling back to defaults. These are environment-only security controls and are intentionally excluded from Firebase Remote Config.
 
+## TradingView Tool-Body Fail-Fast (Issue #646)
+
+TradingView MCP wrappers classify parsed tool-body errors as `upstream_tool_error`, or `not_found` for `No data found ...`, and mark them non-retryable. The shared retry helper returns terminal failures immediately while preserving existing retries for transport and HTTP failures. Runtime status exposes the terminal category through `dependencies.tradingViewMcp.lastErrorCategory`; alert enrichment remains fail-open.
+
+Covered by `tests/unit/tradingview-mcp-service.test.js` and `tests/unit/retry-helper.test.js`. No environment variable, Remote Config key, endpoint, OpenAPI, or Postman contract changed.
+
 ## Structured Webhook/API Error Envelope (CB-? / Issue #644)
 
 `src/lib/errorEnvelope.js` introduces a shared builder that produces a standardized error response envelope for `/api/*` endpoints. Every error response now carries:
