@@ -154,6 +154,22 @@ describe('ChatPreferenceService', () => {
 			expect(pref.chatId).toBe('999');
 		});
 
+		it('returns default preferences if doc is expired based on expiresAt', async () => {
+			mockDoc.get.mockResolvedValueOnce({
+				exists: true,
+				data: () => ({
+					chatId: '123456',
+					channel: 'telegram',
+					symbolFilter: ['BTCUSDT'],
+					expiresAt: { toMillis: () => Date.now() - 1000 },
+				}),
+			});
+
+			const pref = await chatPreferenceService.getPreferences('123456', 'telegram');
+			expect(pref.symbolFilter).toEqual([]);
+			expect(pref.chatId).toBe('123456');
+		});
+
 		it('updates preferences in Firestore and refreshes cache', async () => {
 			mockDoc.get.mockResolvedValueOnce({ exists: false, data: () => null });
 

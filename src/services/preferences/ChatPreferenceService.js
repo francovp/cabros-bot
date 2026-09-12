@@ -298,6 +298,15 @@ class ChatPreferenceService {
 			}
 
 			const data = doc.data() || {};
+			const expiresAtMs = data.expiresAt && typeof data.expiresAt.toMillis === 'function'
+				? data.expiresAt.toMillis()
+				: (data.expiresAt instanceof Date ? data.expiresAt.getTime() : null);
+
+			if (expiresAtMs && expiresAtMs <= Date.now()) {
+				this._setCache(docId, defaults);
+				return defaults;
+			}
+
 			const sanitized = {
 				chatId: String(data.chatId || chatId),
 				channel: String(data.channel || channel),
