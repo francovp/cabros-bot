@@ -1588,7 +1588,7 @@ const createOverviewDashboard = () => {
 };
 
 const sendRequest = async ({
-	definition, path, query, body, headers, button, output, formatResponse, parseSuccessResponse, isCurrent, captureResponseStatus,
+	definition, path, query, body, headers, button, output, formatResponse, parseSuccessResponse, isCurrent, captureResponseStatus, captureResponseData,
 }) => {
 	const requestIsCurrent = typeof isCurrent === 'function' ? isCurrent : () => true;
 	const apiKey = getElement('api-key')?.value || '';
@@ -1654,6 +1654,7 @@ const sendRequest = async ({
 					// Non-JSON responses stay readable as text.
 				}
 			}
+			if (typeof captureResponseData === 'function') captureResponseData(data, response);
 			return { response, data, formatted, elapsed };
 		});
 		const { response, data, formatted, elapsed } = result;
@@ -3367,6 +3368,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 		submitInProgress = true;
 
 		let pollFailureStatus;
+		let responseData;
 		const headers = { 'idempotency-key': idempotencyKey };
 		try {
 			const data = await sendRequest({
@@ -3377,22 +3379,31 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 				button,
 				output,
 				captureResponseStatus: (responseStatus) => { pollFailureStatus = responseStatus; },
+				captureResponseData: (parsedData) => { responseData = parsedData; },
 				formatResponse: ({ summary, status: responseStatus, elapsed }) => (
 					`${summary}\nHTTP ${responseStatus} · ${elapsed} ms`
 				),
 			});
 
-			if (data) {
-				lastRawJson = JSON.stringify(data, null, 2);
+			const effectiveData = data || responseData;
+			if (effectiveData) {
+				lastRawJson = JSON.stringify(effectiveData, null, 2);
 				rawOutput.textContent = lastRawJson;
 				rawCopyButton.hidden = false;
 			}
 
-			if (data && data.jobId && (!pollFailureStatus || pollFailureStatus < 400)) {
+			const isAcceptanceUnknown = pollFailureStatus === 503
+				&& responseData
+				&& responseData.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN'
+				&& responseData.jobId;
+
+			if (effectiveData && effectiveData.jobId && ((!pollFailureStatus || pollFailureStatus < 400) || isAcceptanceUnknown)) {
 				if (typeof onJobCreated === 'function') {
-					await onJobCreated(data.jobId);
+					await onJobCreated(effectiveData.jobId);
 				}
-			} else if (pollFailureStatus && pollFailureStatus >= 400) {
+			}
+
+			if (!data || (pollFailureStatus && pollFailureStatus >= 400)) {
 				retryButton.hidden = false;
 			}
 		} catch (error) {

@@ -4277,5 +4277,95 @@ describe('structured analysis forms', () => {
 			expect(payload.callbackUrl).toBe('https://webhook.site/test');
 			expect(payload.callbackEvents).toEqual(['completed', 'failed', 'cancelled', 'timed_out']);
 		});
+
+		it('retry: exposes same-key retry when network error or transport failure occurs', async () => {
+			const sentKeys = [];
+			let attempts = 0;
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						attempts += 1;
+						sentKeys.push(options.headers['idempotency-key']);
+						if (attempts === 1) {
+							throw new Error('Failed to fetch: connection timeout');
+						}
+						return response({ success: true, jobId: 'recovered-job-111' }, 201);
+					}
+					if (url.startsWith('/api/jobs/recovered-job-111')) {
+						return response({ success: true, jobId: 'recovered-job-111', status: 'queued' });
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
+			expect(retryBtn.hidden).toBe(true);
+
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(attempts).toBe(1);
+			expect(retryBtn.hidden).toBe(false);
+			const firstKey = sentKeys[0];
+			expect(typeof firstKey).toBe('string');
+
+			// Clicking retry re-submits with the same idempotency key
+			await retryBtn.dispatch('click');
+			await flush();
+
+			expect(attempts).toBe(2);
+			expect(sentKeys[1]).toBe(firstKey);
+		});
+
+		it('auto-handoff: on 503 JOB_QUEUE_ACCEPTANCE_UNKNOWN, fills status form with returned jobId and begins auto-loading', async () => {
+			const requests = [];
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					requests.push(url);
+					if (url === '/api/jobs/tradingview-analysis') {
+						return response({
+							error: 'The queue acceptance state could not be determined.',
+							code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
+							jobId: 'unknown-queue-job-503',
+						}, 503);
+					}
+					if (url.startsWith('/api/jobs/unknown-queue-job-503')) {
+						return response({
+							success: true,
+							jobId: 'unknown-queue-job-503',
+							status: 'queued',
+						});
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+			expect(statusForm.elements['path-jobId'].value).toBe('');
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(statusForm.elements['path-jobId'].value).toBe('unknown-queue-job-503');
+			expect(requests).toContain('/api/jobs/unknown-queue-job-503');
+			expect(statusForm.textContent).toContain('unknown-queue-job-503');
+			expect(statusForm.textContent).toContain('queued');
+
+			// Retry button is also visible on 503 so the operator can retry with same key if desired
+			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
+			expect(retryBtn.hidden).toBe(false);
+		});
 	});
 });
