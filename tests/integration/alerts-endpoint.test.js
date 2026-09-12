@@ -136,6 +136,91 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	it('passes include and includeEnrichmentSummary when include=enrichment_summary is requested', async () => {
+		alertStorageService.listAlerts.mockResolvedValue({
+			alerts: [
+				{
+					id: 'alert-1',
+					receivedAt: '2026-06-06T12:00:00.000Z',
+					text: 'BTC alert',
+					enriched: true,
+					enrichmentData: {
+						sentiment: 'BULLISH',
+						sentiment_score: 0.9,
+						setup_type: 'breakout',
+						invalidation_level: 64000,
+						target_level: 68000,
+						risk_reward_ratio: 2,
+						sourceCount: 1,
+						sourceDomains: ['coindesk.com'],
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'full',
+						promptProvenance: {
+							name: 'crypto-sentiment',
+							source: 'langfuse',
+							label: 'production',
+							version: 1,
+						},
+					},
+					enrichmentSummary: {
+						sentiment: 'BULLISH',
+						sentiment_score: 0.9,
+						setup_type: 'breakout',
+						invalidation_level: 64000,
+						target_level: 68000,
+						risk_reward_ratio: 2,
+						sourceCount: 1,
+						sourceDomains: ['coindesk.com'],
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'full',
+						promptProvenance: {
+							name: 'crypto-sentiment',
+							source: 'langfuse',
+							label: 'production',
+							version: 1,
+						},
+					},
+					channels: ['telegram'],
+					deliveryResults: [{ channel: 'telegram', success: true }],
+					source: 'webhook',
+					useTradingViewData: false,
+					tradingViewEnrichmentApplied: true,
+				},
+			],
+			hasMore: false,
+			nextBefore: null,
+		});
+
+		const res = await request(app)
+			.get('/api/alerts?limit=10&include=enrichment_summary')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listAlerts).toHaveBeenCalledWith({
+			before: undefined,
+			enriched: undefined,
+			limit: 10,
+			source: undefined,
+			include: ['enrichment_summary'],
+			includeEnrichmentSummary: true,
+		});
+		expect(res.body.success).toBe(true);
+		expect(res.body.alerts[0].enrichmentData.sentiment).toBe('BULLISH');
+		expect(res.body.alerts[0].enrichmentSummary.sentiment).toBe('BULLISH');
+	});
+
+	it('returns 400 for invalid include values', async () => {
+		const res = await request(app)
+			.get('/api/alerts?include=unknown_field')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: "Invalid include parameter 'unknown_field'. Allowed values: enrichment_summary.",
+			code: 'INVALID_REQUEST',
+		});
+	});
+
 	it('returns 400 for invalid before cursor values', async () => {
 		const res = await request(app)
 			.get('/api/alerts?before=not-a-date')
@@ -421,6 +506,7 @@ describe('Alerts API Integration Tests', () => {
 			source: 'webhook',
 			enriched: true,
 			includeText: false,
+			includeEnrichment: false,
 		});
 		expect(res.headers['content-type']).toContain('application/x-ndjson');
 		expect(res.headers['x-shadow-mode-metrics']).toBeUndefined();
@@ -474,6 +560,7 @@ describe('Alerts API Integration Tests', () => {
 			source: undefined,
 			enriched: undefined,
 			includeText: true,
+			includeEnrichment: false,
 		});
 		expect(res.headers['content-type']).toContain('text/csv');
 		expect(res.text).toContain('id,requestId,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
@@ -563,6 +650,111 @@ describe('Alerts API Integration Tests', () => {
 			code: 'INVALID_REQUEST',
 		});
 		expect(alertStorageService.exportAlerts).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 when includeEnrichment flag is invalid', async () => {
+		const res = await request(app)
+			.get('/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&includeEnrichment=maybe')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: 'Invalid includeEnrichment flag. Use true or false.',
+			code: 'INVALID_REQUEST',
+		});
+		expect(alertStorageService.exportAlerts).not.toHaveBeenCalled();
+	});
+
+	it('exports bounded stored alerts with enrichmentData when includeEnrichment=true is requested', async () => {
+		alertStorageService.exportAlerts.mockResolvedValue({
+			window: {
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 1,
+				maxDays: 31,
+			},
+			alerts: [
+				{
+					id: 'alert-enrich-1',
+					receivedAt: '2026-06-06T12:00:00.000Z',
+					source: 'webhook',
+					enriched: true,
+					enrichmentData: {
+						sentiment: 'BULLISH',
+						sentiment_score: 0.85,
+						setup_type: 'breakout',
+						invalidation_level: 64200,
+						target_level: 68500,
+						risk_reward_ratio: 2.5,
+						sourceCount: 2,
+						sourceDomains: ['coindesk.com'],
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'full',
+						promptProvenance: {
+							name: 'crypto-sentiment',
+							source: 'langfuse',
+							label: 'production',
+							version: 3,
+							schemaDriftDetected: false,
+						},
+					},
+				},
+			],
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&includeEnrichment=true')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.exportAlerts).toHaveBeenCalledWith({
+			from: '2026-06-06T00:00:00.000Z',
+			to: '2026-06-07T00:00:00.000Z',
+			limit: 500,
+			source: undefined,
+			enriched: undefined,
+			includeText: false,
+			includeEnrichment: true,
+		});
+
+		const parsed = JSON.parse(res.text.trim());
+		expect(parsed).toHaveProperty('enrichmentData');
+		expect(parsed.enrichmentData.sentiment).toBe('BULLISH');
+		expect(parsed.enrichmentData.sourceDomains).toEqual(['coindesk.com']);
+	});
+
+	it('exports bounded stored alerts as CSV with enrichmentData column when includeEnrichment=true', async () => {
+		alertStorageService.exportAlerts.mockResolvedValue({
+			window: {
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 1,
+				maxDays: 31,
+			},
+			alerts: [
+				{
+					id: 'alert-csv-enrich-1',
+					receivedAt: '2026-06-06T12:00:00.000Z',
+					source: 'webhook',
+					enriched: true,
+					enrichmentData: {
+						sentiment: 'BULLISH',
+						sentiment_score: 0.85,
+						setup_type: 'breakout',
+					},
+				},
+			],
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/export?format=csv&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&includeEnrichment=true')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(res.headers['content-type']).toContain('text/csv');
+		expect(res.text).toContain('enrichmentData');
+		expect(res.text).toContain('alert-csv-enrich-1');
+		expect(res.text).toContain('""sentiment"":""BULLISH""');
 	});
 
 	it('returns a single stored alert by id', async () => {

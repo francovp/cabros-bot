@@ -147,6 +147,135 @@ describe('SignalOutcomeService', () => {
 		});
 	});
 
+	describe('getSessionContext()', () => {
+		it('flags a post-close daily equity signal and points to the next session open', () => {
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-08-25T20:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'after_hours',
+				measurementCohort: 'raw_received_at_after_hours',
+				anchorMode: 'raw_received_at',
+				calendarId: 'nyse',
+				calendarTimeZone: 'America/New_York',
+				decisionBarClosedAt: '2026-08-25T20:00:00.000Z',
+				tradableAt: '2026-08-26T13:30:00.000Z',
+			}));
+		});
+
+		it('preserves DST-aware session times and skips US holidays', () => {
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'NASDAQ_DLY',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-11-26T20:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'market_holiday',
+				decisionBarClosedAt: null,
+				tradableAt: '2026-11-27T14:30:00.000Z',
+			}));
+
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-11-27T18:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'after_hours',
+				decisionBarClosedAt: '2026-11-27T18:00:00.000Z',
+				tradableAt: '2026-11-30T14:30:00.000Z',
+			}));
+		});
+
+		it('uses the correct DST offset after a Friday close', () => {
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'BATS',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-11-02T21:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				decisionBarClosedAt: '2026-11-02T21:00:00.000Z',
+				tradableAt: '2026-11-03T14:30:00.000Z',
+			}));
+		});
+
+		it('does not add equity session assumptions to crypto signals', () => {
+			const receivedAt = new Date('2026-08-25T20:01:00.000Z');
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'BINANCE',
+				assetClass: 'crypto',
+				timeframe: '1D',
+				receivedAt,
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'crypto_24_7',
+				measurementCohort: 'raw_received_at',
+				tradableAt: receivedAt.toISOString(),
+			}));
+		});
+
+		it('labels pre-open observations as pre_open', () => {
+			// Wednesday 2026-08-26 09:00 EDT = 13:00 UTC
+			const preOpen = new Date('2026-08-26T13:00:00.000Z');
+			const context = SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				receivedAt: preOpen,
+			});
+			expect(context.sessionContext).toBe('pre_open');
+			expect(context.measurementCohort).toBe('raw_pre_open');
+			expect(context.tradableAt).toBe('2026-08-26T13:30:00.000Z');
+		});
+
+		it('normalizes ARCA and ARCA_DLY aliases to regular equity exchange', () => {
+			// 10:30 EDT = 14:30 UTC
+			const regularTime = new Date('2026-08-26T14:30:00.000Z');
+			const arcaContext = SignalOutcomeService.getSessionContext({
+				exchange: 'ARCA',
+				assetClass: 'stock',
+				receivedAt: regularTime,
+			});
+			expect(arcaContext.sessionContext).toBe('regular');
+			expect(arcaContext.calendarId).toBe('nyse');
+
+			const arcaDlyContext = SignalOutcomeService.getSessionContext({
+				exchange: 'ARCA_DLY',
+				assetClass: 'stock',
+				receivedAt: regularTime,
+			});
+			expect(arcaDlyContext.sessionContext).toBe('regular');
+			expect(arcaDlyContext.calendarId).toBe('nyse');
+		});
+
+		it('accounts for weekend Independence Day early close on the preceding trading day', () => {
+			// In 2026, July 4 is Saturday. Thursday July 2 is the early-close day (13:00 EDT / 17:00 UTC).
+			// Alert at 14:00 EDT = 18:00 UTC on July 2 is after early close.
+			const afterEarlyClose = new Date('2026-07-02T18:00:00.000Z');
+			const context = SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				receivedAt: afterEarlyClose,
+			});
+			expect(context.sessionContext).toBe('after_hours');
+			expect(context.decisionBarClosedAt).toBe('2026-07-02T17:00:00.000Z');
+			// Friday July 3 is observed holiday for July 4, so next open is Monday July 6 09:30 EDT = 13:30 UTC
+			expect(context.tradableAt).toBe('2026-07-06T13:30:00.000Z');
+		});
+
+		it('checks next year observed New Years closure on December 31 when Jan 1 is Saturday', () => {
+			// In 2027, Dec 31 is Friday. Jan 1 2028 is Saturday. Observed holiday is Friday Dec 31, 2027.
+			const observedNewYear = new Date('2027-12-31T15:00:00.000Z');
+			const context = SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				receivedAt: observedNewYear,
+			});
+			expect(context.sessionContext).toBe('market_holiday');
+			expect(context.tradableAt).toBe('2028-01-03T14:30:00.000Z');
+		});
+	});
+
 	describe('recordSignal()', () => {
 		it('returns null when feature is disabled', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'false';
@@ -188,6 +317,34 @@ describe('SignalOutcomeService', () => {
 			expect(saved.source).toBe('market-scanner');
 			expect(saved.price).toBe(50000);
 			expect(saved.side).toBe('BUY');
+		});
+
+		it('persists equity session context without mixing post-close windows into a tradable cohort', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+			process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+			process.env.TWELVE_DATA_API_KEY = 'test-twelve-data-key';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-25T20:01:00.000Z'));
+
+			try {
+				const resId = await SignalOutcomeService.recordSignal({
+					requestId: 'req-post-close-session',
+					source: 'market-scanner',
+					symbol: 'NYSE:AAPL',
+					timeframe: '1D',
+					assetClass: 'stock',
+					price: 150,
+				});
+
+				const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+				expect(saved.sessionContext).toBe('after_hours');
+				expect(saved.measurementCohort).toBe('raw_received_at_after_hours');
+				expect(saved.anchorMode).toBe('raw_received_at');
+				expect(saved.tradablePrice).toBeNull();
+				expect(saved.outcomes['1h'].measurementCohort).toBe('raw_received_at_after_hours');
+			} finally {
+				jest.useRealTimers();
+			}
 		});
 
 		it('saves a normalised document when enabled with alert storage', async () => {
@@ -1306,6 +1463,50 @@ describe('SignalOutcomeService', () => {
 			expect(updated.outcomes['1h'].return).toBe(2);
 		});
 
+		it('stores late-resolved prices in tradablePrice when resolved at or after tradableAt for closed-session equity', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const tradableAtDate = new Date(Date.now() - 1 * 60 * 60 * 1000);
+			const mockDocId = 'test-equity-late-resolved';
+
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-equity-late',
+					source: 'news-monitor',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: null,
+					observedPrice: null,
+					tradablePrice: null,
+					sessionContext: 'after_hours',
+					tradableAt: tradableAtDate.toISOString(),
+					eligibilityState: 'pending_entry_price',
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			mockGetKlines.mockResolvedValue([
+				[receivedAtDate.getTime(), '50000', '52000', '49000', '51000'],
+			]);
+
+			await SignalOutcomeService.evaluatePendingOutcomes();
+
+			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
+			expect(updated).toBeDefined();
+			expect(updated.price).toBe(50000);
+			expect(updated.tradablePrice).toBe(50000);
+			expect(updated.observedPrice).toBeNull();
+		});
 
 		it('enforces sweep max duration budget on slow or hanging getKlines requests', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
@@ -2322,6 +2523,158 @@ describe('SignalOutcomeService', () => {
 			expect(allRes.totalSignalsEvaluated).toBe(2);
 			expect(allRes.windows['1h'].totalSignals).toBe(2);
 			expect(allRes.windows['1h'].hitRatePercent).toBe(50);
+		});
+
+		it('collects matching records beyond the initial slice when filters are applied (GH-715)', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const map = new Map();
+			// 600 non-matching (ETH) docs precede the matching BTC docs
+			for (let i = 0; i < 600; i += 1) {
+				map.set(`doc-eth-${i}`, {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: `req-eth-${i}`,
+					source: 'market-scanner',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 3000,
+					score: 0.7,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: -0.5, maxAdverseExcursion: -0.5 },
+					},
+				});
+			}
+			// 5 matching (BTC) docs sit beyond the default 100-doc page slice
+			for (let i = 0; i < 5; i += 1) {
+				map.set(`doc-btc-${i}`, {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: `req-btc-${i}`,
+					source: 'market-scanner',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					score: 0.8,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: 1.0, maxAdverseExcursion: -0.1 },
+					},
+				});
+			}
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			// With a small requested limit (50), filter-before-limit must continue scanning
+			// past the first batch (100 docs) to surface the 5 BTC matches sitting beyond it
+			const res = await SignalOutcomeService.summarizeOutcomes({ symbol: 'BTCUSDT', limit: 50 });
+			expect(res.available).toBe(true);
+			expect(res.totalSignalsReceived).toBe(5);
+			expect(res.totalSignalsEvaluated).toBe(5);
+			expect(res.windows['1h'].totalSignals).toBe(5);
+		});
+
+		it('scopes window aggregation to the requested window filter (GH-715)', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const map = new Map([
+				['doc-1', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-1',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					score: 0.7,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: 1.0, maxAdverseExcursion: -0.1 },
+						'4h': { status: 'evaluated', return: -3.0, maxAdverseExcursion: -4.0 },
+						'1D': { status: 'evaluated', return: 5.0, maxAdverseExcursion: -1.0 },
+					},
+				}],
+				['doc-2', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-2',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 51000,
+					score: 0.7,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: -2.0, maxAdverseExcursion: -2.5 },
+						'4h': { status: 'evaluated', return: 4.0, maxAdverseExcursion: -0.5 },
+						'1D': { status: 'evaluated', return: -1.0, maxAdverseExcursion: -1.5 },
+					},
+				}],
+			]);
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ window: '1h' });
+			expect(res.available).toBe(true);
+			expect(res.windows['1h'].totalSignals).toBe(2);
+			// Only the 1h window should appear — 4h and 1D must not contribute
+			expect(res.windows['4h']).toBeUndefined();
+			expect(res.windows['1D']).toBeUndefined();
+			// hitRatePercent for 1h averages {1.0, -2.0}: 50%
+			expect(res.windows['1h'].hitRatePercent).toBe(50);
+			expect(res.windows['1h'].averageReturnPercent).toBe(-0.5);
+		});
+
+		it('scopes status filter to the requested window when both filters are set (GH-715)', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const map = new Map([
+				['doc-1', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-1',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					score: 0.7,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': { status: 'pending' },
+						'4h': { status: 'evaluated', return: 1.0, maxAdverseExcursion: -0.1 },
+					},
+				}],
+				['doc-2', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-2',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 51000,
+					score: 0.7,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: -2.0, maxAdverseExcursion: -2.5 },
+						'4h': { status: 'pending' },
+					},
+				}],
+			]);
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			// status=pending + window=1h should match only doc-1 (doc-2 has 1h evaluated)
+			const res = await SignalOutcomeService.summarizeOutcomes({ status: 'pending', window: '1h' });
+			expect(res.available).toBe(true);
+			// doc-1 matches {status: pending, window: 1h}; doc-2 does not
+			expect(res.totalSignalsReceived).toBe(1);
+			expect(res.totalSignalsPending).toBe(1);
+			expect(res.totalSignalsEvaluated).toBe(0);
+			// Without window scoping, the 4h evaluated outcome on doc-1 would have marked it as evaluated
 		});
 	});
 
