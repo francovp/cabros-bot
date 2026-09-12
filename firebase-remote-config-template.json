@@ -231,6 +231,13 @@
       "description": "Retention window in days for tradingSignalOutcomes documents before expiration and cleanup",
       "valueType": "NUMBER"
     },
+    "SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES": {
+      "defaultValue": {
+        "value": ""
+      },
+      "description": "Optional ordered signal outcome entry-price providers; empty preserves asset-class defaults",
+      "valueType": "STRING"
+    },
     "EQUITY_MARKET_DATA_RPM": {
       "defaultValue": {
         "value": "8"

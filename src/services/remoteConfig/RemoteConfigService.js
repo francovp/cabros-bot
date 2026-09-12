@@ -3,6 +3,7 @@
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 const alertStorageService = require('../storage/AlertStorageService');
+const { parseEntryPriceSources } = require('../../lib/signalOutcomeEntryPriceSources');
 
 const DEFAULT_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const DEFAULT_LOAD_TIMEOUT_MS = 10 * 1000;
@@ -49,6 +50,18 @@ const PARAMETER_SCHEMA = Object.freeze({
 	SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	SIGNAL_OUTCOME_MAX_RETRY_AGE_MS: { type: 'number', defaultValue: 604800000, integer: true, min: 60000, max: 2592000000 },
 	SIGNAL_OUTCOME_RETENTION_DAYS: { type: 'number', defaultValue: 365, integer: true, min: 1, max: 3650 },
+	SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES: {
+		type: 'string',
+		defaultValue: '',
+		validate: (value) => {
+			try {
+				parseEntryPriceSources(value);
+				return true;
+			} catch (error) {
+				return false;
+			}
+		},
+	},
 	EQUITY_MARKET_DATA_RPM: { type: 'number', defaultValue: 8, integer: true, min: 0, max: 1200 },
 	NOTIFICATION_REDRIVE_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
 	NOTIFICATION_REDRIVE_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
@@ -137,6 +150,9 @@ function parseString(value, schema, fallback) {
 	}
 	const str = String(value).trim();
 	if (Array.isArray(schema.allowedValues) && !schema.allowedValues.includes(str)) {
+		return fallback;
+	}
+	if (typeof schema.validate === 'function' && !schema.validate(str)) {
 		return fallback;
 	}
 	return str;

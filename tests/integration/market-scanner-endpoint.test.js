@@ -190,6 +190,7 @@ describe('Market Scanner Alert endpoint', () => {
 		expect(recorded.side).toBe('SELL');
 		expect(recorded.stop).toBe(60750); // price + atr*1.5
 		expect(recorded.target).toBe(58000); // bb_lower
+		expect(recorded.priceSource).toBe('tradingview-mcp');
 
 		recordSignalSpy.mockRestore();
 		signalOutcomeService.isEnabled.mockRestore();

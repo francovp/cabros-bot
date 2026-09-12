@@ -49,6 +49,7 @@ describe('SignalOutcomeService', () => {
 		EquityMarketDataService._resetPacerForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
+		delete process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_EQUITY_MARKET_DATA;
@@ -64,6 +65,7 @@ describe('SignalOutcomeService', () => {
 		EquityMarketDataService._resetPacerForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
+		delete process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_EQUITY_MARKET_DATA;
@@ -93,6 +95,87 @@ describe('SignalOutcomeService', () => {
 		it('returns true when ENABLE_SIGNAL_OUTCOME_TRACKING is "true"', () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			expect(SignalOutcomeService.isEnabled()).toBe(true);
+		});
+	});
+
+	describe('entry price source configuration', () => {
+		it('keeps the existing crypto and equity fallback chains by default', () => {
+			expect(SignalOutcomeService.getEntryPriceSourceChains()).toEqual({
+				configured: false,
+				crypto: ['mcp', 'binance', 'gemini'],
+				equity: ['twelve-data'],
+			});
+		});
+
+		it('preserves the configured provider order for both asset classes', () => {
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'mcp, twelve-data, binance, gemini';
+
+			expect(SignalOutcomeService.getEntryPriceSourceChains()).toEqual({
+				configured: true,
+				crypto: ['mcp', 'twelve-data', 'binance', 'gemini'],
+				equity: ['mcp', 'twelve-data', 'binance', 'gemini'],
+			});
+		});
+
+		it('honors the configured provider before an incoming MCP price', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'binance';
+			mockGetAvgPrice.mockResolvedValue({ price: '68100.50' });
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-configured-source-order',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 64863.03,
+				side: 'BUY',
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(mockGetAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+			expect(saved.price).toBe(68100.50);
+			expect(saved.entryPriceSource).toBe('binance');
+		});
+
+		it('tries providers before an incoming price when they precede its source', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'binance,mcp';
+			mockGetAvgPrice.mockResolvedValue({ price: '68100.50' });
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-configured-source-prefix',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 64863.03,
+				side: 'BUY',
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(mockGetAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+			expect(saved.price).toBe(68100.50);
+			expect(saved.entryPriceSource).toBe('binance');
+		});
+
+		it('keeps the incoming price when earlier providers do not resolve', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'binance,mcp';
+			mockGetAvgPrice.mockRejectedValue(new Error('Binance unavailable'));
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-configured-source-fallback',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 64863.03,
+				side: 'BUY',
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(mockGetAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+			expect(saved.price).toBe(64863.03);
+			expect(saved.entryPriceSource).toBe('tradingview-mcp');
+		});
+
+		it('rejects unknown providers', () => {
+			expect(() => SignalOutcomeService.parseEntryPriceSources('mcp,unknown')).toThrow(/unknown/i);
 		});
 	});
 
@@ -671,6 +754,25 @@ describe('SignalOutcomeService', () => {
 			expect(saved.price).toBe(68250.75);
 			expect(saved.entryPriceSource).toBe('gemini-grounding');
 			expect(saved.eligibilityState).toBe('supported_provider');
+			expect(saved.outcomeEvaluated).toBe(false);
+			expect(saved.outcomes['1h'].status).toBe('pending');
+		});
+
+		it('keeps Gemini failures retryable when Gemini is the configured source', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'gemini';
+			mockFetchGeminiPrice.mockRejectedValue(new Error('Gemini timeout'));
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-gemini-transient',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: null,
+				side: 'BUY',
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved.eligibilityState).toBe('pending_entry_price');
 			expect(saved.outcomeEvaluated).toBe(false);
 			expect(saved.outcomes['1h'].status).toBe('pending');
 		});
