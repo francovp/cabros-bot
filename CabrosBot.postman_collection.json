@@ -4467,6 +4467,113 @@
               }
             }
           ]
+        },
+        {
+          "name": "GET SSE Real-Time Events",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "events"
+              ]
+            },
+            "description": "Establish a Server-Sent Events (SSE) stream for real-time console updates (job progress, scanner results, alert delivery). Requires admin.viewer."
+          },
+          "response": [
+            {
+              "name": "200 Connected Stream",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/events",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "events"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "text",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "text/event-stream"
+                },
+                {
+                  "key": "Cache-Control",
+                  "value": "no-cache, no-transform"
+                },
+                {
+                  "key": "Connection",
+                  "value": "keep-alive"
+                }
+              ],
+              "body": ":connected\nevent: connected\ndata: {\"clientId\":\"4519965b-db0d-4536-a81d-ef291f09c735\",\"timestamp\":\"2026-09-12T20:00:00.000Z\",\"activeConnections\":1}\n\n"
+            },
+            {
+              "name": "503 SSE Connection Limit Exceeded",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/events",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "events"
+                  ]
+                }
+              },
+              "status": "Service Unavailable",
+              "code": 503,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "30"
+                }
+              ],
+              "body": "{\n  \"error\": \"Server has reached maximum SSE connection capacity. Please retry shortly.\",\n  \"code\": \"SSE_CONNECTION_LIMIT_EXCEEDED\"\n}"
+            }
+          ]
         }
       ]
     },

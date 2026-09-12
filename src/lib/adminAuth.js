@@ -102,7 +102,7 @@ async function validateAdminAccess(req, res, next) {
 		return next();
 	}
 
-	const authorization = req.headers.authorization;
+	const authorization = req.headers.authorization || (req.query?.token ? `Bearer ${req.query.token}` : null);
 	const match = typeof authorization === 'string' && authorization.match(/^Bearer\s+(\S+)$/i);
 	if (match) {
 		const firebaseAuth = getFirebaseAuth();

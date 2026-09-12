@@ -86,6 +86,7 @@ function createProcessLifecycle(options = {}) {
 		stopAlertScheduler = () => undefined,
 		stopRemoteConfig = () => undefined,
 		shutdownNewsMonitor = () => undefined,
+		closeAllSseConnections = () => undefined,
 		flushSentry = () => undefined,
 		timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
 		logger = console,
@@ -184,6 +185,7 @@ function createProcessLifecycle(options = {}) {
 					safelyRun(logger, 'scanner preset scheduler', () => stopScannerPresetScheduler({ drain: true })),
 					safelyRun(logger, 'news monitor scheduler', () => stopNewsMonitorScheduler({ drain: true })),
 					safelyRun(logger, 'alert scheduler', () => stopAlertScheduler({ drain: true })),
+					safelyRun(logger, 'admin SSE streams', closeAllSseConnections),
 					safelyRun(logger, 'remote config service', stopRemoteConfig),
 					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
 				]);

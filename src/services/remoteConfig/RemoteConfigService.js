@@ -93,8 +93,11 @@ const PARAMETER_SCHEMA = Object.freeze({
 	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
 	// notification destinations — must remain deployment-controlled.
 	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
-	// ENABLE_TEST_ALERT, TEST_ALERT_DAILY_LIMIT excluded:
-	// route-enablement gate and abuse rate-limiting controls must remain deployment-controlled.
+	// ENABLE_TEST_ALERT, TEST_ALERT_DAILY_LIMIT, ENABLE_ADMIN_SSE excluded:
+	// route-enablement gates and abuse rate-limiting controls must remain deployment-controlled.
+	ADMIN_SSE_MAX_CLIENT_CONNECTIONS: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 20 },
+	ADMIN_SSE_MAX_TOTAL_CONNECTIONS: { type: 'number', defaultValue: 100, integer: true, min: 10, max: 1000 },
+	ADMIN_SSE_HEARTBEAT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 5000, max: 120000 },
 });
 
 let remoteOverrides = {};

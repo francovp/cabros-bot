@@ -402,6 +402,80 @@
         "x-admin-role": "admin.operator"
       }
     },
+    "/api/admin/events": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Stream real-time operator console events (SSE)",
+        "description": "Establishes a long-lived Server-Sent Events (SSE) stream for real-time operator updates, including job progress, scanner results, alert delivery events, and delivery failures. Supports up to 5 concurrent connections per client session with graceful oldest-connection eviction.",
+        "operationId": "getAdminEvents",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "description": "Firebase ID token query parameter for browser EventSource clients.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE event stream opened successfully.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": ":connected\nevent: connected\ndata: {\"clientId\":\"4519965b-db0d-4536-a81d-ef291f09c735\",\"timestamp\":\"2026-09-12T20:00:00.000Z\",\"activeConnections\":1}\n\n"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "description": "Maximum server SSE connection capacity exceeded.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds to wait before reconnecting."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "Server has reached maximum SSE connection capacity. Please retry shortly.",
+                  "code": "SSE_CONNECTION_LIMIT_EXCEEDED"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/alerts": {
       "get": {
         "tags": [

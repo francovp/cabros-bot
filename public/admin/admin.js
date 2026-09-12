@@ -422,6 +422,7 @@ const setupFirebaseAuth = async (config) => {
 			authState.user = user;
 			if (!user) {
 				authState.role = null;
+				disconnectSse();
 				showSignedOutState();
 				return;
 			}
@@ -429,12 +430,15 @@ const setupFirebaseAuth = async (config) => {
 				const tokenResult = await user.getIdTokenResult();
 				authState.role = window.CabrosAdminRequest.getAdminRole(tokenResult.claims);
 				if (!authState.role) {
+					disconnectSse();
 					showAuthState('This account is not authorized for the admin console.', true);
 					return;
 				}
 				showSignedInState();
+				setupSseStream();
 				navigateToView('status');
 			} catch (error) {
+				disconnectSse();
 				showAuthState('Unable to verify the signed-in account.', true);
 			}
 		});
@@ -442,6 +446,160 @@ const setupFirebaseAuth = async (config) => {
 		showAuthState('Firebase sign-in is unavailable. Ask an administrator to configure it.', true);
 	}
 };
+
+let sseEventSource = null;
+let sseReconnectTimer = null;
+let sseReconnectAttempts = 0;
+const sseListeners = new Set();
+
+const onSseEvent = (handler) => {
+	sseListeners.add(handler);
+	return () => sseListeners.delete(handler);
+};
+
+const dispatchSseEvent = (type, data) => {
+	sseListeners.forEach((listener) => {
+		try {
+			listener(type, data);
+		} catch (error) {
+			console.error('SSE listener error:', error);
+		}
+	});
+};
+
+const updateSseIndicator = (state, label) => {
+	const indicator = getElement('sse-status');
+	const labelEl = getElement('sse-label');
+	if (!indicator) return;
+	indicator.className = `sse-indicator ${state}`;
+	indicator.title = `Real-time stream: ${label}`;
+	if (labelEl) labelEl.textContent = label;
+};
+
+const showToast = (message, type = 'info', durationMs = 4000) => {
+	let container = getElement('toast-container');
+	if (!container) {
+		container = element('div', { id: 'toast-container', className: 'toast-container' });
+		document.body?.append(container);
+	}
+	const toast = element('div', { className: `toast toast-${type}`, text: message });
+	container?.append(toast);
+	setTimeout(() => {
+		if (toast.style) toast.style.opacity = '0';
+		setTimeout(() => {
+			if (typeof toast.remove === 'function') toast.remove();
+		}, 250);
+	}, durationMs);
+};
+
+const disconnectSse = () => {
+	if (sseReconnectTimer) {
+		clearTimeout(sseReconnectTimer);
+		sseReconnectTimer = null;
+	}
+	if (sseEventSource) {
+		if (typeof sseEventSource.close === 'function') sseEventSource.close();
+		sseEventSource = null;
+	}
+	sseReconnectAttempts = 0;
+	updateSseIndicator('disconnected', 'Offline');
+};
+
+const setupSseStream = async () => {
+	if (typeof window === 'undefined' || typeof window.EventSource === 'undefined') {
+		return;
+	}
+	if (sseReconnectTimer) {
+		clearTimeout(sseReconnectTimer);
+		sseReconnectTimer = null;
+	}
+	if (sseEventSource) {
+		if (typeof sseEventSource.close === 'function') sseEventSource.close();
+		sseEventSource = null;
+	}
+
+	let authParam = '';
+	if (authState.enabled && authState.user) {
+		try {
+			const token = await authState.user.getIdToken();
+			authParam = `token=${encodeURIComponent(token)}`;
+		} catch (_) {
+			updateSseIndicator('disconnected', 'Auth error');
+			return;
+		}
+	} else {
+		const apiKey = getElement('api-key')?.value || '';
+		if (apiKey) {
+			authParam = `api-key=${encodeURIComponent(apiKey)}`;
+		}
+	}
+
+	if (!authParam) {
+		updateSseIndicator('disconnected', 'Offline');
+		return;
+	}
+
+	updateSseIndicator('connecting', 'Connecting…');
+
+	const baseUrl = getApiBaseUrl();
+	const streamUrl = `${baseUrl}/api/admin/events?${authParam}`;
+
+	try {
+		const es = new window.EventSource(streamUrl);
+		sseEventSource = es;
+
+		es.onopen = () => {
+			sseReconnectAttempts = 0;
+			updateSseIndicator('connected', 'Live');
+		};
+
+		es.onerror = () => {
+			if (typeof es.close === 'function') es.close();
+			sseEventSource = null;
+			updateSseIndicator('connecting', 'Reconnecting…');
+			const delay = Math.min(30000, 2000 * Math.pow(1.5, sseReconnectAttempts)) + Math.random() * 1000;
+			sseReconnectAttempts++;
+			sseReconnectTimer = setTimeout(() => {
+				setupSseStream();
+			}, delay);
+		};
+
+		es.addEventListener('connected', () => {
+			updateSseIndicator('connected', 'Live');
+		});
+
+		const attachEventHandler = (type) => {
+			es.addEventListener(type, (event) => {
+				try {
+					const data = JSON.parse(event.data);
+					dispatchSseEvent(type, data);
+					if (type === 'job-progress') {
+						if (data.status === 'completed') {
+							showToast(`Job ${String(data.jobId).slice(0, 8)}… completed`, 'success');
+						} else if (data.status === 'failed' || data.status === 'timed_out') {
+							showToast(`Job ${String(data.jobId).slice(0, 8)}… ${data.status}: ${data.error || 'Failed'}`, 'error');
+						}
+					} else if (type === 'scanner-result') {
+						showToast(`Scanner preset completed${data.name ? `: ${data.name}` : ''}`, 'info');
+					} else if (type === 'alert-delivered') {
+						const channels = Array.isArray(data.channels) ? data.channels.join(', ') : 'channels';
+						showToast(`Alert delivered: ${data.symbol || 'symbol'} (${channels})`, 'success');
+					} else if (type === 'delivery-failure') {
+						showToast(`Delivery failure: ${data.symbol || 'symbol'} (${data.channel || 'channel'}): ${data.error || 'error'}`, 'error');
+					}
+				} catch (err) {
+					console.error('Failed to parse SSE event payload:', err);
+				}
+			});
+		};
+
+		['job-progress', 'scanner-result', 'alert-delivered', 'delivery-failure'].forEach(attachEventHandler);
+	} catch (error) {
+		console.error('Failed to create EventSource:', error);
+		updateSseIndicator('disconnected', 'Offline');
+	}
+};
+
 
 const parseJson = (value, label) => {
 	if (!value.trim()) return undefined;
@@ -2668,6 +2826,7 @@ const formatJobProgress = (progress) => {
 const createJobSummary = (job, onSelect) => {
 	const card = element('article', { className: 'operation-card' });
 	const jobId = formatJobValue(job && job.jobId);
+	if (job && job.jobId) card.dataset.jobId = job.jobId;
 	const jobHeading = element('h3');
 	jobHeading.append(
 		element('span', { text: jobId }),
@@ -2954,13 +3113,28 @@ const createJobStatusForm = () => {
 		Promise.resolve(requestStatus(false)).catch(() => {});
 	});
 
+	const unsubscribeSse = onSseEvent((type, data) => {
+		if (type === 'job-progress' && data && data.jobId) {
+			if (jobIdInput && jobIdInput.value.trim() === data.jobId) {
+				Promise.resolve(requestStatus(true)).catch(() => {});
+			}
+		}
+	});
+
 	detachActiveViewPoll = () => {
 		statusRequestVersion += 1;
 		stopPollTimer();
+		unsubscribeSse();
 	};
 
 	return {
 		form,
+		stopPollTimer,
+		destroy: () => {
+			statusRequestVersion += 1;
+			stopPollTimer();
+			unsubscribeSse();
+		},
 		selectJob: async (selectedJobId, options = {}) => {
 			statusRequestVersion += 1;
 			jobIdInput.value = selectedJobId;
@@ -5322,6 +5496,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 		getElement('save-key')?.click();
 	});
 
+	getElement('save-key')?.addEventListener('click', () => {
+		if (getElement('api-key')?.value) setupSseStream();
+	});
+
+	getElement('clear-key')?.addEventListener('click', () => {
+		disconnectSse();
+	});
+
 	const config = await loadAuthConfig();
 	if (config.enabled) {
 		await setupFirebaseAuth(config);
@@ -5332,5 +5514,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 	setHidden('firebase-auth', true);
 	setHidden('legacy-connection', false);
 	setupLegacyConsole();
+	if (getElement('api-key')?.value) setupSseStream();
 	renderView('overview');
 });

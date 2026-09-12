@@ -34,6 +34,7 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const { adminSseService } = require('../../../../services/sse/AdminSseService');
 
 const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 	'5', '5M', '15', '15M', '60', '1H', '240', '4H',
@@ -568,6 +569,20 @@ function postRunPreset(botOrGetter) {
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(scanResults, deliveryResults);
+
+			try {
+				adminSseService.broadcast('scanner-result', {
+					presetId: preset.id,
+					name: preset.name,
+					symbolsCount: preset.symbols?.length || (scanResults ? scanResults.length : 0),
+					summary,
+					timedOut,
+					totalDurationMs: Date.now() - startTime,
+					timestamp: new Date().toISOString(),
+				});
+			} catch (_) {
+				// Fail-safe
+			}
 
 			return res.status(200).json({
 				success: true,

@@ -31,6 +31,7 @@ const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentials');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { adminSseService } = require('../sse/AdminSseService');
 
 const COLLECTION_NAME = 'alerts';
 const REPLAY_COLLECTION_NAME = 'alertReplays';
@@ -1116,56 +1117,93 @@ function getFirestore() {
 	return db;
 }
 
+function emitAlertDeliveryEvents(params, alertId = null) {
+	if (!params) return;
+	try {
+		const deliveryResults = params.deliveryResults || [];
+		const successful = deliveryResults.filter((r) => r && r.success);
+		const failed = deliveryResults.filter((r) => r && !r.success);
+
+		if (successful.length > 0) {
+			adminSseService.broadcast('alert-delivered', {
+				alertId: alertId || params.requestId || null,
+				requestId: params.requestId || null,
+				symbol: params.symbol || null,
+				exchange: params.exchange || null,
+				channels: successful.map((r) => r.channel),
+				deliveredCount: successful.length,
+				timestamp: new Date().toISOString(),
+			});
+		}
+
+		for (const failure of failed) {
+			adminSseService.broadcast('delivery-failure', {
+				alertId: alertId || params.requestId || null,
+				requestId: params.requestId || null,
+				symbol: params.symbol || null,
+				exchange: params.exchange || null,
+				channel: failure.channel,
+				error: failure.error || 'Delivery failed',
+				timestamp: new Date().toISOString(),
+			});
+		}
+	} catch (_) {
+		// Fail-safe
+	}
+}
+
 /**
- * Persist a webhook alert document to the `alerts` Firestore collection.
- *
- * This is designed to be called fire-and-forget from the alert handler.
- * All errors are caught internally — this method never throws.
+ * Persist an alert document to Firestore.
  *
  * @param {Object} params
- * @param {string}  params.text              - Original alert text
- * @param {boolean} params.enriched          - Whether enrichment ran
- * @param {Object|null} params.enrichmentData - alert.enriched object or null
- * @param {Object|null} params.tokenUsage    - tokenUsage.toJSON() result or null
+ * @param {string}  params.text              - Full original alert text
+ * @param {string|null} params.symbol        - Parsed ticker symbol
+ * @param {string|null} params.exchange      - Parsed exchange name
+ * @param {boolean} params.enriched          - Whether enrichment was attempted
+ * @param {Object|null} params.enrichmentData - Full enriched payload (null if not enriched)
+ * @param {Object|null} params.tokenUsage    - Token usage object (null if not enriched)
  * @param {Array<string>} params.channels    - Requested channels used for delivery
  * @param {Array}   params.deliveryResults   - Array of SendResult from notificationManager.sendToAll()
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
  * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
-async function saveAlertInternal({
-	text,
-	symbol,
-	exchange,
-	enriched,
-	enrichmentData,
-	tokenUsage,
-	channels,
-	deliveryResults,
-	useTradingViewData,
-	tradingViewEnrichmentApplied,
-	tradingViewEnrichmentStatus,
-	suppressedRepeat,
-	processingTimeMs,
-	source,
-	eventCategory,
-	confidence,
-	sentimentScore,
-	dedupStatus,
-	requestId,
-	scannerErrorCategories,
-	telegramChatId,
-	telegramThreadId,
-	whatsappChatId,
-	discordWebhookUrl,
-	routing,
-}) {
+async function saveAlertInternal(params = {}) {
+	const {
+		text,
+		symbol,
+		exchange,
+		enriched,
+		enrichmentData,
+		tokenUsage,
+		channels,
+		deliveryResults,
+		useTradingViewData,
+		tradingViewEnrichmentApplied,
+		tradingViewEnrichmentStatus,
+		suppressedRepeat,
+		processingTimeMs,
+		source,
+		eventCategory,
+		confidence,
+		sentimentScore,
+		dedupStatus,
+		requestId,
+		scannerErrorCategories,
+		telegramChatId,
+		telegramThreadId,
+		whatsappChatId,
+		discordWebhookUrl,
+		routing,
+	} = params;
 	if (!isEnabled()) {
+		emitAlertDeliveryEvents(params, null);
 		return null;
 	}
 
 	const firestore = getFirestore();
 	if (!firestore) {
+		emitAlertDeliveryEvents(params, null);
 		return null;
 	}
 
@@ -1251,9 +1289,11 @@ async function saveAlertInternal({
 
 		const docRef = await firestore.collection(COLLECTION_NAME).add(document);
 		console.debug(`[AlertStorageService] Alert stored with ID: ${docRef.id}`);
+		emitAlertDeliveryEvents(params, docRef.id);
 		return docRef.id;
 	} catch (error) {
 		console.warn('[AlertStorageService] Failed to store alert in Firestore:', error.message);
+		emitAlertDeliveryEvents(params, null);
 		return null;
 	}
 }

@@ -36,6 +36,7 @@ const {
 } = require('../notification/requestRouting');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { runWithConcurrency } = require('../../lib/runWithConcurrency');
+const { adminSseService } = require('../sse/AdminSseService');
 
 const EXPIRATION_MS = 3600000; // 1 hour
 const DEFAULT_JOB_TIMEOUT_MS = 300000; // 5 minutes
@@ -778,6 +779,7 @@ class JobService {
 		try {
 			creation.persistencePromise = this.repository.save(job, { required: durableQueueMode });
 			await creation.persistencePromise;
+			this._broadcastJobProgress(job);
 
 			if (job.shutdownFinalized) {
 				return {
@@ -1567,7 +1569,38 @@ class JobService {
 			}
 			return false;
 		}
+		this._broadcastJobProgress(job);
 		return true;
+	}
+
+	_broadcastJobProgress(job) {
+		if (!job || !job.jobId) return;
+		try {
+			adminSseService.broadcast('job-progress', {
+				jobId: job.jobId,
+				type: job.type,
+				status: job.status,
+				progress: job.progress || null,
+				error: job.error || null,
+				code: job.code || null,
+				updatedAt: job.updatedAt || job.createdAt || new Date().toISOString(),
+				totalDurationMs: job.totalDurationMs || null,
+				summary: job.result?.summary || null,
+				timestamp: new Date().toISOString(),
+			});
+
+			if (job.status === 'completed' && job.type === 'market-scanner') {
+				adminSseService.broadcast('scanner-result', {
+					jobId: job.jobId,
+					type: job.type,
+					status: job.status,
+					summary: job.result?.summary || null,
+					timestamp: new Date().toISOString(),
+				});
+			}
+		} catch (_) {
+			// Fail-safe
+		}
 	}
 
 	_isQueuedExecution(job) {
