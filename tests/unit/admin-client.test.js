@@ -1370,6 +1370,335 @@ describe('admin browser client', () => {
 		expect(runForm.elements.query.value).toContain('"dryRun": false');
 	});
 
+	it('renders scanner presets as structured cards with chips, storage mode badge, and raw toggle', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/scanner-presets') {
+					return response({
+						success: true,
+						storage: { mode: 'durable', backend: 'firestore' },
+						presets: [
+							{
+								id: 'daily_momentum',
+								name: 'Daily Momentum',
+								exchange: 'BINANCE',
+								timeframe: '4h',
+								limit: 10,
+								scans: ['top_gainers', 'volume_breakout_scanner'],
+								schedule: { enabled: true, cadence: '4h' },
+								ranked: true,
+								includeMultiTimeframe: true,
+								bbwThreshold: 0.08,
+								lastStatus: 'success',
+								lastRunAt: '2026-03-30T12:00:00.000Z',
+							},
+						],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'presets');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/scanner-presets');
+		expect(listForm).toBeDefined();
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('Durable · Firestore');
+		expect(listForm.textContent).toContain('Daily Momentum');
+		expect(listForm.textContent).toContain('daily_momentum');
+		expect(listForm.textContent).toContain('BINANCE · 4h · Limit 10');
+		expect(listForm.textContent).toContain('top_gainers');
+		expect(listForm.textContent).toContain('volume_breakout_scanner');
+		expect(listForm.textContent).toContain('Schedule: 4h');
+		expect(listForm.textContent).toContain('Ranked');
+		expect(listForm.textContent).toContain('MTF');
+		expect(listForm.textContent).toContain('BBW: 0.08');
+		expect(listForm.textContent).toContain('Show raw presets response');
+	});
+
+	it('supports running a scanner preset from its card with confirmation and structured analysis result', async () => {
+		const requests = [];
+		const confirmPrompts = [];
+		const browser = createBrowser({
+			confirm: (msg) => {
+				confirmPrompts.push(msg);
+				return true;
+			},
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/scanner-presets') {
+					return response({
+						success: true,
+						storage: { mode: 'durable', backend: 'firestore' },
+						presets: [
+							{
+								id: 'crypto_breakout',
+								name: 'Crypto Breakout',
+								exchange: 'BINANCE',
+								timeframe: '1h',
+								limit: 5,
+								scans: ['volume_breakout_scanner'],
+							},
+						],
+					});
+				}
+				if (url.startsWith('/api/scanner-presets/crypto_breakout/run')) {
+					requests.push([url, options]);
+					return response({
+						success: true,
+						presetId: 'crypto_breakout',
+						symbols: ['BINANCE:BTCUSDT', 'BINANCE:ETHUSDT'],
+						report: 'Technical scan report for crypto breakout',
+						storage: { mode: 'durable', backend: 'firestore' },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'presets');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/scanner-presets');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const runBtn = findButton(listForm, 'Run');
+		expect(runBtn).toBeDefined();
+		await runBtn.dispatch('click');
+		await flush();
+
+		expect(confirmPrompts).toContain('Run this scanner preset?');
+		expect(requests.at(-1)[0]).toContain('/api/scanner-presets/crypto_breakout/run?dryRun=false');
+		expect(listForm.textContent).toContain('Technical scan report for crypto breakout');
+		expect(listForm.textContent).toContain('Show raw run response');
+	});
+
+	it('supports editing a scanner preset from its card and populates update form fields', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/scanner-presets') {
+					return response({
+						success: true,
+						presets: [
+							{
+								id: 'bollinger_squeeze',
+								name: 'Bollinger Squeeze',
+								exchange: 'BINANCE',
+								timeframe: '15m',
+								limit: 8,
+								scans: ['bollinger_scan'],
+								bbwThreshold: 0.03,
+								ranked: true,
+								includeMultiTimeframe: true,
+								schedule: { enabled: true, cadence: '1h' },
+							},
+						],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'presets');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/scanner-presets');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const editBtn = findButton(listForm, 'Edit');
+		expect(editBtn).toBeDefined();
+		await editBtn.dispatch('click');
+		await flush();
+
+		const updateForm = findForm(browser.elementsById.view, 'PUT /api/scanner-presets/{id}');
+		expect(updateForm.elements['path-id'].value).toBe('bollinger_squeeze');
+		expect(updateForm.elements.name.value).toBe('Bollinger Squeeze');
+		expect(updateForm.elements.exchange.value).toBe('BINANCE');
+		expect(updateForm.elements.timeframe.value).toBe('15m');
+		expect(Number(updateForm.elements.limit.value)).toBe(8);
+		expect(Number(updateForm.elements.bbwThreshold.value)).toBe(0.03);
+		expect(updateForm.elements.ranked.checked).toBe(true);
+		expect(updateForm.elements.includeMultiTimeframe.checked).toBe(true);
+		expect(updateForm.elements.schedule.value).toBe('1h');
+		expect(updateForm.elements.body.value).toContain('Bollinger Squeeze');
+	});
+
+	it('supports deleting a scanner preset from its card with confirmation and removing it from view', async () => {
+		const requests = [];
+		const confirmPrompts = [];
+		let deleteCount = 0;
+		const browser = createBrowser({
+			confirm: (msg) => {
+				confirmPrompts.push(msg);
+				return true;
+			},
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/scanner-presets' && deleteCount === 0) {
+					return response({
+						success: true,
+						storage: { mode: 'durable', backend: 'firestore' },
+						presets: [
+							{
+								id: 'old_preset',
+								name: 'Old Preset',
+								exchange: 'BINANCE',
+								timeframe: '4h',
+								limit: 5,
+								scans: ['top_gainers'],
+							},
+						],
+					});
+				}
+				if (url === '/api/scanner-presets/old_preset' && options.method === 'DELETE') {
+					deleteCount++;
+					requests.push([url, options]);
+					return response({
+						success: true,
+						presetId: 'old_preset',
+						storage: { mode: 'durable', backend: 'firestore' },
+					});
+				}
+				if (url === '/api/scanner-presets' && deleteCount > 0) {
+					return response({
+						success: true,
+						storage: { mode: 'durable', backend: 'firestore' },
+						presets: [],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'presets');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/scanner-presets');
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('Old Preset');
+		const deleteBtn = findButton(listForm, 'Delete');
+		expect(deleteBtn).toBeDefined();
+		await deleteBtn.dispatch('click');
+		await flush();
+
+		expect(confirmPrompts).toContain('Delete this scanner preset?');
+		expect(requests.at(-1)[0]).toBe('/api/scanner-presets/old_preset');
+		expect(requests.at(-1)[1].method).toBe('DELETE');
+		expect(listForm.textContent).toContain('No scanner presets found.');
+	});
+
+	it('synchronizes structured form controls to JSON body and clamps limit', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'presets');
+
+		const createForm = findForm(browser.elementsById.view, 'POST /api/scanner-presets');
+		expect(createForm).toBeDefined();
+
+		createForm.elements.name.value = 'Custom Momentum';
+		await createForm.elements.name.dispatch('input');
+
+		createForm.elements.timeframe.value = '1D';
+		await createForm.elements.timeframe.dispatch('change');
+
+		createForm.elements.limit.value = '50';
+		await createForm.elements.limit.dispatch('change');
+
+		createForm.elements.ranked.checked = true;
+		await createForm.elements.ranked.dispatch('change');
+
+		const parsedBody = JSON.parse(createForm.elements.body.value);
+		expect(parsedBody.name).toBe('Custom Momentum');
+		expect(parsedBody.timeframe).toBe('1D');
+		expect(parsedBody.limit).toBe(20);
+		expect(parsedBody.ranked).toBe(true);
+	});
+
+	it('disables preset mutation buttons for admin.viewer role', async () => {
+		let authStateChanged;
+		const user = {
+			getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+			getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.viewer'] } }),
+		};
+		const auth = {
+			setPersistence: jest.fn().mockResolvedValue(undefined),
+			onAuthStateChanged: jest.fn((listener) => {
+				authStateChanged = listener;
+				listener(null);
+				return jest.fn();
+			}),
+			signInWithEmailAndPassword: jest.fn(async () => {
+				await authStateChanged(user);
+				return { user };
+			}),
+			signOut: jest.fn().mockResolvedValue(undefined),
+		};
+		const firebase = {
+			initializeApp: jest.fn(),
+			auth: jest.fn(() => auth),
+		};
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({
+						enabled: true,
+						configured: true,
+						config: { apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros' },
+					});
+				}
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/scanner-presets') {
+					return response({
+						success: true,
+						presets: [
+							{
+								id: 'viewer_preset',
+								name: 'Viewer Preset',
+								exchange: 'BINANCE',
+								timeframe: '4h',
+								limit: 5,
+								scans: ['top_gainers'],
+							},
+						],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+
+		browser.elementsById['auth-email'].value = 'viewer@example.com';
+		browser.elementsById['auth-password'].value = 'password';
+		await browser.elementsById['sign-in'].dispatch('click');
+		await flush();
+
+		await selectView(browser, 'presets');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/scanner-presets');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const runBtn = findButton(listForm, 'Run');
+		const editBtn = findButton(listForm, 'Edit');
+		const deleteBtn = findButton(listForm, 'Delete');
+
+		expect(runBtn.disabled).toBe(true);
+		expect(runBtn.title).toBe('Requires admin.operator role');
+		expect(editBtn.disabled).toBe(true);
+		expect(editBtn.title).toBe('Requires admin.operator role');
+		expect(deleteBtn.disabled).toBe(true);
+		expect(deleteBtn.title).toBe('Requires admin.operator role');
+	});
+
 	it('loads recent jobs with bounded status, type, and limit filters', async () => {
 		const requests = [];
 		const browser = createBrowser({
