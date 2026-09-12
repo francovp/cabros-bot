@@ -315,7 +315,7 @@ class ChatPreferenceService {
 			this._setCache(docId, sanitized);
 			return sanitized;
 		} catch (error) {
-			console.warn(`[ChatPreferenceService] Failed to get preferences for ${docId}:`, error.message);
+			console.warn('[ChatPreferenceService] Failed to get preferences:', docId, error.message);
 			return defaults;
 		}
 	}
@@ -352,7 +352,7 @@ class ChatPreferenceService {
 
 				await db.collection('chatPreferences').doc(docId).set(payload, { merge: true });
 			} catch (error) {
-				console.warn(`[ChatPreferenceService] Failed to persist preferences for ${docId}:`, error.message);
+				console.warn('[ChatPreferenceService] Failed to persist preferences:', docId, error.message);
 			}
 		}
 
@@ -369,7 +369,7 @@ class ChatPreferenceService {
 			try {
 				await db.collection('chatPreferences').doc(docId).delete();
 			} catch (error) {
-				console.warn(`[ChatPreferenceService] Failed to delete preferences for ${docId}:`, error.message);
+				console.warn('[ChatPreferenceService] Failed to delete preferences:', docId, error.message);
 			}
 		}
 
