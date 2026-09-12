@@ -24,6 +24,8 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `BOT_TOKEN` - Telegram bot token (from BotFather). Required only when `ENABLE_TELEGRAM_BOT=true` and the app is expected to launch Telegraf outside PR previews
 - `TELEGRAM_CHAT_ID` - Telegram chat ID where alerts are sent
 - `ENABLE_TELEGRAM_BOT` - Enable Telegram bot (`true` or `false`)
+- `ENABLE_TELEGRAM_COMMAND_RATE_LIMITING` - Enable per-chat throttling for expensive Telegram commands (`true` by default; security control, excluded from Remote Config)
+- `TELEGRAM_COMMAND_RATE_LIMITS_JSON` - Optional JSON overrides for per-command `max` and `windowMs`; defaults are `/precio` 10 per 60 seconds and `/analisis`, `/scanner`, `/noticias` 3 per hour. Values are bounded to `max` 1-1000 and `windowMs` 1-86400000; invalid values use defaults (security control, excluded from Remote Config)
 
 ### Optional Variables
 
@@ -126,6 +128,7 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` - Enable optional `combined_analysis` confluence enrichment for TradingView webhook alerts (`true` or `false`, default: `false`)
 - `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` - Also call `multi_timeframe_analysis` during confluence enrichment (`true` or `false`, default: `false`)
 - `ENABLE_ALERT_HTF_RENDER` - Enable rendering higher-timeframe trend alignment on enriched webhook alerts (`true` or `false`, default: `true`)
+- `ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT` - Enable multi-agent consensus analysis fallback for `/api/webhook/symbol-analysis` (`true` or `false`, default: `false`)
 - `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` - Suppress duplicate channel delivery for the same `exchange|symbol|timeframe|side` signal within its cooldown window; suppressed alerts are still persisted with a `suppressedRepeat: true` marker and opposite-side flips always deliver (`true` or `false`, default: `false`)
 - `ALERT_SIGNAL_COOLDOWN_BARS` - Cooldown length in alert-timeframe bars for repeat suppression (`1`-`10`, default: `1`)
 - Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
@@ -134,6 +137,7 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 
 - `ENABLE_FIRESTORE_ALERT_STORAGE` - Enable Firestore persistence and alert read API (`true` or `false`, default: `false`)
 - `ALERT_STORAGE_RETENTION_DAYS` - Retention for `alerts` and `alertReplays` records in days (`1`-`3650`, default: `90`). New records get `expiresAt`; run `bash ops/configure-firestore-alert-retention.sh` once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
+- **Backup & Disaster Recovery**: To safeguard high-value analytical history (`alerts`, `alertReplays`, `tradingSignalOutcomes`, `scannerPresets`) against permanent TTL deletion, automated scheduled workflows (`.github/workflows/firestore-backup.yml`), managed GCS exports (`ops/export-firestore-managed.sh`), and selective JSONL exports (`pnpm run backup:firestore`, `pnpm run restore:firestore`) are provided. See [`docs/firestore-backup-and-restore.md`](docs/firestore-backup-and-restore.md) for the complete runbook and restore procedures.
 - `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`)
 - `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`)
 - `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
@@ -886,11 +890,12 @@ Analyze one `EXCHANGE:SYMBOL` with TradingView MCP and return the Spanish report
   "symbol": "BINANCE:BTCUSDT",
   "timeframe": "1D",
   "analysisMode": "combined",
-  "includeMultiTimeframe": true
+  "includeMultiTimeframe": true,
+  "includeMultiAgent": true
 }
 ```
 
-The response includes `alertText`, normalized price/volume/indicator/signal/assessment data, sentiment/news/confluence and multi-timeframe results when requested, plus directional `risk` and `decision` metadata. `decision.action` is `BUY` or `SELL` only when the data and risk levels are sufficient; otherwise it is `NO_TRADE`. This endpoint never delivers notifications or submits orders. Invalid symbols return `400 INVALID_REQUEST`, TradingView failures return `502 SYMBOL_ANALYSIS_FAILED`, and deadline expiry returns `504 SYMBOL_ANALYSIS_TIMEOUT`.
+The response includes `alertText`, normalized price/volume/indicator/signal/assessment data, sentiment/news/confluence, multi-timeframe results, and multi-agent consensus results (`multiAgent`) when requested (or when `ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT=true`), plus directional `risk` and `decision` metadata. When multi-agent consensus disagrees with the directional signal (decision is `HOLD`, confidence is `Low`, or decision opposes side), an advisory warning (`Consenso multi-agente no confirma la señal`) is appended to `decision.warnings` without flipping the primary action. `decision.action` is `BUY` or `SELL` only when the data and risk levels are sufficient; otherwise it is `NO_TRADE`. This endpoint never delivers notifications or submits orders. Invalid symbols return `400 INVALID_REQUEST`, TradingView failures return `502 SYMBOL_ANALYSIS_FAILED`, and deadline expiry returns `504 SYMBOL_ANALYSIS_TIMEOUT`. Upstream multi-agent failures fail open and mark `analysisStatus: "partial"` while preserving the base analysis.
 
 ### POST /api/webhook/market-scanner-alert
 
@@ -1219,6 +1224,7 @@ Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string 
 - `limit` - Integer between `1` and `1000` (default: `500`)
 - `source` / `enriched` - Optional filters
 - `includeText` - Optional boolean; raw alert text is excluded unless `true`
+- `includeEnrichment` - Optional boolean; safe bounded projection of `enrichmentData` is excluded unless `true`
 
 #### GET /api/alerts/summary
 
@@ -1478,6 +1484,15 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
     {
       "id": "outcome-doc-1",
       "receivedAt": "2026-08-23T12:00:00.000Z",
+      "observedAt": "2026-08-23T12:00:00.000Z",
+      "decisionBarClosedAt": null,
+      "tradableAt": "2026-08-23T12:00:00.000Z",
+      "anchorMode": "raw_received_at",
+      "anchorVersion": "v1",
+      "calendarId": null,
+      "calendarTimeZone": null,
+      "sessionContext": "crypto_24_7",
+      "measurementCohort": "raw_received_at",
       "requestId": "req-1",
       "source": "news-monitor",
       "symbol": "BTCUSDT",
@@ -1488,6 +1503,8 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
       "score": 0.9,
       "side": "BUY",
       "price": 65000,
+      "observedPrice": 65000,
+      "tradablePrice": 65000,
       "entryPriceSource": "tradingview-mcp",
       "stop": 63000,
       "target": 68000,
@@ -1500,6 +1517,9 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
           "status": "evaluated",
           "reason": null,
           "targetTime": "2026-08-23T13:00:00.000Z",
+          "anchorMode": "raw_received_at",
+          "anchorVersion": "v1",
+          "measurementCohort": "raw_received_at",
           "price": 66000,
           "return": 1.5385,
           "maxFavorableExcursion": 2.0,
@@ -1529,9 +1549,11 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
 }
 ```
 
+Equity records also persist `sessionContext`, `decisionBarClosedAt`, `tradableAt`, and separate observed/tradable price fields. Post-close or holiday records are labeled `raw_received_at_after_hours` or `raw_market_closed`; they remain in the shadow raw-observation cohort until a separate executable-session price is available.
+
 #### GET /api/outcomes/summary
 
-Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range. When no outcomes match the filters or tracking is enabled with an empty dataset, the endpoint returns `200 OK` with `available: false` and a typed empty summary structure. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
+Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range. Explicit `from`/`to` ranges may include archived records restored from backups; requests without `from` remain bounded by the configured retention window. When no outcomes match the filters or tracking is enabled with an empty dataset, the endpoint returns `200 OK` with `available: false` and a typed empty summary structure. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
 
 **Query Parameters:**
 - `limit` - Maximum number of recent outcomes to aggregate (integer between `1` and `100`, default: `50`)

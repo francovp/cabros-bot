@@ -34,6 +34,9 @@
       "name": "Signal outcomes"
     },
     {
+      "name": "Symbol analyses"
+    },
+    {
       "name": "Operations"
     }
   ],
@@ -518,6 +521,9 @@
           },
           {
             "$ref": "#/components/parameters/IncludeText"
+          },
+          {
+            "$ref": "#/components/parameters/IncludeEnrichment"
           }
         ],
         "responses": {
@@ -1258,6 +1264,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
@@ -1292,6 +1301,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
@@ -1302,6 +1314,111 @@
             "ApiKeyQuery": []
           }
         ]
+      }
+    },
+    "/api/news-monitor/pause": {
+      "post": {
+        "tags": [
+          "News"
+        ],
+        "summary": "Pause news monitor analysis",
+        "description": "Sets the process-level news monitor pause toggle, rejecting incoming manual analysis requests with HTTP 503 and causing background sweep cycles to skip execution.",
+        "operationId": "pauseNewsMonitor",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/NewsMonitorPause"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/NewsMonitorPauseResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/news-monitor/resume": {
+      "post": {
+        "tags": [
+          "News"
+        ],
+        "summary": "Resume news monitor analysis",
+        "description": "Clears the process-level news monitor pause toggle, allowing incoming manual analysis requests and background scheduler sweep cycles to proceed normally.",
+        "operationId": "resumeNewsMonitor",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/NewsMonitorResumeResult"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/news-monitor/status": {
+      "get": {
+        "tags": [
+          "News"
+        ],
+        "summary": "Get news monitor pause status",
+        "description": "Returns the current process-level pause status, timestamp, and optional reason for the news monitor analysis pipeline.",
+        "operationId": "getNewsMonitorStatus",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/NewsMonitorStatusResult"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
       }
     },
     "/api/outcomes": {
@@ -1403,6 +1520,133 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/OutcomesSummaryResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/symbol-analyses": {
+      "get": {
+        "tags": [
+          "Symbol analyses"
+        ],
+        "summary": "List recorded symbol analyses",
+        "description": "Query durably recorded symbol analysis results with pagination and filtering by symbol, exchange, timeframe, action, and date range.",
+        "operationId": "listSymbolAnalyses",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OutcomeLimit"
+          },
+          {
+            "$ref": "#/components/parameters/BeforeCursor"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeExchange"
+          },
+          {
+            "$ref": "#/components/parameters/SymbolAnalysisTimeframe"
+          },
+          {
+            "$ref": "#/components/parameters/SymbolAnalysisAction"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SymbolAnalysesList"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/symbol-analyses/summary": {
+      "get": {
+        "tags": [
+          "Symbol analyses"
+        ],
+        "summary": "Summarize recorded symbol analyses",
+        "description": "Query aggregated action breakdown and coverage metrics for recorded symbol analyses.",
+        "operationId": "summarizeSymbolAnalyses",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SymbolAnalysisSummaryLimit"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeExchange"
+          },
+          {
+            "$ref": "#/components/parameters/SymbolAnalysisTimeframe"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SymbolAnalysesSummaryResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -1935,6 +2179,39 @@
         },
         "description": "Filter by measurement window."
       },
+      "SymbolAnalysisAction": {
+        "name": "action",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "BUY",
+            "SELL",
+            "NO_TRADE"
+          ]
+        },
+        "description": "Filter by analysis decision action (BUY, SELL, or NO_TRADE)."
+      },
+      "SymbolAnalysisTimeframe": {
+        "name": "timeframe",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "example": "1h",
+        "description": "Filter by chart timeframe (e.g. 15m, 1h, 4h, 1D)."
+      },
+      "SymbolAnalysisSummaryLimit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 500
+        },
+        "description": "Maximum number of recent symbol analyses to aggregate into the summary."
+      },
       "JobListLimit": {
         "name": "limit",
         "in": "query",
@@ -2024,6 +2301,15 @@
       "IncludeText": {
         "name": "includeText",
         "in": "query",
+        "schema": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "IncludeEnrichment": {
+        "name": "includeEnrichment",
+        "in": "query",
+        "description": "When true, includes a bounded safe projection of enrichmentData in exported records.",
         "schema": {
           "type": "boolean",
           "default": false
@@ -2479,6 +2765,18 @@
                   "origClientOrderId": "cabros-574-1"
                 }
               }
+            }
+          }
+        }
+      },
+      "NewsMonitorPause": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsMonitorPauseRequest"
+            },
+            "example": {
+              "reason": "Gemini quota exhaustion"
             }
           }
         }
@@ -3014,6 +3312,120 @@
           }
         }
       },
+      "SymbolAnalysesList": {
+        "description": "Paginated list of recorded symbol analyses",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "analyses",
+                "count",
+                "limit"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "analyses": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SymbolAnalysisRecord"
+                  }
+                },
+                "count": {
+                  "type": "integer",
+                  "example": 1
+                },
+                "limit": {
+                  "type": "integer",
+                  "example": 50
+                },
+                "nextCursor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "example": null
+                }
+              }
+            }
+          }
+        }
+      },
+      "SymbolAnalysesSummaryResult": {
+        "description": "Aggregated summary of recorded symbol analyses",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "summary"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "summary": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "totalAnalyses",
+                    "byAction",
+                    "bySymbol",
+                    "byTimeframe",
+                    "byExchange",
+                    "window"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "totalAnalyses": {
+                      "type": "integer",
+                      "example": 10
+                    },
+                    "byAction": {
+                      "type": "object",
+                      "properties": {
+                        "BUY": {
+                          "type": "integer",
+                          "example": 5
+                        },
+                        "SELL": {
+                          "type": "integer",
+                          "example": 3
+                        },
+                        "NO_TRADE": {
+                          "type": "integer",
+                          "example": 2
+                        }
+                      }
+                    },
+                    "bySymbol": {
+                      "type": "object"
+                    },
+                    "byTimeframe": {
+                      "type": "object"
+                    },
+                    "byExchange": {
+                      "type": "object"
+                    },
+                    "window": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "NewsMonitorAnalysisResult": {
         "description": "News monitor analysis and delivery result",
         "content": {
@@ -3060,6 +3472,54 @@
                   "tokenUsage": {}
                 }
               }
+            }
+          }
+        }
+      },
+      "NewsMonitorPauseResult": {
+        "description": "News monitor successfully paused",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsMonitorPauseResponse"
+            },
+            "example": {
+              "message": "News monitor analysis paused",
+              "paused": true,
+              "pausedAt": "2026-09-04T05:00:00.000Z",
+              "reason": "Gemini quota exhaustion"
+            }
+          }
+        }
+      },
+      "NewsMonitorResumeResult": {
+        "description": "News monitor successfully resumed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsMonitorResumeResponse"
+            },
+            "example": {
+              "message": "News monitor analysis resumed",
+              "paused": false,
+              "resumedAt": "2026-09-04T05:10:00.000Z",
+              "wasPaused": true,
+              "previouslyPausedAt": "2026-09-04T05:00:00.000Z"
+            }
+          }
+        }
+      },
+      "NewsMonitorStatusResult": {
+        "description": "Current news monitor pause status",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsMonitorStatusResponse"
+            },
+            "example": {
+              "paused": false,
+              "pausedAt": null,
+              "reason": null
             }
           }
         }
@@ -3209,6 +3669,14 @@
                     "lastStateChangeAt": null,
                     "failureThreshold": 5,
                     "cooldownMs": 600000
+                  },
+                  "errorCategoryCounts": {
+                    "circuit_breaker_open": 0,
+                    "http_5xx": 0,
+                    "http_4xx": 0,
+                    "timeout": 0,
+                    "invalid_response": 0,
+                    "request_failed": 0
                   }
                 },
                 "equityMarketData": {
@@ -3494,6 +3962,54 @@
             "type": "string",
             "format": "date-time",
             "example": "2026-08-23T12:00:00.000Z"
+          },
+          "observedAt": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "Timestamp at which the signal was observed. Present on records written with session metadata."
+          },
+          "decisionBarClosedAt": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "Regular-session close represented by the signal when known."
+          },
+          "tradableAt": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "First regular-session timestamp at which an anchored cohort could trade. Current shadow evaluation still uses raw observation prices."
+          },
+          "anchorMode": {
+            "type": ["string", "null"],
+            "enum": ["raw_received_at", null],
+            "description": "Price/time denominator used by the current outcome evaluator."
+          },
+          "anchorVersion": {
+            "type": ["string", "null"],
+            "example": "v1"
+          },
+          "calendarId": {
+            "type": ["string", "null"],
+            "example": "nyse"
+          },
+          "calendarTimeZone": {
+            "type": ["string", "null"],
+            "example": "America/New_York"
+          },
+          "sessionContext": {
+            "type": ["string", "null"],
+            "enum": ["crypto_24_7", "regular", "pre_open", "pre_close", "after_hours", "market_holiday", "non_regular_market", null]
+          },
+          "measurementCohort": {
+            "type": ["string", "null"],
+            "enum": ["raw_received_at", "raw_received_at_after_hours", "raw_pre_open", "raw_market_closed", null],
+            "description": "Downstream segmentation label; after-hours equity windows are not anchored to a tradable opening price."
+          },
+          "observedPrice": {
+            "type": ["number", "null"]
+          },
+          "tradablePrice": {
+            "type": ["number", "null"],
+            "description": "Separate executable-session price. Null while the record remains in the raw observation shadow cohort."
           },
           "requestId": {
             "type": [
@@ -4629,6 +5145,28 @@
           "delivery": {
             "$ref": "#/components/schemas/JsonObject"
           },
+          "scanner": {
+            "description": "Market scanner run aggregates. totalRuns counts delivered market-scanner reports; errorCategoryCounts tallies per-symbol TradingView MCP failures by closed-enum category (mcp_unreachable, mcp_timeout, mcp_rate_limited, mcp_tool_error, mcp_suspended, symbol_invalid, symbol_unsupported, unknown).",
+            "type": "object",
+            "properties": {
+              "totalRuns": {
+                "type": "integer"
+              },
+              "errorCategoryCounts": {
+                "type": "object",
+                "properties": {
+                  "mcp_unreachable": { "type": "integer" },
+                  "mcp_timeout": { "type": "integer" },
+                  "mcp_rate_limited": { "type": "integer" },
+                  "mcp_tool_error": { "type": "integer" },
+                  "mcp_suspended": { "type": "integer" },
+                  "symbol_invalid": { "type": "integer" },
+                  "symbol_unsupported": { "type": "integer" },
+                  "unknown": { "type": "integer" }
+                }
+              }
+            }
+          },
           "latency": {
             "$ref": "#/components/schemas/JsonObject"
           },
@@ -4829,7 +5367,9 @@
                 "top_losers",
                 "volume_breakout_scanner",
                 "smart_volume_scanner",
-                "bollinger_scan"
+                "bollinger_scan",
+                "rating_filter",
+                "consecutive_candles_scan"
               ]
             }
           },
@@ -4842,6 +5382,34 @@
           "bbw_threshold": {
             "type": "number",
             "default": 0.05
+          },
+          "rating": {
+            "type": "integer",
+            "minimum": -3,
+            "maximum": 3,
+            "default": 3,
+            "description": "Bollinger Band rating threshold (-3 to 3) for rating_filter scan."
+          },
+          "pattern_type": {
+            "type": "string",
+            "enum": [
+              "bullish",
+              "bearish"
+            ],
+            "default": "bullish",
+            "description": "Candle pattern direction for consecutive_candles_scan."
+          },
+          "candle_count": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 5,
+            "default": 3,
+            "description": "Number of consecutive candles (2-5) for consecutive_candles_scan."
+          },
+          "min_growth": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Optional minimum growth threshold for consecutive_candles_scan."
           },
           "ranked": {
             "type": "boolean",
@@ -4955,9 +5523,38 @@
           "include_multi_timeframe": {
             "type": "boolean",
             "default": false
+          },
+          "includeMultiAgent": {
+            "type": "boolean",
+            "default": false
+          },
+          "include_multi_agent": {
+            "type": "boolean",
+            "default": false
           }
         },
         "additionalProperties": false
+      },
+      "SymbolAnalysisMultiAgent": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "nullable": true
+          },
+          "confidence": {
+            "type": "string",
+            "nullable": true
+          },
+          "net_score": {
+            "type": "number",
+            "nullable": true
+          },
+          "agents": {
+            "$ref": "#/components/schemas/JsonObject",
+            "nullable": true
+          }
+        }
       },
       "SymbolAnalysisResult": {
         "type": "object",
@@ -4998,6 +5595,9 @@
           "analysis": {
             "$ref": "#/components/schemas/JsonObject"
           },
+          "multiAgent": {
+            "$ref": "#/components/schemas/SymbolAnalysisMultiAgent"
+          },
           "requestId": {
             "type": "string"
           },
@@ -5005,6 +5605,82 @@
             "type": "integer",
             "minimum": 0,
             "description": "Total endpoint execution time in milliseconds."
+          }
+        }
+      },
+      "SymbolAnalysisRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "requestId",
+          "recordedAt",
+          "expiresAt",
+          "symbol",
+          "exchange",
+          "timeframe",
+          "action"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "recordedAt": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL",
+              "NO_TRADE"
+            ]
+          },
+          "price": {
+            "type": "number",
+            "nullable": true
+          },
+          "rsi": {
+            "type": "number",
+            "nullable": true
+          },
+          "indicators": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "risk": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "analysisStatus": {
+            "type": "string"
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "alertText": {
+            "type": "string"
+          },
+          "processingTimeMs": {
+            "type": "integer"
           }
         }
       },
@@ -5599,6 +6275,103 @@
             "$ref": "#/components/schemas/JsonObject"
           }
         }
+      },
+      "NewsMonitorPauseRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Optional operational reason for pausing news monitor analysis",
+            "example": "Gemini quota exhaustion"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewsMonitorPauseResponse": {
+        "type": "object",
+        "required": [
+          "message",
+          "paused",
+          "pausedAt",
+          "reason"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "News monitor analysis paused"
+          },
+          "paused": {
+            "type": "boolean",
+            "example": true
+          },
+          "pausedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "example": "Gemini quota exhaustion"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewsMonitorResumeResponse": {
+        "type": "object",
+        "required": [
+          "message",
+          "paused",
+          "resumedAt"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "News monitor analysis resumed"
+          },
+          "paused": {
+            "type": "boolean",
+            "example": false
+          },
+          "resumedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "wasPaused": {
+            "type": "boolean",
+            "example": true
+          },
+          "previouslyPausedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewsMonitorStatusResponse": {
+        "type": "object",
+        "required": [
+          "paused",
+          "pausedAt",
+          "reason"
+        ],
+        "properties": {
+          "paused": {
+            "type": "boolean",
+            "example": false
+          },
+          "pausedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          }
+        },
+        "additionalProperties": false
       },
       "DeliveryResult": {
         "type": "object",

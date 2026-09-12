@@ -29,6 +29,7 @@
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
+const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentials');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 
 const COLLECTION_NAME = 'alerts';
@@ -153,6 +154,10 @@ function buildRetentionExpiryTimestamp() {
 }
 
 function isRetentionExpired(data) {
+	if (data && data.retentionPolicy === 'archive') {
+		return false;
+	}
+
 	const explicitExpiry = getTimestampMillis(data && data.expiresAt);
 	if (explicitExpiry !== null) {
 		return explicitExpiry <= Date.now();
@@ -312,6 +317,55 @@ function stripUndefinedFieldsDeep(value) {
 			result[key] = stripUndefinedFieldsDeep(item);
 		}
 	}
+	return result;
+}
+
+const VALID_SCANNER_ERROR_CATEGORIES = new Set([
+	'mcp_unreachable',
+	'mcp_timeout',
+	'mcp_rate_limited',
+	'mcp_tool_error',
+	'mcp_suspended',
+	'symbol_invalid',
+	'symbol_unsupported',
+	'unknown',
+]);
+
+function createEmptyScannerErrorCategoryCounts() {
+	return {
+		mcp_unreachable: 0,
+		mcp_timeout: 0,
+		mcp_rate_limited: 0,
+		mcp_tool_error: 0,
+		mcp_suspended: 0,
+		symbol_invalid: 0,
+		symbol_unsupported: 0,
+		unknown: 0,
+	};
+}
+
+function sanitizeScannerErrorCategories(value) {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+
+	const seen = new Set();
+	const result = [];
+	for (const entry of value) {
+		if (typeof entry !== 'string') {
+			continue;
+		}
+		const normalized = entry.trim().toLowerCase();
+		if (!VALID_SCANNER_ERROR_CATEGORIES.has(normalized)) {
+			continue;
+		}
+		if (seen.has(normalized)) {
+			continue;
+		}
+		seen.add(normalized);
+		result.push(normalized);
+	}
+
 	return result;
 }
 
@@ -801,7 +855,9 @@ function truncateAlertText(text) {
 		: text;
 }
 
-function formatExportRecord(doc, { includeText }) {
+const formatExportEnrichmentData = formatEnrichmentSummary;
+
+function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
 	const data = doc.data() || {};
 	const record = {
 		id: doc.id,
@@ -830,6 +886,10 @@ function formatExportRecord(doc, { includeText }) {
 	}
 	if (typeof data.dedupStatus === 'string') {
 		record.dedupStatus = data.dedupStatus;
+	}
+
+	if (includeEnrichment) {
+		record.enrichmentData = formatExportEnrichmentData(data.enrichmentData, data);
 	}
 
 	if (includeText) {
@@ -1015,10 +1075,10 @@ function getRawDocCursorValues(doc) {
  * Initialize Firebase Admin (idempotent) and return Firestore client.
  * Returns null when the feature is disabled or initialization fails.
  *
- * Credential resolution order (matches firebase-admin defaults):
- *   1. GOOGLE_APPLICATION_CREDENTIALS env var (path to service-account JSON file)
- *   2. FIREBASE_SERVICE_ACCOUNT_JSON env var   (inline JSON string, preferred for Render secrets)
- *   3. Application Default Credentials          (GCP / Cloud Run managed identity)
+ * Credential resolution is delegated to the shared helper at
+ * src/services/storage/firebaseAdminCredentials.js, which consolidates
+ * FIREBASE_SERVICE_ACCOUNT_JSON / GOOGLE_APPLICATION_CREDENTIALS parsing
+ * and validation that previously lived in this file and three others.
  *
  * @returns {FirebaseFirestore.Firestore | null}
  */
@@ -1032,21 +1092,13 @@ function getFirestore() {
 	}
 
 	try {
-		let credential;
-
-		// Option B: inline JSON (preferred for Render.com secret env vars)
-		if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-			const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-			credential = admin.credential.cert(serviceAccount);
-		}
-		// Option A: GOOGLE_APPLICATION_CREDENTIALS file path handled automatically by initializeApp()
-
+		const loaded = loadFirebaseAdminCredentialsOrNull();
 		const appOptions = {};
-		if (credential) {
-			appOptions.credential = credential;
+		if (loaded && loaded.credential) {
+			appOptions.credential = loaded.credential;
 		}
-		if (process.env.FIREBASE_PROJECT_ID) {
-			appOptions.projectId = process.env.FIREBASE_PROJECT_ID;
+		if (loaded && loaded.projectId) {
+			appOptions.projectId = loaded.projectId;
 		}
 
 		if (!admin.apps.length) {
@@ -1100,6 +1152,7 @@ async function saveAlertInternal({
 	sentimentScore,
 	dedupStatus,
 	requestId,
+	scannerErrorCategories,
 	telegramChatId,
 	telegramThreadId,
 	whatsappChatId,
@@ -1177,6 +1230,10 @@ async function saveAlertInternal({
 		}
 		if (typeof dedupStatus === 'string' && dedupStatus.trim()) {
 			document.dedupStatus = dedupStatus.trim();
+		}
+		const sanitizedScannerErrorCategories = sanitizeScannerErrorCategories(scannerErrorCategories);
+		if (sanitizedScannerErrorCategories.length > 0) {
+			document.scannerErrorCategories = sanitizedScannerErrorCategories;
 		}
 		if (typeof effectiveTelegramChatId === 'string' && effectiveTelegramChatId.trim()) {
 			document.telegramChatId = effectiveTelegramChatId.trim();
@@ -1639,9 +1696,10 @@ async function getLatestReplayForAlert(alertId) {
  * @param {string|undefined} params.source Optional exact source filter
  * @param {boolean|undefined} params.enriched Optional enriched/plain filter
  * @param {boolean|undefined} params.includeText Include truncated alert text when true
+ * @param {boolean|undefined} params.includeEnrichment Include bounded enrichmentData when true
  * @returns {Promise<{window: Object, alerts: Array}>}
  */
-async function exportAlerts({ from, to, limit, source, enriched, includeText = false } = {}) {
+async function exportAlerts({ from, to, limit, source, enriched, includeText = false, includeEnrichment = false } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -1702,7 +1760,7 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 		}
 	}
 
-	const alerts = docs.map(doc => formatExportRecord(doc, { includeText }));
+	const alerts = docs.map(doc => formatExportRecord(doc, { includeText, includeEnrichment }));
 
 	return {
 		window,
@@ -1821,6 +1879,10 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 			totalFailure: 0,
 			byChannel: {},
 		},
+		scanner: {
+			totalRuns: 0,
+			errorCategoryCounts: createEmptyScannerErrorCategoryCounts(),
+		},
 		latency: {
 			averageProcessingMs: null,
 			averageDeliveryMs: null,
@@ -1870,6 +1932,16 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		addTokenUsage(summary.enrichment.tokenUsage, data.tokenUsage);
 		addDeliverySummary(summary.delivery, data.deliveryResults);
 		collectLatency(processingLatencySamples, data.processingTimeMs ?? data.processing_time_ms);
+
+		if (data.source === 'market-scanner') {
+			summary.scanner.totalRuns += 1;
+			const scannerErrorCategories = sanitizeScannerErrorCategories(data.scannerErrorCategories);
+			for (const category of scannerErrorCategories) {
+				if (Object.prototype.hasOwnProperty.call(summary.scanner.errorCategoryCounts, category)) {
+					summary.scanner.errorCategoryCounts[category] += 1;
+				}
+			}
+		}
 
 		if (Array.isArray(data.deliveryResults)) {
 			for (const result of data.deliveryResults) {
