@@ -32,6 +32,7 @@ const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
 const { whatsAppCommandBridgeService } = require('./src/services/notification/WhatsAppCommandBridgeService');
+const { burstAggregator } = require('./src/services/alerts/burstAggregator');
 const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
 const sentryService = require('./src/services/monitoring/SentryService');
@@ -84,6 +85,13 @@ const lifecycle = createProcessLifecycle({
 	stopNewsMonitorScheduler: (options) => newsMonitorSchedulerService.stopWorker(options),
 	stopRemoteConfig: () => remoteConfigService.stop(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
+	shutdownBurstAggregator: () => {
+		try {
+			burstAggregator.flushAll();
+		} catch (error) {
+			console.warn('[Shutdown] Burst aggregator flush failed:', error && error.message);
+		}
+	},
 	flushSentry: (timeout) => sentryService.flush(timeout),
 	timeoutMs: process.env.SHUTDOWN_TIMEOUT_MS,
 });

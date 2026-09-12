@@ -22,6 +22,7 @@ const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsApp
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { burstAggregator } = require('../services/alerts/burstAggregator');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
 const {
 	isNewsMonitorPaused,
@@ -367,6 +368,7 @@ function getStatus() {
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
+			alertBurstAggregation: burstAggregator.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 		},
@@ -444,6 +446,10 @@ function getStatus() {
 			alertSignalRepeatSuppression: {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
+			},
+			alertBurstAggregation: {
+				enabled: burstAggregator.isEnabled(),
+				...burstAggregator.getStats(),
 			},
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,

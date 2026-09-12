@@ -210,6 +210,15 @@ function formatAlertDocument(doc, options = {}) {
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
 	}
+	if (typeof data.burstAggregateId === 'string' && data.burstAggregateId.trim()) {
+		docObj.burstAggregateId = data.burstAggregateId.trim();
+	}
+	if (data.aggregated === true) {
+		docObj.aggregated = true;
+	}
+	if (data.pending === true) {
+		docObj.pending = true;
+	}
 	if (typeof data.eventCategory === 'string') {
 		docObj.eventCategory = data.eventCategory;
 	}
@@ -873,6 +882,15 @@ function formatExportRecord(doc, { includeText }) {
 	if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(data.tradingViewEnrichmentStatus)) {
 		record.tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
 	}
+	if (typeof data.burstAggregateId === 'string' && data.burstAggregateId.trim()) {
+		record.burstAggregateId = data.burstAggregateId.trim();
+	}
+	if (data.aggregated === true) {
+		record.aggregated = true;
+	}
+	if (data.pending === true) {
+		record.pending = true;
+	}
 	if (typeof data.eventCategory === 'string') {
 		record.eventCategory = data.eventCategory;
 	}
@@ -1152,6 +1170,9 @@ async function saveAlertInternal({
 	whatsappChatId,
 	discordWebhookUrl,
 	routing,
+	burstAggregateId,
+	aggregated,
+	pending,
 }) {
 	if (!isEnabled()) {
 		return null;
@@ -1240,6 +1261,15 @@ async function saveAlertInternal({
 		}
 		if (typeof effectiveDiscordWebhookUrl === 'string' && effectiveDiscordWebhookUrl.trim()) {
 			document.discordWebhookUrl = effectiveDiscordWebhookUrl.trim();
+		}
+		if (typeof burstAggregateId === 'string' && burstAggregateId.trim()) {
+			document.burstAggregateId = burstAggregateId.trim();
+		}
+		if (aggregated === true) {
+			document.aggregated = true;
+		}
+		if (pending === true) {
+			document.pending = true;
 		}
 
 		const docRef = await firestore.collection(COLLECTION_NAME).add(document);
