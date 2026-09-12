@@ -594,7 +594,10 @@ class NewsAnalyzer {
 		tracker.recordThrottled(throttled.length);
 
 		// Synchronously reserve window quota before starting asynchronous deliveries
-		const reservation = tracker.reserveCapacity(allowed.length);
+		const reservationTtl = typeof options.deadline === 'number'
+			? Math.max(options.deadline - Date.now() + 60000, 600000)
+			: 600000;
+		const reservation = tracker.reserveCapacity(allowed.length, Date.now(), reservationTtl);
 		const grantedCount = reservation ? reservation.count : 0;
 		const deliverable = allowed.slice(0, grantedCount);
 		const extraThrottled = allowed.slice(grantedCount);
@@ -631,13 +634,18 @@ class NewsAnalyzer {
 					break;
 				}
 
+				if (reservation && typeof tracker.renewReservation === 'function') {
+					tracker.renewReservation(reservation, Date.now(), reservationTtl);
+				}
+
 				const res = item.result;
 				if (res._pendingDelivery) {
 					await this.executePendingDelivery(res, requestId, options);
-					if (res.status === AnalysisStatus.ANALYZED || (res.status === AnalysisStatus.CACHED && res._redelivered)) {
-						deliveredCount++;
-					}
-				} else {
+				}
+				const alertDelivered = res._alertSent === true
+					|| res._redelivered === true
+					|| (Array.isArray(res.deliveryResults) && res.deliveryResults.some((d) => d && d.success === true));
+				if (alertDelivered) {
 					deliveredCount++;
 				}
 			}
@@ -1186,6 +1194,7 @@ class NewsAnalyzer {
 
 		if (!notificationMgr) {
 			console.warn('[Analyzer] NotificationManager not initialized - skipping alert delivery');
+			await this.cache.releaseClaim(symbol, geminiAnalysis.event_category);
 			candidate.deliveryResults = [];
 			delete candidate._pendingDelivery;
 			return;
@@ -1193,11 +1202,13 @@ class NewsAnalyzer {
 
 		if (mergedOptions.signal?.aborted) {
 			console.warn('[Analyzer] Pending delivery aborted by signal before notification dispatch for:', symbol);
+			await this.cache.releaseClaim(symbol, geminiAnalysis.event_category);
 			delete candidate._pendingDelivery;
 			return;
 		}
 		if (typeof mergedOptions.deadline === 'number' && Date.now() >= mergedOptions.deadline) {
 			console.warn('[Analyzer] Pending delivery aborted: deadline exceeded before notification dispatch for:', symbol);
+			await this.cache.releaseClaim(symbol, geminiAnalysis.event_category);
 			delete candidate._pendingDelivery;
 			return;
 		}
@@ -1261,6 +1272,7 @@ class NewsAnalyzer {
 		if (candidate.analysisRecord) {
 			candidate.analysisRecord.alertSent = alertSent;
 		}
+		candidate._alertSent = alertSent;
 		delete candidate._pendingDelivery;
 	}
 

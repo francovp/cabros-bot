@@ -153,19 +153,30 @@ class NewsAlertVolumeTracker {
 		return Math.min(maxPerBatch, remainingInWindow);
 	}
 
-	reserveCapacity(count, now = Date.now(), ttlMs = 60000) {
+	reserveCapacity(count, now = Date.now(), ttlMs = null) {
 		if (count <= 0) return null;
 		this.prune(now);
 		const remaining = this.getRemainingWindowQuota(now);
 		const toReserve = Math.min(count, remaining);
 		if (toReserve <= 0) return null;
+		const effectiveTtl = typeof ttlMs === 'number' && ttlMs > 0 ? ttlMs : Math.max(this.getWindowMs(), 600000);
 		const reservation = {
 			id: Math.random().toString(36).substring(2) + Date.now().toString(36),
 			count: toReserve,
-			expiresAt: now + ttlMs,
+			expiresAt: now + effectiveTtl,
 		};
 		this.reservations.push(reservation);
 		return reservation;
+	}
+
+	renewReservation(reservation, now = Date.now(), ttlMs = null) {
+		if (!reservation) return;
+		const r = this.reservations.find((item) => item.id === reservation.id);
+		if (r) {
+			const effectiveTtl = typeof ttlMs === 'number' && ttlMs > 0 ? ttlMs : Math.max(this.getWindowMs(), 600000);
+			r.expiresAt = now + effectiveTtl;
+			reservation.expiresAt = r.expiresAt;
+		}
 	}
 
 	commitReservation(reservation, deliveredCount = null, now = Date.now()) {

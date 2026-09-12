@@ -153,6 +153,30 @@ describe('NewsAlertVolumeTracker', () => {
 				const secondReservation = tracker.reserveCapacity(5);
 				expect(secondReservation).toBeNull();
 			});
+
+			it('uses long default TTL of at least 10m to prevent premature expiration', () => {
+				const start = 1700000000000;
+				const tracker = new NewsAlertVolumeTracker({ maxAlertsPerWindow: 10, windowMs: 300000 });
+				const reservation = tracker.reserveCapacity(4, start);
+				expect(reservation.expiresAt).toBe(start + 600000); // 10 minutes
+
+				// At T + 120s (e.g. slow delivery batch), reservation is still alive
+				expect(tracker.getRemainingWindowQuota(start + 120000)).toBe(6);
+			});
+
+			it('renews reservation expiry to keep reservation alive during multi-step batch delivery', () => {
+				const start = 1700000000000;
+				const tracker = new NewsAlertVolumeTracker({ maxAlertsPerWindow: 10, windowMs: 300000 });
+				const reservation = tracker.reserveCapacity(4, start, 50000);
+				expect(reservation.expiresAt).toBe(start + 50000);
+
+				// Renew at T + 30s
+				tracker.renewReservation(reservation, start + 30000, 60000);
+				expect(reservation.expiresAt).toBe(start + 90000);
+
+				// At T + 60s, it would have expired without renewal, but remains active
+				expect(tracker.getRemainingWindowQuota(start + 60000)).toBe(6);
+			});
 		});
 	});
 

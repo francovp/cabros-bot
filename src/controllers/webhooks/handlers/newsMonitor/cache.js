@@ -575,6 +575,28 @@ class NewsCache {
 	}
 
 	/**
+	 * Release an in-flight claim when delivery is aborted or abandoned before dispatch.
+	 *
+	 * @param {string} symbol
+	 * @param {string} eventCategory
+	 * @returns {Promise<void>}
+	 */
+	async releaseClaim(symbol, eventCategory) {
+		const key = this.generateKey(symbol, eventCategory);
+		const entry = this.cache.get(key);
+		if (entry?.data?.status === 'claiming') {
+			this.cache.delete(key);
+		}
+		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
+			try {
+				await newsDedupStorageService.deleteEntry(key);
+			} catch (error) {
+				console.warn('[NewsCache] Firestore releaseClaim/deleteEntry failed (fail-open):', error.message);
+			}
+		}
+	}
+
+	/**
    * Remove expired entries from cache
    * Called periodically by setInterval
    */

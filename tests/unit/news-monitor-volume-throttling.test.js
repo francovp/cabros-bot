@@ -454,4 +454,64 @@ describe('News Monitor Volume Throttling & Adaptive Caps', () => {
 			expect(totalDelivered).toBeLessThanOrEqual(2);
 		});
 	});
+
+	describe('delivery failure and claim release handling', () => {
+		it('does not consume window quota if all channels fail during delivery', async () => {
+			const tracker = getVolumeTracker();
+			tracker.resetForTesting(Date.now());
+			tracker.maxAlertsPerWindow = 5;
+			tracker.maxAlertsPerBatch = 5;
+
+			const analyzer = new NewsAnalyzer();
+			analyzer.volumeTracker = tracker;
+
+			const results = [
+				{
+					symbol: 'FAIL_SYM',
+					status: AnalysisStatus.ANALYZED,
+					alert: { symbol: 'FAIL_SYM', confidence: 0.9 },
+					deliveryResults: [],
+					_pendingDelivery: { type: 'new', alert: { symbol: 'FAIL_SYM', confidence: 0.9 } },
+				},
+			];
+
+			// Simulate failed delivery
+			analyzer.executePendingDelivery = jest.fn(async (candidate) => {
+				candidate.deliveryResults = [{ channel: 'telegram', success: false, error: 'Network Error' }];
+				candidate._alertSent = false;
+			});
+
+			await analyzer.applyVolumeThrottling(results, 'req-fail', {}, {});
+
+			const usage = tracker.getWindowUsage();
+			expect(usage.alertsDelivered).toBe(0);
+			expect(tracker.getRemainingWindowQuota()).toBe(5);
+		});
+
+		it('releases cache claim when pre-dispatch abort, deadline, or missing notificationMgr occurs', async () => {
+			const analyzer = new NewsAnalyzer();
+			analyzer.cache = {
+				claim: jest.fn().mockResolvedValue(true),
+				releaseClaim: jest.fn().mockResolvedValue(undefined),
+				get: jest.fn(),
+			};
+
+			const candidate = {
+				symbol: 'ABORT_SYM',
+				status: AnalysisStatus.ANALYZED,
+				alert: { symbol: 'ABORT_SYM', confidence: 0.9, eventCategory: 'surge' },
+				_pendingDelivery: {
+					notificationMgr: null, // missing notificationMgr
+					alert: { symbol: 'ABORT_SYM', confidence: 0.9, eventCategory: 'surge' },
+					routing: {},
+					geminiAnalysis: { event_category: 'surge' },
+					options: {},
+				},
+			};
+
+			await analyzer.executePendingDelivery(candidate, 'req-abort-claim');
+			expect(analyzer.cache.releaseClaim).toHaveBeenCalledWith('ABORT_SYM', 'surge');
+			expect(candidate._pendingDelivery).toBeUndefined();
+		});
+	});
 });
