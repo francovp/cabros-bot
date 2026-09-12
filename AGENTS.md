@@ -269,6 +269,8 @@ Ephemeral preview channels created by the `.github/workflows/firebase-hosting.ym
   - `pnpm test -- tests/integration/news-monitor-basic.test.js` — test single integration file
   - `pnpm test -- tests/unit/ --testTimeout=5000` — test entire unit directory
   - `pnpm test -- --testNamePattern="should parse price"` — test by test name pattern
+  - `pnpm test:perf` — opt-in k6 load profiles plus the dependency-outage drill; requires k6
+  - `pnpm test:perf -- --soak` — additionally runs the 30-minute low-RPS soak and collects `/diag` memory/event-loop metrics
 - **After completing all changes**: Run the full test suite `pnpm test` once per implementation to ensure no regressions
 - **Rationale**: Full test runs take 2-5 minutes and consume significant token budget. Focused tests give rapid feedback (10-30s) during development. Only run full suite as final validation after full implementation phase.
 - **Performance tip**: Use `--testTimeout=5000` with unit tests to speed up execution; integration tests need higher timeouts (~10000ms)
