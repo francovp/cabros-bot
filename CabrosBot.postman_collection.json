@@ -803,6 +803,114 @@
           ]
         },
         {
+          "name": "POST Market Scanner Alert (rating_filter)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"rating_filter\"],\n  \"rating\": 3,\n  \"limit\": 5,\n  \"ranked\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/market-scanner-alert?dryRun=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "market-scanner-alert"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Rating filter dry-run",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"scanResults\": [{\n    \"scan\": \"rating_filter\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"STXUSDT\", \"score\": 75, \"reason\": \"+2.7% · RSI 70.2 · BB rating +3\" }]\n  }]\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Market Scanner Alert (consecutive_candles_scan)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"consecutive_candles_scan\"],\n  \"pattern_type\": \"bullish\",\n  \"candle_count\": 3,\n  \"min_growth\": 1.5,\n  \"limit\": 5,\n  \"ranked\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/market-scanner-alert?dryRun=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "market-scanner-alert"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Consecutive candles dry-run",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"scanResults\": [{\n    \"scan\": \"consecutive_candles_scan\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"AVAXUSDT\", \"score\": 78, \"reason\": \"+4.8% · RSI 62.0 · strength 85 · body 0.75\" }]\n  }]\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Volume Confirmation",
           "request": {
             "method": "POST",
