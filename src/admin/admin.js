@@ -483,6 +483,8 @@ const createIdempotencyKey = () => (window.crypto && typeof window.crypto.random
 	? window.crypto.randomUUID()
 	: `admin-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
+const SYMBOL_PATTERN = /^[A-Za-z0-9_]+:[A-Za-z0-9._-]+$/;
+
 const withReplayIdempotencyKey = (definition, body) => {
 	if (definition.method !== 'POST' || definition.path !== '/api/alerts/{alertId}/replay') return body;
 	if (body && ['idempotencyKey', 'idempotency_key'].some((key) => typeof body[key] === 'string' && body[key].trim())) return body;
@@ -1585,8 +1587,8 @@ const createOverviewDashboard = () => {
 	return dashboard;
 };
 
-	const sendRequest = async ({
-		definition, path, query, body, button, output, formatResponse, parseSuccessResponse, isCurrent, captureResponseStatus,
+const sendRequest = async ({
+	definition, path, query, body, headers, button, output, formatResponse, parseSuccessResponse, isCurrent, captureResponseStatus, captureResponseData,
 }) => {
 	const requestIsCurrent = typeof isCurrent === 'function' ? isCurrent : () => true;
 	const apiKey = getElement('api-key')?.value || '';
@@ -1604,7 +1606,9 @@ const createOverviewDashboard = () => {
 			return;
 		}
 	}
-	const summary = window.CabrosAdminRequest.redactSecret(`${definition.method} ${path}`, apiKey);
+	const baseSummary = window.CabrosAdminRequest.redactSecret(`${definition.method} ${path}`, apiKey);
+	const idempotencyKey = headers && (headers['idempotency-key'] || headers['x-idempotency-key']);
+	const summary = idempotencyKey ? `${baseSummary} · Idempotency: ${idempotencyKey}` : baseSummary;
 	let request;
 	try {
 		request = window.CabrosAdminRequest.createRequest({
@@ -1612,6 +1616,7 @@ const createOverviewDashboard = () => {
 			method: definition.method,
 			query,
 			body,
+			headers,
 			apiKey,
 			authToken,
 			baseUrl: getApiBaseUrl(),
@@ -1649,6 +1654,7 @@ const createOverviewDashboard = () => {
 					// Non-JSON responses stay readable as text.
 				}
 			}
+			if (typeof captureResponseData === 'function') captureResponseData(data, response);
 			return { response, data, formatted, elapsed };
 		});
 		const { response, data, formatted, elapsed } = result;
@@ -2955,13 +2961,20 @@ const createJobStatusForm = () => {
 
 	return {
 		form,
-		selectJob: (selectedJobId) => {
+		selectJob: async (selectedJobId, options = {}) => {
 			statusRequestVersion += 1;
 			jobIdInput.value = selectedJobId;
 			button.disabled = false;
 			clearStructuredState();
+			if (options && options.autoLoad) {
+				if (typeof form.scrollIntoView === 'function') {
+					form.scrollIntoView({ behavior: 'smooth' });
+				}
+				return requestStatus(false);
+			}
 			output.textContent = 'Job selected. Submit to load its status.';
 			if (typeof jobIdInput.focus === 'function') jobIdInput.focus();
+			return undefined;
 		},
 	};
 };
@@ -2975,6 +2988,446 @@ const PRESET_SCAN_TYPES = [
 ];
 
 const PRESET_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1D', '1W', '1M'];
+
+const createJobCreateForm = (contract, definition, onJobCreated) => {
+	const form = element('form', { className: 'operation-card structured-form' });
+	form.append(
+		element('h3', { text: definition.label || 'Create job' }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+
+	const eaTimeframes = (() => {
+		const schema = contract?.components?.schemas?.ExpandedAnalysisRequest?.properties?.timeframe;
+		if (schema && Array.isArray(schema.enum) && schema.enum.length) return schema.enum;
+		return PRESET_TIMEFRAMES;
+	})();
+
+	const msTimeframes = (() => {
+		const schema = contract?.components?.schemas?.MarketScannerRequest?.properties?.timeframe;
+		if (schema && Array.isArray(schema.enum) && schema.enum.length) return schema.enum;
+		return ['15m', '1h', '4h', '1D'];
+	})();
+
+	const msScans = (() => {
+		const schema = contract?.components?.schemas?.MarketScannerRequest?.properties?.scans;
+		if (schema?.items && Array.isArray(schema.items.enum) && schema.items.enum.length) return schema.items.enum;
+		return ['top_gainers', 'top_losers', 'volume_breakout_scanner', 'smart_volume_scanner', 'bollinger_scan'];
+	})();
+
+	const cbEventsEnum = (() => {
+		const schema = contract?.components?.schemas?.CallbackFields?.properties?.callbackEvents;
+		if (schema?.items && Array.isArray(schema.items.enum) && schema.items.enum.length) return schema.items.enum;
+		return ['completed', 'failed', 'cancelled', 'timed_out', 'processing'];
+	})();
+
+	// Job type selector
+	const typeSelect = addField(form, 'Job type', 'type', { tag: 'select' });
+	[
+		{ value: 'expanded-analysis', label: 'Expanded analysis' },
+		{ value: 'market-scanner', label: 'Market scanner' },
+	].forEach(({ value, label }) => {
+		const opt = element('option', { text: label });
+		opt.value = value;
+		typeSelect.append(opt);
+	});
+	typeSelect.value = 'expanded-analysis';
+
+	// Shared Timeframe Selector
+	const timeframeSelect = addField(form, 'Timeframe', 'timeframe', { tag: 'select' });
+	const updateTimeframeOptions = (timeframes, defaultValue) => {
+		timeframeSelect.replaceChildren();
+		timeframes.forEach((tf) => {
+			const opt = element('option', { text: tf });
+			opt.value = tf;
+			timeframeSelect.append(opt);
+		});
+		timeframeSelect.value = defaultValue;
+	};
+
+	// Type containers
+	const eaContainer = element('div', { className: 'job-type-container' });
+	const msContainer = element('div', { className: 'job-type-container' });
+	msContainer.hidden = true;
+
+	// --- Expanded Analysis fields ---
+	const symbolsInput = addField(eaContainer, 'Symbols (EXCHANGE:SYMBOL, one per line)', 'symbols', {
+		tag: 'textarea',
+		rows: 3,
+		placeholder: 'BINANCE:BTCUSDT\nNASDAQ:NVDA',
+		value: 'BINANCE:BTCUSDT',
+	});
+	const symbolsFeedback = element('div', { className: 'field-feedback' });
+	eaContainer.append(symbolsFeedback);
+
+	// Shared MTF checkbox element
+	const mtfLabel = element('label', { className: 'checkbox-label' });
+	const mtfCheckbox = element('input', { type: 'checkbox' });
+	mtfCheckbox.name = 'includeMultiTimeframe';
+	const mtfSpan = element('span', { text: 'Include multi-timeframe analysis' });
+	mtfLabel.append(mtfCheckbox, mtfSpan);
+	eaContainer.append(mtfLabel);
+
+	// --- Market Scanner fields ---
+	const msExchangeInput = addField(msContainer, 'Exchange', 'exchange', {
+		placeholder: 'BINANCE',
+		value: 'BINANCE',
+	});
+
+	const scansFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	scansFieldset.append(element('legend', { text: 'Scans' }));
+	const scanInputs = [];
+	const initialCheckedScans = ['top_gainers', 'top_losers', 'volume_breakout_scanner'];
+	msScans.forEach((scan) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `scan_${scan}`;
+		cb.value = scan;
+		cb.checked = initialCheckedScans.includes(scan);
+		const def = PRESET_SCAN_TYPES.find((s) => s.id === scan);
+		label.append(cb, element('span', { text: def ? def.label : scan.replace(/_/g, ' ') }));
+		scansFieldset.append(label);
+		scanInputs.push(cb);
+	});
+	msContainer.append(scansFieldset);
+
+	const msLimitInput = addField(msContainer, 'Scan limit (1-20)', 'limit', {
+		type: 'number',
+		min: 1,
+		max: 20,
+		value: 5,
+	});
+	const clampLimit = () => {
+		const val = parseInt(msLimitInput.value, 10);
+		if (Number.isFinite(val)) {
+			msLimitInput.value = Math.max(1, Math.min(20, val));
+		}
+	};
+	msLimitInput.addEventListener('input', clampLimit);
+	msLimitInput.addEventListener('change', clampLimit);
+
+	const msBbwInput = addField(msContainer, 'BBW threshold', 'bbw_threshold', {
+		type: 'number',
+		step: '0.01',
+		min: 0,
+		value: 0.05,
+	});
+
+	const msFlags = element('div', { className: 'badge-row' });
+	const msRankedCheckbox = addField(msFlags, 'Ranked results', 'ranked', {
+		type: 'checkbox',
+		checked: true,
+	});
+	msContainer.append(msFlags);
+
+	form.append(eaContainer, msContainer);
+
+	// --- Advanced Section ---
+	const advancedDetails = element('details', { className: 'raw-status' });
+	advancedDetails.append(element('summary', { text: 'Advanced options & raw JSON' }));
+
+	const channelsFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	channelsFieldset.append(element('legend', { text: 'Notification channels (optional)' }));
+	const channelInputs = [];
+	['telegram', 'whatsapp', 'discord'].forEach((ch) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `channel_${ch}`;
+		cb.value = ch;
+		label.append(cb, element('span', { text: ch.charAt(0).toUpperCase() + ch.slice(1) }));
+		channelsFieldset.append(label);
+		channelInputs.push(cb);
+	});
+	advancedDetails.append(channelsFieldset);
+
+	const tgChatInput = addField(advancedDetails, 'Telegram Chat ID (optional)', 'telegramChatId', {
+		placeholder: 'e.g. -1001234567890',
+	});
+	const waChatInput = addField(advancedDetails, 'WhatsApp Chat ID (optional)', 'whatsappChatId', {
+		placeholder: 'e.g. 1234567890@c.us',
+	});
+
+	const cbUrlInput = addField(advancedDetails, 'Callback URL (optional)', 'callbackUrl', {
+		placeholder: 'https://myapp.example.com/job-done',
+	});
+	const cbSecretInput = addField(advancedDetails, 'Callback secret (optional)', 'callbackSecret', {
+		placeholder: 'shared-secret',
+	});
+	const cbEventsFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	cbEventsFieldset.append(element('legend', { text: 'Callback events' }));
+	const cbEventInputs = [];
+	const defaultCbEvents = ['completed', 'failed', 'cancelled', 'timed_out'];
+	cbEventsEnum.forEach((evt) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `callback_event_${evt}`;
+		cb.value = evt;
+		cb.checked = defaultCbEvents.includes(evt);
+		label.append(cb, element('span', { text: evt }));
+		cbEventsFieldset.append(label);
+		cbEventInputs.push(cb);
+	});
+	advancedDetails.append(cbEventsFieldset);
+
+	const timeoutMsInput = addField(advancedDetails, 'Timeout ms (optional)', 'timeoutMs', {
+		type: 'number',
+		min: 1000,
+		max: 600000,
+		step: 1000,
+		placeholder: '300000',
+	});
+
+	addJsonField(advancedDetails, 'Request body JSON (raw override)', 'body', {});
+	form.append(advancedDetails);
+
+	// Actions, output, and raw response
+	const button = element('button', { text: definition.label || 'Create job' });
+	button.type = 'submit';
+	const retryButton = element('button', { className: 'button-ghost', text: 'Retry submission' });
+	retryButton.type = 'button';
+	retryButton.hidden = true;
+	const formActions = element('div', { className: 'form-actions' });
+	formActions.append(button, retryButton);
+
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	let lastRawJson = '';
+	const rawOutput = element('pre', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.append(
+		element('summary', { text: 'Show raw response' }),
+		rawCopyButton,
+		rawOutput,
+	);
+	form.append(formActions, output, rawToggle);
+
+	// Validation
+	const validateSymbols = () => {
+		const text = (symbolsInput.value || '').trim();
+		if (!text) {
+			const msg = 'At least one symbol is required.';
+			symbolsFeedback.textContent = msg;
+			symbolsFeedback.className = 'field-feedback error';
+			return msg;
+		}
+		const symbols = text.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+		if (!symbols.length) {
+			const msg = 'At least one symbol is required.';
+			symbolsFeedback.textContent = msg;
+			symbolsFeedback.className = 'field-feedback error';
+			return msg;
+		}
+		const invalid = symbols.filter((s) => !SYMBOL_PATTERN.test(s));
+		if (invalid.length > 0) {
+			const msg = `Malformed symbol(s): ${invalid.join(', ')}. Expected EXCHANGE:SYMBOL format (e.g. BINANCE:BTCUSDT).`;
+			symbolsFeedback.textContent = msg;
+			symbolsFeedback.className = 'field-feedback error';
+			return msg;
+		}
+		symbolsFeedback.textContent = '';
+		symbolsFeedback.className = 'field-feedback';
+		return null;
+	};
+
+	symbolsInput.addEventListener('input', validateSymbols);
+
+	// Type switching
+	const updateTypeView = () => {
+		const isEA = typeSelect.value === 'expanded-analysis';
+		eaContainer.hidden = !isEA;
+		msContainer.hidden = isEA;
+		if (isEA) {
+			updateTimeframeOptions(eaTimeframes, '1D');
+			eaContainer.append(mtfLabel);
+			mtfSpan.textContent = 'Include multi-timeframe analysis';
+			mtfCheckbox.checked = false;
+			validateSymbols();
+		} else {
+			updateTimeframeOptions(msTimeframes, '4h');
+			msFlags.append(mtfLabel);
+			mtfSpan.textContent = 'Include multi-timeframe';
+			mtfCheckbox.checked = true;
+			symbolsFeedback.textContent = '';
+			symbolsFeedback.className = 'field-feedback';
+		}
+	};
+
+	// Payload builder & sync
+	const buildPayload = () => {
+		const selectedType = typeSelect.value;
+		const payload = { type: selectedType };
+
+		if (selectedType === 'expanded-analysis') {
+			const text = (symbolsInput.value || '').trim();
+			const symbols = text ? text.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean) : [];
+			payload.symbols = symbols;
+			payload.timeframe = timeframeSelect.value || '1D';
+			if (mtfCheckbox.checked) payload.includeMultiTimeframe = true;
+		} else if (selectedType === 'market-scanner') {
+			payload.exchange = (msExchangeInput.value || '').trim() || 'BINANCE';
+			payload.timeframe = timeframeSelect.value || '4h';
+			const selectedScans = scanInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+			payload.scans = selectedScans.length ? selectedScans : ['top_gainers', 'top_losers', 'volume_breakout_scanner'];
+			clampLimit();
+			const rawLimit = parseInt(msLimitInput.value, 10);
+			payload.limit = Number.isFinite(rawLimit) ? rawLimit : 5;
+			const bbw = parseFloat(msBbwInput.value);
+			if (Number.isFinite(bbw)) payload.bbw_threshold = bbw;
+			if (msRankedCheckbox.checked) payload.ranked = true;
+			if (mtfCheckbox.checked) payload.includeMultiTimeframe = true;
+		}
+
+		const selectedChannels = channelInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+		if (selectedChannels.length > 0) payload.channels = selectedChannels;
+		const tgChat = (tgChatInput.value || '').trim();
+		if (tgChat) payload.telegramChatId = tgChat;
+		const waChat = (waChatInput.value || '').trim();
+		if (waChat) payload.whatsappChatId = waChat;
+
+		const cbUrl = (cbUrlInput.value || '').trim();
+		if (cbUrl) {
+			payload.callbackUrl = cbUrl;
+			const cbSecret = (cbSecretInput.value || '').trim();
+			if (cbSecret) payload.callbackSecret = cbSecret;
+			const selectedEvents = cbEventInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+			if (selectedEvents.length > 0) payload.callbackEvents = selectedEvents;
+		}
+		const timeoutVal = parseInt(timeoutMsInput.value, 10);
+		if (Number.isFinite(timeoutVal) && timeoutVal > 0) payload.timeoutMs = timeoutVal;
+
+		return payload;
+	};
+
+	let isAdvancedDirty = false;
+	const syncBody = () => {
+		if (isAdvancedDirty || !form.elements.body) return undefined;
+		const payload = buildPayload();
+		form.elements.body.value = JSON.stringify(payload, null, 2);
+		return payload;
+	};
+
+	typeSelect.addEventListener('change', () => {
+		updateTypeView();
+		isAdvancedDirty = false;
+		syncBody();
+	});
+
+	const structuredInputs = [
+		symbolsInput, mtfCheckbox, timeframeSelect,
+		msExchangeInput, msLimitInput, msBbwInput, msRankedCheckbox,
+		...scanInputs, ...channelInputs, tgChatInput, waChatInput,
+		cbUrlInput, cbSecretInput, ...cbEventInputs, timeoutMsInput,
+	];
+	structuredInputs.forEach((input) => {
+		input.addEventListener('input', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+		input.addEventListener('change', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+	});
+	if (form.elements.body) {
+		form.elements.body.addEventListener('input', () => {
+			isAdvancedDirty = true;
+		});
+	}
+
+	updateTypeView();
+	syncBody();
+
+	// Submission & retry
+	let lastIdempotencyKey = null;
+	let submitInProgress = false;
+
+	const doSubmit = async (idempotencyKey) => {
+		if (submitInProgress) return;
+		if (!isAdvancedDirty && typeSelect.value === 'expanded-analysis') {
+			const err = validateSymbols();
+			if (err) {
+				showError(output, err);
+				return;
+			}
+		}
+
+		let body;
+		try {
+			const bodyInput = form.elements.body;
+			body = isAdvancedDirty && bodyInput ? parseJson(bodyInput.value, 'Request body') : buildPayload();
+		} catch (error) {
+			showError(output, error.message);
+			return;
+		}
+
+		lastIdempotencyKey = idempotencyKey;
+		retryButton.hidden = true;
+		lastRawJson = '';
+		rawOutput.textContent = '';
+		rawCopyButton.hidden = true;
+		submitInProgress = true;
+
+		let pollFailureStatus;
+		let responseData;
+		const headers = { 'idempotency-key': idempotencyKey };
+		try {
+			const data = await sendRequest({
+				definition,
+				path: definition.path,
+				headers,
+				body,
+				button,
+				output,
+				captureResponseStatus: (responseStatus) => { pollFailureStatus = responseStatus; },
+				captureResponseData: (parsedData) => { responseData = parsedData; },
+				formatResponse: ({ summary, status: responseStatus, elapsed }) => (
+					`${summary}\nHTTP ${responseStatus} · ${elapsed} ms`
+				),
+			});
+
+			const effectiveData = data || responseData;
+			if (effectiveData) {
+				lastRawJson = JSON.stringify(effectiveData, null, 2);
+				rawOutput.textContent = lastRawJson;
+				rawCopyButton.hidden = false;
+			}
+
+			const isAcceptanceUnknown = pollFailureStatus === 503
+				&& responseData
+				&& responseData.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN'
+				&& responseData.jobId;
+
+			if (effectiveData && effectiveData.jobId && ((!pollFailureStatus || pollFailureStatus < 400) || isAcceptanceUnknown)) {
+				if (typeof onJobCreated === 'function') {
+					await onJobCreated(effectiveData.jobId);
+				}
+			}
+
+			if (!data || (pollFailureStatus && pollFailureStatus >= 400)) {
+				retryButton.hidden = false;
+			}
+		} catch (error) {
+			showError(output, error.message);
+			retryButton.hidden = false;
+		} finally {
+			submitInProgress = false;
+		}
+	};
+
+	form.addEventListener('submit', async (event) => {
+		event.preventDefault();
+		const freshKey = createIdempotencyKey();
+		await doSubmit(freshKey);
+	});
+
+	retryButton.addEventListener('click', async () => {
+		if (lastIdempotencyKey) {
+			await doSubmit(lastIdempotencyKey);
+		}
+	});
+
+	return form;
+};
 
 const canPerformMutation = () => !authState.enabled
 	|| (Boolean(authState.user) && window.CabrosAdminRequest.canAccess({ requiredRole: 'admin.operator' }, authState.role));
@@ -3576,8 +4029,6 @@ const getBodySchemaEnum = (contract, operation, propertyName) => {
 	}
 	return [];
 };
-
-const SYMBOL_PATTERN = /^[A-Za-z0-9_]+:[A-Za-z0-9._-]+$/;
 
 const createStructuredAnalysisForm = (contract, definition, builder) => {
 	const operation = getOperation(contract, definition);
@@ -4310,7 +4761,9 @@ const renderView = async (name) => {
 		if (name === 'jobs') {
 			const status = createJobStatusForm();
 			view.append(createJobListForm(contract, status.selectJob));
-			VIEWS.jobs.forEach((definition) => view.append(createOperationForm(contract, definition)));
+			VIEWS.jobs.forEach((definition) => view.append(createJobCreateForm(contract, definition, (jobId) => {
+				status.selectJob(jobId, { autoLoad: true });
+			})));
 			view.append(status.form);
 			return;
 		}

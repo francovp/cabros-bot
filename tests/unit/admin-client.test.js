@@ -4018,4 +4018,354 @@ describe('structured analysis forms', () => {
 		expect(requestedUrl).toBeNull();
 		expect(vcForm.textContent).toContain('Malformed symbol');
 	});
+
+	describe('structured job builder and auto-handoff', () => {
+		it('renders structured job builder with expanded-analysis controls and contract enums', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			expect(createForm).toBeDefined();
+			expect(createForm.elements.type.value).toBe('expanded-analysis');
+			expect(createForm.elements.symbols.value).toBe('BINANCE:BTCUSDT');
+			expect(createForm.elements.timeframe.value).toBe('1D');
+			expect(createForm.elements.includeMultiTimeframe.checked).toBe(false);
+			expect(createForm.elements.body).toBeDefined();
+
+			const initialPayload = JSON.parse(createForm.elements.body.value);
+			expect(initialPayload).toEqual({
+				type: 'expanded-analysis',
+				symbols: ['BINANCE:BTCUSDT'],
+				timeframe: '1D',
+			});
+		});
+
+		it('switches job builder to market-scanner, updating controls and timeframe options', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			createForm.elements.type.value = 'market-scanner';
+			await createForm.elements.type.dispatch('change');
+			await flush();
+
+			expect(createForm.elements.exchange.value).toBe('BINANCE');
+			expect(createForm.elements.timeframe.value).toBe('4h');
+			expect(Number(createForm.elements.limit.value)).toBe(5);
+			expect(Number(createForm.elements.bbw_threshold.value)).toBe(0.05);
+			expect(createForm.elements.ranked.checked).toBe(true);
+			expect(createForm.elements.includeMultiTimeframe.checked).toBe(true);
+			expect(createForm.elements.scan_top_gainers.checked).toBe(true);
+			expect(createForm.elements.scan_top_losers.checked).toBe(true);
+			expect(createForm.elements.scan_volume_breakout_scanner.checked).toBe(true);
+
+			// Verify limit clamping
+			createForm.elements.limit.value = '50';
+			await createForm.elements.limit.dispatch('input');
+			await flush();
+			expect(Number(createForm.elements.limit.value)).toBe(20);
+
+			const msPayload = JSON.parse(createForm.elements.body.value);
+			expect(msPayload.type).toBe('market-scanner');
+			expect(msPayload.exchange).toBe('BINANCE');
+			expect(msPayload.limit).toBe(20);
+			expect(msPayload.ranked).toBe(true);
+			expect(msPayload.includeMultiTimeframe).toBe(true);
+		});
+
+		it('validates symbol format on submit and displays inline feedback without sending request', async () => {
+			let dispatched = false;
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						dispatched = true;
+						return response({ success: true, jobId: 'job-invalid' }, 201);
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			createForm.elements.symbols.value = 'INVALID_SYMBOL';
+			await createForm.elements.symbols.dispatch('input');
+			await flush();
+
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(dispatched).toBe(false);
+			expect(createForm.textContent).toContain('Malformed symbol(s): INVALID_SYMBOL');
+		});
+
+		it('generates and transmits idempotency-key in headers and displays in response summary', async () => {
+			let capturedOptions = null;
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						capturedOptions = options;
+						return response({ success: true, jobId: 'job-123-idem' }, 201);
+					}
+					if (url.startsWith('/api/jobs/job-123-idem')) {
+						return response({
+							success: true,
+							jobId: 'job-123-idem',
+							type: 'expanded-analysis',
+							status: 'pending',
+							progress: { fraction: 0.1, currentPhase: 'queued' },
+						});
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			createForm.elements.symbols.value = 'BINANCE:BTCUSDT\nBINANCE:ETHUSDT';
+			await createForm.elements.symbols.dispatch('input');
+			await flush();
+
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(capturedOptions).toBeDefined();
+			expect(capturedOptions.method).toBe('POST');
+			expect(capturedOptions.headers['x-api-key']).toBe('test-session-key');
+			const sentKey = capturedOptions.headers['idempotency-key'];
+			expect(typeof sentKey).toBe('string');
+			expect(sentKey.length).toBeGreaterThan(5);
+
+			expect(createForm.textContent).toContain(`Idempotency: ${sentKey}`);
+		});
+
+		it('shows retry button on error that reuses the exact same idempotency key', async () => {
+			const sentKeys = [];
+			let attempt = 0;
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						attempt += 1;
+						sentKeys.push(options.headers['idempotency-key']);
+						if (attempt === 1) {
+							return response({ success: false, error: 'Internal server error' }, 500);
+						}
+						return response({ success: true, jobId: 'job-retried' }, 201);
+					}
+					if (url.startsWith('/api/jobs/job-retried')) {
+						return response({
+							success: true,
+							jobId: 'job-retried',
+							type: 'expanded-analysis',
+							status: 'pending',
+							progress: {},
+						});
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(attempt).toBe(1);
+			expect(sentKeys.length).toBe(1);
+			const firstKey = sentKeys[0];
+
+			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
+			expect(retryBtn).toBeDefined();
+			expect(retryBtn.hidden).toBe(false);
+
+			await retryBtn.dispatch('click');
+			await flush();
+
+			expect(attempt).toBe(2);
+			expect(sentKeys.length).toBe(2);
+			expect(sentKeys[1]).toBe(firstKey);
+		});
+
+		it('auto-handoff: on 201 Created with data.jobId, fills status form and loads progress immediately', async () => {
+			const requests = [];
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					requests.push(url);
+					if (url === '/api/jobs/tradingview-analysis') {
+						return response({ success: true, jobId: 'job-auto-handoff-789' }, 201);
+					}
+					if (url.startsWith('/api/jobs/job-auto-handoff-789')) {
+						return response({
+							success: true,
+							jobId: 'job-auto-handoff-789',
+							type: 'expanded-analysis',
+							status: 'processing',
+							progress: { fraction: 0.65, currentPhase: 'analysis' },
+							createdAt: new Date().toISOString(),
+						});
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+			expect(statusForm.elements['path-jobId'].value).toBe('');
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(statusForm.elements['path-jobId'].value).toBe('job-auto-handoff-789');
+			expect(requests).toContain('/api/jobs/job-auto-handoff-789');
+			expect(statusForm.textContent).toContain('job-auto-handoff-789');
+			expect(statusForm.textContent).toContain('processing');
+		});
+
+		it('synchronizes advanced callback and channel options into raw JSON', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			createForm.elements.channel_telegram.checked = true;
+			await createForm.elements.channel_telegram.dispatch('change');
+			createForm.elements.telegramChatId.value = '-1009999';
+			await createForm.elements.telegramChatId.dispatch('input');
+			createForm.elements.callbackUrl.value = 'https://webhook.site/test';
+			await createForm.elements.callbackUrl.dispatch('input');
+			await flush();
+
+			const payload = JSON.parse(createForm.elements.body.value);
+			expect(payload.channels).toEqual(['telegram']);
+			expect(payload.telegramChatId).toBe('-1009999');
+			expect(payload.callbackUrl).toBe('https://webhook.site/test');
+			expect(payload.callbackEvents).toEqual(['completed', 'failed', 'cancelled', 'timed_out']);
+		});
+
+		it('retry: exposes same-key retry when network error or transport failure occurs', async () => {
+			const sentKeys = [];
+			let attempts = 0;
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						attempts += 1;
+						sentKeys.push(options.headers['idempotency-key']);
+						if (attempts === 1) {
+							throw new Error('Failed to fetch: connection timeout');
+						}
+						return response({ success: true, jobId: 'recovered-job-111' }, 201);
+					}
+					if (url.startsWith('/api/jobs/recovered-job-111')) {
+						return response({ success: true, jobId: 'recovered-job-111', status: 'queued' });
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
+			expect(retryBtn.hidden).toBe(true);
+
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(attempts).toBe(1);
+			expect(retryBtn.hidden).toBe(false);
+			const firstKey = sentKeys[0];
+			expect(typeof firstKey).toBe('string');
+
+			// Clicking retry re-submits with the same idempotency key
+			await retryBtn.dispatch('click');
+			await flush();
+
+			expect(attempts).toBe(2);
+			expect(sentKeys[1]).toBe(firstKey);
+		});
+
+		it('auto-handoff: on 503 JOB_QUEUE_ACCEPTANCE_UNKNOWN, fills status form with returned jobId and begins auto-loading', async () => {
+			const requests = [];
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					requests.push(url);
+					if (url === '/api/jobs/tradingview-analysis') {
+						return response({
+							error: 'The queue acceptance state could not be determined.',
+							code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
+							jobId: 'unknown-queue-job-503',
+						}, 503);
+					}
+					if (url.startsWith('/api/jobs/unknown-queue-job-503')) {
+						return response({
+							success: true,
+							jobId: 'unknown-queue-job-503',
+							status: 'queued',
+						});
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+			expect(statusForm.elements['path-jobId'].value).toBe('');
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(statusForm.elements['path-jobId'].value).toBe('unknown-queue-job-503');
+			expect(requests).toContain('/api/jobs/unknown-queue-job-503');
+			expect(statusForm.textContent).toContain('unknown-queue-job-503');
+			expect(statusForm.textContent).toContain('queued');
+
+			// Retry button is also visible on 503 so the operator can retry with same key if desired
+			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
+			expect(retryBtn.hidden).toBe(false);
+		});
+	});
 });
