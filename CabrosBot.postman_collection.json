@@ -803,6 +803,114 @@
           ]
         },
         {
+          "name": "POST Market Scanner Alert (rating_filter)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"rating_filter\"],\n  \"rating\": 3,\n  \"limit\": 5,\n  \"ranked\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/market-scanner-alert?dryRun=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "market-scanner-alert"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Rating filter dry-run",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"scanResults\": [{\n    \"scan\": \"rating_filter\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"STXUSDT\", \"score\": 75, \"reason\": \"+2.7% · RSI 70.2 · BB rating +3\" }]\n  }]\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Market Scanner Alert (consecutive_candles_scan)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"consecutive_candles_scan\"],\n  \"pattern_type\": \"bullish\",\n  \"candle_count\": 3,\n  \"min_growth\": 1.5,\n  \"limit\": 5,\n  \"ranked\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/market-scanner-alert?dryRun=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "market-scanner-alert"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Consecutive candles dry-run",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"scanResults\": [{\n    \"scan\": \"consecutive_candles_scan\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"AVAXUSDT\", \"score\": 78, \"reason\": \"+4.8% · RSI 62.0 · strength 85 · body 0.75\" }]\n  }]\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Volume Confirmation",
           "request": {
             "method": "POST",
@@ -833,7 +941,45 @@
                 "volume-confirmation"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "Success - volume confirmed",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"confirmed\": true,\n  \"decision\": \"confirm\",\n  \"volumeRatio\": 1.7,\n  \"analysis\": {\n    \"symbol\": \"BINANCE:BTCUSDT\",\n    \"volume_analysis\": {\n      \"volume_ratio\": 1.7,\n      \"volume_strength\": \"HIGH\"\n    },\n    \"confidence\": 0.91\n  },\n  \"requestId\": \"req-vol-123\",\n  \"processingTimeMs\": 310\n}"
+            },
+            {
+              "name": "400 Invalid symbol",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-vol-400\",\n  \"processingTimeMs\": 12\n}"
+            },
+            {
+              "name": "502 TradingView failure",
+              "status": "Bad Gateway",
+              "code": 502,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"MCP unavailable\",\n  \"code\": \"VOLUME_CONFIRMATION_FAILED\",\n  \"requestId\": \"req-vol-502\",\n  \"processingTimeMs\": 450\n}"
+            }
+          ]
         },
         {
           "name": "POST Single Symbol Analysis",
@@ -853,7 +999,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"analysisMode\": \"combined\",\n  \"includeMultiTimeframe\": true\n}"
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"analysisMode\": \"combined\",\n  \"includeMultiTimeframe\": true,\n  \"includeMultiAgent\": true\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/symbol-analysis",
@@ -872,19 +1018,31 @@
               "name": "Success - decision-ready analysis",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*\ud83d\udd34 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*🔴 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  },\n  \"analysisStatus\": \"complete\",\n  \"requestId\": \"req-sym-123\",\n  \"processingTimeMs\": 850\n}"
+            },
+            {
+              "name": "Success - with multi-agent consensus",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"alertText\": \"*\ud83d\udfe2 SOBREVENTA*\\nBTCUSDT $77,103.55 (+1.2%) | RSI 28.5...\",\n  \"analysis\": {\n    \"decision\": {\n      \"action\": \"BUY\",\n      \"confidence\": \"HIGH\",\n      \"dataSufficient\": true,\n      \"multiAgent\": {\n        \"decision\": \"BUY\",\n        \"confidence\": \"High\",\n        \"net_score\": 2,\n        \"agents\": {\n          \"technical_analyst\": {\n            \"stance\": \"Bullish\"\n          }\n        }\n      }\n    }\n  },\n  \"multiAgent\": {\n    \"decision\": \"BUY\",\n    \"confidence\": \"High\",\n    \"net_score\": 2,\n    \"agents\": {\n      \"technical_analyst\": {\n        \"stance\": \"Bullish\"\n      }\n    }\n  },\n  \"analysisStatus\": \"complete\"\n}"
             },
             {
               "name": "400 Invalid symbol",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\n  \"success\": false,\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+              "body": "{\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-sym-400\",\n  \"processingTimeMs\": 15\n}"
             },
             {
               "name": "502 TradingView failure",
               "status": "Bad Gateway",
               "code": 502,
-              "body": "{\n  \"success\": false,\n  \"error\": \"TradingView MCP unavailable\",\n  \"code\": \"SYMBOL_ANALYSIS_FAILED\"\n}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"TradingView MCP unavailable\",\n  \"code\": \"SYMBOL_ANALYSIS_FAILED\",\n  \"requestId\": \"req-sym-502\",\n  \"processingTimeMs\": 420\n}"
+            },
+            {
+              "name": "504 Analysis timeout",
+              "status": "Gateway Timeout",
+              "code": 504,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Symbol analysis timed out.\",\n  \"code\": \"SYMBOL_ANALYSIS_TIMEOUT\",\n  \"requestId\": \"req-sym-504\",\n  \"processingTimeMs\": 90000\n}"
             }
           ]
         },
@@ -1878,6 +2036,19 @@
                 }
               ],
               "body": "{\n  \"success\": true,\n  \"partial_success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"error\",\n      \"error\": {\n        \"code\": \"GEMINI_QUOTA_EXHAUSTED\",\n        \"message\": \"429 RESOURCE_EXHAUSTED: quota exceeded\"\n      },\n      \"cached\": false,\n      \"requestId\": \"req-quota123\",\n      \"totalDurationMs\": 0\n    },\n    {\n      \"symbol\": \"ETHUSD\",\n      \"status\": \"analyzed\",\n      \"alert\": null,\n      \"cached\": false,\n      \"requestId\": \"req-quota123\",\n      \"totalDurationMs\": 900\n    }\n  ],\n  \"summary\": {\n    \"total\": 2,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 1,\n    \"quota_exhausted\": 1,\n    \"alerts_sent\": 0\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 950,\n  \"requestId\": \"req-quota123\",\n  \"tokenUsage\": {}\n}"
+            },
+            {
+              "name": "503 Service Unavailable - News monitor paused",
+              "status": "Service Unavailable",
+              "code": 503,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"News monitor is temporarily paused: Gemini quota exhaustion\",\n  \"code\": \"NEWS_MONITOR_PAUSED\",\n  \"paused\": true,\n  \"pausedAt\": \"2026-09-04T05:00:00.000Z\",\n  \"reason\": \"Gemini quota exhaustion\",\n  \"requestId\": \"req-paused123\"\n}"
             }
           ]
         },
@@ -1964,6 +2135,187 @@
               "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [{\n    \"symbol\": \"BTCUSDT\",\n    \"status\": \"analyzed\",\n    \"alert\": {\n      \"eventCategory\": \"price_surge\",\n      \"headline\": \"Bitcoin breaks resistance\"\n    },\n    \"deliveryResults\": [],\n    \"cached\": false\n  }],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"deliveredChannels\": [],\n  \"requestId\": \"req-dryrun123\"\n}"
             }
           ]
+        },
+        {
+          "name": "POST Pause News Monitor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Gemini quota exhaustion\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/pause",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "pause"
+              ]
+            },
+            "description": "Sets the runtime pause toggle for news monitor analysis. Incoming requests return 503 and background sweeps are skipped."
+          },
+          "response": [
+            {
+              "name": "200 OK - News monitor paused",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"message\": \"News monitor analysis paused\",\n  \"paused\": true,\n  \"pausedAt\": \"2026-09-04T05:00:00.000Z\",\n  \"reason\": \"Gemini quota exhaustion\"\n}"
+            },
+            {
+              "name": "401 Unauthorized - Missing API key",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Unauthorized\"\n}"
+            },
+            {
+              "name": "403 Forbidden - Operator role required",
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Admin operator role required\",\n  \"code\": \"ADMIN_ROLE_REQUIRED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Resume News Monitor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/resume",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "resume"
+              ]
+            },
+            "description": "Clears the runtime pause toggle, restoring normal news monitor analysis and background scheduler sweeps."
+          },
+          "response": [
+            {
+              "name": "200 OK - News monitor resumed",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"message\": \"News monitor analysis resumed\",\n  \"paused\": false,\n  \"resumedAt\": \"2026-09-04T05:10:00.000Z\",\n  \"wasPaused\": true,\n  \"previouslyPausedAt\": \"2026-09-04T05:00:00.000Z\"\n}"
+            },
+            {
+              "name": "401 Unauthorized - Missing API key",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Unauthorized\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET News Monitor Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "status"
+              ]
+            },
+            "description": "Returns current runtime pause status, timestamp, and optional reason."
+          },
+          "response": [
+            {
+              "name": "200 OK - News monitor pause status",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"paused\": false,\n  \"pausedAt\": null,\n  \"reason\": null\n}"
+            },
+            {
+              "name": "401 Unauthorized - Missing API key",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Unauthorized\"\n}"
+            }
+          ]
         }
       ]
     },
@@ -1992,6 +2344,86 @@
               ]
             }
           }
+        },
+        {
+          "name": "GET List Alerts (include=enrichment_summary)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?limit=10&include=enrichment_summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "include",
+                  "value": "enrichment_summary"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - Alerts list with enrichment summary projection",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"alert-123\",\n      \"receivedAt\": \"2026-06-06T12:00:00.000Z\",\n      \"source\": \"webhook\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": true,\n      \"enrichmentData\": {\n        \"sentiment\": \"BULLISH\",\n        \"sentiment_score\": 0.85,\n        \"setup_type\": \"breakout\"\n      },\n      \"enrichmentSummary\": {\n        \"sentiment\": \"BULLISH\",\n        \"sentiment_score\": 0.85,\n        \"setup_type\": \"breakout\",\n        \"invalidation_level\": 64000,\n        \"target_level\": 70000,\n        \"risk_reward_ratio\": 2.5,\n        \"sourceCount\": 2,\n        \"sourceDomains\": [\"coindesk.com\", \"bloomberg.com\"],\n        \"tradingViewEnrichmentApplied\": true,\n        \"tradingViewEnrichmentStatus\": \"full\",\n        \"promptProvenance\": {\n          \"name\": \"market-analysis\",\n          \"source\": \"langfuse\",\n          \"label\": \"production\",\n          \"version\": 3,\n          \"schemaDriftDetected\": false\n        }\n      },\n      \"useTradingViewData\": true,\n      \"tradingViewEnrichmentApplied\": true,\n      \"tradingViewEnrichmentStatus\": \"full\",\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"123\"\n        }\n      ]\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 10,\n    \"nextBefore\": null\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Alerts (invalid include - 400 Bad Request)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?include=invalid_field",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "include",
+                  "value": "invalid_field"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid include parameter",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Invalid include parameter 'invalid_field'. Allowed values: enrichment_summary.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
         },
         {
           "name": "GET List Alerts (filtered)",
@@ -3905,6 +4337,113 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Symbol Analyses",
+      "description": "Symbol analysis persistence query and summary operations. Feature is gated by ENABLE_SYMBOL_ANALYSIS_STORAGE=true and requires admin.viewer authorization (via API key or Firebase Bearer token).",
+      "item": [
+        {
+          "name": "GET List Symbol Analyses",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Lists recorded symbol analyses with default limit (50) and optional filtering by symbol, exchange, timeframe, action, and date range.",
+            "url": {
+              "raw": "{{baseUrl}}/api/symbol-analyses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "symbol-analyses"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"analyses\": [\n    {\n      \"id\": \"req-1\",\n      \"requestId\": \"req-1\",\n      \"recordedAt\": \"2026-09-04T12:00:00.000Z\",\n      \"expiresAt\": \"2026-09-11T12:00:00.000Z\",\n      \"symbol\": \"BINANCE:BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"asset\": \"BTCUSDT\",\n      \"timeframe\": \"1h\",\n      \"action\": \"BUY\",\n      \"price\": 65000,\n      \"rsi\": 55.4,\n      \"indicators\": {\n        \"rsi\": 55.4,\n        \"macd\": 120.5\n      },\n      \"risk\": {\n        \"risk_reward_ratio\": 2.5\n      },\n      \"decision\": {\n        \"action\": \"BUY\",\n        \"confidence\": 0.85\n      },\n      \"analysisStatus\": \"complete\",\n      \"alertText\": \"TradingView analysis alert for BINANCE:BTCUSDT\",\n      \"processingTimeMs\": 120\n    }\n  ],\n  \"count\": 1,\n  \"limit\": 50,\n  \"nextCursor\": null\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "403 Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Symbol analysis storage feature is disabled. Set ENABLE_SYMBOL_ANALYSIS_STORAGE=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Firestore is unavailable or not configured.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Symbol Analyses",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Summarizes recorded symbol analyses metrics (totalAnalyses, byAction, bySymbol, byTimeframe, byExchange).",
+            "url": {
+              "raw": "{{baseUrl}}/api/symbol-analyses/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "symbol-analyses",
+                "summary"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"success\": true,\n    \"totalAnalyses\": 10,\n    \"byAction\": {\n      \"BUY\": 5,\n      \"SELL\": 3,\n      \"NO_TRADE\": 2\n    },\n    \"bySymbol\": {\n      \"BINANCE:BTCUSDT\": 10\n    },\n    \"byTimeframe\": {\n      \"1h\": 10\n    },\n    \"byExchange\": {\n      \"BINANCE\": 10\n    },\n    \"window\": {\n      \"limit\": 500\n    }\n  }\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "403 Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Symbol analysis storage feature is disabled. Set ENABLE_SYMBOL_ANALYSIS_STORAGE=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Firestore is unavailable or not configured.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
             }
           ]
         }
