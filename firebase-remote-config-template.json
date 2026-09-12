@@ -426,6 +426,27 @@
       },
       "description": "Comma-separated ordered parameter names extracted from the alert for GreenAPI sendTemplate placeholders. Each maps to a field in alert.enriched or alert. Missing fields produce empty strings. WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, and WHATSAPP_TEMPLATE_NAMESPACE are excluded (notification destinations).",
       "valueType": "STRING"
+    },
+    "ENABLE_FIRESTORE_CHAT_PREFERENCES": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable Firestore persistence and caching of per-chat user preferences",
+      "valueType": "BOOLEAN"
+    },
+    "CHAT_PREFERENCES_RETENTION_DAYS": {
+      "defaultValue": {
+        "value": "90"
+      },
+      "description": "Retention window in days for persisted chat preferences before TTL expiry",
+      "valueType": "NUMBER"
+    },
+    "CHAT_PREFERENCES_CACHE_TTL_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "In-memory cache TTL for chat preferences in milliseconds",
+      "valueType": "NUMBER"
     }
   },
   "version": {

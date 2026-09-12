@@ -86,6 +86,7 @@ describe('OpenAPI contract', () => {
 			'POST /api/news-monitor/pause', 'POST /api/news-monitor/resume', 'GET /api/news-monitor/status',
 			'GET /api/news-monitor/summary', 'GET /api/news-monitor/analyses',
 			'POST /api/admin/test-alert',
+			'GET /api/preferences/{channel}/{chatId}', 'PUT /api/preferences/{channel}/{chatId}', 'DELETE /api/preferences/{channel}/{chatId}',
 		]);
 
 		for (const operation of operations) {
@@ -119,6 +120,9 @@ describe('OpenAPI contract', () => {
 			'GET /api/news-monitor/summary': 'admin.viewer',
 			'GET /api/news-monitor/analyses': 'admin.viewer',
 			'POST /api/admin/test-alert': 'admin.operator',
+			'GET /api/preferences/{channel}/{chatId}': 'admin.viewer',
+			'PUT /api/preferences/{channel}/{chatId}': 'admin.operator',
+			'DELETE /api/preferences/{channel}/{chatId}': 'admin.operator',
 		};
 
 		for (const [key, role] of Object.entries(expectedRoles)) {

@@ -421,6 +421,7 @@ describe('Telegram TradingView commands', () => {
 				{ command: 'scanner', description: 'Escaneo de mercado en TradingView' },
 				{ command: 'noticias', description: 'Monitor y análisis de noticias con IA' },
 				{ command: 'outcomes', description: 'Rendimiento reciente de señales evaluadas' },
+				{ command: 'preferencias', description: 'Preferencias de alertas para este chat' },
 				{ command: 'help', description: 'Muestra este mensaje de ayuda' },
 				{ command: 'start', description: 'Muestra este mensaje de ayuda' },
 			]);

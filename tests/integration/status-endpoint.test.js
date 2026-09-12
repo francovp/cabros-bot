@@ -285,6 +285,26 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports firestoreChatPreferences feature flag and dependency status when disabled and enabled', async () => {
+		delete process.env.ENABLE_FIRESTORE_CHAT_PREFERENCES;
+		let res = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(res.status).toBe(200);
+		expect(res.body.featureFlags.firestoreChatPreferences).toBe(false);
+		expect(res.body.dependencies.chatPreferences.enabled).toBe(false);
+
+		process.env.ENABLE_FIRESTORE_CHAT_PREFERENCES = 'true';
+		res = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(res.status).toBe(200);
+		expect(res.body.featureFlags.firestoreChatPreferences).toBe(true);
+		expect(res.body.dependencies.chatPreferences.enabled).toBe(true);
+	});
+
 	it('reports durable scanner preset storage from its dedicated Firestore gate', async () => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';

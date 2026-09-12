@@ -24,6 +24,7 @@ const {
 const { listAlerts, getAlertById, replayAlert, summarizeAlerts, exportAlerts, listReplays } = require('../controllers/alerts/alerts');
 const { listOutcomes, summarizeOutcomes } = require('../controllers/outcomes/outcomes');
 const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/symbolAnalyses/symbolAnalyses');
+const { getPreferencesHandler, putPreferencesHandler, deletePreferencesHandler } = require('../controllers/preferences/preferences');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const { postBinanceOrder, getBinanceOrders, deleteBinanceOrder } = require('../controllers/trading/binanceOrders');
@@ -66,6 +67,11 @@ function getRoutes(botOrGetter) {
 	router.put('/scanner-presets/:id', ...adminWrite, updatePreset);
 	router.delete('/scanner-presets/:id', ...adminWrite, deletePreset);
 	router.post('/scanner-presets/:id/run', ...adminWrite, idempotencyMiddleware, postRunPreset(botOrGetter));
+
+	// Per-chat alert preferences endpoints
+	router.get('/preferences/:channel/:chatId', ...adminRead, getPreferencesHandler);
+	router.put('/preferences/:channel/:chatId', ...adminWrite, putPreferencesHandler);
+	router.delete('/preferences/:channel/:chatId', ...adminWrite, deletePreferencesHandler);
 
 	// Async job endpoints
 	router.post('/jobs/tradingview-analysis', ...adminWrite, idempotencyMiddleware, postCreateJob(botOrGetter));
