@@ -1746,6 +1746,7 @@ Sources:
 - HTTP 200 OK returned (fail-open pattern)
 - Failures logged at WARN/ERROR level
 - If `channels` is omitted in the generic message webhook, delivery fans out to every enabled channel
+- Successful generic-message deliveries are persisted as `source: webhook-message` when Firestore alert storage is enabled, without delaying the response
 
 **Example - Dual Channel Delivery**:
 

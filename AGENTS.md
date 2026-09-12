@@ -1608,9 +1608,11 @@ The highest-traffic `/api/webhook/alert` endpoint's catch block (`NotificationRo
 
 No environment variable, Remote Config key, endpoint, or feature flag was added. HTTP status codes and existing fail-open/fail-safe patterns are unchanged.
 
-## Telegram Command Rate Limiting (Issue #658)
+## Generic Message Delivery Storage (Issue #654)
 
-`index.js` installs `telegramCommandRateLimiter` before Telegraf command handlers. It applies process-local per-chat fixed-window limits to the expensive `/precio`, `/analisis`/`/analysis`, `/scanner`, and `/noticias`/`/news` commands, with bounded storage for 10,000 chat-command buckets. It defaults to 10 `/precio` calls per minute and 3 calls per hour for the other commands; `ENABLE_TELEGRAM_COMMAND_RATE_LIMITING=false` disables it, and `TELEGRAM_COMMAND_RATE_LIMITS_JSON` provides optional per-command `{max,windowMs}` overrides bounded to `max` 1-1000 and `windowMs` 1-86400000, with invalid values falling back to defaults. These are environment-only security controls and are intentionally excluded from Firebase Remote Config.
+Successful `POST /api/webhook/message` deliveries now reuse `AlertStorageService.saveAlert()` after the response is sent, using `source: webhook-message`. This keeps generic-message deliveries available to the existing alert audit, export, summary, and replay flows when `ENABLE_FIRESTORE_ALERT_STORAGE=true` while preserving fail-open delivery behavior, including unexpected storage promise rejections. Integration coverage verifies the persisted payload and rejection handling; the existing full suite remains green.
+
+No environment variable, Remote Config key, endpoint, OpenAPI, or Postman contract changed.
 
 ## Telegram Command Rate Limiting (Issue #658)
 
