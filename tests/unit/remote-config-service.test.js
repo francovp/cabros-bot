@@ -374,6 +374,9 @@ describe('RemoteConfigService', () => {
 			ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: true,
 			ENABLE_ALERT_HTF_RENDER: false,
 			ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT: true,
+			ENABLE_FIRESTORE_CHAT_PREFERENCES: true,
+			CHAT_PREFERENCES_RETENTION_DAYS: 45,
+			CHAT_PREFERENCES_CACHE_TTL_MS: 30000,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -387,6 +390,9 @@ describe('RemoteConfigService', () => {
 		expect(config.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP).toBe(true);
 		expect(config.ENABLE_ALERT_HTF_RENDER).toBe(false);
 		expect(config.ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT).toBe(true);
+		expect(config.ENABLE_FIRESTORE_CHAT_PREFERENCES).toBe(true);
+		expect(config.CHAT_PREFERENCES_RETENTION_DAYS).toBe(45);
+		expect(config.CHAT_PREFERENCES_CACHE_TTL_MS).toBe(30000);
 	});
 
 	it('keeps the startup-only signal outcome cadence out of Remote Config', async () => {

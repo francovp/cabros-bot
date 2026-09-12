@@ -322,5 +322,8 @@ class MarkdownV2Formatter {
 	}
 }
 
+MarkdownV2Formatter.smartEscapeMarkdownV2 = smartEscapeMarkdownV2;
+
 module.exports = MarkdownV2Formatter;
+module.exports.smartEscapeMarkdownV2 = smartEscapeMarkdownV2;
 

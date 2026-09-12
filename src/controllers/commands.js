@@ -4,12 +4,19 @@ const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor'
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
+const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
+const { smartEscapeMarkdownV2 } = require('../services/notification/formatters/MarkdownV2Formatter');
 
 const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	precio: { max: 10, windowMs: 60_000 },
 	analisis: { max: 3, windowMs: 3_600_000 },
 	scanner: { max: 3, windowMs: 3_600_000 },
 	noticias: { max: 3, windowMs: 3_600_000 },
+	preferencias: { max: 20, windowMs: 60_000 },
+	filtro: { max: 20, windowMs: 60_000 },
+	silencio: { max: 20, windowMs: 60_000 },
+	umbral: { max: 20, windowMs: 60_000 },
+	categorias: { max: 20, windowMs: 60_000 },
 });
 const MAX_TELEGRAM_COMMAND_RATE_LIMIT = 1_000;
 const MAX_TELEGRAM_COMMAND_WINDOW_MS = 86_400_000;
@@ -576,6 +583,248 @@ function formatOutcomesMessage(symbol, outcomes) {
 	return lines.join('\n');
 }
 
+function formatPreferencesMessage(prefs) {
+	const symFilter = prefs.symbolFilter && prefs.symbolFilter.length > 0
+		? prefs.symbolFilter.map((s) => `\`${smartEscapeMarkdownV2(s)}\``).join(', ')
+		: '_Todos los símbolos_';
+	const symExclude = prefs.symbolExclude && prefs.symbolExclude.length > 0
+		? prefs.symbolExclude.map((s) => `\`${smartEscapeMarkdownV2(s)}\``).join(', ')
+		: '_Ninguno_';
+	const cats = prefs.categories && prefs.categories.length > 0
+		? prefs.categories.map((c) => `\`${smartEscapeMarkdownV2(c)}\``).join(', ')
+		: '_Todas_ \\(scanner, news, expanded, core, volume\\)';
+	const conf = typeof prefs.minConfidence === 'number' && prefs.minConfidence > 0
+		? `${Math.round(prefs.minConfidence * 100)}\\%`
+		: '_Sin filtro_';
+	const quiet = prefs.quietHoursStart !== null && prefs.quietHoursEnd !== null
+		? `${String(prefs.quietHoursStart).padStart(2, '0')}:00 \\- ${String(prefs.quietHoursEnd).padStart(2, '0')}:00 \\(${smartEscapeMarkdownV2(prefs.timezone || 'America/Santiago')}\\)`
+		: '_Desactivado_';
+
+	return [
+		'*⚙️ Preferencias para este chat*',
+		'',
+		`• *Símbolos permitidos*: ${symFilter}`,
+		`• *Símbolos excluidos*: ${symExclude}`,
+		`• *Categorías activas*: ${cats}`,
+		`• *Confianza mínima*: ${conf}`,
+		`• *Horas de silencio*: ${quiet}`,
+		'',
+		'*Comandos de configuración:*',
+		'• `/filtro <simbolos>` \\(ej: `/filtro BTC,ETH` o `/filtro clear`\\)',
+		'• `/filtro excluir <simbolos>` \\(ej: `/filtro excluir DOGEUSDT`\\)',
+		'• `/silencio <inicio>,<fin>` \\(ej: `/silencio 23,7` o `/silencio off`\\)',
+		'• `/umbral <min>` \\(ej: `/umbral 0.8` o `/umbral 80` o `/umbral off`\\)',
+		'• `/categorias <lista>` \\(ej: `/categorias scanner,news` o `/categorias all`\\)',
+	].join('\n');
+}
+
+const preferenciasCmd = async (context) => {
+	const chatId = getChatId(context);
+	if (!chatId) return;
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.preferencias',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/preferencias',
+			'telegram.chat_id': String(chatId),
+		},
+	});
+
+	try {
+		const prefs = await chatPreferenceService.getPreferences(chatId, 'telegram');
+		const message = formatPreferencesMessage(prefs);
+		await context.reply(message, { parse_mode: 'MarkdownV2' });
+	} catch (error) {
+		console.error(error);
+		sentryService.captureRuntimeError({
+			channel: 'telegram',
+			error,
+			extra: { command: 'preferenciasCmd', chatId },
+		});
+		await context.reply('Error al obtener preferencias.');
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
+
+const filtroCmd = async (context) => {
+	const chatId = getChatId(context);
+	if (!chatId) return;
+	const { positionals } = parseCommandArgs(context);
+
+	try {
+		if (positionals.length === 0) {
+			const prefs = await chatPreferenceService.getPreferences(chatId, 'telegram');
+			const symList = prefs.symbolFilter.length > 0 ? prefs.symbolFilter.join(', ') : 'Todos';
+			const excList = prefs.symbolExclude.length > 0 ? prefs.symbolExclude.join(', ') : 'Ninguno';
+			return await context.reply(
+				`*Filtro actual:*\n• Permitidos: \`${smartEscapeMarkdownV2(symList)}\`\n• Excluidos: \`${smartEscapeMarkdownV2(excList)}\`\n\nUso: \`/filtro BTC,ETH\` o \`/filtro clear\` o \`/filtro excluir DOGE\``,
+				{ parse_mode: 'MarkdownV2' },
+			);
+		}
+
+		const firstArg = positionals[0].toLowerCase();
+		if (firstArg === 'excluir' || firstArg === 'exclude') {
+			if (positionals.length === 1 || ['clear', 'off', 'none', 'ninguno'].includes(positionals[1]?.toLowerCase())) {
+				await chatPreferenceService.setPreferences(chatId, 'telegram', { symbolExclude: [] });
+				return await context.reply('*Filtro de exclusión desactivado*', { parse_mode: 'MarkdownV2' });
+			}
+			const rawSymbols = positionals.slice(1).join(' ').replace(/,/g, ' ');
+			const symbols = rawSymbols.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+			const updated = await chatPreferenceService.setPreferences(chatId, 'telegram', { symbolExclude: symbols });
+			const list = updated.symbolExclude.join(', ');
+			return await context.reply(
+				`*Símbolos excluidos actualizados:*\n\`${smartEscapeMarkdownV2(list)}\``,
+				{ parse_mode: 'MarkdownV2' },
+			);
+		}
+
+		if (['clear', 'off', 'none', 'todos', 'all'].includes(firstArg)) {
+			await chatPreferenceService.setPreferences(chatId, 'telegram', { symbolFilter: [] });
+			return await context.reply('*Filtro de símbolos desactivado*: recibirás todos los símbolos', { parse_mode: 'MarkdownV2' });
+		}
+
+		const rawSymbols = positionals.join(' ').replace(/,/g, ' ');
+		const symbols = rawSymbols.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+		const updated = await chatPreferenceService.setPreferences(chatId, 'telegram', { symbolFilter: symbols });
+		const list = updated.symbolFilter.join(', ');
+		return await context.reply(
+			`*Filtro de símbolos actualizado:*\n\`${smartEscapeMarkdownV2(list)}\``,
+			{ parse_mode: 'MarkdownV2' },
+		);
+	} catch (error) {
+		console.error(error);
+		await context.reply(`Error en filtro: ${error.message}`);
+	}
+};
+
+const silencioCmd = async (context) => {
+	const chatId = getChatId(context);
+	if (!chatId) return;
+	const { positionals, options } = parseCommandArgs(context);
+
+	try {
+		if (positionals.length === 0) {
+			const prefs = await chatPreferenceService.getPreferences(chatId, 'telegram');
+			const current = prefs.quietHoursStart !== null && prefs.quietHoursEnd !== null
+				? `${prefs.quietHoursStart}:00 - ${prefs.quietHoursEnd}:00 (${prefs.timezone})`
+				: 'Desactivado';
+			return await context.reply(
+				`*Horas de silencio actuales:* ${smartEscapeMarkdownV2(current)}\n\nUso: \`/silencio 23,7\` o \`/silencio off\``,
+				{ parse_mode: 'MarkdownV2' },
+			);
+		}
+
+		const firstArg = positionals[0].toLowerCase();
+		if (['off', 'clear', 'disable', 'ninguno'].includes(firstArg)) {
+			await chatPreferenceService.setPreferences(chatId, 'telegram', {
+				quietHoursStart: null,
+				quietHoursEnd: null,
+			});
+			return await context.reply('*Horas de silencio desactivadas*', { parse_mode: 'MarkdownV2' });
+		}
+
+		// Support '23,7', '23-7', '23 7', '23:00,7:00'
+		const rawTime = positionals.join(' ').replace(/[:]/g, '');
+		const parts = rawTime.split(/[,-/\s]+/).filter(Boolean).map((p) => {
+			const num = parseInt(p, 10);
+			return num > 24 ? Math.floor(num / 100) : num;
+		});
+
+		if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1]) || parts[0] < 0 || parts[0] > 23 || parts[1] < 0 || parts[1] > 23) {
+			return await context.reply('Formato inválido. Usa: `/silencio <inicio>,<fin>` (ej: `/silencio 23,7` o `/silencio off`)');
+		}
+
+		const tz = options.tz || options.timezone;
+		const update = {
+			quietHoursStart: parts[0],
+			quietHoursEnd: parts[1],
+			...(tz ? { timezone: tz } : {}),
+		};
+		const updated = await chatPreferenceService.setPreferences(chatId, 'telegram', update);
+		return await context.reply(
+			`*Horas de silencio configuradas:* ${updated.quietHoursStart}:00 \\- ${updated.quietHoursEnd}:00 \\(${smartEscapeMarkdownV2(updated.timezone)}\\)`,
+			{ parse_mode: 'MarkdownV2' },
+		);
+	} catch (error) {
+		console.error(error);
+		await context.reply(`Error en silencio: ${error.message}`);
+	}
+};
+
+const umbralCmd = async (context) => {
+	const chatId = getChatId(context);
+	if (!chatId) return;
+	const { positionals } = parseCommandArgs(context);
+
+	try {
+		if (positionals.length === 0) {
+			const prefs = await chatPreferenceService.getPreferences(chatId, 'telegram');
+			const current = prefs.minConfidence > 0 ? `${Math.round(prefs.minConfidence * 100)}%` : 'Sin umbral';
+			return await context.reply(
+				`*Umbral de confianza actual:* ${smartEscapeMarkdownV2(current)}\n\nUso: \`/umbral 0.8\` o \`/umbral 80\` o \`/umbral off\``,
+				{ parse_mode: 'MarkdownV2' },
+			);
+		}
+
+		const firstArg = positionals[0].toLowerCase();
+		if (['off', 'clear', '0', 'none'].includes(firstArg)) {
+			await chatPreferenceService.setPreferences(chatId, 'telegram', { minConfidence: 0 });
+			return await context.reply('*Umbral de confianza desactivado*: recibirás todas las señales', { parse_mode: 'MarkdownV2' });
+		}
+
+		const rawVal = parseFloat(firstArg.replace('%', ''));
+		if (isNaN(rawVal) || rawVal < 0) {
+			return await context.reply('Valor inválido. Usa: `/umbral 0.8` o `/umbral 80` o `/umbral off`');
+		}
+
+		const updated = await chatPreferenceService.setPreferences(chatId, 'telegram', { minConfidence: rawVal });
+		return await context.reply(
+			`*Umbral de confianza actualizado:* ${Math.round(updated.minConfidence * 100)}\\%`,
+			{ parse_mode: 'MarkdownV2' },
+		);
+	} catch (error) {
+		console.error(error);
+		await context.reply(`Error en umbral: ${error.message}`);
+	}
+};
+
+const categoriasCmd = async (context) => {
+	const chatId = getChatId(context);
+	if (!chatId) return;
+	const { positionals } = parseCommandArgs(context);
+
+	try {
+		if (positionals.length === 0) {
+			const prefs = await chatPreferenceService.getPreferences(chatId, 'telegram');
+			const current = prefs.categories.length > 0 ? prefs.categories.join(', ') : 'Todas';
+			return await context.reply(
+				`*Categorías actuales:* \`${smartEscapeMarkdownV2(current)}\`\n\nCategorías válidas: \`scanner\`, \`news\`, \`expanded\`, \`core\`, \`volume\`\nUso: \`/categorias scanner,news\` o \`/categorias all\``,
+				{ parse_mode: 'MarkdownV2' },
+			);
+		}
+
+		const firstArg = positionals[0].toLowerCase();
+		if (['all', 'clear', 'todas', 'off'].includes(firstArg)) {
+			await chatPreferenceService.setPreferences(chatId, 'telegram', { categories: [] });
+			return await context.reply('*Categorías actualizadas*: recibirás todas las alertas', { parse_mode: 'MarkdownV2' });
+		}
+
+		const rawCats = positionals.join(' ').replace(/,/g, ' ');
+		const cats = rawCats.split(/\s+/).map((c) => c.trim()).filter(Boolean);
+		const updated = await chatPreferenceService.setPreferences(chatId, 'telegram', { categories: cats });
+		const list = updated.categories.length > 0 ? updated.categories.join(', ') : 'Todas';
+		return await context.reply(
+			`*Categorías actualizadas:*\n\`${smartEscapeMarkdownV2(list)}\``,
+			{ parse_mode: 'MarkdownV2' },
+		);
+	} catch (error) {
+		console.error(error);
+		await context.reply(`Error en categorías: ${error.message}`);
+	}
+};
+
 function buildHelpMessage() {
 	return [
 		'*🤖 Comandos disponibles en Cabros Bot*',
@@ -590,6 +839,8 @@ function buildHelpMessage() {
 		'  _Opciones: `crypto=BTCUSDT,ETHUSDT`, `stocks=NVDA`_',
 		'• `/outcomes <simbolo>` — Rendimiento reciente de señales evaluadas \\(alias: `/rendimiento`\\)',
 		'  _Ej: `/outcomes BINANCE:BTCUSDT`_',
+		'• `/preferencias` — Preferencias de alertas para este chat \\(símbolos, silencio, umbral, categorías\\)',
+		'  _Comandos rápidos: `/filtro`, `/silencio`, `/umbral`, `/categorias`_',
 		'• `/jobs [jobId]` — Lista jobs recientes o muestra su estado \\(alias: `/trabajos`\\)',
 		'• `/help` / `/start` — Muestra este mensaje de ayuda',
 	].join('\n');
@@ -716,6 +967,12 @@ module.exports = {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	preferenciasCmd,
+	filtroCmd,
+	silencioCmd,
+	umbralCmd,
+	categoriasCmd,
+	formatPreferencesMessage,
 	buildHelpMessage,
 	getTelegramCommandMenu,
 	parseCommandArgs,

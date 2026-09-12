@@ -8,6 +8,7 @@ const remoteConfigService = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { notificationRedriveService } = require('./NotificationRedriveService');
 const { deliveryMetricsService } = require('./DeliveryMetricsService');
+const { chatPreferenceService } = require('../preferences/ChatPreferenceService');
 
 const DEFAULT_ZERO_CHANNEL_ALERT_COOLDOWN_MS = 300000;
 
@@ -16,8 +17,9 @@ class NotificationManager {
    * @param {Object} telegramService - TelegramService instance
    * @param {Object} whatsappService - WhatsAppService instance
    * @param {Object} discordService - DiscordService instance
+   * @param {Object} [preferenceService] - ChatPreferenceService instance
    */
-	constructor(telegramService, whatsappService, discordService) {
+	constructor(telegramService, whatsappService, discordService, preferenceService = chatPreferenceService) {
 		this.channels = new Map(
 			[
 				['telegram', telegramService],
@@ -25,6 +27,7 @@ class NotificationManager {
 				['discord', discordService],
 			].filter(([, channel]) => !!channel),
 		);
+		this.chatPreferenceService = preferenceService || chatPreferenceService;
 		this.zeroChannelBroadcastCount = 0;
 		this.lastZeroChannelAlertAt = 0;
 		notificationRedriveService.setNotificationManagerGetter(() => this);
@@ -269,10 +272,22 @@ class NotificationManager {
 				});
 
 				return Promise.resolve()
-					.then(() => ch.send(alert, {
-						...options,
-						signal: options.signalByChannel?.[ch.name] || options.signal,
-					}))
+					.then(async () => {
+						const prefCheck = await this._evaluateChatPreferences(ch, alert, options);
+						if (!prefCheck.deliver) {
+							return {
+								channel: ch.name,
+								success: true,
+								skipped: true,
+								reason: 'PREFERENCE_FILTER',
+								filterReason: prefCheck.reason,
+							};
+						}
+						return ch.send(alert, {
+							...options,
+							signal: options.signalByChannel?.[ch.name] || options.signal,
+						});
+					})
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
 					});
@@ -468,10 +483,22 @@ class NotificationManager {
 				});
 
 				return Promise.resolve()
-					.then(() => ch.send(alert, {
-						...options,
-						signal: options.signalByChannel?.[ch.name] || options.signal,
-					}))
+					.then(async () => {
+						const prefCheck = await this._evaluateChatPreferences(ch, alert, options);
+						if (!prefCheck.deliver) {
+							return {
+								channel: ch.name,
+								success: true,
+								skipped: true,
+								reason: 'PREFERENCE_FILTER',
+								filterReason: prefCheck.reason,
+							};
+						}
+						return ch.send(alert, {
+							...options,
+							signal: options.signalByChannel?.[ch.name] || options.signal,
+						});
+					})
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
 					});
@@ -567,12 +594,31 @@ class NotificationManager {
 		return formattedResults;
 	}
 
+	async _evaluateChatPreferences(channel, alert, options = {}) {
+		if (options.bypassPreferences || alert?.bypassPreferences || alert?.isProbe || options.isProbe) {
+			return { deliver: true };
+		}
+		const chatId = channel.name === 'telegram'
+			? (alert?.telegramChatId || channel.chatId)
+			: channel.name === 'whatsapp'
+				? (alert?.whatsappChatId || channel.chatId)
+				: channel.chatId;
+
+		const prefService = this.chatPreferenceService || chatPreferenceService;
+		return prefService.shouldDeliverAlert({
+			chatId: chatId ? String(chatId) : '',
+			channel: channel.name,
+			alert,
+			options,
+		});
+	}
+
 	_recordDeliveryMetrics(formattedResults, fallbackDurationMs) {
 		if (!Array.isArray(formattedResults) || formattedResults.length === 0) {
 			return;
 		}
 		for (const result of formattedResults) {
-			if (!result || typeof result !== 'object') {
+			if (!result || typeof result !== 'object' || result.skipped) {
 				continue;
 			}
 			const durationMs = typeof result.durationMs === 'number' && Number.isFinite(result.durationMs)

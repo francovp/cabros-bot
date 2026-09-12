@@ -37,6 +37,9 @@
       "name": "Admin"
     },
     {
+      "name": "Preferences"
+    },
+    {
       "name": "Operations"
     }
   ],
@@ -706,6 +709,128 @@
             "$ref": "#/components/responses/IdempotencyConflict"
           },
           "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/preferences/{channel}/{chatId}": {
+      "get": {
+        "tags": [
+          "Preferences"
+        ],
+        "summary": "Get chat alert preferences",
+        "description": "Returns per-chat alert preferences (symbol filters, quiet hours, confidence thresholds, categories) for a specific notification channel and chat ID. Returns default values if no custom preferences are saved.",
+        "operationId": "getChatPreferences",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PreferenceChannel"
+          },
+          {
+            "$ref": "#/components/parameters/PreferenceChatId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ChatPreferencesResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      },
+      "put": {
+        "tags": [
+          "Preferences"
+        ],
+        "summary": "Update chat alert preferences",
+        "description": "Creates or updates per-chat alert preferences. Missing fields retain existing values or safe defaults.",
+        "operationId": "updateChatPreferences",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PreferenceChannel"
+          },
+          {
+            "$ref": "#/components/parameters/PreferenceChatId"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/ChatPreferences"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ChatPreferencesResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      },
+      "delete": {
+        "tags": [
+          "Preferences"
+        ],
+        "summary": "Reset chat alert preferences to defaults",
+        "description": "Deletes stored preferences for the chat, restoring system defaults.",
+        "operationId": "deleteChatPreferences",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PreferenceChannel"
+          },
+          {
+            "$ref": "#/components/parameters/PreferenceChatId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ChatPreferencesDeleteResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
             "$ref": "#/components/responses/Error"
           }
         },
@@ -2197,6 +2322,29 @@
           "format": "uuid"
         }
       },
+      "PreferenceChannel": {
+        "name": "channel",
+        "in": "path",
+        "required": true,
+        "description": "Notification channel name",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "telegram",
+            "whatsapp",
+            "discord"
+          ]
+        }
+      },
+      "PreferenceChatId": {
+        "name": "chatId",
+        "in": "path",
+        "required": true,
+        "description": "Chat identifier for the given channel",
+        "schema": {
+          "type": "string"
+        }
+      },
       "JobId": {
         "name": "jobId",
         "in": "path",
@@ -2996,6 +3144,33 @@
             },
             "example": {
               "reason": "Gemini quota exhaustion"
+            }
+          }
+        }
+      },
+      "ChatPreferences": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ChatPreferencesUpdateInput"
+            },
+            "example": {
+              "symbolFilter": [
+                "BTC",
+                "ETH"
+              ],
+              "symbolExclude": [
+                "DOGE"
+              ],
+              "minConfidence": 0.75,
+              "quietHoursStart": 22,
+              "quietHoursEnd": 8,
+              "timezone": "America/Santiago",
+              "categories": [
+                "scanner",
+                "news"
+              ]
             }
           }
         }
@@ -4012,12 +4187,199 @@
             }
           }
         }
+      },
+      "ChatPreferencesResult": {
+        "description": "Chat preferences result",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "data": {
+                  "$ref": "#/components/schemas/ChatPreferences"
+                }
+              },
+              "required": [
+                "success",
+                "data"
+              ]
+            }
+          }
+        }
+      },
+      "ChatPreferencesDeleteResult": {
+        "description": "Chat preferences reset result",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "message": {
+                  "type": "string",
+                  "example": "Preferencias eliminadas. Se usarán valores por defecto."
+                }
+              },
+              "required": [
+                "success",
+                "message"
+              ]
+            }
+          }
+        }
       }
     },
     "schemas": {
       "JsonObject": {
         "type": "object",
         "additionalProperties": true
+      },
+      "ChatPreferences": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "example": "123456789"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "telegram",
+              "whatsapp",
+              "discord"
+            ],
+            "example": "telegram"
+          },
+          "symbolFilter": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "example": [
+              "BTCUSDT",
+              "ETHUSDT"
+            ]
+          },
+          "symbolExclude": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "example": [
+              "DOGEUSDT"
+            ]
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "example": [
+              "scanner",
+              "news"
+            ]
+          },
+          "minConfidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "example": 0.7
+          },
+          "quietHoursStart": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 23,
+            "example": 22
+          },
+          "quietHoursEnd": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 23,
+            "example": 8
+          },
+          "timezone": {
+            "type": "string",
+            "example": "America/Santiago"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "chatId",
+          "channel",
+          "symbolFilter",
+          "symbolExclude",
+          "categories",
+          "minConfidence",
+          "timezone"
+        ]
+      },
+      "ChatPreferencesUpdateInput": {
+        "type": "object",
+        "properties": {
+          "symbolFilter": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "symbolExclude": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "minConfidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "quietHoursStart": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 23
+          },
+          "quietHoursEnd": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 23
+          },
+          "timezone": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "TestAlertRequest": {
         "type": "object",
