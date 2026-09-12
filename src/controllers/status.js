@@ -14,6 +14,7 @@ const remoteConfigService = require('../services/remoteConfig/RemoteConfigServic
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { binanceOrderAuditService } = require('../services/trading/BinanceOrderAuditService');
+const symbolAnalysisStorageService = require('../services/storage/SymbolAnalysisStorageService');
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
@@ -23,6 +24,10 @@ const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const {
+	isNewsMonitorPaused,
+	getNewsMonitorPauseState,
+} = require('./webhooks/handlers/newsMonitor/pauseState');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -335,6 +340,7 @@ function getStatus() {
 			discordAlerts: discordEnabled,
 			geminiGrounding: geminiGroundingEnabled,
 			newsMonitor: newsMonitorEnabled,
+			newsMonitorPaused: isNewsMonitorPaused(),
 			newsMonitorTestMode: newsMonitorTestModeEnabled,
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
 			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationFlagEnabled,
@@ -363,6 +369,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			symbolAnalysisStorage: symbolAnalysisStorageService.isEnabled(),
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 		},
 		deliveryChannels: {
@@ -399,6 +406,10 @@ function getStatus() {
 			sentry,
 			langfuse,
 			braveSearch,
+			newsMonitor: {
+				enabled: newsMonitorEnabled,
+				...getNewsMonitorPauseState(),
+			},
 			newsMonitorLlm,
 			llmAlertEnrichment,
 			cloudflareAig: dependencyStatus({
@@ -439,6 +450,7 @@ function getStatus() {
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
 			binanceOrderAudit: binanceOrderAuditService.getStatus(),
+			symbolAnalysisStorage: symbolAnalysisStorageService.getStatus(),
 		},
 	};
 }
