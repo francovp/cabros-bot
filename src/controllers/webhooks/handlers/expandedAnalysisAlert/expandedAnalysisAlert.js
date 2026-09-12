@@ -92,7 +92,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -109,7 +109,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -175,6 +175,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 						score,
 						side: itemSide,
 						price: typeof closePrice === 'number' ? closePrice : null,
+						priceSource: typeof closePrice === 'number' ? 'tradingview-mcp' : null,
 						stop: typeof row.stopLoss === 'number' ? row.stopLoss : null,
 						target: typeof row.takeProfit === 'number' ? row.takeProfit : null,
 						sources: [],
@@ -195,7 +196,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				timedOut,
 				timeoutMs,
 				requestId,
-				totalDurationMs: Date.now() - startTime,
+				processingTimeMs: Math.max(0, Date.now() - startTime),
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {

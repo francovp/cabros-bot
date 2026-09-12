@@ -28,6 +28,7 @@ const EXPORT_FIELDS = [
 	'deliveryResults',
 	'suppressedRepeat',
 	'tokenUsage',
+	'enrichmentData',
 	'text',
 ];
 
@@ -58,6 +59,43 @@ function parseEnriched(rawEnriched) {
 	}
 
 	return null;
+}
+
+const ALLOWED_INCLUDE_VALUES = new Set(['enrichment_summary']);
+
+function parseInclude(rawInclude) {
+	if (rawInclude === undefined || rawInclude === null || rawInclude === '') {
+		return { success: true, values: [] };
+	}
+
+	let items = [];
+	if (Array.isArray(rawInclude)) {
+		items = rawInclude.flatMap((item) => (typeof item === 'string' ? item.split(',') : []));
+	} else if (typeof rawInclude === 'string') {
+		items = rawInclude.split(',');
+	} else {
+		return {
+			success: false,
+			error: 'Invalid include parameter. Allowed values: enrichment_summary.',
+		};
+	}
+
+	const normalized = [];
+	for (const item of items) {
+		const trimmed = item.trim();
+		if (!trimmed) {
+			continue;
+		}
+		if (!ALLOWED_INCLUDE_VALUES.has(trimmed)) {
+			return {
+				success: false,
+				error: `Invalid include parameter '${trimmed}'. Allowed values: enrichment_summary.`,
+			};
+		}
+		normalized.push(trimmed);
+	}
+
+	return { success: true, values: Array.from(new Set(normalized)) };
 }
 
 function parseSummaryLimit(rawLimit) {
@@ -163,12 +201,26 @@ function listAlerts(req, res) {
 			? req.query.source.trim()
 			: undefined;
 
-		const result = await alertStorageService.listAlerts({
+		const parsedInclude = parseInclude(req.query.include);
+		if (!parsedInclude.success) {
+			return res.status(400).json({
+				error: parsedInclude.error,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const listParams = {
 			before,
 			enriched,
 			limit,
 			source,
-		});
+		};
+		if (parsedInclude.values.length > 0) {
+			listParams.include = parsedInclude.values;
+			listParams.includeEnrichmentSummary = parsedInclude.values.includes('enrichment_summary');
+		}
+
+		const result = await alertStorageService.listAlerts(listParams);
 
 		return res.status(200).json({
 			success: true,
@@ -270,10 +322,25 @@ function escapeCsvValue(value) {
 	return safeSerialized;
 }
 
-function buildCsv(alerts, includeText) {
-	const fields = includeText
-		? EXPORT_FIELDS
-		: EXPORT_FIELDS.filter(field => field !== 'text');
+function buildCsv(alerts, optionsOrIncludeText, maybeIncludeEnrichment) {
+	const options = typeof optionsOrIncludeText === 'object' && optionsOrIncludeText !== null
+		? optionsOrIncludeText
+		: {
+			includeText: Boolean(optionsOrIncludeText),
+			includeEnrichment: Boolean(maybeIncludeEnrichment),
+		};
+	const includeText = Boolean(options.includeText);
+	const includeEnrichment = Boolean(options.includeEnrichment);
+
+	const fields = EXPORT_FIELDS.filter((field) => {
+		if (field === 'text' && !includeText) {
+			return false;
+		}
+		if (field === 'enrichmentData' && !includeEnrichment) {
+			return false;
+		}
+		return true;
+	});
 	const rows = alerts.map(alert => fields.map(field => escapeCsvValue(alert[field])).join(','));
 	return [fields.join(','), ...rows].join('\n');
 }
@@ -336,6 +403,14 @@ function exportAlerts(req, res) {
 			});
 		}
 
+		const includeEnrichment = parseBooleanFlag(req.query.includeEnrichment, false);
+		if (includeEnrichment === null) {
+			return res.status(400).json({
+				error: 'Invalid includeEnrichment flag. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
 		const source = typeof req.query.source === 'string' && req.query.source.trim()
 			? req.query.source.trim()
 			: undefined;
@@ -347,6 +422,7 @@ function exportAlerts(req, res) {
 			source,
 			enriched,
 			includeText,
+			includeEnrichment,
 		});
 
 		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
@@ -367,7 +443,7 @@ function exportAlerts(req, res) {
 
 		if (format === 'csv') {
 			res.type('text/csv; charset=utf-8');
-			return res.status(200).send(`${buildCsv(result.alerts, includeText)}\n`);
+			return res.status(200).send(`${buildCsv(result.alerts, { includeText, includeEnrichment })}\n`);
 		}
 
 		res.type('application/x-ndjson; charset=utf-8');

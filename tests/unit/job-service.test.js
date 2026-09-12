@@ -86,6 +86,24 @@ describe('JobService Unit Tests', () => {
 			expect(result.status).toBe('processing');
 		});
 
+		it('persists market-scanner scan-specific options for background execution', async () => {
+			const metadata = await jobService.createJob('market-scanner', {
+				scans: ['rating_filter', 'consecutive_candles_scan'],
+				rating: -2,
+				pattern_type: 'bearish',
+				candle_count: 4,
+				min_growth: 1.5,
+			});
+
+			const rawJob = await jobService.repository.get(metadata.jobId);
+			expect(rawJob.requestMetadata).toEqual(expect.objectContaining({
+				rating: -2,
+				pattern_type: 'bearish',
+				candle_count: 4,
+				min_growth: 1.5,
+			}));
+		});
+
 		it('correctly validates and parses timeoutMs string format like 1e3', async () => {
 			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],

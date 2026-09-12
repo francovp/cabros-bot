@@ -27,6 +27,11 @@ const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
+const {
+	buildErrorEnvelope,
+	sendError,
+	STANDARD_ERROR_CODES,
+} = require('../../../../lib/errorEnvelope');
 
 // Initialize services
 let notificationManager = null;
@@ -190,6 +195,26 @@ function getCooldownChannelIdentityForDestination(channel, destination) {
 
 function getChannelName(identity) {
 	return String(identity).split(':', 1)[0];
+}
+
+function resolveSignalOutcomePriceSource(enriched, parsed) {
+	const explicitSource = typeof enriched?.priceSource === 'string'
+		? enriched.priceSource.trim().toLowerCase()
+		: '';
+	if (explicitSource && explicitSource !== 'derived-quote') {
+		return explicitSource;
+	}
+
+	if (enriched?.tradingViewEnrichmentApplied === true
+		|| ['full', 'partial'].includes(enriched?.tradingViewEnrichmentStatus)) {
+		return 'tradingview-mcp';
+	}
+
+	if (enriched?.levelsSource === 'derived-quote') {
+		return (parsed?.exchange || 'BINANCE') === 'BINANCE' ? 'binance' : 'twelve-data';
+	}
+
+	return enriched?.levelsSource === 'gemini-grounding' ? 'gemini-grounding' : 'tradingview-mcp';
 }
 
 function postAlert(botOrGetter) {
@@ -472,9 +497,8 @@ function postAlert(botOrGetter) {
 							? Number(alert.enriched.target_level)
 							: null);
 
-					const levelsSource = alert.enriched && alert.enriched.levelsSource;
 					const priceSource = mcpPrice !== null
-						? (levelsSource === 'derived-quote' ? 'derived-quote' : (levelsSource === 'gemini-grounding' ? 'gemini-grounding' : 'tradingview-mcp'))
+						? resolveSignalOutcomePriceSource(alert.enriched, parsed)
 						: null;
 
 					signalOutcomeService.recordSignal({
@@ -498,11 +522,11 @@ function postAlert(botOrGetter) {
 			}
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(error.statusCode).json({
-					success: false,
+				return sendError(res, error.statusCode, {
 					error: error.message,
-					details: error.details,
+					code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 					requestId,
+					details: error.details,
 				});
 			}
 
@@ -527,8 +551,17 @@ function postAlert(botOrGetter) {
 			});
 
 			const status = (error.response && error.response.error_code) || 500;
-			const errorResponse = error.response || { error: 'Internal server error', details: error.message, requestId };
-			res.status(status).send(errorResponse);
+			const upstreamEnvelope = error.response && typeof error.response === 'object'
+				? error.response
+				: null;
+			const envelope = buildErrorEnvelope({
+				error: (upstreamEnvelope && upstreamEnvelope.error) || error.message || 'Internal server error',
+				code: (upstreamEnvelope && upstreamEnvelope.code) || STANDARD_ERROR_CODES.INTERNAL_ERROR,
+				requestId,
+				statusCode: status,
+				details: (upstreamEnvelope && upstreamEnvelope.details) || undefined,
+			});
+			res.status(status).json(envelope);
 		}
 	};
 }
