@@ -1993,7 +1993,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"analyzed\",\n      \"alert\": null,\n      \"cached\": false,\n      \"requestId\": \"req-abc123\",\n      \"totalDurationMs\": 800\n    }\n  ],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 0\n  },\n  \"requestedChannels\": [\"telegram\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 850,\n  \"requestId\": \"req-abc123\",\n  \"tokenUsage\": {\n    \"inputTokens\": 10,\n    \"outputTokens\": 20,\n    \"totalTokens\": 30\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"analyzed\",\n      \"alert\": null,\n      \"cached\": false,\n      \"requestId\": \"req-abc123\",\n      \"totalDurationMs\": 800\n    }\n  ],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"throttled\": 0,\n    \"alerts_sent\": 0\n  },\n  \"requestedChannels\": [\"telegram\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 850,\n  \"requestId\": \"req-abc123\",\n  \"tokenUsage\": {\n    \"inputTokens\": 10,\n    \"outputTokens\": 20,\n    \"totalTokens\": 30\n  },\n  \"windowUsage\": {\n    \"alertsDelivered\": 0,\n    \"alertsThrottled\": 0,\n    \"windowResetsAt\": \"2026-09-12T10:20:00.000Z\"\n  }\n}"
             },
             {
               "name": "200 OK - Partial quota exhaustion",
@@ -2035,7 +2035,20 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"partial_success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"error\",\n      \"error\": {\n        \"code\": \"GEMINI_QUOTA_EXHAUSTED\",\n        \"message\": \"429 RESOURCE_EXHAUSTED: quota exceeded\"\n      },\n      \"cached\": false,\n      \"requestId\": \"req-quota123\",\n      \"totalDurationMs\": 0\n    },\n    {\n      \"symbol\": \"ETHUSD\",\n      \"status\": \"analyzed\",\n      \"alert\": null,\n      \"cached\": false,\n      \"requestId\": \"req-quota123\",\n      \"totalDurationMs\": 900\n    }\n  ],\n  \"summary\": {\n    \"total\": 2,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 1,\n    \"quota_exhausted\": 1,\n    \"alerts_sent\": 0\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 950,\n  \"requestId\": \"req-quota123\",\n  \"tokenUsage\": {}\n}"
+              "body": "{\n  \"success\": true,\n  \"partial_success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"error\",\n      \"error\": {\n        \"code\": \"GEMINI_QUOTA_EXHAUSTED\",\n        \"message\": \"429 RESOURCE_EXHAUSTED: quota exceeded\"\n      },\n      \"cached\": false,\n      \"requestId\": \"req-quota123\",\n      \"totalDurationMs\": 0\n    },\n    {\n      \"symbol\": \"ETHUSD\",\n      \"status\": \"analyzed\",\n      \"alert\": null,\n      \"cached\": false,\n      \"requestId\": \"req-quota123\",\n      \"totalDurationMs\": 900\n    }\n  ],\n  \"summary\": {\n    \"total\": 2,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 1,\n    \"quota_exhausted\": 1,\n    \"throttled\": 0,\n    \"alerts_sent\": 0\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 950,\n  \"requestId\": \"req-quota123\",\n  \"tokenUsage\": {},\n  \"windowUsage\": {\n    \"alertsDelivered\": 0,\n    \"alertsThrottled\": 0,\n    \"windowResetsAt\": \"2026-09-12T10:20:00.000Z\"\n  }\n}"
+            },
+            {
+              "name": "200 OK - Volume throttled alerts",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"throttled\",\n      \"reason\": \"alert_volume_cap\",\n      \"alert\": {\n        \"eventCategory\": \"price_surge\",\n        \"headline\": \"Bitcoin breaks resistance\",\n        \"confidence\": 0.75\n      },\n      \"cached\": false,\n      \"deliveryResults\": []\n    }\n  ],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 0,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"throttled\": 1,\n    \"alerts_sent\": 0\n  },\n  \"requestedChannels\": [\"telegram\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 750,\n  \"requestId\": \"req-throttled123\",\n  \"tokenUsage\": {},\n  \"windowUsage\": {\n    \"alertsDelivered\": 10,\n    \"alertsThrottled\": 1,\n    \"windowResetsAt\": \"2026-09-12T10:20:00.000Z\"\n  }\n}"
             },
             {
               "name": "503 Service Unavailable - News monitor paused",
@@ -2132,7 +2145,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [{\n    \"symbol\": \"BTCUSDT\",\n    \"status\": \"analyzed\",\n    \"alert\": {\n      \"eventCategory\": \"price_surge\",\n      \"headline\": \"Bitcoin breaks resistance\"\n    },\n    \"deliveryResults\": [],\n    \"cached\": false\n  }],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"deliveredChannels\": [],\n  \"requestId\": \"req-dryrun123\"\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [{\n    \"symbol\": \"BTCUSDT\",\n    \"status\": \"analyzed\",\n    \"alert\": {\n      \"eventCategory\": \"price_surge\",\n      \"headline\": \"Bitcoin breaks resistance\"\n    },\n    \"deliveryResults\": [],\n    \"cached\": false\n  }],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"throttled\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"deliveredChannels\": [],\n  \"requestId\": \"req-dryrun123\",\n  \"windowUsage\": {\n    \"alertsDelivered\": 0,\n    \"alertsThrottled\": 0,\n    \"windowResetsAt\": \"2026-09-12T10:20:00.000Z\"\n  }\n}"
             }
           ]
         },

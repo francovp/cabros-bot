@@ -329,12 +329,18 @@ describe('RemoteConfigService', () => {
 			TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD: 10,
 			TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS: 300000,
 			TRADINGVIEW_MCP_PAGE_COOLDOWN_MS: 1800000,
+			NEWS_MAX_ALERTS_PER_BATCH: 15,
+			NEWS_MAX_ALERTS_PER_WINDOW: 30,
+			NEWS_MAX_ALERTS_PER_WINDOW_MS: 600000,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
 		await remoteConfigService.loadNow();
 
 		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.NEWS_MAX_ALERTS_PER_BATCH).toBe(15);
+		expect(config.NEWS_MAX_ALERTS_PER_WINDOW).toBe(30);
+		expect(config.NEWS_MAX_ALERTS_PER_WINDOW_MS).toBe(600000);
 		expect(config.GROUNDING_MAX_SOURCES).toBe(5);
 		expect(config.GROUNDING_TIMEOUT_MS).toBe(45000);
 		expect(config.GROUNDING_MAX_LENGTH).toBe(3000);

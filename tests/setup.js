@@ -93,8 +93,10 @@ jest.setTimeout(15000);
 
 const rateLimiter = require('../src/lib/rateLimiter');
 const geminiQuotaManager = require('../src/services/grounding/geminiQuotaManager');
+const { resetVolumeTrackerForTesting } = require('../src/controllers/webhooks/handlers/newsMonitor/volumeTracker');
 afterEach(() => {
 	rateLimiter.disableTestMode();
 	rateLimiter.reset();
 	geminiQuotaManager.resetForTesting();
+	resetVolumeTrackerForTesting();
 });

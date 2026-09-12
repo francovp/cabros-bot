@@ -10,6 +10,12 @@ const { getCacheInstance } = require('./cache');
 const { getEnrichmentService } = require('../../../../services/inference/enrichmentService');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { AnalysisStatus, EventCategory } = require('./constants');
+const {
+	getVolumeTracker,
+	parseNewsMaxAlertsPerBatch,
+	parseNewsMaxAlertsPerWindow,
+	parseNewsMaxAlertsPerWindowMs,
+} = require('./volumeTracker');
 const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
 const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
 const geminiPriceService = require('../../../../services/grounding/geminiPriceService');
@@ -402,9 +408,10 @@ function calculateRSI(closes, period = 14) {
 }
 
 class NewsAnalyzer {
-	constructor() {
+	constructor(options = {}) {
 		this.cache = getCacheInstance();
 		this.enrichmentService = getEnrichmentService();
+		this.volumeTracker = options.volumeTracker || getVolumeTracker();
 		// Do NOT store notificationManager in constructor - get it dynamically
 		// to handle delayed initialization in tests and app startup
 
@@ -479,6 +486,7 @@ class NewsAnalyzer {
 		const results = [];
 		let nextIndex = 0;
 		const batchStartedAt = Date.now();
+		const symbolOptions = { ...options, deferDelivery: true };
 
 		const runNext = async () => {
 			while (nextIndex < symbols.length) {
@@ -486,7 +494,7 @@ class NewsAnalyzer {
 				nextIndex += 1;
 				const symbol = symbols[currentIndex];
 				const symbolTokenUsage = new TokenUsageTracker();
-				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, symbolTokenUsage, routing, batchStartedAt, options)
+				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, symbolTokenUsage, routing, batchStartedAt, symbolOptions)
 					.then((result) => {
 						if (tokenUsage) {
 							tokenUsage.merge(symbolTokenUsage);
@@ -514,7 +522,75 @@ class NewsAnalyzer {
 
 		await Promise.all(Array.from({ length: limit }, runNext));
 
+		await this.applyVolumeThrottling(results, requestId, routing, options);
+
 		return results;
+	}
+
+	async applyVolumeThrottling(results, requestId, routing = {}, options = {}) {
+		if (!Array.isArray(results) || results.length === 0) {
+			return;
+		}
+
+		const candidates = [];
+		for (let i = 0; i < results.length; i++) {
+			const res = results[i];
+			if (res && res.status === AnalysisStatus.ANALYZED && res.alert && !res.cached) {
+				const conf = typeof res.alert.confidence === 'number' ? res.alert.confidence : 0;
+				candidates.push({ result: res, index: i, confidence: conf });
+			}
+		}
+
+		if (candidates.length === 0) {
+			return;
+		}
+
+		// Prioritize candidate alerts by confidence score descending
+		candidates.sort((a, b) => {
+			if (b.confidence !== a.confidence) {
+				return b.confidence - a.confidence;
+			}
+			return a.index - b.index;
+		});
+
+		const tracker = this.volumeTracker || getVolumeTracker();
+		const effectiveCap = tracker.getEffectiveBatchCapacity();
+
+		const allowed = candidates.slice(0, effectiveCap);
+		const throttled = candidates.slice(effectiveCap);
+
+		for (const item of throttled) {
+			const res = item.result;
+			res.status = AnalysisStatus.THROTTLED;
+			res.reason = 'alert_volume_cap';
+			res.deliveryResults = [];
+			delete res._pendingDelivery;
+		}
+
+		if (options.dryRun) {
+			for (const item of allowed) {
+				const res = item.result;
+				res.deliveryResults = [];
+				delete res._pendingDelivery;
+			}
+			return;
+		}
+
+		let deliveredCount = 0;
+		for (const item of allowed) {
+			const res = item.result;
+			if (res._pendingDelivery) {
+				await this.executePendingDelivery(res, requestId);
+				if (res.status === AnalysisStatus.ANALYZED) {
+					deliveredCount++;
+				}
+			} else {
+				deliveredCount++;
+			}
+		}
+
+		tracker.recordDelivered(deliveredCount);
+		tracker.recordThrottled(throttled.length);
 	}
 
 	async runSymbolAnalysisWithRetry(symbol, requestId, tokenUsage, routing, startedAt, options = {}) {
@@ -918,29 +994,21 @@ class NewsAnalyzer {
 			};
 		}
 
-		// Claim the cache key atomically before delivering the alert to prevent race conditions
-		const claimed = await this.cache.claim(symbol, geminiAnalysis.event_category);
-		if (!claimed) {
-			console.info('[Analyzer] Duplicate alert detected during claim, suppressing delivery for:', symbol, geminiAnalysis.event_category);
-			const cached = await this.cache.get(symbol, geminiAnalysis.event_category);
+		if (options.deferDelivery) {
 			return {
-				status: AnalysisStatus.CACHED,
-				alert: cached ? cached.alert : alert,
-				deliveryResults: cached ? cached.deliveryResults : [],
-				cached: true,
-			};
-		}
-
-		// Send to all notification channels
-		console.info('[Analyzer] Sending alert:', symbol, 'confidence:', alert.confidence.toFixed(2), 'event:', alert.eventCategory);
-		const notificationMgr = getNotificationManager();
-		if (!notificationMgr) {
-			console.warn('[Analyzer] NotificationManager not initialized - skipping alert delivery');
-			return {
+				symbol,
 				status: AnalysisStatus.ANALYZED,
 				alert,
 				deliveryResults: [],
 				cached: false,
+				_pendingDelivery: {
+					notificationMgr: getNotificationManager(),
+					alert,
+					routing,
+					geminiAnalysis,
+					options,
+					tokenUsage,
+				},
 				analysisRecord: {
 					symbol,
 					eventCategory: alert.eventCategory,
@@ -953,8 +1021,75 @@ class NewsAnalyzer {
 				},
 			};
 		}
+
+		const candidate = {
+			symbol,
+			status: AnalysisStatus.ANALYZED,
+			alert,
+			deliveryResults: [],
+			cached: false,
+			_pendingDelivery: {
+				notificationMgr: getNotificationManager(),
+				alert,
+				routing,
+				geminiAnalysis,
+				options,
+				tokenUsage,
+			},
+			analysisRecord: {
+				symbol,
+				eventCategory: alert.eventCategory,
+				sentiment: alert.sentimentScore ?? 0,
+				confidence: alert.confidence,
+				headline: alert.headline || geminiAnalysis.headline || '',
+				alertSent: false,
+				promptVersion: alert.promptVersion || geminiAnalysis.promptVersion,
+				tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+			},
+		};
+
+		await this.executePendingDelivery(candidate, requestId);
+		return candidate;
+	}
+
+	async executePendingDelivery(candidate, requestId) {
+		if (!candidate || !candidate._pendingDelivery) {
+			return;
+		}
+		const {
+			notificationMgr,
+			alert,
+			routing,
+			geminiAnalysis,
+			options = {},
+			tokenUsage,
+		} = candidate._pendingDelivery;
+		const symbol = candidate.symbol;
+
+		// Claim the cache key atomically before delivering the alert to prevent race conditions
+		const claimed = await this.cache.claim(symbol, geminiAnalysis.event_category);
+		if (!claimed) {
+			console.info('[Analyzer] Duplicate alert detected during claim, suppressing delivery for:', symbol, geminiAnalysis.event_category);
+			const cached = await this.cache.get(symbol, geminiAnalysis.event_category);
+			candidate.status = AnalysisStatus.CACHED;
+			candidate.alert = cached ? cached.alert : alert;
+			candidate.deliveryResults = cached ? cached.deliveryResults : [];
+			candidate.cached = true;
+			delete candidate._pendingDelivery;
+			return;
+		}
+
+		if (!notificationMgr) {
+			console.warn('[Analyzer] NotificationManager not initialized - skipping alert delivery');
+			candidate.deliveryResults = [];
+			delete candidate._pendingDelivery;
+			return;
+		}
+
+		console.info('[Analyzer] Sending alert:', symbol, 'confidence:', alert.confidence.toFixed(2), 'event:', alert.eventCategory);
 		const deliveryResults = await sendWithNotificationRouting(notificationMgr, alert, routing);
 		console.info('[Analyzer] Alert delivery results for', symbol, ':', deliveryResults);
+		candidate.deliveryResults = deliveryResults;
 
 		const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 		if (signalOutcomeService.isEnabled()) {
@@ -1007,22 +1142,10 @@ class NewsAnalyzer {
 		});
 
 		const alertSent = Array.isArray(deliveryResults) && deliveryResults.some((d) => d && d.success === true);
-		return {
-			status: AnalysisStatus.ANALYZED,
-			alert,
-			deliveryResults,
-			cached: false,
-			analysisRecord: {
-				symbol,
-				eventCategory: alert.eventCategory,
-				sentiment: alert.sentimentScore ?? 0,
-				confidence: alert.confidence,
-				headline: alert.headline || geminiAnalysis.headline || '',
-				alertSent,
-				promptVersion: alert.promptVersion || geminiAnalysis.promptVersion,
-				tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
-			},
-		};
+		if (candidate.analysisRecord) {
+			candidate.analysisRecord.alertSent = alertSent;
+		}
+		delete candidate._pendingDelivery;
 	}
 
 	/**
@@ -1548,6 +1671,9 @@ module.exports = {
 	isKlineOpen,
 	parseNewsTimeoutMs,
 	parseNewsAlertThreshold,
+	parseNewsMaxAlertsPerBatch,
+	parseNewsMaxAlertsPerWindow,
+	parseNewsMaxAlertsPerWindowMs,
 	getCachedRoutingMetadata,
 	hashDiscordWebhook,
 };

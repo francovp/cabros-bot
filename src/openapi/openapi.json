@@ -3467,6 +3467,7 @@
                     "timeout": 0,
                     "error": 0,
                     "quota_exhausted": 0,
+                    "throttled": 0,
                     "alerts_sent": 1
                   },
                   "requestedChannels": [
@@ -3476,7 +3477,12 @@
                   "deliveredChannels": [],
                   "totalDurationMs": 850,
                   "requestId": "req-dryrun123",
-                  "tokenUsage": {}
+                  "tokenUsage": {},
+                  "windowUsage": {
+                    "alertsDelivered": 0,
+                    "alertsThrottled": 0,
+                    "windowResetsAt": "2026-09-12T10:20:00.000Z"
+                  }
                 }
               }
             }
@@ -6069,6 +6075,10 @@
                 "type": "integer",
                 "description": "Number of symbols that exhausted Gemini 429 RESOURCE_EXHAUSTED retries."
               },
+              "throttled": {
+                "type": "integer",
+                "description": "Number of alert candidates throttled due to global batch or window volume caps."
+              },
               "alerts_sent": {
                 "type": "integer"
               }
@@ -6096,6 +6106,24 @@
           },
           "tokenUsage": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "windowUsage": {
+            "type": "object",
+            "properties": {
+              "alertsDelivered": {
+                "type": "integer",
+                "description": "Number of alerts delivered in the current sliding window."
+              },
+              "alertsThrottled": {
+                "type": "integer",
+                "description": "Number of alerts throttled in the current sliding window."
+              },
+              "windowResetsAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Timestamp when the current sliding window resets."
+              }
+            }
           }
         }
       },

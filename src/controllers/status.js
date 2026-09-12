@@ -30,6 +30,7 @@ const {
 	isNewsMonitorPaused,
 	getNewsMonitorPauseState,
 } = require('./webhooks/handlers/newsMonitor/pauseState');
+const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTracker');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -413,6 +414,7 @@ function getStatus() {
 			newsMonitor: {
 				enabled: newsMonitorEnabled,
 				...getNewsMonitorPauseState(),
+				...getVolumeTracker().getWindowUsage(),
 			},
 			newsMonitorLlm,
 			llmAlertEnrichment,
