@@ -283,30 +283,37 @@ class NotificationManager {
 			sentryService.endSpan(dispatchSpan);
 		}
 
+		const totalDurationMs = Date.now() - startTime;
+
 		const formattedResults = results.map((r, idx) => {
 			const chName = channels[idx] ? channels[idx].name : 'unknown';
 			if (r.status === 'fulfilled') {
 				if (r.value && typeof r.value === 'object') {
-					return {
+					const item = {
 						channel: chName,
 						...r.value,
 					};
+					if (typeof item.durationMs !== 'number' || !Number.isFinite(item.durationMs) || item.durationMs < 0) {
+						item.durationMs = totalDurationMs;
+					}
+					return item;
 				}
 				return {
 					success: false,
 					channel: chName,
 					error: 'Channel returned empty response',
+					durationMs: totalDurationMs,
 				};
 			}
 			return {
 				success: false,
 				channel: chName,
 				error: (r.reason && (r.reason.message || String(r.reason))) || 'Unknown error',
+				durationMs: totalDurationMs,
 			};
 		});
 
 		// Report external failures to Sentry
-		const totalDurationMs = Date.now() - startTime;
 		const httpContext = options.http || (options.endpoint ? {
 			endpoint: options.endpoint,
 			method: options.method || 'POST',
@@ -482,30 +489,37 @@ class NotificationManager {
 			sentryService.endSpan(dispatchSpan);
 		}
 
+		const totalDurationMs = Date.now() - startTime;
+
 		const formattedResults = results.map((r, idx) => {
 			const chName = enabledChannels[idx] ? enabledChannels[idx].name : 'unknown';
 			if (r.status === 'fulfilled') {
 				if (r.value && typeof r.value === 'object') {
-					return {
+					const item = {
 						channel: chName,
 						...r.value,
 					};
+					if (typeof item.durationMs !== 'number' || !Number.isFinite(item.durationMs) || item.durationMs < 0) {
+						item.durationMs = totalDurationMs;
+					}
+					return item;
 				}
 				return {
 					success: false,
 					channel: chName,
 					error: 'Channel returned empty response',
+					durationMs: totalDurationMs,
 				};
 			}
 			return {
 				success: false,
 				channel: chName,
 				error: (r.reason && (r.reason.message || String(r.reason))) || 'Unknown error',
+				durationMs: totalDurationMs,
 			};
 		});
 
 		// Report external failures to Sentry (T014)
-		const totalDurationMs = Date.now() - startTime;
 		const httpContext = options.http || (options.endpoint ? {
 			endpoint: options.endpoint,
 			method: options.method || 'POST',

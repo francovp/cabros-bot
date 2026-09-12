@@ -112,6 +112,7 @@ class DiscordService extends NotificationChannel {
 	}
 
 	async send(alert = {}, options = {}) {
+		const startedAt = Date.now();
 		try {
 			const webhookUrl = alert.discordWebhookUrl || this.webhookUrl;
 			if (!webhookUrl) {
@@ -119,6 +120,7 @@ class DiscordService extends NotificationChannel {
 					success: false,
 					channel: 'discord',
 					error: 'Missing DISCORD_WEBHOOK_URL',
+					durationMs: Date.now() - startedAt,
 				};
 			}
 
@@ -132,9 +134,9 @@ class DiscordService extends NotificationChannel {
 				totalAttempts += result.attemptCount || 0;
 				if (!result.success) {
 					if (result.statusCode === 429) {
-						return { ...result, attemptCount: totalAttempts };
+						return { ...result, attemptCount: totalAttempts, durationMs: Date.now() - startedAt };
 					}
-					return result;
+					return { ...result, durationMs: Date.now() - startedAt };
 				}
 				messageIds.push(result.messageId);
 			}
@@ -145,6 +147,7 @@ class DiscordService extends NotificationChannel {
 				messageId: messageIds.join(','),
 				messageIds,
 				messageCount: messageIds.length,
+				durationMs: Date.now() - startedAt,
 			};
 		} catch (error) {
 			this.logger?.error?.(`Failed to send to Discord: ${error.message}`);
@@ -152,6 +155,7 @@ class DiscordService extends NotificationChannel {
 				success: false,
 				channel: 'discord',
 				error: error.message,
+				durationMs: Date.now() - startedAt,
 			};
 		}
 	}

@@ -929,6 +929,16 @@ function averageLatency(samples) {
 	return Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length);
 }
 
+function calculatePercentileLatency(samples, percentile = 95) {
+	if (!Array.isArray(samples) || samples.length === 0) {
+		return null;
+	}
+
+	const sorted = [...samples].sort((a, b) => a - b);
+	const index = Math.min(Math.max(Math.ceil((percentile / 100) * sorted.length) - 1, 0), sorted.length - 1);
+	return Math.round(sorted[index]);
+}
+
 function buildSummaryWindow({ from, to, limit }) {
 	const now = new Date();
 	const parsedTo = to ? new Date(to) : now;
@@ -1180,6 +1190,17 @@ async function saveAlertInternal({
 		const effectiveWhatsappChatId = whatsappChatId || (routing && routing.whatsappChatId);
 		const effectiveDiscordWebhookUrl = discordWebhookUrl || (routing && routing.discordWebhookUrl);
 
+		const normalizedDeliveryResults = Array.isArray(deliveryResults)
+			? deliveryResults.map((result) => {
+				if (!result || typeof result !== 'object') return result;
+				const duration = result.durationMs ?? result.latencyMs ?? result.deliveryLatencyMs;
+				if (typeof duration === 'number' && Number.isFinite(duration) && duration >= 0 && typeof result.durationMs !== 'number') {
+					return { ...result, durationMs: Math.round(duration) };
+				}
+				return result;
+			})
+			: [];
+
 		const document = {
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
 			expiresAt: buildRetentionExpiryTimestamp(),
@@ -1189,7 +1210,7 @@ async function saveAlertInternal({
 			tokenUsage: stripUndefinedFieldsDeep(tokenUsage ?? null),
 			channels: Array.isArray(channels) ? channels : [],
 			deliveryResults: Array.isArray(deliveryResults)
-				? stripUndefinedFieldsDeep(deliveryResults)
+				? stripUndefinedFieldsDeep(normalizedDeliveryResults)
 				: [],
 			source: typeof source === 'string' && source.trim() ? source.trim() : 'webhook',
 			useTradingViewData: Boolean(useTradingViewData),
@@ -1887,10 +1908,12 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		latency: {
 			averageProcessingMs: null,
 			averageDeliveryMs: null,
+			byChannel: {},
 		},
 	};
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
+	const channelLatencySamples = {};
 
 	for (const doc of docs) {
 		const data = doc.data() || {};
@@ -1946,7 +1969,20 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 
 		if (Array.isArray(data.deliveryResults)) {
 			for (const result of data.deliveryResults) {
-				collectLatency(deliveryLatencySamples, result && (result.latencyMs || result.deliveryLatencyMs || result.durationMs));
+				if (!result || typeof result !== 'object') {
+					continue;
+				}
+				const latencyVal = result.durationMs ?? result.latencyMs ?? result.deliveryLatencyMs;
+				collectLatency(deliveryLatencySamples, latencyVal);
+				const channel = typeof result.channel === 'string' && result.channel.trim()
+					? result.channel.trim()
+					: null;
+				if (channel) {
+					if (!channelLatencySamples[channel]) {
+						channelLatencySamples[channel] = [];
+					}
+					collectLatency(channelLatencySamples[channel], latencyVal);
+				}
 			}
 		}
 	}
@@ -1956,6 +1992,16 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
 	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
 	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);
+	summary.latency.byChannel = {};
+	for (const [channel, samples] of Object.entries(channelLatencySamples)) {
+		if (samples.length > 0) {
+			summary.latency.byChannel[channel] = {
+				averageMs: averageLatency(samples),
+				p95Ms: calculatePercentileLatency(samples, 95),
+				sampleCount: samples.length,
+			};
+		}
+	}
 
 	return summary;
 }
@@ -1966,6 +2012,7 @@ module.exports = {
 	listAlerts,
 	getAlertById,
 	summarizeAlerts,
+	calculatePercentileLatency,
 	exportAlerts,
 	saveReplayAttempt,
 	listReplayAttempts,

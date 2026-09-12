@@ -5379,11 +5379,60 @@
             "$ref": "#/components/schemas/JsonObject"
           },
           "latency": {
-            "$ref": "#/components/schemas/JsonObject"
+            "$ref": "#/components/schemas/AlertSummaryLatency"
           },
           "shadowModeMetrics": {
             "description": "Aggregated shadow-mode outcome metrics. When an object, includes the full OutcomesSummary payload (coverage buckets, per-window WindowStats with hit/target/stop rates and expectancyR, drawdown proxy, latency/cost metadata, and falsePositiveCandidates). When no data is available or signal-outcome tracking is disabled, the value is the string sentinel \"No measurements found\". Equity providers remain opt-in and fail open. This field is omitted when source or enriched filters are supplied because shadow-mode metrics do not support those filters. Win-rate field semantics: hitRatePercent counts evaluated window outcomes whose return > 0; targetHitRatePercent/stopHitRatePercent count explicit target/stop hits (including firstHit fallbacks) over barrier-eligible denominators only; expectancyR averages finite rMultiple over evaluated windows.",
             "$ref": "#/components/schemas/ShadowModeMetrics"
+          }
+        }
+      },
+      "ChannelLatencyStats": {
+        "type": "object",
+        "description": "Per-channel delivery latency statistics for a summary window.",
+        "required": [
+          "averageMs",
+          "p95Ms",
+          "sampleCount"
+        ],
+        "properties": {
+          "averageMs": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Average delivery latency in milliseconds for this channel across samples."
+          },
+          "p95Ms": {
+            "type": "integer",
+            "nullable": true,
+            "description": "95th percentile delivery latency in milliseconds for this channel."
+          },
+          "sampleCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of delivery latency samples recorded for this channel."
+          }
+        }
+      },
+      "AlertSummaryLatency": {
+        "type": "object",
+        "description": "Processing and multi-channel delivery latency metrics across alerts in the summary window.",
+        "properties": {
+          "averageProcessingMs": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Average alert processing time in milliseconds."
+          },
+          "averageDeliveryMs": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Average delivery latency in milliseconds across all channels."
+          },
+          "byChannel": {
+            "type": "object",
+            "description": "Per-channel delivery latency breakdown. Only channels with recorded delivery samples in the window are included.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ChannelLatencyStats"
+            }
           }
         }
       },
