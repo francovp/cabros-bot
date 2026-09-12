@@ -1,7 +1,3 @@
-'use strict';
-
-/* global document, window */
-
 const VIEWS = {
 	status: [{ method: 'GET', path: '/api/status', label: 'Refresh status' }],
 	presets: [
@@ -454,7 +450,391 @@ const parseJson = (value, label) => {
 const resolveRef = (contract, value) => {
 	if (!value || !value.$ref) return value;
 	return value.$ref.slice(2).split('/').reduce((current, key) => current[key], contract);
+}
+
+const getBodySchema = (contract, operation) => {
+  const requestBody = resolveRef(contract, operation && operation.requestBody);
+  const json = requestBody && requestBody.content && requestBody.content['application/json'];
+  if (!json || !json.schema) return null;
+  return resolveRef(contract, json.schema);
 };
+
+const getQueryEnumValues = (contract, definition, paramName) => {
+  const operation = getOperation(contract, definition);
+  const parameter = getParameters(contract, operation).find((p) => p.name === paramName);
+  return parameter && parameter.schema && parameter.schema.enum || [];
+};
+
+const getBodySchemaEnum = (contract, operation, propertyName) => {
+  const schema = getBodySchema(contract, operation);
+  if (!schema || !schema.properties || !schema.properties[propertyName]) return [];
+  return schema.properties[propertyName].enum || [];
+};
+
+const createStructuredAnalysisForm = (contract, definition, builder) => {
+  const operation = getOperation(contract, definition);
+  const form = element('form', { className: 'operation-card structured-form' });
+  const title = element('h3', { text: definition.label });
+  const route = element('code', { text: `${definition.method} ${definition.path}` });
+  form.append(title, route);
+  const pathNames = addPathFields(form, definition.path);
+
+  const fields = element('div', { className: 'form-fields' });
+  builder(contract, operation, fields, definition);
+
+  const rawToggle = element('details', { className: 'raw-status' });
+  const rawTextarea = element('textarea', { name: 'body', rows: 10 });
+  rawTextarea.placeholder = 'Advanced: raw JSON (overrides structured inputs when edited)';
+  const rawToggleLabel = element('summary', { text: 'Advanced: edit raw JSON' });
+  rawToggle.append(rawToggleLabel, rawTextarea);
+  form.append(fields, rawToggle);
+
+  const button = element('button', { text: definition.label });
+  button.type = 'submit';
+  if (definition.confirm) button.className = 'destructive-action';
+  const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+  const hasStructuredResult = typeof definition.renderSuccess === 'function';
+  const resultHost = hasStructuredResult ? element('div') : null;
+  let lastRawJson = '';
+  let rawOutputEl = null;
+  let rawCopyButton = null;
+  if (hasStructuredResult) {
+    rawOutputEl = element('pre', { className: 'response-block' });
+    rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+    rawCopyButton.hidden = true;
+    const resultRawToggle = element('details', { className: 'raw-status' });
+    resultRawToggle.append(
+      element('summary', { text: 'Show raw response' }),
+      rawCopyButton,
+      rawOutputEl,
+    );
+    form.append(button, resultHost, output, resultRawToggle);
+  } else {
+    form.append(button, output);
+  }
+
+  const syncRawFromStructured = () => {
+    if (rawTextarea.dataset.manuallyEdited === 'true') return;
+    const body = builder.getBody ? builder.getBody() : {};
+    rawTextarea.value = JSON.stringify(body, null, 2);
+  };
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (resultHost) resultHost.replaceChildren();
+    if (rawCopyButton) {
+      lastRawJson = '';
+      rawOutputEl.textContent = '';
+      rawCopyButton.hidden = true;
+    }
+    try {
+      const query = form.elements.query
+        ? window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query'))
+        : undefined;
+      let body;
+      if (rawTextarea.dataset.manuallyEdited === 'true' && rawTextarea.value.trim()) {
+        body = parseJson(rawTextarea.value, 'Request body');
+      } else if (builder.getBody) {
+        body = builder.getBody();
+      }
+      const requestBody = withReplayIdempotencyKey(definition, body);
+      Promise.resolve(sendRequest({
+        definition,
+        path: fillPath(definition.path, pathNames, form),
+        query,
+        body: requestBody,
+        button,
+        output,
+        formatResponse: hasStructuredResult
+          ? ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} \u00b7 ${elapsed} ms`
+          : undefined,
+      })).then((data) => {
+        if (!resultHost) return;
+        if (!data) {
+          resultHost.replaceChildren();
+          rawOutputEl.textContent = '';
+          rawCopyButton.hidden = true;
+          return;
+        }
+        lastRawJson = JSON.stringify(data, null, 2);
+        rawOutputEl.textContent = lastRawJson;
+        rawCopyButton.hidden = false;
+        const rendered = definition.renderSuccess(data);
+        resultHost.replaceChildren(...(rendered ? [rendered] : []));
+      }).catch(() => {});
+    } catch (error) {
+      showError(output, error.message);
+    }
+  });
+
+  rawTextarea.addEventListener('input', () => {
+    rawTextarea.dataset.manuallyEdited = 'true';
+  });
+
+  if (typeof MutationObserver !== 'undefined') {
+    const observer = new MutationObserver(syncRawFromStructured);
+    observer.observe(fields, { subtree: true, childList: true, characterData: true });
+  }
+  syncRawFromStructured();
+
+  return form;
+};
+
+const buildExpandedAnalysisForm = (contract, operation, fields, definition) => {
+  const timeframeEnum = getBodySchemaEnum(contract, operation, 'timeframe');
+  const analysisModeEnum = getBodySchemaEnum(contract, operation, 'analysisMode');
+  const channelsEnum = getBodySchemaEnum(contract, operation, 'channels');
+  let formState = {};
+
+  addField(fields, 'Symbols (EXCHANGE:SYMBOL, one per line)', 'symbols', {
+    tag: 'textarea',
+    rows: 5,
+    placeholder: 'BINANCE:BTCUSDT\nNASDAQ:NVDA',
+  });
+
+  const timeframeSelect = addField(fields, 'Timeframe', 'timeframe', {
+    tag: 'select',
+  });
+  timeframeEnum.forEach((tf) => {
+    const opt = element('option', { text: tf });
+    opt.value = tf;
+    timeframeSelect.append(opt);
+  });
+  timeframeSelect.value = timeframeEnum[0] || '1D';
+
+  const analysisModeSelect = addField(fields, 'Analysis mode', 'analysisMode', {
+    tag: 'select',
+  });
+  analysisModeEnum.forEach((mode) => {
+    const opt = element('option', { text: mode });
+    opt.value = mode;
+    analysisModeSelect.append(opt);
+  });
+  analysisModeSelect.value = analysisModeEnum[0] || 'standard';
+
+  const includeMTF = addField(fields, 'Include multi-timeframe analysis', 'includeMultiTimeframe', {
+    type: 'checkbox',
+  });
+  includeMTF.checked = false;
+
+  addField(fields, 'Notification channels', 'channels', {
+    tag: 'select',
+    multiple: true,
+  });
+  channelsEnum.forEach((ch) => {
+    const opt = element('option', { text: ch });
+    opt.value = ch;
+    fields.querySelector('select[name=channels]').append(opt);
+  });
+
+  addField(fields, 'Telegram Chat ID (optional)', 'telegramChatId');
+  addField(fields, 'Telegram Thread ID (optional, 0 for general)', 'telegramThreadId', { type: 'number', min: 0 });
+  addField(fields, 'WhatsApp Chat ID (optional)', 'whatsappChatId');
+
+  return {
+    getBody: () => {
+      const symbolsText = fields.querySelector('textarea[name=symbols]').value.trim();
+      const symbols = symbolsText ? symbolsText.split('\n').map((s) => s.trim()).filter(Boolean) : [];
+      return {
+        symbols,
+        timeframe: timeframeSelect.value,
+        analysisMode: analysisModeSelect.value,
+        includeMultiTimeframe: includeMTF.checked,
+        channels: Array.from(fields.querySelector('select[name=channels]').selectedOptions).map((o) => o.value),
+        telegramChatId: fields.querySelector('input[name=telegramChatId]').value.trim() || undefined,
+        telegramThreadId: fields.querySelector('input[name=telegramThreadId]').value !== '' ? parseInt(fields.querySelector('input[name=telegramThreadId]').value, 10) : undefined,
+        whatsappChatId: fields.querySelector('input[name=whatsappChatId]').value.trim() || undefined,
+      };
+    },
+  };
+};
+
+const buildMarketScannerForm = (contract, operation, fields, definition) => {
+  const timeframeEnum = getBodySchemaEnum(contract, operation, 'timeframe');
+  const scansEnum = getBodySchemaEnum(contract, operation, 'scans');
+  const channelsEnum = getBodySchemaEnum(contract, operation, 'channels');
+
+  addField(fields, 'Exchange', 'exchange', { value: 'BINANCE' });
+
+  const timeframeSelect = addField(fields, 'Timeframe', 'timeframe', { tag: 'select' });
+  timeframeEnum.forEach((tf) => {
+    const opt = element('option', { text: tf });
+    opt.value = tf;
+    timeframeSelect.append(opt);
+  });
+  timeframeSelect.value = timeframeEnum[0] || '4h';
+
+  const scansContainer = element('fieldset', { className: 'checkbox-group' });
+  scansContainer.append(element('legend', { text: 'Scans' }));
+  scansEnum.forEach((scan) => {
+    const label = element('label', { className: 'checkbox-label' });
+    const input = element('input', { type: 'checkbox', name: 'scans', value: scan });
+    label.append(input, element('span', { text: scan.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()) }));
+    scansContainer.append(label);
+  });
+  fields.append(scansContainer);
+
+  addField(fields, 'Limit (1-20)', 'limit', { type: 'number', min: 1, max: 20, value: 5 });
+  addField(fields, 'BBW Threshold', 'bbw_threshold', { type: 'number', step: 0.01, value: 0.05 });
+  addField(fields, 'Rating (-3 to 3)', 'rating', { type: 'number', min: -3, max: 3, value: 3 });
+  addField(fields, 'Pattern Type', 'pattern_type', { tag: 'select' });
+  ['bullish', 'bearish'].forEach((pt) => {
+    const opt = element('option', { text: pt });
+    opt.value = pt;
+    fields.querySelector('select[name=pattern_type]').append(opt);
+  });
+  addField(fields, 'Candle Count (2-5)', 'candle_count', { type: 'number', min: 2, max: 5, value: 3 });
+  addField(fields, 'Min Growth', 'min_growth', { type: 'number', step: 0.01 });
+  addField(fields, 'Max Decline', 'max_decline', { type: 'number', step: 0.01 });
+
+  const ranked = addField(fields, 'Ranked results', 'ranked', { type: 'checkbox' });
+  const includeMTF = addField(fields, 'Include multi-timeframe', 'includeMultiTimeframe', { type: 'checkbox' });
+
+  addField(fields, 'Notification channels', 'channels', { tag: 'select', multiple: true });
+  channelsEnum.forEach((ch) => {
+    const opt = element('option', { text: ch });
+    opt.value = ch;
+    fields.querySelector('select[name=channels]').append(opt);
+  });
+
+  addField(fields, 'Telegram Chat ID (optional)', 'telegramChatId');
+  addField(fields, 'Telegram Thread ID (optional, 0 for general)', 'telegramThreadId', { type: 'number', min: 0 });
+  addField(fields, 'WhatsApp Chat ID (optional)', 'whatsappChatId');
+
+  return {
+    getBody: () => {
+      const selectedScans = Array.from(fields.querySelectorAll('input[name=scans]:checked')).map((i) => i.value);
+      return {
+        exchange: fields.querySelector('input[name=exchange]').value.trim() || 'BINANCE',
+        timeframe: timeframeSelect.value,
+        scans: selectedScans,
+        limit: parseInt(fields.querySelector('input[name=limit]').value, 10) || 5,
+        bbw_threshold: parseFloat(fields.querySelector('input[name=bbw_threshold]').value) || 0.05,
+        rating: parseInt(fields.querySelector('input[name=rating]').value, 10) || 3,
+        pattern_type: fields.querySelector('select[name=pattern_type]').value || 'bullish',
+        candle_count: parseInt(fields.querySelector('input[name=candle_count]').value, 10) || 3,
+        min_growth: parseFloat(fields.querySelector('input[name=min_growth]').value) || undefined,
+        max_decline: parseFloat(fields.querySelector('input[name=max_decline]').value) || undefined,
+        ranked: ranked.checked,
+        includeMultiTimeframe: includeMTF.checked,
+        channels: Array.from(fields.querySelector('select[name=channels]').selectedOptions).map((o) => o.value),
+        telegramChatId: fields.querySelector('input[name=telegramChatId]').value.trim() || undefined,
+        telegramThreadId: fields.querySelector('input[name=telegramThreadId]').value !== '' ? parseInt(fields.querySelector('input[name=telegramThreadId]').value, 10) : undefined,
+        whatsappChatId: fields.querySelector('input[name=whatsappChatId]').value.trim() || undefined,
+      };
+    },
+  };
+};
+
+const buildVolumeConfirmationForm = (contract, operation, fields, definition) => {
+  addField(fields, 'Symbol (EXCHANGE:SYMBOL)', 'symbol', { placeholder: 'BINANCE:BTCUSDT' });
+  const timeframeEnum = getBodySchemaEnum(contract, operation, 'timeframe');
+  if (timeframeEnum.length > 0) {
+    const timeframeSelect = addField(fields, 'Timeframe', 'timeframe', { tag: 'select' });
+    timeframeEnum.forEach((tf) => {
+      const opt = element('option', { text: tf });
+      opt.value = tf;
+      timeframeSelect.append(opt);
+    });
+  } else {
+    addField(fields, 'Timeframe', 'timeframe', { placeholder: '1h' });
+  }
+
+  return {
+    getBody: () => ({
+      symbol: fields.querySelector('input[name=symbol]').value.trim(),
+      timeframe: fields.querySelector('select[name=timeframe]')?.value || fields.querySelector('input[name=timeframe]')?.value || '1h',
+    }),
+  };
+};
+
+const buildSymbolAnalysisForm = (contract, operation, fields, definition) => {
+  addField(fields, 'Symbol (EXCHANGE:SYMBOL)', 'symbol', { placeholder: 'BINANCE:BTCUSDT' });
+  const timeframeEnum = getBodySchemaEnum(contract, operation, 'timeframe');
+  const analysisModeEnum = getBodySchemaEnum(contract, operation, 'analysisMode');
+
+  if (timeframeEnum.length > 0) {
+    const timeframeSelect = addField(fields, 'Timeframe', 'timeframe', { tag: 'select' });
+    timeframeEnum.forEach((tf) => {
+      const opt = element('option', { text: tf });
+      opt.value = tf;
+      timeframeSelect.append(opt);
+    });
+  } else {
+    addField(fields, 'Timeframe', 'timeframe', { placeholder: '1h' });
+  }
+
+  const analysisModeSelect = addField(fields, 'Analysis mode', 'analysisMode', { tag: 'select' });
+  analysisModeEnum.forEach((mode) => {
+    const opt = element('option', { text: mode });
+    opt.value = mode;
+    analysisModeSelect.append(opt);
+  });
+  analysisModeSelect.value = analysisModeEnum[0] || 'standard';
+
+  return {
+    getBody: () => ({
+      symbol: fields.querySelector('input[name=symbol]').value.trim(),
+      timeframe: fields.querySelector('select[name=timeframe]')?.value || fields.querySelector('input[name=timeframe]')?.value || '1D',
+      analysisMode: analysisModeSelect.value,
+    }),
+  };
+};
+
+const buildNewsMonitorForm = (contract, operation, fields, definition) => {
+  addField(fields, 'Crypto symbols (comma-separated)', 'crypto', { tag: 'textarea', rows: 3, placeholder: 'BTCUSDT,ETHUSDT' });
+  addField(fields, 'Stock symbols (comma-separated)', 'stocks', { tag: 'textarea', rows: 3, placeholder: 'NVDA,MSFT' });
+
+  const dryRun = addField(fields, 'Dry run (analyze only, no delivery)', 'dryRun', { type: 'checkbox' });
+
+  const channelsEnum = getBodySchemaEnum(contract, operation, 'channels');
+  if (channelsEnum.length > 0) {
+    addField(fields, 'Notification channels', 'channels', { tag: 'select', multiple: true });
+    channelsEnum.forEach((ch) => {
+      const opt = element('option', { text: ch });
+      opt.value = ch;
+      fields.querySelector('select[name=channels]').append(opt);
+    });
+  }
+
+  addField(fields, 'Telegram Chat ID (optional)', 'telegramChatId');
+  addField(fields, 'Telegram Thread ID (optional, 0 for general)', 'telegramThreadId', { type: 'number', min: 0 });
+  addField(fields, 'WhatsApp Chat ID (optional)', 'whatsappChatId');
+
+  const isGet = definition.method === 'GET';
+  if (isGet) {
+    const note = element('p', { className: 'form-note', text: 'GET request uses query parameters.' });
+    fields.append(note);
+  }
+
+  return {
+    getBody: () => {
+      const cryptoText = fields.querySelector('textarea[name=crypto]').value.trim();
+      const stocksText = fields.querySelector('textarea[name=stocks]').value.trim();
+      const crypto = cryptoText ? cryptoText.split(',').map((s) => s.trim()).filter(Boolean) : [];
+      const stocks = stocksText ? stocksText.split(',').map((s) => s.trim()).filter(Boolean) : [];
+      const body = {};
+      if (crypto.length) body.crypto = crypto;
+      if (stocks.length) body.stocks = stocks;
+      if (dryRun.checked) body.dryRun = true;
+      const channels = Array.from(fields.querySelectorAll('select[name=channels] option:checked')).map((o) => o.value);
+      if (channels.length) body.channels = channels;
+      const tgChat = fields.querySelector('input[name=telegramChatId]').value.trim();
+      if (tgChat) body.telegramChatId = tgChat;
+      const tgThread = fields.querySelector('input[name=telegramThreadId]').value;
+      if (tgThread !== '') body.telegramThreadId = parseInt(tgThread, 10);
+      const waChat = fields.querySelector('input[name=whatsappChatId]').value.trim();
+      if (waChat) body.whatsappChatId = waChat;
+      return body;
+    },
+  };
+};
+'use strict';
+
+/* global document, window */
+
+
+;
 
 const getOperation = (contract, definition) => contract.paths[definition.path]
 	&& contract.paths[definition.path][definition.method.toLowerCase()];
@@ -3134,6 +3514,26 @@ const renderView = async (name) => {
 			view.append(createJobListForm(contract, status.selectJob));
 			VIEWS.jobs.forEach((definition) => view.append(createOperationForm(contract, definition)));
 			view.append(status.form);
+			return;
+		}
+		if (name === 'analysis') {
+			const definitions = [...(VIEWS[name] || []), ...(VIEW_ACTIONS[name] || [])];
+			definitions.forEach((definition) => {
+				const path = definition.path;
+				if (path === '/api/webhook/expanded-analysis-alert') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildExpandedAnalysisForm));
+				} else if (path === '/api/webhook/market-scanner-alert') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildMarketScannerForm));
+				} else if (path === '/api/webhook/volume-confirmation') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildVolumeConfirmationForm));
+				} else if (path === '/api/webhook/symbol-analysis') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildSymbolAnalysisForm));
+				} else if (path === '/api/news-monitor') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildNewsMonitorForm));
+				} else {
+					view.append(createOperationForm(contract, definition));
+				}
+			});
 			return;
 		}
 		[...(VIEWS[name] || []), ...(VIEW_ACTIONS[name] || [])]
