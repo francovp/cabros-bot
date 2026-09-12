@@ -3,6 +3,7 @@
 
 const { isFirestoreConfigured } = require('../src/services/storage/firestoreConfig');
 const { isPreviewEnvironment } = require('../src/lib/deploymentEnvironment');
+const { parseEntryPriceSources } = require('../src/lib/signalOutcomeEntryPriceSources');
 
 const ENV_EXAMPLE = '.env.example';
 const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
@@ -146,6 +147,13 @@ function validateEnv(env = process.env) {
 	if (hasValue(env.TRADINGVIEW_MCP_URL) && !isHttpUrl(env.TRADINGVIEW_MCP_URL)) {
 		addInvalid(warnings, 'TRADINGVIEW_MCP_URL', 'has an invalid HTTP URL');
 	}
+	if (hasValue(env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES)) {
+		try {
+			parseEntryPriceSources(env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES);
+		} catch (_) {
+			addInvalid(warnings, 'SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES', 'must contain only mcp, binance, twelve-data, or gemini providers');
+		}
+	}
 
 	const firestoreGateEnabled = [
 		'ENABLE_FIRESTORE_ALERT_STORAGE',
@@ -171,8 +179,8 @@ function validateEnv(env = process.env) {
 		addMissing(warnings, 'BINANCE_API_SECRET', env.BINANCE_API_SECRET);
 		addMissing(warnings, 'BINANCE_TRADING_ALLOWED_SYMBOLS', env.BINANCE_TRADING_ALLOWED_SYMBOLS);
 		addMissing(warnings, 'BINANCE_TRADING_MAX_NOTIONAL', env.BINANCE_TRADING_MAX_NOTIONAL);
-		if (hasValue(env.BINANCE_TRADING_ENV) && !['testnet', 'live'].includes(env.BINANCE_TRADING_ENV.trim().toLowerCase())) {
-			addInvalid(warnings, 'BINANCE_TRADING_ENV', 'must be testnet or live');
+		if (hasValue(env.BINANCE_TRADING_ENV) && !['testnet', 'demo', 'live'].includes(env.BINANCE_TRADING_ENV.trim().toLowerCase())) {
+			addInvalid(warnings, 'BINANCE_TRADING_ENV', 'must be testnet, demo, or live');
 		}
 		if (hasValue(env.BINANCE_TRADING_MAX_NOTIONAL) && !isPositiveNumber(env.BINANCE_TRADING_MAX_NOTIONAL)) {
 			addInvalid(warnings, 'BINANCE_TRADING_MAX_NOTIONAL', 'must be a positive number');

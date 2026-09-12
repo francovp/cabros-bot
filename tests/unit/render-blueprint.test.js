@@ -16,6 +16,7 @@ describe('Render signal outcome worker blueprint', () => {
 		expect(blueprint).toContain('numInstances: 1');
 		expect(blueprint).toContain('generation: off');
 		expect(blueprint).toContain('- key: ENABLE_EQUITY_MARKET_DATA');
+		expect(blueprint).toContain('- key: ENABLE_FIREBASE_REMOTE_CONFIG\n    sync: false');
 		expect(blueprint).toContain('- key: EQUITY_MARKET_DATA_PROVIDER');
 		expect(blueprint).toContain('- key: TWELVE_DATA_API_KEY');
 		expect(blueprint).toContain('- key: TWELVE_DATA_BASE_URL');

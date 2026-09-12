@@ -44,7 +44,10 @@ describe('BinanceOrderService', () => {
 		configureTrading();
 	});
 
-	afterEach(() => restoreEnv(savedEnv));
+	afterEach(() => {
+		restoreEnv(savedEnv);
+		jest.clearAllMocks();
+	});
 
 	it('rejects disabled trading before constructing a Binance client', async () => {
 		delete process.env.ENABLE_BINANCE_TRADING;
@@ -1234,6 +1237,124 @@ describe('BinanceOrderService', () => {
 			expect(MainClient).toHaveBeenCalledWith(expect.objectContaining({
 				baseUrl: 'https://api.binance.com',
 			}), expect.any(Object));
+		});
+	});
+
+	describe('demo environment', () => {
+		function configureDemoTrading() {
+			process.env.ENABLE_BINANCE_TRADING = 'true';
+			process.env.BINANCE_API_KEY = 'test-api-key';
+			process.env.BINANCE_API_SECRET = 'test-api-secret';
+			process.env.BINANCE_TRADING_ENV = 'demo';
+			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'BTCUSDT';
+			process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
+		}
+
+		it('getStatus reports environment demo and configured:true', () => {
+			configureDemoTrading();
+			const service = createBinanceOrderService({ createClient: jest.fn() });
+			const status = service.getStatus();
+			expect(status.environment).toBe('demo');
+			expect(status.configured).toBe(true);
+			expect(status.ready).toBe(true);
+			expect(status.status).toBe('ready');
+		});
+
+		it('getStatus reports configured:false when credentials are missing in demo env', () => {
+			configureDemoTrading();
+			delete process.env.BINANCE_API_KEY;
+			const service = createBinanceOrderService({ createClient: jest.fn() });
+			const status = service.getStatus();
+			expect(status.environment).toBe('demo');
+			expect(status.configured).toBe(false);
+			expect(status.ready).toBe(false);
+		});
+
+		it('routes MainClient baseUrl to demo-api.binance.com when env is demo', async () => {
+			configureDemoTrading();
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				submitNewOrder: jest.fn().mockResolvedValue({ orderId: 1, status: 'FILLED' }),
+			};
+			MainClient.mockClear().mockImplementation(() => client);
+
+			await binanceOrderService.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+				idempotencyKey: 'idem-demo-env',
+				dryRun: false,
+			});
+
+			expect(MainClient).toHaveBeenCalledWith(expect.objectContaining({
+				baseUrl: 'https://demo-api.binance.com',
+			}), expect.any(Object));
+		});
+
+		it('does not use BINANCE_DATA_BASE_URL for the demo environment', async () => {
+			configureDemoTrading();
+			process.env.BINANCE_DATA_BASE_URL = 'https://api1.binance.com';
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				submitNewOrder: jest.fn().mockResolvedValue({ orderId: 1, status: 'FILLED' }),
+			};
+			MainClient.mockClear().mockImplementation(() => client);
+
+			await binanceOrderService.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+				idempotencyKey: 'idem-demo-no-custom-url',
+				dryRun: false,
+			});
+
+			// demo always uses https://demo-api.binance.com; BINANCE_DATA_BASE_URL only applies to live
+			expect(MainClient).toHaveBeenCalledWith(expect.objectContaining({
+				baseUrl: 'https://demo-api.binance.com',
+			}), expect.any(Object));
+		});
+
+		it('placeOrder dry-run in demo env returns environment:demo', async () => {
+			configureDemoTrading();
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			const result = await service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+			});
+
+			expect(result).toMatchObject({
+				success: true,
+				dryRun: true,
+				environment: 'demo',
+			});
+			expect(client.getExchangeInfo).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+		});
+
+		it('getOrders returns environment:demo in response', async () => {
+			configureDemoTrading();
+			const client = {
+				allOrders: jest.fn().mockResolvedValue([]),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			const result = await service.getOrders({ symbol: 'BTCUSDT' });
+			expect(result).toMatchObject({
+				success: true,
+				environment: 'demo',
+				orders: [],
+				count: 0,
+			});
 		});
 	});
 

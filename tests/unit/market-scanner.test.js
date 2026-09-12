@@ -234,6 +234,7 @@ describe('Market Scanner Handler', () => {
 				status: 'error',
 				items: [],
 				error: 'First scan failed',
+				errorCategory: 'unknown',
 			});
 			expect(results[1]).toEqual({
 				scan: 'top_losers',

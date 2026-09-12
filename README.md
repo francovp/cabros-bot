@@ -24,6 +24,8 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `BOT_TOKEN` - Telegram bot token (from BotFather). Required only when `ENABLE_TELEGRAM_BOT=true` and the app is expected to launch Telegraf outside PR previews
 - `TELEGRAM_CHAT_ID` - Telegram chat ID where alerts are sent
 - `ENABLE_TELEGRAM_BOT` - Enable Telegram bot (`true` or `false`)
+- `ENABLE_TELEGRAM_COMMAND_RATE_LIMITING` - Enable per-chat throttling for expensive Telegram commands (`true` by default; security control, excluded from Remote Config)
+- `TELEGRAM_COMMAND_RATE_LIMITS_JSON` - Optional JSON overrides for per-command `max` and `windowMs`; defaults are `/precio` 10 per 60 seconds and `/analisis`, `/scanner`, `/noticias` 3 per hour. Values are bounded to `max` 1-1000 and `windowMs` 1-86400000; invalid values use defaults (security control, excluded from Remote Config)
 
 ### Optional Variables
 
@@ -126,6 +128,7 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` - Enable optional `combined_analysis` confluence enrichment for TradingView webhook alerts (`true` or `false`, default: `false`)
 - `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` - Also call `multi_timeframe_analysis` during confluence enrichment (`true` or `false`, default: `false`)
 - `ENABLE_ALERT_HTF_RENDER` - Enable rendering higher-timeframe trend alignment on enriched webhook alerts (`true` or `false`, default: `true`)
+- `ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT` - Enable multi-agent consensus analysis fallback for `/api/webhook/symbol-analysis` (`true` or `false`, default: `false`)
 - `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` - Suppress duplicate channel delivery for the same `exchange|symbol|timeframe|side` signal within its cooldown window; suppressed alerts are still persisted with a `suppressedRepeat: true` marker and opposite-side flips always deliver (`true` or `false`, default: `false`)
 - `ALERT_SIGNAL_COOLDOWN_BARS` - Cooldown length in alert-timeframe bars for repeat suppression (`1`-`10`, default: `1`)
 - Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
@@ -134,10 +137,12 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 
 - `ENABLE_FIRESTORE_ALERT_STORAGE` - Enable Firestore persistence and alert read API (`true` or `false`, default: `false`)
 - `ALERT_STORAGE_RETENTION_DAYS` - Retention for `alerts` and `alertReplays` records in days (`1`-`3650`, default: `90`). New records get `expiresAt`; run `bash ops/configure-firestore-alert-retention.sh` once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
+- **Backup & Disaster Recovery**: To safeguard high-value analytical history (`alerts`, `alertReplays`, `tradingSignalOutcomes`, `scannerPresets`) against permanent TTL deletion, automated scheduled workflows (`.github/workflows/firestore-backup.yml`), managed GCS exports (`ops/export-firestore-managed.sh`), and selective JSONL exports (`pnpm run backup:firestore`, `pnpm run restore:firestore`) are provided. See [`docs/firestore-backup-and-restore.md`](docs/firestore-backup-and-restore.md) for the complete runbook and restore procedures.
 - `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`)
 - `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`)
 - `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
 - `SIGNAL_OUTCOME_RETENTION_DAYS` - Retention for `tradingSignalOutcomes` records in days (`1`-`3650`, default: `365`). New records get `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` (or with `BACKFILL=true`) once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
+- `SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES` - Optional comma-separated first-success provider chain (`mcp`, `binance`, `twelve-data`, `gemini`); empty preserves the existing crypto (`mcp,binance,gemini`) and equity (`twelve-data`) defaults. Active chains are reported under `dependencies.signalOutcomeWorker.entryPriceSources`.
 - `ENABLE_EQUITY_MARKET_DATA` - Opt in to equity/forex/index outcome evaluation for `NASDAQ`, `BATS`, `NYSE`, `AMEX`, `NYSE ARCA`, `FX_IDC`, and `SPCFD` signals (`true` or `false`, default: `false`)
 - `EQUITY_MARKET_DATA_PROVIDER` - Equity provider name; currently `twelve-data`
 - `TWELVE_DATA_API_KEY` - Twelve Data API key; sent in the `Authorization` header and never returned by status endpoints
@@ -218,7 +223,7 @@ pnpm test:firebase
 - `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel/Railway, and `false` for direct deployments)
 - `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes; invalid values use the default)
 - `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default). Core `/api/webhook/alert` and `/api/webhook/message` ingest uses an isolated finite bucket of 1,000 requests per window so TradingView bursts do not consume the ordinary client bucket; API-key validation still applies.
-- `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
+- `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production). The logger automatically masks sensitive plain-object keys, bare-scalar secrets preceded by sensitive labels, URL query secrets, embedded JSON strings, Authorization/Bearer credentials, Telegram bot tokens, Discord webhook tokens, OpenAI keys, and dynamically registered request-scoped secrets via `registerSecretValue` / `clearSecretValue`.
 - `SERVICE_NAME` - Optional service name included in JSON logs (default: package name or `cabros-bot`)
 
 #### News Monitoring (003-news-monitor)
@@ -241,7 +246,7 @@ pnpm test:firebase
 
 - `ENABLE_BINANCE_TRADING` - Enable the operator-only Spot order endpoint (`true` or `false`, default: `false`)
 - `BINANCE_API_KEY` / `BINANCE_API_SECRET` - Server-side Binance credentials with Spot trading permission only; withdrawals must remain disabled and IP restrictions are recommended
-- `BINANCE_TRADING_ENV` - Binance environment: `testnet` (default) or explicit `live`
+- `BINANCE_TRADING_ENV` - Binance environment: `testnet` (default), `demo`, or explicit `live`. Use `demo` (`https://demo-api.binance.com`) for pre-live validation — it mirrors production market data and exchange filters exactly. Use `testnet` (`https://testnet.binance.vision`) for exploratory sandbox testing.
 - `BINANCE_TRADING_BASE_URL` - Optional custom base URL for Binance trading endpoints in live mode (default: unset / `https://api.binance.com`)
 - `BINANCE_TRADING_ALLOWED_SYMBOLS` - Comma-separated Spot symbol allow-list, for example `BTCUSDT,ETHUSDT`
 - `BINANCE_TRADING_MAX_NOTIONAL` - Maximum order notional in quote asset, enforced before submission
@@ -393,6 +398,29 @@ Health check endpoint.
 {"uptime":"..."}
 ```
 
+### GET /ready
+
+Public bootstrap-readiness endpoint for deployment traffic cutover. It returns `503` while startup is pending or failed, and `200` only after the required bootstrap components are ready. Telegram is `disabled` when the bot is disabled or the environment is a preview; the news monitor is `disabled` when it is not enabled. Readiness checks bootstrap completion only and does not continuously ping external providers, avoiding restart loops caused by transient dependency outages.
+
+Configure the deployment platform health check to use `/ready` (`healthCheckPath` in `render.yaml`; Railway's service healthcheck path should use the same value). Keep `/healthcheck` for process liveness.
+
+The protected `/api/status` response includes the same non-sensitive state under `readiness`.
+
+**Ready response:**
+```json
+{
+  "status": "ready",
+  "ready": true,
+  "components": {
+    "telegramBot": { "status": "disabled" },
+    "notificationServices": { "status": "ready" },
+    "newsMonitor": { "status": "disabled" }
+  }
+}
+```
+
+Pending and failed bootstrap states use the same body shape with HTTP `503`; failed responses include a sanitized `error` message.
+
 ### GET /api/status
 
 Machine-readable runtime status for operational tooling. This endpoint uses the same `WEBHOOK_API_KEY` protection as other `/api` endpoints when that environment variable is configured. Send the key with the `x-api-key` header.
@@ -416,14 +444,14 @@ When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, `/api/webhook/alert` suppres
 `featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
 
 When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports Twelve Data readiness and the supported `BATS`/`NASDAQ`/`NYSE`/`AMEX`/`NYSE ARCA`/`FX_IDC`/`SPCFD` exchanges without exposing the API key. Signal outcome tracking uses `/quote` for missing entry prices and `/time_series` for bounded historical bars; provider, timeout, malformed-data, and quota failures mark equity outcomes unavailable without blocking alert delivery. Extended-hours data is excluded by default. Confirm current Twelve Data plan limits and licensing before production use: [pricing](https://twelvedata.com/pricing), [US equities coverage](https://support.twelvedata.com/en/articles/9935903-us-equities-market-data), and [commercial usage](https://support.twelvedata.com/en/articles/5332349-commercial-and-personal-usage).
-`dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
+`dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, active entry-price chains, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
 
 The dedicated worker also persists the same non-sensitive heartbeat to `workerHeartbeats/signal-outcome` in Firestore. Heartbeat writes fail open and never block alert delivery.
 `featureFlags.firebaseRemoteConfig` reports `ENABLE_FIREBASE_REMOTE_CONFIG`. This is server-side Remote Config: the Firebase Admin SDK loads the published template with `initServerTemplate()`, while no Firebase Web/Client SDK configuration is involved. `dependencies.firebaseRemoteConfig` exposes only `enabled`, `configured`, `ready` (true only after a successful, fresh template load), `status` (`ready`, `degraded`, `unknown`, `misconfigured`, or `disabled`), `source` (`remote`, `environment`, `default`, or `disabled`), `templateVersion`, `lastSuccessfulLoad`, `lastErrorCategory`, `consecutiveFailures`, and bounded loader settings; it never returns remote parameter values or credentials.
 
 `GET /api/capabilities` is an alias for the same payload.
 
-When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`live` environment, allow-listed symbols, and readiness state.
+When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`demo`/`live` environment, allow-listed symbols, and readiness state.
 
 ### Browser admin authentication
 
@@ -441,7 +469,7 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
 
 - **Build & Artifacts**: `pnpm run build:hosting` synchronizes static console assets from `src/admin/` to `public/admin/` and generates the root redirect `public/index.html`. `firebase.json` defines the hosting root (`public`), ignore patterns, rewrite rules (`/admin/**` -> `/admin/index.html`), and `no-cache` cache-control headers.
 - **Backend API Connectivity**: When hosted on Firebase Hosting (`*.web.app` / `*.firebaseapp.com`), the admin console resolves `https://cabros-bot-production.up.railway.app` by default. `?backend=` and `cabros_backend_origin` overrides are accepted only when their exact origin is the explicit HTTPS allowlist entry `https://cabros-bot-production.up.railway.app`; arbitrary origins, wildcards, HTTP URLs, and malformed values are ignored before any credential-bearing request.
-- **CORS & CSP Policy**: Backend CORS permits requests from the hosted console, and Helmet CSP allows `connect-src` to Google Auth, Firebase Hosting origins, and the backend origin.
+- **CORS & CSP Policy**: Backend CORS permits requests from the explicit allowlist (`https://cabros-bot.web.app`, `https://cabros-bot.firebaseapp.com`, `https://cabros-bot-production.up.railway.app`, `http://localhost:*`, and optional `CORS_ALLOWED_ORIGINS`), and Helmet CSP allows `connect-src` to Google Auth, Firebase Hosting origins, and the backend origin.
 - **CI/CD Deployment**: `.github/workflows/firebase-hosting.yml` automatically deploys pull requests to ephemeral Firebase preview channels and deploys the `live` channel on releases merged to `master`.
 - **Local Testing**: Run `pnpm run build:hosting` then `firebase emulators:start --only hosting` to test the static hosting deployment locally on port 5000.
 - **Rollback**: In the Firebase Console (Hosting > Release history) or via Firebase CLI: `firebase hosting:rollback` / `firebase hosting:clone cabros-bot:previous_version cabros-bot:live`.
@@ -809,7 +837,7 @@ The endpoint stops analysis at `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` (default 60 
     "delivered": 1
   },
   "requestId": "req-abc123",
-  "totalDurationMs": 1200
+  "processingTimeMs": 1200
 }
 ```
 
@@ -845,7 +873,9 @@ Run TradingView MCP `volume_confirmation_analysis` on demand and return structur
       "volume_ratio": 1.7,
       "volume_strength": "HIGH"
     }
-  }
+  },
+  "requestId": "req-vol-123",
+  "processingTimeMs": 310
 }
 ```
 
@@ -861,11 +891,12 @@ Analyze one `EXCHANGE:SYMBOL` with TradingView MCP and return the Spanish report
   "symbol": "BINANCE:BTCUSDT",
   "timeframe": "1D",
   "analysisMode": "combined",
-  "includeMultiTimeframe": true
+  "includeMultiTimeframe": true,
+  "includeMultiAgent": true
 }
 ```
 
-The response includes `alertText`, normalized price/volume/indicator/signal/assessment data, sentiment/news/confluence and multi-timeframe results when requested, plus directional `risk` and `decision` metadata. `decision.action` is `BUY` or `SELL` only when the data and risk levels are sufficient; otherwise it is `NO_TRADE`. This endpoint never delivers notifications or submits orders. Invalid symbols return `400 INVALID_REQUEST`, TradingView failures return `502 SYMBOL_ANALYSIS_FAILED`, and deadline expiry returns `504 SYMBOL_ANALYSIS_TIMEOUT`.
+The response includes `alertText`, normalized price/volume/indicator/signal/assessment data, sentiment/news/confluence, multi-timeframe results, and multi-agent consensus results (`multiAgent`) when requested (or when `ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT=true`), plus directional `risk` and `decision` metadata. When multi-agent consensus disagrees with the directional signal (decision is `HOLD`, confidence is `Low`, or decision opposes side), an advisory warning (`Consenso multi-agente no confirma la señal`) is appended to `decision.warnings` without flipping the primary action. `decision.action` is `BUY` or `SELL` only when the data and risk levels are sufficient; otherwise it is `NO_TRADE`. This endpoint never delivers notifications or submits orders. Invalid symbols return `400 INVALID_REQUEST`, TradingView failures return `502 SYMBOL_ANALYSIS_FAILED`, and deadline expiry returns `504 SYMBOL_ANALYSIS_TIMEOUT`. Upstream multi-agent failures fail open and mark `analysisStatus: "partial"` while preserving the base analysis.
 
 ### POST /api/webhook/market-scanner-alert
 
@@ -929,7 +960,7 @@ Execute multiple market scanner tools on the TradingView MCP server (such as top
   "includeMultiTimeframe": true,
   "timeoutMs": 90000,
   "requestId": "req-xyz789",
-  "totalDurationMs": 1450
+  "processingTimeMs": 1450
 }
 ```
 
@@ -1147,6 +1178,7 @@ List stored alerts ordered by `receivedAt` descending.
 - `before` - Either a legacy ISO-8601 timestamp cursor or the opaque `nextBefore` token from a previous response
 - `source` - Optional source filter. Valid values include `webhook`, `news-monitor`, `market-scanner`, and `expanded-analysis`.
 - `enriched` - Optional boolean filter (`true` or `false`)
+- `include` - Optional projection filter. Allowed value: `enrichment_summary`. When set, each returned alert item includes a sanitized `enrichmentSummary` projection object (with `sentiment`, `sentiment_score`, `setup_type`, `invalidation_level`, `target_level`, `risk_reward_ratio`, `sourceCount`, `sourceDomains`, `tradingViewEnrichmentApplied`, `tradingViewEnrichmentStatus`, and `promptProvenance`) and a sanitized `enrichmentData` payload without requiring N+1 detail fetches.
 
 **Response (200 OK):**
 ```json
@@ -1193,6 +1225,7 @@ Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string 
 - `limit` - Integer between `1` and `1000` (default: `500`)
 - `source` / `enriched` - Optional filters
 - `includeText` - Optional boolean; raw alert text is excluded unless `true`
+- `includeEnrichment` - Optional boolean; safe bounded projection of `enrichmentData` is excluded unless `true`
 
 #### GET /api/alerts/summary
 
@@ -1452,6 +1485,15 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
     {
       "id": "outcome-doc-1",
       "receivedAt": "2026-08-23T12:00:00.000Z",
+      "observedAt": "2026-08-23T12:00:00.000Z",
+      "decisionBarClosedAt": null,
+      "tradableAt": "2026-08-23T12:00:00.000Z",
+      "anchorMode": "raw_received_at",
+      "anchorVersion": "v1",
+      "calendarId": null,
+      "calendarTimeZone": null,
+      "sessionContext": "crypto_24_7",
+      "measurementCohort": "raw_received_at",
       "requestId": "req-1",
       "source": "news-monitor",
       "symbol": "BTCUSDT",
@@ -1462,6 +1504,8 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
       "score": 0.9,
       "side": "BUY",
       "price": 65000,
+      "observedPrice": 65000,
+      "tradablePrice": 65000,
       "entryPriceSource": "tradingview-mcp",
       "stop": 63000,
       "target": 68000,
@@ -1474,6 +1518,9 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
           "status": "evaluated",
           "reason": null,
           "targetTime": "2026-08-23T13:00:00.000Z",
+          "anchorMode": "raw_received_at",
+          "anchorVersion": "v1",
+          "measurementCohort": "raw_received_at",
           "price": 66000,
           "return": 1.5385,
           "maxFavorableExcursion": 2.0,
@@ -1503,9 +1550,11 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
 }
 ```
 
+Equity records also persist `sessionContext`, `decisionBarClosedAt`, `tradableAt`, and separate observed/tradable price fields. Post-close or holiday records are labeled `raw_received_at_after_hours` or `raw_market_closed`; they remain in the shadow raw-observation cohort until a separate executable-session price is available.
+
 #### GET /api/outcomes/summary
 
-Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range. When no outcomes match the filters or tracking is enabled with an empty dataset, the endpoint returns `200 OK` with `available: false` and a typed empty summary structure. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
+Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range. Explicit `from`/`to` ranges may include archived records restored from backups; requests without `from` remain bounded by the configured retention window. When no outcomes match the filters or tracking is enabled with an empty dataset, the endpoint returns `200 OK` with `available: false` and a typed empty summary structure. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
 
 **Query Parameters:**
 - `limit` - Maximum number of recent outcomes to aggregate (integer between `1` and `100`, default: `50`)
@@ -1698,6 +1747,7 @@ Sources:
 - HTTP 200 OK returned (fail-open pattern)
 - Failures logged at WARN/ERROR level
 - If `channels` is omitted in the generic message webhook, delivery fans out to every enabled channel
+- Successful generic-message deliveries are persisted as `source: webhook-message` when Firestore alert storage is enabled, without delaying the response
 
 **Example - Dual Channel Delivery**:
 

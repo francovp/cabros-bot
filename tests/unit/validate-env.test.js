@@ -119,6 +119,12 @@ describe('validate-env', () => {
 		expect(warnings.map((w) => w.variable)).not.toContain('TELEGRAM_TOPIC_ROUTES');
 	});
 
+	it('rejects unknown signal outcome entry-price providers', () => {
+		process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'mcp,wat';
+
+		expect(validateEnv().map((warning) => warning.variable)).toContain('SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES');
+	});
+
 	it('formats warnings with remediation and no raw value', () => {
 		const warning = formatWarning({ variable: 'GEMINI_API_KEY', message: 'is missing' });
 

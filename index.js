@@ -14,6 +14,7 @@ const {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	telegramCommandRateLimiter,
 } = require('./src/controllers/commands');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
@@ -25,6 +26,7 @@ const { registerDebugSentryRoute } = require('./src/lib/debugSentryRoute');
 const { createProcessLifecycle } = require('./src/lib/processLifecycle');
 const { waitForBackgroundTasks } = require('./src/lib/backgroundTaskTracker');
 const { getTelegramBootstrapConfig, sendStartupDeploymentNotification } = require('./src/lib/telegramBootstrap');
+const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
 const { launchTelegramBot } = require('./src/lib/telegramCommandMenu');
 const { attachTelegramErrorBoundary, handlePollingError } = require('./src/lib/telegramErrorBoundary');
 const { jobService } = require('./src/services/jobs/JobService');
@@ -37,7 +39,11 @@ const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
 const Sentry = require('@sentry/node');
 
-const { token } = getTelegramBootstrapConfig();
+const { token, shouldStartTelegramBot } = getTelegramBootstrapConfig();
+bootstrapReadiness.begin({
+	telegramRequired: shouldStartTelegramBot,
+	newsMonitorRequired: process.env.ENABLE_NEWS_MONITOR === 'true',
+});
 
 let bot;
 let botLaunchPromise;
@@ -105,15 +111,17 @@ async function bootstrapApplication() {
 	}
 	if (process.env.ENABLE_NEWS_MONITOR === 'true') {
 		getNewsMonitor().initialize();
+		bootstrapReadiness.markReady('newsMonitor');
 	}
 
-	const { telegramBotIsEnabled, isPreviewEnv, shouldStartTelegramBot } = getTelegramBootstrapConfig();
+	const { telegramBotIsEnabled, isPreviewEnv, shouldStartTelegramBot: shouldLaunchTelegramBot } = getTelegramBootstrapConfig();
 	console.debug('telegramBotIsEnabled:', telegramBotIsEnabled);
 	console.debug('isPreviewEnv:', isPreviewEnv);
 
-	if (shouldStartTelegramBot) {
+	if (shouldLaunchTelegramBot) {
 		console.log('Telegram Bot is enabled');
 		bot = new Telegraf(token);
+		bot.use(telegramCommandRateLimiter);
 		bot.command(['precio'], getPrice);
 		bot.command(['cryptobot'], cryptoBotCmd);
 		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);
@@ -128,13 +136,15 @@ async function bootstrapApplication() {
 
 		// Initialize notification services
 		await initializeNotificationServices(bot);
+		bootstrapReadiness.markReady('notificationServices');
 		if (lifecycle.isShuttingDown()) return;
 
 		// Start polling without blocking the rest of bootstrap.
 		botLaunchPromise = launchTelegramBot(bot, (error) => {
 			console.error('[index] Failed to launch Telegram bot:', error.message);
 			void handlePollingError(error, { bot });
-		});
+		}, () => bootstrapReadiness.markReady('telegramBot'));
+		void botLaunchPromise.catch((error) => bootstrapReadiness.markFailed('telegramBot', error));
 
 		if (!lifecycle.isShuttingDown()) {
 			await sendStartupDeploymentNotification({
@@ -148,12 +158,14 @@ async function bootstrapApplication() {
 		console.log('Telegram Bot is disabled');
 		// Initialize notification services
 		await initializeNotificationServices(null);
+		bootstrapReadiness.markReady('notificationServices');
 	}
 }
 
 server = app.listen(port, () => {
 	bootstrapPromise = bootstrapApplication();
 	void bootstrapPromise.catch((error) => {
+		bootstrapReadiness.fail(error);
 		console.error('[index] Application bootstrap failed:', error.message);
 	});
 });
