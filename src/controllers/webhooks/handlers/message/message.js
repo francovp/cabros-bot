@@ -7,9 +7,36 @@ const {
 	parseNotificationRouting,
 	sendWithNotificationRouting,
 } = require('../../../../services/notification/requestRouting');
-const MAX_MESSAGE_LENGTH = 4000;
 
-function validateMessageRequest(body) {
+const DEFAULT_MAX_MESSAGE_LENGTH = 4000;
+const MIN_MAX_MESSAGE_LENGTH = 1;
+const MAX_MAX_MESSAGE_LENGTH = 20000;
+
+function resolveMaxMessageLength() {
+	const raw = process.env.GENERIC_MESSAGE_MAX_LENGTH;
+	if (raw === undefined || raw === null || raw === '') {
+		return DEFAULT_MAX_MESSAGE_LENGTH;
+	}
+	const trimmed = String(raw).trim();
+	if (!/^\d+$/.test(trimmed)) {
+		return DEFAULT_MAX_MESSAGE_LENGTH;
+	}
+	const parsed = Number.parseInt(trimmed, 10);
+	if (!Number.isSafeInteger(parsed) || parsed < MIN_MAX_MESSAGE_LENGTH || parsed > MAX_MAX_MESSAGE_LENGTH) {
+		return DEFAULT_MAX_MESSAGE_LENGTH;
+	}
+	return parsed;
+}
+
+function getMaxMessageLength() {
+	return resolveMaxMessageLength();
+}
+
+function buildTruncatedText(message, maxLength) {
+	return message.substring(0, maxLength) + '...';
+}
+
+function validateMessageRequest(body, options = {}) {
 	if (!body || typeof body !== 'object') {
 		throw new NotificationRoutingValidationError('Request body must be a JSON object');
 	}
@@ -23,11 +50,26 @@ function validateMessageRequest(body) {
 	}
 	const routing = parseNotificationRouting(body);
 
-	const text = message.length > MAX_MESSAGE_LENGTH
-		? message.substring(0, MAX_MESSAGE_LENGTH) + '...'
-		: message;
+	const maxLength = typeof options.maxMessageLength === 'number'
+		&& Number.isSafeInteger(options.maxMessageLength)
+		&& options.maxMessageLength >= MIN_MAX_MESSAGE_LENGTH
+		&& options.maxMessageLength <= MAX_MAX_MESSAGE_LENGTH
+		? options.maxMessageLength
+		: getMaxMessageLength();
 
-	return { text, ...routing };
+	const originalLength = message.length;
+	const truncated = originalLength > maxLength;
+	const text = truncated ? buildTruncatedText(message, maxLength) : message;
+	const messageLength = text.length;
+
+	return {
+		text,
+		originalLength,
+		messageLength,
+		truncated,
+		maxMessageLength: maxLength,
+		...routing,
+	};
 }
 
 function postMessage(botOrGetter) {
@@ -73,7 +115,22 @@ function postMessage(botOrGetter) {
 				{ http: httpContext },
 			);
 
-			res.json({ success: true, results });
+			if (routing.truncated) {
+				console.warn('[MessageWebhook] truncated message', {
+					originalLength: routing.originalLength,
+					messageLength: routing.messageLength,
+					maxMessageLength: routing.maxMessageLength,
+				});
+			}
+
+			res.json({
+				success: true,
+				results,
+				truncated: routing.truncated,
+				messageLength: routing.messageLength,
+				originalLength: routing.originalLength,
+				maxMessageLength: routing.maxMessageLength,
+			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
 				return res.status(error.statusCode).json({
@@ -112,5 +169,10 @@ module.exports = {
 	postMessage,
 	MessageValidationError: NotificationRoutingValidationError,
 	VALID_CHANNELS,
-	MAX_MESSAGE_LENGTH,
+	DEFAULT_MAX_MESSAGE_LENGTH,
+	MIN_MAX_MESSAGE_LENGTH,
+	MAX_MAX_MESSAGE_LENGTH,
+	getMaxMessageLength,
+	buildTruncatedText,
+	validateMessageRequest,
 };
