@@ -24,6 +24,7 @@ const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStorageService');
 const {
 	isNewsMonitorPaused,
 	getNewsMonitorPauseState,
@@ -349,6 +350,7 @@ function getStatus() {
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
+			firestoreNewsAnalysis: newsAnalysisStorageService.isEnabled(),
 			scannerPresetScheduler: scannerPresetSchedulerService.isEnabled(),
 			newsMonitorScheduler: newsMonitorSchedulerService.isEnabled(),
 			sentryMonitoring: sentryEnabled,
