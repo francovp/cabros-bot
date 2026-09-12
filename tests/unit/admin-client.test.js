@@ -40,7 +40,10 @@ class FakeElement {
 			const selectFirstOption = this.tagName === 'SELECT' && this.children.length === 0;
 			node.parentNode = this;
 			this.children.push(node);
-			if (selectFirstOption) this.value = node.value;
+			if (selectFirstOption) {
+				const firstOpt = node.tagName === 'OPTION' ? node : find(node, (n) => n.tagName === 'OPTION');
+				if (firstOpt && firstOpt.value !== undefined) this.value = firstOpt.value;
+			}
 		});
 	}
 
@@ -966,7 +969,7 @@ describe('admin browser client', () => {
 		const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
 			&& node.textContent.includes('Playground'));
 		const select = find(playground, (node) => node.tagName === 'SELECT');
-		select.value = select.children.find((option) => option.textContent.includes('POST /api/webhook/alert')).value;
+		select.value = find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes('POST /api/webhook/alert')).value;
 		await select.dispatch('change');
 		await playground.dispatch('submit');
 		await flush();
@@ -1118,7 +1121,7 @@ describe('admin browser client', () => {
 		const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
 			&& node.textContent.includes('Playground'));
 		const select = find(playground, (node) => node.tagName === 'SELECT');
-		select.value = select.children.find((option) => option.textContent.includes('POST /api/alerts/{alertId}/replay')).value;
+		select.value = find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes('POST /api/alerts/{alertId}/replay')).value;
 		await select.dispatch('change');
 		playground.elements['path-alertId'].value = 'alert-1';
 		await playground.dispatch('submit');
@@ -4368,4 +4371,247 @@ describe('structured analysis forms', () => {
 			expect(retryBtn.hidden).toBe(false);
 		});
 	});
+
+	describe('Playground UX improvements', () => {
+		it('renders schema-aware inputs omitting query or body fields when inapplicable', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Playground'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+
+			// POST /api/jobs/tradingview-analysis has body but NO query parameters
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/jobs/tradingview-analysis')).value;
+			await select.dispatch('change');
+
+			expect(playground.elements.body).toBeDefined();
+			expect(playground.elements.query).toBeUndefined();
+
+			// GET /api/alerts has query parameters but NO request body
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/alerts —')).value;
+			await select.dispatch('change');
+
+			expect(playground.elements.query).toBeDefined();
+			expect(playground.elements.body).toBeUndefined();
+
+			// GET /api/scanner-presets/{id} has path parameters but NEITHER query nor body
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/scanner-presets/{id}')).value;
+			await select.dispatch('change');
+
+			expect(playground.elements['path-id']).toBeDefined();
+			expect(playground.elements.query).toBeUndefined();
+			expect(playground.elements.body).toBeUndefined();
+		});
+
+		it('groups operations into optgroups and supports real-time text filtering', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+			});
+			await flush();
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Playground'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const optgroups = findAll(select, (node) => node.tagName === 'OPTGROUP');
+
+			expect(optgroups.length).toBeGreaterThanOrEqual(5);
+			const groupLabels = optgroups.map((g) => g.label || g.attributes.label);
+			expect(groupLabels).toContain('Webhooks');
+			expect(groupLabels).toContain('Alerts');
+			expect(groupLabels).toContain('Jobs');
+
+			// Filter operations
+			const filterInput = playground.elements.filterOperations;
+			filterInput.value = 'volume-confirmation';
+			await filterInput.dispatch('input');
+
+			const filteredOptions = findAll(select, (node) => node.tagName === 'OPTION');
+			expect(filteredOptions.length).toBe(1);
+			expect(filteredOptions[0].textContent).toContain('/api/webhook/volume-confirmation');
+
+			// Reset filter
+			filterInput.value = '';
+			await filterInput.dispatch('input');
+			const allOptions = findAll(select, (node) => node.tagName === 'OPTION');
+			expect(allOptions.length).toBeGreaterThan(10);
+		});
+
+		it('preserves user input across operation switches within the session', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+			});
+			await flush();
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Playground'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+
+			// Select POST /api/webhook/alert and enter custom body
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ message: 'Custom alert message 42' });
+			await playground.elements.body.dispatch('input');
+
+			// Switch to GET /api/alerts
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/alerts —')).value;
+			await select.dispatch('change');
+			expect(playground.elements.body).toBeUndefined();
+
+			// Switch back to POST /api/webhook/alert
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
+			await select.dispatch('change');
+			expect(playground.elements.body.value).toContain('Custom alert message 42');
+		});
+
+		it('renders structured results and provides collapsible raw JSON toggle', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/webhook/volume-confirmation')) {
+						return response({
+							success: true,
+							symbol: 'BINANCE:BTCUSDT',
+							timeframe: '1h',
+							confirmed: true,
+							volumeRatio: 2.15,
+							currentVolume: 12000,
+							smaVolume: 5580,
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Playground'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/volume-confirmation')).value;
+			await select.dispatch('change');
+			await playground.dispatch('submit');
+			await flush();
+
+			// Structured result host should contain the volume confirmation verdict
+			const structuredResult = find(playground, (n) => n.className === 'playground-structured-result');
+			expect(structuredResult.textContent).toContain('Confirmed');
+			expect(structuredResult.textContent).toContain('2.15x');
+
+			// Raw toggle should be visible with copy button and formatted JSON
+			const rawToggle = find(playground, (n) => n.tagName === 'DETAILS' && n.className === 'raw-status');
+			expect(rawToggle.hidden).toBe(false);
+			expect(rawToggle.textContent).toContain('Show raw response');
+			expect(rawToggle.textContent).toContain('2.15');
+		});
+
+		it('records request history with redacted credentials and allows restoration', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/webhook/alert')) {
+						return response({ success: true, messageId: 'm-101' });
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Playground'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ message: 'Buy BTC', apiKey: 'super-secret-key-999' });
+			await playground.dispatch('submit');
+			await flush();
+
+			const historyItems = findAll(playground, (n) => n.className === 'history-item');
+			expect(historyItems.length).toBe(1);
+			expect(historyItems[0].textContent).toContain('POST');
+			expect(historyItems[0].textContent).toContain('/api/webhook/alert');
+			expect(historyItems[0].textContent).toContain('HTTP 200');
+
+			// Verify secrets are redacted in history
+			expect(playground.textContent).not.toContain('super-secret-key-999');
+
+			// Change the current form to another operation
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/alerts —')).value;
+			await select.dispatch('change');
+			expect(playground.elements.body).toBeUndefined();
+
+			// Restore from history
+			const restoreBtn = find(historyItems[0], (n) => n.tagName === 'BUTTON' && n.textContent === 'Restore');
+			await restoreBtn.dispatch('click');
+			await flush();
+
+			// Form should be back to POST /api/webhook/alert with restored body
+			const currentSelected = find(select, (o) => o.value === select.value);
+			expect(currentSelected.textContent).toContain('POST /api/webhook/alert');
+			expect(playground.elements.body).toBeDefined();
+			expect(playground.elements.body.value).toContain('Buy BTC');
+			expect(playground.elements.body.value).toContain('[REDACTED]');
+		});
+
+		it('generates a curl command with literal $WEBHOOK_API_KEY placeholder and never leaks actual key', async () => {
+			let capturedTextarea = null;
+			const browser = createBrowser({
+				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'actual-production-secret-key-12345';
+			await selectView(browser, 'playground');
+			await flush();
+
+			// Intercept textarea creation for execCommand copy
+			const origCreateElement = browser.context.document.createElement;
+			browser.context.document.createElement = (tag) => {
+				const el = origCreateElement(tag);
+				if (tag === 'textarea') capturedTextarea = el;
+				return el;
+			};
+			browser.context.document.execCommand = () => true;
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Playground'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ message: 'Hello cURL' });
+
+			const curlBtn = find(playground, (n) => n.tagName === 'BUTTON' && n.textContent.includes('Copy as cURL'));
+			expect(curlBtn).toBeDefined();
+
+			await curlBtn.dispatch('click');
+			await flush();
+
+			expect(capturedTextarea).not.toBeNull();
+			const curlCommand = capturedTextarea.value;
+			expect(curlCommand).toContain('curl -X POST');
+			expect(curlCommand).toContain('/api/webhook/alert');
+			expect(curlCommand).toContain('-H "x-api-key: $WEBHOOK_API_KEY"');
+			expect(curlCommand).toContain('-H "Content-Type: application/json"');
+			expect(curlCommand).toContain('Hello cURL');
+			// Crucial security check: the actual API key MUST NOT appear anywhere in the curl output
+			expect(curlCommand).not.toContain('actual-production-secret-key-12345');
+		});
+	});
 });
+

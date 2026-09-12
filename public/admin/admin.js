@@ -3950,55 +3950,470 @@ const createOperationForm = (contract, definition, options = {}) => {
 	return form;
 };
 
+const PLAYGROUND_STRUCTURED_RENDERERS = {
+	'POST /api/webhook/symbol-analysis': (data) => symbolAnalysisResult(data),
+	'POST /api/webhook/expanded-analysis-alert': (data) => analysisReportResult(data),
+	'POST /api/webhook/market-scanner-alert': (data) => analysisReportResult(data),
+	'POST /api/webhook/volume-confirmation': (data) => volumeConfirmationResult(data),
+	'POST /api/news-monitor': (data) => newsMonitorResults(data),
+	'GET /api/alerts/{alertId}': (data) => (data && data.alert ? createAlertDetailPanel(data.alert) : null),
+	'GET /api/alerts': (data) => {
+		if (!data || !Array.isArray(data.alerts) || !data.alerts.length) return null;
+		const container = element('div', { className: 'alert-feed' });
+		data.alerts.forEach((alert) => container.append(createAlertCard(alert)));
+		return container;
+	},
+	'GET /api/alerts/summary': (data) => (data && data.summary ? renderAlertSummaryBlocks(data) : null),
+	'POST /api/alerts/{alertId}/replay': (data) => {
+		const chips = deliveryChips(data && data.results);
+		return chips && chips.children && chips.children.length ? chips : null;
+	},
+	'POST /api/scanner-presets/{id}/run': (data) => analysisReportResult(data),
+	'GET /api/jobs/{jobId}': (data) => (data && (data.jobId || data.status) ? createJobPanel(data) : null),
+	'POST /api/jobs/tradingview-analysis': (data) => (data && (data.jobId || data.status) ? createJobPanel(data) : null),
+	'GET /api/outcomes/{id}': (data) => (data && data.id ? createOutcomeDetailPanel(data) : null),
+	'GET /api/outcomes/summary': (data) => (data && data.summary ? renderOutcomesSummaryBlocks(data) : null),
+};
+
+const getPlaygroundRenderer = (definition) => {
+	if (!definition) return null;
+	if (typeof definition.renderSuccess === 'function') return definition.renderSuccess;
+	return PLAYGROUND_STRUCTURED_RENDERERS[`${definition.method} ${definition.path}`] || null;
+};
+
+const PLAYGROUND_GROUP_ORDER = [
+	'Webhooks',
+	'Jobs',
+	'Alerts',
+	'Presets',
+	'Trading',
+	'Analysis',
+	'News Monitor',
+	'Outcomes',
+	'Status & Docs',
+	'Other',
+];
+
+const getPlaygroundOperationGroup = (path) => {
+	if (path.startsWith('/api/webhook/')) return 'Webhooks';
+	if (path.startsWith('/api/jobs')) return 'Jobs';
+	if (path.startsWith('/api/alerts')) return 'Alerts';
+	if (path.startsWith('/api/scanner-presets')) return 'Presets';
+	if (path.startsWith('/api/trading')) return 'Trading';
+	if (path.startsWith('/api/news-monitor')) return 'News Monitor';
+	if (path.startsWith('/api/symbol-analyses')) return 'Analysis';
+	if (path.startsWith('/api/outcomes')) return 'Outcomes';
+	if (path.startsWith('/api/status') || path.startsWith('/api/capabilities') || path.includes('docs') || path.includes('openapi')) return 'Status & Docs';
+	return 'Other';
+};
+
+const playgroundInputCache = new Map();
+const playgroundHistory = [];
+const sanitizeForHistory = (text) => {
+	if (!text || typeof text !== 'string') return text;
+	return text.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization)['"]?\s*[:=]\s*['"]?)[^'"\s,}\]]+/gi, '$1[REDACTED]');
+};
+
 const renderPlayground = (contract, view) => {
 	const form = element('form', { className: 'operation-card playground' });
 	form.append(element('h2', { text: 'Playground' }));
+
+	const filterLabel = element('label', { text: 'Filter operations' });
+	const filterInput = element('input', { type: 'search', placeholder: 'Filter by method, path, or label...' });
+	filterInput.name = 'filterOperations';
+	filterLabel.append(filterInput);
+
 	const selectLabel = element('label', { text: 'Operation' });
 	const select = element('select');
-	const definitions = window.CabrosAdminRequest.operationDefinitions(contract);
-	definitions.forEach((definition, index) => {
-		const option = element('option', { text: `${definition.method} ${definition.path} — ${definition.label}` });
-		option.value = index;
-		select.append(option);
-	});
+	select.name = 'operation';
 	selectLabel.append(select);
+
+	const definitions = window.CabrosAdminRequest.operationDefinitions(contract);
+
 	const fields = element('div', { className: 'form-fields' });
+
+	const buttonRow = element('div', { className: 'badge-row playground-actions' });
 	const button = element('button', { text: 'Send request' });
 	button.type = 'submit';
+
+	const buildCurlCommand = () => {
+		const definition = definitions[Number(select.value)];
+		if (!definition) return '';
+		const pathNames = [...definition.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
+		const resolvedPath = pathNames.reduce((acc, name) => {
+			const val = form.elements[`path-${name}`]?.value;
+			return acc.replace(`{${name}}`, val ? encodeURIComponent(val) : `{${name}}`);
+		}, definition.path);
+
+		let queryString = '';
+		if (form.elements.query && form.elements.query.value.trim()) {
+			try {
+				const parsed = parseJson(form.elements.query.value, 'Query');
+				if (parsed && typeof parsed === 'object') {
+					const sp = new URLSearchParams();
+					Object.entries(parsed).forEach(([k, v]) => {
+						if (v !== undefined && v !== null && v !== '') sp.set(k, String(v));
+					});
+					const qs = sp.toString();
+					if (qs) queryString = `?${qs}`;
+				}
+			} catch (_) {
+				// Query invalid JSON; omit params from cURL
+			}
+		}
+
+		const baseUrl = getApiBaseUrl();
+		const origin = (typeof window !== 'undefined' && window.location && window.location.origin) || '';
+		const fullUrl = `${baseUrl || origin}${resolvedPath}${queryString}`;
+
+		const lines = [`curl -X ${definition.method} "${fullUrl}"`];
+		lines.push('  -H "x-api-key: $WEBHOOK_API_KEY"');
+		if (form.elements.body && definition.method !== 'GET') {
+			const bodyVal = form.elements.body.value.trim();
+			if (bodyVal) {
+				lines.push('  -H "Content-Type: application/json"');
+				lines.push(`  -d '${bodyVal.replace(/'/g, "'\\''")}'`);
+			}
+		}
+		return lines.join(' \\\n');
+	};
+
+	const curlButton = createCopyButton(() => buildCurlCommand(), 'Copy as cURL');
+	buttonRow.append(button, curlButton);
+
+	const resultHost = element('div', { className: 'playground-structured-result' });
 	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
-	form.append(selectLabel, fields, button, output);
+
+	let lastRawJson = '';
+	const rawOutput = element('pre', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.append(
+		element('summary', { text: 'Show raw response' }),
+		rawCopyButton,
+		rawOutput,
+	);
+	rawToggle.hidden = true;
+
+	const historySection = element('div', { className: 'playground-history' });
+	historySection.append(element('h3', { text: 'Request history' }));
+	const historyEmpty = element('p', { className: 'empty-state', text: 'No requests sent this session.' });
+	const historyList = element('div', { className: 'history-list' });
+	historySection.append(historyEmpty, historyList);
+
+	form.append(filterLabel, selectLabel, fields, buttonRow, resultHost, output, rawToggle, historySection);
 	view.append(form);
+
+	const saveCurrentInputs = (def) => {
+		if (!def) return;
+		const key = `${def.method} ${def.path}`;
+		const pathNames = [...def.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
+		const pathValues = {};
+		pathNames.forEach((name) => {
+			const el = form.elements[`path-${name}`];
+			if (el) pathValues[name] = el.value;
+		});
+		playgroundInputCache.set(key, {
+			pathValues,
+			query: form.elements.query ? form.elements.query.value : undefined,
+			body: form.elements.body ? form.elements.body.value : undefined,
+		});
+	};
 
 	const renderFields = () => {
 		fields.replaceChildren();
 		const definition = definitions[Number(select.value)];
-		const operation = getOperation(contract, definition);
+		if (!definition) {
+			button.disabled = true;
+			curlButton.disabled = true;
+			return;
+		}
+		button.disabled = false;
+		curlButton.disabled = false;
 		button.className = definition.confirm ? 'destructive-action' : '';
-		addPathFields(fields, definition.path);
-		addJsonField(fields, 'Query JSON', 'query', getQueryExample(contract, operation));
-		addJsonField(fields, 'Request body JSON', 'body', getBodyExample(contract, operation));
+
+		const pathNames = addPathFields(fields, definition.path);
+		const operation = getOperation(contract, definition);
+		const queryParameters = getParameters(contract, operation).filter((p) => p && p.in === 'query');
+		const hasQueryParams = queryParameters.length > 0;
+		if (hasQueryParams) {
+			addJsonField(fields, 'Query JSON', 'query', getQueryExample(contract, operation));
+		}
+
+		const requestBody = resolveRef(contract, operation && operation.requestBody);
+		const hasRequestBody = Boolean(requestBody && requestBody.content && requestBody.content['application/json']);
+		if (hasRequestBody && definition.method !== 'GET') {
+			addJsonField(fields, 'Request body JSON', 'body', getBodyExample(contract, operation));
+		}
+
+		const key = `${definition.method} ${definition.path}`;
+		const cached = playgroundInputCache.get(key);
+		if (cached) {
+			if (cached.pathValues) {
+				pathNames.forEach((name) => {
+					const input = form.elements[`path-${name}`];
+					if (input && cached.pathValues[name] !== undefined) {
+						input.value = cached.pathValues[name];
+					}
+				});
+			}
+			if (hasQueryParams && form.elements.query && cached.query !== undefined) {
+				form.elements.query.value = cached.query;
+			}
+			if (hasRequestBody && form.elements.body && cached.body !== undefined) {
+				form.elements.body.value = cached.body;
+			}
+		}
 	};
 
-	select.addEventListener('change', renderFields);
+	const populateOptions = (filterText = '') => {
+		const currentVal = select.value;
+		select.replaceChildren();
+		const query = filterText.trim().toLowerCase();
+		let firstAvailableValue = null;
+		let currentValStillAvailable = false;
+
+		const grouped = new Map();
+		PLAYGROUND_GROUP_ORDER.forEach((group) => grouped.set(group, []));
+
+		definitions.forEach((definition, index) => {
+			const text = `${definition.method} ${definition.path} — ${definition.label}`;
+			if (query && !text.toLowerCase().includes(query)) return;
+			const group = getPlaygroundOperationGroup(definition.path);
+			if (!grouped.has(group)) grouped.set(group, []);
+			grouped.get(group).push({ definition, index, text });
+		});
+
+		PLAYGROUND_GROUP_ORDER.forEach((group) => {
+			const items = grouped.get(group) || [];
+			if (!items.length) return;
+			const optgroup = element('optgroup', { label: group });
+			optgroup.label = group;
+			optgroup.setAttribute('label', group);
+			items.forEach(({ index, text }) => {
+				const option = element('option', { text });
+				option.value = String(index);
+				if (firstAvailableValue === null) firstAvailableValue = String(index);
+				if (String(index) === String(currentVal)) currentValStillAvailable = true;
+				optgroup.append(option);
+			});
+			select.append(optgroup);
+		});
+
+		if (currentValStillAvailable) {
+			select.value = currentVal;
+		} else if (firstAvailableValue !== null) {
+			select.value = firstAvailableValue;
+			renderFields();
+		} else {
+			select.value = '';
+			renderFields();
+		}
+	};
+
+	const renderHistoryList = () => {
+		if (playgroundHistory.length === 0) {
+			historyEmpty.hidden = false;
+			historyList.replaceChildren();
+			return;
+		}
+		historyEmpty.hidden = true;
+		historyList.replaceChildren();
+		playgroundHistory.forEach((entry) => {
+			const row = element('div', { className: 'history-item' });
+			const badge = element('span', {
+				className: `status-badge ${entry.ok ? 'status-ready' : 'status-danger'}`,
+				text: String(entry.status),
+			});
+			const methodEl = element('code', { text: entry.method });
+			const pathEl = element('span', { className: 'history-path', text: entry.resolvedPath });
+			const timeStr = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : '';
+			const timeEl = element('span', { className: 'timestamp', text: timeStr });
+			const restoreBtn = element('button', { text: 'Restore' });
+			restoreBtn.type = 'button';
+			restoreBtn.className = 'history-restore-btn';
+			restoreBtn.addEventListener('click', () => {
+				restoreHistoryEntry(entry);
+			});
+			row.append(badge, methodEl, pathEl, timeEl, restoreBtn);
+			historyList.append(row);
+		});
+	};
+
+	const addHistoryEntry = (entry) => {
+		playgroundHistory.unshift({
+			...entry,
+			query: sanitizeForHistory(entry.query),
+			body: sanitizeForHistory(entry.body),
+			timestamp: Date.now(),
+		});
+		if (playgroundHistory.length > 10) playgroundHistory.pop();
+		renderHistoryList();
+	};
+
+	const restoreHistoryEntry = (entry) => {
+		const targetIndex = definitions.findIndex((d) => d.method === entry.method && d.path === entry.path);
+		if (targetIndex === -1) return;
+		saveCurrentInputs(definitions[Number(select.value)]);
+		if (filterInput.value) {
+			filterInput.value = '';
+			populateOptions('');
+		}
+		select.value = String(targetIndex);
+		previousDefinition = definitions[targetIndex];
+		renderFields();
+		if (entry.pathValues) {
+			Object.entries(entry.pathValues).forEach(([name, val]) => {
+				const el = form.elements[`path-${name}`];
+				if (el && val !== undefined) el.value = val;
+			});
+		}
+		if (form.elements.query && entry.query !== undefined) {
+			form.elements.query.value = entry.query;
+		}
+		if (form.elements.body && entry.body !== undefined) {
+			form.elements.body.value = entry.body;
+		}
+		saveCurrentInputs(definitions[targetIndex]);
+	};
+
+	let previousDefinition = definitions[0];
+	select.addEventListener('change', () => {
+		saveCurrentInputs(previousDefinition);
+		previousDefinition = definitions[Number(select.value)];
+		renderFields();
+	});
+
+	fields.addEventListener('input', () => {
+		saveCurrentInputs(definitions[Number(select.value)]);
+	});
+
+	filterInput.addEventListener('input', () => {
+		populateOptions(filterInput.value);
+	});
+
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
+		resultHost.replaceChildren();
+		lastRawJson = '';
+		rawOutput.textContent = '';
+		rawCopyButton.hidden = true;
+		rawToggle.hidden = true;
+
+		const definition = definitions[Number(select.value)];
+		if (!definition) return;
+
+		const pathNames = [...definition.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
+		const resolvedPath = fillPath(definition.path, pathNames, form);
+		const pathValues = {};
+		pathNames.forEach((name) => {
+			const el = form.elements[`path-${name}`];
+			if (el) pathValues[name] = el.value;
+		});
+
+		let query;
+		let body;
 		try {
-			const definition = definitions[Number(select.value)];
-			const pathNames = [...definition.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
-			sendRequest({
-				definition,
-				path: fillPath(definition.path, pathNames, form),
-				query: window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query')),
-				body: getRequestBody(definition, form),
-				button,
-				output,
-			});
+			if (form.elements.query) {
+				query = window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query'));
+			}
+			if (form.elements.body) {
+				body = getRequestBody(definition, form);
+			}
 		} catch (error) {
 			showError(output, error.message);
+			addHistoryEntry({
+				method: definition.method,
+				path: definition.path,
+				resolvedPath,
+				pathValues,
+				query: form.elements.query ? form.elements.query.value : undefined,
+				body: form.elements.body ? form.elements.body.value : undefined,
+				status: 'Validation error',
+				ok: false,
+			});
+			return;
 		}
+
+		saveCurrentInputs(definition);
+		const renderer = getPlaygroundRenderer(definition);
+		const hasStructured = typeof renderer === 'function';
+
+		let responseStatus = null;
+		let responseOk = false;
+		let responseData = null;
+
+		sendRequest({
+			definition,
+			path: resolvedPath,
+			query,
+			body,
+			button,
+			output,
+			captureResponseStatus: (status) => {
+				responseStatus = status;
+				responseOk = status >= 200 && status < 300;
+			},
+			captureResponseData: (capturedData, response) => {
+				responseData = capturedData;
+				if (response) {
+					responseStatus = response.status;
+					responseOk = response.ok;
+				}
+			},
+			formatResponse: hasStructured
+				? ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`
+				: undefined,
+		}).then((data) => {
+			addHistoryEntry({
+				method: definition.method,
+				path: definition.path,
+				resolvedPath,
+				pathValues,
+				query: form.elements.query ? form.elements.query.value : undefined,
+				body: form.elements.body ? form.elements.body.value : undefined,
+				status: responseStatus ? `HTTP ${responseStatus}` : '200 OK',
+				ok: responseOk !== false,
+			});
+
+			const payloadToRender = data || responseData;
+			let rendered = null;
+			if (hasStructured && payloadToRender && responseOk !== false) {
+				try {
+					rendered = renderer(payloadToRender);
+				} catch (_) {
+					rendered = null;
+				}
+			}
+			if (rendered) {
+				resultHost.replaceChildren(rendered);
+				lastRawJson = JSON.stringify(payloadToRender, null, 2);
+				rawOutput.textContent = lastRawJson;
+				rawCopyButton.hidden = false;
+				rawToggle.hidden = false;
+			} else if (payloadToRender && hasStructured) {
+				output.textContent = `${output.textContent}\n\n${JSON.stringify(payloadToRender, null, 2)}`;
+			}
+		}).catch(() => {
+			addHistoryEntry({
+				method: definition.method,
+				path: definition.path,
+				resolvedPath,
+				pathValues,
+				query: form.elements.query ? form.elements.query.value : undefined,
+				body: form.elements.body ? form.elements.body.value : undefined,
+				status: responseStatus ? `HTTP ${responseStatus}` : 'Network error',
+				ok: false,
+			});
+		});
 	});
+
+	populateOptions();
 	renderFields();
+	renderHistoryList();
 };
+
 
 const getBodySchema = (contract, operation) => {
 	const requestBody = resolveRef(contract, operation && operation.requestBody);
