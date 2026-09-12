@@ -224,4 +224,26 @@ describe('Postman collection contract', () => {
 		expect(marketBuyResp.order.newOrderRespType).toBe('FULL');
 		expect(marketBuyResp.order.newClientOrderId).toBeUndefined();
 	});
+
+	it('documents include=enrichment_summary success and invalid 400 response in GET List Alerts', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const includeItem = findItem(collection.item, 'GET List Alerts (include=enrichment_summary)');
+		const invalidIncludeItem = findItem(collection.item, 'GET List Alerts (invalid include - 400 Bad Request)');
+
+		expect(includeItem).toBeDefined();
+		expect(includeItem.request.url.raw).toContain('include=enrichment_summary');
+		const successBody = JSON.parse(includeItem.response[0].body);
+		expect(successBody.success).toBe(true);
+		expect(successBody.alerts[0].enrichmentSummary).toBeDefined();
+		expect(successBody.alerts[0].enrichmentSummary.sentiment).toBe('BULLISH');
+		expect(successBody.alerts[0].enrichmentSummary.promptProvenance).toBeDefined();
+
+		expect(invalidIncludeItem).toBeDefined();
+		expect(invalidIncludeItem.request.url.raw).toContain('include=invalid_field');
+		expect(invalidIncludeItem.response[0].code).toBe(400);
+		const errorBody = JSON.parse(invalidIncludeItem.response[0].body);
+		expect(errorBody.code).toBe('INVALID_REQUEST');
+		expect(errorBody.error).toContain('enrichment_summary');
+	});
 });
+

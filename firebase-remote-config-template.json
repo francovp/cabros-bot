@@ -391,6 +391,20 @@
       },
       "description": "Retention window in days for persisted symbol-analysis records before Firestore TTL expiry",
       "valueType": "NUMBER"
+    },
+    "ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable multi-agent consensus analysis in symbol-analysis webhook",
+      "valueType": "BOOLEAN"
+    },
+    "WHATSAPP_TEMPLATE_PARAM_ORDER": {
+      "defaultValue": {
+        "value": "symbol,price,action,setup,timeframe,source"
+      },
+      "description": "Comma-separated ordered parameter names extracted from the alert for GreenAPI sendTemplate placeholders. Each maps to a field in alert.enriched or alert. Missing fields produce empty strings. WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, and WHATSAPP_TEMPLATE_NAMESPACE are excluded (notification destinations).",
+      "valueType": "STRING"
     }
   },
   "version": {

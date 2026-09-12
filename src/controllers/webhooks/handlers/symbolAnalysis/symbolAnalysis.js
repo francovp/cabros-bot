@@ -33,6 +33,7 @@ function postSymbolAnalysis() {
 			});
 
 			let multiTimeframe = null;
+			let multiAgent = null;
 			let analysisStatus = 'complete';
 			if (parsed.includeMultiTimeframe) {
 				try {
@@ -48,8 +49,25 @@ function postSymbolAnalysis() {
 				}
 			}
 
+			const shouldRunMultiAgent = parsed.includeMultiAgent || getRuntimeConfig().ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT;
+			if (shouldRunMultiAgent) {
+				try {
+					const rawMultiAgent = await tradingViewMcpService.callMultiAgentAnalysis({
+						symbol: input.symbol,
+						exchange: input.exchange,
+						timeframe: parsed.timeframe,
+						signal: deadline.signal,
+					});
+					multiAgent = sanitizeMultiAgent(rawMultiAgent);
+				} catch (error) {
+					if (deadline.signal.aborted || error?.name === 'AbortError') throw error;
+					analysisStatus = 'partial';
+					console.warn('[SymbolAnalysis] Multi-agent analysis failed:', error.message);
+				}
+			}
+
 			const side = inferSide(analysis);
-			const normalized = normalizeAnalysis({ analysis, input, parsed, multiTimeframe, side });
+			const normalized = normalizeAnalysis({ analysis, input, parsed, multiTimeframe, multiAgent, side });
 			const reportAnalysis = {
 				...analysis,
 				technical: {
@@ -60,10 +78,8 @@ function postSymbolAnalysis() {
 				},
 			};
 			const item = { input, analysis: reportAnalysis, multiTimeframe, side };
-
 			const processingTimeMs = Math.max(0, Date.now() - startTime);
-
-			res.status(200).json({
+			const responsePayload = {
 				success: true,
 				symbol: input.raw,
 				exchange: input.exchange,
@@ -74,7 +90,12 @@ function postSymbolAnalysis() {
 				analysisStatus,
 				requestId,
 				processingTimeMs,
-			});
+			};
+			if (multiAgent) {
+				responsePayload.multiAgent = multiAgent;
+			}
+
+			res.status(200).json(responsePayload);
 
 			if (symbolAnalysisStorageService.isEnabled()) {
 				symbolAnalysisStorageService.recordAnalysis({
@@ -179,10 +200,43 @@ function parseSymbolAnalysisRequest(req) {
 		throw new ExpandedAnalysisAlertRequestError('symbol must be a string in EXCHANGE:SYMBOL format');
 	}
 
-	return parseExpandedAnalysisAlertRequest({ body: { ...body, symbols: [body.symbol] } });
+	const parsed = parseExpandedAnalysisAlertRequest({ body: { ...body, symbols: [body.symbol] } });
+	const includeMultiAgent = parseIncludeMultiAgent(body);
+	return {
+		...parsed,
+		includeMultiAgent,
+	};
 }
 
-function normalizeAnalysis({ analysis = {}, input, parsed, multiTimeframe, side }) {
+function parseIncludeMultiAgent(body = {}) {
+	const val = body.includeMultiAgent !== undefined ? body.includeMultiAgent : body.include_multi_agent;
+	if (val === undefined || val === null) {
+		return false;
+	}
+	if (typeof val !== 'boolean') {
+		if (typeof val === 'string') {
+			const lower = val.trim().toLowerCase();
+			if (lower === 'true') return true;
+			if (lower === 'false') return false;
+		}
+		throw new ExpandedAnalysisAlertRequestError('includeMultiAgent must be a boolean');
+	}
+	return val;
+}
+
+function sanitizeMultiAgent(raw) {
+	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+	const consensus = raw.consensus && typeof raw.consensus === 'object' && !Array.isArray(raw.consensus) ? raw.consensus : raw;
+	const agents = raw.agents_debate || raw.agents || null;
+	return {
+		decision: typeof consensus.decision === 'string' ? consensus.decision : null,
+		confidence: typeof consensus.confidence === 'string' ? consensus.confidence : null,
+		net_score: numberOrNull(consensus.net_score),
+		agents: agents && typeof agents === 'object' && !Array.isArray(agents) ? agents : null,
+	};
+}
+
+function normalizeAnalysis({ analysis = {}, input, parsed, multiTimeframe, multiAgent, side }) {
 	const technical = analysis.technical || analysis;
 	const rawPrice = technical.price_data || {};
 	const rawIndicators = technical.technical_indicators || {};
@@ -231,7 +285,7 @@ function normalizeAnalysis({ analysis = {}, input, parsed, multiTimeframe, side 
 	const signals = analysis.signals ?? technical.signals ?? [];
 	const risk = buildRisk({ technical, price, side });
 
-	return {
+	const normalized = {
 		...analysis,
 		symbol: input.raw,
 		exchange: input.exchange,
@@ -243,9 +297,14 @@ function normalizeAnalysis({ analysis = {}, input, parsed, multiTimeframe, side 
 		signals,
 		overall_assessment: overallAssessment,
 		risk,
-		decision: buildDecision({ analysis, technical, side, risk, price, technicalIndicators }),
+		decision: buildDecision({ analysis, technical, side, risk, price, technicalIndicators, multiAgent }),
 		multi_timeframe: multiTimeframe,
 	};
+	if (multiAgent) {
+		normalized.multi_agent = multiAgent;
+		normalized.multiAgent = multiAgent;
+	}
+	return normalized;
 }
 
 function buildRisk({ technical, price, side }) {
@@ -290,7 +349,7 @@ function emptyRisk(side, price) {
 	};
 }
 
-function buildDecision({ analysis, technical, side, risk, price, technicalIndicators }) {
+function buildDecision({ analysis, technical, side, risk, price, technicalIndicators, multiAgent }) {
 	const reasons = [];
 	const warnings = [];
 	const confluence = analysis.confluence || {};
@@ -304,13 +363,30 @@ function buildDecision({ analysis, technical, side, risk, price, technicalIndica
 	if (!risk.valid) warnings.push('El riesgo calculado no tiene niveles direccionales válidos.');
 	if (!Number.isFinite(price)) warnings.push('Falta el precio actual.');
 
-	return {
+	if (multiAgent) {
+		const agentDecision = typeof multiAgent.decision === 'string' ? multiAgent.decision.toUpperCase() : null;
+		const agentConfidence = typeof multiAgent.confidence === 'string' ? multiAgent.confidence.toUpperCase() : null;
+		if (side === 'BUY' || side === 'SELL') {
+			const isDisagreement = agentDecision === 'HOLD'
+				|| agentConfidence === 'LOW'
+				|| (agentDecision && agentDecision !== side);
+			if (isDisagreement) {
+				warnings.push('Consenso multi-agente no confirma la señal');
+			}
+		}
+	}
+
+	const decision = {
 		action: dataSufficient ? side : 'NO_TRADE',
 		confidence: confluence.confidence ?? null,
 		dataSufficient,
 		reasons,
 		warnings,
 	};
+	if (multiAgent) {
+		decision.multiAgent = multiAgent;
+	}
+	return decision;
 }
 
 function inferSide(analysis = {}) {
