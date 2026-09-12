@@ -14,6 +14,7 @@ const {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	telegramCommandRateLimiter,
 } = require('./src/controllers/commands');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
@@ -120,6 +121,7 @@ async function bootstrapApplication() {
 	if (shouldLaunchTelegramBot) {
 		console.log('Telegram Bot is enabled');
 		bot = new Telegraf(token);
+		bot.use(telegramCommandRateLimiter);
 		bot.command(['precio'], getPrice);
 		bot.command(['cryptobot'], cryptoBotCmd);
 		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);
