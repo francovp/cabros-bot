@@ -175,4 +175,35 @@ describe('POST /api/admin/test-alert Integration', () => {
 		expect(res.status).toBe(400);
 		expect(res.body.code).toBe('INVALID_REQUEST');
 	});
+
+	it('returns cached idempotent response on repeated request with same x-idempotency-key', async () => {
+		const idempotencyKey = 'test-alert-idempotency-key-1';
+
+		const res1 = await request(app)
+			.post('/api/admin/test-alert')
+			.set('x-api-key', 'secret-operator-key')
+			.set('x-idempotency-key', idempotencyKey)
+			.send({
+				text: 'Idempotent test alert',
+				channels: ['telegram'],
+			});
+
+		expect(res1.status).toBe(200);
+		expect(res1.body.ok).toBe(true);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
+
+		// Second call with same idempotency key should return cached response without 429 and without re-sending
+		const res2 = await request(app)
+			.post('/api/admin/test-alert')
+			.set('x-api-key', 'secret-operator-key')
+			.set('x-idempotency-key', idempotencyKey)
+			.send({
+				text: 'Idempotent test alert',
+				channels: ['telegram'],
+			});
+
+		expect(res2.status).toBe(200);
+		expect(res2.header['idempotency-replay']).toBe('true');
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
+	});
 });

@@ -55,7 +55,7 @@ function getRoutes(botOrGetter) {
 	router.get('/alerts/export', ...adminRead, exportAlerts);
 	router.post('/alerts/:alertId/replay', ...adminWrite, idempotencyMiddleware, replayAlert(botOrGetter));
 	router.get('/alerts/:alertId', ...adminRead, getAlertById);
-	router.post('/admin/test-alert', ...adminWrite, postTestAlert(botOrGetter));
+	router.post('/admin/test-alert', ...adminWrite, idempotencyMiddleware, postTestAlert(botOrGetter));
 	router.get('/outcomes', ...adminRead, listOutcomes);
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
 	router.get('/symbol-analyses', ...adminRead, listSymbolAnalyses);

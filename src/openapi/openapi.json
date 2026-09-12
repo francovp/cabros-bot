@@ -3458,13 +3458,7 @@
                   "ok": true,
                   "alertId": "dryrun-test-alert-12345",
                   "persisted": false,
-                  "results": [
-                    {
-                      "channel": "telegram",
-                      "success": true,
-                      "dryRun": true
-                    }
-                  ],
+                  "results": [],
                   "dryRun": true,
                   "enrichmentApplied": false,
                   "tokenUsage": null,

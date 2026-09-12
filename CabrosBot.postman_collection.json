@@ -4196,7 +4196,7 @@
                   "value": "application/json; charset=utf-8"
                 }
               ],
-              "body": "{\n  \"ok\": true,\n  \"alertId\": \"dryrun-test-alert-1700000000000-abcd1234\",\n  \"persisted\": false,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"dryRun\": true\n    }\n  ],\n  \"dryRun\": true,\n  \"enrichmentApplied\": false,\n  \"tokenUsage\": null,\n  \"formatted\": {\n    \"telegram\": {\n      \"length\": 32,\n      \"preview\": \"Dry run verification probe...\",\n      \"text\": \"Dry run verification probe\"\n    }\n  }\n}",
+              "body": "{\n  \"ok\": true,\n  \"alertId\": \"dryrun-test-alert-1700000000000-abcd1234\",\n  \"persisted\": false,\n  \"results\": [],\n  \"dryRun\": true,\n  \"enrichmentApplied\": false,\n  \"tokenUsage\": null,\n  \"formatted\": {\n    \"telegram\": {\n      \"length\": 32,\n      \"preview\": \"Dry run verification probe...\",\n      \"text\": \"Dry run verification probe\"\n    }\n  }\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [

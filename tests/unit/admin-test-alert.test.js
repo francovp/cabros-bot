@@ -5,11 +5,15 @@ jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	saveAlert: jest.fn(),
 }));
 
-jest.mock('../../src/controllers/webhooks/handlers/alert/alert', () => ({
-	getNotificationManager: jest.fn(),
-	initializeNotificationServices: jest.fn(),
-	processEnrichment: jest.fn(),
-}));
+jest.mock('../../src/controllers/webhooks/handlers/alert/alert', () => {
+	const original = jest.requireActual('../../src/controllers/webhooks/handlers/alert/alert');
+	return {
+		...original,
+		getNotificationManager: jest.fn(),
+		initializeNotificationServices: jest.fn(),
+		processEnrichment: jest.fn(),
+	};
+});
 
 jest.mock('../../src/services/monitoring/SentryService', () => ({
 	getActiveSpan: jest.fn().mockReturnValue(null),
@@ -273,5 +277,71 @@ describe('Admin Test Alert Controller Unit Tests', () => {
 		expect(res.data.tokenUsage).toMatchObject({
 			totalTokens: 150,
 		});
+	});
+
+	it('keys rate limiting by req.adminUser.uid when present', async () => {
+		const handler = postTestAlert();
+		req.adminUser = { uid: 'verified-admin-uid-1' };
+		delete req.user;
+		await handler(req, res);
+		expect(res.status).toHaveBeenCalledWith(200);
+
+		// Immediate second call by same adminUser is rate limited
+		const req2 = {
+			adminUser: { uid: 'verified-admin-uid-1' },
+			headers: {},
+			body: {},
+			query: {},
+			ip: '10.0.0.99', // different IP, but same adminUser
+		};
+		const res2 = {
+			headers: {},
+			set: jest.fn(),
+			status: jest.fn(function (c) { this.statusCode = c; return this; }),
+			json: jest.fn(function (d) { this.data = d; return this; }),
+		};
+		await handler(req2, res2);
+		expect(res2.status).toHaveBeenCalledWith(429);
+		expect(res2.data.code).toBe('RATE_LIMITED');
+	});
+
+	it('handles Firestore persistence error gracefully and returns 200 with persisted: false', async () => {
+		alertStorageService.saveAlert.mockRejectedValueOnce(new Error('Firestore connection timeout'));
+		req.body = { channels: ['telegram'] };
+		const handler = postTestAlert();
+		await handler(req, res);
+
+		expect(res.status).toHaveBeenCalledWith(200);
+		expect(res.data.ok).toBe(true);
+		expect(res.data.persisted).toBe(false);
+	});
+
+	it('uses channel formatters for enriched dry-run previews on whatsapp and discord', async () => {
+		mockNotificationManager.getEnabledChannels.mockReturnValue(['telegram', 'whatsapp', 'discord']);
+		alertHandler.processEnrichment.mockImplementation(async (alert) => {
+			alert.enriched = {
+				symbol: 'ETHUSDT',
+				original_text: 'Ethereum technical analysis breakdown',
+				insights: ['Key resistance broken'],
+			};
+			return true;
+		});
+
+		req.body = {
+			dryRun: true,
+			includeEnrichment: true,
+			channels: ['telegram', 'whatsapp', 'discord'],
+		};
+		const handler = postTestAlert();
+		await handler(req, res);
+
+		expect(res.status).toHaveBeenCalledWith(200);
+		expect(res.data.dryRun).toBe(true);
+		expect(res.data.results).toEqual([]);
+		expect(res.data.formatted).toHaveProperty('telegram');
+		expect(res.data.formatted).toHaveProperty('whatsapp');
+		expect(res.data.formatted).toHaveProperty('discord');
+		expect(res.data.formatted.whatsapp.text).toContain('Ethereum');
+		expect(res.data.formatted.discord.text).toContain('Ethereum');
 	});
 });

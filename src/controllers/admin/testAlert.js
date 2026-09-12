@@ -5,6 +5,7 @@ const { validateAlert } = require('../../lib/validation');
 const { TokenUsageTracker } = require('../../lib/tokenUsage');
 const alertStorageService = require('../../services/storage/AlertStorageService');
 const MarkdownV2Formatter = require('../../services/notification/formatters/markdownV2Formatter');
+const WhatsAppMarkdownFormatter = require('../../services/notification/formatters/whatsappMarkdownFormatter');
 const { parseTradingViewSignal } = require('../../services/tradingview/parseTradingViewSignal');
 const sentryService = require('../../services/monitoring/SentryService');
 const { getRuntimeConfig } = require('../../services/remoteConfig/RemoteConfigService');
@@ -62,8 +63,9 @@ function isTestAlertEnabled() {
 }
 
 function getAdminKey(req) {
-	if (req.user && (req.user.uid || req.user.email)) {
-		return `user:${req.user.uid || req.user.email}`;
+	const user = req.adminUser || req.user;
+	if (user && (user.uid || user.email)) {
+		return `user:${user.uid || user.email}`;
 	}
 	const ip = req.ip || req.socket?.remoteAddress || '127.0.0.1';
 	return `ip:${ip}`;
@@ -214,14 +216,15 @@ function postTestAlert(botOrGetter) {
 
 		// Channel formatting
 		const telegramFormatter = new MarkdownV2Formatter();
+		const whatsappFormatter = new WhatsAppMarkdownFormatter();
 		const telegramText = alert.enriched && typeof alert.enriched === 'object'
 			? telegramFormatter.formatEnriched(alert.enriched)
 			: telegramFormatter.format(alert.text);
 		const whatsappText = alert.enriched && typeof alert.enriched === 'object'
-			? (alert.enriched.analysis || alert.text)
+			? await whatsappFormatter.formatEnriched(alert.enriched)
 			: (typeof alert.text === 'string' ? alert.text : '');
 		const discordText = alert.enriched && typeof alert.enriched === 'object'
-			? (alert.enriched.analysis || alert.text)
+			? await whatsappFormatter.formatEnriched(alert.enriched)
 			: alert.text;
 
 		if (dryRun) {
@@ -290,7 +293,12 @@ function postTestAlert(botOrGetter) {
 		if (alertStorageService.isEnabled()) {
 			const extracted = parseTradingViewSignal(alert.text) || { symbol: 'unknown', exchange: null };
 			try {
-				const storedId = await alertStorageService.saveAlert({
+				const storageTimeoutMs = 2000;
+				let timer;
+				const timeoutPromise = new Promise((_, reject) => {
+					timer = setTimeout(() => reject(new Error('Firestore save timed out')), storageTimeoutMs);
+				});
+				const savePromise = alertStorageService.saveAlert({
 					requestId: alertId,
 					text: alert.text,
 					symbol: extracted.symbol !== 'unknown' ? extracted.symbol : null,
@@ -311,12 +319,14 @@ function postTestAlert(botOrGetter) {
 					whatsappChatId: routing.whatsappChatId,
 					discordWebhookUrl: routing.discordWebhookUrl,
 				});
+				const storedId = await Promise.race([savePromise, timeoutPromise]);
+				clearTimeout(timer);
 				if (storedId) {
 					alertId = storedId;
 					persisted = true;
 				}
 			} catch (storageErr) {
-				console.warn('[AdminTestAlert] Failed to store alert in Firestore:', storageErr.message);
+				console.warn('[AdminTestAlert] Failed or timed out storing alert in Firestore:', storageErr.message);
 			}
 		}
 
