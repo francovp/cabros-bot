@@ -1,8 +1,10 @@
 'use strict';
 
+const crypto = require('crypto');
 const alertStorageService = require('../../services/storage/AlertStorageService');
 const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
+const { parseTelegramTopicRoutes, resolveTelegramThreadId } = require('../../services/notification/telegramTopicRouting');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -28,6 +30,7 @@ const EXPORT_FIELDS = [
 	'deliveryResults',
 	'suppressedRepeat',
 	'tokenUsage',
+	'enrichmentData',
 	'text',
 ];
 
@@ -58,6 +61,43 @@ function parseEnriched(rawEnriched) {
 	}
 
 	return null;
+}
+
+const ALLOWED_INCLUDE_VALUES = new Set(['enrichment_summary']);
+
+function parseInclude(rawInclude) {
+	if (rawInclude === undefined || rawInclude === null || rawInclude === '') {
+		return { success: true, values: [] };
+	}
+
+	let items = [];
+	if (Array.isArray(rawInclude)) {
+		items = rawInclude.flatMap((item) => (typeof item === 'string' ? item.split(',') : []));
+	} else if (typeof rawInclude === 'string') {
+		items = rawInclude.split(',');
+	} else {
+		return {
+			success: false,
+			error: 'Invalid include parameter. Allowed values: enrichment_summary.',
+		};
+	}
+
+	const normalized = [];
+	for (const item of items) {
+		const trimmed = item.trim();
+		if (!trimmed) {
+			continue;
+		}
+		if (!ALLOWED_INCLUDE_VALUES.has(trimmed)) {
+			return {
+				success: false,
+				error: `Invalid include parameter '${trimmed}'. Allowed values: enrichment_summary.`,
+			};
+		}
+		normalized.push(trimmed);
+	}
+
+	return { success: true, values: Array.from(new Set(normalized)) };
 }
 
 function parseSummaryLimit(rawLimit) {
@@ -163,12 +203,26 @@ function listAlerts(req, res) {
 			? req.query.source.trim()
 			: undefined;
 
-		const result = await alertStorageService.listAlerts({
+		const parsedInclude = parseInclude(req.query.include);
+		if (!parsedInclude.success) {
+			return res.status(400).json({
+				error: parsedInclude.error,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const listParams = {
 			before,
 			enriched,
 			limit,
 			source,
-		});
+		};
+		if (parsedInclude.values.length > 0) {
+			listParams.include = parsedInclude.values;
+			listParams.includeEnrichmentSummary = parsedInclude.values.includes('enrichment_summary');
+		}
+
+		const result = await alertStorageService.listAlerts(listParams);
 
 		return res.status(200).json({
 			success: true,
@@ -270,10 +324,25 @@ function escapeCsvValue(value) {
 	return safeSerialized;
 }
 
-function buildCsv(alerts, includeText) {
-	const fields = includeText
-		? EXPORT_FIELDS
-		: EXPORT_FIELDS.filter(field => field !== 'text');
+function buildCsv(alerts, optionsOrIncludeText, maybeIncludeEnrichment) {
+	const options = typeof optionsOrIncludeText === 'object' && optionsOrIncludeText !== null
+		? optionsOrIncludeText
+		: {
+			includeText: Boolean(optionsOrIncludeText),
+			includeEnrichment: Boolean(maybeIncludeEnrichment),
+		};
+	const includeText = Boolean(options.includeText);
+	const includeEnrichment = Boolean(options.includeEnrichment);
+
+	const fields = EXPORT_FIELDS.filter((field) => {
+		if (field === 'text' && !includeText) {
+			return false;
+		}
+		if (field === 'enrichmentData' && !includeEnrichment) {
+			return false;
+		}
+		return true;
+	});
 	const rows = alerts.map(alert => fields.map(field => escapeCsvValue(alert[field])).join(','));
 	return [fields.join(','), ...rows].join('\n');
 }
@@ -336,6 +405,14 @@ function exportAlerts(req, res) {
 			});
 		}
 
+		const includeEnrichment = parseBooleanFlag(req.query.includeEnrichment, false);
+		if (includeEnrichment === null) {
+			return res.status(400).json({
+				error: 'Invalid includeEnrichment flag. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
 		const source = typeof req.query.source === 'string' && req.query.source.trim()
 			? req.query.source.trim()
 			: undefined;
@@ -347,6 +424,7 @@ function exportAlerts(req, res) {
 			source,
 			enriched,
 			includeText,
+			includeEnrichment,
 		});
 
 		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
@@ -367,7 +445,7 @@ function exportAlerts(req, res) {
 
 		if (format === 'csv') {
 			res.type('text/csv; charset=utf-8');
-			return res.status(200).send(`${buildCsv(result.alerts, includeText)}\n`);
+			return res.status(200).send(`${buildCsv(result.alerts, { includeText, includeEnrichment })}\n`);
 		}
 
 		res.type('application/x-ndjson; charset=utf-8');
@@ -497,6 +575,65 @@ function getIdempotencyKey(req) {
 		|| (req.query && (req.query.idempotencyKey || req.query.idempotency_key));
 }
 
+function resolveDryRun(req) {
+	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
+	const bodyFlag = req.body && typeof req.body === 'object'
+		&& (req.body.dryRun === true || req.body.dryRun === 'true');
+	return Boolean(queryFlag || bodyFlag);
+}
+
+function buildStoredChannelRouting(storedAlert, storedTelegramThreadId) {
+	return {
+		...(storedAlert.telegramChatId ? { telegramChatId: storedAlert.telegramChatId } : {}),
+		...(storedTelegramThreadId !== undefined && storedTelegramThreadId !== null
+			? { telegramThreadId: storedTelegramThreadId }
+			: {}),
+		...(storedAlert.whatsappChatId ? { whatsappChatId: storedAlert.whatsappChatId } : {}),
+		...(storedAlert.discordWebhookUrl ? { discordWebhookUrl: storedAlert.discordWebhookUrl } : {}),
+	};
+}
+
+function buildDryRunChannelRouting(storedAlert, storedTelegramThreadId, channels) {
+	const routing = buildStoredChannelRouting(storedAlert, storedTelegramThreadId);
+
+	if (Array.isArray(channels)) {
+		if (channels.includes('telegram')) {
+			if (!routing.telegramChatId && process.env.TELEGRAM_CHAT_ID) {
+				routing.telegramChatId = process.env.TELEGRAM_CHAT_ID;
+			}
+			if (routing.telegramThreadId === undefined) {
+				const isCustomChat = Boolean(
+					routing.telegramChatId
+					&& process.env.TELEGRAM_CHAT_ID
+					&& String(routing.telegramChatId) !== String(process.env.TELEGRAM_CHAT_ID)
+				);
+				const topicRoutes = isCustomChat ? {} : parseTelegramTopicRoutes(process.env.TELEGRAM_TOPIC_ROUTES);
+				const resolvedThread = resolveTelegramThreadId(
+					{ ...storedAlert, source: storedAlert.source || 'alert-replay' },
+					topicRoutes
+				);
+				if (resolvedThread !== null && resolvedThread !== undefined) {
+					routing.telegramThreadId = resolvedThread;
+				}
+			}
+		}
+
+		if (channels.includes('whatsapp')) {
+			if (!routing.whatsappChatId && process.env.WHATSAPP_CHAT_ID) {
+				routing.whatsappChatId = process.env.WHATSAPP_CHAT_ID;
+			}
+		}
+
+		if (channels.includes('discord')) {
+			if (!routing.discordWebhookUrl && process.env.DISCORD_WEBHOOK_URL) {
+				routing.discordWebhookUrl = process.env.DISCORD_WEBHOOK_URL;
+			}
+		}
+	}
+
+	return routing;
+}
+
 function replayAlert(botOrGetter) {
 	return function handleReplayAlert(req, res) {
 		return handleAsync(req, res, `/api/alerts/${req.params.alertId}/replay`, async () => {
@@ -539,19 +676,14 @@ function replayAlert(botOrGetter) {
 				});
 			}
 
+			const dryRun = resolveDryRun(req);
+
 			const storedAlert = await alertStorageService.getAlertById(alertId);
 			if (!storedAlert) {
 				return res.status(404).json({
 					error: 'Alert not found',
 					code: 'NOT_FOUND',
 				});
-			}
-
-			const { getNotificationManager, initializeNotificationServices } = require('../webhooks/handlers/alert/alert');
-			let notificationManager = getNotificationManager();
-			if (!notificationManager) {
-				const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
-				notificationManager = await initializeNotificationServices(bot);
 			}
 
 			let storedTelegramThreadId = storedAlert.telegramThreadId;
@@ -566,6 +698,37 @@ function replayAlert(botOrGetter) {
 				}
 			}
 
+			const storedChannelRouting = buildStoredChannelRouting(storedAlert, storedTelegramThreadId);
+
+			if (dryRun) {
+				console.debug('[AlertsController] Replay dry-run: skipping delivery and persistence for alert', alertId);
+				const channelRouting = buildDryRunChannelRouting(storedAlert, storedTelegramThreadId, channels);
+				const idempotencyKeyHashPrefix = crypto
+					.createHash('sha256')
+					.update(idempotencyKey.trim())
+					.digest('hex')
+					.slice(0, 12);
+				return res.status(200).json({
+					success: true,
+					dryRun: true,
+					alertId,
+					channels,
+					idempotencyKeyHashPrefix,
+					payloadPreview: {
+						text: storedAlert.text,
+						enriched: storedAlert.enrichmentData || null,
+						channelRouting,
+					},
+				});
+			}
+
+			const { getNotificationManager, initializeNotificationServices } = require('../webhooks/handlers/alert/alert');
+			let notificationManager = getNotificationManager();
+			if (!notificationManager) {
+				const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
+				notificationManager = await initializeNotificationServices(bot);
+			}
+
 			const replayPayload = {
 				text: storedAlert.text,
 				enriched: storedAlert.enrichmentData || undefined,
@@ -574,12 +737,7 @@ function replayAlert(botOrGetter) {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),
 				},
-				...(storedAlert.telegramChatId ? { telegramChatId: storedAlert.telegramChatId } : {}),
-				...(storedTelegramThreadId !== undefined && storedTelegramThreadId !== null
-					? { telegramThreadId: storedTelegramThreadId }
-					: {}),
-				...(storedAlert.whatsappChatId ? { whatsappChatId: storedAlert.whatsappChatId } : {}),
-				...(storedAlert.discordWebhookUrl ? { discordWebhookUrl: storedAlert.discordWebhookUrl } : {}),
+				...storedChannelRouting,
 			};
 			const results = await notificationManager.sendToChannels(replayPayload, channels);
 			const replayId = await alertStorageService.saveReplayAttempt({

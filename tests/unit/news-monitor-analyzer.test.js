@@ -354,6 +354,43 @@ describe('News Monitor Analyzer - Volume & RSI Filtering', () => {
 			expect(alert.stop).toBeUndefined();
 			expect(alert.target).toBeUndefined();
 		});
+
+		it('should MarkdownV2-escape reserved punctuation inside invalidation_hint', () => {
+			const geminiAnalysis = {
+				headline: 'Major breaking news',
+				event_category: 'price_surge',
+				sentiment_score: 0.8,
+				confidence: 0.9,
+				invalidation_hint: 'Reversal below (80,000).',
+			};
+
+			const alert = analyzer.buildAlert('BTCUSDT', geminiAnalysis, null);
+			const summary = alert.enriched.summary;
+			// Label markup must be preserved verbatim
+			expect(summary).toContain('*Invalidación:*');
+			// Reserved punctuation must be escaped so Telegram MarkdownV2 stays valid
+			expect(summary).toContain('\\(');
+			expect(summary).toContain('\\)');
+			expect(summary).toContain('\\.');
+			// The raw, unescaped hint remains available for downstream channels
+			expect(alert.enriched.invalidation_hint).toBe('Reversal below (80,000).');
+		});
+
+		it('should escape multiple reserved characters in invalidation_hint', () => {
+			const geminiAnalysis = {
+				headline: 'Major breaking news',
+				event_category: 'price_surge',
+				sentiment_score: 0.8,
+				confidence: 0.9,
+				invalidation_hint: 'Drop below 80,000! [confirmed]',
+			};
+
+			const alert = analyzer.buildAlert('BTCUSDT', geminiAnalysis, null);
+			const summary = alert.enriched.summary;
+			expect(summary).toContain('\\!');
+			expect(summary).toContain('\\[');
+			expect(summary).toContain('\\]');
+		});
 	});
 });
 
