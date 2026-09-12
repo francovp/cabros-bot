@@ -34,6 +34,9 @@
       "name": "Signal outcomes"
     },
     {
+      "name": "Admin"
+    },
+    {
       "name": "Operations"
     }
   ],
@@ -331,6 +334,72 @@
             "ApiKeyQuery": []
           }
         ]
+      }
+    },
+    "/api/admin/test-alert": {
+      "post": {
+        "tags": [
+          "Admin",
+          "Alerts"
+        ],
+        "summary": "Send a verification probe test alert",
+        "description": "Dispatches a synthetic test alert through enabled notification channels and persists to Firestore with source: test-alert. Supports dryRun=true to preview formatted text and validate channel readiness without dispatching or persisting. Rate-limited to 1 call per 60 seconds per admin caller and TEST_ALERT_DAILY_LIMIT.",
+        "operationId": "postTestAlert",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/TestAlert"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/TestAlertResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "description": "Rate limited by the 60-second caller cooldown or TEST_ALERT_DAILY_LIMIT.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until retry is permitted."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "Rate limit exceeded. Please wait 60 seconds before triggering another test alert.",
+                  "code": "RATE_LIMITED",
+                  "retryAfterSeconds": 60
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
       }
     },
     "/api/alerts": {
@@ -2338,11 +2407,12 @@
             "webhook",
             "news-monitor",
             "market-scanner",
-            "expanded-analysis"
+            "expanded-analysis",
+            "test-alert"
           ]
         },
         "example": "webhook",
-        "description": "Stored alert source filter. webhook covers /api/webhook/alert; news-monitor covers /api/news-monitor deliveries; market-scanner covers delivered /api/webhook/market-scanner-alert reports; expanded-analysis covers delivered /api/webhook/expanded-analysis-alert reports."
+        "description": "Stored alert source filter. webhook covers /api/webhook/alert; news-monitor covers /api/news-monitor deliveries; market-scanner covers delivered /api/webhook/market-scanner-alert reports; expanded-analysis covers delivered /api/webhook/expanded-analysis-alert reports; test-alert covers /api/admin/test-alert verification probes."
       },
       "Enriched": {
         "name": "enriched",
@@ -2675,6 +2745,34 @@
                 "telegram"
               ],
               "dryRun": true
+            }
+          }
+        }
+      },
+      "TestAlert": {
+        "required": false,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/TestAlertRequest"
+            },
+            "examples": {
+              "minimal": {
+                "summary": "Default synthetic probe",
+                "value": {}
+              },
+              "custom": {
+                "summary": "Custom text with specific channels and dry-run",
+                "value": {
+                  "text": "Verification probe alert",
+                  "channels": [
+                    "telegram",
+                    "discord"
+                  ],
+                  "dryRun": true,
+                  "includeEnrichment": false
+                }
+              }
             }
           }
         }
@@ -3328,6 +3426,55 @@
           }
         }
       },
+      "TestAlertResult": {
+        "description": "Test alert verification probe result. Contains channel delivery results or dry-run formatting preview.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/TestAlertResult"
+            },
+            "examples": {
+              "liveProbe": {
+                "summary": "Successful live probe alert",
+                "value": {
+                  "ok": true,
+                  "alertId": "test-alert-12345",
+                  "persisted": true,
+                  "results": [
+                    {
+                      "channel": "telegram",
+                      "success": true,
+                      "messageId": "msg-99"
+                    }
+                  ],
+                  "dryRun": false,
+                  "enrichmentApplied": false,
+                  "tokenUsage": null
+                }
+              },
+              "dryRun": {
+                "summary": "Dry run verification without side effects",
+                "value": {
+                  "ok": true,
+                  "alertId": "dryrun-test-alert-12345",
+                  "persisted": false,
+                  "results": [],
+                  "dryRun": true,
+                  "enrichmentApplied": false,
+                  "tokenUsage": null,
+                  "formatted": {
+                    "telegram": {
+                      "length": 45,
+                      "preview": "[TEST-ALERT] cabros-bot smoke probe...",
+                      "text": "[TEST-ALERT] cabros-bot smoke probe 2026-09-12T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "AnalysisResult": {
         "description": "Analysis and delivery result",
         "content": {
@@ -3871,6 +4018,108 @@
       "JsonObject": {
         "type": "object",
         "additionalProperties": true
+      },
+      "TestAlertRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Optional custom alert probe text. Defaults to formatted smoke alert with timestamp."
+          },
+          "channels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            },
+            "description": "Optional subset of channels to probe. Defaults to all enabled channels."
+          },
+          "telegramChatId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional Telegram chat ID destination override."
+          },
+          "telegramThreadId": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional Telegram forum topic message_thread_id override (0 routes to the chat general topic)."
+          },
+          "whatsappChatId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional GreenAPI WhatsApp chat ID destination override."
+          },
+          "discordWebhookUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://([a-zA-Z0-9-]+\\.)?(discord\\.com|discordapp\\.com)/api/webhooks/\\d+/[a-zA-Z0-9_-]+",
+            "description": "Optional HTTPS Discord webhook URL override."
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, simulates formatting and channel routing without dispatching or persisting."
+          },
+          "includeEnrichment": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, runs alert enrichment."
+          }
+        }
+      },
+      "TestAlertResult": {
+        "type": "object",
+        "required": [
+          "ok",
+          "alertId",
+          "persisted",
+          "results",
+          "dryRun"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "Whether the test alert probe succeeded."
+          },
+          "alertId": {
+            "type": "string",
+            "description": "Probe alert identifier (UUID or Firestore document ID)."
+          },
+          "persisted": {
+            "type": "boolean",
+            "description": "Whether the alert was persisted to Firestore (false for dry-run)."
+          },
+          "results": {
+            "type": "array",
+            "description": "Channel delivery results.",
+            "items": {
+              "$ref": "#/components/schemas/JsonObject"
+            }
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "True when executed as dry-run probe."
+          },
+          "enrichmentApplied": {
+            "type": "boolean",
+            "description": "Whether enrichment was applied."
+          },
+          "tokenUsage": {
+            "type": "object",
+            "nullable": true,
+            "description": "Token usage summary if enrichment was run."
+          },
+          "formatted": {
+            "type": "object",
+            "nullable": true,
+            "description": "Formatted text previews per channel when dryRun is true."
+          }
+        }
       },
       "DeliveryMetrics": {
         "type": "object",
@@ -4699,7 +4948,7 @@
       },
       "StoredAlert": {
         "type": "object",
-        "description": "Stored alert document. The `source` field identifies the producing flow (webhook, news-monitor, market-scanner, expanded-analysis). When the report text exceeded the 20,000-character storage cap, `truncated: true` and `originalLength` are populated so consumers and replay can flag the loss; replay will redeliver only the truncated text.",
+        "description": "Stored alert document. The `source` field identifies the producing flow (webhook, news-monitor, market-scanner, expanded-analysis, test-alert). When the report text exceeded the 20,000-character storage cap, `truncated: true` and `originalLength` are populated so consumers and replay can flag the loss; replay will redeliver only the truncated text.",
         "properties": {
           "id": {
             "type": "string"
@@ -4747,7 +4996,8 @@
               "webhook",
               "news-monitor",
               "market-scanner",
-              "expanded-analysis"
+              "expanded-analysis",
+              "test-alert"
             ]
           },
           "useTradingViewData": {

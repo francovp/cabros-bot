@@ -27,6 +27,7 @@ const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const { postBinanceOrder, getBinanceOrders, deleteBinanceOrder } = require('../controllers/trading/binanceOrders');
+const { postTestAlert } = require('../controllers/admin/testAlert');
 const { idempotencyMiddleware } = require('../lib/idempotency');
 const {
 	ADMIN_OPERATOR,
@@ -54,6 +55,7 @@ function getRoutes(botOrGetter) {
 	router.get('/alerts/export', ...adminRead, exportAlerts);
 	router.post('/alerts/:alertId/replay', ...adminWrite, idempotencyMiddleware, replayAlert(botOrGetter));
 	router.get('/alerts/:alertId', ...adminRead, getAlertById);
+	router.post('/admin/test-alert', ...adminWrite, idempotencyMiddleware, postTestAlert(botOrGetter));
 	router.get('/outcomes', ...adminRead, listOutcomes);
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
 	router.get('/symbol-analyses', ...adminRead, listSymbolAnalyses);

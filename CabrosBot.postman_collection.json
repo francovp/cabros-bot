@@ -4073,6 +4073,400 @@
               }
             }
           ]
+        },
+        {
+          "name": "POST Test Alert (Minimal / Default Probe)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/test-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "test-alert"
+              ]
+            },
+            "description": "Trigger a verification probe test alert across all enabled channels with default smoke message. Persisted with source: test-alert. Requires admin.operator."
+          },
+          "response": [
+            {
+              "name": "200 OK - Probe Delivered",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"ok\": true,\n  \"alertId\": \"test-alert-1700000000000-abcd1234\",\n  \"persisted\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"msg-999\"\n    }\n  ],\n  \"dryRun\": false,\n  \"enrichmentApplied\": false,\n  \"tokenUsage\": null\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/test-alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "test-alert"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Test Alert (Dry Run)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Dry run verification probe\",\n  \"channels\": [\"telegram\"],\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/test-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "test-alert"
+              ]
+            },
+            "description": "Preview formatting and validate channel readiness without dispatching messages or persisting to Firestore."
+          },
+          "response": [
+            {
+              "name": "200 OK - Dry Run Preview",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"ok\": true,\n  \"alertId\": \"dryrun-test-alert-1700000000000-abcd1234\",\n  \"persisted\": false,\n  \"results\": [],\n  \"dryRun\": true,\n  \"enrichmentApplied\": false,\n  \"tokenUsage\": null,\n  \"formatted\": {\n    \"telegram\": {\n      \"length\": 32,\n      \"preview\": \"Dry run verification probe...\",\n      \"text\": \"Dry run verification probe\"\n    }\n  }\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"Dry run verification probe\",\n  \"channels\": [\"telegram\"],\n  \"dryRun\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/test-alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "test-alert"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Test Alert (Multi-channel & Enrichment)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT Breakout verification probe\",\n  \"channels\": [\"telegram\", \"discord\"],\n  \"includeEnrichment\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/test-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "test-alert"
+              ]
+            },
+            "description": "Send test probe with multi-channel dispatch and optional LLM enrichment token usage tracking."
+          },
+          "response": [
+            {
+              "name": "200 OK - Enriched Probe Delivered",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"ok\": true,\n  \"alertId\": \"test-alert-1700000000000-efgh5678\",\n  \"persisted\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"msg-1000\"\n    },\n    {\n      \"channel\": \"discord\",\n      \"success\": true,\n      \"messageId\": \"msg-1001\"\n    }\n  ],\n  \"dryRun\": false,\n  \"enrichmentApplied\": true,\n  \"tokenUsage\": {\n    \"inputTokens\": 120,\n    \"outputTokens\": 45,\n    \"totalTokens\": 165\n  }\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BTCUSDT Breakout verification probe\",\n  \"channels\": [\"telegram\", \"discord\"],\n  \"includeEnrichment\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/test-alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "test-alert"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Test Alert (Rate Limited 429)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/test-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "test-alert"
+              ]
+            },
+            "description": "Trigger rate limit error response when invoked again within the 60-second cooldown window or when TEST_ALERT_DAILY_LIMIT is exceeded."
+          },
+          "response": [
+            {
+              "name": "429 Too Many Requests - 60s cooldown",
+              "status": "Too Many Requests",
+              "code": 429,
+              "header": [
+                {
+                  "key": "Retry-After",
+                  "value": "58"
+                },
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"error\": \"Rate limit exceeded. Please wait 58 seconds before triggering another test alert.\",\n  \"code\": \"RATE_LIMITED\",\n  \"retryAfterSeconds\": 58\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/test-alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "test-alert"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Test Alert (Invalid Input - 400 Bad Request)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channels\": [\"invalid_channel\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/test-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "test-alert"
+              ]
+            },
+            "description": "Trigger 400 Bad Request by supplying invalid channels or malformed payload."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Unknown Channel",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"error\": \"Unknown notification channel(s): invalid_channel. Supported channels: telegram, whatsapp, discord\",\n  \"code\": \"INVALID_REQUEST\"\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"channels\": [\"invalid_channel\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/test-alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "test-alert"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     },
