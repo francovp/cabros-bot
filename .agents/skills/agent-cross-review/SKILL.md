@@ -65,6 +65,34 @@ gh pr view "$PR_NUM" --json number,title,body,headRefName,author,labels,url
 gh pr diff "$PR_NUM"
 ```
 
+**Fetch review thread state (required for the CodeQL/GHAS gate in rubric item 4):**
+
+```bash
+# Paginate all review threads; check isResolved and comment author
+gh api graphql -f query='
+{
+  repository(owner:"francovp", name:"cabros-bot") {
+    pullRequest(number: '"$PR_NUM"') {
+      reviewThreads(first: 50) {
+        nodes {
+          isResolved
+          path
+          line
+          comments(first: 1) {
+            nodes { author { login } body }
+          }
+        }
+      }
+    }
+  }
+}' --jq '
+  .data.repository.pullRequest.reviewThreads.nodes[]
+  | select(.isResolved == false)
+  | {path:.path, line:.line, author:.comments.nodes[0].author.login, snippet:(.comments.nodes[0].body[:120])}'
+```
+
+Any thread whose `author.login` is `github-advanced-security` and `isResolved` is `false` is a **security blocker** — resolve it before approving (rubric item 4).
+
 Read the linked GitHub issues, Linear tickets (e.g. `CB-xxx`), or user stories mentioned in the PR description to understand the intended behavior.
 
 ### 4. Evaluate Against Cabros Bot Rubric
