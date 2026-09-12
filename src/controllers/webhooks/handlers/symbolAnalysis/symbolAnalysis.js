@@ -13,6 +13,7 @@ const {
 } = require('../../../../services/tradingview/expandedAnalysisAlertReport');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const symbolAnalysisStorageService = require('../../../../services/storage/SymbolAnalysisStorageService');
 
 function postSymbolAnalysis() {
 	return async (req, res) => {
@@ -77,6 +78,7 @@ function postSymbolAnalysis() {
 				},
 			};
 			const item = { input, analysis: reportAnalysis, multiTimeframe, side };
+			const processingTimeMs = Math.max(0, Date.now() - startTime);
 			const responsePayload = {
 				success: true,
 				symbol: input.raw,
@@ -87,13 +89,45 @@ function postSymbolAnalysis() {
 				analysis: normalized,
 				analysisStatus,
 				requestId,
-				processingTimeMs: Math.max(0, Date.now() - startTime),
+				processingTimeMs,
 			};
 			if (multiAgent) {
 				responsePayload.multiAgent = multiAgent;
 			}
 
-			return res.status(200).json(responsePayload);
+			res.status(200).json(responsePayload);
+
+			if (symbolAnalysisStorageService.isEnabled()) {
+				symbolAnalysisStorageService.recordAnalysis({
+					requestId,
+					symbol: input.raw,
+					asset: input.symbol,
+					exchange: input.exchange,
+					timeframe: parsed.timeframe,
+					analysisMode: parsed.analysisMode,
+					decision: normalized.decision,
+					price: normalized.price_data?.current_price ?? normalized.price_data?.close,
+					rsi: normalized.technical_indicators?.RSI,
+					indicators: {
+						bbUpper: normalized.technical_indicators?.BB_upper,
+						bbLower: normalized.technical_indicators?.BB_lower,
+						sma20: normalized.technical_indicators?.SMA20,
+						macd: normalized.technical_indicators?.MACD,
+						macdSignal: normalized.technical_indicators?.MACD_signal,
+						atr: normalized.technical_indicators?.ATR,
+						adx: normalized.technical_indicators?.ADX,
+						volumeRatio: normalized.volume_analysis?.volume_ratio,
+					},
+					risk: normalized.risk,
+					multiTimeframe: Boolean(multiTimeframe),
+					analysisStatus,
+					processingTimeMs,
+				}).catch((storageErr) => {
+					console.warn('[SymbolAnalysis] Failed to record analysis in storage:', storageErr.message);
+				});
+			}
+
+			return;
 		} catch (error) {
 			const processingTimeMs = Math.max(0, Date.now() - startTime);
 			if (error instanceof ExpandedAnalysisAlertRequestError) {

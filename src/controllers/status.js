@@ -14,6 +14,7 @@ const remoteConfigService = require('../services/remoteConfig/RemoteConfigServic
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { binanceOrderAuditService } = require('../services/trading/BinanceOrderAuditService');
+const symbolAnalysisStorageService = require('../services/storage/SymbolAnalysisStorageService');
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
@@ -368,6 +369,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			symbolAnalysisStorage: symbolAnalysisStorageService.isEnabled(),
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 		},
 		deliveryChannels: {
@@ -448,6 +450,7 @@ function getStatus() {
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
 			binanceOrderAudit: binanceOrderAuditService.getStatus(),
+			symbolAnalysisStorage: symbolAnalysisStorageService.getStatus(),
 		},
 	};
 }
