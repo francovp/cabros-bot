@@ -71,6 +71,11 @@ describe('RemoteConfigService', () => {
 			['TRADINGVIEW_MCP_TIMEOUT_MS', '999', 12000],
 			['TRADINGVIEW_MCP_MAX_RETRIES', '6', 3],
 			['TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS', '-1', 12000],
+			['ALERT_SCHEDULER_INTERVAL_MS', 'not-a-number', 60000],
+			['ALERT_SCHEDULER_INTERVAL_MS', '500', 60000],
+			['ALERT_SCHEDULER_INTERVAL_MS', '4000000', 60000],
+			['ALERT_SCHEDULER_BATCH_LIMIT', '0', 10],
+			['ALERT_SCHEDULER_BATCH_LIMIT', '101', 10],
 		].forEach(([key, value, expected]) => {
 			process.env[key] = value;
 			expect(remoteConfigService.getRuntimeConfig()[key]).toBe(expected);
