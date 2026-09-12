@@ -10,7 +10,10 @@ const alertModule = require('../../controllers/webhooks/handlers/alert/alert');
 const requestRoutingModule = require('../notification/requestRouting');
 const sentryService = require('../monitoring/SentryService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
-const { getAnalyzer } = require('../../controllers/webhooks/handlers/newsMonitor/analyzer');
+const { getAnalyzer, setNotificationManager } = require('../../controllers/webhooks/handlers/newsMonitor/analyzer');
+const { alertStorageService } = require('../storage/AlertStorageService');
+
+const COLLECTION_NAME = 'alertSchedulerLocks';
 
 const DEFAULT_SCHEDULER_INTERVAL_MS = 60000;
 const MIN_SCHEDULER_INTERVAL_MS = 1000;
@@ -111,7 +114,12 @@ function validateSymbol(symbol) {
 }
 
 function normalizeRoutingChannels(channels) {
-	if (!Array.isArray(channels)) return [];
+	if (channels === undefined || channels === null) {
+		return undefined;
+	}
+	if (!Array.isArray(channels)) {
+		return undefined;
+	}
 	const normalized = [];
 	for (const channel of channels) {
 		if (typeof channel !== 'string') continue;
@@ -121,7 +129,7 @@ function normalizeRoutingChannels(channels) {
 			normalized.push(trimmed);
 		}
 	}
-	return normalized;
+	return normalized.length > 0 ? normalized : undefined;
 }
 
 function buildScheduleId(schedule, index) {
@@ -253,7 +261,9 @@ function parseSchedules(raw) {
 
 class AlertSchedulerService {
 	constructor(options = {}) {
+		this.alertStorage = options.alertStorageService || alertStorageService;
 		this.getNotificationManagerFn = options.getNotificationManager || (() => alertModule.getNotificationManager());
+		this.setNotificationManagerFn = options.setNotificationManager || setNotificationManager;
 		this.getAnalyzerFn = options.getAnalyzer || getAnalyzer;
 		this.botGetter = options.botGetter || null;
 		this.workerId = options.workerId || `${process.pid}-${crypto.randomUUID()}`;
@@ -265,6 +275,7 @@ class AlertSchedulerService {
 
 		this.schedules = [];
 		this.scheduleState = new Map();
+		this._scheduleCursor = 0;
 		this.lastRunAt = null;
 		this.lastRunDurationMs = null;
 		this.lastRunExecutedCount = 0;
@@ -490,27 +501,164 @@ class AlertSchedulerService {
 		return !Number.isFinite(nextRunAtMs) || nextRunAtMs <= nowMs;
 	}
 
+	_getFirestore() {
+		if (this.alertStorage && typeof this.alertStorage.getFirestore === 'function') {
+			return this.alertStorage.getFirestore();
+		}
+		return null;
+	}
+
+	async _acquireLease(nowMs, leaseMs, options = {}) {
+		const firestore = this._getFirestore();
+		if (!firestore || typeof firestore.runTransaction !== 'function') {
+			return true;
+		}
+
+		const bypassCadenceGuard = Boolean(options.force || options.bypassCadenceGuard);
+
+		try {
+			const docRef = firestore.collection(COLLECTION_NAME).doc('singleton');
+			const acquired = await firestore.runTransaction(async (tx) => {
+				const doc = await tx.get(docRef);
+				const data = doc.exists ? (doc.data() || {}) : {};
+				const lockedUntilMs = data.lockedUntil ? new Date(data.lockedUntil).getTime() : 0;
+				const lockedBy = data.lockedBy || null;
+				const nextAllowedSweepAtMs = data.nextAllowedSweepAt ? new Date(data.nextAllowedSweepAt).getTime() : 0;
+
+				if (lockedUntilMs > nowMs && lockedBy && lockedBy !== this.workerId) {
+					return false;
+				}
+
+				if (!bypassCadenceGuard && nextAllowedSweepAtMs > nowMs && lockedBy !== this.workerId) {
+					return false;
+				}
+
+				tx.set(docRef, {
+					lockedUntil: new Date(nowMs + leaseMs).toISOString(),
+					lockedBy: this.workerId,
+					updatedAt: new Date(nowMs).toISOString(),
+				}, { merge: true });
+				return true;
+			});
+			return Boolean(acquired);
+		} catch (err) {
+			console.warn('[AlertScheduler] Lease acquire failed:', err.message);
+			return true;
+		}
+	}
+
+	async _renewLease(nowMs, leaseMs) {
+		const firestore = this._getFirestore();
+		if (!firestore || typeof firestore.runTransaction !== 'function') {
+			return false;
+		}
+
+		try {
+			const docRef = firestore.collection(COLLECTION_NAME).doc('singleton');
+			return await firestore.runTransaction(async (tx) => {
+				const doc = await tx.get(docRef);
+				if (!doc.exists) return false;
+				const data = doc.data() || {};
+				if (data.lockedBy && data.lockedBy !== this.workerId) {
+					return false;
+				}
+				tx.set(docRef, {
+					lockedUntil: new Date(nowMs + leaseMs).toISOString(),
+					updatedAt: new Date(nowMs).toISOString(),
+				}, { merge: true });
+				return true;
+			});
+		} catch (err) {
+			console.warn('[AlertScheduler] Lease renew failed:', err.message);
+			return false;
+		}
+	}
+
+	async _releaseLease(completedAtMs, intervalMs) {
+		const firestore = this._getFirestore();
+		if (!firestore || typeof firestore.runTransaction !== 'function') {
+			return;
+		}
+
+		const interval = intervalMs || this.getIntervalMs();
+		const nextAllowedSweepAt = new Date(completedAtMs + interval).toISOString();
+
+		try {
+			const docRef = firestore.collection(COLLECTION_NAME).doc('singleton');
+			await firestore.runTransaction(async (tx) => {
+				const doc = await tx.get(docRef);
+				if (!doc.exists) return;
+				const data = doc.data() || {};
+				if (data.lockedBy && data.lockedBy !== this.workerId) {
+					return;
+				}
+				tx.set(docRef, {
+					lockedUntil: null,
+					lockedBy: null,
+					lastCompletedAt: new Date(completedAtMs).toISOString(),
+					nextAllowedSweepAt,
+					updatedAt: new Date().toISOString(),
+				}, { merge: true });
+			});
+		} catch (err) {
+			console.warn('[AlertScheduler] Lease release failed:', err.message);
+		}
+	}
+
 	async _executeSweep(options = {}) {
 		const sweepStartTime = Date.now();
 		const nowMs = sweepStartTime;
 		const batchLimit = options.batchLimit || this.getBatchLimit();
+		const leaseMs = options.leaseMs || this.getLeaseMs();
 		const timeoutMs = options.timeoutMs || this.getTimeoutMs();
-		const controller = new AbortController();
-		this.activeSweepController = controller;
-		const sweepTimer = setTimeout(() => controller.abort(), timeoutMs);
 
 		let executedCount = 0;
 		let errorCount = 0;
 		let lastErrorMessage = null;
 
-		try {
-			if (this.schedules.length === 0) {
-				this._loadSchedules();
-			}
+		if (this.schedules.length === 0) {
+			this._loadSchedules();
+		}
 
-			const dueSchedules = this.schedules
-				.filter((s) => this._isScheduleDue(s, nowMs))
-				.slice(0, batchLimit);
+		const leaseAcquired = await this._acquireLease(nowMs, leaseMs, options);
+		if (!leaseAcquired) {
+			this.lastRunAt = new Date(sweepStartTime);
+			this.lastRunDurationMs = Date.now() - sweepStartTime;
+			this.lastRunExecutedCount = 0;
+			this.lastRunErrorCount = 0;
+			this.lastError = null;
+			return {
+				executedCount: 0,
+				errorCount: 0,
+				durationMs: this.lastRunDurationMs,
+				skipped: 'lease-held',
+			};
+		}
+
+		const controller = new AbortController();
+		this.activeSweepController = controller;
+		const sweepTimer = setTimeout(() => controller.abort(), timeoutMs);
+
+		const renewIntervalMs = Math.max(1000, Math.floor(leaseMs / 2));
+		const renewHandle = setInterval(() => {
+			this._renewLease(Date.now(), leaseMs).catch((err) => {
+				console.warn('[AlertScheduler] Lease renew tick failed:', err.message);
+			});
+		}, renewIntervalMs);
+
+		try {
+			const allDue = this.schedules.filter((s) => this._isScheduleDue(s, nowMs));
+			let dueSchedules = allDue;
+			if (allDue.length > batchLimit) {
+				const start = this._scheduleCursor % allDue.length;
+				dueSchedules = [];
+				for (let i = 0; i < batchLimit; i += 1) {
+					dueSchedules.push(allDue[(start + i) % allDue.length]);
+				}
+				this._scheduleCursor = (start + batchLimit) % allDue.length;
+			} else {
+				this._scheduleCursor = 0;
+			}
 
 			for (const schedule of dueSchedules) {
 				if (this.shutdownRequested || controller.signal.aborted) {
@@ -563,8 +711,11 @@ class AlertSchedulerService {
 				error: err,
 			});
 		} finally {
+			clearInterval(renewHandle);
 			clearTimeout(sweepTimer);
 			this.activeSweepController = null;
+			const intervalMs = options.intervalMs || this.getIntervalMs();
+			await this._releaseLease(Date.now(), intervalMs);
 			this.lastRunAt = new Date(sweepStartTime);
 			this.lastRunDurationMs = Date.now() - sweepStartTime;
 			this.lastRunExecutedCount = executedCount;
@@ -605,6 +756,17 @@ class AlertSchedulerService {
 		try {
 			const analyzer = this.getAnalyzerFn();
 			const notificationManager = this.getNotificationManagerFn();
+			if (notificationManager) {
+				try {
+					if (typeof this.setNotificationManagerFn === 'function') {
+						this.setNotificationManagerFn(notificationManager);
+					} else if (typeof analyzer.setNotificationManager === 'function') {
+						analyzer.setNotificationManager(notificationManager);
+					}
+				} catch (err) {
+					console.warn('[AlertScheduler] Could not inject notification manager:', err.message);
+				}
+			}
 
 			const requestId = uuidv4();
 			const cryptoSet = new Set(schedule.symbols.crypto.map((s) => String(s).trim().toUpperCase()));
@@ -613,11 +775,15 @@ class AlertSchedulerService {
 				assetClassBySymbol[symbol] = cryptoSet.has(symbol) ? 'crypto' : 'stock';
 			}
 
+			const routing = schedule.channels && schedule.channels.length > 0
+				? { channels: schedule.channels }
+				: {};
+
 			const results = await analyzer.analyzeSymbols(
 				symbols,
 				requestId,
 				null,
-				{},
+				routing,
 				{
 					deadline: Date.now() + this.getTimeoutMs(),
 					signal: parentSignal,
@@ -650,6 +816,7 @@ class AlertSchedulerService {
 				timeframe: schedule.timeframe,
 				scans: schedule.scans,
 				limit: schedule.limit,
+				bbwThreshold: 0.05,
 				bbw_threshold: 0.05,
 				ranked: schedule.ranked,
 				includeMultiTimeframe: schedule.includeMultiTimeframe,
@@ -670,14 +837,15 @@ class AlertSchedulerService {
 			const alertText = marketScannerReportModule.buildMarketScannerReport(scanResults, {
 				exchange: schedule.exchange,
 				timeframe: schedule.timeframe,
+				ranked: schedule.ranked,
 				now: new Date(),
 			});
 
 			const notificationManager = this.getNotificationManagerFn();
 			if (notificationManager) {
-				const routing = {
-					channels: schedule.channels,
-				};
+				const routing = schedule.channels && schedule.channels.length > 0
+					? { channels: schedule.channels }
+					: {};
 				await requestRoutingModule.sendWithNotificationRouting(
 					notificationManager,
 					{ text: alertText, source: 'alert-scheduler' },
