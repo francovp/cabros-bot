@@ -3234,7 +3234,7 @@ describe('admin browser client', () => {
 		expect(form.textContent).not.toContain('Alerts sent');
 	});
 
-	it.skip('clears the raw analysis payload when the next submission fails validation', async () => {
+	it('clears the raw analysis payload when the next submission fails validation', async () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => {
 				if (url === '/openapi.json') return response(contract);
@@ -3248,24 +3248,6 @@ describe('admin browser client', () => {
 		await selectView(browser, 'analysis');
 
 		const form = findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation');
-console.log('form.elements.body:', form.elements.body);
-console.log('form.elements:', Object.keys(form.elements));
-function dumpTree(node, indent=0) {
-  const prefix = '  '.repeat(indent);
-  console.log(prefix + node.tagName, 'name=' + node.name, 'class=' + node.className);
-  node.children.forEach(c => dumpTree(c, indent+1));
-}
-dumpTree(form);
-function dumpTree(node, indent=0) {
-  const prefix = '  '.repeat(indent);
-  console.log(prefix + node.tagName, 'name=' + (node.name || node.attributes?.name), 'class=' + node.className);
-  node.children.forEach(c => dumpTree(c, indent+1));
-}
-dumpTree(form);
-console.log('Form children:', form.children.length);
-form.children.forEach((c, i) => console.log('Child', i, c.tagName, c.className, c.name));
-const allTextareas = form.querySelectorAll('textarea');
-console.log('All textareas:', allTextareas.length);
 		await form.dispatch('submit');
 		await flush();
 		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
@@ -3930,17 +3912,11 @@ console.log('All textareas:', allTextareas.length);
 });
 
 
-describe('debug analysis view', () => {
-	it('shows analysis view content', async () => {
+describe('structured analysis forms', () => {
+	it('renders structured controls for analysis operations and provides raw JSON sync', async () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => {
 				if (url === '/openapi.json') return response(contract);
-				if (url === '/api/status') return response({
-					service: { name: 'cabros-bot', environment: 'production' },
-					featureFlags: {},
-					deliveryChannels: {},
-					dependencies: {},
-				});
 				return response({});
 			},
 		});
@@ -3948,15 +3924,98 @@ describe('debug analysis view', () => {
 		browser.elementsById['api-key'].value = 'test-key';
 		await selectView(browser, 'analysis');
 		await flush();
-		await flush();
-		
+
 		const view = browser.elementsById.view;
-		console.log('View textContent:', view.textContent.slice(0, 500));
-		console.log('View children:', view.children.length);
-		
-		// The view should have content
-		const tc = view.textContent;
-console.log("TEXT:", tc);
-expect(tc).toContain("Analysis");
+
+		// 1. Volume Confirmation Form
+		const vcForm = findForm(view, 'POST /api/webhook/volume-confirmation');
+		expect(vcForm).toBeDefined();
+		expect(vcForm.elements.symbol).toBeDefined();
+		expect(vcForm.elements.timeframe).toBeDefined();
+		expect(vcForm.elements.body).toBeDefined();
+
+		// Real-time synchronization
+		vcForm.elements.symbol.value = 'BINANCE:ETHUSDT';
+		await vcForm.elements.symbol.dispatch('input');
+		await flush();
+		const vcParsed = JSON.parse(vcForm.elements.body.value);
+		expect(vcParsed.symbol).toBe('BINANCE:ETHUSDT');
+
+		// 2. Expanded Analysis Form
+		const expForm = findForm(view, 'POST /api/webhook/expanded-analysis-alert');
+		expect(expForm).toBeDefined();
+		expect(expForm.elements.symbols).toBeDefined();
+		expect(expForm.elements.timeframe).toBeDefined();
+		expect(expForm.elements.analysisMode).toBeDefined();
+		expect(expForm.elements.includeMultiTimeframe).toBeDefined();
+		expect(expForm.elements.channel_telegram).toBeDefined();
+		expect(expForm.elements.channel_whatsapp).toBeDefined();
+		expect(expForm.elements.channel_discord).toBeDefined();
+		expect(expForm.elements.body).toBeDefined();
+
+		// 3. Market Scanner Form
+		const scanForm = findForm(view, 'POST /api/webhook/market-scanner-alert');
+		expect(scanForm).toBeDefined();
+		expect(scanForm.elements.exchange).toBeDefined();
+		expect(scanForm.elements.timeframe).toBeDefined();
+		expect(scanForm.elements.scan_top_gainers).toBeDefined();
+		expect(scanForm.elements.scan_top_losers).toBeDefined();
+		expect(scanForm.elements.scan_volume_breakout_scanner).toBeDefined();
+		expect(scanForm.elements.scan_smart_volume_scanner).toBeDefined();
+		expect(scanForm.elements.scan_bollinger_scan).toBeDefined();
+		expect(scanForm.elements.limit).toBeDefined();
+		expect(scanForm.elements.bbw_threshold).toBeDefined();
+		expect(scanForm.elements.body).toBeDefined();
+
+		// 4. Symbol Analysis Form
+		const symForm = findForm(view, 'POST /api/webhook/symbol-analysis');
+		expect(symForm).toBeDefined();
+		expect(symForm.elements.symbol).toBeDefined();
+		expect(symForm.elements.timeframe).toBeDefined();
+		expect(symForm.elements.analysisMode).toBeDefined();
+		expect(symForm.elements.body).toBeDefined();
+
+		// 5. News Monitor Form (POST)
+		const newsPostForm = findForm(view, 'POST /api/news-monitor');
+		expect(newsPostForm).toBeDefined();
+		expect(newsPostForm.elements.crypto).toBeDefined();
+		expect(newsPostForm.elements.stocks).toBeDefined();
+		expect(newsPostForm.elements.channel_telegram).toBeDefined();
+		expect(newsPostForm.elements.channel_whatsapp).toBeDefined();
+		expect(newsPostForm.elements.channel_discord).toBeDefined();
+		expect(newsPostForm.elements.body).toBeDefined();
+
+		// News monitor sync
+		newsPostForm.elements.crypto.value = 'SOLUSDT,ADAUSDT';
+		await newsPostForm.elements.crypto.dispatch('input');
+		await flush();
+		const newsParsed = JSON.parse(newsPostForm.elements.body.value);
+		expect(newsParsed.crypto).toEqual(['SOLUSDT', 'ADAUSDT']);
+	});
+
+	it('validates symbol format on structured analysis submit and prevents invalid requests', async () => {
+		let requestedUrl = null;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				requestedUrl = url;
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'analysis');
+		await flush();
+
+		const vcForm = findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation');
+		vcForm.elements.symbol.value = 'MALFORMED_SYMBOL';
+		await vcForm.elements.symbol.dispatch('input');
+		await flush();
+
+		await vcForm.dispatch('submit');
+		await flush();
+
+		expect(requestedUrl).toBeNull();
+		expect(vcForm.textContent).toContain('Malformed symbol');
 	});
 });
