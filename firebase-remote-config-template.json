@@ -126,6 +126,34 @@
       "description": "Binance API fetch timeout in milliseconds",
       "valueType": "NUMBER"
     },
+    "BINANCE_TRADING_ENV": {
+      "defaultValue": {
+        "value": "testnet"
+      },
+      "description": "Binance Spot order environment: testnet | demo | live",
+      "valueType": "STRING"
+    },
+    "BINANCE_TRADING_ALLOWED_SYMBOLS": {
+      "defaultValue": {
+        "value": ""
+      },
+      "description": "Comma-separated allow-list of symbols accepted by POST /api/trading/binance/orders",
+      "valueType": "STRING"
+    },
+    "BINANCE_TRADING_MAX_NOTIONAL": {
+      "defaultValue": {
+        "value": "1000"
+      },
+      "description": "Maximum order notional in quote asset for live and dry-run validation",
+      "valueType": "NUMBER"
+    },
+    "BINANCE_TRADING_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "10000"
+      },
+      "description": "Signed Binance request timeout in milliseconds (max 60000)",
+      "valueType": "NUMBER"
+    },
     "TRADINGVIEW_MCP_DEFAULT_TIMEFRAME": {
       "defaultValue": {
         "value": "1h"
