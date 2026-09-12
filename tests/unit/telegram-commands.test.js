@@ -37,11 +37,18 @@ const {
 	buildHelpMessage,
 	getTelegramCommandMenu,
 	parseCommandArgs,
+	telegramCommandRateLimiter,
 } = require('../../src/controllers/commands');
 
 function buildContext(text) {
+	const commandToken = text.trim().split(/\s+/, 1)[0];
 	return {
-		message: { text },
+		message: {
+			text,
+			entities: commandToken.startsWith('/')
+				? [{ type: 'bot_command', offset: 0, length: commandToken.length }]
+				: [],
+		},
 		update: {
 			message: {
 				chat: { id: 123 },
@@ -55,6 +62,153 @@ function buildContext(text) {
 describe('Telegram TradingView commands', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		telegramCommandRateLimiter.reset();
+		delete process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING;
+		delete process.env.TELEGRAM_COMMAND_RATE_LIMITS_JSON;
+	});
+
+	it('limits expensive commands per chat and returns a cooldown reply', async () => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner'));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+
+		const otherChat = buildContext('/scanner');
+		otherChat.update.message.chat.id = 456;
+		await telegramCommandRateLimiter(otherChat, next);
+		expect(next).toHaveBeenCalledTimes(4);
+	});
+
+	it.each(['/analysis', '/news'])('applies canonical limits to the %s alias', async (command) => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext(command));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
+	it('does not charge uppercase command entities that Telegraf will not dispatch', async () => {
+		const next = jest.fn();
+		for (const context of Array.from({ length: 3 }, () => buildContext('/SCANNER'))) {
+			await telegramCommandRateLimiter(context, next);
+		}
+
+		const lowercaseCommand = buildContext('/scanner');
+		await telegramCommandRateLimiter(lowercaseCommand, next);
+
+		expect(next).toHaveBeenCalledTimes(4);
+		expect(lowercaseCommand.reply).not.toHaveBeenCalled();
+	});
+
+	it('does not charge plain text against a command bucket', async () => {
+		const next = jest.fn();
+		const plainText = buildContext('scanner');
+
+		await telegramCommandRateLimiter(plainText, next);
+		for (const context of Array.from({ length: 3 }, () => buildContext('/scanner'))) {
+			await telegramCommandRateLimiter(context, next);
+		}
+		const fourthCommand = buildContext('/scanner');
+		await telegramCommandRateLimiter(fourthCommand, next);
+
+		expect(next).toHaveBeenCalledTimes(4);
+		expect(fourthCommand.reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
+	it('uses the bot command entity when punctuation follows the command', async () => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner,'));
+		for (const context of contexts) {
+			context.message.entities = [{ type: 'bot_command', offset: 0, length: '/scanner'.length }];
+			await telegramCommandRateLimiter(context, next);
+		}
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
+	it('does not charge commands addressed to another bot', async () => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner@other_bot'));
+		for (const context of contexts) {
+			context.me = 'cabros_bot';
+			await telegramCommandRateLimiter(context, next);
+		}
+
+		expect(next).toHaveBeenCalledTimes(4);
+		expect(contexts[3].reply).not.toHaveBeenCalled();
+	});
+
+	it('falls back when a command max override exceeds the operational bound', async () => {
+		process.env.TELEGRAM_COMMAND_RATE_LIMITS_JSON = JSON.stringify({
+			scanner: { max: 1001, windowMs: 60_000 },
+		});
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner'));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
+	it('falls back when a command window override exceeds the operational bound', async () => {
+		jest.useFakeTimers({ now: 0 });
+		process.env.TELEGRAM_COMMAND_RATE_LIMITS_JSON = JSON.stringify({
+			scanner: { max: 1, windowMs: 86_400_001 },
+		});
+		const next = jest.fn();
+
+		await telegramCommandRateLimiter(buildContext('/scanner'), next);
+		jest.advanceTimersByTime(2 * 60 * 60 * 1000);
+		await telegramCommandRateLimiter(buildContext('/scanner'), next);
+
+		expect(next).toHaveBeenCalledTimes(2);
+		jest.useRealTimers();
+	});
+
+	it('falls back when command limit overrides are not JSON numbers', async () => {
+		process.env.TELEGRAM_COMMAND_RATE_LIMITS_JSON = JSON.stringify({
+			scanner: { max: '3', windowMs: true },
+		});
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner'));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
+	it('does not evict an active bucket when the chat map reaches its cap', async () => {
+		const next = jest.fn();
+		const activeChat = 0;
+
+		for (const context of Array.from({ length: 3 }, () => buildContext('/scanner'))) {
+			context.update.message.chat.id = activeChat;
+			await telegramCommandRateLimiter(context, next);
+		}
+		for (let chatId = 1; chatId <= 9999; chatId += 1) {
+			const context = buildContext('/scanner');
+			context.update.message.chat.id = chatId;
+			await telegramCommandRateLimiter(context, next);
+		}
+
+		const newChat = buildContext('/scanner');
+		newChat.update.message.chat.id = 10000;
+		await telegramCommandRateLimiter(newChat, next);
+
+		const activeChatAfterCap = buildContext('/scanner');
+		activeChatAfterCap.update.message.chat.id = activeChat;
+		await telegramCommandRateLimiter(activeChatAfterCap, next);
+
+		expect(activeChatAfterCap.reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+		expect(newChat.reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
 	});
 
 	it('parses command args into positionals and key/value options', () => {

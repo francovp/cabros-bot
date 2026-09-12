@@ -39,6 +39,9 @@ const REGION_BLOCK_MESSAGE_PATTERNS = [
 const DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS = 365;
 const MAX_SIGNAL_OUTCOME_RETENTION_DAYS = 3650;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const SESSION_TIME_ZONE = 'America/New_York';
+const SESSION_ANCHOR_VERSION = 'v1';
+const REGULAR_EQUITY_EXCHANGES = new Set(['AMEX', 'BATS', 'NASDAQ', 'NYSE', 'NYSE ARCA']);
 
 let binanceClient = null;
 let isEvaluating = false;
@@ -139,6 +142,10 @@ function buildRetentionExpiryTimestamp(baseDate = new Date()) {
 }
 
 function isRetentionExpired(data) {
+	if (data && data.retentionPolicy === 'archive') {
+		return false;
+	}
+
 	const now = Date.now();
 	const explicitExpiry = getTimestampMillis(data && data.expiresAt);
 	if (explicitExpiry !== null && explicitExpiry <= now) {
@@ -151,6 +158,220 @@ function isRetentionExpired(data) {
 	}
 
 	return false;
+}
+
+function getLocalDateParts(date) {
+	const parts = new Intl.DateTimeFormat('en-US', {
+		timeZone: SESSION_TIME_ZONE,
+		calendar: 'gregory',
+		weekday: 'short',
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit',
+		hour: '2-digit',
+		minute: '2-digit',
+		hourCycle: 'h23',
+	}).formatToParts(date).reduce((result, part) => {
+		if (part.type !== 'literal') result[part.type] = part.value;
+		return result;
+	}, {});
+
+	return {
+		year: Number(parts.year),
+		month: Number(parts.month),
+		day: Number(parts.day),
+		weekday: parts.weekday,
+		hour: Number(parts.hour),
+		minute: Number(parts.minute),
+	};
+}
+
+function localDateKey({ year, month, day }) {
+	return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function addLocalDays(dateKey, days) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	const date = new Date(Date.UTC(year, month - 1, day + days));
+	return localDateKey({ year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate() });
+}
+
+function getWeekday(dateKey) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+}
+
+function getNthWeekday(year, month, weekday, occurrence) {
+	const first = new Date(Date.UTC(year, month - 1, 1));
+	const day = 1 + ((weekday - first.getUTCDay() + 7) % 7) + ((occurrence - 1) * 7);
+	return localDateKey({ year, month, day });
+}
+
+function getLastWeekday(year, month, weekday) {
+	const last = new Date(Date.UTC(year, month, 0));
+	const day = last.getUTCDate() - ((last.getUTCDay() - weekday + 7) % 7);
+	return localDateKey({ year, month, day });
+}
+
+function getEasterSunday(year) {
+	const a = year % 19;
+	const b = Math.floor(year / 100);
+	const c = year % 100;
+	const d = Math.floor(b / 4);
+	const e = b % 4;
+	const f = Math.floor((b + 8) / 25);
+	const g = Math.floor((b - f + 1) / 3);
+	const h = (19 * a + b - d - g + 15) % 30;
+	const i = Math.floor(c / 4);
+	const k = c % 4;
+	const l = (32 + 2 * e + 2 * i - h - k) % 7;
+	const m = Math.floor((a + 11 * h + 22 * l) / 451);
+	const month = Math.floor((h + l - 7 * m + 114) / 31);
+	const day = ((h + l - 7 * m + 114) % 31) + 1;
+	return localDateKey({ year, month, day });
+}
+
+function getObservedFixedHoliday(year, month, day) {
+	const dateKey = localDateKey({ year, month, day });
+	const weekday = getWeekday(dateKey);
+	if (weekday === 6) return addLocalDays(dateKey, -1);
+	if (weekday === 0) return addLocalDays(dateKey, 1);
+	return dateKey;
+}
+
+function isUsMarketHoliday(dateKey) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	const fixed = new Set([
+		getObservedFixedHoliday(year, 1, 1),
+		getObservedFixedHoliday(year + 1, 1, 1),
+		getObservedFixedHoliday(year, 6, 19),
+		getObservedFixedHoliday(year, 7, 4),
+		getObservedFixedHoliday(year, 12, 25),
+	]);
+	const movable = new Set([
+		getNthWeekday(year, 1, 1, 3),
+		getNthWeekday(year, 2, 1, 3),
+		addLocalDays(getEasterSunday(year), -2),
+		getLastWeekday(year, 5, 1),
+		getNthWeekday(year, 9, 1, 1),
+		getNthWeekday(year, 11, 4, 4),
+	]);
+	return fixed.has(dateKey) || movable.has(dateKey) || getWeekday(dateKey) === 0 || getWeekday(dateKey) === 6;
+}
+
+function isUsMarketHalfDay(dateKey) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	const thanksgiving = getNthWeekday(year, 11, 4, 4);
+	const julyFourth = localDateKey({ year, month: 7, day: 4 });
+	const julyFourthWeekday = getWeekday(julyFourth);
+	const isJulyEarlyClose = (julyFourthWeekday === 6 || julyFourthWeekday === 0)
+		? dateKey === localDateKey({ year, month: 7, day: 2 })
+		: (julyFourthWeekday >= 2 && julyFourthWeekday <= 5 && dateKey === localDateKey({ year, month: 7, day: 3 }));
+	return dateKey === addLocalDays(thanksgiving, 1)
+		|| isJulyEarlyClose
+		|| (dateKey === localDateKey({ year, month: 12, day: 24 }) && getWeekday(localDateKey({ year, month: 12, day: 25 })) >= 1 && getWeekday(localDateKey({ year, month: 12, day: 25 })) <= 5);
+}
+
+function localTimeToDate(dateKey, hour, minute) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	let utcMillis = Date.UTC(year, month - 1, day, hour, minute);
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const local = getLocalDateParts(new Date(utcMillis));
+		const localAsUtc = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute);
+		const wantedAsUtc = Date.UTC(year, month - 1, day, hour, minute);
+		utcMillis += wantedAsUtc - localAsUtc;
+	}
+	return new Date(utcMillis);
+}
+
+function getSessionSchedule(dateKey) {
+	if (isUsMarketHoliday(dateKey)) return null;
+	const closeHour = isUsMarketHalfDay(dateKey) ? 13 : 16;
+	return {
+		openAt: localTimeToDate(dateKey, 9, 30),
+		closeAt: localTimeToDate(dateKey, closeHour, 0),
+	};
+}
+
+function getNextSessionOpen(dateKey) {
+	for (let offset = 1; offset <= 14; offset++) {
+		const candidate = addLocalDays(dateKey, offset);
+		const schedule = getSessionSchedule(candidate);
+		if (schedule) return schedule.openAt;
+	}
+	return null;
+}
+
+function getSessionContext({ exchange, assetClass, receivedAt = new Date() } = {}) {
+	const observedDate = receivedAt instanceof Date ? receivedAt : new Date(receivedAt);
+	const observedAt = Number.isNaN(observedDate.getTime()) ? new Date() : observedDate;
+	const base = {
+		observedAt: observedAt.toISOString(),
+		decisionBarClosedAt: null,
+		tradableAt: observedAt.toISOString(),
+		anchorMode: 'raw_received_at',
+		anchorVersion: SESSION_ANCHOR_VERSION,
+		calendarId: null,
+		calendarTimeZone: null,
+		measurementCohort: 'raw_received_at',
+	};
+
+	if (String(assetClass || '').toLowerCase() === 'crypto' || String(exchange || '').toUpperCase() === 'BINANCE') {
+		return { ...base, sessionContext: 'crypto_24_7' };
+	}
+
+	const normalizedExchange = equityMarketDataService.normalizeExchange(exchange)
+		|| String(exchange || '').trim().toUpperCase().replace(/_DLY$/, '');
+	if (!REGULAR_EQUITY_EXCHANGES.has(normalizedExchange)) {
+		return { ...base, sessionContext: 'non_regular_market' };
+	}
+
+	const local = getLocalDateParts(observedAt);
+	const dateKey = localDateKey(local);
+	const nextSessionOpen = getNextSessionOpen(dateKey);
+	const calendarFields = {
+		calendarId: 'nyse',
+		calendarTimeZone: SESSION_TIME_ZONE,
+	};
+	const schedule = getSessionSchedule(dateKey);
+	if (!schedule) {
+		return {
+			...base,
+			...calendarFields,
+			sessionContext: 'market_holiday',
+			tradableAt: nextSessionOpen ? nextSessionOpen.toISOString() : null,
+			measurementCohort: 'raw_market_closed',
+		};
+	}
+
+	const observedMillis = observedAt.getTime();
+	if (observedMillis < schedule.openAt.getTime()) {
+		return {
+			...base,
+			...calendarFields,
+			sessionContext: 'pre_open',
+			tradableAt: schedule.openAt.toISOString(),
+			measurementCohort: 'raw_pre_open',
+		};
+	}
+	if (observedMillis >= schedule.closeAt.getTime()) {
+		return {
+			...base,
+			...calendarFields,
+			sessionContext: 'after_hours',
+			decisionBarClosedAt: schedule.closeAt.toISOString(),
+			tradableAt: nextSessionOpen ? nextSessionOpen.toISOString() : null,
+			measurementCohort: 'raw_received_at_after_hours',
+		};
+	}
+
+	return {
+		...base,
+		...calendarFields,
+		sessionContext: 'regular',
+		tradableAt: observedAt.toISOString(),
+		measurementCohort: 'raw_received_at',
+	};
 }
 
 function awaitWithTimeout(promise, timeoutMs, message) {
@@ -413,6 +634,12 @@ async function recordSignalInternal({
 		const normAssetClass = normalizeAssetClass(assetClass);
 		const normSide = normalizeSide(side);
 		const now = new Date();
+		const sessionContext = getSessionContext({
+			exchange: normSymbolInfo.exchange,
+			assetClass: normAssetClass,
+			timeframe,
+			receivedAt: now,
+		});
 		const equityProviderName = equityMarketDataService.getProviderName(normSymbolInfo.exchange, normAssetClass);
 		const entryPriceSourceChains = getEntryPriceSourceChains();
 		const entryPriceSourceChain = normSymbolInfo.exchange === 'BINANCE' || normAssetClass === 'crypto'
@@ -547,6 +774,9 @@ async function recordSignalInternal({
 				status: isEligible ? 'pending' : 'unavailable',
 				reason: isEligible ? null : eligibility.state,
 				targetTime: new Date(now.getTime() + config.durationMs).toISOString(),
+				anchorMode: sessionContext.anchorMode,
+				anchorVersion: sessionContext.anchorVersion,
+				measurementCohort: sessionContext.measurementCohort,
 				price: null,
 				return: null,
 				maxFavorableExcursion: null,
@@ -556,6 +786,19 @@ async function recordSignalInternal({
 
 		const document = {
 			receivedAt: admin.firestore.Timestamp.fromDate(now),
+			observedAt: admin.firestore.Timestamp.fromDate(now),
+			decisionBarClosedAt: sessionContext.decisionBarClosedAt
+				? admin.firestore.Timestamp.fromDate(new Date(sessionContext.decisionBarClosedAt))
+				: null,
+			tradableAt: sessionContext.tradableAt
+				? admin.firestore.Timestamp.fromDate(new Date(sessionContext.tradableAt))
+				: null,
+			anchorMode: sessionContext.anchorMode,
+			anchorVersion: sessionContext.anchorVersion,
+			calendarId: sessionContext.calendarId,
+			calendarTimeZone: sessionContext.calendarTimeZone,
+			sessionContext: sessionContext.sessionContext,
+			measurementCohort: sessionContext.measurementCohort,
 			expiresAt: buildRetentionExpiryTimestamp(now),
 			requestId: typeof requestId === 'string' ? requestId : 'unknown',
 			source: typeof source === 'string' ? source : 'unknown',
@@ -567,6 +810,10 @@ async function recordSignalInternal({
 			score: typeof score === 'number' && Number.isFinite(score) ? score : null,
 			side: normSide,
 			price: entryPrice,
+			observedPrice: entryPrice,
+			tradablePrice: sessionContext.sessionContext === 'crypto_24_7' || sessionContext.sessionContext === 'regular'
+				? entryPrice
+				: null,
 			entryPriceSource: entryPriceSource || null,
 			stop: typeof stop === 'number' && Number.isFinite(stop) ? stop : null,
 			target: typeof target === 'number' && Number.isFinite(target) ? target : null,
@@ -1173,6 +1420,16 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 				const updateFields = { outcomes };
 				if (data.price !== undefined && data.price !== null) {
 					updateFields.price = data.price;
+					const tradableAtMs = getTimestampMillis(data.tradableAt);
+					const isRegularOrCrypto = data.sessionContext === 'crypto_24_7' || data.sessionContext === 'regular';
+					if (isRegularOrCrypto) {
+						updateFields.observedPrice = data.price;
+						updateFields.tradablePrice = data.price;
+					} else if (tradableAtMs !== null && Date.now() >= tradableAtMs) {
+						updateFields.tradablePrice = data.price;
+					} else {
+						updateFields.observedPrice = data.price;
+					}
 				}
 				if (data.entryPriceSource) {
 					updateFields.entryPriceSource = data.entryPriceSource;
@@ -1501,7 +1758,9 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 
 	const retentionDays = getSignalOutcomeRetentionDays();
 	const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
-	const effectiveFromMs = Math.max(parsedFrom.getTime(), retentionCutoffMs);
+	const effectiveFromMs = from
+		? parsedFrom.getTime()
+		: Math.max(parsedFrom.getTime(), retentionCutoffMs);
 	if (effectiveFromMs > parsedTo.getTime()) {
 		return createEmptyMetricsSummary();
 	}
@@ -1904,16 +2163,20 @@ function getDocTimestamp(data) {
 		return null;
 	}
 
-	if (data.receivedAt && typeof data.receivedAt.toDate === 'function') {
-		return data.receivedAt.toDate().toISOString();
+	return getTimestampIso(data.receivedAt);
+}
+
+function getTimestampIso(value) {
+	if (value && typeof value.toDate === 'function') {
+		return value.toDate().toISOString();
 	}
 
-	if (data.receivedAt instanceof Date) {
-		return data.receivedAt.toISOString();
+	if (value instanceof Date) {
+		return value.toISOString();
 	}
 
-	if (typeof data.receivedAt === 'string' && !Number.isNaN(Date.parse(data.receivedAt))) {
-		return new Date(data.receivedAt).toISOString();
+	if (typeof value === 'string' && !Number.isNaN(Date.parse(value))) {
+		return new Date(value).toISOString();
 	}
 
 	return null;
@@ -1944,7 +2207,7 @@ function formatOutcomeDocument(doc) {
 	const data = doc.data() || {};
 	const receivedAt = getDocTimestamp(data);
 
-	return {
+	const formatted = {
 		id: doc.id,
 		receivedAt,
 		requestId: typeof data.requestId === 'string' ? data.requestId : 'unknown',
@@ -1969,6 +2232,24 @@ function formatOutcomeDocument(doc) {
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 		processingTimeMs: typeof data.processingTimeMs === 'number' && Number.isFinite(data.processingTimeMs) ? data.processingTimeMs : null,
 	};
+
+	if (Object.prototype.hasOwnProperty.call(data, 'sessionContext')) {
+		Object.assign(formatted, {
+			observedAt: getTimestampIso(data.observedAt),
+			decisionBarClosedAt: getTimestampIso(data.decisionBarClosedAt),
+			tradableAt: getTimestampIso(data.tradableAt),
+			anchorMode: typeof data.anchorMode === 'string' ? data.anchorMode : null,
+			anchorVersion: typeof data.anchorVersion === 'string' ? data.anchorVersion : null,
+			calendarId: typeof data.calendarId === 'string' ? data.calendarId : null,
+			calendarTimeZone: typeof data.calendarTimeZone === 'string' ? data.calendarTimeZone : null,
+			sessionContext: typeof data.sessionContext === 'string' ? data.sessionContext : null,
+			measurementCohort: typeof data.measurementCohort === 'string' ? data.measurementCohort : null,
+			observedPrice: typeof data.observedPrice === 'number' && Number.isFinite(data.observedPrice) ? data.observedPrice : null,
+			tradablePrice: typeof data.tradablePrice === 'number' && Number.isFinite(data.tradablePrice) ? data.tradablePrice : null,
+		});
+	}
+
+	return formatted;
 }
 
 function matchesOutcomeFilters(outcome, { symbol, exchange, status, window, from, to }) {
@@ -2164,6 +2445,7 @@ function _resetForTesting() {
 module.exports = {
 	isEnabled,
 	recordSignal,
+	getSessionContext,
 	evaluatePendingOutcomes,
 	getMetricsSummary,
 	summarizeOutcomes,

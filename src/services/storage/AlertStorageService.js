@@ -154,6 +154,10 @@ function buildRetentionExpiryTimestamp() {
 }
 
 function isRetentionExpired(data) {
+	if (data && data.retentionPolicy === 'archive') {
+		return false;
+	}
+
 	const explicitExpiry = getTimestampMillis(data && data.expiresAt);
 	if (explicitExpiry !== null) {
 		return explicitExpiry <= Date.now();
@@ -851,7 +855,9 @@ function truncateAlertText(text) {
 		: text;
 }
 
-function formatExportRecord(doc, { includeText }) {
+const formatExportEnrichmentData = formatEnrichmentSummary;
+
+function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
 	const data = doc.data() || {};
 	const record = {
 		id: doc.id,
@@ -880,6 +886,10 @@ function formatExportRecord(doc, { includeText }) {
 	}
 	if (typeof data.dedupStatus === 'string') {
 		record.dedupStatus = data.dedupStatus;
+	}
+
+	if (includeEnrichment) {
+		record.enrichmentData = formatExportEnrichmentData(data.enrichmentData, data);
 	}
 
 	if (includeText) {
@@ -1686,9 +1696,10 @@ async function getLatestReplayForAlert(alertId) {
  * @param {string|undefined} params.source Optional exact source filter
  * @param {boolean|undefined} params.enriched Optional enriched/plain filter
  * @param {boolean|undefined} params.includeText Include truncated alert text when true
+ * @param {boolean|undefined} params.includeEnrichment Include bounded enrichmentData when true
  * @returns {Promise<{window: Object, alerts: Array}>}
  */
-async function exportAlerts({ from, to, limit, source, enriched, includeText = false } = {}) {
+async function exportAlerts({ from, to, limit, source, enriched, includeText = false, includeEnrichment = false } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -1749,7 +1760,7 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 		}
 	}
 
-	const alerts = docs.map(doc => formatExportRecord(doc, { includeText }));
+	const alerts = docs.map(doc => formatExportRecord(doc, { includeText, includeEnrichment }));
 
 	return {
 		window,
