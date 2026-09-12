@@ -344,4 +344,30 @@ describe('Admin Test Alert Controller Unit Tests', () => {
 		expect(res.data.formatted.whatsapp.text).toContain('Ethereum');
 		expect(res.data.formatted.discord.text).toContain('Ethereum');
 	});
+
+	it('rejects invalid or empty string text with 400 Bad Request', async () => {
+		req.body = { text: '' };
+		const handler = postTestAlert();
+		await handler(req, res);
+
+		expect(res.status).toHaveBeenCalledWith(400);
+		expect(res.data.code).toBe('INVALID_REQUEST');
+		expect(res.data.error).toContain('Alert text is required and must be a string');
+	});
+
+	it('omits raw discordWebhookUrl from Firestore persistence to protect credentials', async () => {
+		req.body = {
+			channels: ['telegram'],
+			discordWebhookUrl: 'https://discord.com/api/webhooks/123456789/secret-webhook-token',
+		};
+		const handler = postTestAlert();
+		await handler(req, res);
+
+		expect(res.status).toHaveBeenCalledWith(200);
+		expect(alertStorageService.saveAlert).toHaveBeenCalledWith(
+			expect.not.objectContaining({
+				discordWebhookUrl: expect.anything(),
+			}),
+		);
+	});
 });

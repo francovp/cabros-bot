@@ -144,7 +144,7 @@ function postTestAlert(botOrGetter) {
 		);
 		const includeEnrichment = Boolean(body.includeEnrichment === true || body.includeEnrichment === 'true');
 		const defaultMarkerText = `[TEST-ALERT] cabros-bot smoke probe ${new Date().toISOString()}`;
-		const rawText = typeof body.text === 'string' && body.text.trim() ? body.text.trim() : defaultMarkerText;
+		const rawText = body.text === undefined ? defaultMarkerText : body.text;
 
 		let alertText;
 		try {
@@ -317,7 +317,7 @@ function postTestAlert(botOrGetter) {
 					telegramChatId: routing.telegramChatId,
 					telegramThreadId: routing.telegramThreadId,
 					whatsappChatId: routing.whatsappChatId,
-					discordWebhookUrl: routing.discordWebhookUrl,
+					// Do not persist raw discordWebhookUrl to avoid storing sensitive webhook credentials.
 				});
 				const storedId = await Promise.race([savePromise, timeoutPromise]);
 				clearTimeout(timer);

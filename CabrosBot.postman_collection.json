@@ -4389,6 +4389,84 @@
               }
             }
           ]
+        },
+        {
+          "name": "POST Test Alert (Invalid Input - 400 Bad Request)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channels\": [\"invalid_channel\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/test-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "test-alert"
+              ]
+            },
+            "description": "Trigger 400 Bad Request by supplying invalid channels or malformed payload."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Unknown Channel",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"error\": \"Unknown notification channel(s): invalid_channel. Supported channels: telegram, whatsapp, discord\",\n  \"code\": \"INVALID_REQUEST\"\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"channels\": [\"invalid_channel\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/test-alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "test-alert"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     },

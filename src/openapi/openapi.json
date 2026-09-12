@@ -4028,6 +4028,7 @@
           },
           "channels": {
             "type": "array",
+            "minItems": 1,
             "items": {
               "type": "string",
               "enum": [
@@ -4037,6 +4038,27 @@
               ]
             },
             "description": "Optional subset of channels to probe. Defaults to all enabled channels."
+          },
+          "telegramChatId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional Telegram chat ID destination override."
+          },
+          "telegramThreadId": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional Telegram forum topic message_thread_id override (0 routes to the chat general topic)."
+          },
+          "whatsappChatId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional GreenAPI WhatsApp chat ID destination override."
+          },
+          "discordWebhookUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://([a-zA-Z0-9-]+\\.)?(discord\\.com|discordapp\\.com)/api/webhooks/\\d+/[a-zA-Z0-9_-]+",
+            "description": "Optional HTTPS Discord webhook URL override."
           },
           "dryRun": {
             "type": "boolean",
