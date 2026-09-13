@@ -1689,6 +1689,37 @@ describe('Alerts API Integration Tests', () => {
 				results: [{ channel: 'telegram', success: true, messageId: 'tg-retry' }],
 			});
 		});
+
+		it('fails closed and reports RECONCILIATION_FAILED without duplicate delivery when checking past replay fails', async () => {
+			alertStorageService.getAlertById
+				.mockResolvedValueOnce({ id: 'alert-1', text: 'Alert 1' })
+				.mockResolvedValueOnce({ id: 'alert-2', text: 'Alert 2' });
+			alertStorageService.getReplayAttemptByIdempotencyKey
+				.mockRejectedValueOnce(new Error('Firestore read timeout'))
+				.mockResolvedValueOnce(null);
+			mockNotificationManager.sendToChannels
+				.mockResolvedValueOnce([{ channel: 'telegram', success: true, messageId: 'tg-2' }]);
+			alertStorageService.saveReplayAttempt.mockResolvedValueOnce('replay-doc-2');
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1', 'alert-2'], idempotencyKey: 'reconcile-fail-key' })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results).toHaveLength(2);
+			// alert-1 failed closed on reconciliation error, so sendToChannels was only called once (for alert-2)
+			expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'alert-1',
+				success: false,
+				error: 'Failed to reconcile existing replay attempt: Firestore read timeout',
+				code: 'RECONCILIATION_FAILED',
+			});
+			expect(res.body.results[1].success).toBe(true);
+			expect(res.body.results[1].alertId).toBe('alert-2');
+		});
 	});
 
 	describe('POST /api/alerts/batch/export', () => {

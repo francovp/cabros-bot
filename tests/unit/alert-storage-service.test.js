@@ -3076,15 +3076,45 @@ describe('AlertStorageService', () => {
 			expect(await AlertStorageService.deleteAlerts(null)).toEqual({ deleted: 0 });
 		});
 
-		it('batch deletes documents using Firestore batch', async () => {
+		it('batch deletes documents that exist using Firestore batch', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet
+				.mockImplementationOnce(async () => ({ exists: true, id: 'alert-1' }))
+				.mockImplementationOnce(async () => ({ exists: true, id: 'alert-2' }));
 			const result = await AlertStorageService.deleteAlerts(['alert-1', 'alert-2', 'alert-1']);
 			expect(result).toEqual({ deleted: 2 });
 			expect(mockBatchDelete).toHaveBeenCalledTimes(2);
 		});
 
+		it('reports only alerts that actually existed as deleted', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet
+				.mockImplementationOnce(async () => ({ exists: true, id: 'alert-1' }))
+				.mockImplementationOnce(async () => ({ exists: false, id: 'nonexistent-2' }));
+			const result = await AlertStorageService.deleteAlerts(['alert-1', 'nonexistent-2']);
+			expect(result).toEqual({ deleted: 1 });
+			expect(mockBatchDelete).toHaveBeenCalledTimes(1);
+		});
+
+		it('returns { deleted: 0 } and skips batch delete when no requested documents exist', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockImplementationOnce(async () => ({ exists: false, id: 'missing' }));
+			const result = await AlertStorageService.deleteAlerts(['missing']);
+			expect(result).toEqual({ deleted: 0 });
+			expect(mockBatchDelete).not.toHaveBeenCalled();
+		});
+
+		it('throws STORAGE_UNAVAILABLE when reading documents before batch delete fails', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockRejectedValueOnce(new Error('Firestore read timeout'));
+			await expect(AlertStorageService.deleteAlerts(['alert-1'])).rejects.toMatchObject({
+				code: AlertStorageService.STORAGE_UNAVAILABLE_CODE,
+			});
+		});
+
 		it('throws STORAGE_UNAVAILABLE when batch commit fails', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockImplementationOnce(async () => ({ exists: true, id: 'alert-1' }));
 			mockBatchCommit.mockImplementationOnce(() => {
 				throw new Error('Firestore commit failed');
 			});
@@ -3194,13 +3224,18 @@ describe('AlertStorageService', () => {
 			expect(replay.alertId).toBe('alert-1');
 		});
 
-		it('returns null when no replay matches or query fails', async () => {
+		it('returns null when no replay matches', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({ docs: [] });
 			expect(await AlertStorageService.getReplayAttemptByIdempotencyKey('alert-1', 'key-1')).toBeNull();
+		});
 
+		it('throws storage unavailable error when Firestore query fails', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockRejectedValueOnce(new Error('Firestore unavailable'));
-			expect(await AlertStorageService.getReplayAttemptByIdempotencyKey('alert-1', 'key-1')).toBeNull();
+			await expect(AlertStorageService.getReplayAttemptByIdempotencyKey('alert-1', 'key-1')).rejects.toMatchObject({
+				code: AlertStorageService.STORAGE_UNAVAILABLE_CODE,
+			});
 		});
 	});
 

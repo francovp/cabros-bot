@@ -307,4 +307,23 @@ describe('Postman collection contract', () => {
 		expect(summaryInvalid.response[0].code).toBe(400);
 		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
 	});
+
+	it('documents both JSONL and CSV request variants and response examples for batch alert export', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const jsonlExport = findItem(collection.item, 'POST Batch Export Alerts (JSONL)') || findItem(collection.item, 'POST Batch Export Alerts');
+		const csvExport = findItem(collection.item, 'POST Batch Export Alerts (CSV)');
+
+		expect(jsonlExport).toBeDefined();
+		expect(csvExport).toBeDefined();
+
+		const jsonlBody = JSON.parse(jsonlExport.request.body.raw);
+		expect(jsonlBody.format).toBe('jsonl');
+
+		const csvBody = JSON.parse(csvExport.request.body.raw);
+		expect(csvBody.format).toBe('csv');
+
+		const csvSuccess = csvExport.response.find((r) => r.name.includes('CSV'));
+		expect(csvSuccess).toBeDefined();
+		expect(csvSuccess.code).toBe(200);
+	});
 });

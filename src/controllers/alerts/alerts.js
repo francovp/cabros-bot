@@ -932,12 +932,24 @@ function batchReplayAlerts(botOrGetter) {
 					const alertIdempotencyKey = `${idempotencyKey.trim()}:${alertId}`;
 
 					let existingReplay = null;
+					let reconciliationError = null;
 					try {
 						if (typeof alertStorageService.getReplayAttemptByIdempotencyKey === 'function') {
 							existingReplay = await alertStorageService.getReplayAttemptByIdempotencyKey(alertId, alertIdempotencyKey);
 						}
 					} catch (checkErr) {
 						console.warn('[AlertsController] Failed checking existing replay for alert:', alertId, checkErr.message);
+						reconciliationError = checkErr;
+					}
+
+					if (reconciliationError) {
+						alertResults.push({
+							alertId,
+							success: false,
+							error: `Failed to reconcile existing replay attempt: ${reconciliationError.message || 'Storage unavailable'}`,
+							code: 'RECONCILIATION_FAILED',
+						});
+						continue;
 					}
 
 					if (existingReplay) {

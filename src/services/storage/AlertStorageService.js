@@ -1753,7 +1753,7 @@ async function getReplayAttemptByIdempotencyKey(alertId, idempotencyKey) {
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		return null;
+		throw createStorageUnavailableError();
 	}
 
 	const idempotencyKeyHash = crypto.createHash('sha256').update(idempotencyKey.trim()).digest('hex');
@@ -1781,7 +1781,7 @@ async function getReplayAttemptByIdempotencyKey(alertId, idempotencyKey) {
 		};
 	} catch (error) {
 		console.warn('[AlertStorageService] Failed to query replay by idempotency key:', error.message);
-		return null;
+		throw createStorageUnavailableError(error);
 	}
 }
 
@@ -1954,10 +1954,31 @@ async function deleteAlerts(alertIds) {
 		return { deleted: 0 };
 	}
 
+	let snapshots;
+	try {
+		snapshots = await Promise.all(
+			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get())
+		);
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to read alert batch before delete from Firestore:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+
+	const existingIds = [];
+	for (const snap of snapshots) {
+		if (snap && snap.exists) {
+			existingIds.push(snap.id);
+		}
+	}
+
+	if (existingIds.length === 0) {
+		return { deleted: 0 };
+	}
+
 	let totalDeleted = 0;
 	const BATCH_SIZE = 500;
-	for (let i = 0; i < uniqueIds.length; i += BATCH_SIZE) {
-		const chunk = uniqueIds.slice(i, i + BATCH_SIZE);
+	for (let i = 0; i < existingIds.length; i += BATCH_SIZE) {
+		const chunk = existingIds.slice(i, i + BATCH_SIZE);
 		const batch = firestore.batch();
 		for (const id of chunk) {
 			const docRef = firestore.collection(COLLECTION_NAME).doc(id);
