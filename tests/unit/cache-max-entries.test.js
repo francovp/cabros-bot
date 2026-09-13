@@ -148,6 +148,24 @@ describe('Cache Max Entries / LRU Eviction', () => {
 			expect(cache.deliveryLocks.has('BNBUSDT:price_surge:delivery:telegram')).toBe(true);
 		});
 
+		it('evicts an inactive lease before rejecting a claim at capacity', async () => {
+			cache.deliveryLocks.set('inactive', {
+				active: false,
+				persistentUntil: Date.now() + 10_000,
+			});
+			cache.deliveryLocks.set('active', {
+				active: true,
+				persistentUntil: Date.now() + 10_000,
+			});
+
+			const claimed = await cache.claimDelivery('BNBUSDT', EventCategory.PRICE_SURGE, 'telegram');
+
+			expect(claimed).toBe(true);
+			expect(cache.deliveryLocks.size).toBe(2);
+			expect(cache.deliveryLocks.has('inactive')).toBe(false);
+			expect(cache.deliveryLocks.get('active')?.active).toBe(true);
+		});
+
 		it('exposes deliveryLocks stats in getStats()', () => {
 			const stats = cache.getStats();
 			expect(stats.deliveryLockMaxEntries).toBe(2);

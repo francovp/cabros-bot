@@ -84,6 +84,8 @@ class URLShortenerCache {
 			return null;
 		}
 
+		this.cache.delete(url);
+		this.cache.set(url, entry);
 		return entry.shortUrl;
 	}
 
@@ -381,7 +383,9 @@ class URLShortener {
 				if (shortUrl) {
 					this.cache.set(longUrl, shortUrl);
 					// Reset failure count on success
-					this.serviceFailures.set(service, 0);
+						this.serviceFailures.delete(service);
+						this.serviceFailures.set(service, 0);
+						this._evictServiceFailuresIfOverCapacity();
 					console.debug(
 						`[URLShortener] Successfully shortened URL via ${service}`,
 					);

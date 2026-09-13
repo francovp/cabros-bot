@@ -43,6 +43,18 @@ describe('URLShortenerCache - Max Entries / LRU', () => {
 			expect(cache.get('https://example.com/new')).toBe('https://bit.ly/new');
 			expect(cache.get('https://example.com/evict')).toBe('https://bit.ly/evict');
 		});
+
+		it('refreshes LRU recency when a cached URL is read', () => {
+			cache.set('https://example.com/a', 'https://bit.ly/a');
+			cache.set('https://example.com/b', 'https://bit.ly/b');
+			cache.set('https://example.com/c', 'https://bit.ly/c');
+
+			expect(cache.get('https://example.com/a')).toBe('https://bit.ly/a');
+			cache.set('https://example.com/d', 'https://bit.ly/d');
+
+			expect(cache.get('https://example.com/a')).toBe('https://bit.ly/a');
+			expect(cache.get('https://example.com/b')).toBeNull();
+		});
 	});
 
 	describe('env var fallback', () => {
@@ -125,5 +137,24 @@ describe('URLShortener.serviceFailures size bound', () => {
 		const localShortener = new URLShortener({ serviceFailuresMaxEntries: 10 });
 		expect(localShortener.serviceFailuresMaxEntries).toBe(10);
 		expect(localShortener._serviceFailuresMaxEntries).toBe(10);
+	});
+
+	it('keeps the failure map bounded when a new service succeeds', async () => {
+		const previousService = process.env.URL_SHORTENER_SERVICE;
+		process.env.URL_SHORTENER_SERVICE = 'test';
+		try {
+			const localShortener = new URLShortener({ serviceFailuresMaxEntries: 1 });
+			localShortener.serviceFailures.set('failed-service', 1);
+
+			await expect(localShortener.shortenUrl('https://example.com/new')).resolves.toBe('https://short.url/test');
+			expect(localShortener.serviceFailures.size).toBe(1);
+			expect(localShortener.serviceFailures.has('test')).toBe(true);
+		} finally {
+			if (previousService === undefined) {
+				delete process.env.URL_SHORTENER_SERVICE;
+			} else {
+				process.env.URL_SHORTENER_SERVICE = previousService;
+			}
+		}
 	});
 });

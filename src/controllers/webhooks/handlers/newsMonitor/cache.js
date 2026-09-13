@@ -245,16 +245,17 @@ class NewsCache {
 	 * Active leases (lease.active === true) must NEVER be evicted so concurrent
 	 * webhooks or retries cannot claim a duplicate delivery lease.
 	 */
-	_evictDeliveryLocksIfOverCapacity() {
+	_evictDeliveryLocksIfOverCapacity({ reserveSlot = false } = {}) {
 		const max = this.deliveryLockMaxEntries;
-		if (this.deliveryLocks.size <= max) {
+		const targetSize = reserveSlot ? max - 1 : max;
+		if (this.deliveryLocks.size <= targetSize) {
 			return;
 		}
 		const now = Date.now();
 		let evicted = 0;
 		// First pass: evict inactive leases whose persistent lease has expired
 		for (const [key, lease] of this.deliveryLocks.entries()) {
-			if (this.deliveryLocks.size <= max) {
+			if (this.deliveryLocks.size <= targetSize) {
 				break;
 			}
 			if (!lease.active && (!lease.persistentUntil || lease.persistentUntil <= now)) {
@@ -264,7 +265,7 @@ class NewsCache {
 		}
 		// Second pass: evict any remaining inactive leases
 		for (const [key, lease] of this.deliveryLocks.entries()) {
-			if (this.deliveryLocks.size <= max) {
+			if (this.deliveryLocks.size <= targetSize) {
 				break;
 			}
 			if (!lease.active) {
@@ -573,7 +574,7 @@ class NewsCache {
 		}
 
 		// Prune inactive/expired leases before capacity check
-		this._evictDeliveryLocksIfOverCapacity();
+		this._evictDeliveryLocksIfOverCapacity({ reserveSlot: !existingLease });
 
 		// If this is a new lease and capacity is already saturated with active leases,
 		// reject the claim to preserve existing active leases from eviction.

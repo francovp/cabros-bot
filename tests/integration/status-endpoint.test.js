@@ -195,6 +195,14 @@ describe('Status endpoints', () => {
 				failureThreshold: 5,
 				cooldownMs: 600000,
 			},
+			errorCategoryCounts: {
+				circuit_breaker_open: 0,
+				http_5xx: 0,
+				http_4xx: 0,
+				timeout: 0,
+				invalid_response: 0,
+				request_failed: 0,
+			},
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: false,
@@ -536,6 +544,11 @@ describe('Status endpoints', () => {
 			lastRunPendingCount: 0,
 			lastRunErrorCount: 0,
 			shutdownRequested: false,
+			entryPriceSources: {
+				configured: false,
+				crypto: ['mcp', 'binance', 'gemini'],
+				equity: ['twelve-data'],
+			},
 		});
 	});
 
@@ -1129,6 +1142,14 @@ describe('Status endpoints', () => {
 				lastStateChangeAt: null,
 				failureThreshold: 5,
 				cooldownMs: 600000,
+			},
+			errorCategoryCounts: {
+				circuit_breaker_open: 0,
+				http_5xx: 0,
+				http_4xx: 0,
+				timeout: 0,
+				invalid_response: 0,
+				request_failed: 0,
 			},
 		});
 	});
@@ -1795,6 +1816,25 @@ describe('Status endpoints', () => {
 			role: 'worker',
 			batchLimit: 50,
 			maxAttempts: 5,
+		});
+	});
+
+	it('reports testAlert feature flag and dependency status', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.testAlert).toBe(true);
+		expect(response.body.dependencies.testAlert).toEqual({
+			enabled: true,
+			lastRunAt: null,
+			lastRunStatus: null,
+			rateLimitState: {
+				windowMs: 60000,
+				dailyLimit: 30,
+				dailyRunsToday: 0,
+			},
 		});
 	});
 
