@@ -320,6 +320,102 @@ describe('BinanceOrderAuditService', () => {
 			warnSpy.mockRestore();
 		});
 
+		it('records a dry-run mutation document with dryRun: true and status: dry_run', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			const result = await service.recordMutation({
+				action: 'PLACE',
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.005',
+				price: '50000',
+				dryRun: true,
+				status: 'dry_run',
+				environment: 'testnet',
+			});
+
+			expect(mockDb.collection).toHaveBeenCalledWith('binanceOrderAudit');
+			expect(mockDocRef.set).toHaveBeenCalledTimes(1);
+			const writtenData = mockDocRef.set.mock.calls[0][0];
+			expect(writtenData).toMatchObject({
+				action: 'PLACE',
+				symbol: 'BTCUSDT',
+				status: 'dry_run',
+				dryRun: true,
+				environment: 'testnet',
+			});
+			expect(writtenData.requestFingerprint).toBeDefined();
+			expect(result.dryRun).toBe(true);
+			expect(result.status).toBe('dry_run');
+		});
+
+		it('records an ambiguous mutation document with errorCode and status: ambiguous', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			const result = await service.recordMutation({
+				action: 'PLACE',
+				symbol: 'ETHUSDT',
+				status: 'ambiguous',
+				errorCode: 'BINANCE_ORDER_STATUS_UNKNOWN',
+				dryRun: false,
+			});
+
+			const writtenData = mockDocRef.set.mock.calls[0][0];
+			expect(writtenData).toMatchObject({
+				symbol: 'ETHUSDT',
+				status: 'ambiguous',
+				errorCode: 'BINANCE_ORDER_STATUS_UNKNOWN',
+				dryRun: false,
+			});
+			expect(result.status).toBe('ambiguous');
+			expect(result.errorCode).toBe('BINANCE_ORDER_STATUS_UNKNOWN');
+		});
+
+		it('records a rejected mutation document with errorCode and status: rejected', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			const result = await service.recordMutation({
+				action: 'PLACE',
+				symbol: 'SOLUSDT',
+				status: 'rejected',
+				errorCode: '-1013',
+				dryRun: false,
+			});
+
+			const writtenData = mockDocRef.set.mock.calls[0][0];
+			expect(writtenData).toMatchObject({
+				symbol: 'SOLUSDT',
+				status: 'rejected',
+				errorCode: '-1013',
+				dryRun: false,
+			});
+			expect(result.status).toBe('rejected');
+			expect(result.errorCode).toBe('-1013');
+		});
+
+		it('hashes idempotency key from req or parameters into idempotencyKeyHash', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			const idempotencyValue = 'test-idempotency-header-val';
+			const expectedHash = crypto.createHash('sha256').update(idempotencyValue).digest('hex');
+
+			await service.recordMutation({
+				req: {
+					headers: { 'x-idempotency-key': idempotencyValue },
+				},
+				action: 'PLACE',
+				symbol: 'BTCUSDT',
+			});
+
+			const writtenData = mockDocRef.set.mock.calls[0][0];
+			expect(writtenData.idempotencyKeyHash).toBe(expectedHash);
+		});
+
 		it('reads an audit record by orderId via getAuditRecord', async () => {
 			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
 			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
@@ -346,6 +442,155 @@ describe('BinanceOrderAuditService', () => {
 
 			const record = await service.getAuditRecord('non-existent');
 			expect(record).toBeNull();
+		});
+	});
+
+	describe('listAuditRecords', () => {
+		let mockDb;
+		let mockCollection;
+		let service;
+		let queryChain;
+
+		beforeEach(() => {
+			queryChain = {
+				orderBy: jest.fn().mockReturnThis(),
+				limit: jest.fn().mockReturnThis(),
+				startAfter: jest.fn().mockReturnThis(),
+				where: jest.fn().mockReturnThis(),
+				get: jest.fn(),
+			};
+			mockCollection = {
+				orderBy: queryChain.orderBy,
+				limit: queryChain.limit,
+				startAfter: queryChain.startAfter,
+				where: queryChain.where,
+				get: queryChain.get,
+			};
+			mockDb = {
+				collection: jest.fn().mockReturnValue(mockCollection),
+			};
+			service = new BinanceOrderAuditService({ firestore: mockDb });
+		});
+
+		it('returns null when audit service is disabled', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'false';
+			const result = await service.listAuditRecords({ limit: 10 });
+			expect(result).toBeNull();
+			expect(queryChain.get).not.toHaveBeenCalled();
+		});
+
+		it('throws STORAGE_UNAVAILABLE when firestore is unconfigured', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+			delete process.env.FIREBASE_PROJECT_ID;
+			const unconfiguredService = new BinanceOrderAuditService({ firestore: null });
+			jest.spyOn(unconfiguredService, 'isConfigured').mockReturnValue(false);
+			jest.spyOn(unconfiguredService, '_getFirestore').mockReturnValue(null);
+
+			await expect(unconfiguredService.listAuditRecords({ limit: 10 })).rejects.toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+			});
+		});
+
+		it('throws INVALID_REQUEST when before cursor is invalid', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			await expect(service.listAuditRecords({ before: 'malformed_cursor_value' })).rejects.toMatchObject({
+				code: 'INVALID_REQUEST',
+			});
+		});
+
+		it('lists audit records with filtering by symbol, status, and time range', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			queryChain.get.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					{
+						id: 'event-1',
+						data: () => ({
+							orderId: 'event-1',
+							symbol: 'BTCUSDT',
+							status: 'dry_run',
+							dryRun: true,
+							environment: 'testnet',
+							timestamp: '2026-09-10T12:00:00.000Z',
+						}),
+					},
+					{
+						id: 'event-2',
+						data: () => ({
+							orderId: 'event-2',
+							symbol: 'ETHUSDT',
+							status: 'confirmed',
+							dryRun: false,
+							environment: 'testnet',
+							timestamp: '2026-09-10T11:00:00.000Z',
+						}),
+					},
+					{
+						id: 'event-3',
+						data: () => ({
+							orderId: 'event-3',
+							symbol: 'BTCUSDT',
+							status: 'rejected',
+							errorCode: 'LOT_SIZE',
+							dryRun: false,
+							environment: 'testnet',
+							timestamp: '2026-09-08T10:00:00.000Z',
+						}),
+					},
+				],
+			});
+
+			const result = await service.listAuditRecords({
+				symbol: 'BTCUSDT',
+				status: 'dry_run',
+				from: '2026-09-09T00:00:00.000Z',
+				to: '2026-09-11T00:00:00.000Z',
+				limit: 10,
+			});
+
+			expect(result).toBeDefined();
+			expect(result.records).toHaveLength(1);
+			expect(result.records[0]).toMatchObject({
+				id: 'event-1',
+				symbol: 'BTCUSDT',
+				status: 'dry_run',
+				dryRun: true,
+			});
+			expect(result.hasMore).toBe(false);
+			expect(result.nextBefore).toBeDefined();
+		});
+
+		it('matches status flexibly (confirmed matches FILLED, rejected matches failed)', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			queryChain.get.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					{
+						id: 'event-1',
+						data: () => ({
+							orderId: 'event-1',
+							symbol: 'BTCUSDT',
+							status: 'FILLED',
+							timestamp: '2026-09-10T12:00:00.000Z',
+						}),
+					},
+				],
+			});
+
+			const result = await service.listAuditRecords({
+				status: 'confirmed',
+				limit: 10,
+			});
+
+			expect(result.records).toHaveLength(1);
+			expect(result.records[0].status).toBe('FILLED');
 		});
 	});
 });
