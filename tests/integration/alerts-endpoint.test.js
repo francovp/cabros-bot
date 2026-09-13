@@ -1630,6 +1630,65 @@ describe('Alerts API Integration Tests', () => {
 			});
 			expect(res.body.results[1].success).toBe(true);
 		});
+
+		it('marks replay item failed and avoids saving attempt when sendToChannels returns failure or empty array', async () => {
+			alertStorageService.getAlertById
+				.mockResolvedValueOnce({ id: 'alert-1', text: 'Alert 1' })
+				.mockResolvedValueOnce({ id: 'alert-2', text: 'Alert 2' });
+			alertStorageService.getReplayAttemptByIdempotencyKey.mockResolvedValue(null);
+			mockNotificationManager.sendToChannels
+				.mockResolvedValueOnce([{ channel: 'telegram', success: false, error: 'Chat not found' }])
+				.mockResolvedValueOnce([]);
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1', 'alert-2'], idempotencyKey: 'fail-channels-k' })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'alert-1',
+				success: false,
+				error: 'Channel delivery failed',
+				code: 'DELIVERY_FAILED',
+				results: [{ channel: 'telegram', success: false, error: 'Chat not found' }],
+			});
+			expect(res.body.results[1]).toEqual({
+				alertId: 'alert-2',
+				success: false,
+				error: 'No notification channels delivered',
+				code: 'DELIVERY_FAILED',
+				results: [],
+			});
+			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+
+		it('does not reconcile failed or empty past attempts as delivered on retry', async () => {
+			alertStorageService.getAlertById.mockResolvedValueOnce({ id: 'alert-1', text: 'Alert 1' });
+			alertStorageService.getReplayAttemptByIdempotencyKey.mockResolvedValueOnce({
+				id: 'replay-doc-failed',
+				deliveryResults: [{ channel: 'telegram', success: false }],
+			});
+			mockNotificationManager.sendToChannels.mockResolvedValueOnce([{ channel: 'telegram', success: true, messageId: 'tg-retry' }]);
+			alertStorageService.saveReplayAttempt.mockResolvedValueOnce('replay-doc-new');
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], idempotencyKey: 'retry-past-failed-k' })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
+			expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledTimes(1);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'alert-1',
+				success: true,
+				replayId: 'replay-doc-new',
+				results: [{ channel: 'telegram', success: true, messageId: 'tg-retry' }],
+			});
+		});
 	});
 
 	describe('POST /api/alerts/batch/export', () => {

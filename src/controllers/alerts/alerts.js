@@ -941,13 +941,18 @@ function batchReplayAlerts(botOrGetter) {
 					}
 
 					if (existingReplay) {
-						alertResults.push({
-							alertId,
-							success: true,
-							replayId: existingReplay.id,
-							results: existingReplay.deliveryResults || [],
-						});
-						continue;
+						const hasPastSuccess = Array.isArray(existingReplay.deliveryResults)
+							&& existingReplay.deliveryResults.length > 0
+							&& existingReplay.deliveryResults.some((r) => r && r.success === true);
+						if (hasPastSuccess) {
+							alertResults.push({
+								alertId,
+								success: true,
+								replayId: existingReplay.id,
+								results: existingReplay.deliveryResults || [],
+							});
+							continue;
+						}
 					}
 
 					const replayPayload = {
@@ -963,24 +968,38 @@ function batchReplayAlerts(botOrGetter) {
 
 					try {
 						const results = await notificationManager.sendToChannels(replayPayload, channels);
-						let replayId = null;
-						try {
-							replayId = await alertStorageService.saveReplayAttempt({
-								alertId,
-								idempotencyKey: alertIdempotencyKey,
-								channels,
-								deliveryResults: results,
-							});
-						} catch (storageErr) {
-							console.warn('[AlertsController] Failed to record replay attempt in Firestore for alert:', alertId, storageErr.message);
-						}
+						const hasSuccessfulDelivery = Array.isArray(results)
+							&& results.length > 0
+							&& results.some((r) => r && r.success === true);
 
-						alertResults.push({
-							alertId,
-							success: true,
-							replayId,
-							results,
-						});
+						if (hasSuccessfulDelivery) {
+							let replayId = null;
+							try {
+								replayId = await alertStorageService.saveReplayAttempt({
+									alertId,
+									idempotencyKey: alertIdempotencyKey,
+									channels,
+									deliveryResults: results,
+								});
+							} catch (storageErr) {
+								console.warn('[AlertsController] Failed to record replay attempt in Firestore for alert:', alertId, storageErr.message);
+							}
+
+							alertResults.push({
+								alertId,
+								success: true,
+								replayId,
+								results,
+							});
+						} else {
+							alertResults.push({
+								alertId,
+								success: false,
+								error: results && results.length > 0 ? 'Channel delivery failed' : 'No notification channels delivered',
+								code: 'DELIVERY_FAILED',
+								results: results || [],
+							});
+						}
 					} catch (sendErr) {
 						console.warn('[AlertsController] Failed to send replay to channels for alert:', alertId, sendErr.message);
 						alertResults.push({
