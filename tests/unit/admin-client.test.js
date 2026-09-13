@@ -2348,6 +2348,48 @@ describe('admin browser client', () => {
 		expect(listForm.textContent).toContain('Batch delete complete: 2 alerts deleted.');
 	});
 
+	it('disables batch replay button when more than 50 alerts are selected', async () => {
+		const alertsList = Array.from({ length: 55 }, (_, i) => ({
+			id: `alert-${i + 1}`,
+			text: `alert ${i + 1}`,
+			source: 'webhook',
+		}));
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					return response({ success: true, alerts: alertsList, pagination: { hasMore: false } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const selectAll = find(listForm, (node) => node.tagName === 'INPUT' && node.className.includes('alert-select-all'));
+		const countSpan = find(listForm, (node) => node.className && node.className.includes('batch-selection-count'));
+		const replayBtn = findButton(listForm, 'Replay selected');
+		const exportBtn = findButton(listForm, 'Export selected');
+		const deleteBtn = findButton(listForm, 'Delete selected');
+
+		// Select all 55 alerts
+		selectAll.checked = true;
+		await selectAll.dispatch('change');
+		expect(countSpan.textContent).toBe('55 selected');
+
+		// Replay button should be disabled because 55 > 50
+		expect(replayBtn.disabled).toBe(true);
+		expect(replayBtn.title).toBe('Batch replay is limited to 50 alerts at a time (55 selected)');
+
+		// Export and delete should remain enabled
+		expect(exportBtn.disabled).toBe(false);
+		expect(deleteBtn.disabled).toBe(false);
+	});
+
 	it('disables batch replay and delete for admin.viewer role', async () => {
 		const auth = {
 			onAuthStateChanged: (listener) => {

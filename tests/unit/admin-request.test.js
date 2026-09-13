@@ -273,6 +273,30 @@ describe('admin deadline budget calculations', () => {
 		});
 	});
 
+	it('scales batch replay timeout dynamically according to batch size', () => {
+		const replayPath = { path: '/api/alerts/batch/replay' };
+		// Default single operation budget when no options passed
+		expect(adminRequest.getApiRequestTimeout(replayPath)).toBe(990000);
+		expect(adminRequest.getApiRequestTimeout(replayPath, {})).toBe(990000);
+		expect(adminRequest.getApiRequestTimeout(replayPath, { batchSize: 1 })).toBe(990000);
+
+		// Scaled by batchSize option
+		expect(adminRequest.getApiRequestTimeout(replayPath, { batchSize: 2 })).toBe(1980000);
+		expect(adminRequest.getApiRequestTimeout(replayPath, { batchSize: 5 })).toBe(4950000);
+		expect(adminRequest.getApiRequestTimeout(replayPath, { batchSize: 50 })).toBe(49500000);
+		// Capped at 50 even if higher batchSize is passed
+		expect(adminRequest.getApiRequestTimeout(replayPath, { batchSize: 100 })).toBe(49500000);
+
+		// Scaled from body JSON alertIds
+		expect(adminRequest.getApiRequestTimeout(replayPath, {
+			body: JSON.stringify({ alertIds: ['id1', 'id2', 'id3'] }),
+		})).toBe(2970000);
+
+		// Helper function export
+		expect(typeof adminRequest.getBatchReplayTimeout).toBe('function');
+		expect(adminRequest.getBatchReplayTimeout({ batchSize: 3 })).toBe(2970000);
+	});
+
 	it('assigns standard 30s timeout to short operations and handles missing definitions safely', () => {
 		expect(adminRequest.getApiRequestTimeout({ path: '/api/status' })).toBe(30000);
 		expect(adminRequest.getApiRequestTimeout({ path: '/api/jobs' })).toBe(30000);

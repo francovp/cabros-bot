@@ -152,11 +152,31 @@
 		'/api/alerts/batch/replay',
 	]);
 
-	const getApiRequestTimeout = (definition) => {
+	const getBatchReplayTimeout = (options) => {
+		let count = 1;
+		if (options && typeof options === 'object') {
+			if (typeof options.batchSize === 'number' && options.batchSize > 0) {
+				count = Math.min(options.batchSize, 50);
+			} else if (options.body) {
+				try {
+					const parsed = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
+					if (Array.isArray(parsed && parsed.alertIds) && parsed.alertIds.length > 0) {
+						count = Math.min(parsed.alertIds.length, 50);
+					}
+				} catch (_) {}
+			}
+		}
+		return count > 1 ? count * LONG_RUNNING_API_REQUEST_TIMEOUT_MS : LONG_RUNNING_API_REQUEST_TIMEOUT_MS;
+	};
+
+	const getApiRequestTimeout = (definition, options) => {
 		if (!definition || !definition.path) return API_REQUEST_TIMEOUT_MS;
 		if (definition.path === '/api/webhook/volume-confirmation'
 			|| definition.path === '/api/webhook/symbol-analysis') {
 			return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+		}
+		if (definition.path === '/api/alerts/batch/replay') {
+			return getBatchReplayTimeout(options);
 		}
 		return LONG_RUNNING_REQUEST_PATHS.has(definition.path)
 			? LONG_RUNNING_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS;
@@ -191,6 +211,7 @@
 		createRequest,
 		getAdminRole,
 		getApiRequestTimeout,
+		getBatchReplayTimeout,
 		operationDefinitions,
 		redactSecret,
 		validateQuery,

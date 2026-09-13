@@ -200,16 +200,33 @@ const LONG_RUNNING_REQUEST_PATHS = typeof window !== 'undefined' && window.Cabro
 		'/api/webhook/alert',
 		'/api/webhook/message',
 		'/api/alerts/{alertId}/replay',
+		'/api/alerts/batch/replay',
 	]);
 
-const getApiRequestTimeout = (definition) => {
+const getApiRequestTimeout = (definition, options) => {
 	if (typeof window !== 'undefined' && window.CabrosAdminRequest && typeof window.CabrosAdminRequest.getApiRequestTimeout === 'function') {
-		return window.CabrosAdminRequest.getApiRequestTimeout(definition);
+		return window.CabrosAdminRequest.getApiRequestTimeout(definition, options);
 	}
 	if (!definition || !definition.path) return API_REQUEST_TIMEOUT_MS;
 	if (definition.path === '/api/webhook/volume-confirmation'
 		|| definition.path === '/api/webhook/symbol-analysis') {
 		return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+	}
+	if (definition.path === '/api/alerts/batch/replay') {
+		let count = 1;
+		if (options && typeof options === 'object') {
+			if (typeof options.batchSize === 'number' && options.batchSize > 0) {
+				count = Math.min(options.batchSize, 50);
+			} else if (options.body) {
+				try {
+					const parsed = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
+					if (Array.isArray(parsed && parsed.alertIds) && parsed.alertIds.length > 0) {
+						count = Math.min(parsed.alertIds.length, 50);
+					}
+				} catch (_) {}
+			}
+		}
+		return count > 1 ? count * LONG_RUNNING_API_REQUEST_TIMEOUT_MS : LONG_RUNNING_API_REQUEST_TIMEOUT_MS;
 	}
 	return LONG_RUNNING_REQUEST_PATHS.has(definition.path)
 		? LONG_RUNNING_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS;
@@ -1659,7 +1676,7 @@ const sendRequest = async ({
 	);
 	const started = performance.now();
 	try {
-		const result = await fetchWithTimeout(request.url, request.options, getApiRequestTimeout(definition), async (response) => {
+		const result = await fetchWithTimeout(request.url, request.options, getApiRequestTimeout(definition, request.options), async (response) => {
 			if (typeof captureResponseStatus === 'function') captureResponseStatus(response.status);
 			const elapsed = Math.round(performance.now() - started);
 			let data;
@@ -1775,10 +1792,16 @@ const createAlertListForm = () => {
 		selectionCount.textContent = `${count} selected`;
 		const hasSelection = count > 0;
 		const isOperator = canPerformMutation();
+		const exceedsReplayLimit = count > 50;
 
-		batchReplayButton.disabled = !hasSelection || !isOperator;
-		if (!isOperator) batchReplayButton.title = 'Requires admin.operator role';
-		else batchReplayButton.removeAttribute('title');
+		batchReplayButton.disabled = !hasSelection || !isOperator || exceedsReplayLimit;
+		if (!isOperator) {
+			batchReplayButton.title = 'Requires admin.operator role';
+		} else if (exceedsReplayLimit) {
+			batchReplayButton.title = `Batch replay is limited to 50 alerts at a time (${count} selected)`;
+		} else {
+			batchReplayButton.removeAttribute('title');
+		}
 
 		batchExportButton.disabled = !hasSelection;
 
@@ -1820,6 +1843,11 @@ const createAlertListForm = () => {
 		const ids = Array.from(selectedAlertIds);
 		if (!ids.length) return;
 		if (!canPerformMutation()) return;
+		if (ids.length > 50) {
+			batchOutput.hidden = false;
+			batchOutput.textContent = `Batch replay limit exceeded: up to 50 alerts can be replayed at once (${ids.length} selected). Please narrow your selection.`;
+			return;
+		}
 
 		batchOutput.hidden = false;
 		await sendRequest({
@@ -1832,6 +1860,7 @@ const createAlertListForm = () => {
 			path: '/api/alerts/batch/replay',
 			button: batchReplayButton,
 			output: batchOutput,
+			options: { batchSize: ids.length },
 			body: withReplayIdempotencyKey({ method: 'POST', path: '/api/alerts/batch/replay' }, { alertIds: ids }),
 			formatResponse: ({ summary, status, elapsed, data }) => {
 				const count = data && Array.isArray(data.results) ? data.results.length : 0;
