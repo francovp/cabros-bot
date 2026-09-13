@@ -1017,6 +1017,8 @@ class NotificationRedriveService {
 					if (marked) {
 						this.totalExhaustedCount += 1;
 						trackBackgroundTask(this.notifyAdminPermanentFailure(candidate, `Terminal status: ${terminalStatus}`)).catch(() => {});
+					} else {
+						errorCount += 1;
 					}
 					continue;
 				}
@@ -1252,22 +1254,32 @@ class NotificationRedriveService {
 
 		// Bound waiting for previous write so an unsettled/hung previous promise never blocks subsequent sweeps
 		const previousPromise = this._activeTelemetryWritePromise;
-		let waitTimer = null;
-		const waitForPrevious = previousPromise
-			? Promise.race([
-				previousPromise.catch(() => {}),
-				new Promise((resolve) => {
-					waitTimer = setTimeout(resolve, timeoutMs);
-				}),
-			]).finally(() => {
+		if (previousPromise) {
+			const waitBudgetMs = Number.isFinite(options.waitTimeoutMs)
+				? options.waitTimeoutMs
+				: Math.min(timeoutMs, 2000);
+			let waitTimer = null;
+			try {
+				await Promise.race([
+					previousPromise.catch(() => {}),
+					new Promise((resolve) => {
+						waitTimer = setTimeout(resolve, waitBudgetMs);
+					}),
+				]);
+			} finally {
 				if (waitTimer) {
 					clearTimeout(waitTimer);
 				}
-			})
-			: Promise.resolve();
+			}
+		}
 
-		const nextPromise = waitForPrevious.then(performWrite);
-		this._activeTelemetryWritePromise = nextPromise;
+		// Skip stale write if a newer sweep write has already been scheduled in this process
+		if (sequence < this._telemetryWriteSequence) {
+			return false;
+		}
+
+		const writePromise = performWrite();
+		this._activeTelemetryWritePromise = writePromise;
 
 		let timedOut = false;
 		let timeoutTimer = null;
@@ -1279,7 +1291,7 @@ class NotificationRedriveService {
 				}, timeoutMs);
 			});
 
-			const result = await Promise.race([nextPromise, timeoutPromise]);
+			const result = await Promise.race([writePromise, timeoutPromise]);
 			return result === true;
 		} catch (error) {
 			console.warn('[NotificationRedriveService] Failed to persist worker telemetry:', error.message);
@@ -1288,8 +1300,8 @@ class NotificationRedriveService {
 			if (timeoutTimer) {
 				clearTimeout(timeoutTimer);
 			}
-			// Clear or replace timed-out / settled chain so future sweeps do not chain behind an unsettled promise
-			if (timedOut || this._activeTelemetryWritePromise === nextPromise) {
+			// Clear or replace timed-out / settled promise so future sweeps do not chain behind an unsettled promise
+			if (timedOut || this._activeTelemetryWritePromise === writePromise) {
 				this._activeTelemetryWritePromise = null;
 			}
 		}

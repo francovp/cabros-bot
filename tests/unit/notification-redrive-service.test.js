@@ -1261,6 +1261,8 @@ describe('NotificationRedriveService', () => {
 			expect(service.totalExhaustedCount).toBe(initialExhausted);
 			expect(service.lastRunExhaustedCount).toBe(0);
 			expect(service.lastSweepResult.exhausted).toBe(0);
+			expect(service.lastRunErrorCount).toBe(1);
+			expect(service.lastSweepResult.errors).toBe(1);
 			expect(notifySpy).not.toHaveBeenCalled();
 		});
 
@@ -1572,6 +1574,41 @@ describe('NotificationRedriveService', () => {
 
 			// Second write with 20ms timeout should unblock itself via race and succeed
 			const success = await service.persistWorkerTelemetry({ timeoutMs: 20 });
+			expect(success).toBe(true);
+			expect(secondWriteCommitted).toBe(true);
+			expect(service._activeTelemetryWritePromise).toBeNull();
+		});
+
+		it('reserves separate write budget and avoids zombie writes when waiting for previous write', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			let secondWriteCommitted = false;
+
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						set: jest.fn(),
+					})),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					await new Promise((resolve) => setTimeout(resolve, 15));
+					const mockTx = {
+						get: jest.fn(async () => ({ exists: false })),
+						set: jest.fn(() => {
+							secondWriteCommitted = true;
+						}),
+					};
+					await updateFn(mockTx);
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			// First write takes 20ms to resolve
+			service._activeTelemetryWritePromise = new Promise((resolve) => {
+				setTimeout(resolve, 20);
+			});
+
+			// Second write with waitTimeoutMs: 30 and timeoutMs: 30 succeeds and commits
+			const success = await service.persistWorkerTelemetry({ waitTimeoutMs: 30, timeoutMs: 30 });
 			expect(success).toBe(true);
 			expect(secondWriteCommitted).toBe(true);
 			expect(service._activeTelemetryWritePromise).toBeNull();
