@@ -34,10 +34,59 @@
       "name": "Signal outcomes"
     },
     {
+      "name": "Admin"
+    },
+    {
       "name": "Operations"
     }
   ],
   "paths": {
+    "/healthcheck": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Service healthcheck",
+        "description": "Default behavior returns 200 with `uptime` JSON only. With `?deep=true`, the endpoint reuses the existing channel readiness logic from `/api/status` dependencies and returns 200 when every enabled channel is ready, 503 when any enabled channel is degraded (with `degradedChannels` and per-channel readiness). The endpoint is never API-key protected.",
+        "operationId": "getHealthcheck",
+        "parameters": [
+          {
+            "name": "deep",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "boolean" },
+            "description": "When `true`, include channel readiness and return 503 if any enabled channel is degraded."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Service is healthy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Healthcheck"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DeepHealthcheck"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "One or more enabled channels are degraded, or readiness evaluation failed.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeepHealthcheck" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/ready": {
       "get": {
         "tags": [
@@ -280,7 +329,7 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/AnalysisResult"
+            "$ref": "#/components/responses/VolumeConfirmationResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -333,6 +382,72 @@
         ]
       }
     },
+    "/api/admin/test-alert": {
+      "post": {
+        "tags": [
+          "Admin",
+          "Alerts"
+        ],
+        "summary": "Send a verification probe test alert",
+        "description": "Dispatches a synthetic test alert through enabled notification channels and persists to Firestore with source: test-alert. Supports dryRun=true to preview formatted text and validate channel readiness without dispatching or persisting. Rate-limited to 1 call per 60 seconds per admin caller and TEST_ALERT_DAILY_LIMIT.",
+        "operationId": "postTestAlert",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/TestAlert"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/TestAlertResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "description": "Rate limited by the 60-second caller cooldown or TEST_ALERT_DAILY_LIMIT.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds until retry is permitted."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "Rate limit exceeded. Please wait 60 seconds before triggering another test alert.",
+                  "code": "RATE_LIMITED",
+                  "retryAfterSeconds": 60
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
     "/api/alerts": {
       "get": {
         "tags": [
@@ -352,11 +467,23 @@
           },
           {
             "$ref": "#/components/parameters/Enriched"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/AlertEventCategory"
+          },
+          {
+            "$ref": "#/components/parameters/AlertExchange"
           }
         ],
         "responses": {
           "200": {
             "$ref": "#/components/responses/AlertList"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -454,6 +581,15 @@
           },
           {
             "$ref": "#/components/parameters/Enriched"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/AlertEventCategory"
+          },
+          {
+            "$ref": "#/components/parameters/AlertExchange"
           }
         ],
         "responses": {
@@ -1298,6 +1434,353 @@
         ]
       }
     },
+    "/api/news-monitor/summary": {
+      "get": {
+        "tags": [
+          "News"
+        ],
+        "summary": "Summarize stored news-monitor analyses and false-positive tracking",
+        "description": "Query aggregated performance, alert rates, and false-positive proxy metrics for recorded news analysis runs.",
+        "operationId": "getNewsMonitorSummary",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SummaryLimit"
+          },
+          {
+            "$ref": "#/components/parameters/NewsAnalysisThreshold"
+          },
+          {
+            "$ref": "#/components/parameters/NewsAnalysisSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/NewsAnalysisSummaryResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/news-monitor/analyses": {
+      "get": {
+        "tags": [
+          "News"
+        ],
+        "summary": "List recorded news analysis records",
+        "description": "Query durably recorded news analysis records with pagination and filtering by symbol, eventCategory, and date range.",
+        "operationId": "listNewsAnalyses",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/NewsAnalysisLimit"
+          },
+          {
+            "$ref": "#/components/parameters/BeforeCursor"
+          },
+          {
+            "$ref": "#/components/parameters/NewsAnalysisSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/NewsAnalysisEventCategory"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/NewsAnalysisListResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/news-monitor/pause": {
+      "post": {
+        "tags": [
+          "News"
+        ],
+        "summary": "Pause news monitor analysis",
+        "description": "Sets the process-level news monitor pause toggle, rejecting incoming manual analysis requests with HTTP 503 and causing background sweep cycles to skip execution.",
+        "operationId": "pauseNewsMonitor",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/NewsMonitorPause"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/NewsMonitorPauseResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/news-monitor/resume": {
+      "post": {
+        "tags": [
+          "News"
+        ],
+        "summary": "Resume news monitor analysis",
+        "description": "Clears the process-level news monitor pause toggle, allowing incoming manual analysis requests and background scheduler sweep cycles to proceed normally.",
+        "operationId": "resumeNewsMonitor",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/NewsMonitorResumeResult"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/news-monitor/status": {
+      "get": {
+        "tags": [
+          "News"
+        ],
+        "summary": "Get news monitor pause status",
+        "description": "Returns the current process-level pause status, timestamp, and optional reason for the news monitor analysis pipeline.",
+        "operationId": "getNewsMonitorStatus",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/NewsMonitorStatusResult"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/symbol-analyses": {
+      "get": {
+        "tags": [
+          "Symbol analyses"
+        ],
+        "summary": "List recorded symbol analyses",
+        "description": "Query durably recorded symbol analysis results with pagination and filtering by symbol, exchange, timeframe, action, and date range.",
+        "operationId": "listSymbolAnalyses",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OutcomeLimit"
+          },
+          {
+            "$ref": "#/components/parameters/BeforeCursor"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeExchange"
+          },
+          {
+            "$ref": "#/components/parameters/SymbolAnalysisTimeframe"
+          },
+          {
+            "$ref": "#/components/parameters/SymbolAnalysisAction"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SymbolAnalysesList"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/symbol-analyses/summary": {
+      "get": {
+        "tags": [
+          "Symbol analyses"
+        ],
+        "summary": "Summarize recorded symbol analyses",
+        "description": "Query aggregated action breakdown and coverage metrics for recorded symbol analyses.",
+        "operationId": "summarizeSymbolAnalyses",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SymbolAnalysisSummaryLimit"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeExchange"
+          },
+          {
+            "$ref": "#/components/parameters/SymbolAnalysisTimeframe"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SymbolAnalysesSummaryResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/outcomes": {
       "get": {
         "tags": [
@@ -1991,11 +2474,12 @@
             "webhook",
             "news-monitor",
             "market-scanner",
-            "expanded-analysis"
+            "expanded-analysis",
+            "test-alert"
           ]
         },
         "example": "webhook",
-        "description": "Stored alert source filter. webhook covers /api/webhook/alert; news-monitor covers /api/news-monitor deliveries; market-scanner covers delivered /api/webhook/market-scanner-alert reports; expanded-analysis covers delivered /api/webhook/expanded-analysis-alert reports."
+        "description": "Stored alert source filter. webhook covers /api/webhook/alert; news-monitor covers /api/news-monitor deliveries; market-scanner covers delivered /api/webhook/market-scanner-alert reports; expanded-analysis covers delivered /api/webhook/expanded-analysis-alert reports; test-alert covers /api/admin/test-alert verification probes."
       },
       "Enriched": {
         "name": "enriched",
@@ -2003,6 +2487,42 @@
         "schema": {
           "type": "boolean"
         }
+      },
+      "AlertSymbol": {
+        "name": "symbol",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "\\S"
+        },
+        "example": "BTCUSDT",
+        "description": "Optional symbol filter (e.g. BTCUSDT, BINANCE:BTCUSDT, or AAPL). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against extracted symbol and exchange fields."
+      },
+      "AlertEventCategory": {
+        "name": "eventCategory",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "\\S"
+        },
+        "example": "price_surge",
+        "description": "Optional event category filter (e.g. price_surge, price_decline, regulatory). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against the eventCategory field."
+      },
+      "AlertExchange": {
+        "name": "exchange",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "\\S"
+        },
+        "example": "BINANCE",
+        "description": "Optional exchange filter (e.g. BINANCE, COINBASE). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against the extracted exchange field."
       },
       "IncludeText": {
         "name": "includeText",
@@ -2093,6 +2613,77 @@
           "maxLength": 128
         },
         "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Echoed in the response and persisted on stored alerts."
+      },
+      "NewsAnalysisSymbol": {
+        "name": "symbol",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "Filter by trading symbol (e.g. BTCUSDT)."
+      },
+      "NewsAnalysisEventCategory": {
+        "name": "eventCategory",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "Filter by detected news event category."
+      },
+      "NewsAnalysisThreshold": {
+        "name": "threshold",
+        "in": "query",
+        "schema": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.7
+        },
+        "description": "Confidence threshold above which an analysis is treated as a high-confidence signal."
+      },
+      "NewsAnalysisLimit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        },
+        "description": "Maximum number of analysis records to return (1-100)."
+      },
+      "SymbolAnalysisSummaryLimit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 500
+        },
+        "description": "Maximum number of recent symbol analyses to aggregate into the summary."
+      },
+      "SymbolAnalysisTimeframe": {
+        "name": "timeframe",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "example": "1h",
+        "description": "Filter by chart timeframe (e.g. 15m, 1h, 4h, 1D)."
+      },
+      "SymbolAnalysisAction": {
+        "name": "action",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "BUY",
+            "SELL",
+            "NO_TRADE"
+          ]
+        },
+        "description": "Filter by analysis decision action (BUY, SELL, or NO_TRADE)."
       }
     },
     "requestBodies": {
@@ -2244,13 +2835,47 @@
                       "discord"
                     ]
                   }
+                },
+                "dryRun": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "When true, fetch the stored alert and build the would-be payload, then return it without dispatching to any notification channel and without persisting a replay attempt."
                 }
               }
             },
             "example": {
               "channels": [
                 "telegram"
-              ]
+              ],
+              "dryRun": true
+            }
+          }
+        }
+      },
+      "TestAlert": {
+        "required": false,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/TestAlertRequest"
+            },
+            "examples": {
+              "minimal": {
+                "summary": "Default synthetic probe",
+                "value": {}
+              },
+              "custom": {
+                "summary": "Custom text with specific channels and dry-run",
+                "value": {
+                  "text": "Verification probe alert",
+                  "channels": [
+                    "telegram",
+                    "discord"
+                  ],
+                  "dryRun": true,
+                  "includeEnrichment": false
+                }
+              }
             }
           }
         }
@@ -2462,6 +3087,18 @@
                   "origClientOrderId": "cabros-574-1"
                 }
               }
+            }
+          }
+        }
+      },
+      "NewsMonitorPause": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsMonitorPauseRequest"
+            },
+            "example": {
+              "reason": "Gemini quota exhaustion"
             }
           }
         }
@@ -2873,7 +3510,7 @@
         }
       },
       "DeliveryResult": {
-        "description": "Per-channel delivery result. When ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION is enabled and the same exchange/symbol/timeframe/side signal fires within its cooldown window, the response includes suppressedRepeat: true with empty results and deliveredChannels while the alert remains persisted with a suppression marker.",
+        "description": "Per-channel delivery result. When ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION is enabled and the same exchange/symbol/timeframe/side signal fires within its cooldown window, the response includes suppressedRepeat: true with empty results and deliveredChannels while the alert remains persisted with a suppression marker. Replay endpoints that run with dryRun=true return payloadPreview, alertId, channels, and idempotencyKeyHashPrefix instead of dispatching to any channel.",
         "content": {
           "application/json": {
             "schema": {
@@ -2888,6 +3525,55 @@
                   "success": true
                 }
               ]
+            }
+          }
+        }
+      },
+      "TestAlertResult": {
+        "description": "Test alert verification probe result. Contains channel delivery results or dry-run formatting preview.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/TestAlertResult"
+            },
+            "examples": {
+              "liveProbe": {
+                "summary": "Successful live probe alert",
+                "value": {
+                  "ok": true,
+                  "alertId": "test-alert-12345",
+                  "persisted": true,
+                  "results": [
+                    {
+                      "channel": "telegram",
+                      "success": true,
+                      "messageId": "msg-99"
+                    }
+                  ],
+                  "dryRun": false,
+                  "enrichmentApplied": false,
+                  "tokenUsage": null
+                }
+              },
+              "dryRun": {
+                "summary": "Dry run verification without side effects",
+                "value": {
+                  "ok": true,
+                  "alertId": "dryrun-test-alert-12345",
+                  "persisted": false,
+                  "results": [],
+                  "dryRun": true,
+                  "enrichmentApplied": false,
+                  "tokenUsage": null,
+                  "formatted": {
+                    "telegram": {
+                      "length": 45,
+                      "preview": "[TEST-ALERT] cabros-bot smoke probe...",
+                      "text": "[TEST-ALERT] cabros-bot smoke probe 2026-09-12T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -2908,6 +3594,16 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/SymbolAnalysisResult"
+            }
+          }
+        }
+      },
+      "VolumeConfirmationResult": {
+        "description": "Structured TradingView MCP volume confirmation data, decision, and timing metadata.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/VolumeConfirmationResult"
             }
           }
         }
@@ -3132,10 +3828,29 @@
             },
             "example": {
               "featureFlags": {
+                "alertScheduler": false,
                 "equityMarketData": false,
                 "firebaseRemoteConfig": false
               },
               "dependencies": {
+                "alertScheduler": {
+                  "enabled": false,
+                  "configured": false,
+                  "ready": false,
+                  "status": "disabled",
+                  "role": "web",
+                  "running": false,
+                  "intervalMs": 60000,
+                  "batchLimit": 10,
+                  "scheduleCount": 0,
+                  "activeCount": 0,
+                  "lastRunAt": null,
+                  "lastRunDurationMs": null,
+                  "lastRunExecutedCount": 0,
+                  "lastRunErrorCount": 0,
+                  "lastError": null,
+                  "schedules": []
+                },
                 "geminiQuota": {
                   "enabled": true,
                   "configured": true,
@@ -3218,12 +3933,469 @@
             }
           }
         }
+      },
+      "NewsAnalysisSummaryResult": {
+        "description": "Aggregated news-monitor analyses and false-positive tracking metrics.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsAnalysisSummary"
+            }
+          }
+        }
+      },
+      "NewsAnalysisListResult": {
+        "description": "Paginated list of recorded news analysis records.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsAnalysisList"
+            }
+          }
+        }
+      },
+      "NewsMonitorPauseResult": {
+        "description": "News monitor successfully paused",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsMonitorPauseResponse"
+            },
+            "example": {
+              "message": "News monitor analysis paused",
+              "paused": true,
+              "pausedAt": "2026-09-04T05:00:00.000Z",
+              "reason": "Gemini quota exhaustion"
+            }
+          }
+        }
+      },
+      "NewsMonitorResumeResult": {
+        "description": "News monitor successfully resumed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsMonitorResumeResponse"
+            },
+            "example": {
+              "message": "News monitor analysis resumed",
+              "paused": false,
+              "resumedAt": "2026-09-04T05:10:00.000Z",
+              "wasPaused": true,
+              "previouslyPausedAt": "2026-09-04T05:00:00.000Z"
+            }
+          }
+        }
+      },
+      "NewsMonitorStatusResult": {
+        "description": "Current news monitor pause status",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/NewsMonitorStatusResponse"
+            },
+            "example": {
+              "paused": false,
+              "pausedAt": null,
+              "reason": null
+            }
+          }
+        }
+      },
+      "SymbolAnalysesList": {
+        "description": "Paginated list of recorded symbol analyses",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "analyses",
+                "count",
+                "limit"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "analyses": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SymbolAnalysisRecord"
+                  }
+                },
+                "count": {
+                  "type": "integer",
+                  "example": 1
+                },
+                "limit": {
+                  "type": "integer",
+                  "example": 50
+                },
+                "nextCursor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "example": null
+                }
+              }
+            }
+          }
+        }
+      },
+      "SymbolAnalysesSummaryResult": {
+        "description": "Aggregated summary of recorded symbol analyses",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "summary"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "summary": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "totalAnalyses",
+                    "byAction",
+                    "bySymbol",
+                    "byTimeframe",
+                    "byExchange",
+                    "window"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "totalAnalyses": {
+                      "type": "integer",
+                      "example": 10
+                    },
+                    "byAction": {
+                      "type": "object",
+                      "properties": {
+                        "BUY": {
+                          "type": "integer",
+                          "example": 5
+                        },
+                        "SELL": {
+                          "type": "integer",
+                          "example": 3
+                        },
+                        "NO_TRADE": {
+                          "type": "integer",
+                          "example": 2
+                        }
+                      }
+                    },
+                    "bySymbol": {
+                      "type": "object"
+                    },
+                    "byTimeframe": {
+                      "type": "object"
+                    },
+                    "byExchange": {
+                      "type": "object"
+                    },
+                    "window": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "schemas": {
       "JsonObject": {
         "type": "object",
         "additionalProperties": true
+      },
+      "Healthcheck": {
+        "type": "object",
+        "required": [
+          "uptime"
+        ],
+        "properties": {
+          "uptime": {
+            "type": "number",
+            "description": "Process uptime in seconds."
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeepHealthcheck": {
+        "type": "object",
+        "required": [
+          "status",
+          "uptime",
+          "channels"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded"
+            ]
+          },
+          "uptime": {
+            "type": "number"
+          },
+          "degradedChannels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "channels": {
+            "type": "object",
+            "required": [
+              "telegram",
+              "whatsapp",
+              "discord"
+            ],
+            "properties": {
+              "telegram": { "$ref": "#/components/schemas/ChannelReadiness" },
+              "whatsapp": { "$ref": "#/components/schemas/ChannelReadiness" },
+              "discord": { "$ref": "#/components/schemas/ChannelReadiness" }
+            }
+          }
+        }
+      },
+      "TestAlertRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Optional custom alert probe text. Defaults to formatted smoke alert with timestamp."
+          },
+          "channels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            },
+            "description": "Optional subset of channels to probe. Defaults to all enabled channels."
+          },
+          "telegramChatId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional Telegram chat ID destination override."
+          },
+          "telegramThreadId": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional Telegram forum topic message_thread_id override (0 routes to the chat general topic)."
+          },
+          "whatsappChatId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional GreenAPI WhatsApp chat ID destination override."
+          },
+          "discordWebhookUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://([a-zA-Z0-9-]+\\.)?(discord\\.com|discordapp\\.com)/api/webhooks/\\d+/[a-zA-Z0-9_-]+",
+            "description": "Optional HTTPS Discord webhook URL override."
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, simulates formatting and channel routing without dispatching or persisting."
+          },
+          "includeEnrichment": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, runs alert enrichment."
+          }
+        }
+      },
+      "TestAlertResult": {
+        "type": "object",
+        "required": [
+          "ok",
+          "alertId",
+          "persisted",
+          "results",
+          "dryRun"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "Whether the test alert probe succeeded."
+          },
+          "alertId": {
+            "type": "string",
+            "description": "Probe alert identifier (UUID or Firestore document ID)."
+          },
+          "persisted": {
+            "type": "boolean",
+            "description": "Whether the alert was persisted to Firestore (false for dry-run)."
+          },
+          "results": {
+            "type": "array",
+            "description": "Channel delivery results.",
+            "items": {
+              "$ref": "#/components/schemas/JsonObject"
+            }
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "True when executed as dry-run probe."
+          },
+          "enrichmentApplied": {
+            "type": "boolean",
+            "description": "Whether enrichment was applied."
+          },
+          "tokenUsage": {
+            "type": "object",
+            "nullable": true,
+            "description": "Token usage summary if enrichment was run."
+          },
+          "formatted": {
+            "type": "object",
+            "nullable": true,
+            "description": "Formatted text previews per channel when dryRun is true."
+          }
+        }
+      },
+      "DeliveryMetrics": {
+        "type": "object",
+        "description": "Aggregate in-memory delivery SLA counters exposed through /api/status and /api/capabilities. Reset on process restart. Omitted when no channel has recorded any delivery.",
+        "required": [
+          "window",
+          "success",
+          "failure",
+          "total",
+          "successRate",
+          "averageDeliveryMs",
+          "byChannel"
+        ],
+        "properties": {
+          "window": {
+            "type": "object",
+            "required": [
+              "startedAt",
+              "durationMs"
+            ],
+            "properties": {
+              "startedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "durationMs": {
+                "type": "number",
+                "format": "int64"
+              }
+            }
+          },
+          "success": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failure": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "successRate": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "averageDeliveryMs": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "byChannel": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DeliveryChannelMetrics"
+            }
+          }
+        }
+      },
+      "ChannelReadiness": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "ready",
+          "status"
+        ],
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "ready": { "type": "boolean" },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "misconfigured",
+              "disabled",
+              "error",
+              "unknown"
+            ]
+          },
+          "error": { "type": "string" }
+        }
+      },
+      "DeliveryChannelMetrics": {
+        "type": "object",
+        "required": [
+          "success",
+          "failure",
+          "total",
+          "successRate",
+          "averageDeliveryMs"
+        ],
+        "properties": {
+          "success": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failure": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "successRate": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "averageDeliveryMs": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          }
+        }
       },
       "BootstrapReadiness": {
         "type": "object",
@@ -3954,7 +5126,7 @@
       },
       "StoredAlert": {
         "type": "object",
-        "description": "Stored alert document. The `source` field identifies the producing flow (webhook, news-monitor, market-scanner, expanded-analysis). When the report text exceeded the 20,000-character storage cap, `truncated: true` and `originalLength` are populated so consumers and replay can flag the loss; replay will redeliver only the truncated text.",
+        "description": "Stored alert document. The `source` field identifies the producing flow (webhook, news-monitor, market-scanner, expanded-analysis, test-alert). When the report text exceeded the 20,000-character storage cap, `truncated: true` and `originalLength` are populated so consumers and replay can flag the loss; replay will redeliver only the truncated text.",
         "properties": {
           "id": {
             "type": "string"
@@ -4002,7 +5174,8 @@
               "webhook",
               "news-monitor",
               "market-scanner",
-              "expanded-analysis"
+              "expanded-analysis",
+              "test-alert"
             ]
           },
           "useTradingViewData": {
@@ -4280,11 +5453,26 @@
                 "type": "object",
                 "description": "Counts TradingView enrichment outcomes; requested alerts without a stored status are reported as unrecorded.",
                 "properties": {
-                  "full": { "type": "integer", "minimum": 0 },
-                  "partial": { "type": "integer", "minimum": 0 },
-                  "failed": { "type": "integer", "minimum": 0 },
-                  "not_applicable": { "type": "integer", "minimum": 0 },
-                  "unrecorded": { "type": "integer", "minimum": 0 }
+                  "full": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "partial": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "failed": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "not_applicable": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "unrecorded": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
                 }
               },
               "riskMetadataCoverage": {
@@ -4302,22 +5490,43 @@
                   "zeroSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "oneToTwoSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "threePlusSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "totalSourceCount": {
@@ -4683,7 +5892,9 @@
           "success",
           "symbol",
           "analysis",
-          "alertText"
+          "alertText",
+          "requestId",
+          "processingTimeMs"
         ],
         "properties": {
           "success": {
@@ -4717,9 +5928,71 @@
           "requestId": {
             "type": "string"
           },
-          "totalDurationMs": {
+          "processingTimeMs": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Total endpoint execution time in milliseconds."
+          }
+        }
+      },
+      "VolumeConfirmationResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "symbol",
+          "exchange",
+          "asset",
+          "timeframe",
+          "decision",
+          "requestId",
+          "processingTimeMs"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          },
+          "confirmed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "confirm",
+              "deny",
+              "unknown"
+            ]
+          },
+          "volumeRatio": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "processingTimeMs": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total endpoint execution time in milliseconds."
           }
         }
       },
@@ -5407,6 +6680,52 @@
             "items": {
               "type": "string"
             }
+          },
+          "alertId": {
+            "type": "string",
+            "description": "Stored alert ID echoed back from replay endpoints."
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            },
+            "description": "Channels selected for this replay; when dryRun is true, no dispatch occurs."
+          },
+          "idempotencyKeyHashPrefix": {
+            "type": "string",
+            "description": "SHA-256 hash prefix (12 characters) of the idempotency key echoed back from replay endpoints to identify the request without exposing the raw key in cached responses."
+          },
+          "payloadPreview": {
+            "type": "object",
+            "description": "Returned only by replay endpoints when dryRun=true. Contains the exact payload that would be dispatched (text, enriched data, channel routing) without sending to any channel or persisting a replay attempt.",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "enriched": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": true,
+                "description": "Stored enrichmentData from the alert. Mirrors the alert.enriched shape (may include sentiment, insights, technical_levels, etc.)."
+              },
+              "channelRouting": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "Per-channel effective destination routing that would have been applied (telegramChatId, telegramThreadId, whatsappChatId, discordWebhookUrl), resolving channel service defaults and topic routes when stored alert lacks overrides."
+              }
+            }
+          },
+          "replayId": {
+            "type": "string",
+            "description": "Persisted replay attempt ID returned only on live replay; absent when dryRun=true."
           }
         }
       },
@@ -5663,7 +6982,7 @@
       },
       "Status": {
         "type": "object",
-        "description": "Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals).",
+        "description": "Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals).",
         "properties": {
           "readiness": {
             "$ref": "#/components/schemas/BootstrapReadiness"
@@ -5676,6 +6995,9 @@
           },
           "deliveryChannels": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "deliveryMetrics": {
+            "$ref": "#/components/schemas/DeliveryMetrics"
           },
           "dependencies": {
             "type": "object",
@@ -5849,6 +7171,366 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "NewsAnalysisRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "symbol",
+          "analyzedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "eventCategory": {
+            "type": "string",
+            "nullable": true
+          },
+          "sentiment": {
+            "type": "number",
+            "nullable": true
+          },
+          "confidence": {
+            "type": "number",
+            "nullable": true
+          },
+          "headline": {
+            "type": "string",
+            "nullable": true
+          },
+          "alertSent": {
+            "type": "boolean"
+          },
+          "promptVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "tokens": {
+            "type": "object",
+            "nullable": true
+          },
+          "analyzedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "NewsAnalysisSummary": {
+        "type": "object",
+        "required": [
+          "success",
+          "totalAnalyses",
+          "totalAlertsSent",
+          "alertRatePercent",
+          "bySymbol",
+          "byEventCategory",
+          "falsePositiveProxy",
+          "window"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "totalAnalyses": {
+            "type": "integer"
+          },
+          "totalAlertsSent": {
+            "type": "integer"
+          },
+          "alertRatePercent": {
+            "type": "number"
+          },
+          "bySymbol": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "count": {
+                  "type": "integer"
+                },
+                "alertsSent": {
+                  "type": "integer"
+                },
+                "alertRatePercent": {
+                  "type": "number"
+                },
+                "avgConfidence": {
+                  "type": "number"
+                }
+              }
+            }
+          },
+          "byEventCategory": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "count": {
+                  "type": "integer"
+                },
+                "alertsSent": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "falsePositiveProxy": {
+            "type": "object",
+            "required": [
+              "totalHighConfidenceAlerts",
+              "falsePositiveAlerts",
+              "falsePositiveRatePercent"
+            ],
+            "properties": {
+              "totalHighConfidenceAlerts": {
+                "type": "integer"
+              },
+              "falsePositiveAlerts": {
+                "type": "integer"
+              },
+              "falsePositiveRatePercent": {
+                "type": "number"
+              },
+              "description": {
+                "type": "string"
+              }
+            }
+          },
+          "window": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "nullable": true
+              },
+              "to": {
+                "type": "string",
+                "nullable": true
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "threshold": {
+                "type": "number"
+              },
+              "symbol": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          }
+        }
+      },
+      "NewsAnalysisList": {
+        "type": "object",
+        "required": [
+          "success",
+          "analyses",
+          "count",
+          "limit"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "analyses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NewsAnalysisRecord"
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "NewsMonitorPauseRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Optional operational reason for pausing news monitor analysis",
+            "example": "Gemini quota exhaustion"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewsMonitorPauseResponse": {
+        "type": "object",
+        "required": [
+          "message",
+          "paused",
+          "pausedAt",
+          "reason"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "News monitor analysis paused"
+          },
+          "paused": {
+            "type": "boolean",
+            "example": true
+          },
+          "pausedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "example": "Gemini quota exhaustion"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewsMonitorResumeResponse": {
+        "type": "object",
+        "required": [
+          "message",
+          "paused",
+          "resumedAt"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "News monitor analysis resumed"
+          },
+          "paused": {
+            "type": "boolean",
+            "example": false
+          },
+          "resumedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "wasPaused": {
+            "type": "boolean",
+            "example": true
+          },
+          "previouslyPausedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewsMonitorStatusResponse": {
+        "type": "object",
+        "required": [
+          "paused",
+          "pausedAt",
+          "reason"
+        ],
+        "properties": {
+          "paused": {
+            "type": "boolean",
+            "example": false
+          },
+          "pausedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          }
+        },
+        "additionalProperties": false
+      },
+      "SymbolAnalysisRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "requestId",
+          "recordedAt",
+          "expiresAt",
+          "symbol",
+          "exchange",
+          "timeframe",
+          "action"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "recordedAt": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL",
+              "NO_TRADE"
+            ]
+          },
+          "price": {
+            "type": "number",
+            "nullable": true
+          },
+          "rsi": {
+            "type": "number",
+            "nullable": true
+          },
+          "indicators": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "risk": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "analysisStatus": {
+            "type": "string"
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "alertText": {
+            "type": "string"
+          },
+          "processingTimeMs": {
+            "type": "integer"
           }
         }
       }

@@ -22,6 +22,7 @@ const {
 	getRequestedChannels,
 	validateNotificationRouting,
 } = require('../../../../services/notification/requestRouting');
+const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 
 const promptService = getPromptService();
 
@@ -825,6 +826,16 @@ class NewsAnalyzer {
 				status: AnalysisStatus.ANALYZED,
 				alert: null,
 				cached: false,
+				analysisRecord: {
+					symbol,
+					eventCategory: EventCategory.NONE,
+					sentiment: geminiAnalysis.sentiment_score ?? 0,
+					confidence: geminiAnalysis.confidence ?? 0,
+					headline: geminiAnalysis.headline || '',
+					alertSent: false,
+					promptVersion: geminiAnalysis.promptVersion,
+					tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+				},
 			};
 		}
 
@@ -846,6 +857,16 @@ class NewsAnalyzer {
 				status: AnalysisStatus.ANALYZED,
 				alert: null,
 				cached: false,
+				analysisRecord: {
+					symbol,
+					eventCategory: geminiAnalysis.event_category,
+					sentiment: geminiAnalysis.sentiment_score ?? 0,
+					confidence: geminiAnalysis.confidence ?? 0,
+					headline: geminiAnalysis.headline || '',
+					alertSent: false,
+					promptVersion: geminiAnalysis.promptVersion,
+					tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+				},
 			};
 		}
 
@@ -859,6 +880,16 @@ class NewsAnalyzer {
 					status: AnalysisStatus.ANALYZED,
 					alert: null,
 					cached: false,
+					analysisRecord: {
+						symbol,
+						eventCategory: geminiAnalysis.event_category,
+						sentiment: geminiAnalysis.sentiment_score ?? 0,
+						confidence: enrichmentMetadata.enriched_confidence,
+						headline: geminiAnalysis.headline || '',
+						alertSent: false,
+						promptVersion: geminiAnalysis.promptVersion,
+						tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+					},
 				};
 			}
 		}
@@ -874,6 +905,16 @@ class NewsAnalyzer {
 				alert,
 				deliveryResults: [],
 				cached: false,
+				analysisRecord: {
+					symbol,
+					eventCategory: alert.eventCategory,
+					sentiment: alert.sentimentScore ?? 0,
+					confidence: alert.confidence,
+					headline: alert.headline || geminiAnalysis.headline || '',
+					alertSent: false,
+					promptVersion: alert.promptVersion || geminiAnalysis.promptVersion,
+					tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+				},
 			};
 		}
 
@@ -900,6 +941,16 @@ class NewsAnalyzer {
 				alert,
 				deliveryResults: [],
 				cached: false,
+				analysisRecord: {
+					symbol,
+					eventCategory: alert.eventCategory,
+					sentiment: alert.sentimentScore ?? 0,
+					confidence: alert.confidence,
+					headline: alert.headline || geminiAnalysis.headline || '',
+					alertSent: false,
+					promptVersion: alert.promptVersion || geminiAnalysis.promptVersion,
+					tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+				},
 			};
 		}
 		const deliveryResults = await sendWithNotificationRouting(notificationMgr, alert, routing);
@@ -955,11 +1006,22 @@ class NewsAnalyzer {
 			deliveryResults,
 		});
 
+		const alertSent = Array.isArray(deliveryResults) && deliveryResults.some((d) => d && d.success === true);
 		return {
 			status: AnalysisStatus.ANALYZED,
 			alert,
 			deliveryResults,
 			cached: false,
+			analysisRecord: {
+				symbol,
+				eventCategory: alert.eventCategory,
+				sentiment: alert.sentimentScore ?? 0,
+				confidence: alert.confidence,
+				headline: alert.headline || geminiAnalysis.headline || '',
+				alertSent,
+				promptVersion: alert.promptVersion || geminiAnalysis.promptVersion,
+				tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+			},
 		};
 	}
 
@@ -1194,7 +1256,8 @@ class NewsAnalyzer {
 		}
 
 		if (geminiAnalysis.invalidation_hint && typeof geminiAnalysis.invalidation_hint === 'string' && geminiAnalysis.invalidation_hint.trim()) {
-			context += `\n*Invalidación:* ${geminiAnalysis.invalidation_hint.trim()}`;
+			const escapedInvalidationHint = new MarkdownV2Formatter().format(geminiAnalysis.invalidation_hint.trim());
+			context += `\n*Invalidación:* ${escapedInvalidationHint}`;
 		}
 
 		// Derive outcome barriers when marketContext has a valid numeric price
@@ -1258,6 +1321,7 @@ class NewsAnalyzer {
 			uncertainty_reason: geminiAnalysis.uncertainty_reason,
 			invalidation_hint: geminiAnalysis.invalidation_hint,
 			calibration: geminiAnalysis.calibration || undefined,
+			promptVersion: geminiAnalysis.promptVersion || undefined,
 			timestamp: Date.now(),
 			marketContext: marketContext || undefined,
 			enrichmentMetadata: enrichmentMetadata || undefined,

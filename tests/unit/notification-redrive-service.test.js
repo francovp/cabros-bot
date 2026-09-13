@@ -170,6 +170,33 @@ describe('NotificationRedriveService', () => {
 			expect(service.getPendingCount()).toBe(0);
 		});
 
+		it('does not record when options or alert indicates a probe or redrive ineligible', async () => {
+			const alert = { text: 'Alert body', correlationId: 'corr-probe' };
+			const results = [
+				{ channel: 'telegram', success: false, error: 'Network timeout' },
+			];
+
+			// options.isProbe: true
+			let recorded = await service.recordDeliveryResults(alert, results, { isProbe: true });
+			expect(recorded).toEqual([]);
+			expect(service.getPendingCount()).toBe(0);
+
+			// options.redriveEligible: false
+			recorded = await service.recordDeliveryResults(alert, results, { redriveEligible: false });
+			expect(recorded).toEqual([]);
+			expect(service.getPendingCount()).toBe(0);
+
+			// alert.isProbe: true
+			recorded = await service.recordDeliveryResults({ ...alert, isProbe: true }, results);
+			expect(recorded).toEqual([]);
+			expect(service.getPendingCount()).toBe(0);
+
+			// alert.redriveEligible: false
+			recorded = await service.recordDeliveryResults({ ...alert, redriveEligible: false }, results);
+			expect(recorded).toEqual([]);
+			expect(service.getPendingCount()).toBe(0);
+		});
+
 		it('records only failed channels and stores in fallback in-memory store', async () => {
 			const alert = { text: 'Alert body', correlationId: 'corr-123' };
 			const results = [

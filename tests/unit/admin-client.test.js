@@ -17,6 +17,7 @@ class FakeElement {
 		this.value = '';
 		this.disabled = false;
 		this._text = '';
+		this.name = '';
 	}
 
 	get textContent() {
@@ -39,7 +40,10 @@ class FakeElement {
 			const selectFirstOption = this.tagName === 'SELECT' && this.children.length === 0;
 			node.parentNode = this;
 			this.children.push(node);
-			if (selectFirstOption) this.value = node.value;
+			if (selectFirstOption) {
+				const firstOpt = node.tagName === 'OPTION' ? node : find(node, (n) => n.tagName === 'OPTION');
+				if (firstOpt && firstOpt.value !== undefined) this.value = firstOpt.value;
+			}
 		});
 	}
 
@@ -60,6 +64,7 @@ class FakeElement {
 
 	setAttribute(name, value) {
 		this.attributes[name] = String(value);
+		if (name === 'name') this.name = String(value);
 	}
 
 	removeAttribute(name) {
@@ -76,9 +81,28 @@ class FakeElement {
 
 	select() {}
 
+	querySelector(selector) {
+		const results = this.querySelectorAll(selector);
+		return results[0] || null;
+	}
+
 	querySelectorAll(selector) {
 		if (selector === '[data-view]') return findAll(this, (node) => node.dataset.view);
-		return [];
+		// Simple querySelectorAll for common selectors used in the builder functions
+		return findAll(this, (node) => {
+			if (selector.startsWith('select[name=') || selector.startsWith('input[name=') || selector.startsWith('textarea[name=')) {
+				const attrMatch = selector.match(/\[name=([^\]]+)\]/);
+				if (attrMatch && node.attributes['name'] === attrMatch[1]) return true;
+				if (attrMatch && node.name === attrMatch[1]) return true;
+			}
+			if (selector === 'textarea[name=body]') {
+				return node.tagName === 'TEXTAREA' && node.name === 'body';
+			}
+			if (selector.startsWith('option:checked')) {
+				return node.tagName === 'OPTION' && node.selected;
+			}
+			return false;
+		});
 	}
 }
 
@@ -265,6 +289,432 @@ describe('admin browser client', () => {
 		expect(overview.textContent).not.toContain('undefined');
 	});
 
+	it('uses effective dependency health in overview cards', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				sentry: { status: 'ready', profiling: { status: 'misconfigured' } },
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => url === '/openapi.json' ? response(contract) : response(status),
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		expect(browser.elementsById.view.textContent).toContain('SentryNeeds attention');
+	});
+
+	it('renders the status view as a searchable dependency explorer', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production', commit: 'abc123' },
+			featureFlags: { telegramBot: true },
+			deliveryChannels: {
+				telegram: { enabled: true, status: 'ready' },
+				whatsapp: { enabled: false, status: 'disabled' },
+			},
+			dependencies: {
+				telegram: { enabled: true, configured: true, status: 'ready', provider: 'Telegram' },
+				tradingViewMcp: {
+					enabled: true,
+					configured: true,
+					status: 'degraded',
+					provider: 'MCP',
+					lastCheckedAt: '2026-08-31T00:00:00Z',
+					lastSuccessAt: '2026-08-30T23:00:00Z',
+					lastFailureAt: '2026-08-30T23:30:00Z',
+					lastErrorCategory: '<img src=x onerror=alert(1)>',
+					successCount: 4,
+					failureCount: 2,
+				},
+				scannerPresetStorage: {
+					enabled: false,
+					configured: false,
+					status: 'disabled',
+					mode: 'ephemeral',
+					backend: 'memory',
+				},
+				groundingCoalescing: {
+					enabled: true,
+					windowMs: 5000,
+					hits: 3,
+				},
+				unknownDependency: { status: 'unknown' },
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		const cards = () => findAll(view, (node) => node.className.includes('status-detail-card'));
+		expect(view.textContent).toContain('Dependency health');
+		expect(view.textContent).toContain('TradingView MCP');
+		expect(view.textContent).toContain('Needs attention');
+		expect(view.textContent).toContain('<img src=x onerror=alert(1)>');
+		expect(view.textContent).toContain('Successes4');
+		expect(view.textContent).toContain('ephemeral');
+		expect(view.textContent).toContain('2 need attention');
+		expect(cards()).toHaveLength(5);
+		expect(cards()[0].textContent).toContain('TradingView MCP');
+		expect(cards()[1].textContent).toContain('Unknown Dependency');
+		expect(cards()[2].textContent).toContain('Grounding Coalescing');
+		expect(cards().some((card) => card.textContent.includes('TradingView MCP'))).toBe(true);
+		expect(cards().some((card) => card.textContent.includes('Scanner preset storage'))).toBe(true);
+		expect(cards().some((card) => card.textContent.includes('Grounding Coalescing'))).toBe(true);
+		expect(findAll(view, (node) => node.tagName === 'IMG')).toHaveLength(0);
+
+		const search = find(view, (node) => node.tagName === 'INPUT' && node.name === 'dependency-search');
+		search.value = 'Telegram';
+		await search.dispatch('input');
+		expect(cards()).toHaveLength(1);
+		expect(cards()[0].textContent).toContain('Telegram');
+
+		search.value = '';
+		await search.dispatch('input');
+		const tone = find(view, (node) => node.tagName === 'SELECT' && node.name === 'dependency-tone');
+		tone.value = 'ready';
+		await tone.dispatch('change');
+		expect(cards()).toHaveLength(1);
+		expect(cards()[0].textContent).toContain('Telegram');
+
+		tone.value = 'attention';
+		await tone.dispatch('change');
+		expect(cards()).toHaveLength(2);
+		expect(cards()[0].textContent).toContain('TradingView MCP');
+
+		tone.value = 'unknown';
+		await tone.dispatch('change');
+		expect(cards()).toHaveLength(1);
+		expect(cards()[0].textContent).toContain('Unknown Dependency');
+	});
+
+	it('renders Binance trading safety fields in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				binanceTrading: {
+					status: 'ready',
+					environment: 'testnet',
+					allowedSymbols: ['BTCUSDT', 'ETHUSDT'],
+					maxNotionalConfigured: true,
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const card = find(browser.elementsById.view, (node) => node.className.includes('status-detail-card'));
+		expect(card.textContent).toContain('Environmenttestnet');
+		expect(card.textContent).toContain('Allowed symbolsBTCUSDT, ETHUSDT');
+		expect(card.textContent).toContain('Max notional configuredtrue');
+	});
+
+	it('renders safe operational counters in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				groundingCoalescing: { enabled: true, windowMs: 5000, activeEntries: 2, hits: 3, misses: 4, failures: 1 },
+				alertSignalRepeatSuppression: {
+					enabled: true,
+					suppressedCount: 7,
+					lastSuppressedAt: '2026-09-08T00:00:00Z',
+					activeTrackedSignals: 2,
+				},
+				newsMonitorScheduler: {
+					status: 'ready', intervalMs: 300000, batchLimit: 10, lastRunExecutedCount: 4, lastRunErrorCount: 1,
+				},
+				notificationRedrive: {
+					status: 'ready', intervalMs: 60000, batchLimit: 25, maxAttempts: 5, maxAgeMs: 86400000, pendingCount: 2, deliveredCount: 9,
+					exhaustedCount: 1, zeroChannelBroadcasts: 4, lastRunScannedCount: 8, lastRunRedrivenCount: 3,
+				},
+				whatsappCommandBridge: {
+					status: 'degraded', lastPollAt: '2026-09-08T00:00:00Z',
+					lastError: 'poll failed', lastErrorAt: '2026-09-08T00:01:00Z',
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Window (ms)5000');
+		expect(view.textContent).toContain('Active entries2');
+		expect(view.textContent).toContain('Hits3');
+		expect(view.textContent).toContain('Misses4');
+		expect(view.textContent).toContain('Suppressed7');
+		expect(view.textContent).toContain('Active tracked signals2');
+		expect(view.textContent).toContain('Interval (ms)300000');
+		expect(view.textContent).toContain('Batch limit10');
+		expect(view.textContent).toContain('Max attempts5');
+		expect(view.textContent).toContain('Max age (ms)86400000');
+		expect(view.textContent).toContain('Last run executed4');
+		expect(view.textContent).toContain('Last run scanned8');
+		expect(view.textContent).toContain('Last run redriven3');
+		expect(view.textContent).toContain('Pending2');
+		expect(view.textContent).toContain('Delivered9');
+		expect(view.textContent).toContain('Exhausted1');
+		expect(view.textContent).toContain('Zero-channel broadcasts4');
+		expect(view.textContent).toContain('Last poll');
+		expect(view.textContent).toContain('Last error detailpoll failed');
+		expect(view.textContent).toContain('Last error at');
+	});
+
+	it('includes nested profiling health in dependency attention', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				sentry: {
+					status: 'ready',
+					profiling: { status: 'misconfigured', enabled: true, configured: false },
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('1 need attention');
+		expect(view.textContent).not.toContain('Dependencies1 ready');
+		expect(view.textContent).toContain('Profiling');
+		expect(view.textContent).toContain('ProfilingNeeds attention');
+		const dependencyCard = find(view, (node) => node.className.includes('status-detail-card'));
+		const summaryBadge = find(dependencyCard, (node) => node.className.includes('status-badge'));
+		expect(summaryBadge.className).toContain('status-misconfigured');
+		expect(summaryBadge.textContent).toBe('Needs attention');
+		const search = find(view, (node) => node.tagName === 'INPUT' && node.name === 'dependency-search');
+		search.value = 'misconfigured';
+		await search.dispatch('input');
+		expect(findAll(view, (node) => node.className.includes('status-detail-card'))).toHaveLength(1);
+		search.value = 'Needs attention';
+		await search.dispatch('input');
+		expect(findAll(view, (node) => node.className.includes('status-detail-card'))).toHaveLength(1);
+		const tone = find(view, (node) => node.tagName === 'SELECT' && node.name === 'dependency-tone');
+		tone.value = 'ready';
+		await tone.dispatch('change');
+		expect(findAll(view, (node) => node.className.includes('status-detail-card'))).toHaveLength(0);
+	});
+
+	it('renders Gemini quota cooldown telemetry in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				geminiQuota: {
+					status: 'degraded', cooldownActive: true, remainingCooldownMs: 4500,
+					lastTriggeredAt: '2026-09-08T00:00:00Z', triggersTotal: 2,
+					braveFallbacksDuringCooldown: 3, lastBraveFallbackAt: '2026-09-08T00:01:00Z',
+					metrics: { totalRequests: 10, successRequests: 7, failureRequests: 2, timeoutRequests: 1 },
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Cooldown activetrue');
+		expect(view.textContent).toContain('Remaining cooldown (ms)4500');
+		expect(view.textContent).toContain('Triggers total2');
+		expect(view.textContent).toContain('Brave fallbacks during cooldown3');
+		expect(view.textContent).toContain('Last triggered');
+		expect(view.textContent).toContain('Last Brave fallback');
+		expect(view.textContent).toContain('Total requests10');
+		expect(view.textContent).toContain('Success requests7');
+		expect(view.textContent).toContain('Failure requests2');
+		expect(view.textContent).toContain('Timeout requests1');
+	});
+
+	it('clears every structured status section after a refresh failure', async () => {
+		let statusRequests = 0;
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: { telegramBot: true },
+			deliveryChannels: { telegram: { status: 'ready' } },
+			dependencies: { telegram: { status: 'ready' } },
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return ++statusRequests === 1 ? response(status) : response({ error: 'temporary failure' }, 503);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Telegram');
+		expect(view.textContent).toContain('Last checked');
+
+		await findButton(view, 'Refresh status').dispatch('click');
+		await flush();
+
+		expect(view.textContent).not.toContain('Telegram');
+		expect(view.textContent).not.toContain('Telegram Bot');
+		expect(view.textContent).not.toContain('Last checked');
+		expect(view.textContent).toContain('Status unavailable. Check the API key and service logs.');
+	});
+
+	it('renders safe queue telemetry in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				jobExecutionQueue: {
+					status: 'disabled', mode: 'local', enqueued: 12, claimed: 10, completed: 9, failed: 1,
+					lastErrorCode: 'QUEUE_TIMEOUT', lastEnqueuedAt: '2026-09-08T00:00:00Z',
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Enqueued12');
+		expect(view.textContent).toContain('Claimed10');
+		expect(view.textContent).toContain('Completed9');
+		expect(view.textContent).toContain('Failed1');
+		expect(view.textContent).toContain('Last error codeQUEUE_TIMEOUT');
+		expect(view.textContent).toContain('Last enqueued');
+	});
+
+	it('renders circuit breaker and Remote Config timestamps in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				tradingViewMcp: {
+					status: 'degraded',
+					circuitBreaker: {
+						state: 'open',
+						openedAt: '2026-09-08T00:00:00Z',
+						cooldownMs: 120000,
+						consecutiveFailures: 3,
+					},
+				},
+				remoteConfig: {
+					status: 'ready',
+					lastSuccessfulLoad: '2026-09-08T00:01:00Z',
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Circuit breaker stateopen');
+		expect(view.textContent).toContain('Circuit breaker opened');
+		expect(view.textContent).toContain('Circuit breaker cooldown (ms)120000');
+		expect(view.textContent).toContain('Circuit breaker consecutive failures3');
+		expect(view.textContent).toContain('Last successful load');
+	});
+
+	it('renders alert-path enrichment telemetry in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				tradingViewMcp: {
+					status: 'ready',
+					enrichment: {
+						alertPath: {
+							windowMs: 86400000, totalCount: 5, appliedCount: 3, failedCount: 2,
+							appliedRate24h: 60, failureRate24h: 40,
+						},
+					},
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Alert path total5');
+		expect(view.textContent).toContain('Alert path applied3');
+		expect(view.textContent).toContain('Alert path failed2');
+		expect(view.textContent).toContain('Alert path applied rate (%)60');
+		expect(view.textContent).toContain('Alert path failure rate (%)40');
+	});
+
 	it('waits for an API key before loading protected overview status', async () => {
 		const requests = [];
 		const browser = createBrowser({
@@ -408,10 +858,10 @@ describe('admin browser client', () => {
 			},
 		});
 		await flush();
-		browser.elementsById['api-key'].value = 'test-key';
 		await selectView(browser, 'status');
-		const form = findForm(browser.elementsById.view, 'GET /api/status');
-		await form.dispatch('submit');
+		browser.elementsById['api-key'].value = 'test-key';
+		const refreshButton = findButton(browser.elementsById.view, 'Refresh status');
+		await refreshButton.dispatch('click');
 		await flush();
 
 		expect(browser.timers.size).toBe(1);
@@ -419,7 +869,7 @@ describe('admin browser client', () => {
 		await flush();
 
 		expect(signal.aborted).toBe(true);
-		expect(form.textContent).toContain('Network error');
+		expect(browser.elementsById.view.textContent).toContain('Network error');
 		expect(browser.timers.size).toBe(0);
 	});
 
@@ -519,7 +969,7 @@ describe('admin browser client', () => {
 		const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
 			&& node.textContent.includes('Playground'));
 		const select = find(playground, (node) => node.tagName === 'SELECT');
-		select.value = select.children.find((option) => option.textContent.includes('POST /api/webhook/alert')).value;
+		select.value = find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes('POST /api/webhook/alert')).value;
 		await select.dispatch('change');
 		await playground.dispatch('submit');
 		await flush();
@@ -591,9 +1041,9 @@ describe('admin browser client', () => {
 		const overviewViewButton = find(browser.body, (node) => node.dataset.view === 'overview');
 		expect(statusViewButton.attributes['aria-current']).toBe('page');
 		expect(overviewViewButton.attributes['aria-current']).toBeUndefined();
-		const statusForm = findForm(browser.elementsById.view, 'GET /api/status');
-		expect(statusForm).toBeDefined();
-		await statusForm.dispatch('submit');
+		const refreshButton = findButton(browser.elementsById.view, 'Refresh status');
+		expect(refreshButton).toBeDefined();
+		await refreshButton.dispatch('click');
 		await flush();
 		expect(requests.at(-1)[1].headers.Authorization).toBe('Bearer firebase-token');
 
@@ -626,15 +1076,15 @@ describe('admin browser client', () => {
 		await browser.elementsById['save-key'].dispatch('click');
 
 		await selectView(browser, 'status');
-		const statusForm = findForm(browser.elementsById.view, 'GET /api/status');
-		await statusForm.dispatch('submit');
+		const refreshButton = findButton(browser.elementsById.view, 'Refresh status');
+		await refreshButton.dispatch('click');
 		await flush();
 
 		expect(browser.helperCalls.at(-1).apiKey).toBe('current-secret');
 		expect(events.at(-1)[2].headers['x-api-key']).toBe('current-secret');
 		expect(browser.storage.get('cabros-admin-api-key')).toBe('current-secret');
-		expect(statusForm.textContent).toContain('[REDACTED]');
-		expect(statusForm.textContent).not.toContain('current-secret');
+		expect(browser.elementsById.view.textContent).toContain('[REDACTED]');
+		expect(browser.elementsById.view.textContent).not.toContain('current-secret');
 		expect(events.filter(([type]) => type === 'fetch').every(([, url]) => !url.includes('current-secret'))).toBe(true);
 
 		await selectView(browser, 'alerts');
@@ -671,7 +1121,7 @@ describe('admin browser client', () => {
 		const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
 			&& node.textContent.includes('Playground'));
 		const select = find(playground, (node) => node.tagName === 'SELECT');
-		select.value = select.children.find((option) => option.textContent.includes('POST /api/alerts/{alertId}/replay')).value;
+		select.value = find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes('POST /api/alerts/{alertId}/replay')).value;
 		await select.dispatch('change');
 		playground.elements['path-alertId'].value = 'alert-1';
 		await playground.dispatch('submit');
@@ -942,6 +1392,335 @@ describe('admin browser client', () => {
 		const runForm = findForm(browser.elementsById.view, 'POST /api/scanner-presets/{id}/run');
 		expect(runForm.elements.query).toBeDefined();
 		expect(runForm.elements.query.value).toContain('"dryRun": false');
+	});
+
+	it('renders scanner presets as structured cards with chips, storage mode badge, and raw toggle', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/scanner-presets') {
+					return response({
+						success: true,
+						storage: { mode: 'durable', backend: 'firestore' },
+						presets: [
+							{
+								id: 'daily_momentum',
+								name: 'Daily Momentum',
+								exchange: 'BINANCE',
+								timeframe: '4h',
+								limit: 10,
+								scans: ['top_gainers', 'volume_breakout_scanner'],
+								schedule: { enabled: true, cadence: '4h' },
+								ranked: true,
+								includeMultiTimeframe: true,
+								bbwThreshold: 0.08,
+								lastStatus: 'success',
+								lastRunAt: '2026-03-30T12:00:00.000Z',
+							},
+						],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'presets');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/scanner-presets');
+		expect(listForm).toBeDefined();
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('Durable · Firestore');
+		expect(listForm.textContent).toContain('Daily Momentum');
+		expect(listForm.textContent).toContain('daily_momentum');
+		expect(listForm.textContent).toContain('BINANCE · 4h · Limit 10');
+		expect(listForm.textContent).toContain('top_gainers');
+		expect(listForm.textContent).toContain('volume_breakout_scanner');
+		expect(listForm.textContent).toContain('Schedule: 4h');
+		expect(listForm.textContent).toContain('Ranked');
+		expect(listForm.textContent).toContain('MTF');
+		expect(listForm.textContent).toContain('BBW: 0.08');
+		expect(listForm.textContent).toContain('Show raw presets response');
+	});
+
+	it('supports running a scanner preset from its card with confirmation and structured analysis result', async () => {
+		const requests = [];
+		const confirmPrompts = [];
+		const browser = createBrowser({
+			confirm: (msg) => {
+				confirmPrompts.push(msg);
+				return true;
+			},
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/scanner-presets') {
+					return response({
+						success: true,
+						storage: { mode: 'durable', backend: 'firestore' },
+						presets: [
+							{
+								id: 'crypto_breakout',
+								name: 'Crypto Breakout',
+								exchange: 'BINANCE',
+								timeframe: '1h',
+								limit: 5,
+								scans: ['volume_breakout_scanner'],
+							},
+						],
+					});
+				}
+				if (url.startsWith('/api/scanner-presets/crypto_breakout/run')) {
+					requests.push([url, options]);
+					return response({
+						success: true,
+						presetId: 'crypto_breakout',
+						symbols: ['BINANCE:BTCUSDT', 'BINANCE:ETHUSDT'],
+						report: 'Technical scan report for crypto breakout',
+						storage: { mode: 'durable', backend: 'firestore' },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'presets');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/scanner-presets');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const runBtn = findButton(listForm, 'Run');
+		expect(runBtn).toBeDefined();
+		await runBtn.dispatch('click');
+		await flush();
+
+		expect(confirmPrompts).toContain('Run this scanner preset?');
+		expect(requests.at(-1)[0]).toContain('/api/scanner-presets/crypto_breakout/run?dryRun=false');
+		expect(listForm.textContent).toContain('Technical scan report for crypto breakout');
+		expect(listForm.textContent).toContain('Show raw run response');
+	});
+
+	it('supports editing a scanner preset from its card and populates update form fields', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/scanner-presets') {
+					return response({
+						success: true,
+						presets: [
+							{
+								id: 'bollinger_squeeze',
+								name: 'Bollinger Squeeze',
+								exchange: 'BINANCE',
+								timeframe: '15m',
+								limit: 8,
+								scans: ['bollinger_scan'],
+								bbwThreshold: 0.03,
+								ranked: true,
+								includeMultiTimeframe: true,
+								schedule: { enabled: true, cadence: '1h' },
+							},
+						],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'presets');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/scanner-presets');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const editBtn = findButton(listForm, 'Edit');
+		expect(editBtn).toBeDefined();
+		await editBtn.dispatch('click');
+		await flush();
+
+		const updateForm = findForm(browser.elementsById.view, 'PUT /api/scanner-presets/{id}');
+		expect(updateForm.elements['path-id'].value).toBe('bollinger_squeeze');
+		expect(updateForm.elements.name.value).toBe('Bollinger Squeeze');
+		expect(updateForm.elements.exchange.value).toBe('BINANCE');
+		expect(updateForm.elements.timeframe.value).toBe('15m');
+		expect(Number(updateForm.elements.limit.value)).toBe(8);
+		expect(Number(updateForm.elements.bbwThreshold.value)).toBe(0.03);
+		expect(updateForm.elements.ranked.checked).toBe(true);
+		expect(updateForm.elements.includeMultiTimeframe.checked).toBe(true);
+		expect(updateForm.elements.schedule.value).toBe('1h');
+		expect(updateForm.elements.body.value).toContain('Bollinger Squeeze');
+	});
+
+	it('supports deleting a scanner preset from its card with confirmation and removing it from view', async () => {
+		const requests = [];
+		const confirmPrompts = [];
+		let deleteCount = 0;
+		const browser = createBrowser({
+			confirm: (msg) => {
+				confirmPrompts.push(msg);
+				return true;
+			},
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/scanner-presets' && deleteCount === 0) {
+					return response({
+						success: true,
+						storage: { mode: 'durable', backend: 'firestore' },
+						presets: [
+							{
+								id: 'old_preset',
+								name: 'Old Preset',
+								exchange: 'BINANCE',
+								timeframe: '4h',
+								limit: 5,
+								scans: ['top_gainers'],
+							},
+						],
+					});
+				}
+				if (url === '/api/scanner-presets/old_preset' && options.method === 'DELETE') {
+					deleteCount++;
+					requests.push([url, options]);
+					return response({
+						success: true,
+						presetId: 'old_preset',
+						storage: { mode: 'durable', backend: 'firestore' },
+					});
+				}
+				if (url === '/api/scanner-presets' && deleteCount > 0) {
+					return response({
+						success: true,
+						storage: { mode: 'durable', backend: 'firestore' },
+						presets: [],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'presets');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/scanner-presets');
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('Old Preset');
+		const deleteBtn = findButton(listForm, 'Delete');
+		expect(deleteBtn).toBeDefined();
+		await deleteBtn.dispatch('click');
+		await flush();
+
+		expect(confirmPrompts).toContain('Delete this scanner preset?');
+		expect(requests.at(-1)[0]).toBe('/api/scanner-presets/old_preset');
+		expect(requests.at(-1)[1].method).toBe('DELETE');
+		expect(listForm.textContent).toContain('No scanner presets found.');
+	});
+
+	it('synchronizes structured form controls to JSON body and clamps limit', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'presets');
+
+		const createForm = findForm(browser.elementsById.view, 'POST /api/scanner-presets');
+		expect(createForm).toBeDefined();
+
+		createForm.elements.name.value = 'Custom Momentum';
+		await createForm.elements.name.dispatch('input');
+
+		createForm.elements.timeframe.value = '1D';
+		await createForm.elements.timeframe.dispatch('change');
+
+		createForm.elements.limit.value = '50';
+		await createForm.elements.limit.dispatch('change');
+
+		createForm.elements.ranked.checked = true;
+		await createForm.elements.ranked.dispatch('change');
+
+		const parsedBody = JSON.parse(createForm.elements.body.value);
+		expect(parsedBody.name).toBe('Custom Momentum');
+		expect(parsedBody.timeframe).toBe('1D');
+		expect(parsedBody.limit).toBe(20);
+		expect(parsedBody.ranked).toBe(true);
+	});
+
+	it('disables preset mutation buttons for admin.viewer role', async () => {
+		let authStateChanged;
+		const user = {
+			getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+			getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.viewer'] } }),
+		};
+		const auth = {
+			setPersistence: jest.fn().mockResolvedValue(undefined),
+			onAuthStateChanged: jest.fn((listener) => {
+				authStateChanged = listener;
+				listener(null);
+				return jest.fn();
+			}),
+			signInWithEmailAndPassword: jest.fn(async () => {
+				await authStateChanged(user);
+				return { user };
+			}),
+			signOut: jest.fn().mockResolvedValue(undefined),
+		};
+		const firebase = {
+			initializeApp: jest.fn(),
+			auth: jest.fn(() => auth),
+		};
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({
+						enabled: true,
+						configured: true,
+						config: { apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros' },
+					});
+				}
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/scanner-presets') {
+					return response({
+						success: true,
+						presets: [
+							{
+								id: 'viewer_preset',
+								name: 'Viewer Preset',
+								exchange: 'BINANCE',
+								timeframe: '4h',
+								limit: 5,
+								scans: ['top_gainers'],
+							},
+						],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+
+		browser.elementsById['auth-email'].value = 'viewer@example.com';
+		browser.elementsById['auth-password'].value = 'password';
+		await browser.elementsById['sign-in'].dispatch('click');
+		await flush();
+
+		await selectView(browser, 'presets');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/scanner-presets');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const runBtn = findButton(listForm, 'Run');
+		const editBtn = findButton(listForm, 'Edit');
+		const deleteBtn = findButton(listForm, 'Delete');
+
+		expect(runBtn.disabled).toBe(true);
+		expect(runBtn.title).toBe('Requires admin.operator role');
+		expect(editBtn.disabled).toBe(true);
+		expect(editBtn.title).toBe('Requires admin.operator role');
+		expect(deleteBtn.disabled).toBe(true);
+		expect(deleteBtn.title).toBe('Requires admin.operator role');
 	});
 
 	it('loads recent jobs with bounded status, type, and limit filters', async () => {
@@ -1287,12 +2066,9 @@ describe('admin browser client', () => {
 		await flush();
 		browser.elementsById['api-key'].value = 'test-key';
 		await selectView(browser, 'status');
-
-		const statusForm = findForm(browser.elementsById.view, 'GET /api/status');
-		const pendingSubmit = statusForm.dispatch('submit');
 		await flush();
 
-		const output = find(statusForm, (node) => node.tagName === 'PRE');
+		const output = find(browser.elementsById.view, (node) => node.tagName === 'PRE');
 		expect(find(output, (node) => node.className === 'spinner')).toBeDefined();
 		expect(output.textContent).toContain('Request in progress');
 
@@ -1302,7 +2078,6 @@ describe('admin browser client', () => {
 			deliveryChannels: {},
 			dependencies: {},
 		}));
-		await pendingSubmit;
 		await flush();
 		expect(output.textContent).toContain('cabros-bot');
 	});
@@ -2480,7 +3255,9 @@ describe('admin browser client', () => {
 		await flush();
 		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
 
-		form.elements.body.value = '{ invalid';
+		// Use form.elements to find the raw textarea by name
+		const rawTextarea = form.elements.body;
+		rawTextarea.value = '{ invalid';
 		await form.dispatch('submit');
 		await flush();
 
@@ -3136,3 +3913,705 @@ describe('admin browser client', () => {
 		expect(shell).not.toMatch(/[⌂◈◉◇◌✦▷]/);
 	});
 });
+
+
+describe('structured analysis forms', () => {
+	it('renders structured controls for analysis operations and provides raw JSON sync', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'analysis');
+		await flush();
+
+		const view = browser.elementsById.view;
+
+		// 1. Volume Confirmation Form
+		const vcForm = findForm(view, 'POST /api/webhook/volume-confirmation');
+		expect(vcForm).toBeDefined();
+		expect(vcForm.elements.symbol).toBeDefined();
+		expect(vcForm.elements.timeframe).toBeDefined();
+		expect(vcForm.elements.body).toBeDefined();
+
+		// Real-time synchronization
+		vcForm.elements.symbol.value = 'BINANCE:ETHUSDT';
+		await vcForm.elements.symbol.dispatch('input');
+		await flush();
+		const vcParsed = JSON.parse(vcForm.elements.body.value);
+		expect(vcParsed.symbol).toBe('BINANCE:ETHUSDT');
+
+		// 2. Expanded Analysis Form
+		const expForm = findForm(view, 'POST /api/webhook/expanded-analysis-alert');
+		expect(expForm).toBeDefined();
+		expect(expForm.elements.symbols).toBeDefined();
+		expect(expForm.elements.timeframe).toBeDefined();
+		expect(expForm.elements.analysisMode).toBeDefined();
+		expect(expForm.elements.includeMultiTimeframe).toBeDefined();
+		expect(expForm.elements.channel_telegram).toBeDefined();
+		expect(expForm.elements.channel_whatsapp).toBeDefined();
+		expect(expForm.elements.channel_discord).toBeDefined();
+		expect(expForm.elements.body).toBeDefined();
+
+		// 3. Market Scanner Form
+		const scanForm = findForm(view, 'POST /api/webhook/market-scanner-alert');
+		expect(scanForm).toBeDefined();
+		expect(scanForm.elements.exchange).toBeDefined();
+		expect(scanForm.elements.timeframe).toBeDefined();
+		expect(scanForm.elements.scan_top_gainers).toBeDefined();
+		expect(scanForm.elements.scan_top_losers).toBeDefined();
+		expect(scanForm.elements.scan_volume_breakout_scanner).toBeDefined();
+		expect(scanForm.elements.scan_smart_volume_scanner).toBeDefined();
+		expect(scanForm.elements.scan_bollinger_scan).toBeDefined();
+		expect(scanForm.elements.limit).toBeDefined();
+		expect(scanForm.elements.bbw_threshold).toBeDefined();
+		expect(scanForm.elements.body).toBeDefined();
+
+		// 4. Symbol Analysis Form
+		const symForm = findForm(view, 'POST /api/webhook/symbol-analysis');
+		expect(symForm).toBeDefined();
+		expect(symForm.elements.symbol).toBeDefined();
+		expect(symForm.elements.timeframe).toBeDefined();
+		expect(symForm.elements.analysisMode).toBeDefined();
+		expect(symForm.elements.body).toBeDefined();
+
+		// 5. News Monitor Form (POST)
+		const newsPostForm = findForm(view, 'POST /api/news-monitor');
+		expect(newsPostForm).toBeDefined();
+		expect(newsPostForm.elements.crypto).toBeDefined();
+		expect(newsPostForm.elements.stocks).toBeDefined();
+		expect(newsPostForm.elements.channel_telegram).toBeDefined();
+		expect(newsPostForm.elements.channel_whatsapp).toBeDefined();
+		expect(newsPostForm.elements.channel_discord).toBeDefined();
+		expect(newsPostForm.elements.body).toBeDefined();
+
+		// News monitor sync
+		newsPostForm.elements.crypto.value = 'SOLUSDT,ADAUSDT';
+		await newsPostForm.elements.crypto.dispatch('input');
+		await flush();
+		const newsParsed = JSON.parse(newsPostForm.elements.body.value);
+		expect(newsParsed.crypto).toEqual(['SOLUSDT', 'ADAUSDT']);
+	});
+
+	it('validates symbol format on structured analysis submit and prevents invalid requests', async () => {
+		let requestedUrl = null;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				requestedUrl = url;
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'analysis');
+		await flush();
+
+		const vcForm = findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation');
+		vcForm.elements.symbol.value = 'MALFORMED_SYMBOL';
+		await vcForm.elements.symbol.dispatch('input');
+		await flush();
+
+		await vcForm.dispatch('submit');
+		await flush();
+
+		expect(requestedUrl).toBeNull();
+		expect(vcForm.textContent).toContain('Malformed symbol');
+	});
+
+	describe('structured job builder and auto-handoff', () => {
+		it('renders structured job builder with expanded-analysis controls and contract enums', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			expect(createForm).toBeDefined();
+			expect(createForm.elements.type.value).toBe('expanded-analysis');
+			expect(createForm.elements.symbols.value).toBe('BINANCE:BTCUSDT');
+			expect(createForm.elements.timeframe.value).toBe('1D');
+			expect(createForm.elements.includeMultiTimeframe.checked).toBe(false);
+			expect(createForm.elements.body).toBeDefined();
+
+			const initialPayload = JSON.parse(createForm.elements.body.value);
+			expect(initialPayload).toEqual({
+				type: 'expanded-analysis',
+				symbols: ['BINANCE:BTCUSDT'],
+				timeframe: '1D',
+			});
+		});
+
+		it('switches job builder to market-scanner, updating controls and timeframe options', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			createForm.elements.type.value = 'market-scanner';
+			await createForm.elements.type.dispatch('change');
+			await flush();
+
+			expect(createForm.elements.exchange.value).toBe('BINANCE');
+			expect(createForm.elements.timeframe.value).toBe('4h');
+			expect(Number(createForm.elements.limit.value)).toBe(5);
+			expect(Number(createForm.elements.bbw_threshold.value)).toBe(0.05);
+			expect(createForm.elements.ranked.checked).toBe(true);
+			expect(createForm.elements.includeMultiTimeframe.checked).toBe(true);
+			expect(createForm.elements.scan_top_gainers.checked).toBe(true);
+			expect(createForm.elements.scan_top_losers.checked).toBe(true);
+			expect(createForm.elements.scan_volume_breakout_scanner.checked).toBe(true);
+
+			// Verify limit clamping
+			createForm.elements.limit.value = '50';
+			await createForm.elements.limit.dispatch('input');
+			await flush();
+			expect(Number(createForm.elements.limit.value)).toBe(20);
+
+			const msPayload = JSON.parse(createForm.elements.body.value);
+			expect(msPayload.type).toBe('market-scanner');
+			expect(msPayload.exchange).toBe('BINANCE');
+			expect(msPayload.limit).toBe(20);
+			expect(msPayload.ranked).toBe(true);
+			expect(msPayload.includeMultiTimeframe).toBe(true);
+		});
+
+		it('validates symbol format on submit and displays inline feedback without sending request', async () => {
+			let dispatched = false;
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						dispatched = true;
+						return response({ success: true, jobId: 'job-invalid' }, 201);
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			createForm.elements.symbols.value = 'INVALID_SYMBOL';
+			await createForm.elements.symbols.dispatch('input');
+			await flush();
+
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(dispatched).toBe(false);
+			expect(createForm.textContent).toContain('Malformed symbol(s): INVALID_SYMBOL');
+		});
+
+		it('generates and transmits idempotency-key in headers and displays in response summary', async () => {
+			let capturedOptions = null;
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						capturedOptions = options;
+						return response({ success: true, jobId: 'job-123-idem' }, 201);
+					}
+					if (url.startsWith('/api/jobs/job-123-idem')) {
+						return response({
+							success: true,
+							jobId: 'job-123-idem',
+							type: 'expanded-analysis',
+							status: 'pending',
+							progress: { fraction: 0.1, currentPhase: 'queued' },
+						});
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			createForm.elements.symbols.value = 'BINANCE:BTCUSDT\nBINANCE:ETHUSDT';
+			await createForm.elements.symbols.dispatch('input');
+			await flush();
+
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(capturedOptions).toBeDefined();
+			expect(capturedOptions.method).toBe('POST');
+			expect(capturedOptions.headers['x-api-key']).toBe('test-session-key');
+			const sentKey = capturedOptions.headers['idempotency-key'];
+			expect(typeof sentKey).toBe('string');
+			expect(sentKey.length).toBeGreaterThan(5);
+
+			expect(createForm.textContent).toContain(`Idempotency: ${sentKey}`);
+		});
+
+		it('shows retry button on error that reuses the exact same idempotency key', async () => {
+			const sentKeys = [];
+			let attempt = 0;
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						attempt += 1;
+						sentKeys.push(options.headers['idempotency-key']);
+						if (attempt === 1) {
+							return response({ success: false, error: 'Internal server error' }, 500);
+						}
+						return response({ success: true, jobId: 'job-retried' }, 201);
+					}
+					if (url.startsWith('/api/jobs/job-retried')) {
+						return response({
+							success: true,
+							jobId: 'job-retried',
+							type: 'expanded-analysis',
+							status: 'pending',
+							progress: {},
+						});
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(attempt).toBe(1);
+			expect(sentKeys.length).toBe(1);
+			const firstKey = sentKeys[0];
+
+			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
+			expect(retryBtn).toBeDefined();
+			expect(retryBtn.hidden).toBe(false);
+
+			await retryBtn.dispatch('click');
+			await flush();
+
+			expect(attempt).toBe(2);
+			expect(sentKeys.length).toBe(2);
+			expect(sentKeys[1]).toBe(firstKey);
+		});
+
+		it('auto-handoff: on 201 Created with data.jobId, fills status form and loads progress immediately', async () => {
+			const requests = [];
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					requests.push(url);
+					if (url === '/api/jobs/tradingview-analysis') {
+						return response({ success: true, jobId: 'job-auto-handoff-789' }, 201);
+					}
+					if (url.startsWith('/api/jobs/job-auto-handoff-789')) {
+						return response({
+							success: true,
+							jobId: 'job-auto-handoff-789',
+							type: 'expanded-analysis',
+							status: 'processing',
+							progress: { fraction: 0.65, currentPhase: 'analysis' },
+							createdAt: new Date().toISOString(),
+						});
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+			expect(statusForm.elements['path-jobId'].value).toBe('');
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(statusForm.elements['path-jobId'].value).toBe('job-auto-handoff-789');
+			expect(requests).toContain('/api/jobs/job-auto-handoff-789');
+			expect(statusForm.textContent).toContain('job-auto-handoff-789');
+			expect(statusForm.textContent).toContain('processing');
+		});
+
+		it('synchronizes advanced callback and channel options into raw JSON', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			createForm.elements.channel_telegram.checked = true;
+			await createForm.elements.channel_telegram.dispatch('change');
+			createForm.elements.telegramChatId.value = '-1009999';
+			await createForm.elements.telegramChatId.dispatch('input');
+			createForm.elements.callbackUrl.value = 'https://webhook.site/test';
+			await createForm.elements.callbackUrl.dispatch('input');
+			await flush();
+
+			const payload = JSON.parse(createForm.elements.body.value);
+			expect(payload.channels).toEqual(['telegram']);
+			expect(payload.telegramChatId).toBe('-1009999');
+			expect(payload.callbackUrl).toBe('https://webhook.site/test');
+			expect(payload.callbackEvents).toEqual(['completed', 'failed', 'cancelled', 'timed_out']);
+		});
+
+		it('retry: exposes same-key retry when network error or transport failure occurs', async () => {
+			const sentKeys = [];
+			let attempts = 0;
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						attempts += 1;
+						sentKeys.push(options.headers['idempotency-key']);
+						if (attempts === 1) {
+							throw new Error('Failed to fetch: connection timeout');
+						}
+						return response({ success: true, jobId: 'recovered-job-111' }, 201);
+					}
+					if (url.startsWith('/api/jobs/recovered-job-111')) {
+						return response({ success: true, jobId: 'recovered-job-111', status: 'queued' });
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
+			expect(retryBtn.hidden).toBe(true);
+
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(attempts).toBe(1);
+			expect(retryBtn.hidden).toBe(false);
+			const firstKey = sentKeys[0];
+			expect(typeof firstKey).toBe('string');
+
+			// Clicking retry re-submits with the same idempotency key
+			await retryBtn.dispatch('click');
+			await flush();
+
+			expect(attempts).toBe(2);
+			expect(sentKeys[1]).toBe(firstKey);
+		});
+
+		it('auto-handoff: on 503 JOB_QUEUE_ACCEPTANCE_UNKNOWN, fills status form with returned jobId and begins auto-loading', async () => {
+			const requests = [];
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					requests.push(url);
+					if (url === '/api/jobs/tradingview-analysis') {
+						return response({
+							error: 'The queue acceptance state could not be determined.',
+							code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
+							jobId: 'unknown-queue-job-503',
+						}, 503);
+					}
+					if (url.startsWith('/api/jobs/unknown-queue-job-503')) {
+						return response({
+							success: true,
+							jobId: 'unknown-queue-job-503',
+							status: 'queued',
+						});
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+			expect(statusForm.elements['path-jobId'].value).toBe('');
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(statusForm.elements['path-jobId'].value).toBe('unknown-queue-job-503');
+			expect(requests).toContain('/api/jobs/unknown-queue-job-503');
+			expect(statusForm.textContent).toContain('unknown-queue-job-503');
+			expect(statusForm.textContent).toContain('queued');
+
+			// Retry button is also visible on 503 so the operator can retry with same key if desired
+			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
+			expect(retryBtn.hidden).toBe(false);
+		});
+	});
+
+	describe('Playground UX improvements', () => {
+		it('renders schema-aware inputs omitting query or body fields when inapplicable', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Playground'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+
+			// POST /api/jobs/tradingview-analysis has body but NO query parameters
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/jobs/tradingview-analysis')).value;
+			await select.dispatch('change');
+
+			expect(playground.elements.body).toBeDefined();
+			expect(playground.elements.query).toBeUndefined();
+
+			// GET /api/alerts has query parameters but NO request body
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/alerts —')).value;
+			await select.dispatch('change');
+
+			expect(playground.elements.query).toBeDefined();
+			expect(playground.elements.body).toBeUndefined();
+
+			// GET /api/scanner-presets/{id} has path parameters but NEITHER query nor body
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/scanner-presets/{id}')).value;
+			await select.dispatch('change');
+
+			expect(playground.elements['path-id']).toBeDefined();
+			expect(playground.elements.query).toBeUndefined();
+			expect(playground.elements.body).toBeUndefined();
+		});
+
+		it('groups operations into optgroups and supports real-time text filtering', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+			});
+			await flush();
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Playground'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const optgroups = findAll(select, (node) => node.tagName === 'OPTGROUP');
+
+			expect(optgroups.length).toBeGreaterThanOrEqual(5);
+			const groupLabels = optgroups.map((g) => g.label || g.attributes.label);
+			expect(groupLabels).toContain('Webhooks');
+			expect(groupLabels).toContain('Alerts');
+			expect(groupLabels).toContain('Jobs');
+
+			// Filter operations
+			const filterInput = playground.elements.filterOperations;
+			filterInput.value = 'volume-confirmation';
+			await filterInput.dispatch('input');
+
+			const filteredOptions = findAll(select, (node) => node.tagName === 'OPTION');
+			expect(filteredOptions.length).toBe(1);
+			expect(filteredOptions[0].textContent).toContain('/api/webhook/volume-confirmation');
+
+			// Reset filter
+			filterInput.value = '';
+			await filterInput.dispatch('input');
+			const allOptions = findAll(select, (node) => node.tagName === 'OPTION');
+			expect(allOptions.length).toBeGreaterThan(10);
+		});
+
+		it('preserves user input across operation switches within the session', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+			});
+			await flush();
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Playground'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+
+			// Select POST /api/webhook/alert and enter custom body
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ message: 'Custom alert message 42' });
+			await playground.elements.body.dispatch('input');
+
+			// Switch to GET /api/alerts
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/alerts —')).value;
+			await select.dispatch('change');
+			expect(playground.elements.body).toBeUndefined();
+
+			// Switch back to POST /api/webhook/alert
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
+			await select.dispatch('change');
+			expect(playground.elements.body.value).toContain('Custom alert message 42');
+		});
+
+		it('renders structured results and provides collapsible raw JSON toggle', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/webhook/volume-confirmation')) {
+						return response({
+							success: true,
+							symbol: 'BINANCE:BTCUSDT',
+							timeframe: '1h',
+							confirmed: true,
+							volumeRatio: 2.15,
+							currentVolume: 12000,
+							smaVolume: 5580,
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Playground'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/volume-confirmation')).value;
+			await select.dispatch('change');
+			await playground.dispatch('submit');
+			await flush();
+
+			// Structured result host should contain the volume confirmation verdict
+			const structuredResult = find(playground, (n) => n.className === 'playground-structured-result');
+			expect(structuredResult.textContent).toContain('Confirmed');
+			expect(structuredResult.textContent).toContain('2.15x');
+
+			// Raw toggle should be visible with copy button and formatted JSON
+			const rawToggle = find(playground, (n) => n.tagName === 'DETAILS' && n.className === 'raw-status');
+			expect(rawToggle.hidden).toBe(false);
+			expect(rawToggle.textContent).toContain('Show raw response');
+			expect(rawToggle.textContent).toContain('2.15');
+		});
+
+		it('records request history with redacted credentials and allows restoration', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/webhook/alert')) {
+						return response({ success: true, messageId: 'm-101' });
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Playground'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ message: 'Buy BTC', apiKey: 'super-secret-key-999' });
+			await playground.dispatch('submit');
+			await flush();
+
+			const historyItems = findAll(playground, (n) => n.className === 'history-item');
+			expect(historyItems.length).toBe(1);
+			expect(historyItems[0].textContent).toContain('POST');
+			expect(historyItems[0].textContent).toContain('/api/webhook/alert');
+			expect(historyItems[0].textContent).toContain('HTTP 200');
+
+			// Verify secrets are redacted in history
+			expect(playground.textContent).not.toContain('super-secret-key-999');
+
+			// Change the current form to another operation
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/alerts —')).value;
+			await select.dispatch('change');
+			expect(playground.elements.body).toBeUndefined();
+
+			// Restore from history
+			const restoreBtn = find(historyItems[0], (n) => n.tagName === 'BUTTON' && n.textContent === 'Restore');
+			await restoreBtn.dispatch('click');
+			await flush();
+
+			// Form should be back to POST /api/webhook/alert with restored body
+			const currentSelected = find(select, (o) => o.value === select.value);
+			expect(currentSelected.textContent).toContain('POST /api/webhook/alert');
+			expect(playground.elements.body).toBeDefined();
+			expect(playground.elements.body.value).toContain('Buy BTC');
+			expect(playground.elements.body.value).toContain('[REDACTED]');
+		});
+
+		it('generates a curl command with literal $WEBHOOK_API_KEY placeholder and never leaks actual key', async () => {
+			let capturedTextarea = null;
+			const browser = createBrowser({
+				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'actual-production-secret-key-12345';
+			await selectView(browser, 'playground');
+			await flush();
+
+			// Intercept textarea creation for execCommand copy
+			const origCreateElement = browser.context.document.createElement;
+			browser.context.document.createElement = (tag) => {
+				const el = origCreateElement(tag);
+				if (tag === 'textarea') capturedTextarea = el;
+				return el;
+			};
+			browser.context.document.execCommand = () => true;
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Playground'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ message: 'Hello cURL' });
+
+			const curlBtn = find(playground, (n) => n.tagName === 'BUTTON' && n.textContent.includes('Copy as cURL'));
+			expect(curlBtn).toBeDefined();
+
+			await curlBtn.dispatch('click');
+			await flush();
+
+			expect(capturedTextarea).not.toBeNull();
+			const curlCommand = capturedTextarea.value;
+			expect(curlCommand).toContain('curl -X POST');
+			expect(curlCommand).toContain('/api/webhook/alert');
+			expect(curlCommand).toContain('-H "x-api-key: $WEBHOOK_API_KEY"');
+			expect(curlCommand).toContain('-H "Content-Type: application/json"');
+			expect(curlCommand).toContain('Hello cURL');
+			// Crucial security check: the actual API key MUST NOT appear anywhere in the curl output
+			expect(curlCommand).not.toContain('actual-production-secret-key-12345');
+		});
+	});
+});
+
