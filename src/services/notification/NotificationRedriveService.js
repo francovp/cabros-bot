@@ -180,6 +180,8 @@ class NotificationRedriveService {
 		this.lastRunRedrivenCount = 0;
 		this.lastRunErrorCount = 0;
 		this.lastRunExhaustedCount = 0;
+		this.lastSweepAt = null;
+		this.lastSweepResult = null;
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
 		this.totalZeroChannelBroadcasts = 0;
@@ -1126,6 +1128,13 @@ class NotificationRedriveService {
 			this.lastRunRedrivenCount = redrivenCount;
 			this.lastRunErrorCount = errorCount;
 			this.lastRunExhaustedCount = exhaustedCount;
+			this.lastSweepAt = new Date(startTime);
+			this.lastSweepResult = {
+				processed: scannedCount,
+				succeeded: redrivenCount,
+				exhausted: exhaustedCount,
+				errors: errorCount,
+			};
 		}
 
 		return {
@@ -1225,6 +1234,9 @@ class NotificationRedriveService {
 		const role = this.getWorkerRole();
 		const runtimeConfig = getRuntimeConfig();
 		const lastRunAtIso = this.lastRunAt ? this.lastRunAt.toISOString() : null;
+		const lastSweepAtIso = this.lastSweepAt
+			? (this.lastSweepAt instanceof Date ? this.lastSweepAt.toISOString() : new Date(this.lastSweepAt).toISOString())
+			: null;
 
 		return {
 			enabled,
@@ -1243,19 +1255,14 @@ class NotificationRedriveService {
 			exhaustedCount: this.totalExhaustedCount,
 			zeroChannelBroadcasts: this.totalZeroChannelBroadcasts,
 			lastRunAt: lastRunAtIso,
-			lastSweepAt: lastRunAtIso,
+			lastSweepAt: lastSweepAtIso,
 			lastRunDurationMs: this.lastRunDurationMs,
 			lastRunScannedCount: this.lastRunScannedCount,
 			lastRunRedrivenCount: this.lastRunRedrivenCount,
 			lastRunErrorCount: this.lastRunErrorCount,
 			lastRunExhaustedCount: this.lastRunExhaustedCount,
-			lastSweepResult: this.lastRunAt
-				? {
-					processed: this.lastRunScannedCount,
-					succeeded: this.lastRunRedrivenCount,
-					exhausted: this.lastRunExhaustedCount,
-					errors: this.lastRunErrorCount,
-				}
+			lastSweepResult: this.lastSweepResult
+				? { ...this.lastSweepResult }
 				: null,
 		};
 	}
@@ -1276,6 +1283,8 @@ class NotificationRedriveService {
 		this.lastRunRedrivenCount = 0;
 		this.lastRunErrorCount = 0;
 		this.lastRunExhaustedCount = 0;
+		this.lastSweepAt = null;
+		this.lastSweepResult = null;
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
 		this.totalZeroChannelBroadcasts = 0;

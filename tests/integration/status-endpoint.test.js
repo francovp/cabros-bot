@@ -1827,12 +1827,13 @@ describe('Status endpoints', () => {
 		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
 		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
 		const service = require('../../src/services/notification/NotificationRedriveService').notificationRedriveService;
-		service.lastRunAt = new Date('2026-08-30T00:00:00.000Z');
-		service.lastRunDurationMs = 42;
-		service.lastRunScannedCount = 8;
-		service.lastRunRedrivenCount = 3;
-		service.lastRunExhaustedCount = 2;
-		service.lastRunErrorCount = 1;
+		service.lastSweepAt = new Date('2026-08-30T00:00:00.000Z');
+		service.lastSweepResult = {
+			processed: 8,
+			succeeded: 3,
+			exhausted: 2,
+			errors: 1,
+		};
 
 		const response = await request(app)
 			.get('/api/status')

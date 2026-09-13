@@ -124,12 +124,13 @@ describe('NotificationRedriveService', () => {
 		});
 
 		it('exposes structured lastSweepResult with processed/succeeded/exhausted/errors', () => {
-			service.lastRunAt = new Date('2026-08-30T00:00:00.000Z');
-			service.lastRunDurationMs = 123;
-			service.lastRunScannedCount = 10;
-			service.lastRunRedrivenCount = 4;
-			service.lastRunExhaustedCount = 2;
-			service.lastRunErrorCount = 1;
+			service.lastSweepAt = new Date('2026-08-30T00:00:00.000Z');
+			service.lastSweepResult = {
+				processed: 10,
+				succeeded: 4,
+				exhausted: 2,
+				errors: 1,
+			};
 			const status = service.getStatus();
 			expect(status.lastSweepAt).toBe('2026-08-30T00:00:00.000Z');
 			expect(status.lastSweepResult).toEqual({
@@ -137,6 +138,56 @@ describe('NotificationRedriveService', () => {
 				succeeded: 4,
 				exhausted: 2,
 				errors: 1,
+			});
+		});
+
+		it('publishes lastSweepAt and lastSweepResult only upon sweep completion, not during in-flight sweep', async () => {
+			process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
+			let resolveDispatch;
+			const dispatchGate = new Promise((resolve) => {
+				resolveDispatch = resolve;
+			});
+			const mockNotificationManager = {
+				sendToChannels: jest.fn(async () => {
+					await dispatchGate;
+					return [{ channel: 'telegram', success: true }];
+				}),
+			};
+			service.setNotificationManagerGetter(() => mockNotificationManager);
+			await service.recordDeliveryResults(
+				{ text: 'BUY signal', correlationId: 'corr-inflight' },
+				[{ channel: 'telegram', success: false, error: 'Initial failure' }],
+			);
+			service.inMemoryStore.get('corr-inflight_telegram').nextAttemptAt = Date.now() - 1000;
+
+			// Before sweep starts:
+			expect(service.getStatus().lastSweepAt).toBeNull();
+			expect(service.getStatus().lastSweepResult).toBeNull();
+
+			// Start sweep:
+			const sweepPromise = service.sweep();
+
+			// Give event loop tick to enter sweep and await sendToChannels:
+			await new Promise((r) => setImmediate(r));
+
+			// While in flight, lastSweepAt and lastSweepResult should still be null (not mismatched interim numbers)
+			const inFlightStatus = service.getStatus();
+			expect(inFlightStatus.lastSweepAt).toBeNull();
+			expect(inFlightStatus.lastSweepResult).toBeNull();
+
+			// Complete the dispatch:
+			resolveDispatch();
+			await sweepPromise;
+
+			// After sweep completion, both are published as an atomic snapshot:
+			const completedStatus = service.getStatus();
+			expect(completedStatus.lastSweepAt).not.toBeNull();
+			expect(completedStatus.lastSweepResult).toEqual({
+				processed: 1,
+				succeeded: 1,
+				exhausted: 0,
+				errors: 0,
 			});
 		});
 
