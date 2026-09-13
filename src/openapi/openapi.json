@@ -64,7 +64,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "oneOf": [
+                  "anyOf": [
                     {
                       "$ref": "#/components/schemas/Healthcheck"
                     },
@@ -4132,7 +4132,8 @@
             "type": "number",
             "description": "Process uptime in seconds."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "DeepHealthcheck": {
         "type": "object",
