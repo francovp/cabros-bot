@@ -698,6 +698,168 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/alerts/batch/delete": {
+      "post": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "Delete stored alerts in batch",
+        "operationId": "batchDeleteAlerts",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/BatchDeleteAlerts"
+        },
+        "responses": {
+          "200": {
+            "description": "Batch delete result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchDeleteResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/alerts/batch/export": {
+      "post": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "Export stored alerts by IDs",
+        "operationId": "batchExportAlerts",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/BatchExportAlerts"
+        },
+        "responses": {
+          "200": {
+            "description": "JSON Lines or CSV batch export",
+            "headers": {
+              "Content-Disposition": {
+                "description": "Attachment filename header",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/alerts/batch/replay": {
+      "post": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "Replay stored alerts in batch",
+        "operationId": "batchReplayAlerts",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/BatchReplayAlerts"
+        },
+        "responses": {
+          "200": {
+            "description": "Batch replay execution results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchReplayResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
     "/api/alerts/{alertId}": {
       "get": {
         "tags": [
@@ -2710,6 +2872,139 @@
           }
         }
       },
+      "BatchDeleteAlerts": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "alertIds"
+              ],
+              "properties": {
+                "alertIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "maxItems": 500,
+                  "description": "Array of stored alert IDs to delete"
+                }
+              }
+            },
+            "example": {
+              "alertIds": [
+                "alert-1",
+                "alert-2"
+              ]
+            }
+          }
+        }
+      },
+      "BatchExportAlerts": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "alertIds"
+              ],
+              "properties": {
+                "alertIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "maxItems": 1000,
+                  "description": "Array of stored alert IDs to export"
+                },
+                "format": {
+                  "type": "string",
+                  "enum": [
+                    "jsonl",
+                    "csv"
+                  ],
+                  "default": "jsonl"
+                },
+                "includeText": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "includeEnrichment": {
+                  "type": "boolean",
+                  "default": false
+                }
+              }
+            },
+            "example": {
+              "alertIds": [
+                "alert-1",
+                "alert-2"
+              ],
+              "format": "jsonl",
+              "includeText": false,
+              "includeEnrichment": false
+            }
+          }
+        }
+      },
+      "BatchReplayAlerts": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "alertIds"
+              ],
+              "properties": {
+                "alertIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "maxItems": 50,
+                  "description": "Array of stored alert IDs to replay"
+                },
+                "channels": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "telegram",
+                      "whatsapp",
+                      "discord"
+                    ]
+                  }
+                },
+                "dryRun": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "idempotencyKey": {
+                  "type": "string",
+                  "description": "Idempotency key for the batch replay operation"
+                }
+              }
+            },
+            "example": {
+              "alertIds": [
+                "alert-1",
+                "alert-2"
+              ],
+              "channels": [
+                "telegram"
+              ],
+              "dryRun": false,
+              "idempotencyKey": "batch-replay-001"
+            }
+          }
+        }
+      },
       "Message": {
         "required": true,
         "content": {
@@ -4121,6 +4416,46 @@
       "JsonObject": {
         "type": "object",
         "additionalProperties": true
+      },
+      "BatchDeleteResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "deleted"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "deleted": {
+            "type": "integer",
+            "example": 2
+          }
+        }
+      },
+      "BatchReplayResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "results"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "dryRun": {
+            "type": "boolean",
+            "example": false
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
       },
       "Healthcheck": {
         "type": "object",

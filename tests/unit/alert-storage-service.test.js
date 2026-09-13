@@ -22,6 +22,11 @@ const {
 	__mockGet: mockGet,
 	__mockDocGet: mockDocGet,
 	__mockDocSet: mockDocSet,
+	__mockBatch: mockBatch,
+	__mockBatchCommit: mockBatchCommit,
+	__mockBatchDelete: mockBatchDelete,
+	__mockBatchSet: mockBatchSet,
+	__mockBatchUpdate: mockBatchUpdate,
 	__mockWhere: mockWhere,
 	__mockOrderBy: mockOrderBy,
 	__mockLimit: mockLimit,
@@ -3055,6 +3060,165 @@ describe('AlertStorageService', () => {
 				expect(result.tradingViewEnrichmentApplied).toBe(true);
 				expect(result.tradingViewEnrichmentStatus).toBe('partial');
 			});
+		});
+	});
+
+	describe('deleteAlerts()', () => {
+		it('returns null when alert storage is disabled', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'false';
+			const result = await AlertStorageService.deleteAlerts(['alert-1']);
+			expect(result).toBeNull();
+		});
+
+		it('returns { deleted: 0 } when alertIds is empty or invalid', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			expect(await AlertStorageService.deleteAlerts([])).toEqual({ deleted: 0 });
+			expect(await AlertStorageService.deleteAlerts(null)).toEqual({ deleted: 0 });
+		});
+
+		it('batch deletes documents using Firestore batch', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const result = await AlertStorageService.deleteAlerts(['alert-1', 'alert-2', 'alert-1']);
+			expect(result).toEqual({ deleted: 2 });
+			expect(mockBatchDelete).toHaveBeenCalledTimes(2);
+		});
+
+		it('throws STORAGE_UNAVAILABLE when batch commit fails', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockBatchCommit.mockImplementationOnce(() => {
+				throw new Error('Firestore commit failed');
+			});
+			await expect(AlertStorageService.deleteAlerts(['alert-1'])).rejects.toMatchObject({
+				code: AlertStorageService.STORAGE_UNAVAILABLE_CODE,
+			});
+		});
+	});
+
+	describe('exportAlertsByIds()', () => {
+		it('returns null when alert storage is disabled', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'false';
+			const result = await AlertStorageService.exportAlertsByIds({ alertIds: ['alert-1'] });
+			expect(result).toBeNull();
+		});
+
+		it('exports matching active alerts by ID', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockImplementationOnce(async () => ({
+				exists: true,
+				id: 'alert-1',
+				data: () => ({
+					text: 'BTC alert',
+					receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+					expiresAt: buildTimestamp('2026-12-31T00:00:00.000Z'),
+				}),
+			}));
+
+			const result = await AlertStorageService.exportAlertsByIds({ alertIds: ['alert-1'] });
+			expect(result.alerts).toHaveLength(1);
+			expect(result.alerts[0].id).toBe('alert-1');
+		});
+
+		it('filters out non-existent or expired alerts', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+			mockDocGet
+				.mockImplementationOnce(async () => ({
+					exists: false,
+					id: 'missing',
+					data: () => null,
+				}))
+				.mockImplementationOnce(async () => ({
+					exists: true,
+					id: 'expired',
+					data: () => ({
+						receivedAt: buildTimestamp('2026-05-01T00:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-05-02T00:00:00.000Z'),
+					}),
+				}));
+
+			const result = await AlertStorageService.exportAlertsByIds({ alertIds: ['missing', 'expired'] });
+			expect(result.alerts).toHaveLength(0);
+		});
+		it('throws storage unavailable error when Firestore read rejects', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockRejectedValueOnce(new Error('Firestore quota exceeded'));
+
+			await expect(AlertStorageService.exportAlertsByIds({ alertIds: ['alert-1'] }))
+				.rejects.toMatchObject({ code: AlertStorageService.STORAGE_UNAVAILABLE_CODE });
+		});
+	});
+
+	describe('getAlertsByIds()', () => {
+		it('returns null when alert storage is disabled', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'false';
+			const result = await AlertStorageService.getAlertsByIds(['alert-1']);
+			expect(result).toBeNull();
+		});
+
+		it('throws storage unavailable error when Firestore read rejects', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockRejectedValueOnce(new Error('Firestore connection timeout'));
+
+			await expect(AlertStorageService.getAlertsByIds(['alert-1']))
+				.rejects.toMatchObject({ code: AlertStorageService.STORAGE_UNAVAILABLE_CODE });
+		});
+	});
+
+	describe('getReplayAttemptByIdempotencyKey()', () => {
+		it('returns null when alert storage is disabled or params invalid', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'false';
+			expect(await AlertStorageService.getReplayAttemptByIdempotencyKey('alert-1', 'key-1')).toBeNull();
+
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			expect(await AlertStorageService.getReplayAttemptByIdempotencyKey('', 'key-1')).toBeNull();
+			expect(await AlertStorageService.getReplayAttemptByIdempotencyKey('alert-1', '')).toBeNull();
+		});
+
+		it('queries replay document by alertId and idempotencyKeyHash', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				docs: [{
+					id: 'replay-doc-1',
+					exists: true,
+					data: () => ({
+						alertId: 'alert-1',
+						idempotencyKeyHash: 'somehash',
+						deliveryResults: [{ channel: 'telegram', success: true }],
+					}),
+				}],
+			});
+
+			const replay = await AlertStorageService.getReplayAttemptByIdempotencyKey('alert-1', 'key-1');
+			expect(replay).toBeDefined();
+			expect(replay.id).toBe('replay-doc-1');
+			expect(replay.alertId).toBe('alert-1');
+		});
+
+		it('returns null when no replay matches or query fails', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({ docs: [] });
+			expect(await AlertStorageService.getReplayAttemptByIdempotencyKey('alert-1', 'key-1')).toBeNull();
+
+			mockGet.mockRejectedValueOnce(new Error('Firestore unavailable'));
+			expect(await AlertStorageService.getReplayAttemptByIdempotencyKey('alert-1', 'key-1')).toBeNull();
+		});
+	});
+
+	describe('batchReplayAlerts()', () => {
+		it('returns null when alert storage is disabled', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'false';
+			const result = await AlertStorageService.batchReplayAlerts([{ alertId: 'alert-1', idempotencyKey: 'k', channels: ['telegram'], deliveryResults: [] }]);
+			expect(result).toBeNull();
+		});
+
+		it('saves batch replay attempts using Firestore batch', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const result = await AlertStorageService.batchReplayAlerts([
+				{ alertId: 'alert-1', idempotencyKey: 'k1', channels: ['telegram'], deliveryResults: [{ channel: 'telegram', success: true }] },
+				{ alertId: 'alert-2', idempotencyKey: 'k2', channels: ['discord'], deliveryResults: [{ channel: 'discord', success: true }] },
+			]);
+			expect(result).toHaveLength(2);
+			expect(mockBatchSet).toHaveBeenCalledTimes(2);
 		});
 	});
 });
