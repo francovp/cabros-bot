@@ -1698,6 +1698,141 @@ describe('NotificationRedriveService', () => {
 			expect(service.persistedLastSweepAt).toEqual(cachedDate);
 			expect(service.persistedLastRunDurationMs).toBe(5000);
 		});
+
+		it('reports durable queue pending count from worker heartbeat in status and counts unexpired durable records', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+
+			// Verify getStatus uses persistedPendingCount when role is worker
+			service.persistedPendingCount = 7;
+			const status = service.getStatus();
+			expect(status.pendingCount).toBe(7);
+
+			// Verify countDurablePendingRecords queries firestore and counts unexpired records
+			const unexpiredDate = new Date(Date.now() + 60000).toISOString();
+			const expiredDate = new Date(Date.now() - 60000).toISOString();
+			const mockFirestore = {
+				collection: jest.fn((colName) => {
+					if (colName === 'notificationDeadLetters') {
+						return {
+							where: jest.fn(() => ({
+								get: jest.fn(async () => ({
+									empty: false,
+									docs: [
+										{ data: () => ({ status: 'pending', expiresAt: unexpiredDate }) },
+										{ data: () => ({ status: 'in_flight', expiresAt: unexpiredDate }) },
+										{ data: () => ({ status: 'pending', expiresAt: expiredDate }) }, // expired, excluded
+									],
+								})),
+							})),
+						};
+					}
+					return {};
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			const durableCount = await service.countDurablePendingRecords();
+			expect(durableCount).toBe(2);
+		});
+
+		it('preserves cumulative counters across worker restarts and merges with persisted heartbeat totals', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+
+			let persistedHeartbeat = {
+				deliveredCount: 25,
+				exhaustedCount: 10,
+				zeroChannelBroadcasts: 5,
+				lastSweepAt: new Date(Date.now() - 60000).toISOString(),
+			};
+
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						get: jest.fn(async () => ({
+							exists: true,
+							data: () => persistedHeartbeat,
+						})),
+					})),
+					where: jest.fn(() => ({
+						get: jest.fn(async () => ({ empty: true, docs: [] })),
+					})),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					const mockTx = {
+						get: jest.fn(async () => ({
+							exists: true,
+							data: () => persistedHeartbeat,
+						})),
+						set: jest.fn((docRef, payload) => {
+							persistedHeartbeat = { ...payload };
+						}),
+					};
+					await updateFn(mockTx);
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			// Seed counters from existing heartbeat on worker startup
+			await service.seedCountersFromHeartbeat();
+			expect(service.totalDeliveredCount).toBe(25);
+			expect(service.totalExhaustedCount).toBe(10);
+			expect(service.totalZeroChannelBroadcasts).toBe(5);
+
+			// Worker performs sweep and delivers 2 more items
+			service.totalDeliveredCount += 2;
+			service.lastSweepAt = new Date();
+
+			await service.persistWorkerTelemetry({ timeoutMs: 100 });
+			expect(persistedHeartbeat.deliveredCount).toBe(27);
+			expect(persistedHeartbeat.exhaustedCount).toBe(10);
+			expect(persistedHeartbeat.zeroChannelBroadcasts).toBe(5);
+			expect(service.totalDeliveredCount).toBe(27);
+		});
+
+		it('keeps timed-out Firestore reads single-flight until settled', async () => {
+			let readCount = 0;
+			let resolveSlowRead;
+			const slowRead = new Promise((resolve) => {
+				resolveSlowRead = resolve;
+			});
+
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						get: jest.fn(() => {
+							readCount += 1;
+							return slowRead;
+						}),
+					})),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			// First read times out after 20ms
+			const firstResult = await service.syncWorkerTelemetry({ timeoutMs: 20 });
+			expect(firstResult).toBe(false);
+			expect(readCount).toBe(1);
+
+			// Second read while first is still pending should NOT start a new Firestore read
+			const secondResult = await service.syncWorkerTelemetry({ timeoutMs: 20 });
+			expect(secondResult).toBe(false);
+			expect(readCount).toBe(1);
+
+			// Now resolve the slow read
+			resolveSlowRead({
+				exists: true,
+				data: () => ({
+					lastSweepAt: new Date().toISOString(),
+					lastRunDurationMs: 1234,
+				}),
+			});
+
+			// Wait for the active promise to settle
+			await service._activeTelemetryReadPromise;
+			expect(service._activeTelemetryReadPromise).toBeNull();
+		});
 	});
 
 	describe('helpers', () => {

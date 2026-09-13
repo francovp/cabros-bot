@@ -197,6 +197,7 @@ class NotificationRedriveService {
 		this.persistedDeliveredCount = 0;
 		this.persistedExhaustedCount = 0;
 		this.persistedZeroChannelBroadcasts = 0;
+		this.persistedPendingCount = null;
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
 		this.totalZeroChannelBroadcasts = 0;
@@ -1176,6 +1177,69 @@ class NotificationRedriveService {
 		};
 	}
 
+	async countDurablePendingRecords() {
+		const firestore = this.getFirestore();
+		if (!firestore) {
+			return this.getPendingCount();
+		}
+		try {
+			const collection = firestore.collection(COLLECTION_NAME);
+			if (typeof collection?.where !== 'function') {
+				return this.getPendingCount();
+			}
+			const query = collection.where('status', 'in', ['pending', 'in_flight']);
+			if (!query || typeof query.get !== 'function') {
+				return this.getPendingCount();
+			}
+			const snapshot = await resolveBeforeDeadline(query.get(), Date.now() + 3000);
+			if (!snapshot || snapshot.empty) {
+				return 0;
+			}
+			let count = 0;
+			const nowMs = Date.now();
+			const docs = Array.isArray(snapshot.docs) ? snapshot.docs : [];
+			for (const doc of docs) {
+				const data = typeof doc.data === 'function' ? doc.data() : doc;
+				const expiresAtMs = toMillis(data?.expiresAt);
+				if (!expiresAtMs || expiresAtMs > nowMs) {
+					count += 1;
+				}
+			}
+			return count;
+		} catch (error) {
+			console.warn('[NotificationRedriveService] Failed to count durable pending records:', error.message);
+			return this.getPendingCount();
+		}
+	}
+
+	async seedCountersFromHeartbeat() {
+		const firestore = this.getFirestore();
+		if (!firestore) return;
+		try {
+			const collection = firestore.collection(HEARTBEAT_COLLECTION_NAME);
+			if (typeof collection?.doc !== 'function') return;
+			const docRef = collection.doc(HEARTBEAT_DOCUMENT_ID);
+			if (!docRef || typeof docRef.get !== 'function') return;
+			const doc = await resolveBeforeDeadline(docRef.get(), Date.now() + 3000);
+			if (doc && doc.exists) {
+				const data = typeof doc.data === 'function' ? doc.data() : doc;
+				if (data) {
+					if (Number.isFinite(data.deliveredCount) && data.deliveredCount > this.totalDeliveredCount) {
+						this.totalDeliveredCount = data.deliveredCount;
+					}
+					if (Number.isFinite(data.exhaustedCount) && data.exhaustedCount > this.totalExhaustedCount) {
+						this.totalExhaustedCount = data.exhaustedCount;
+					}
+					if (Number.isFinite(data.zeroChannelBroadcasts) && data.zeroChannelBroadcasts > this.totalZeroChannelBroadcasts) {
+						this.totalZeroChannelBroadcasts = data.zeroChannelBroadcasts;
+					}
+				}
+			}
+		} catch (error) {
+			console.warn('[NotificationRedriveService] Failed to seed counters from heartbeat:', error.message);
+		}
+	}
+
 	async persistWorkerTelemetry(options = {}) {
 		const firestore = this.getFirestore();
 		if (!firestore) {
@@ -1186,6 +1250,7 @@ class NotificationRedriveService {
 		const sequence = ++this._telemetryWriteSequence;
 		const completedAt = this.lastSweepAt || new Date();
 		const currentSweepAtMs = completedAt.getTime();
+		const pendingCount = await this.countDurablePendingRecords();
 		const payload = {
 			worker: 'notification-redrive',
 			role: this.getWorkerRole(),
@@ -1199,6 +1264,7 @@ class NotificationRedriveService {
 			lastRunRedrivenCount: this.lastRunRedrivenCount,
 			lastRunErrorCount: this.lastRunErrorCount,
 			lastRunExhaustedCount: this.lastRunExhaustedCount,
+			pendingCount,
 			deliveredCount: this.totalDeliveredCount,
 			exhaustedCount: this.totalExhaustedCount,
 			zeroChannelBroadcasts: this.totalZeroChannelBroadcasts,
@@ -1226,6 +1292,7 @@ class NotificationRedriveService {
 			if (typeof firestore.runTransaction === 'function') {
 				const txPromise = firestore.runTransaction(async (transaction) => {
 					const doc = await transaction.get(docRef);
+					let writePayload = { ...payload };
 					if (doc && doc.exists) {
 						const data = typeof doc.data === 'function' ? doc.data() : doc;
 						const existingSweepAtMs = parseSweepTimestampMs(data?.lastSweepAt);
@@ -1240,8 +1307,17 @@ class NotificationRedriveService {
 								return;
 							}
 						}
+						const existingDelivered = Number(data?.deliveredCount) || 0;
+						const existingExhausted = Number(data?.exhaustedCount) || 0;
+						const existingZeroChannel = Number(data?.zeroChannelBroadcasts) || 0;
+						writePayload.deliveredCount = Math.max(existingDelivered, payload.deliveredCount);
+						writePayload.exhaustedCount = Math.max(existingExhausted, payload.exhaustedCount);
+						writePayload.zeroChannelBroadcasts = Math.max(existingZeroChannel, payload.zeroChannelBroadcasts);
+						this.totalDeliveredCount = writePayload.deliveredCount;
+						this.totalExhaustedCount = writePayload.exhaustedCount;
+						this.totalZeroChannelBroadcasts = writePayload.zeroChannelBroadcasts;
 					}
-					transaction.set(docRef, payload, { merge: true });
+					transaction.set(docRef, writePayload, { merge: true });
 				});
 				await resolveBeforeDeadline(txPromise, Date.now() + timeoutMs);
 				return true;
@@ -1307,24 +1383,49 @@ class NotificationRedriveService {
 		}
 	}
 
-	async syncWorkerTelemetry() {
-		if (this._activeTelemetryReadPromise) {
-			return this._activeTelemetryReadPromise;
-		}
-		this._activeTelemetryReadPromise = this._performSyncWorkerTelemetry().finally(() => {
-			this._activeTelemetryReadPromise = null;
-		});
-		return this._activeTelemetryReadPromise;
-	}
-
-	async _performSyncWorkerTelemetry() {
+	async syncWorkerTelemetry(options = {}) {
 		const firestore = this.getFirestore();
 		if (!firestore) {
 			return false;
 		}
+
+		// Keep underlying read promise single-flight until it settles
+		if (!this._activeTelemetryReadPromise) {
+			let readPromise;
+			readPromise = Promise.resolve()
+				.then(() => this._performSyncWorkerTelemetry(firestore))
+				.catch((error) => {
+					console.warn('[NotificationRedriveService] Telemetry read error:', error.message);
+					return false;
+				})
+				.finally(() => {
+					if (this._activeTelemetryReadPromise === readPromise) {
+						this._activeTelemetryReadPromise = null;
+					}
+				});
+			this._activeTelemetryReadPromise = readPromise;
+		}
+
+		const timeoutMs = options.timeoutMs || HEARTBEAT_WRITE_TIMEOUT_MS;
+		let timer = null;
 		try {
-			const read = firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID).get();
-			const snapshot = await resolveBeforeDeadline(read, Date.now() + HEARTBEAT_WRITE_TIMEOUT_MS);
+			return await Promise.race([
+				this._activeTelemetryReadPromise,
+				new Promise((resolve) => {
+					timer = setTimeout(() => resolve(false), timeoutMs);
+				}),
+			]);
+		} finally {
+			if (timer) {
+				clearTimeout(timer);
+			}
+		}
+	}
+
+	async _performSyncWorkerTelemetry(firestore) {
+		try {
+			const docRef = firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID);
+			const snapshot = await docRef.get();
 			if (!snapshot || !snapshot.exists) {
 				return false;
 			}
@@ -1366,6 +1467,9 @@ class NotificationRedriveService {
 			}
 			if (typeof data.lastRunExhaustedCount === 'number') {
 				this.persistedLastRunExhaustedCount = data.lastRunExhaustedCount;
+			}
+			if (typeof data.pendingCount === 'number') {
+				this.persistedPendingCount = data.pendingCount;
 			}
 			if (typeof data.deliveredCount === 'number') {
 				this.persistedDeliveredCount = data.deliveredCount;
@@ -1427,6 +1531,9 @@ class NotificationRedriveService {
 		}
 
 		this.running = true;
+		if (configuredRole === 'worker') {
+			void this.seedCountersFromHeartbeat();
+		}
 		this.workerTimer = setInterval(() => {
 			trackBackgroundTask(this.sweep()).catch((err) => {
 				console.warn('[NotificationRedriveService] Worker sweep error:', err.message);
@@ -1490,6 +1597,24 @@ class NotificationRedriveService {
 					}
 				}
 			}
+
+			if (this._activeTelemetryReadPromise) {
+				let timer = null;
+				try {
+					await Promise.race([
+						this._activeTelemetryReadPromise,
+						new Promise((_, reject) => {
+							timer = setTimeout(() => reject(new Error('Telemetry read drain timeout exceeded')), Math.max(0, drainDeadline - Date.now()));
+						}),
+					]);
+				} catch (error) {
+					console.warn('[NotificationRedriveService] Worker telemetry read drain timeout/error:', error.message);
+				} finally {
+					if (timer) {
+						clearTimeout(timer);
+					}
+				}
+			}
 		}
 	}
 
@@ -1525,6 +1650,9 @@ class NotificationRedriveService {
 		const effectiveLastRunRedrivenCount = this.lastRunRedrivenCount || (role === 'worker' ? (this.persistedLastRunRedrivenCount || 0) : 0);
 		const effectiveLastRunErrorCount = this.lastRunErrorCount || (role === 'worker' ? (this.persistedLastRunErrorCount || 0) : 0);
 		const effectiveLastRunExhaustedCount = this.lastRunExhaustedCount || (role === 'worker' ? (this.persistedLastRunExhaustedCount || 0) : 0);
+		const effectivePendingCount = (role === 'worker' && Number.isFinite(this.persistedPendingCount))
+			? this.persistedPendingCount
+			: this.getPendingCount();
 		const effectiveDeliveredCount = Math.max(this.totalDeliveredCount, role === 'worker' ? (this.persistedDeliveredCount || 0) : 0);
 		const effectiveExhaustedCount = Math.max(this.totalExhaustedCount, role === 'worker' ? (this.persistedExhaustedCount || 0) : 0);
 		const effectiveZeroChannelBroadcasts = Math.max(this.totalZeroChannelBroadcasts, role === 'worker' ? (this.persistedZeroChannelBroadcasts || 0) : 0);
@@ -1548,7 +1676,7 @@ class NotificationRedriveService {
 			batchLimit: parsePositiveInteger(runtimeConfig.NOTIFICATION_REDRIVE_BATCH_LIMIT ?? process.env.NOTIFICATION_REDRIVE_BATCH_LIMIT, DEFAULT_BATCH_LIMIT),
 			maxAttempts: parsePositiveInteger(runtimeConfig.NOTIFICATION_REDRIVE_MAX_ATTEMPTS ?? process.env.NOTIFICATION_REDRIVE_MAX_ATTEMPTS, DEFAULT_MAX_ATTEMPTS),
 			maxAgeMs: parsePositiveInteger(runtimeConfig.NOTIFICATION_REDRIVE_MAX_AGE_MS ?? process.env.NOTIFICATION_REDRIVE_MAX_AGE_MS, DEFAULT_MAX_AGE_MS),
-			pendingCount: this.getPendingCount(),
+			pendingCount: effectivePendingCount,
 			deliveredCount: effectiveDeliveredCount,
 			exhaustedCount: effectiveExhaustedCount,
 			zeroChannelBroadcasts: effectiveZeroChannelBroadcasts,
@@ -1598,6 +1726,7 @@ class NotificationRedriveService {
 		this.persistedLastRunRedrivenCount = 0;
 		this.persistedLastRunErrorCount = 0;
 		this.persistedLastRunExhaustedCount = 0;
+		this.persistedPendingCount = null;
 		this.persistedDeliveredCount = 0;
 		this.persistedExhaustedCount = 0;
 		this.persistedZeroChannelBroadcasts = 0;
