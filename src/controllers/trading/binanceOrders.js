@@ -5,15 +5,17 @@ const {
 	BinanceOrderRequestError,
 	BinanceOrderServiceError,
 	binanceOrderService,
+	deriveClientOrderId,
 } = require('../../services/trading/BinanceOrderService');
 const { getIdempotencyKey } = require('../../lib/idempotency');
 const { binanceOrderAuditService } = require('../../services/trading/BinanceOrderAuditService');
 
 async function postBinanceOrder(req, res) {
 	const startTime = Date.now();
+	const idempotencyKey = getIdempotencyKey(req);
 	try {
 		const result = await binanceOrderService.placeOrder(req.body, {
-			idempotencyKey: getIdempotencyKey(req),
+			idempotencyKey,
 		});
 		const processingMs = Date.now() - startTime;
 		try {
@@ -35,7 +37,9 @@ async function postBinanceOrder(req, res) {
 			side: result.order?.side || req.body?.side || null,
 			type: result.order?.type || req.body?.type || null,
 			quantity: result.order?.origQty ?? result.order?.quantity ?? req.body?.quantity ?? null,
+			quoteOrderQty: result.order?.quoteOrderQty ?? req.body?.quoteOrderQty ?? null,
 			price: result.order?.price ?? req.body?.price ?? null,
+			timeInForce: result.order?.timeInForce ?? req.body?.timeInForce ?? null,
 			status: result.dryRun ? 'dry_run' : (result.order?.status || 'SUBMITTED'),
 			dryRun: Boolean(result.dryRun),
 			environment: result.environment,
@@ -50,6 +54,10 @@ async function postBinanceOrder(req, res) {
 		return res.status(result.dryRun ? 200 : 201).json(result);
 	} catch (error) {
 		const processingMs = Date.now() - startTime;
+		const clientOrderId = error.clientOrderId
+			|| req.body?.clientOrderId
+			|| (idempotencyKey ? deriveClientOrderId(idempotencyKey, req.body) : null);
+
 		if (error instanceof BinanceOrderRequestError || error instanceof BinanceOrderServiceError) {
 			console.warn('[BinanceOrdersController] order rejected', { code: error.code });
 			const isAmbiguous = error.code === 'BINANCE_ORDER_STATUS_UNKNOWN';
@@ -61,11 +69,14 @@ async function postBinanceOrder(req, res) {
 				side: req.body?.side || null,
 				type: req.body?.type || null,
 				quantity: req.body?.quantity ?? null,
+				quoteOrderQty: req.body?.quoteOrderQty ?? null,
 				price: req.body?.price ?? null,
+				timeInForce: req.body?.timeInForce ?? null,
 				status,
 				errorCode: error.code,
 				dryRun: Boolean(req.body?.dryRun),
 				binanceOrderId: null,
+				clientOrderId: clientOrderId ?? null,
 				response: { error: error.message, code: error.code },
 				processingMs,
 			}).catch((err) => {
@@ -86,11 +97,14 @@ async function postBinanceOrder(req, res) {
 			side: req.body?.side || null,
 			type: req.body?.type || null,
 			quantity: req.body?.quantity ?? null,
+			quoteOrderQty: req.body?.quoteOrderQty ?? null,
 			price: req.body?.price ?? null,
+			timeInForce: req.body?.timeInForce ?? null,
 			status: 'rejected',
 			errorCode: 'BINANCE_ORDER_FAILED',
 			dryRun: Boolean(req.body?.dryRun),
 			binanceOrderId: null,
+			clientOrderId: clientOrderId ?? null,
 			response: { error: error.message, code: 'BINANCE_ORDER_FAILED' },
 			processingMs,
 		}).catch((err) => {
@@ -282,8 +296,20 @@ async function getBinanceOrderAudit(req, res) {
 		});
 	}
 
+	let effectiveLimit = 50;
+	if (req.query.limit !== undefined) {
+		const parsed = Number(req.query.limit);
+		if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
+			return res.status(400).json({
+				success: false,
+				error: 'limit must be an integer between 1 and 100',
+				code: 'INVALID_REQUEST',
+			});
+		}
+		effectiveLimit = parsed;
+	}
+
 	const {
-		limit = 50,
 		before,
 		symbol,
 		status,
@@ -316,7 +342,7 @@ async function getBinanceOrderAudit(req, res) {
 
 	try {
 		const result = await binanceOrderAuditService.listAuditRecords({
-			limit,
+			limit: effectiveLimit,
 			before,
 			symbol,
 			status,
@@ -324,6 +350,7 @@ async function getBinanceOrderAudit(req, res) {
 			to: effectiveTo,
 			environment,
 			orderId,
+			signal: req.signal,
 		});
 
 		const records = result?.records || [];
@@ -336,7 +363,7 @@ async function getBinanceOrderAudit(req, res) {
 			audit: records,
 			pagination: {
 				hasMore,
-				limit: Number.parseInt(limit, 10) || 50,
+				limit: result?.limit ?? effectiveLimit,
 				nextBefore,
 			},
 		});
@@ -346,6 +373,14 @@ async function getBinanceOrderAudit(req, res) {
 				success: false,
 				error: error.message || 'Invalid request parameters',
 				code: 'INVALID_REQUEST',
+			});
+		}
+
+		if (error.code === 'ABORTED' || error.name === 'AbortError') {
+			return res.status(499).json({
+				success: false,
+				error: 'Request was aborted',
+				code: 'ABORTED',
 			});
 		}
 

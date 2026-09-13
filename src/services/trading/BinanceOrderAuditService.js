@@ -167,7 +167,9 @@ function formatAuditRecord(doc) {
 		operator: data.operator || 'unknown',
 		action: data.action || 'PLACE',
 		quantity: data.quantity !== undefined && paramsValue(data.quantity),
+		quoteOrderQty: data.quoteOrderQty !== undefined && paramsValue(data.quoteOrderQty),
 		price: data.price !== undefined && paramsValue(data.price),
+		timeInForce: data.timeInForce ?? null,
 		binanceOrderId: data.binanceOrderId !== undefined && data.binanceOrderId !== null
 			? String(data.binanceOrderId)
 			: null,
@@ -271,6 +273,12 @@ class BinanceOrderAuditService {
 			const symbol = typeof params.symbol === 'string' ? params.symbol.toUpperCase() : 'UNKNOWN';
 			const side = typeof params.side === 'string' ? params.side.toUpperCase() : null;
 			const type = typeof params.type === 'string' ? params.type.toUpperCase() : null;
+			const quantity = params.quantity !== undefined && params.quantity !== null ? params.quantity : null;
+			const quoteOrderQty = params.quoteOrderQty !== undefined && params.quoteOrderQty !== null
+				? params.quoteOrderQty
+				: (params.req?.body?.quoteOrderQty !== undefined ? params.req.body.quoteOrderQty : null);
+			const price = params.price !== undefined && params.price !== null ? params.price : null;
+			const timeInForce = params.timeInForce || params.req?.body?.timeInForce || null;
 
 			let requestFingerprint = params.requestFingerprint || null;
 			if (!requestFingerprint && (symbol !== 'UNKNOWN' || side || type)) {
@@ -278,8 +286,10 @@ class BinanceOrderAuditService {
 					symbol,
 					side || '',
 					type || '',
-					params.quantity ?? '',
-					params.price ?? '',
+					quantity ?? '',
+					quoteOrderQty ?? '',
+					price ?? '',
+					timeInForce ?? '',
 				].join(':');
 				requestFingerprint = crypto.createHash('sha256').update(fpPayload).digest('hex');
 			}
@@ -320,8 +330,10 @@ class BinanceOrderAuditService {
 				timestamp,
 				operator,
 				action: typeof params.action === 'string' ? params.action.toUpperCase() : 'PLACE',
-				quantity: params.quantity !== undefined && params.quantity !== null ? params.quantity : null,
-				price: params.price !== undefined && params.price !== null ? params.price : null,
+				quantity,
+				quoteOrderQty,
+				price,
+				timeInForce,
 				binanceOrderId: params.binanceOrderId !== undefined && params.binanceOrderId !== null
 					? String(params.binanceOrderId)
 					: null,
@@ -349,13 +361,12 @@ class BinanceOrderAuditService {
 		if (!this.isEnabled() || !this.isConfigured() || !orderId) {
 			return null;
 		}
+		const firestore = this._getFirestore();
+		if (!firestore) return null;
+
 		try {
-			const firestore = this._getFirestore();
-			if (!firestore) {
-				return null;
-			}
-			const doc = await firestore.collection(COLLECTION_NAME).doc(orderId).get();
-			if (!doc || !doc.exists) {
+			const doc = await firestore.collection(COLLECTION_NAME).doc(String(orderId)).get();
+			if (!doc.exists) {
 				return null;
 			}
 			return { id: doc.id, ...doc.data() };
@@ -421,7 +432,13 @@ class BinanceOrderAuditService {
 		const normalizedOrderId = typeof orderId === 'string' && orderId.trim() ? orderId.trim() : null;
 		const normalizedEnvironment = typeof environment === 'string' && environment.trim() ? environment.trim().toLowerCase() : null;
 
-		while (matches.length < targetCount) {
+		const MAX_SCAN_DOCS = 1000;
+		const MAX_SCAN_MS = 8000;
+		const scanStartTime = Date.now();
+		let totalScanned = 0;
+		const now = new Date();
+
+		while (matches.length < targetCount && totalScanned < MAX_SCAN_DOCS && (Date.now() - scanStartTime) < MAX_SCAN_MS) {
 			if (signal && signal.aborted) {
 				const abortErr = new Error('Query was aborted');
 				abortErr.name = 'AbortError';
@@ -466,8 +483,16 @@ class BinanceOrderAuditService {
 			}
 
 			for (const doc of snapshot.docs) {
+				totalScanned++;
 				const formatted = formatAuditRecord(doc);
 				const recordDate = formatted.timestamp ? new Date(formatted.timestamp) : null;
+
+				if (formatted.expiresAt) {
+					const expiresDate = new Date(formatted.expiresAt);
+					if (!Number.isNaN(expiresDate.getTime()) && expiresDate <= now) {
+						continue;
+					}
+				}
 
 				if (normalizedSymbol && formatted.symbol !== normalizedSymbol) continue;
 				if (normalizedStatus && !matchesStatus(formatted.status, normalizedStatus)) continue;
@@ -507,6 +532,7 @@ class BinanceOrderAuditService {
 			records,
 			hasMore: matches.length > pageSize,
 			nextBefore,
+			limit: pageSize,
 		};
 	}
 

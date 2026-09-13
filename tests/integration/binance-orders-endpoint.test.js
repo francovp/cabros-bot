@@ -1128,13 +1128,81 @@ describe('Binance orders API', () => {
 				expect.objectContaining({
 					symbol: 'BTCUSDT',
 					status: 'dry_run',
-					limit: '25',
+					limit: 25,
 				}),
 			);
 
 			isEnabledSpy.mockRestore();
 			isConfiguredSpy.mockRestore();
 			listAuditRecordsSpy.mockRestore();
+		});
+
+		it('returns 400 INVALID_REQUEST when limit is out of range or not an integer', async () => {
+			const isEnabledSpy = jest.spyOn(binanceOrderAuditService, 'isEnabled').mockReturnValue(true);
+			const isConfiguredSpy = jest.spyOn(binanceOrderAuditService, 'isConfigured').mockReturnValue(true);
+
+			const resTooHigh = await request(app)
+				.get('/api/trading/binance/orders/audit?limit=101')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(resTooHigh.body).toEqual({
+				success: false,
+				error: 'limit must be an integer between 1 and 100',
+				code: 'INVALID_REQUEST',
+			});
+
+			const resTooLow = await request(app)
+				.get('/api/trading/binance/orders/audit?limit=0')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(resTooLow.body.code).toBe('INVALID_REQUEST');
+
+			const resInvalid = await request(app)
+				.get('/api/trading/binance/orders/audit?limit=abc')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(resInvalid.body.code).toBe('INVALID_REQUEST');
+
+			isEnabledSpy.mockRestore();
+			isConfiguredSpy.mockRestore();
+		});
+
+		it('records clientOrderId and execution fields on ambiguous order submission audit mutation', async () => {
+			const recordMutationSpy = jest.spyOn(binanceOrderAuditService, 'recordMutation').mockResolvedValue(null);
+
+			client.getOrder.mockRejectedValue(new Error('Order not found'));
+			const timeoutError = new Error('Socket timed out');
+			timeoutError.code = 'ECONNRESET';
+			client.submitNewOrder.mockRejectedValue(timeoutError);
+
+			await request(app)
+				.post('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'audit-ambiguous-test-key')
+				.send({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'LIMIT',
+					quantity: 0.1,
+					price: 100,
+					timeInForce: 'GTC',
+					dryRun: false,
+				})
+				.expect(503);
+
+			expect(recordMutationSpy).toHaveBeenCalledWith(expect.objectContaining({
+				action: 'PLACE',
+				symbol: 'BTCUSDT',
+				status: 'ambiguous',
+				errorCode: 'BINANCE_ORDER_STATUS_UNKNOWN',
+				clientOrderId: expect.stringMatching(/^cb_/),
+				timeInForce: 'GTC',
+			}));
+
+			recordMutationSpy.mockRestore();
 		});
 	});
 });

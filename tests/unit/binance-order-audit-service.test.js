@@ -397,6 +397,31 @@ describe('BinanceOrderAuditService', () => {
 			expect(result.errorCode).toBe('-1013');
 		});
 
+		it('includes quoteOrderQty and timeInForce in requestFingerprint and record', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			const result = await service.recordMutation({
+				action: 'PLACE',
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.01',
+				quoteOrderQty: '500',
+				price: '50000',
+				timeInForce: 'GTC',
+			});
+
+			const writtenData = mockDocRef.set.mock.calls[0][0];
+			expect(writtenData.quoteOrderQty).toBe('500');
+			expect(writtenData.timeInForce).toBe('GTC');
+
+			const expectedFingerprint = crypto.createHash('sha256')
+				.update('BTCUSDT:BUY:LIMIT:0.01:500:50000:GTC')
+				.digest('hex');
+			expect(writtenData.requestFingerprint).toBe(expectedFingerprint);
+		});
+
 		it('hashes idempotency key from req or parameters into idempotencyKeyHash', async () => {
 			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
 			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
@@ -591,6 +616,66 @@ describe('BinanceOrderAuditService', () => {
 
 			expect(result.records).toHaveLength(1);
 			expect(result.records[0].status).toBe('FILLED');
+		});
+
+		it('excludes expired documents where expiresAt is in the past', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			queryChain.get.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					{
+						id: 'active-1',
+						data: () => ({
+							orderId: 'active-1',
+							symbol: 'BTCUSDT',
+							status: 'confirmed',
+							timestamp: '2026-09-10T12:00:00.000Z',
+							expiresAt: new Date(Date.now() + 86400000).toISOString(),
+						}),
+					},
+					{
+						id: 'expired-1',
+						data: () => ({
+							orderId: 'expired-1',
+							symbol: 'BTCUSDT',
+							status: 'confirmed',
+							timestamp: '2026-09-10T11:00:00.000Z',
+							expiresAt: new Date(Date.now() - 1000).toISOString(),
+						}),
+					},
+				],
+			});
+
+			const result = await service.listAuditRecords({ limit: 10 });
+			expect(result.records).toHaveLength(1);
+			expect(result.records[0].id).toBe('active-1');
+		});
+
+		it('aborts when signal is already aborted', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			const controller = new AbortController();
+			controller.abort();
+
+			await expect(service.listAuditRecords({ signal: controller.signal })).rejects.toMatchObject({
+				code: 'ABORTED',
+			});
+		});
+
+		it('returns effective limit in the result', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			queryChain.get.mockResolvedValueOnce({
+				empty: true,
+				docs: [],
+			});
+
+			const result = await service.listAuditRecords({ limit: 25 });
+			expect(result.limit).toBe(25);
 		});
 	});
 });
