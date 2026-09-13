@@ -1765,8 +1765,10 @@ describe('NotificationRedriveService', () => {
 							exists: true,
 							data: () => persistedHeartbeat,
 						})),
-						set: jest.fn((docRef, payload) => {
-							persistedHeartbeat = { ...payload };
+						set: jest.fn((docRef, payload, options) => {
+							persistedHeartbeat = options?.merge
+								? { ...persistedHeartbeat, ...payload }
+								: { ...payload };
 						}),
 					};
 					await updateFn(mockTx);
@@ -2052,6 +2054,201 @@ describe('NotificationRedriveService', () => {
 			expect(status.lastSweepAt).toBe(new Date(1700000000000).toISOString());
 			expect(status.lastRunAt).toBe(new Date(1700000050000).toISOString());
 			expect(status.deliveredCount).toBe(42);
+		});
+
+		it('keeps timed-out heartbeat writes single-flight and does not start concurrent write while operation is active', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			let activeOperations = 0;
+			let maxConcurrentOperations = 0;
+			let resolveFirstTx;
+
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({})),
+				})),
+				runTransaction: jest.fn((updateFn) => {
+					activeOperations++;
+					maxConcurrentOperations = Math.max(maxConcurrentOperations, activeOperations);
+					return new Promise((resolve) => {
+						resolveFirstTx = () => {
+							activeOperations--;
+							resolve();
+						};
+					});
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			// First write times out in 20ms
+			const firstWritePromise = service.persistWorkerTelemetry({ timeoutMs: 20 });
+			const firstResult = await firstWritePromise;
+			expect(firstResult).toBe(false);
+			expect(service._activeTelemetryWriteOperation).not.toBeNull();
+
+			// Second write while first transaction is still pending in Firestore
+			const secondResult = await service.persistWorkerTelemetry({ waitTimeoutMs: 20, timeoutMs: 20 });
+			// Second write must not have started a second concurrent transaction!
+			expect(secondResult).toBe(false);
+			expect(maxConcurrentOperations).toBe(1);
+
+			// Resolve the hanging first transaction
+			resolveFirstTx();
+			await service._activeTelemetryWriteOperation;
+			expect(service._activeTelemetryWriteOperation).toBeNull();
+		});
+
+		it('persists delta counters without overwriting newer sweep metadata when older heartbeat loses to newer sweep', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			let persistedDeltaPayload = null;
+
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({})),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					const mockTx = {
+						get: jest.fn(async () => ({
+							exists: true,
+							data: () => ({
+								lastSweepAt: '2026-09-13T12:00:00.000Z',
+								deliveredCount: 10,
+								exhaustedCount: 5,
+								zeroChannelBroadcasts: 2,
+							}),
+						})),
+						set: jest.fn((docRef, payload, options) => {
+							persistedDeltaPayload = payload;
+						}),
+					};
+					await updateFn(mockTx);
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			service.lastSweepAt = '2026-09-13T11:59:00.000Z';
+			service._sessionDeliveredDelta = 3;
+			service._sessionExhaustedDelta = 1;
+
+			const success = await service.persistWorkerTelemetry({ timeoutMs: 100 });
+			expect(success).toBe(true);
+			expect(persistedDeltaPayload).toEqual({
+					deliveredCount: 13,
+				exhaustedCount: 6,
+			});
+			expect(persistedDeltaPayload.lastSweepAt).toBeUndefined();
+			expect(service._sessionDeliveredDelta).toBe(0);
+			expect(service._sessionExhaustedDelta).toBe(0);
+		});
+
+		it('does not replay a zero-channel increment through heartbeat telemetry', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			const heartbeat = { zeroChannelBroadcasts: 1 };
+			let persistedPayload = null;
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({})),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					const mockTx = {
+						get: jest.fn(async () => ({
+							exists: true,
+							data: () => heartbeat,
+						})),
+						set: jest.fn((docRef, payload) => {
+							persistedPayload = payload;
+							Object.assign(heartbeat, payload);
+						}),
+					};
+					await updateFn(mockTx);
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+			jest.spyOn(service, 'countDurablePendingRecords').mockResolvedValue(0);
+
+			// The point-increment write already committed this event; telemetry must not add it again.
+			service.totalZeroChannelBroadcasts = 1;
+			service._sessionZeroChannelDelta = 1;
+
+			await service.persistWorkerTelemetry({ timeoutMs: 100 });
+
+			expect(heartbeat.zeroChannelBroadcasts).toBe(1);
+			expect(persistedPayload?.zeroChannelBroadcasts).not.toBe(2);
+		});
+
+		it('persists zero-channel increments from web processes to Firestore and reflects across replicas in getStatus', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			let persistedPayload = null;
+
+			const mockDocRef = {
+				set: jest.fn(async (payload) => {
+					persistedPayload = payload;
+				}),
+			};
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => mockDocRef),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					const mockTx = {
+						get: jest.fn(async () => ({
+							exists: true,
+							data: () => ({ zeroChannelBroadcasts: 4 }),
+						})),
+						set: jest.fn((docRef, payload) => {
+							persistedPayload = payload;
+						}),
+					};
+					await updateFn(mockTx);
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			await service.incrementZeroChannelBroadcasts();
+			expect(mockFirestore.runTransaction).toHaveBeenCalled();
+			expect(persistedPayload).toEqual({ zeroChannelBroadcasts: 5 });
+			expect(service.getZeroChannelBroadcastsCount()).toBe(1);
+
+			// In a web replica where persisted count was synced from Firestore
+			service.totalZeroChannelBroadcasts = 0;
+			service.persistedZeroChannelBroadcasts = 5;
+			const status = service.getStatus();
+			expect(status.zeroChannelBroadcasts).toBe(5);
+		});
+
+		it('serializes fallback zero-channel increments to avoid lost updates', async () => {
+			let activeTransactions = 0;
+			let maxActiveTransactions = 0;
+			let persistedCount = 0;
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({ id: 'notification-redrive' })),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					activeTransactions += 1;
+					maxActiveTransactions = Math.max(maxActiveTransactions, activeTransactions);
+					await new Promise((resolve) => setImmediate(resolve));
+					const mockTx = {
+						get: jest.fn(async () => ({
+							exists: persistedCount > 0,
+							data: () => ({ zeroChannelBroadcasts: persistedCount }),
+						})),
+						set: jest.fn((docRef, payload) => {
+							persistedCount = payload.zeroChannelBroadcasts;
+						}),
+					};
+					await updateFn(mockTx);
+					activeTransactions -= 1;
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			await Promise.all([
+				service.incrementZeroChannelBroadcasts(),
+				service.incrementZeroChannelBroadcasts(),
+			]);
+
+			expect(maxActiveTransactions).toBe(1);
+			expect(persistedCount).toBe(2);
 		});
 	});
 

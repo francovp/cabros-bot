@@ -241,15 +241,59 @@ class NotificationRedriveService {
 		this._activeTelemetryWriteOperation = null;
 		this._activeTelemetryReadPromise = null;
 		this._activePendingCountPromise = null;
+		this._activeZeroChannelWritePromise = null;
 		this._initialSeedPromise = null;
 		this._sessionDeliveredDelta = 0;
 		this._sessionExhaustedDelta = 0;
-		this._sessionZeroChannelDelta = 0;
 	}
 
 	incrementZeroChannelBroadcasts() {
 		this.totalZeroChannelBroadcasts += 1;
-		this._sessionZeroChannelDelta = (this._sessionZeroChannelDelta || 0) + 1;
+		if (!this.hasDurableStore()) return Promise.resolve();
+
+		const previousWrite = this._activeZeroChannelWritePromise || Promise.resolve();
+		let trackedWrite;
+		const writePromise = previousWrite
+			.catch(() => {})
+			.then(() => this._persistZeroChannelIncrement(1));
+		trackedWrite = writePromise.finally(() => {
+			if (this._activeZeroChannelWritePromise === trackedWrite) {
+				this._activeZeroChannelWritePromise = null;
+			}
+		});
+		this._activeZeroChannelWritePromise = trackedWrite;
+		trackBackgroundTask(trackedWrite).catch(() => {});
+		return trackedWrite;
+	}
+
+	async _persistZeroChannelIncrement(delta = 1) {
+		const firestore = this.getFirestore();
+		if (!firestore) {
+			return;
+		}
+		try {
+			const docRef = firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID);
+			let writePromise;
+			if (admin?.firestore?.FieldValue?.increment) {
+				writePromise = docRef.set({
+					zeroChannelBroadcasts: admin.firestore.FieldValue.increment(delta),
+				}, { merge: true });
+			} else if (typeof firestore.runTransaction === 'function') {
+				writePromise = firestore.runTransaction(async (tx) => {
+					const snapshot = await tx.get(docRef);
+					const data = snapshot && snapshot.exists ? (typeof snapshot.data === 'function' ? snapshot.data() : snapshot) : null;
+					const current = Number(data?.zeroChannelBroadcasts) || 0;
+					tx.set(docRef, { zeroChannelBroadcasts: current + delta }, { merge: true });
+				});
+			} else if (typeof docRef.set === 'function') {
+				writePromise = docRef.set({ zeroChannelBroadcasts: this.totalZeroChannelBroadcasts }, { merge: true });
+			} else {
+				return;
+			}
+			await writePromise;
+		} catch (error) {
+			console.warn('[NotificationRedriveService] Failed to persist zero-channel increment:', error.message);
+		}
 	}
 
 	getZeroChannelBroadcastsCount() {
@@ -1340,7 +1384,7 @@ class NotificationRedriveService {
 
 		const timeoutMs = options.timeoutMs || this._heartbeatWriteTimeoutMs || HEARTBEAT_WRITE_TIMEOUT_MS;
 		const sequence = ++this._telemetryWriteSequence;
-		const completedAt = this.lastSweepAt || new Date();
+		const completedAt = normalizeTimestampToDate(this.lastSweepAt) || new Date();
 		const currentSweepAtMs = completedAt.getTime();
 		const pendingCount = await this.countDurablePendingRecords();
 		const payload = {
@@ -1359,7 +1403,6 @@ class NotificationRedriveService {
 			pendingCount,
 			deliveredCount: this.totalDeliveredCount,
 			exhaustedCount: this.totalExhaustedCount,
-			zeroChannelBroadcasts: this.totalZeroChannelBroadcasts,
 			updatedAt: admin.firestore?.Timestamp?.fromDate
 				? admin.firestore.Timestamp.fromDate(new Date())
 				: new Date().toISOString(),
@@ -1385,47 +1428,63 @@ class NotificationRedriveService {
 				let txCompleted = false;
 				let deliveredDelta = 0;
 				let exhaustedDelta = 0;
-				let zeroChannelDelta = 0;
 				let finalWritePayload = null;
 				const txPromise = firestore.runTransaction(async (transaction) => {
 					const doc = await transaction.get(docRef);
 					let writePayload = { ...payload };
 					deliveredDelta = this._sessionDeliveredDelta || 0;
 					exhaustedDelta = this._sessionExhaustedDelta || 0;
-					zeroChannelDelta = this._sessionZeroChannelDelta || 0;
 
 					if (doc && doc.exists) {
 						const data = typeof doc.data === 'function' ? doc.data() : doc;
+						const existingDelivered = Number(data?.deliveredCount) || 0;
+						const existingExhausted = Number(data?.exhaustedCount) || 0;
 						const existingSweepAtMs = parseSweepTimestampMs(data?.lastSweepAt);
-						// If persisted heartbeat has a newer sweep completion time, do not overwrite
+						const currentSweepAtMs = parseSweepTimestampMs(payload.lastSweepAt);
+
+						// If persisted heartbeat has a newer sweep completion time, do not overwrite sweep metadata
 						if (existingSweepAtMs > currentSweepAtMs) {
+							if (deliveredDelta > 0 || exhaustedDelta > 0) {
+								const deltaPayload = {
+									deliveredCount: existingDelivered + deliveredDelta,
+									exhaustedCount: existingExhausted + exhaustedDelta,
+								};
+								finalWritePayload = deltaPayload;
+								transaction.set(docRef, deltaPayload, { merge: true });
+							}
 							return;
 						}
 						// If exact same completion millisecond, use process sequence as tie-breaker
 						if (existingSweepAtMs === currentSweepAtMs) {
 							const existingSequence = Number(data?.sequence) || 0;
 							if (existingSequence > sequence) {
+								if (deliveredDelta > 0 || exhaustedDelta > 0) {
+									const deltaPayload = {
+										deliveredCount: existingDelivered + deliveredDelta,
+										exhaustedCount: existingExhausted + exhaustedDelta,
+									};
+									finalWritePayload = deltaPayload;
+									transaction.set(docRef, deltaPayload, { merge: true });
+								}
 								return;
 							}
 						}
-						const existingDelivered = Number(data?.deliveredCount) || 0;
-						const existingExhausted = Number(data?.exhaustedCount) || 0;
-						const existingZeroChannel = Number(data?.zeroChannelBroadcasts) || 0;
 						writePayload.deliveredCount = Math.max(existingDelivered + deliveredDelta, payload.deliveredCount);
 						writePayload.exhaustedCount = Math.max(existingExhausted + exhaustedDelta, payload.exhaustedCount);
-						writePayload.zeroChannelBroadcasts = Math.max(existingZeroChannel + zeroChannelDelta, payload.zeroChannelBroadcasts);
 					}
 					finalWritePayload = writePayload;
 					transaction.set(docRef, writePayload, { merge: true });
 				}).then(() => {
 					txCompleted = true;
-					this._sessionDeliveredDelta = Math.max(0, (this._sessionDeliveredDelta || 0) - deliveredDelta);
-					this._sessionExhaustedDelta = Math.max(0, (this._sessionExhaustedDelta || 0) - exhaustedDelta);
-					this._sessionZeroChannelDelta = Math.max(0, (this._sessionZeroChannelDelta || 0) - zeroChannelDelta);
 					if (finalWritePayload) {
-						this.totalDeliveredCount = finalWritePayload.deliveredCount;
-						this.totalExhaustedCount = finalWritePayload.exhaustedCount;
-						this.totalZeroChannelBroadcasts = finalWritePayload.zeroChannelBroadcasts;
+						this._sessionDeliveredDelta = Math.max(0, (this._sessionDeliveredDelta || 0) - deliveredDelta);
+						this._sessionExhaustedDelta = Math.max(0, (this._sessionExhaustedDelta || 0) - exhaustedDelta);
+						if (typeof finalWritePayload.deliveredCount === 'number') {
+							this.totalDeliveredCount = finalWritePayload.deliveredCount;
+						}
+						if (typeof finalWritePayload.exhaustedCount === 'number') {
+							this.totalExhaustedCount = finalWritePayload.exhaustedCount;
+						}
 					}
 				});
 
@@ -1464,16 +1523,36 @@ class NotificationRedriveService {
 			return setCompleted;
 		};
 
-		// Bound waiting for previous write so an unsettled/hung previous promise never blocks subsequent sweeps
-		const previousPromise = this._activeTelemetryWritePromise || this._activeTelemetryWriteOperation;
-		if (previousPromise) {
+		// If a previous telemetry write operation is still active in Firestore, keep writes single-flight
+		if (this._activeTelemetryWriteOperation) {
 			const waitBudgetMs = Number.isFinite(options.waitTimeoutMs)
 				? options.waitTimeoutMs
 				: Math.min(timeoutMs, 2000);
 			let waitTimer = null;
 			try {
 				await Promise.race([
-					previousPromise.catch(() => {}),
+					this._activeTelemetryWriteOperation,
+					new Promise((resolve) => {
+						waitTimer = setTimeout(resolve, waitBudgetMs);
+					}),
+				]);
+			} finally {
+				if (waitTimer) {
+					clearTimeout(waitTimer);
+				}
+			}
+			// If previous Firestore operation has not settled, prevent starting a concurrent write
+			if (this._activeTelemetryWriteOperation) {
+				return false;
+			}
+		} else if (this._activeTelemetryWritePromise) {
+			const waitBudgetMs = Number.isFinite(options.waitTimeoutMs)
+				? options.waitTimeoutMs
+				: Math.min(timeoutMs, 2000);
+			let waitTimer = null;
+			try {
+				await Promise.race([
+					this._activeTelemetryWritePromise.catch(() => {}),
 					new Promise((resolve) => {
 						waitTimer = setTimeout(resolve, waitBudgetMs);
 					}),
@@ -1770,6 +1849,24 @@ class NotificationRedriveService {
 					}
 				}
 			}
+
+			if (this._activeZeroChannelWritePromise) {
+				let timer = null;
+				try {
+					await Promise.race([
+						this._activeZeroChannelWritePromise,
+						new Promise((_, reject) => {
+							timer = setTimeout(() => reject(new Error('Zero-channel write drain timeout exceeded')), Math.max(0, drainDeadline - Date.now()));
+						}),
+					]);
+				} catch (error) {
+					console.warn('[NotificationRedriveService] Worker zero-channel write drain timeout/error:', error.message);
+				} finally {
+					if (timer) {
+						clearTimeout(timer);
+					}
+				}
+			}
 		}
 	}
 
@@ -1810,7 +1907,7 @@ class NotificationRedriveService {
 			: this.getPendingCount();
 		const effectiveDeliveredCount = Math.max(this.totalDeliveredCount, role === 'worker' ? (this.persistedDeliveredCount || 0) : 0);
 		const effectiveExhaustedCount = Math.max(this.totalExhaustedCount, role === 'worker' ? (this.persistedExhaustedCount || 0) : 0);
-		const effectiveZeroChannelBroadcasts = Math.max(this.totalZeroChannelBroadcasts, role === 'worker' ? (this.persistedZeroChannelBroadcasts || 0) : 0);
+		const effectiveZeroChannelBroadcasts = Math.max(this.totalZeroChannelBroadcasts, this.persistedZeroChannelBroadcasts || 0);
 
 		const formatSafeIso = (dateVal) => {
 			const normalized = normalizeTimestampToDate(dateVal);
@@ -1867,10 +1964,10 @@ class NotificationRedriveService {
 		this._activeTelemetryWriteOperation = null;
 		this._activeTelemetryReadPromise = null;
 		this._activePendingCountPromise = null;
+		this._activeZeroChannelWritePromise = null;
 		this._initialSeedPromise = null;
 		this._sessionDeliveredDelta = 0;
 		this._sessionExhaustedDelta = 0;
-		this._sessionZeroChannelDelta = 0;
 		this.running = false;
 		this.lastRunAt = null;
 		this.lastRunDurationMs = null;
