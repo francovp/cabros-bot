@@ -2441,6 +2441,46 @@ describe('NotificationRedriveService', () => {
 			expect(transactionCalls).toBe(2);
 			expect(persistedCount).toBe(101);
 		});
+
+		it('retries failed zero-channel persistence without another event', async () => {
+			jest.useFakeTimers();
+			let transactionCalls = 0;
+			let persistedCount = 0;
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({ id: 'notification-redrive' })),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					transactionCalls += 1;
+					if (transactionCalls === 1) {
+						throw new Error('transient Firestore outage');
+					}
+					const mockTx = {
+						get: jest.fn(async () => ({
+							exists: persistedCount > 0,
+							data: () => ({ zeroChannelBroadcasts: persistedCount }),
+						})),
+						set: jest.fn((docRef, payload) => {
+							persistedCount = payload.zeroChannelBroadcasts;
+						}),
+					};
+					await updateFn(mockTx);
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			await service.incrementZeroChannelBroadcasts();
+			expect(transactionCalls).toBe(1);
+
+			await jest.advanceTimersByTimeAsync(5000);
+			if (service._activeZeroChannelWritePromise) {
+				await service._activeZeroChannelWritePromise;
+			}
+
+			expect(transactionCalls).toBe(2);
+			expect(persistedCount).toBe(1);
+			jest.useRealTimers();
+		});
 	});
 
 	describe('helpers', () => {

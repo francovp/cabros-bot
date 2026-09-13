@@ -21,6 +21,8 @@ const DURABLE_ENQUEUE_TIMEOUT_MS = 500;
 const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
 const HEARTBEAT_DOCUMENT_ID = 'notification-redrive';
 const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
+const ZERO_CHANNEL_RETRY_DELAY_MS = HEARTBEAT_WRITE_TIMEOUT_MS;
+const MAX_ZERO_CHANNEL_RETRY_ATTEMPTS = 3;
 const PENDING_COUNT_FALLBACK_LIMIT = 1000;
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
 const ROUTING_FIELDS = Object.freeze({
@@ -245,6 +247,8 @@ class NotificationRedriveService {
 		this._activeZeroChannelWritePromise = null;
 		this._activeZeroChannelWriteResultPromise = null;
 		this._pendingZeroChannelWriteDelta = 0;
+		this._zeroChannelRetryTimer = null;
+		this._zeroChannelRetryAttempts = 0;
 		this._initialSeedPromise = null;
 		this._sessionDeliveredDelta = 0;
 		this._sessionExhaustedDelta = 0;
@@ -258,12 +262,38 @@ class NotificationRedriveService {
 		return this._flushZeroChannelWrites();
 	}
 
+	_scheduleZeroChannelRetry() {
+		if (
+			this._zeroChannelRetryTimer
+			|| this._pendingZeroChannelWriteDelta <= 0
+			|| !this.hasDurableStore()
+			|| this._zeroChannelRetryAttempts >= MAX_ZERO_CHANNEL_RETRY_ATTEMPTS
+		) {
+			return;
+		}
+
+		this._zeroChannelRetryAttempts += 1;
+		this._zeroChannelRetryTimer = setTimeout(() => {
+			this._zeroChannelRetryTimer = null;
+			if (this._pendingZeroChannelWriteDelta > 0) {
+				trackBackgroundTask(this._flushZeroChannelWrites()).catch(() => {});
+			}
+		}, ZERO_CHANNEL_RETRY_DELAY_MS);
+		if (typeof this._zeroChannelRetryTimer.unref === 'function') {
+			this._zeroChannelRetryTimer.unref();
+		}
+	}
+
 	_flushZeroChannelWrites() {
 		if (this._activeZeroChannelWritePromise) {
 			return this._activeZeroChannelWriteResultPromise || this._activeZeroChannelWritePromise;
 		}
 		if (this._pendingZeroChannelWriteDelta <= 0 || !this.hasDurableStore()) {
 			return Promise.resolve(true);
+		}
+		if (this._zeroChannelRetryTimer) {
+			clearTimeout(this._zeroChannelRetryTimer);
+			this._zeroChannelRetryTimer = null;
 		}
 
 		const delta = this._pendingZeroChannelWriteDelta;
@@ -289,9 +319,14 @@ class NotificationRedriveService {
 				if (this._activeZeroChannelWritePromise !== trackedWrite) return;
 				this._activeZeroChannelWritePromise = null;
 				this._activeZeroChannelWriteResultPromise = null;
-				if (persisted && this._pendingZeroChannelWriteDelta > 0) {
-					followUpWriteStarted = true;
-					this._flushZeroChannelWrites();
+				if (persisted) {
+					this._zeroChannelRetryAttempts = 0;
+					if (this._pendingZeroChannelWriteDelta > 0) {
+						followUpWriteStarted = true;
+						this._flushZeroChannelWrites();
+					}
+				} else {
+					this._scheduleZeroChannelRetry();
 				}
 			});
 		trackedWrite = writePromise;
@@ -2048,6 +2083,11 @@ class NotificationRedriveService {
 		this._activeZeroChannelWritePromise = null;
 		this._activeZeroChannelWriteResultPromise = null;
 		this._pendingZeroChannelWriteDelta = 0;
+		if (this._zeroChannelRetryTimer) {
+			clearTimeout(this._zeroChannelRetryTimer);
+		}
+		this._zeroChannelRetryTimer = null;
+		this._zeroChannelRetryAttempts = 0;
 		this._initialSeedPromise = null;
 		this._sessionDeliveredDelta = 0;
 		this._sessionExhaustedDelta = 0;
