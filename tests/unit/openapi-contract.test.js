@@ -396,6 +396,8 @@ describe('OpenAPI contract', () => {
 
 			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
 			expect(statusExample.dependencies.notificationRedrive.maxAgeMs).toBe(3600000);
+			expect(redriveSchema.properties.zeroChannelBroadcasts.description)
+				.toContain('dropped because no notification channels were enabled');
 		});
 	});
 });

@@ -198,6 +198,38 @@ describe('NotificationRedriveService', () => {
 			expect(status.workerRole).toBe('worker');
 		});
 
+		it('syncs durable telemetry for web status replicas', () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
+			jest.spyOn(service, 'getFirestore').mockReturnValue({});
+			jest.spyOn(service, 'syncWorkerTelemetry').mockImplementation(() => {
+				service.persistedLastSweepAt = new Date('2026-09-13T12:00:00.000Z');
+				service.persistedLastSweepResult = {
+					processed: 4,
+					succeeded: 2,
+					exhausted: 1,
+					errors: 1,
+				};
+				service.persistedPendingCount = 7;
+				service.persistedDeliveredCount = 4;
+				service.persistedExhaustedCount = 2;
+				return Promise.resolve(true);
+			});
+
+			const status = service.getStatus();
+
+			expect(service.syncWorkerTelemetry).toHaveBeenCalled();
+			expect(status.lastSweepAt).toBe('2026-09-13T12:00:00.000Z');
+			expect(status.lastSweepResult).toEqual({
+				processed: 4,
+				succeeded: 2,
+				exhausted: 1,
+				errors: 1,
+			});
+			expect(status.pendingCount).toBe(7);
+			expect(status.deliveredCount).toBe(4);
+			expect(status.exhaustedCount).toBe(2);
+		});
+
 		it('normalizes worker role to web, worker, or disabled', () => {
 			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'WORKER';
 			expect(service.getWorkerRole()).toBe('worker');
@@ -1736,6 +1768,29 @@ describe('NotificationRedriveService', () => {
 			expect(durableCount).toBe(2);
 		});
 
+		it('uses Firestore count aggregation for durable pending depth when available', async () => {
+			const aggregate = {
+				get: jest.fn(async () => ({ data: () => ({ count: 7 }) })),
+			};
+			const query = {
+				count: jest.fn(() => aggregate),
+				get: jest.fn(async () => ({ empty: false, docs: [] })),
+			};
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					where: jest.fn(() => query),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			const durableCount = await service.countDurablePendingRecords();
+
+			expect(durableCount).toBe(7);
+			expect(query.count).toHaveBeenCalledTimes(1);
+			expect(aggregate.get).toHaveBeenCalledTimes(1);
+			expect(query.get).not.toHaveBeenCalled();
+		});
+
 		it('preserves cumulative counters across worker restarts and merges with persisted heartbeat totals', async () => {
 			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
 			process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
@@ -2249,6 +2304,52 @@ describe('NotificationRedriveService', () => {
 
 			expect(maxActiveTransactions).toBe(1);
 			expect(persistedCount).toBe(2);
+		});
+
+		it('coalesces zero-channel increments while a durable write is pending', async () => {
+			let transactionCalls = 0;
+			let persistedCount = 0;
+			let releaseFirstTransaction;
+			const firstTransaction = new Promise((resolve) => {
+				releaseFirstTransaction = resolve;
+			});
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({ id: 'notification-redrive' })),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					transactionCalls += 1;
+					if (transactionCalls === 1) await firstTransaction;
+					const mockTx = {
+						get: jest.fn(async () => ({
+							exists: persistedCount > 0,
+							data: () => ({ zeroChannelBroadcasts: persistedCount }),
+						})),
+						set: jest.fn((docRef, payload) => {
+							persistedCount = payload.zeroChannelBroadcasts;
+						}),
+					};
+					await updateFn(mockTx);
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			const firstWrite = service.incrementZeroChannelBroadcasts();
+			await new Promise((resolve) => setImmediate(resolve));
+			for (let index = 0; index < 100; index += 1) {
+				service.incrementZeroChannelBroadcasts();
+			}
+
+			expect(transactionCalls).toBe(1);
+
+			releaseFirstTransaction();
+			await firstWrite;
+			if (service._activeZeroChannelWritePromise) {
+				await service._activeZeroChannelWritePromise;
+			}
+
+			expect(transactionCalls).toBe(2);
+			expect(persistedCount).toBe(101);
 		});
 	});
 

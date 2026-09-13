@@ -7572,7 +7572,7 @@
           "zeroChannelBroadcasts": {
             "type": "integer",
             "minimum": 0,
-            "description": "Cumulative count of broadcast alerts dispatched to all channels due to empty channel targeting."
+            "description": "Cumulative count of broadcast alerts dropped because no notification channels were enabled at broadcast time."
           },
           "lastRunAt": {
             "type": [

@@ -21,6 +21,7 @@ const DURABLE_ENQUEUE_TIMEOUT_MS = 500;
 const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
 const HEARTBEAT_DOCUMENT_ID = 'notification-redrive';
 const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
+const PENDING_COUNT_FALLBACK_LIMIT = 1000;
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
 const ROUTING_FIELDS = Object.freeze({
 	telegram: 'telegramChatId',
@@ -242,6 +243,8 @@ class NotificationRedriveService {
 		this._activeTelemetryReadPromise = null;
 		this._activePendingCountPromise = null;
 		this._activeZeroChannelWritePromise = null;
+		this._activeZeroChannelWriteResultPromise = null;
+		this._pendingZeroChannelWriteDelta = 0;
 		this._initialSeedPromise = null;
 		this._sessionDeliveredDelta = 0;
 		this._sessionExhaustedDelta = 0;
@@ -251,29 +254,75 @@ class NotificationRedriveService {
 		this.totalZeroChannelBroadcasts += 1;
 		if (!this.hasDurableStore()) return Promise.resolve();
 
-		const previousWrite = this._activeZeroChannelWritePromise || Promise.resolve();
-		let trackedWrite;
-		const writePromise = previousWrite
-			.catch(() => {})
-			.then(() => this._persistZeroChannelIncrement(1));
-		trackedWrite = writePromise.finally(() => {
-			if (this._activeZeroChannelWritePromise === trackedWrite) {
-				this._activeZeroChannelWritePromise = null;
-			}
-		});
-		this._activeZeroChannelWritePromise = trackedWrite;
-		trackBackgroundTask(trackedWrite).catch(() => {});
-		return trackedWrite;
+		this._pendingZeroChannelWriteDelta += 1;
+		return this._flushZeroChannelWrites();
 	}
 
-	async _persistZeroChannelIncrement(delta = 1) {
+	_flushZeroChannelWrites() {
+		if (this._activeZeroChannelWritePromise) {
+			return this._activeZeroChannelWriteResultPromise || this._activeZeroChannelWritePromise;
+		}
+		if (this._pendingZeroChannelWriteDelta <= 0 || !this.hasDurableStore()) {
+			return Promise.resolve(true);
+		}
+
+		const delta = this._pendingZeroChannelWriteDelta;
+		this._pendingZeroChannelWriteDelta = 0;
+		let persisted = false;
+		let followUpWriteStarted = false;
+		let trackedWrite;
+		const writePromise = Promise.resolve()
+			.then(() => this._persistZeroChannelIncrement(delta))
+			.then((result) => {
+				persisted = result === true;
+				if (!persisted) {
+					this._pendingZeroChannelWriteDelta += delta;
+				}
+				return persisted;
+			})
+			.catch((error) => {
+				this._pendingZeroChannelWriteDelta += delta;
+				console.warn('[NotificationRedriveService] Zero-channel write failed:', error.message);
+				return false;
+			})
+			.finally(() => {
+				if (this._activeZeroChannelWritePromise !== trackedWrite) return;
+				this._activeZeroChannelWritePromise = null;
+				this._activeZeroChannelWriteResultPromise = null;
+				if (persisted && this._pendingZeroChannelWriteDelta > 0) {
+					followUpWriteStarted = true;
+					this._flushZeroChannelWrites();
+				}
+			});
+		trackedWrite = writePromise;
+		this._activeZeroChannelWritePromise = trackedWrite;
+
+		const boundedResult = resolveBeforeDeadline(
+			trackedWrite,
+			Date.now() + HEARTBEAT_WRITE_TIMEOUT_MS,
+		).then((result) => {
+			if (result === null) {
+				console.warn(`[NotificationRedriveService] Zero-channel write timed out after ${HEARTBEAT_WRITE_TIMEOUT_MS}ms`);
+				return false;
+			}
+			if (result === true && followUpWriteStarted) {
+				return this._activeZeroChannelWriteResultPromise || Promise.resolve(true);
+			}
+			return result === true;
+		}).catch(() => false);
+		this._activeZeroChannelWriteResultPromise = boundedResult;
+		trackBackgroundTask(trackedWrite).catch(() => {});
+		return boundedResult;
+	}
+
+	_persistZeroChannelIncrement(delta = 1) {
 		const firestore = this.getFirestore();
 		if (!firestore) {
-			return;
+			return Promise.resolve(false);
 		}
 		try {
 			const docRef = firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID);
-			let writePromise;
+			let writePromise = null;
 			if (admin?.firestore?.FieldValue?.increment) {
 				writePromise = docRef.set({
 					zeroChannelBroadcasts: admin.firestore.FieldValue.increment(delta),
@@ -288,11 +337,15 @@ class NotificationRedriveService {
 			} else if (typeof docRef.set === 'function') {
 				writePromise = docRef.set({ zeroChannelBroadcasts: this.totalZeroChannelBroadcasts }, { merge: true });
 			} else {
-				return;
+				return Promise.resolve(false);
 			}
-			await writePromise;
+			return Promise.resolve(writePromise).then(() => true).catch((error) => {
+				console.warn('[NotificationRedriveService] Failed to persist zero-channel increment:', error.message);
+				return false;
+			});
 		} catch (error) {
 			console.warn('[NotificationRedriveService] Failed to persist zero-channel increment:', error.message);
+			return Promise.resolve(false);
 		}
 	}
 
@@ -1294,13 +1347,29 @@ class NotificationRedriveService {
 					return this._getPendingFallbackCount();
 				}
 				const query = collection.where('status', 'in', ['pending', 'in_flight']);
-				if (!query || typeof query.get !== 'function') {
+				if (!query) {
+					return this._getPendingFallbackCount();
+				}
+				const aggregateQuery = typeof query.count === 'function' ? query.count() : null;
+				const queryToRead = aggregateQuery || (
+					typeof query.limit === 'function'
+						? query.limit(PENDING_COUNT_FALLBACK_LIMIT)
+						: query
+				);
+				if (!queryToRead || typeof queryToRead.get !== 'function') {
 					return this._getPendingFallbackCount();
 				}
 
 				const countPromise = Promise.resolve()
-					.then(() => query.get())
+					.then(() => queryToRead.get())
 					.then((snapshot) => {
+						if (aggregateQuery) {
+							const data = typeof snapshot?.data === 'function' ? snapshot.data() : snapshot?.data;
+							const count = Number(data?.count);
+							if (!Number.isFinite(count) || count < 0) return null;
+							this.persistedPendingCount = Math.floor(count);
+							return this.persistedPendingCount;
+						}
 						if (!snapshot || snapshot.empty) {
 							this.persistedPendingCount = 0;
 							return 0;
@@ -1890,23 +1959,23 @@ class NotificationRedriveService {
 		const role = this.getWorkerRole();
 		const runtimeConfig = getRuntimeConfig();
 
-		if (role === 'worker' && this.getFirestore()) {
+		if (role !== 'disabled' && this.getFirestore()) {
 			void this.syncWorkerTelemetry();
 		}
 
-		const effectiveLastRunAt = this.lastRunAt || (role === 'worker' ? this.persistedLastRunAt : null);
-		const effectiveLastSweepAt = this.lastSweepAt || (role === 'worker' ? this.persistedLastSweepAt : null);
-		const effectiveLastSweepResult = this.lastSweepResult || (role === 'worker' ? this.persistedLastSweepResult : null);
-		const effectiveLastRunDurationMs = this.lastRunDurationMs !== null ? this.lastRunDurationMs : (role === 'worker' ? this.persistedLastRunDurationMs : null);
-		const effectiveLastRunScannedCount = this.lastRunScannedCount || (role === 'worker' ? (this.persistedLastRunScannedCount || 0) : 0);
-		const effectiveLastRunRedrivenCount = this.lastRunRedrivenCount || (role === 'worker' ? (this.persistedLastRunRedrivenCount || 0) : 0);
-		const effectiveLastRunErrorCount = this.lastRunErrorCount || (role === 'worker' ? (this.persistedLastRunErrorCount || 0) : 0);
-		const effectiveLastRunExhaustedCount = this.lastRunExhaustedCount || (role === 'worker' ? (this.persistedLastRunExhaustedCount || 0) : 0);
-		const effectivePendingCount = (role === 'worker' && Number.isFinite(this.persistedPendingCount))
+		const effectiveLastRunAt = this.persistedLastRunAt || this.lastRunAt;
+		const effectiveLastSweepAt = this.persistedLastSweepAt || this.lastSweepAt;
+		const effectiveLastSweepResult = this.persistedLastSweepResult || this.lastSweepResult;
+		const effectiveLastRunDurationMs = this.persistedLastRunDurationMs !== null ? this.persistedLastRunDurationMs : this.lastRunDurationMs;
+		const effectiveLastRunScannedCount = this.persistedLastRunScannedCount || this.lastRunScannedCount || 0;
+		const effectiveLastRunRedrivenCount = this.persistedLastRunRedrivenCount || this.lastRunRedrivenCount || 0;
+		const effectiveLastRunErrorCount = this.persistedLastRunErrorCount || this.lastRunErrorCount || 0;
+		const effectiveLastRunExhaustedCount = this.persistedLastRunExhaustedCount || this.lastRunExhaustedCount || 0;
+		const effectivePendingCount = Number.isFinite(this.persistedPendingCount)
 			? this.persistedPendingCount
 			: this.getPendingCount();
-		const effectiveDeliveredCount = Math.max(this.totalDeliveredCount, role === 'worker' ? (this.persistedDeliveredCount || 0) : 0);
-		const effectiveExhaustedCount = Math.max(this.totalExhaustedCount, role === 'worker' ? (this.persistedExhaustedCount || 0) : 0);
+		const effectiveDeliveredCount = Math.max(this.totalDeliveredCount, this.persistedDeliveredCount || 0);
+		const effectiveExhaustedCount = Math.max(this.totalExhaustedCount, this.persistedExhaustedCount || 0);
 		const effectiveZeroChannelBroadcasts = Math.max(this.totalZeroChannelBroadcasts, this.persistedZeroChannelBroadcasts || 0);
 
 		const formatSafeIso = (dateVal) => {
@@ -1965,6 +2034,8 @@ class NotificationRedriveService {
 		this._activeTelemetryReadPromise = null;
 		this._activePendingCountPromise = null;
 		this._activeZeroChannelWritePromise = null;
+		this._activeZeroChannelWriteResultPromise = null;
+		this._pendingZeroChannelWriteDelta = 0;
 		this._initialSeedPromise = null;
 		this._sessionDeliveredDelta = 0;
 		this._sessionExhaustedDelta = 0;
