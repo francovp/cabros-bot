@@ -230,6 +230,48 @@ describe('NotificationRedriveService', () => {
 			expect(status.exhaustedCount).toBe(2);
 		});
 
+		it('keeps a newer local completed sweep over an older durable snapshot', () => {
+			jest.spyOn(service, 'getFirestore').mockReturnValue({});
+			jest.spyOn(service, 'syncWorkerTelemetry').mockResolvedValue(true);
+			service.persistedLastRunAt = new Date('2026-09-13T11:59:00.000Z');
+			service.persistedLastSweepAt = new Date('2026-09-13T11:59:01.000Z');
+			service.persistedLastSweepResult = {
+				processed: 1,
+				succeeded: 0,
+				exhausted: 0,
+				errors: 1,
+			};
+			service.persistedLastRunDurationMs = 10;
+			service.persistedLastRunScannedCount = 1;
+			service.persistedLastRunRedrivenCount = 0;
+			service.persistedLastRunErrorCount = 1;
+			service.persistedLastRunExhaustedCount = 0;
+			service.lastRunAt = new Date('2026-09-13T12:00:00.000Z');
+			service.lastSweepAt = new Date('2026-09-13T12:00:01.000Z');
+			service.lastSweepResult = {
+				processed: 2,
+				succeeded: 1,
+				exhausted: 1,
+				errors: 0,
+			};
+			service.lastRunDurationMs = 20;
+			service.lastRunScannedCount = 2;
+			service.lastRunRedrivenCount = 1;
+			service.lastRunErrorCount = 0;
+			service.lastRunExhaustedCount = 1;
+
+			const status = service.getStatus();
+
+			expect(status.lastRunAt).toBe('2026-09-13T12:00:00.000Z');
+			expect(status.lastSweepAt).toBe('2026-09-13T12:00:01.000Z');
+			expect(status.lastSweepResult).toEqual(service.lastSweepResult);
+			expect(status.lastRunDurationMs).toBe(20);
+			expect(status.lastRunScannedCount).toBe(2);
+			expect(status.lastRunRedrivenCount).toBe(1);
+			expect(status.lastRunErrorCount).toBe(0);
+			expect(status.lastRunExhaustedCount).toBe(1);
+		});
+
 		it('normalizes worker role to web, worker, or disabled', () => {
 			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'WORKER';
 			expect(service.getWorkerRole()).toBe('worker');
@@ -1318,6 +1360,29 @@ describe('NotificationRedriveService', () => {
 			expect(service.lastSweepResult.exhausted).toBe(1);
 			expect(notifySpy).toHaveBeenCalled();
 		});
+
+		it('reports only exhaustion completed by the current sweep', async () => {
+			const candidate = {
+				id: 'record_remote-count',
+				channel: 'telegram',
+				attemptCount: 10,
+				expired: true,
+				createdAt: new Date(),
+			};
+			jest.spyOn(service, 'getEligibleRecords').mockResolvedValue([candidate]);
+			jest.spyOn(service, 'markTerminal').mockImplementation(async () => {
+				// Simulate a late heartbeat completion merging a remote cumulative count.
+				service.totalExhaustedCount = 25;
+				return true;
+			});
+			jest.spyOn(service, 'notifyAdminPermanentFailure').mockResolvedValue();
+
+			await service.sweep();
+
+			expect(service.totalExhaustedCount).toBe(26);
+			expect(service.lastRunExhaustedCount).toBe(1);
+			expect(service.lastSweepResult.exhausted).toBe(1);
+		});
 	});
 
 	describe('worker lifecycle', () => {
@@ -1789,6 +1854,31 @@ describe('NotificationRedriveService', () => {
 			expect(query.count).toHaveBeenCalledTimes(1);
 			expect(aggregate.get).toHaveBeenCalledTimes(1);
 			expect(query.get).not.toHaveBeenCalled();
+		});
+
+		it('filters expired records before durable pending aggregation', async () => {
+			const aggregate = {
+				get: jest.fn(async () => ({ data: () => ({ count: 2 }) })),
+			};
+			const expiryAwareQuery = {
+				count: jest.fn(() => aggregate),
+			};
+			const statusQuery = {
+				where: jest.fn(() => expiryAwareQuery),
+			};
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					where: jest.fn(() => statusQuery),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			const durableCount = await service.countDurablePendingRecords();
+
+			expect(durableCount).toBe(2);
+			expect(statusQuery.where).toHaveBeenCalledWith('expiresAt', '>', expect.anything());
+			expect(expiryAwareQuery.count).toHaveBeenCalledTimes(1);
+			expect(aggregate.get).toHaveBeenCalledTimes(1);
 		});
 
 		it('preserves cumulative counters across worker restarts and merges with persisted heartbeat totals', async () => {

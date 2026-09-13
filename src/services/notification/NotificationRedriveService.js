@@ -1122,7 +1122,6 @@ class NotificationRedriveService {
 	async _executeSweep(options = {}) {
 		const startTime = Date.now();
 		this.lastRunAt = new Date(startTime);
-		const exhaustedBaseline = this.totalExhaustedCount;
 
 		const runtimeConfig = getRuntimeConfig();
 		const batchLimit = parsePositiveInteger(
@@ -1164,6 +1163,7 @@ class NotificationRedriveService {
 					});
 					if (marked) {
 						this.totalExhaustedCount += 1;
+						exhaustedCount += 1;
 						this._sessionExhaustedDelta = (this._sessionExhaustedDelta || 0) + 1;
 						trackBackgroundTask(this.notifyAdminPermanentFailure(candidate, `Terminal status: ${terminalStatus}`)).catch(() => {});
 					} else {
@@ -1259,6 +1259,7 @@ class NotificationRedriveService {
 							});
 							if (marked) {
 								this.totalExhaustedCount += 1;
+								exhaustedCount += 1;
 								this._sessionExhaustedDelta = (this._sessionExhaustedDelta || 0) + 1;
 								trackBackgroundTask(this.notifyAdminPermanentFailure({
 									...claimed,
@@ -1283,6 +1284,7 @@ class NotificationRedriveService {
 						});
 						if (marked) {
 							this.totalExhaustedCount += 1;
+							exhaustedCount += 1;
 							this._sessionExhaustedDelta = (this._sessionExhaustedDelta || 0) + 1;
 							trackBackgroundTask(this.notifyAdminPermanentFailure({
 								...claimed,
@@ -1301,7 +1303,6 @@ class NotificationRedriveService {
 			errorCount += 1;
 		} finally {
 			const sweepEndTime = Date.now();
-			exhaustedCount = Math.max(0, this.totalExhaustedCount - exhaustedBaseline);
 			this.lastRunDurationMs = Math.max(0, sweepEndTime - startTime);
 			this.lastRunScannedCount = scannedCount;
 			this.lastRunRedrivenCount = redrivenCount;
@@ -1350,11 +1351,14 @@ class NotificationRedriveService {
 				if (!query) {
 					return this._getPendingFallbackCount();
 				}
-				const aggregateQuery = typeof query.count === 'function' ? query.count() : null;
+				const expiryAwareQuery = typeof query.where === 'function'
+					? query.where('expiresAt', '>', toTimestamp(new Date()))
+					: query;
+				const aggregateQuery = typeof expiryAwareQuery.count === 'function' ? expiryAwareQuery.count() : null;
 				const queryToRead = aggregateQuery || (
-					typeof query.limit === 'function'
-						? query.limit(PENDING_COUNT_FALLBACK_LIMIT)
-						: query
+					typeof expiryAwareQuery.limit === 'function'
+						? expiryAwareQuery.limit(PENDING_COUNT_FALLBACK_LIMIT)
+						: expiryAwareQuery
 				);
 				if (!queryToRead || typeof queryToRead.get !== 'function') {
 					return this._getPendingFallbackCount();
@@ -1963,14 +1967,22 @@ class NotificationRedriveService {
 			void this.syncWorkerTelemetry();
 		}
 
-		const effectiveLastRunAt = this.persistedLastRunAt || this.lastRunAt;
-		const effectiveLastSweepAt = this.persistedLastSweepAt || this.lastSweepAt;
-		const effectiveLastSweepResult = this.persistedLastSweepResult || this.lastSweepResult;
-		const effectiveLastRunDurationMs = this.persistedLastRunDurationMs !== null ? this.persistedLastRunDurationMs : this.lastRunDurationMs;
-		const effectiveLastRunScannedCount = this.persistedLastRunScannedCount || this.lastRunScannedCount || 0;
-		const effectiveLastRunRedrivenCount = this.persistedLastRunRedrivenCount || this.lastRunRedrivenCount || 0;
-		const effectiveLastRunErrorCount = this.persistedLastRunErrorCount || this.lastRunErrorCount || 0;
-		const effectiveLastRunExhaustedCount = this.persistedLastRunExhaustedCount || this.lastRunExhaustedCount || 0;
+		const localSweepAt = normalizeTimestampToDate(this.lastSweepAt);
+		const persistedSweepAt = normalizeTimestampToDate(this.persistedLastSweepAt);
+		const usePersistedSnapshot = Boolean(
+			persistedSweepAt && (!localSweepAt || persistedSweepAt.getTime() >= localSweepAt.getTime()),
+		);
+		const selectSnapshotValue = (localValue, persistedValue) => usePersistedSnapshot
+			? (persistedValue ?? localValue)
+			: (localValue ?? persistedValue);
+		const effectiveLastRunAt = selectSnapshotValue(this.lastRunAt, this.persistedLastRunAt);
+		const effectiveLastSweepAt = selectSnapshotValue(this.lastSweepAt, this.persistedLastSweepAt);
+		const effectiveLastSweepResult = selectSnapshotValue(this.lastSweepResult, this.persistedLastSweepResult);
+		const effectiveLastRunDurationMs = selectSnapshotValue(this.lastRunDurationMs, this.persistedLastRunDurationMs);
+		const effectiveLastRunScannedCount = selectSnapshotValue(this.lastRunScannedCount, this.persistedLastRunScannedCount) ?? 0;
+		const effectiveLastRunRedrivenCount = selectSnapshotValue(this.lastRunRedrivenCount, this.persistedLastRunRedrivenCount) ?? 0;
+		const effectiveLastRunErrorCount = selectSnapshotValue(this.lastRunErrorCount, this.persistedLastRunErrorCount) ?? 0;
+		const effectiveLastRunExhaustedCount = selectSnapshotValue(this.lastRunExhaustedCount, this.persistedLastRunExhaustedCount) ?? 0;
 		const effectivePendingCount = Number.isFinite(this.persistedPendingCount)
 			? this.persistedPendingCount
 			: this.getPendingCount();
