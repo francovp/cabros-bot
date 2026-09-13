@@ -2464,7 +2464,7 @@
           "pattern": "\\S"
         },
         "example": "price_surge",
-        "description": "Optional event category filter (e.g. price_surge, price_drop, regulatory). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against the eventCategory field."
+        "description": "Optional event category filter (e.g. price_surge, price_decline, regulatory). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against the eventCategory field."
       },
       "AlertExchange": {
         "name": "exchange",

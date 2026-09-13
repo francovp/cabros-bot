@@ -1191,7 +1191,7 @@ List stored alerts ordered by `receivedAt` descending.
 - `enriched` - Optional boolean filter (`true` or `false`)
 - `symbol` - Optional symbol filter (e.g. `BTCUSDT`, `BINANCE:BTCUSDT`, `AAPL`). Case-insensitive and matched against extracted symbol and exchange fields. Up to 64 characters.
 - `exchange` - Optional exchange filter (e.g. `BINANCE`, `COINBASE`). Case-insensitive and matched against the extracted exchange field. Up to 64 characters.
-- `eventCategory` - Optional event category filter (e.g. `price_surge`, `price_drop`, `regulatory`). Case-insensitive and matched against `eventCategory`. Up to 64 characters.
+- `eventCategory` - Optional event category filter (e.g. `price_surge`, `price_decline`, `regulatory`). Case-insensitive and matched against `eventCategory`. Up to 64 characters.
 - `include` - Optional projection filter. Allowed value: `enrichment_summary`. When set, each returned alert item includes a sanitized `enrichmentSummary` projection object (with `sentiment`, `sentiment_score`, `setup_type`, `invalidation_level`, `target_level`, `risk_reward_ratio`, `sourceCount`, `sourceDomains`, `tradingViewEnrichmentApplied`, `tradingViewEnrichmentStatus`, and `promptProvenance`) and a sanitized `enrichmentData` payload without requiring N+1 detail fetches.
 
 **Response (200 OK):**
@@ -1257,7 +1257,7 @@ Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited gr
 - `enriched` - Optional boolean filter (`true` or `false`)
 - `symbol` - Optional symbol filter (e.g. `BTCUSDT`, `BINANCE:BTCUSDT`, `AAPL`). Case-insensitive and matched against extracted symbol and exchange fields. Up to 64 characters.
 - `exchange` - Optional exchange filter (e.g. `BINANCE`, `COINBASE`). Case-insensitive and matched against the extracted exchange field. Up to 64 characters.
-- `eventCategory` - Optional event category filter (e.g. `price_surge`, `price_drop`, `regulatory`). Case-insensitive and matched against `eventCategory`. Up to 64 characters.
+- `eventCategory` - Optional event category filter (e.g. `price_surge`, `price_decline`, `regulatory`). Case-insensitive and matched against `eventCategory`. Up to 64 characters.
 
 The service caps the queried window at 31 days to keep routine operator usage cheap.
 
