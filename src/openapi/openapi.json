@@ -421,11 +421,23 @@
           },
           {
             "$ref": "#/components/parameters/Enriched"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/AlertEventCategory"
+          },
+          {
+            "$ref": "#/components/parameters/AlertExchange"
           }
         ],
         "responses": {
           "200": {
             "$ref": "#/components/responses/AlertList"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -523,6 +535,15 @@
           },
           {
             "$ref": "#/components/parameters/Enriched"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/AlertEventCategory"
+          },
+          {
+            "$ref": "#/components/parameters/AlertExchange"
           }
         ],
         "responses": {
@@ -2420,6 +2441,42 @@
         "schema": {
           "type": "boolean"
         }
+      },
+      "AlertSymbol": {
+        "name": "symbol",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "\\S"
+        },
+        "example": "BTCUSDT",
+        "description": "Optional symbol filter (e.g. BTCUSDT, BINANCE:BTCUSDT, or AAPL). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against extracted symbol and exchange fields."
+      },
+      "AlertEventCategory": {
+        "name": "eventCategory",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "\\S"
+        },
+        "example": "price_surge",
+        "description": "Optional event category filter (e.g. price_surge, price_decline, regulatory). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against the eventCategory field."
+      },
+      "AlertExchange": {
+        "name": "exchange",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "\\S"
+        },
+        "example": "BINANCE",
+        "description": "Optional exchange filter (e.g. BINANCE, COINBASE). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against the extracted exchange field."
       },
       "IncludeText": {
         "name": "includeText",

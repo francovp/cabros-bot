@@ -279,4 +279,32 @@ describe('Postman collection contract', () => {
 		expect(errorBody.code).toBe('INVALID_REQUEST');
 		expect(errorBody.error).toContain('enrichment_summary');
 	});
+
+	it('documents symbol, exchange, and eventCategory query filters in GET List Alerts and GET Alert Analytics Summary', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const listFiltered = findItem(collection.item, 'GET List Alerts (symbol, exchange, eventCategory)');
+		const listInvalid = findItem(collection.item, 'GET List Alerts (invalid symbol - 400 Bad Request)');
+		const summaryFiltered = findItem(collection.item, 'GET Alert Analytics Summary (symbol, exchange, eventCategory)');
+		const summaryInvalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid symbol - 400 Bad Request)');
+
+		expect(listFiltered).toBeDefined();
+		expect(listFiltered.request.url.raw).toContain('symbol=BTCUSDT');
+		expect(listFiltered.request.url.raw).toContain('exchange=BINANCE');
+		expect(listFiltered.request.url.raw).toContain('eventCategory=price_surge');
+		expect(listFiltered.response[0].code).toBe(200);
+
+		expect(listInvalid).toBeDefined();
+		expect(listInvalid.response[0].code).toBe(400);
+		expect(JSON.parse(listInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+
+		expect(summaryFiltered).toBeDefined();
+		expect(summaryFiltered.request.url.raw).toContain('symbol=BTCUSDT');
+		expect(summaryFiltered.request.url.raw).toContain('exchange=BINANCE');
+		expect(summaryFiltered.request.url.raw).toContain('eventCategory=price_surge');
+		expect(summaryFiltered.response[0].code).toBe(200);
+
+		expect(summaryInvalid).toBeDefined();
+		expect(summaryInvalid.response[0].code).toBe(400);
+		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+	});
 });

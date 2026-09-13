@@ -234,6 +234,63 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	it('passes symbol, eventCategory, and exchange filters to alertStorageService.listAlerts', async () => {
+		alertStorageService.listAlerts.mockResolvedValue({
+			alerts: [],
+			hasMore: false,
+			nextBefore: null,
+		});
+
+		await request(app)
+			.get('/api/alerts?symbol=BTCUSDT&eventCategory=price_surge&exchange=BINANCE')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listAlerts).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			eventCategory: 'price_surge',
+			exchange: 'BINANCE',
+		}));
+	});
+
+	it('returns 400 when GET /api/alerts receives invalid filter values', async () => {
+		const emptySymbol = await request(app)
+			.get('/api/alerts?symbol=')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(emptySymbol.body).toEqual({
+			error: 'Invalid symbol filter. Use a non-empty string up to 64 characters.',
+			code: 'INVALID_REQUEST',
+		});
+
+		const emptyCategory = await request(app)
+			.get('/api/alerts?eventCategory=')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(emptyCategory.body).toEqual({
+			error: 'Invalid eventCategory filter. Use a non-empty string up to 64 characters.',
+			code: 'INVALID_REQUEST',
+		});
+
+		const emptyExchange = await request(app)
+			.get('/api/alerts?exchange=')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(emptyExchange.body).toEqual({
+			error: 'Invalid exchange filter. Use a non-empty string up to 64 characters.',
+			code: 'INVALID_REQUEST',
+		});
+
+		const whitespaceSymbol = await request(app)
+			.get('/api/alerts?symbol=%20%20%20')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(whitespaceSymbol.body).toEqual({
+			error: 'Invalid symbol filter. Use a non-empty string up to 64 characters.',
+			code: 'INVALID_REQUEST',
+		});
+	});
+
 	it('accepts an opaque nextBefore cursor from a previous response', async () => {
 		const before = encodeAlertPaginationCursor({
 			receivedAt: '2026-06-06T12:00:00.000Z',
@@ -470,6 +527,54 @@ describe('Alerts API Integration Tests', () => {
 
 		expect(res.body).toEqual({
 			error: 'Invalid summary window. from must be before or equal to to.',
+			code: 'INVALID_REQUEST',
+		});
+	});
+
+	it('passes symbol, eventCategory, and exchange filters to alertStorageService.summarizeAlerts', async () => {
+		alertStorageService.summarizeAlerts.mockResolvedValue({
+			totalAlerts: 0,
+			bySource: {},
+			bySymbol: {},
+		});
+
+		await request(app)
+			.get('/api/alerts/summary?symbol=BTCUSDT&eventCategory=price_surge&exchange=BINANCE')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.summarizeAlerts).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			eventCategory: 'price_surge',
+			exchange: 'BINANCE',
+		}));
+	});
+
+	it('returns 400 when GET /api/alerts/summary receives invalid filter values', async () => {
+		const emptySymbol = await request(app)
+			.get('/api/alerts/summary?symbol=')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(emptySymbol.body).toEqual({
+			error: 'Invalid symbol filter. Use a non-empty string up to 64 characters.',
+			code: 'INVALID_REQUEST',
+		});
+
+		const emptyCategory = await request(app)
+			.get('/api/alerts/summary?eventCategory=')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(emptyCategory.body).toEqual({
+			error: 'Invalid eventCategory filter. Use a non-empty string up to 64 characters.',
+			code: 'INVALID_REQUEST',
+		});
+
+		const emptyExchange = await request(app)
+			.get('/api/alerts/summary?exchange=')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(emptyExchange.body).toEqual({
+			error: 'Invalid exchange filter. Use a non-empty string up to 64 characters.',
 			code: 'INVALID_REQUEST',
 		});
 	});
