@@ -2322,7 +2322,10 @@ describe('admin browser client', () => {
 		await flush();
 		const replayRequest = requests.find(([url]) => url === '/api/alerts/batch/replay');
 		expect(replayRequest).toBeDefined();
-		expect(JSON.parse(replayRequest[1].body)).toEqual({ alertIds: ['alert-1', 'alert-2'] });
+		const parsedReplayBody = JSON.parse(replayRequest[1].body);
+		expect(parsedReplayBody.alertIds).toEqual(['alert-1', 'alert-2']);
+		expect(typeof parsedReplayBody.idempotencyKey).toBe('string');
+		expect(parsedReplayBody.idempotencyKey.trim().length).toBeGreaterThan(0);
 		expect(listForm.textContent).toContain('Batch replay complete: 2/2 succeeded.');
 
 		// Batch export
@@ -2358,9 +2361,11 @@ describe('admin browser client', () => {
 			initializeApp: jest.fn(),
 			auth: jest.fn(() => auth),
 		};
+		const requests = [];
 		const browser = createBrowser({
 			firebase,
-			fetchImpl: async (url) => {
+			fetchImpl: async (url, options) => {
+				requests.push([url, options]);
 				if (url === '/admin/auth-config') {
 					return response({
 						enabled: true,
@@ -2396,6 +2401,12 @@ describe('admin browser client', () => {
 		expect(exportBtn.disabled).toBe(false);
 		expect(replayBtn.disabled).toBe(true);
 		expect(deleteBtn.disabled).toBe(true);
+
+		await exportBtn.dispatch('click');
+		await flush();
+		const exportRequest = requests.find(([url]) => url === '/api/alerts/batch/export');
+		expect(exportRequest).toBeDefined();
+		expect(listForm.textContent).not.toContain('Your admin role cannot perform this operation.');
 	});
 
 	it('paginates stored alerts backward through visited cursors', async () => {

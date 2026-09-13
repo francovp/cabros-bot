@@ -742,12 +742,17 @@ function replayAlert(botOrGetter) {
 				...storedChannelRouting,
 			};
 			const results = await notificationManager.sendToChannels(replayPayload, channels);
-			const replayId = await alertStorageService.saveReplayAttempt({
-				alertId,
-				idempotencyKey: idempotencyKey.trim(),
-				channels,
-				deliveryResults: results,
-			});
+			let replayId = null;
+			try {
+				replayId = await alertStorageService.saveReplayAttempt({
+					alertId,
+					idempotencyKey: idempotencyKey.trim(),
+					channels,
+					deliveryResults: results,
+				});
+			} catch (storageErr) {
+				console.warn('[AlertsController] Failed to record replay attempt in Firestore for alert:', alertId, storageErr.message);
+			}
 
 			return res.status(200).json({
 				success: true,
@@ -854,6 +859,26 @@ function batchReplayAlerts(botOrGetter) {
 					});
 				} else {
 					const alertIdempotencyKey = `${idempotencyKey.trim()}:${alertId}`;
+
+					let existingReplay = null;
+					try {
+						if (typeof alertStorageService.getReplayAttemptByIdempotencyKey === 'function') {
+							existingReplay = await alertStorageService.getReplayAttemptByIdempotencyKey(alertId, alertIdempotencyKey);
+						}
+					} catch (checkErr) {
+						console.warn('[AlertsController] Failed checking existing replay for alert:', alertId, checkErr.message);
+					}
+
+					if (existingReplay) {
+						alertResults.push({
+							alertId,
+							success: true,
+							replayId: existingReplay.id,
+							results: existingReplay.deliveryResults || [],
+						});
+						continue;
+					}
+
 					const replayPayload = {
 						text: storedAlert.text,
 						enriched: storedAlert.enrichmentData || undefined,
@@ -865,20 +890,35 @@ function batchReplayAlerts(botOrGetter) {
 						...storedChannelRouting,
 					};
 
-					const results = await notificationManager.sendToChannels(replayPayload, channels);
-					const replayId = await alertStorageService.saveReplayAttempt({
-						alertId,
-						idempotencyKey: alertIdempotencyKey,
-						channels,
-						deliveryResults: results,
-					});
+					try {
+						const results = await notificationManager.sendToChannels(replayPayload, channels);
+						let replayId = null;
+						try {
+							replayId = await alertStorageService.saveReplayAttempt({
+								alertId,
+								idempotencyKey: alertIdempotencyKey,
+								channels,
+								deliveryResults: results,
+							});
+						} catch (storageErr) {
+							console.warn('[AlertsController] Failed to record replay attempt in Firestore for alert:', alertId, storageErr.message);
+						}
 
-					alertResults.push({
-						alertId,
-						success: true,
-						replayId,
-						results,
-					});
+						alertResults.push({
+							alertId,
+							success: true,
+							replayId,
+							results,
+						});
+					} catch (sendErr) {
+						console.warn('[AlertsController] Failed to send replay to channels for alert:', alertId, sendErr.message);
+						alertResults.push({
+							alertId,
+							success: false,
+							error: sendErr.message || 'Failed to send replay',
+							code: 'DELIVERY_FAILED',
+						});
+					}
 				}
 			}
 

@@ -1690,6 +1690,53 @@ async function getLatestReplayForAlert(alertId) {
 }
 
 /**
+ * Retrieve a previously saved replay attempt by alert ID and raw idempotency key.
+ * Used by batch replay to reconcile and skip already-delivered alerts upon retry.
+ *
+ * @param {string} alertId
+ * @param {string} idempotencyKey
+ * @returns {Promise<Object|null>}
+ */
+async function getReplayAttemptByIdempotencyKey(alertId, idempotencyKey) {
+	if (!isEnabled() || typeof alertId !== 'string' || !alertId.trim() || typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) {
+		return null;
+	}
+
+	const firestore = getFirestore();
+	if (!firestore) {
+		return null;
+	}
+
+	const idempotencyKeyHash = crypto.createHash('sha256').update(idempotencyKey.trim()).digest('hex');
+
+	try {
+		const snapshot = await firestore
+			.collection(REPLAY_COLLECTION_NAME)
+			.where('alertId', '==', alertId.trim())
+			.where('idempotencyKeyHash', '==', idempotencyKeyHash)
+			.limit(1)
+			.get();
+
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			return null;
+		}
+
+		const doc = snapshot.docs[0];
+		if (!doc || !doc.exists || isRetentionExpired(doc.data() || {})) {
+			return null;
+		}
+
+		return {
+			id: doc.id,
+			...doc.data(),
+		};
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to query replay by idempotency key:', error.message);
+		return null;
+	}
+}
+
+/**
  * Export a bounded set of stored alerts using safe, stable fields only.
  *
  * @param {Object} params
@@ -1793,12 +1840,15 @@ async function getAlertsByIds(alertIds) {
 		return [];
 	}
 
-	const snapshots = await Promise.all(
-		uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get().catch(err => {
-			console.warn('[AlertStorageService] Failed to read alert:', id, err.message);
-			return null;
-		}))
-	);
+	let snapshots;
+	try {
+		snapshots = await Promise.all(
+			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get())
+		);
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to read alert batch from Firestore:', error.message);
+		throw createStorageUnavailableError(error);
+	}
 
 	const validDocs = [];
 	for (const snap of snapshots) {
@@ -2134,6 +2184,7 @@ module.exports = {
 	saveReplayAttempt,
 	listReplayAttempts,
 	getLatestReplayForAlert,
+	getReplayAttemptByIdempotencyKey,
 	parseSymbolFromText,
 	extractSymbolAndExchange,
 	extractAlertSymbol,

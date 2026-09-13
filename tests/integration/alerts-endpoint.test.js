@@ -9,6 +9,7 @@ jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	deleteAlerts: jest.fn(),
 	batchReplayAlerts: jest.fn(),
 	saveReplayAttempt: jest.fn(),
+	getReplayAttemptByIdempotencyKey: jest.fn(),
 	listReplayAttempts: jest.fn(),
 	getLatestReplayForAlert: jest.fn(),
 	summarizeAlerts: jest.fn(),
@@ -1447,6 +1448,83 @@ describe('Alerts API Integration Tests', () => {
 			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
 		});
+
+		it('reconciles and skips previously delivered alerts on batch retry', async () => {
+			alertStorageService.getAlertById
+				.mockResolvedValueOnce({ id: 'alert-1', text: 'Alert 1' })
+				.mockResolvedValueOnce({ id: 'alert-2', text: 'Alert 2' });
+			alertStorageService.getReplayAttemptByIdempotencyKey
+				.mockResolvedValueOnce({ id: 'replay-doc-1', deliveryResults: [{ channel: 'telegram', success: true }] })
+				.mockResolvedValueOnce(null);
+			alertStorageService.saveReplayAttempt.mockResolvedValueOnce('replay-doc-2');
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.set('x-idempotency-key', 'batch-retry-key')
+				.send({ alertIds: ['alert-1', 'alert-2'], channels: ['telegram'] })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results).toHaveLength(2);
+			// alert-1 was reconciled, so sendToChannels was only called once (for alert-2)
+			expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'alert-1',
+				success: true,
+				replayId: 'replay-doc-1',
+				results: [{ channel: 'telegram', success: true }],
+			});
+			expect(res.body.results[1].success).toBe(true);
+			expect(res.body.results[1].replayId).toBe('replay-doc-2');
+		});
+
+		it('fails open when saveReplayAttempt rejects, preserving delivery results without returning 503', async () => {
+			alertStorageService.getAlertById.mockResolvedValueOnce({ id: 'alert-1', text: 'Alert 1' });
+			alertStorageService.getReplayAttemptByIdempotencyKey.mockResolvedValueOnce(null);
+			alertStorageService.saveReplayAttempt.mockRejectedValueOnce(new Error('Firestore write quota exceeded'));
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], idempotencyKey: 'fail-open-k' })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'alert-1',
+				success: true,
+				replayId: null,
+				results: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+			});
+		});
+
+		it('records per-alert failure when sendToChannels throws without breaking remaining items in batch', async () => {
+			alertStorageService.getAlertById
+				.mockResolvedValueOnce({ id: 'alert-1', text: 'Alert 1' })
+				.mockResolvedValueOnce({ id: 'alert-2', text: 'Alert 2' });
+			alertStorageService.getReplayAttemptByIdempotencyKey
+				.mockResolvedValue(null);
+			mockNotificationManager.sendToChannels
+				.mockRejectedValueOnce(new Error('Telegram API unreachable'))
+				.mockResolvedValueOnce([{ channel: 'telegram', success: true, messageId: 'tg-2' }]);
+			alertStorageService.saveReplayAttempt.mockResolvedValueOnce('replay-doc-2');
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1', 'alert-2'], idempotencyKey: 'delivery-fail-k' })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'alert-1',
+				success: false,
+				error: 'Telegram API unreachable',
+				code: 'DELIVERY_FAILED',
+			});
+			expect(res.body.results[1].success).toBe(true);
+		});
 	});
 
 	describe('POST /api/alerts/batch/export', () => {
@@ -1521,6 +1599,20 @@ describe('Alerts API Integration Tests', () => {
 			expect(res.headers['content-type']).toContain('text/csv');
 			expect(res.text).toContain('id,requestId,receivedAt');
 			expect(res.text).toContain('alert-1');
+		});
+
+		it('returns 503 when exportAlertsByIds throws STORAGE_UNAVAILABLE', async () => {
+			const error = new Error('Firestore read timeout');
+			error.code = 'STORAGE_UNAVAILABLE';
+			alertStorageService.exportAlertsByIds.mockRejectedValueOnce(error);
+
+			const res = await request(app)
+				.post('/api/alerts/batch/export')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'] })
+				.expect(503);
+
+			expect(res.body.code).toBe('STORAGE_UNAVAILABLE');
 		});
 	});
 

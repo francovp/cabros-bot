@@ -2962,6 +2962,69 @@ describe('AlertStorageService', () => {
 			const result = await AlertStorageService.exportAlertsByIds({ alertIds: ['missing', 'expired'] });
 			expect(result.alerts).toHaveLength(0);
 		});
+		it('throws storage unavailable error when Firestore read rejects', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockRejectedValueOnce(new Error('Firestore quota exceeded'));
+
+			await expect(AlertStorageService.exportAlertsByIds({ alertIds: ['alert-1'] }))
+				.rejects.toMatchObject({ code: AlertStorageService.STORAGE_UNAVAILABLE_CODE });
+		});
+	});
+
+	describe('getAlertsByIds()', () => {
+		it('returns null when alert storage is disabled', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'false';
+			const result = await AlertStorageService.getAlertsByIds(['alert-1']);
+			expect(result).toBeNull();
+		});
+
+		it('throws storage unavailable error when Firestore read rejects', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockRejectedValueOnce(new Error('Firestore connection timeout'));
+
+			await expect(AlertStorageService.getAlertsByIds(['alert-1']))
+				.rejects.toMatchObject({ code: AlertStorageService.STORAGE_UNAVAILABLE_CODE });
+		});
+	});
+
+	describe('getReplayAttemptByIdempotencyKey()', () => {
+		it('returns null when alert storage is disabled or params invalid', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'false';
+			expect(await AlertStorageService.getReplayAttemptByIdempotencyKey('alert-1', 'key-1')).toBeNull();
+
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			expect(await AlertStorageService.getReplayAttemptByIdempotencyKey('', 'key-1')).toBeNull();
+			expect(await AlertStorageService.getReplayAttemptByIdempotencyKey('alert-1', '')).toBeNull();
+		});
+
+		it('queries replay document by alertId and idempotencyKeyHash', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				docs: [{
+					id: 'replay-doc-1',
+					exists: true,
+					data: () => ({
+						alertId: 'alert-1',
+						idempotencyKeyHash: 'somehash',
+						deliveryResults: [{ channel: 'telegram', success: true }],
+					}),
+				}],
+			});
+
+			const replay = await AlertStorageService.getReplayAttemptByIdempotencyKey('alert-1', 'key-1');
+			expect(replay).toBeDefined();
+			expect(replay.id).toBe('replay-doc-1');
+			expect(replay.alertId).toBe('alert-1');
+		});
+
+		it('returns null when no replay matches or query fails', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({ docs: [] });
+			expect(await AlertStorageService.getReplayAttemptByIdempotencyKey('alert-1', 'key-1')).toBeNull();
+
+			mockGet.mockRejectedValueOnce(new Error('Firestore unavailable'));
+			expect(await AlertStorageService.getReplayAttemptByIdempotencyKey('alert-1', 'key-1')).toBeNull();
+		});
 	});
 
 	describe('batchReplayAlerts()', () => {

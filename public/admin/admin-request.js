@@ -142,6 +142,7 @@
 		'/api/webhook/alert',
 		'/api/webhook/message',
 		'/api/alerts/{alertId}/replay',
+		'/api/alerts/batch/replay',
 	]);
 
 	const getApiRequestTimeout = (definition) => {

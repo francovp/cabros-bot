@@ -495,7 +495,7 @@ const createIdempotencyKey = () => (window.crypto && typeof window.crypto.random
 	: `admin-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
 const withReplayIdempotencyKey = (definition, body) => {
-	if (definition.method !== 'POST' || definition.path !== '/api/alerts/{alertId}/replay') return body;
+	if (definition.method !== 'POST' || (definition.path !== '/api/alerts/{alertId}/replay' && definition.path !== '/api/alerts/batch/replay')) return body;
 	if (body && ['idempotencyKey', 'idempotency_key'].some((key) => typeof body[key] === 'string' && body[key].trim())) return body;
 	return { ...(body || {}), idempotencyKey: createIdempotencyKey() };
 };
@@ -1826,7 +1826,7 @@ const createAlertListForm = () => {
 			path: '/api/alerts/batch/replay',
 			button: batchReplayButton,
 			output: batchOutput,
-			body: { alertIds: ids },
+			body: withReplayIdempotencyKey({ method: 'POST', path: '/api/alerts/batch/replay' }, { alertIds: ids }),
 			formatResponse: ({ summary, status, elapsed, data }) => {
 				const count = data && Array.isArray(data.results) ? data.results.length : 0;
 				const successful = data && Array.isArray(data.results) ? data.results.filter((r) => r.success).length : 0;
@@ -1842,7 +1842,12 @@ const createAlertListForm = () => {
 
 		batchOutput.hidden = false;
 		await sendRequest({
-			definition: { method: 'POST', path: '/api/alerts/batch/export', label: 'Batch export alerts' },
+			definition: {
+				method: 'POST',
+				path: '/api/alerts/batch/export',
+				label: 'Batch export alerts',
+				requiredRole: 'admin.viewer',
+			},
 			path: '/api/alerts/batch/export',
 			button: batchExportButton,
 			output: batchOutput,

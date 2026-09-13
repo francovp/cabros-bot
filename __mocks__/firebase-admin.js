@@ -118,8 +118,8 @@ function buildQuerySnapshot(collectionName, queryState = {}) {
 		}
 	}
 
-	if (queryState.where && Array.isArray(queryState.where)) {
-		const [field, op, val] = queryState.where;
+	const wheres = queryState.wheres || (queryState.where && Array.isArray(queryState.where) ? [queryState.where] : []);
+	for (const [field, op, val] of wheres) {
 		if (op === '==') {
 			docs = docs.filter(d => d.data() && getNestedValue(d.data(), field) === val);
 		}
@@ -200,6 +200,8 @@ function createQueryApi(collectionName) {
 		where: (...args) => {
 			mockWhere(...args);
 			queryState.where = args;
+			queryState.wheres = queryState.wheres || [];
+			queryState.wheres.push(args);
 			return api;
 		},
 		limit: (count) => {
