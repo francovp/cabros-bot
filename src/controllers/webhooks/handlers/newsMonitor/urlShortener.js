@@ -254,15 +254,14 @@ class URLShortener {
 	}
 
 	get serviceFailuresMaxEntries() {
-		if (this._explicitServiceFailuresMaxEntries !== undefined) {
-			return this._explicitServiceFailuresMaxEntries;
-		}
-		const runtime = getRuntimeConfig().URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES;
-		return parsePositiveInteger(
-			runtime,
-			DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES,
-			'URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES',
-		);
+		const configuredMaxEntries = this._explicitServiceFailuresMaxEntries !== undefined
+			? this._explicitServiceFailuresMaxEntries
+			: parsePositiveInteger(
+				getRuntimeConfig().URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES,
+				DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES,
+				'URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES',
+			);
+		return Math.max(configuredMaxEntries, this.configuredServices?.length ?? 0);
 	}
 
 	get _serviceFailuresMaxEntries() {

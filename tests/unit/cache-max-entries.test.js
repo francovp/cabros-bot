@@ -89,6 +89,35 @@ describe('Cache Max Entries / LRU Eviction', () => {
 			expect(await cache.get('B', EventCategory.PRICE_SURGE)).not.toBeNull();
 		});
 
+		it('preserves in-flight claiming entries when evicting for a new claim', async () => {
+			const claiming = new NewsCache(undefined, { maxEntries: 2 });
+			try {
+				await claiming.claim('ACTIVE', EventCategory.PRICE_SURGE);
+				await claiming.set('COLD', EventCategory.PRICE_SURGE, { v: 1 });
+
+				expect(await claiming.claim('NEW', EventCategory.PRICE_SURGE)).toBe(true);
+				expect(claiming.cache.has('ACTIVE:price_surge')).toBe(true);
+				expect(claiming.cache.has('COLD:price_surge')).toBe(false);
+			} finally {
+				claiming.shutdown();
+			}
+		});
+
+		it('rejects a new claim when every capacity slot is an active claim', async () => {
+			const claiming = new NewsCache(undefined, { maxEntries: 2 });
+			try {
+				await claiming.claim('ACTIVE_A', EventCategory.PRICE_SURGE);
+				await claiming.claim('ACTIVE_B', EventCategory.PRICE_SURGE);
+
+				expect(await claiming.claim('NEW', EventCategory.PRICE_SURGE)).toBe(false);
+				expect(claiming.cache.size).toBe(2);
+				expect(claiming.cache.get('ACTIVE_A:price_surge')?.data.status).toBe('claiming');
+				expect(claiming.cache.get('ACTIVE_B:price_surge')?.data.status).toBe('claiming');
+			} finally {
+				claiming.shutdown();
+			}
+		});
+
 		it('exposes maxEntries + evictionCount in getStats()', () => {
 			expect(cache.maxEntries).toBe(3);
 			const stats = cache.getStats();

@@ -147,13 +147,41 @@ describe('URLShortener.serviceFailures size bound', () => {
 			localShortener.serviceFailures.set('failed-service', 1);
 
 			await expect(localShortener.shortenUrl('https://example.com/new')).resolves.toBe('https://short.url/test');
-			expect(localShortener.serviceFailures.size).toBe(1);
+			expect(localShortener.serviceFailures.size).toBeLessThanOrEqual(localShortener.serviceFailuresMaxEntries);
 			expect(localShortener.serviceFailures.has('test')).toBe(true);
 		} finally {
 			if (previousService === undefined) {
 				delete process.env.URL_SHORTENER_SERVICE;
 			} else {
 				process.env.URL_SHORTENER_SERVICE = previousService;
+			}
+		}
+	});
+
+	it('retains failure counts for configured fallback providers', async () => {
+		const previousService = process.env.URL_SHORTENER_SERVICE;
+		const previousPicseeKey = process.env.PICSEE_API_KEY;
+		process.env.URL_SHORTENER_SERVICE = 'tinyurl';
+		process.env.PICSEE_API_KEY = 'test-key';
+		try {
+			const localShortener = new URLShortener({ serviceFailuresMaxEntries: 1 });
+			localShortener.serviceFailures.set('tinyurl', 2);
+			localShortener.callShortenerAPI = jest.fn().mockResolvedValue('https://short.url/picsee');
+
+			await expect(localShortener.shortenUrl('https://example.com/fallback')).resolves.toBe('https://short.url/picsee');
+			expect(localShortener.serviceFailuresMaxEntries).toBe(2);
+			expect(localShortener.serviceFailures.get('tinyurl')).toBe(2);
+			expect(localShortener.serviceFailures.get('picsee')).toBe(0);
+		} finally {
+			if (previousService === undefined) {
+				delete process.env.URL_SHORTENER_SERVICE;
+			} else {
+				process.env.URL_SHORTENER_SERVICE = previousService;
+			}
+			if (previousPicseeKey === undefined) {
+				delete process.env.PICSEE_API_KEY;
+			} else {
+				process.env.PICSEE_API_KEY = previousPicseeKey;
 			}
 		}
 	});

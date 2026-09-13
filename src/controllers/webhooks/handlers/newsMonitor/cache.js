@@ -215,6 +215,10 @@ class NewsCache {
 		this._evictIfOverCapacity();
 	}
 
+	_isActiveClaimEntry(entry) {
+		return entry?.data?.status === 'claiming' && !this.isExpired(entry);
+	}
+
 	/**
 	 * Enforce the cache size bound by evicting the oldest entry (LRU eviction).
 	 * JavaScript Map iteration order is insertion order, so the first key is
@@ -227,10 +231,12 @@ class NewsCache {
 		}
 		let evicted = 0;
 		while (this.cache.size > max) {
-			const oldestKey = this.cache.keys().next().value;
-			if (oldestKey === undefined) {
+			const oldestEvictable = Array.from(this.cache.entries())
+				.find(([, entry]) => !this._isActiveClaimEntry(entry));
+			if (!oldestEvictable) {
 				break;
 			}
+			const [oldestKey] = oldestEvictable;
 			this.cache.delete(oldestKey);
 			evicted++;
 		}
@@ -677,6 +683,11 @@ class NewsCache {
 		const entry = this.cache.get(key);
 
 		if (entry && !this.isExpired(entry)) {
+			return false;
+		}
+		if (!entry && this.cache.size >= this.maxEntries
+			&& !Array.from(this.cache.values()).some(cacheEntry => !this._isActiveClaimEntry(cacheEntry))) {
+			console.warn('[NewsCache] Cache capacity saturated with active claims; rejecting new claim');
 			return false;
 		}
 
