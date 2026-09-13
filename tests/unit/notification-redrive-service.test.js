@@ -1242,6 +1242,48 @@ describe('NotificationRedriveService', () => {
 			const doc = mockDocs.get('fs-1_telegram');
 			expect(doc.status).toBe('delivered');
 		});
+
+		it('does not increment exhaustedCount if markTerminal fails', async () => {
+			const candidate = {
+				id: 'record_fail',
+				channel: 'telegram',
+				attemptCount: 10,
+				expired: true,
+				createdAt: new Date(),
+			};
+			jest.spyOn(service, 'getEligibleRecords').mockResolvedValue([candidate]);
+			jest.spyOn(service, 'markTerminal').mockResolvedValue(false);
+			const notifySpy = jest.spyOn(service, 'notifyAdminPermanentFailure');
+
+			const initialExhausted = service.totalExhaustedCount;
+			await service.sweep();
+
+			expect(service.totalExhaustedCount).toBe(initialExhausted);
+			expect(service.lastRunExhaustedCount).toBe(0);
+			expect(service.lastSweepResult.exhausted).toBe(0);
+			expect(notifySpy).not.toHaveBeenCalled();
+		});
+
+		it('increments exhaustedCount when markTerminal succeeds', async () => {
+			const candidate = {
+				id: 'record_success',
+				channel: 'telegram',
+				attemptCount: 10,
+				expired: true,
+				createdAt: new Date(),
+			};
+			jest.spyOn(service, 'getEligibleRecords').mockResolvedValue([candidate]);
+			jest.spyOn(service, 'markTerminal').mockResolvedValue(true);
+			const notifySpy = jest.spyOn(service, 'notifyAdminPermanentFailure').mockResolvedValue();
+
+			const initialExhausted = service.totalExhaustedCount;
+			await service.sweep();
+
+			expect(service.totalExhaustedCount).toBe(initialExhausted + 1);
+			expect(service.lastRunExhaustedCount).toBe(1);
+			expect(service.lastSweepResult.exhausted).toBe(1);
+			expect(notifySpy).toHaveBeenCalled();
+		});
 	});
 
 	describe('worker lifecycle', () => {
@@ -1557,6 +1599,67 @@ describe('NotificationRedriveService', () => {
 			expect(sweepResolved).toBe(true);
 			expect(telemetryResolved).toBe(true);
 			expect(service.running).toBe(false);
+		});
+
+		it('deduplicates concurrent syncWorkerTelemetry calls into a single-flight read', async () => {
+			let readCount = 0;
+			const delayedRead = new Promise((resolve) => {
+				setTimeout(() => {
+					readCount += 1;
+					resolve({
+						exists: true,
+						data: () => ({
+							lastSweepAt: new Date().toISOString(),
+							lastRunDurationMs: 1234,
+						}),
+					});
+				}, 20);
+			});
+
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						get: jest.fn(() => delayedRead),
+					})),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			const [r1, r2] = await Promise.all([
+				service.syncWorkerTelemetry(),
+				service.syncWorkerTelemetry(),
+			]);
+
+			expect(r1).toBe(true);
+			expect(r2).toBe(true);
+			expect(readCount).toBe(1);
+		});
+
+		it('discards stale telemetry snapshots with older lastSweepAt', async () => {
+			const cachedDate = new Date('2026-09-13T12:00:00.000Z');
+			service.persistedLastSweepAt = cachedDate;
+			service.persistedLastRunDurationMs = 5000;
+
+			const staleDate = new Date('2026-09-13T11:00:00.000Z'); // 1 hour older
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						get: jest.fn(async () => ({
+							exists: true,
+							data: () => ({
+								lastSweepAt: staleDate.toISOString(),
+								lastRunDurationMs: 9999,
+							}),
+						})),
+					})),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			const result = await service.syncWorkerTelemetry();
+			expect(result).toBe(false);
+			expect(service.persistedLastSweepAt).toEqual(cachedDate);
+			expect(service.persistedLastRunDurationMs).toBe(5000);
 		});
 	});
 

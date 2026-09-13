@@ -202,6 +202,7 @@ class NotificationRedriveService {
 		this.totalZeroChannelBroadcasts = 0;
 		this._telemetryWriteSequence = 0;
 		this._activeTelemetryWritePromise = null;
+		this._activeTelemetryReadPromise = null;
 	}
 
 	incrementZeroChannelBroadcasts() {
@@ -1010,11 +1011,13 @@ class NotificationRedriveService {
 				if (candidate.expired || candidate.attemptCount >= maxAttempts) {
 					const terminalStatus = candidate.expired ? 'expired' : 'exhausted';
 					releaseRepeatCooldown(candidate);
-					await this.markTerminal(candidate.id, terminalStatus, {
+					const marked = await this.markTerminal(candidate.id, terminalStatus, {
 						terminalAt: toTimestamp(new Date()),
 					});
-					this.totalExhaustedCount += 1;
-					trackBackgroundTask(this.notifyAdminPermanentFailure(candidate, `Terminal status: ${terminalStatus}`)).catch(() => {});
+					if (marked) {
+						this.totalExhaustedCount += 1;
+						trackBackgroundTask(this.notifyAdminPermanentFailure(candidate, `Terminal status: ${terminalStatus}`)).catch(() => {});
+					}
 					continue;
 				}
 
@@ -1097,17 +1100,19 @@ class NotificationRedriveService {
 
 						if (nextAttempts >= maxAttempts) {
 							releaseRepeatCooldown(claimed);
-							await this.markTerminal(claimed.id, 'exhausted', {
+							const marked = await this.markTerminal(claimed.id, 'exhausted', {
 								lastError: String(lastErr),
 								lastStatusCode: lastCode,
 								attemptCount: nextAttempts,
 							});
-							this.totalExhaustedCount += 1;
-							trackBackgroundTask(this.notifyAdminPermanentFailure({
-								...claimed,
-								attemptCount: nextAttempts,
-								lastError: lastErr,
-							}, 'Exhausted maximum retry attempts')).catch(() => {});
+							if (marked) {
+								this.totalExhaustedCount += 1;
+								trackBackgroundTask(this.notifyAdminPermanentFailure({
+									...claimed,
+									attemptCount: nextAttempts,
+									lastError: lastErr,
+								}, 'Exhausted maximum retry attempts')).catch(() => {});
+							}
 							errorCount += 1;
 						} else {
 							await this.markRetry(claimed.id, nextAttempts, lastErr, lastCode);
@@ -1119,16 +1124,18 @@ class NotificationRedriveService {
 					const nextAttempts = (claimed.attemptCount || 0) + 1;
 					if (nextAttempts >= maxAttempts) {
 						releaseRepeatCooldown(claimed);
-						await this.markTerminal(claimed.id, 'exhausted', {
+						const marked = await this.markTerminal(claimed.id, 'exhausted', {
 							lastError: error.message,
 							attemptCount: nextAttempts,
 						});
-						this.totalExhaustedCount += 1;
-						trackBackgroundTask(this.notifyAdminPermanentFailure({
-							...claimed,
-							attemptCount: nextAttempts,
-							lastError: error.message,
-						}, 'Exhausted maximum retry attempts')).catch(() => {});
+						if (marked) {
+							this.totalExhaustedCount += 1;
+							trackBackgroundTask(this.notifyAdminPermanentFailure({
+								...claimed,
+								attemptCount: nextAttempts,
+								lastError: error.message,
+							}, 'Exhausted maximum retry attempts')).catch(() => {});
+						}
 					} else {
 						await this.markRetry(claimed.id, nextAttempts, error.message, null);
 					}
@@ -1289,6 +1296,16 @@ class NotificationRedriveService {
 	}
 
 	async syncWorkerTelemetry() {
+		if (this._activeTelemetryReadPromise) {
+			return this._activeTelemetryReadPromise;
+		}
+		this._activeTelemetryReadPromise = this._performSyncWorkerTelemetry().finally(() => {
+			this._activeTelemetryReadPromise = null;
+		});
+		return this._activeTelemetryReadPromise;
+	}
+
+	async _performSyncWorkerTelemetry() {
 		const firestore = this.getFirestore();
 		if (!firestore) {
 			return false;
@@ -1301,6 +1318,12 @@ class NotificationRedriveService {
 			}
 			const data = typeof snapshot.data === 'function' ? snapshot.data() : snapshot;
 			if (!data) {
+				return false;
+			}
+			const snapshotSweepAt = data.lastSweepAt ? new Date(data.lastSweepAt) : null;
+			const snapshotSweepAtMs = snapshotSweepAt ? snapshotSweepAt.getTime() : 0;
+			const currentCachedSweepAtMs = this.persistedLastSweepAt ? new Date(this.persistedLastSweepAt).getTime() : 0;
+			if (currentCachedSweepAtMs > 0 && Number.isFinite(snapshotSweepAtMs) && snapshotSweepAtMs < currentCachedSweepAtMs) {
 				return false;
 			}
 			if (data.lastRunAt) {
@@ -1545,6 +1568,7 @@ class NotificationRedriveService {
 		this.activeSweepPromise = null;
 		this._telemetryWriteSequence = 0;
 		this._activeTelemetryWritePromise = null;
+		this._activeTelemetryReadPromise = null;
 		this.running = false;
 		this.lastRunAt = null;
 		this.lastRunDurationMs = null;
