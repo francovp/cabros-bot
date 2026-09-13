@@ -67,6 +67,7 @@
       "request": {
         "method": "GET",
         "header": [],
+        "description": "Default healthcheck returning service uptime. No API-key required.",
         "url": {
           "raw": "{{baseUrl}}/healthcheck",
           "host": [
@@ -82,7 +83,44 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"uptime\":\"42.5\"}"
+          "body": "{\"uptime\":42.5}"
+        }
+      ]
+    },
+    {
+      "name": "Healthcheck - Deep (channels ready)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/healthcheck?deep=true",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "healthcheck"
+          ],
+          "query": [
+            {
+              "key": "deep",
+              "value": "true"
+            }
+          ]
+        },
+        "description": "When ?deep=true, the endpoint reuses /api/status dependencies logic and returns 200 when every enabled channel is ready. No API-key required."
+      },
+      "response": [
+        {
+          "name": "Healthy",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"healthy\",\"uptime\":42.5,\"channels\":{\"telegram\":{\"enabled\":true,\"ready\":true,\"status\":\"ready\"},\"whatsapp\":{\"enabled\":false,\"ready\":false,\"status\":\"disabled\"},\"discord\":{\"enabled\":false,\"ready\":false,\"status\":\"disabled\"}}}"
+        },
+        {
+          "name": "Degraded - enabled channel in error state",
+          "status": "Service Unavailable",
+          "code": 503,
+          "body": "{\"status\":\"degraded\",\"uptime\":42.5,\"degradedChannels\":[\"whatsapp\"],\"channels\":{\"telegram\":{\"enabled\":true,\"ready\":true,\"status\":\"ready\"},\"whatsapp\":{\"enabled\":true,\"ready\":false,\"status\":\"error\",\"error\":\"Missing WHATSAPP_API_KEY\"},\"discord\":{\"enabled\":false,\"ready\":false,\"status\":\"disabled\"}}}"
         }
       ]
     },
