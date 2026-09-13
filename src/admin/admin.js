@@ -422,6 +422,7 @@ const setupFirebaseAuth = async (config) => {
 			authState.user = user;
 			if (!user) {
 				authState.role = null;
+				disconnectSse();
 				showSignedOutState();
 				return;
 			}
@@ -429,12 +430,15 @@ const setupFirebaseAuth = async (config) => {
 				const tokenResult = await user.getIdTokenResult();
 				authState.role = window.CabrosAdminRequest.getAdminRole(tokenResult.claims);
 				if (!authState.role) {
+					disconnectSse();
 					showAuthState('This account is not authorized for the admin console.', true);
 					return;
 				}
 				showSignedInState();
+				setupSseStream();
 				navigateToView('status');
 			} catch (error) {
+				disconnectSse();
 				showAuthState('Unable to verify the signed-in account.', true);
 			}
 		});
@@ -442,6 +446,199 @@ const setupFirebaseAuth = async (config) => {
 		showAuthState('Firebase sign-in is unavailable. Ask an administrator to configure it.', true);
 	}
 };
+
+let sseAbortController = null;
+let sseReconnectTimer = null;
+let sseReconnectAttempts = 0;
+const sseListeners = new Set();
+
+const onSseEvent = (handler) => {
+	sseListeners.add(handler);
+	return () => sseListeners.delete(handler);
+};
+
+const dispatchSseEvent = (type, data) => {
+	sseListeners.forEach((listener) => {
+		try {
+			listener(type, data);
+		} catch (error) {
+			console.error('SSE listener error:', error);
+		}
+	});
+};
+
+const updateSseIndicator = (state, label) => {
+	const indicator = getElement('sse-status');
+	const labelEl = getElement('sse-label');
+	if (!indicator) return;
+	indicator.className = `sse-indicator ${state}`;
+	indicator.title = `Real-time stream: ${label}`;
+	if (labelEl) labelEl.textContent = label;
+};
+
+const showToast = (message, type = 'info', durationMs = 4000) => {
+	let container = getElement('toast-container');
+	if (!container) {
+		container = element('div', { id: 'toast-container', className: 'toast-container' });
+		document.body?.append(container);
+	}
+	const toast = element('div', { className: `toast toast-${type}`, text: message });
+	container?.append(toast);
+	setTimeout(() => {
+		if (toast.style) toast.style.opacity = '0';
+		setTimeout(() => {
+			if (typeof toast.remove === 'function') toast.remove();
+		}, 250);
+	}, durationMs);
+};
+
+const disconnectSse = () => {
+	if (sseReconnectTimer) {
+		clearTimeout(sseReconnectTimer);
+		sseReconnectTimer = null;
+	}
+	if (sseAbortController) {
+		try {
+			sseAbortController.abort();
+		} catch (_) {
+			// Fail-safe
+		}
+		sseAbortController = null;
+	}
+	sseReconnectAttempts = 0;
+	updateSseIndicator('disconnected', 'Offline');
+};
+
+const setupSseStream = async () => {
+	if (typeof window === 'undefined' || typeof window.fetch === 'undefined') {
+		return;
+	}
+	if (sseReconnectTimer) {
+		clearTimeout(sseReconnectTimer);
+		sseReconnectTimer = null;
+	}
+	if (sseAbortController) {
+		try {
+			sseAbortController.abort();
+		} catch (_) {
+			// Fail-safe
+		}
+		sseAbortController = null;
+	}
+
+	const headers = {
+		Accept: 'text/event-stream',
+	};
+
+	if (authState.enabled && authState.user) {
+		try {
+			const token = await authState.user.getIdToken();
+			headers.Authorization = `Bearer ${token}`;
+		} catch (_) {
+			updateSseIndicator('disconnected', 'Auth error');
+			return;
+		}
+	} else {
+		const apiKey = getElement('api-key')?.value || '';
+		if (apiKey) {
+			headers['x-api-key'] = apiKey;
+		}
+	}
+
+	if (!headers.Authorization && !headers['x-api-key']) {
+		updateSseIndicator('disconnected', 'Offline');
+		return;
+	}
+
+	updateSseIndicator('connecting', 'Connecting…');
+
+	const baseUrl = getApiBaseUrl();
+	const streamUrl = `${baseUrl}/api/admin/events`;
+	const controller = new AbortController();
+	sseAbortController = controller;
+
+	try {
+		const response = await fetch(streamUrl, {
+			method: 'GET',
+			headers,
+			signal: controller.signal,
+		});
+
+		if (!response.ok) {
+			throw new Error(`SSE stream HTTP ${response.status}`);
+		}
+
+		updateSseIndicator('connected', 'Live');
+		sseReconnectAttempts = 0;
+
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder();
+		let buffer = '';
+
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			const blocks = buffer.split('\n\n');
+			buffer = blocks.pop() || '';
+
+			for (const block of blocks) {
+				const trimmed = block.trim();
+				if (!trimmed || trimmed.startsWith(':')) continue;
+
+				let eventType = 'message';
+				const dataLines = [];
+				for (const line of trimmed.split('\n')) {
+					if (line.startsWith('event:')) {
+						eventType = line.slice(6).trim();
+					} else if (line.startsWith('data:')) {
+						dataLines.push(line.slice(5).trim());
+					}
+				}
+
+				if (eventType === 'connected') {
+					updateSseIndicator('connected', 'Live');
+					continue;
+				}
+
+				if (dataLines.length > 0) {
+					try {
+						const data = JSON.parse(dataLines.join('\n'));
+						dispatchSseEvent(eventType, data);
+						if (eventType === 'job-progress') {
+							if (data.status === 'completed') {
+								showToast(`Job ${String(data.jobId).slice(0, 8)}… completed`, 'success');
+							} else if (data.status === 'failed' || data.status === 'timed_out') {
+								showToast(`Job ${String(data.jobId).slice(0, 8)}… ${data.status}: ${data.error || 'Failed'}`, 'error');
+							}
+						} else if (eventType === 'scanner-result') {
+							showToast(`Scanner preset completed${data.name ? `: ${data.name}` : ''}`, 'info');
+						} else if (eventType === 'alert-delivered') {
+							const channels = Array.isArray(data.channels) ? data.channels.join(', ') : 'channels';
+							showToast(`Alert delivered: ${data.symbol || 'symbol'} (${channels})`, 'success');
+						} else if (eventType === 'delivery-failure') {
+							showToast(`Delivery failure: ${data.symbol || 'symbol'} (${data.channel || 'channel'}): ${data.error || 'error'}`, 'error');
+						}
+					} catch (err) {
+						console.error('Failed to parse SSE event payload:', err);
+					}
+				}
+			}
+		}
+	} catch (error) {
+		if (controller.signal.aborted) {
+			return;
+		}
+		console.error('SSE stream error:', error);
+		updateSseIndicator('connecting', 'Reconnecting…');
+		const delay = Math.min(30000, 2000 * Math.pow(1.5, sseReconnectAttempts)) + Math.random() * 1000;
+		sseReconnectAttempts++;
+		sseReconnectTimer = setTimeout(() => {
+			setupSseStream();
+		}, delay);
+	}
+};
+
 
 const parseJson = (value, label) => {
 	if (!value.trim()) return undefined;
@@ -2668,6 +2865,7 @@ const formatJobProgress = (progress) => {
 const createJobSummary = (job, onSelect) => {
 	const card = element('article', { className: 'operation-card' });
 	const jobId = formatJobValue(job && job.jobId);
+	if (job && job.jobId) card.dataset.jobId = job.jobId;
 	const jobHeading = element('h3');
 	jobHeading.append(
 		element('span', { text: jobId }),
@@ -2954,13 +3152,28 @@ const createJobStatusForm = () => {
 		Promise.resolve(requestStatus(false)).catch(() => {});
 	});
 
+	const unsubscribeSse = onSseEvent((type, data) => {
+		if (type === 'job-progress' && data && data.jobId) {
+			if (jobIdInput && jobIdInput.value.trim() === data.jobId) {
+				Promise.resolve(requestStatus(true)).catch(() => {});
+			}
+		}
+	});
+
 	detachActiveViewPoll = () => {
 		statusRequestVersion += 1;
 		stopPollTimer();
+		unsubscribeSse();
 	};
 
 	return {
 		form,
+		stopPollTimer,
+		destroy: () => {
+			statusRequestVersion += 1;
+			stopPollTimer();
+			unsubscribeSse();
+		},
 		selectJob: async (selectedJobId, options = {}) => {
 			statusRequestVersion += 1;
 			jobIdInput.value = selectedJobId;
@@ -5322,6 +5535,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 		getElement('save-key')?.click();
 	});
 
+	getElement('save-key')?.addEventListener('click', () => {
+		if (getElement('api-key')?.value) setupSseStream();
+	});
+
+	getElement('clear-key')?.addEventListener('click', () => {
+		disconnectSse();
+	});
+
 	const config = await loadAuthConfig();
 	if (config.enabled) {
 		await setupFirebaseAuth(config);
@@ -5332,5 +5553,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 	setHidden('firebase-auth', true);
 	setHidden('legacy-connection', false);
 	setupLegacyConsole();
+	if (getElement('api-key')?.value) setupSseStream();
 	renderView('overview');
 });

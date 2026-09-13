@@ -35,7 +35,13 @@
           <p class="eyebrow">Operator workspace</p>
           <p class="topbar-title">Monitor, diagnose and trigger safely</p>
         </div>
-        <button id="clear-key" class="button-ghost" type="button">Clear key</button>
+        <div class="topbar-actions">
+          <div id="sse-status" class="sse-indicator disconnected" title="Real-time stream: Offline" role="status" aria-live="polite">
+            <span class="sse-dot" aria-hidden="true"></span>
+            <span id="sse-label" class="sse-label">Offline</span>
+          </div>
+          <button id="clear-key" class="button-ghost" type="button">Clear key</button>
+        </div>
       </header>
       <section id="firebase-auth" class="connection-card auth-card" aria-labelledby="firebase-auth-title" hidden>
         <div class="section-heading">
@@ -69,6 +75,7 @@
       </section>
       <section id="view" aria-live="polite"></section>
     </section>
+    <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
   </main>
   <script src="/admin/admin-request.js" defer></script>
   <script src="/admin/admin.js" defer></script>

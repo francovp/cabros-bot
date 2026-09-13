@@ -2201,4 +2201,32 @@ describe('JobService Unit Tests', () => {
 			}
 		});
 	});
+
+	describe('_broadcastJobProgress', () => {
+		it('broadcasts job-progress and scanner-result with persisted job.summary', () => {
+			const { adminSseService } = require('../../src/services/sse/AdminSseService');
+			const broadcastSpy = jest.spyOn(adminSseService, 'broadcast').mockImplementation(() => {});
+
+			try {
+				jobService._broadcastJobProgress({
+					jobId: 'job-summary-test',
+					type: 'market-scanner',
+					status: 'completed',
+					summary: { total: 5, passed: 3 },
+				});
+
+				expect(broadcastSpy).toHaveBeenCalledWith('job-progress', expect.objectContaining({
+					jobId: 'job-summary-test',
+					summary: { total: 5, passed: 3 },
+				}));
+
+				expect(broadcastSpy).toHaveBeenCalledWith('scanner-result', expect.objectContaining({
+					jobId: 'job-summary-test',
+					summary: { total: 5, passed: 3 },
+				}));
+			} finally {
+				broadcastSpy.mockRestore();
+			}
+		});
+	});
 });

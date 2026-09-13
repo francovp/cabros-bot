@@ -85,7 +85,7 @@ describe('OpenAPI contract', () => {
 			'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
 			'POST /api/news-monitor/pause', 'POST /api/news-monitor/resume', 'GET /api/news-monitor/status',
 			'GET /api/news-monitor/summary', 'GET /api/news-monitor/analyses',
-			'POST /api/admin/test-alert',
+			'POST /api/admin/test-alert', 'GET /api/admin/events',
 		]);
 
 		for (const operation of operations) {
@@ -119,6 +119,7 @@ describe('OpenAPI contract', () => {
 			'GET /api/news-monitor/summary': 'admin.viewer',
 			'GET /api/news-monitor/analyses': 'admin.viewer',
 			'POST /api/admin/test-alert': 'admin.operator',
+			'GET /api/admin/events': 'admin.viewer',
 		};
 
 		for (const [key, role] of Object.entries(expectedRoles)) {
