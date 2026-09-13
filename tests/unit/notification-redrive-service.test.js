@@ -2450,10 +2450,12 @@ describe('NotificationRedriveService', () => {
 				collection: jest.fn(() => ({
 					doc: jest.fn(() => ({ id: 'notification-redrive' })),
 				})),
-				runTransaction: jest.fn(async (updateFn) => {
+					runTransaction: jest.fn(async (updateFn) => {
 					transactionCalls += 1;
 					if (transactionCalls === 1) {
-						throw new Error('transient Firestore outage');
+						const error = new Error('validation rejected before commit');
+						error.code = 'failed-precondition';
+						throw error;
 					}
 					const mockTx = {
 						get: jest.fn(async () => ({
@@ -2479,6 +2481,30 @@ describe('NotificationRedriveService', () => {
 
 			expect(transactionCalls).toBe(2);
 			expect(persistedCount).toBe(1);
+			jest.useRealTimers();
+		});
+
+		it('does not retry ambiguous zero-channel persistence failures', async () => {
+			jest.useFakeTimers();
+			let transactionCalls = 0;
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({ id: 'notification-redrive' })),
+				})),
+				runTransaction: jest.fn(async () => {
+					transactionCalls += 1;
+					const error = new Error('ambiguous transport failure');
+					error.code = 'unavailable';
+					throw error;
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			await service.incrementZeroChannelBroadcasts();
+			await jest.advanceTimersByTimeAsync(20000);
+
+			expect(transactionCalls).toBe(1);
+			expect(service._pendingZeroChannelWriteDelta).toBe(1);
 			jest.useRealTimers();
 		});
 	});

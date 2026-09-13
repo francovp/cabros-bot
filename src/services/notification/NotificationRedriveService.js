@@ -23,6 +23,24 @@ const HEARTBEAT_DOCUMENT_ID = 'notification-redrive';
 const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
 const ZERO_CHANNEL_RETRY_DELAY_MS = HEARTBEAT_WRITE_TIMEOUT_MS;
 const MAX_ZERO_CHANNEL_RETRY_ATTEMPTS = 3;
+const ZERO_CHANNEL_NON_COMMIT_ERROR_CODES = new Set([
+	'aborted',
+	'already-exists',
+	'failed-precondition',
+	'invalid-argument',
+	'not-found',
+	'permission-denied',
+	'resource-exhausted',
+	'unauthenticated',
+	'3',
+	'5',
+	'6',
+	'7',
+	'8',
+	'9',
+	'10',
+	'16',
+]);
 const PENDING_COUNT_FALLBACK_LIMIT = 1000;
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
 const ROUTING_FIELDS = Object.freeze({
@@ -137,6 +155,10 @@ function normalizeTimestampToDate(val) {
 		return Number.isFinite(ms) ? new Date(ms) : null;
 	}
 	return null;
+}
+
+function isZeroChannelNonCommitError(error) {
+	return ZERO_CHANNEL_NON_COMMIT_ERROR_CODES.has(String(error?.code || '').trim().toLowerCase());
 }
 
 function compareGenerations(supersessionGen, recordGen) {
@@ -299,12 +321,14 @@ class NotificationRedriveService {
 		const delta = this._pendingZeroChannelWriteDelta;
 		this._pendingZeroChannelWriteDelta = 0;
 		let persisted = false;
+		let retryable = false;
 		let followUpWriteStarted = false;
 		let trackedWrite;
 		const writePromise = Promise.resolve()
 			.then(() => this._persistZeroChannelIncrement(delta))
 			.then((result) => {
-				persisted = result === true;
+				persisted = result?.persisted === true;
+				retryable = result?.retryable === true;
 				if (!persisted) {
 					this._pendingZeroChannelWriteDelta += delta;
 				}
@@ -325,7 +349,7 @@ class NotificationRedriveService {
 						followUpWriteStarted = true;
 						this._flushZeroChannelWrites();
 					}
-				} else {
+				} else if (retryable) {
 					this._scheduleZeroChannelRetry();
 				}
 			});
@@ -353,7 +377,7 @@ class NotificationRedriveService {
 	_persistZeroChannelIncrement(delta = 1) {
 		const firestore = this.getFirestore();
 		if (!firestore) {
-			return Promise.resolve(false);
+			return Promise.resolve({ persisted: false, retryable: false });
 		}
 		try {
 			const docRef = firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID);
@@ -372,15 +396,15 @@ class NotificationRedriveService {
 			} else if (typeof docRef.set === 'function') {
 				writePromise = docRef.set({ zeroChannelBroadcasts: this.totalZeroChannelBroadcasts }, { merge: true });
 			} else {
-				return Promise.resolve(false);
+				return Promise.resolve({ persisted: false, retryable: false });
 			}
-			return Promise.resolve(writePromise).then(() => true).catch((error) => {
+			return Promise.resolve(writePromise).then(() => ({ persisted: true, retryable: false })).catch((error) => {
 				console.warn('[NotificationRedriveService] Failed to persist zero-channel increment:', error.message);
-				return false;
+				return { persisted: false, retryable: isZeroChannelNonCommitError(error) };
 			});
 		} catch (error) {
 			console.warn('[NotificationRedriveService] Failed to persist zero-channel increment:', error.message);
-			return Promise.resolve(false);
+			return Promise.resolve({ persisted: false, retryable: true });
 		}
 	}
 
