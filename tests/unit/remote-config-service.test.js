@@ -71,6 +71,9 @@ describe('RemoteConfigService', () => {
 			['TRADINGVIEW_MCP_TIMEOUT_MS', '999', 12000],
 			['TRADINGVIEW_MCP_MAX_RETRIES', '6', 3],
 			['TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS', '-1', 12000],
+			['REQUEST_TIMEOUT_MS', 'not-a-number', 30000],
+			['REQUEST_TIMEOUT_MS', '999', 30000],
+			['REQUEST_TIMEOUT_MS', '120001', 30000],
 		].forEach(([key, value, expected]) => {
 			process.env[key] = value;
 			expect(remoteConfigService.getRuntimeConfig()[key]).toBe(expected);
@@ -85,6 +88,7 @@ describe('RemoteConfigService', () => {
 		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '4';
 		process.env.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS = '20000';
 		process.env.EXPANDED_ANALYSIS_ALERT_CONCURRENCY = '2';
+		process.env.REQUEST_TIMEOUT_MS = '45000';
 
 		await remoteConfigService.start();
 
@@ -96,6 +100,7 @@ describe('RemoteConfigService', () => {
 			TRADINGVIEW_MCP_MAX_RETRIES: 4,
 			TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: 20000,
 			EXPANDED_ANALYSIS_ALERT_CONCURRENCY: 2,
+			REQUEST_TIMEOUT_MS: 45000,
 		}));
 	});
 
@@ -568,6 +573,31 @@ describe('RemoteConfigService', () => {
 				status: 'degraded',
 				lastErrorCategory: 'stale',
 				lastSuccessfulLoad: new Date(loadedAt).toISOString(),
+			}));
+		});
+
+		it('applies REQUEST_TIMEOUT_MS remote override within bounds', () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			remoteConfigService._setRemoteOverridesForTesting({ REQUEST_TIMEOUT_MS: 50000 });
+
+			expect(remoteConfigService.getRuntimeConfig().REQUEST_TIMEOUT_MS).toBe(50000);
+		});
+
+		it('maintains parity between PARAMETER_SCHEMA and firebase-remote-config-template.json', () => {
+			const fs = require('fs');
+			const path = require('path');
+			const templatePath = path.join(__dirname, '../../firebase-remote-config-template.json');
+			const template = JSON.parse(fs.readFileSync(templatePath, 'utf8'));
+
+			const schemaKeys = Object.keys(remoteConfigService.PARAMETER_SCHEMA);
+			const templateKeys = Object.keys(template.parameters || {});
+
+			for (const key of schemaKeys) {
+				expect(templateKeys).toContain(key);
+			}
+			expect(template.parameters.REQUEST_TIMEOUT_MS).toEqual(expect.objectContaining({
+				defaultValue: { value: '30000' },
+				valueType: 'NUMBER',
 			}));
 		});
 	});

@@ -6,7 +6,7 @@ const requestDeadline = require('../../src/lib/requestDeadline');
 
 describe('Request Deadline Middleware (unit)', () => {
 	const savedEnv = {};
-	const envKeys = ['REQUEST_TIMEOUT_MS', 'REQUEST_DEADLINE_EXEMPT_PATHS', 'REQUEST_TIMEOUT_MS_TEST', 'REQUEST_DEADLINE_EXEMPT_PATHS_TEST'];
+	const envKeys = ['REQUEST_TIMEOUT_MS', 'REQUEST_DEADLINE_EXEMPT_PATHS'];
 
 	beforeEach(() => {
 		for (const key of envKeys) {
@@ -14,7 +14,6 @@ describe('Request Deadline Middleware (unit)', () => {
 			delete process.env[key];
 		}
 		requestDeadline.resetForTests();
-		requestDeadline.enableTestMode();
 	});
 
 	afterEach(() => {
@@ -26,7 +25,7 @@ describe('Request Deadline Middleware (unit)', () => {
 	});
 
 	test('passes through exempt paths without setting a timer', () => {
-		process.env.REQUEST_TIMEOUT_MS_TEST = '5000';
+		process.env.REQUEST_TIMEOUT_MS = '5000';
 		const req = httpMocks.createRequest({ method: 'GET', url: '/healthcheck' });
 		const res = httpMocks.createResponse();
 		const next = jest.fn();
@@ -36,7 +35,7 @@ describe('Request Deadline Middleware (unit)', () => {
 	});
 
 	test('exempts /ready, /openapi.json, /docs by default', () => {
-		process.env.REQUEST_TIMEOUT_MS_TEST = '5000';
+		process.env.REQUEST_TIMEOUT_MS = '5000';
 		for (const path of ['/ready', '/openapi.json', '/docs']) {
 			const req = httpMocks.createRequest({ method: 'GET', url: path });
 			const res = httpMocks.createResponse();
@@ -48,7 +47,7 @@ describe('Request Deadline Middleware (unit)', () => {
 	});
 
 	test('reuses req.requestId stamped upstream and exposes X-Request-Id', () => {
-		process.env.REQUEST_TIMEOUT_MS_TEST = '5000';
+		process.env.REQUEST_TIMEOUT_MS = '5000';
 		const req = httpMocks.createRequest({ method: 'POST', url: '/api/webhook/alert' });
 		req.requestId = 'preset-request-id';
 		const res = httpMocks.createResponse();
@@ -60,7 +59,7 @@ describe('Request Deadline Middleware (unit)', () => {
 	});
 
 	test('mints a request id when none is provided', () => {
-		process.env.REQUEST_TIMEOUT_MS_TEST = '5000';
+		process.env.REQUEST_TIMEOUT_MS = '5000';
 		const req = httpMocks.createRequest({ method: 'POST', url: '/api/webhook/alert' });
 		const res = httpMocks.createResponse();
 		const next = jest.fn();
@@ -71,8 +70,8 @@ describe('Request Deadline Middleware (unit)', () => {
 	});
 
 	test('honors REQUEST_DEADLINE_EXEMPT_PATHS additions', () => {
-		process.env.REQUEST_TIMEOUT_MS_TEST = '1500';
-		process.env.REQUEST_DEADLINE_EXEMPT_PATHS_TEST = '/api/exempt, /api/special';
+		process.env.REQUEST_TIMEOUT_MS = '1500';
+		process.env.REQUEST_DEADLINE_EXEMPT_PATHS = '/api/exempt, /api/special';
 		const req = httpMocks.createRequest({ method: 'POST', url: '/api/exempt' });
 		const res = httpMocks.createResponse();
 		const next = jest.fn();
@@ -125,7 +124,7 @@ describe('Request Deadline Middleware (unit)', () => {
 	});
 
 	test('normalizes path with query strings and lowercase', () => {
-		process.env.REQUEST_TIMEOUT_MS_TEST = '5000';
+		process.env.REQUEST_TIMEOUT_MS = '5000';
 		const req = httpMocks.createRequest({
 			method: 'GET',
 			url: '/HealthCheck?probe=1',
@@ -135,6 +134,33 @@ describe('Request Deadline Middleware (unit)', () => {
 		requestDeadline(req, res, next);
 		expect(next).toHaveBeenCalled();
 		expect(res.getHeader('X-Request-Id')).toBeUndefined();
+	});
+
+	test('honors programmatic setTestOverrides', () => {
+		requestDeadline.setTestOverrides({
+			timeoutMs: 4200,
+			exemptPaths: new Set(['/api/custom-exempt']),
+		});
+		const req = httpMocks.createRequest({ method: 'POST', url: '/api/custom-exempt' });
+		const res = httpMocks.createResponse();
+		const next = jest.fn();
+		requestDeadline(req, res, next);
+		expect(next).toHaveBeenCalled();
+		expect(res.getHeader('X-Request-Id')).toBeUndefined();
+	});
+
+	test('reads REQUEST_TIMEOUT_MS from RemoteConfigService runtimeConfig when available', () => {
+		const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+		remoteConfigService._setRemoteOverridesForTesting({ REQUEST_TIMEOUT_MS: 45000 });
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+
+		const req = httpMocks.createRequest({ method: 'POST', url: '/api/test' });
+		const res = httpMocks.createResponse();
+		const next = jest.fn();
+		requestDeadline(req, res, next);
+		expect(next).toHaveBeenCalled();
+
+		remoteConfigService._resetForTesting();
 	});
 });
 

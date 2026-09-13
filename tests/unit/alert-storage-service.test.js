@@ -64,6 +64,7 @@ describe('AlertStorageService', () => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+		jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
 	});
 
 	afterEach(() => {

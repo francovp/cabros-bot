@@ -107,6 +107,9 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           }
@@ -155,6 +158,9 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/MessageIdempotencyConflict"
           }
@@ -196,6 +202,9 @@
           },
           "400": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
@@ -248,6 +257,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
@@ -285,6 +297,9 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "502": {
             "$ref": "#/components/responses/Error"
           }
@@ -315,6 +330,9 @@
           },
           "400": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -360,6 +378,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -414,6 +435,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -465,6 +489,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -544,6 +571,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -580,6 +610,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -633,6 +666,9 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
@@ -664,6 +700,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/ScannerPresetResult"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -701,6 +740,9 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -737,6 +779,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -796,6 +841,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "description": "Preset is locked by an in-flight sweep (lockedUntil > now). Response body includes code=PRESET_LOCKED and the lockedUntil timestamp; the current preset is also returned so the client can decide whether to retry.",
@@ -872,6 +920,9 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "412": {
             "description": "If-Match version does not match the current preset version. Response body includes code=PRECONDITION_FAILED and the current preset so the client can rebase.",
             "content": {
@@ -937,6 +988,9 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
@@ -985,6 +1039,9 @@
           },
           "400": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
@@ -1035,6 +1092,9 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -1072,6 +1132,9 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -1108,6 +1171,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "$ref": "#/components/responses/Error"
@@ -1154,6 +1220,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "$ref": "#/components/responses/JobConflict"
@@ -1204,6 +1273,9 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/JobConflict"
           },
@@ -1252,6 +1324,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -1286,6 +1361,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -1344,6 +1422,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -1406,6 +1487,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -1506,6 +1590,9 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "502": {
             "$ref": "#/components/responses/BinanceOrderFailure"
           },
@@ -1556,6 +1643,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "description": "The idempotency key conflicts with the request, or the recovered Binance order does not match the requested order.",
@@ -1668,6 +1758,9 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "502": {
             "$ref": "#/components/responses/BinanceOrderFailure"
           },
@@ -1699,6 +1792,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/StatusResult"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -1725,6 +1821,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/StatusResult"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -3218,6 +3317,31 @@
             }
           }
         }
+      },
+      "RequestTimeout": {
+        "description": "Request processing exceeded the global request-deadline ceiling",
+        "headers": {
+          "X-Request-Id": {
+            "description": "Unique identifier assigned to the request",
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RequestTimeoutError"
+            },
+            "example": {
+              "error": "Request Timeout",
+              "code": "REQUEST_TIMEOUT",
+              "requestId": "req-1726214400000-abcdef",
+              "deadlineMs": 30000,
+              "durationMs": 30005
+            }
+          }
+        }
       }
     },
     "schemas": {
@@ -3240,7 +3364,10 @@
         "properties": {
           "window": {
             "type": "object",
-            "required": ["startedAt", "durationMs"],
+            "required": [
+              "startedAt",
+              "durationMs"
+            ],
             "properties": {
               "startedAt": {
                 "type": "string",
@@ -3286,7 +3413,13 @@
       },
       "DeliveryChannelMetrics": {
         "type": "object",
-        "required": ["success", "failure", "total", "successRate", "averageDeliveryMs"],
+        "required": [
+          "success",
+          "failure",
+          "total",
+          "successRate",
+          "averageDeliveryMs"
+        ],
         "properties": {
           "success": {
             "type": "integer",
@@ -4369,11 +4502,26 @@
                 "type": "object",
                 "description": "Counts TradingView enrichment outcomes; requested alerts without a stored status are reported as unrecorded.",
                 "properties": {
-                  "full": { "type": "integer", "minimum": 0 },
-                  "partial": { "type": "integer", "minimum": 0 },
-                  "failed": { "type": "integer", "minimum": 0 },
-                  "not_applicable": { "type": "integer", "minimum": 0 },
-                  "unrecorded": { "type": "integer", "minimum": 0 }
+                  "full": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "partial": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "failed": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "not_applicable": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "unrecorded": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
                 }
               },
               "riskMetadataCoverage": {
@@ -4391,22 +4539,43 @@
                   "zeroSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "oneToTwoSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "threePlusSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "totalSourceCount": {
@@ -5941,6 +6110,38 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "RequestTimeoutError": {
+        "type": "object",
+        "required": [
+          "error",
+          "code",
+          "requestId",
+          "deadlineMs",
+          "durationMs"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "Request Timeout"
+          },
+          "code": {
+            "type": "string",
+            "example": "REQUEST_TIMEOUT"
+          },
+          "requestId": {
+            "type": "string",
+            "example": "req-1726214400000-abcdef"
+          },
+          "deadlineMs": {
+            "type": "integer",
+            "example": 30000
+          },
+          "durationMs": {
+            "type": "integer",
+            "example": 30005
           }
         }
       }

@@ -79,29 +79,32 @@ function parseExemptPaths() {
 	return paths;
 }
 
-let testModeEnabled = false;
+const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
+
+let testOverrides = null;
 
 function resolveTimeoutMs() {
-	if (testModeEnabled) {
-		const override = Number(process.env.REQUEST_TIMEOUT_MS_TEST);
-		return Number.isFinite(override) && override > 0
-			? override
-			: DEFAULT_TIMEOUT_MS;
+	if (testOverrides && typeof testOverrides.timeoutMs === 'number') {
+		return testOverrides.timeoutMs;
 	}
-	return readPositiveInteger('REQUEST_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
+	const envTimeout = readPositiveInteger('REQUEST_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
+	try {
+		const status = remoteConfigService.getStatus();
+		if (status && status.enabled) {
+			const runtimeConfig = remoteConfigService.getRuntimeConfig();
+			if (runtimeConfig && typeof runtimeConfig.REQUEST_TIMEOUT_MS === 'number') {
+				return runtimeConfig.REQUEST_TIMEOUT_MS;
+			}
+		}
+	} catch (_) {
+		// fail-open to environment variable and fallback
+	}
+	return envTimeout;
 }
 
 function resolveExemptPaths() {
-	if (testModeEnabled) {
-		const exempt = new Set(DEFAULT_EXEMPT_PATHS);
-		const raw = process.env.REQUEST_DEADLINE_EXEMPT_PATHS_TEST;
-		if (raw) {
-			for (const part of String(raw).split(',')) {
-				const trimmed = part.trim();
-				if (trimmed) exempt.add(trimmed.startsWith('/') ? trimmed : `/${trimmed}`);
-			}
-		}
-		return exempt;
+	if (testOverrides && testOverrides.exemptPaths instanceof Set) {
+		return testOverrides.exemptPaths;
 	}
 	return parseExemptPaths();
 }
@@ -168,15 +171,20 @@ function requestDeadline(req, res, next) {
 }
 
 requestDeadline.enableTestMode = function () {
-	testModeEnabled = true;
+	// Preserved for compatibility
 };
 
 requestDeadline.disableTestMode = function () {
-	testModeEnabled = false;
+	testOverrides = null;
+};
+
+requestDeadline.setTestOverrides = function (overrides) {
+	testOverrides = overrides;
 };
 
 requestDeadline.resetForTests = function () {
 	invalidConfigWarnings.clear();
+	testOverrides = null;
 };
 
 requestDeadline.constants = Object.freeze({

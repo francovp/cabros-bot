@@ -363,6 +363,13 @@
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
+    },
+    "REQUEST_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "30000"
+      },
+      "description": "Global request-deadline timeout ceiling in milliseconds",
+      "valueType": "NUMBER"
     }
   },
   "version": {

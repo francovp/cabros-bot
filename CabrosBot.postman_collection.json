@@ -369,6 +369,18 @@
               "status": "OK",
               "code": 200,
               "body": "{\"success\":true,\"requestId\":\"req-12345\",\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\"}],\"enriched\":false}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -1023,6 +1035,18 @@
               "status": "Internal Server Error",
               "code": 500,
               "body": "{\n  \"success\": false,\n  \"error\": \"Internal server error\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -1071,6 +1095,18 @@
               "status": "OK",
               "code": 200,
               "body": "{\n  \"success\": true,\n  \"results\": [{\n    \"channel\": \"telegram\",\n    \"success\": true,\n    \"messageId\": \"tg-msg-123\"\n  }]\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -3951,6 +3987,18 @@
               "status": "Service Unavailable",
               "code": 503,
               "body": "{\n  \"error\": \"The queue acceptance state could not be determined.\",\n  \"code\": \"JOB_QUEUE_ACCEPTANCE_UNKNOWN\",\n  \"jobId\": \"8f8ef192-349f-4318-8547-0e6d628bf739\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             },
             {
               "name": "Create Job with Callback",

@@ -1580,7 +1580,9 @@ No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env va
 - `.env.example` and `README.md` — documented the default, valid range, and opt-out behavior.
 
 **Configuration**
-- `REQUEST_TIMEOUT_MS` — Optional request-deadline ceiling (default 30000, integer 1000-120000; invalid values fall back to 30000 with a single warning). Classified as **remote-config eligible** because it is a non-secret, non-credential, non-destination runtime tuning. Out of scope per the existing `PARAMETER_SCHEMA` allow-list (TradingView MCP / signal-outcome / Remote Config news thresholds); promote only after coordinated Remote Config schema update.
+- `REQUEST_TIMEOUT_MS` — Optional request-deadline ceiling (default 30000, integer 1000-120000; invalid values fall back to 30000 with a single warning). Classified as **remote-config eligible** and integrated into `RemoteConfigService` (`PARAMETER_SCHEMA`), `firebase-remote-config-template.json`, and dynamic runtime config overrides.
 - `REQUEST_DEADLINE_EXEMPT_PATHS` — Optional comma-separated path list (defaults to `/healthcheck,/ready,/openapi.json,/docs`). Classified as **environment-only** for Remote Config parity (path allow-list is a route/security control, not a runtime tuning knob).
 
-No endpoint, OpenAPI, Postman, or Remote Config contract changed in this initial rollout.
+**API Contracts**
+- The structured `408` timeout response (`RequestTimeoutError` schema and `RequestTimeout` response component) is formally specified in `src/openapi/openapi.json` for all non-exempt `/api` operation paths.
+- Response examples for `Request Timeout (408)` are documented in `CabrosBot.postman_collection.json` across primary webhook and job ingest operations.
