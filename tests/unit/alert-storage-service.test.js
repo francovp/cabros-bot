@@ -58,6 +58,7 @@ function buildDocSnapshot(id, data) {
 describe('AlertStorageService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		jest.useFakeTimers().setSystemTime(new Date('2026-06-06T12:00:00.000Z'));
 		admin.__resetApps();
 		// Reset the Firestore db singleton between tests
 		AlertStorageService._resetForTesting();
@@ -756,7 +757,133 @@ describe('AlertStorageService', () => {
 			expect(result.alerts[0]).not.toHaveProperty('originalLength');
 		});
 
-		it('hides expired alerts and ages legacy records from receivedAt', async () => {
+		it('projects sanitized enrichmentData and enrichmentSummary when include=enrichment_summary is requested', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-enriched-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'BTC breakout',
+						enriched: true,
+						enrichmentData: {
+							sentiment: '  BULLISH  ',
+							sentiment_score: 0.85,
+							setup_type: 'breakout',
+							invalidation_level: 64200,
+							target_level: 68500,
+							risk_reward_ratio: 2.5,
+							sources: [
+								'https://coindesk.com/article/1',
+								{ url: 'https://cointelegraph.com/news/2' },
+								'invalid-url',
+							],
+							tradingViewEnrichmentApplied: true,
+							tradingViewEnrichmentStatus: 'full',
+							promptProvenance: {
+								name: 'crypto-sentiment',
+								source: 'langfuse',
+								label: 'production',
+								version: 2,
+								secretToken: 'do-not-leak',
+							},
+							internalSecret: 'sensitive-gemini-key',
+							rawAnalysis: 'unbounded raw text',
+						},
+						channels: ['telegram'],
+						deliveryResults: [{ channel: 'telegram', success: true }],
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listAlerts({
+				limit: 1,
+				include: ['enrichment_summary'],
+			});
+
+			expect(result.alerts).toHaveLength(1);
+			const alert = result.alerts[0];
+
+			const expectedProjection = {
+				sentiment: 'BULLISH',
+				sentiment_score: 0.85,
+				setup_type: 'breakout',
+				invalidation_level: 64200,
+				target_level: 68500,
+				risk_reward_ratio: 2.5,
+				sourceCount: 3,
+				sourceDomains: ['coindesk.com', 'cointelegraph.com'],
+				tradingViewEnrichmentApplied: true,
+				tradingViewEnrichmentStatus: 'full',
+				promptProvenance: {
+					name: 'crypto-sentiment',
+					source: 'langfuse',
+					label: 'production',
+					version: 2,
+					schemaDriftDetected: false,
+				},
+			};
+
+			expect(alert.enrichmentData).toEqual(expectedProjection);
+			expect(alert.enrichmentSummary).toEqual(expectedProjection);
+			expect(alert.enrichmentData).not.toHaveProperty('internalSecret');
+			expect(alert.enrichmentData).not.toHaveProperty('rawAnalysis');
+			expect(alert.enrichmentData.promptProvenance).not.toHaveProperty('secretToken');
+		});
+
+		it('returns null enrichment projection for unenriched alerts when include=enrichment_summary is requested', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-plain-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'Plain alert',
+						enriched: false,
+						enrichmentData: null,
+						channels: ['telegram'],
+						deliveryResults: [{ channel: 'telegram', success: true }],
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listAlerts({
+				limit: 1,
+				includeEnrichmentSummary: true,
+			});
+
+			expect(result.alerts).toHaveLength(1);
+			expect(result.alerts[0].enrichmentData).toBeNull();
+			expect(result.alerts[0].enrichmentSummary).toBeNull();
+		});
+
+		it('preserves raw doc enrichmentData and omits enrichmentSummary when include is not requested', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-raw-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'Alert with raw enrichment',
+						enriched: true,
+						enrichmentData: {
+							customField: 'unmodified-payload',
+						},
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listAlerts({ limit: 1 });
+			expect(result.alerts[0].enrichmentData).toEqual({
+				customField: 'unmodified-payload',
+			});
+			expect(result.alerts[0]).not.toHaveProperty('enrichmentSummary');
+		});
+
+		it('hides expired alerts, ages legacy records, and preserves archived records', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
 			mockGet.mockResolvedValueOnce({
@@ -776,12 +903,17 @@ describe('AlertStorageService', () => {
 					buildQueryDoc('legacy-active-alert', {
 						receivedAt: buildTimestamp('2026-08-12T00:00:00.000Z'),
 					}),
+					buildQueryDoc('archived-alert', {
+						receivedAt: buildTimestamp('2025-01-01T00:00:00.000Z'),
+						expiresAt: buildTimestamp('2025-02-01T00:00:00.000Z'),
+						retentionPolicy: 'archive',
+					}),
 				],
 			});
 
 			const result = await AlertStorageService.listAlerts({ limit: 10 });
 
-			expect(result.alerts.map(alert => alert.id)).toEqual(['active-alert', 'legacy-active-alert']);
+			expect(result.alerts.map(alert => alert.id)).toEqual(['active-alert', 'legacy-active-alert', 'archived-alert']);
 		});
 
 		it('uses bounded scan batches for small retention-filtered pages', async () => {
@@ -853,6 +985,107 @@ describe('AlertStorageService', () => {
 			expect(mockGet).toHaveBeenCalledTimes(2);
 			expect(result.alerts).toHaveLength(1);
 			expect(result.alerts[0].id).toBe('alert-2');
+		});
+
+		it('filters alerts by symbol, eventCategory, and exchange individually and in combination', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const sampleDocs = [
+				buildQueryDoc('alert-btc-binance-surge', {
+					receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+					text: 'BTC surge alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					eventCategory: 'price_surge',
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-eth-binance-surge', {
+					receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+					text: 'ETH surge alert',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					eventCategory: 'price_surge',
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-btc-coinbase-whale', {
+					receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+					text: 'BTC whale alert',
+					symbol: 'BTCUSDT',
+					exchange: 'COINBASE',
+					eventCategory: 'whale_movement',
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-sol-binance-whale', {
+					receivedAt: buildTimestamp('2026-06-06T09:00:00.000Z'),
+					text: 'SOL whale alert',
+					symbol: 'SOLUSDT',
+					exchange: 'BINANCE',
+					eventCategory: 'whale_movement',
+					source: 'webhook',
+				}),
+			];
+
+			// 1. Filter by symbol (case-insensitive)
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const bySymbol = await AlertStorageService.listAlerts({ limit: 10, symbol: 'btcusdt' });
+			expect(bySymbol.alerts.map(a => a.id)).toEqual(['alert-btc-binance-surge', 'alert-btc-coinbase-whale']);
+
+			// 2. Filter by symbol with exchange prefix
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const byPrefixedSymbol = await AlertStorageService.listAlerts({ limit: 10, symbol: 'BINANCE:BTCUSDT' });
+			expect(byPrefixedSymbol.alerts.map(a => a.id)).toEqual(['alert-btc-binance-surge']);
+
+			// 3. Filter by exchange (case-insensitive)
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const byExchange = await AlertStorageService.listAlerts({ limit: 10, exchange: 'coinbase' });
+			expect(byExchange.alerts.map(a => a.id)).toEqual(['alert-btc-coinbase-whale']);
+
+			// 4. Filter by eventCategory (case-insensitive)
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const byCategory = await AlertStorageService.listAlerts({ limit: 10, eventCategory: 'PRICE_SURGE' });
+			expect(byCategory.alerts.map(a => a.id)).toEqual(['alert-btc-binance-surge', 'alert-eth-binance-surge']);
+
+			// 5. Combined filters
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const combined = await AlertStorageService.listAlerts({
+				limit: 10,
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				eventCategory: 'price_surge',
+			});
+			expect(combined.alerts.map(a => a.id)).toEqual(['alert-btc-binance-surge']);
+		});
+
+		it('filters list by eventCategory from nested enrichmentData.event_category and populates eventCategory on formatted output', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const sampleDocs = [
+				buildQueryDoc('alert-nested-cat', {
+					receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+					text: 'BTC breakout',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					enrichmentData: {
+						event_category: 'price_surge',
+					},
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-other-cat', {
+					receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+					text: 'ETH news',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					enrichmentData: {
+						event_category: 'regulatory',
+					},
+					source: 'webhook',
+				}),
+			];
+
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const result = await AlertStorageService.listAlerts({ limit: 10, eventCategory: 'price_surge' });
+			expect(result.alerts).toHaveLength(1);
+			expect(result.alerts[0].id).toBe('alert-nested-cat');
+			expect(result.alerts[0].eventCategory).toBe('price_surge');
 		});
 
 		it('uses the opaque nextBefore cursor to continue within tied timestamps', async () => {
@@ -1688,9 +1921,134 @@ describe('AlertStorageService', () => {
 			expect(result.alerts[0]).not.toHaveProperty('truncated');
 			expect(result.alerts[0]).not.toHaveProperty('originalLength');
 		});
+
+		it('projects bounded safe enrichmentData when includeEnrichment is true', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('enriched-alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						enriched: true,
+						useTradingViewData: true,
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'full',
+						enrichmentData: {
+							sentiment: 'BULLISH',
+							sentiment_score: 0.85,
+							setup_type: 'breakout',
+							invalidation_level: 64200,
+							target_level: 68500,
+							risk_reward_ratio: 2.5,
+							sources: [
+								'https://www.coindesk.com/markets/2026/06/btc-breakout',
+								'https://cointelegraph.com/news/bitcoin-surge',
+								{ url: 'https://news.bitcoin.com/article-1', title: 'BTC analysis' },
+								'invalid-url',
+							],
+							tradingViewEnrichmentApplied: true,
+							tradingViewEnrichmentStatus: 'full',
+							promptProvenance: {
+								name: 'crypto-sentiment',
+								source: 'langfuse',
+								label: 'production',
+								version: 3,
+								schemaDriftDetected: false,
+								extraInternalPromptData: 'secret-prompt-content',
+							},
+							rawProviderResponse: { choices: [{ message: 'full-raw' }] },
+							internalSecret: 'sensitive-value',
+						},
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				includeEnrichment: true,
+			});
+
+			expect(result.alerts[0]).toHaveProperty('enrichmentData');
+			expect(result.alerts[0].enrichmentData).toEqual({
+				sentiment: 'BULLISH',
+				sentiment_score: 0.85,
+				setup_type: 'breakout',
+				invalidation_level: 64200,
+				target_level: 68500,
+				risk_reward_ratio: 2.5,
+				sourceCount: 4,
+				sourceDomains: ['www.coindesk.com', 'cointelegraph.com', 'news.bitcoin.com'],
+				tradingViewEnrichmentApplied: true,
+				tradingViewEnrichmentStatus: 'full',
+				promptProvenance: {
+					name: 'crypto-sentiment',
+					source: 'langfuse',
+					label: 'production',
+					version: 3,
+					schemaDriftDetected: false,
+				},
+			});
+			expect(result.alerts[0].enrichmentData).not.toHaveProperty('rawProviderResponse');
+			expect(result.alerts[0].enrichmentData).not.toHaveProperty('internalSecret');
+			expect(result.alerts[0].enrichmentData.promptProvenance).not.toHaveProperty('extraInternalPromptData');
+		});
+
+		it('returns enrichmentData: null when includeEnrichment is true but alert has no enrichmentData', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('unenriched-alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						enriched: false,
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				includeEnrichment: true,
+			});
+
+			expect(result.alerts[0]).toHaveProperty('enrichmentData', null);
+		});
+
+		it('omits enrichmentData entirely when includeEnrichment is false or omitted', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('enriched-alert-default', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						enriched: true,
+						enrichmentData: { sentiment: 'BULLISH' },
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			});
+
+			expect(result.alerts[0]).not.toHaveProperty('enrichmentData');
+		});
 	});
 
 		describe('summarizeAlerts()', () => {
+		beforeEach(() => {
+			jest.useFakeTimers({ now: new Date('2026-06-06T13:00:00.000Z') });
+		});
+
+		afterEach(() => {
+			jest.useRealTimers();
+		});
+
 		it('counts recorded, not-applicable, and legacy unrecorded TradingView outcomes separately', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
@@ -1904,6 +2262,19 @@ describe('AlertStorageService', () => {
 						whatsapp: { total: 1, success: 1, failure: 0 },
 					},
 				},
+				scanner: {
+					totalRuns: 0,
+					errorCategoryCounts: {
+						mcp_unreachable: 0,
+						mcp_timeout: 0,
+						mcp_rate_limited: 0,
+						mcp_tool_error: 0,
+						mcp_suspended: 0,
+						symbol_invalid: 0,
+						symbol_unsupported: 0,
+						unknown: 0,
+					},
+				},
 				latency: {
 					averageProcessingMs: 250,
 					averageDeliveryMs: 150,
@@ -2016,6 +2387,82 @@ describe('AlertStorageService', () => {
 			expect(result.bySymbol).toEqual({ BTCUSDT: 1 });
 			expect(result.byFeatureFlag.enriched).toBe(1);
 			expect(result.byFeatureFlag.plain).toBe(0);
+		});
+
+		it('applies symbol, eventCategory, and exchange filters before aggregating summaries', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const sampleDocs = [
+				buildQueryDoc('alert-btc-binance-surge', {
+					receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+					text: 'BINANCE:BTCUSDT surge',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					eventCategory: 'price_surge',
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-eth-binance-surge', {
+					receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+					text: 'BINANCE:ETHUSDT surge',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					eventCategory: 'price_surge',
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-btc-coinbase-whale', {
+					receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+					text: 'COINBASE:BTCUSDT whale',
+					symbol: 'BTCUSDT',
+					exchange: 'COINBASE',
+					eventCategory: 'whale_movement',
+					source: 'webhook',
+				}),
+			];
+
+			// 1. By symbol (case-insensitive)
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const bySymbol = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 10,
+				symbol: 'btcusdt',
+			});
+			expect(bySymbol.totalAlerts).toBe(2);
+			expect(bySymbol.bySymbol).toEqual({ BTCUSDT: 2 });
+
+			// 2. By exchange (case-insensitive)
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const byExchange = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 10,
+				exchange: 'binance',
+			});
+			expect(byExchange.totalAlerts).toBe(2);
+			expect(byExchange.bySymbol).toEqual({ BTCUSDT: 1, ETHUSDT: 1 });
+
+			// 3. By eventCategory (case-insensitive)
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const byCategory = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 10,
+				eventCategory: 'WHALE_MOVEMENT',
+			});
+			expect(byCategory.totalAlerts).toBe(1);
+			expect(byCategory.bySymbol).toEqual({ BTCUSDT: 1 });
+
+			// 4. Combined filters
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const combined = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 10,
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				eventCategory: 'price_surge',
+			});
+			expect(combined.totalAlerts).toBe(1);
+			expect(combined.bySymbol).toEqual({ BTCUSDT: 1 });
 		});
 
 		it('pages through bounded alerts until filtered summaries reach the limit', async () => {
@@ -2532,6 +2979,81 @@ describe('AlertStorageService', () => {
 					symbol: 'unknown',
 					exchange: null,
 				});
+			});
+		});
+
+		describe('extractSourceDomains()', () => {
+			it('extracts unique lowercase hostnames from string and object source entries', () => {
+				const sources = [
+					'https://Bloomberg.com/news/1',
+					{ url: 'https://COINDESK.COM/article/2' },
+					'https://bloomberg.com/news/other', // duplicate
+					'not-a-url',
+					null,
+					123,
+				];
+				expect(AlertStorageService.extractSourceDomains(sources)).toEqual([
+					'bloomberg.com',
+					'coindesk.com',
+				]);
+			});
+
+			it('caps source domains at 10 items', () => {
+				const sources = Array.from({ length: 15 }, (_, i) => `https://domain${i}.com/page`);
+				const result = AlertStorageService.extractSourceDomains(sources);
+				expect(result).toHaveLength(10);
+				expect(result[0]).toBe('domain0.com');
+			});
+
+			it('returns empty array when sources is not an array', () => {
+				expect(AlertStorageService.extractSourceDomains(null)).toEqual([]);
+				expect(AlertStorageService.extractSourceDomains(undefined)).toEqual([]);
+				expect(AlertStorageService.extractSourceDomains('not-array')).toEqual([]);
+			});
+		});
+
+		describe('formatEnrichmentSummary()', () => {
+			it('returns null for non-object, null, or array inputs', () => {
+				expect(AlertStorageService.formatEnrichmentSummary(null)).toBeNull();
+				expect(AlertStorageService.formatEnrichmentSummary(undefined)).toBeNull();
+				expect(AlertStorageService.formatEnrichmentSummary([])).toBeNull();
+				expect(AlertStorageService.formatEnrichmentSummary('invalid')).toBeNull();
+			});
+
+			it('clips sentiment to 32 chars and setup_type to 64 chars', () => {
+				const result = AlertStorageService.formatEnrichmentSummary({
+					sentiment: 'A'.repeat(50),
+					setup_type: 'B'.repeat(100),
+				});
+				expect(result.sentiment).toBe('A'.repeat(32));
+				expect(result.setup_type).toBe('B'.repeat(64));
+			});
+
+			it('handles alternate camelCase field names for sentimentScore and setupType', () => {
+				const result = AlertStorageService.formatEnrichmentSummary({
+					sentimentScore: 0.75,
+					setupType: 'continuation',
+					invalidationLevel: 100,
+					targetLevel: 200,
+					riskRewardRatio: 2.0,
+				});
+				expect(result.sentiment_score).toBe(0.75);
+				expect(result.setup_type).toBe('continuation');
+				expect(result.invalidation_level).toBe(100);
+				expect(result.target_level).toBe(200);
+				expect(result.risk_reward_ratio).toBe(2.0);
+			});
+
+			it('falls back to docData for tradingViewEnrichment fields if missing from enrichmentData', () => {
+				const result = AlertStorageService.formatEnrichmentSummary(
+					{ sentiment: 'NEUTRAL' },
+					{
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'partial',
+					}
+				);
+				expect(result.tradingViewEnrichmentApplied).toBe(true);
+				expect(result.tradingViewEnrichmentStatus).toBe('partial');
 			});
 		});
 	});

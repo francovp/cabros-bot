@@ -21,6 +21,8 @@
     "test:firebase": "env -u FIREBASE_SERVICE_ACCOUNT_JSON -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_APPLICATION_CREDENTIALS_JSON -u FIREBASE_CONFIG FIREBASE_PROJECT_ID=demo-cabros GCLOUD_PROJECT=demo-cabros FIRESTORE_EMULATOR_HOST=127.0.0.1:8081 firebase emulators:exec --project demo-cabros --config firebase.json --only firestore \"pnpm exec jest --config jest.firebase.config.js --runInBand\"",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
+    "backup:firestore": "node ops/export-firestore-collections.js",
+    "restore:firestore": "node ops/restore-firestore-collections.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },

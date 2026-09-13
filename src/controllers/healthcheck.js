@@ -15,11 +15,13 @@ function isDeepRequested(req) {
 }
 
 function getChannelReadinessSnapshot() {
+	let statusEvaluationError = null;
 	const snapshot = (() => {
 		try {
 			return statusController.getStatus();
 		} catch (error) {
 			console.warn('[Healthcheck] statusController.getStatus() failed:', error.message);
+			statusEvaluationError = error;
 			return { dependencies: {} };
 		}
 	})();
@@ -42,13 +44,23 @@ function getChannelReadinessSnapshot() {
 			...(dep.error ? { error: dep.error } : {}),
 		};
 	}
+	if (statusEvaluationError) {
+		Object.defineProperty(channels, '_statusEvaluationError', {
+			value: statusEvaluationError.message || 'Status evaluation failed',
+			enumerable: false,
+			configurable: true,
+		});
+	}
 	return channels;
 }
 
 function computeDeepHealth(channels) {
 	const degraded = [];
+	if (channels && channels._statusEvaluationError) {
+		degraded.push('status');
+	}
 	for (const name of NOTIFICATION_CHANNEL_NAMES) {
-		const channel = channels[name];
+		const channel = channels && channels[name];
 		if (!channel || !channel.enabled) {
 			continue;
 		}

@@ -63,6 +63,21 @@ describe('healthcheck helpers', () => {
 			expect(result.healthy).toBe(false);
 			expect(result.degradedChannels).toEqual(['telegram']);
 		});
+
+		it('reports degraded when _statusEvaluationError is present', () => {
+			const channels = {
+				telegram: { enabled: true, ready: true, status: 'ready' },
+				whatsapp: { enabled: true, ready: true, status: 'ready' },
+				discord: { enabled: false, ready: false, status: 'disabled' },
+			};
+			Object.defineProperty(channels, '_statusEvaluationError', {
+				value: 'boom',
+				enumerable: false,
+			});
+			const result = computeDeepHealth(channels);
+			expect(result.healthy).toBe(false);
+			expect(result.degradedChannels).toContain('status');
+		});
 	});
 
 	describe('getChannelReadinessSnapshot', () => {
@@ -82,7 +97,7 @@ describe('healthcheck helpers', () => {
 			});
 		});
 
-		it('returns safe defaults when statusController.getStatus throws', () => {
+		it('returns safe defaults and marks evaluation error when statusController.getStatus throws', () => {
 			jest.isolateModules(() => {
 				const statusMod = require('../../src/controllers/status');
 				const healthMod = require('../../src/controllers/healthcheck');
@@ -95,6 +110,11 @@ describe('healthcheck helpers', () => {
 					expect(snap.telegram.enabled).toBe(false);
 					expect(snap.telegram.ready).toBe(false);
 					expect(snap.telegram.status).toBe('unknown');
+					expect(snap._statusEvaluationError).toBe('boom');
+
+					const health = healthMod.computeDeepHealth(snap);
+					expect(health.healthy).toBe(false);
+					expect(health.degradedChannels).toEqual(['status']);
 				} finally {
 					statusMod.getStatus = original;
 				}

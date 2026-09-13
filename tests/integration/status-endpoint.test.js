@@ -11,6 +11,7 @@ const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfi
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../../src/services/grounding/metrics');
+const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -104,6 +105,7 @@ describe('Status endpoints', () => {
 		remoteConfigService._resetForTesting();
 		geminiQuotaManager.resetForTesting();
 		groundingMetrics.resetForTesting();
+		deliveryMetricsService.resetForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
@@ -192,6 +194,14 @@ describe('Status endpoints', () => {
 				lastStateChangeAt: null,
 				failureThreshold: 5,
 				cooldownMs: 600000,
+			},
+			errorCategoryCounts: {
+				circuit_breaker_open: 0,
+				http_5xx: 0,
+				http_4xx: 0,
+				timeout: 0,
+				invalid_response: 0,
+				request_failed: 0,
 			},
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
@@ -534,6 +544,11 @@ describe('Status endpoints', () => {
 			lastRunPendingCount: 0,
 			lastRunErrorCount: 0,
 			shutdownRequested: false,
+			entryPriceSources: {
+				configured: false,
+				crypto: ['mcp', 'binance', 'gemini'],
+				equity: ['twelve-data'],
+			},
 		});
 	});
 
@@ -1127,6 +1142,14 @@ describe('Status endpoints', () => {
 				lastStateChangeAt: null,
 				failureThreshold: 5,
 				cooldownMs: 600000,
+			},
+			errorCategoryCounts: {
+				circuit_breaker_open: 0,
+				http_5xx: 0,
+				http_4xx: 0,
+				timeout: 0,
+				invalid_response: 0,
+				request_failed: 0,
 			},
 		});
 	});
@@ -1792,5 +1815,90 @@ describe('Status endpoints', () => {
 			batchLimit: 50,
 			maxAttempts: 5,
 		});
+	});
+
+	it('reports testAlert feature flag and dependency status', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.testAlert).toBe(true);
+		expect(response.body.dependencies.testAlert).toEqual({
+			enabled: true,
+			lastRunAt: null,
+			lastRunStatus: null,
+			rateLimitState: {
+				windowMs: 60000,
+				dailyLimit: 30,
+				dailyRunsToday: 0,
+			},
+		});
+	});
+
+	it('omits deliveryMetrics when no deliveries have been recorded', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body).not.toHaveProperty('deliveryMetrics');
+	});
+
+	it('exposes per-channel deliveryMetrics after recorded results', async () => {
+		deliveryMetricsService.record({ channel: 'telegram', success: true, durationMs: 120 });
+		deliveryMetricsService.record({ channel: 'telegram', success: false, durationMs: 250 });
+		deliveryMetricsService.record({ channel: 'whatsapp', success: true, durationMs: 300 });
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.deliveryMetrics).toEqual(expect.objectContaining({
+			success: 2,
+			failure: 1,
+			total: 3,
+			successRate: expect.closeTo(2 / 3, 4),
+			byChannel: {
+				telegram: expect.objectContaining({
+					success: 1,
+					failure: 1,
+					total: 2,
+					successRate: 0.5,
+					averageDeliveryMs: 185,
+				}),
+				whatsapp: expect.objectContaining({
+					success: 1,
+					failure: 0,
+					total: 1,
+					successRate: 1.0,
+					averageDeliveryMs: 300,
+				}),
+			},
+			window: expect.objectContaining({
+				startedAt: expect.any(String),
+				durationMs: expect.any(Number),
+			}),
+		}));
+		expect(response.body.deliveryMetrics.averageDeliveryMs).toBeCloseTo((120 + 250 + 300) / 3, 1);
+	});
+
+	it('aliases /api/capabilities to expose deliveryMetrics', async () => {
+		deliveryMetricsService.record({ channel: 'discord', success: true, durationMs: 80 });
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.deliveryMetrics).toEqual(expect.objectContaining({
+			success: 1,
+			failure: 0,
+			total: 1,
+			byChannel: expect.objectContaining({
+				discord: expect.objectContaining({ successRate: 1.0 }),
+			}),
+		}));
 	});
 });

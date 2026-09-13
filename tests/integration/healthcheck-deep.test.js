@@ -120,4 +120,21 @@ describe('GET /healthcheck deep-readiness endpoint', () => {
 		expect(res.body.status).toBe('degraded');
 		expect(res.body.channels.whatsapp.status).toBe('error');
 	});
+
+	it('returns 503 when statusController.getStatus throws', async () => {
+		const app = buildApp();
+		const mod = require('../../src/controllers/status');
+		const original = mod.getStatus;
+		mod.getStatus = () => {
+			throw new Error('status crashed');
+		};
+		restore = () => {
+			mod.getStatus = original;
+		};
+
+		const res = await request(app).get('/healthcheck?deep=true');
+		expect(res.status).toBe(503);
+		expect(res.body.status).toBe('degraded');
+		expect(res.body.degradedChannels).toContain('status');
+	});
 });

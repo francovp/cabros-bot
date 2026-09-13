@@ -1148,4 +1148,53 @@ describe('TradingViewMcpService', () => {
 			expect(service.hasActiveOutagePage).toBe(false);
 		});
 	});
+
+	describe('callMultiAgentAnalysis', () => {
+		it('calls tool multi_agent_analysis with symbol, exchange, timeframe and unwraps result', async () => {
+			const service = new TradingViewMcpService();
+			const mockPayload = {
+				consensus: { decision: 'BUY', confidence: 'High', net_score: 2 },
+				agents_debate: { technical_analyst: { stance: 'Bullish' } },
+			};
+			service._callTool = jest.fn().mockResolvedValue({
+				result: mockPayload,
+			});
+
+			const result = await service.callMultiAgentAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '15m',
+			});
+
+			expect(service._callTool).toHaveBeenCalledWith('multi_agent_analysis', {
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '15m',
+			}, expect.objectContaining({ signal: undefined }));
+			expect(result).toEqual(mockPayload);
+		});
+
+		it('throws when tool response contains an error field', async () => {
+			const service = new TradingViewMcpService();
+			service._callTool = jest.fn().mockResolvedValue({
+				error: 'Symbol not supported',
+			});
+
+			await expect(service.callMultiAgentAnalysis({
+				symbol: 'INVALID',
+				exchange: 'BINANCE',
+			})).rejects.toThrow('Symbol not supported');
+		});
+
+		it('throws when tool response is not an object', async () => {
+			const service = new TradingViewMcpService();
+			service._callTool = jest.fn().mockResolvedValue('not an object');
+
+			await expect(service.callMultiAgentAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+			})).rejects.toThrow('TradingView MCP multi_agent_analysis returned invalid payload');
+		});
+	});
 });
+

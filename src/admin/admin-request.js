@@ -60,7 +60,7 @@
 
 	const confirmRequest = (definition, confirm) => !definition.confirm || confirm(definition.confirm);
 
-	const createRequest = ({ path, method, query, body, apiKey, authToken, baseUrl }) => {
+	const createRequest = ({ path, method, query, body, apiKey, authToken, baseUrl, headers: extraHeaders }) => {
 		if (typeof path !== 'string' || !path.startsWith('/api/') || path.includes('?') || path.includes('#')) {
 			throw new Error('API path must start with /api/');
 		}
@@ -76,6 +76,13 @@
 		if (hasJsonBody(body)) {
 			headers['Content-Type'] = 'application/json';
 			options.body = JSON.stringify(body);
+		}
+		if (extraHeaders && typeof extraHeaders === 'object' && !Array.isArray(extraHeaders)) {
+			Object.entries(extraHeaders).forEach(([key, value]) => {
+				if (value !== undefined && value !== null && value !== '') {
+					headers[key] = String(value);
+				}
+			});
 		}
 		if (apiKey) headers['x-api-key'] = apiKey;
 		if (authToken) headers.Authorization = `Bearer ${authToken}`;

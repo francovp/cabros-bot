@@ -1,0 +1,107 @@
+name: Firestore Scheduled Backup
+
+on:
+  schedule:
+    # Run weekly every Sunday at 04:00 UTC
+    - cron: '0 4 * * 0'
+  workflow_dispatch:
+    inputs:
+      collections:
+        description: 'Comma-separated collection IDs to export'
+        required: false
+        default: 'alerts,alertReplays,tradingSignalOutcomes,scannerPresets'
+
+permissions:
+  contents: read
+
+jobs:
+  backup-firestore:
+    runs-on: ubuntu-latest
+    env:
+      FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || 'cabros-bot' }}
+      GCS_BACKUP_BUCKET: ${{ vars.GCS_BACKUP_BUCKET || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Configure Google / Firebase credentials
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          test -n "$FIREBASE_SERVICE_ACCOUNT_JSON"
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/firebase-service-account.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/firebase-service-account.json" >> "$GITHUB_ENV"
+
+      - name: Execute Firestore Backup
+        id: backup
+        env:
+          COLLECTIONS_INPUT: ${{ inputs.collections || 'alerts,alertReplays,tradingSignalOutcomes,scannerPresets' }}
+        run: |
+          if [ -n "$GCS_BACKUP_BUCKET" ] && command -v gcloud >/dev/null 2>&1; then
+            echo "Running managed GCS export..."
+            gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS" --project="$FIREBASE_PROJECT_ID"
+            COLLECTION_IDS="$COLLECTIONS_INPUT" bash ops/export-firestore-managed.sh
+          else
+            echo "Running node JSONL backup..."
+            node ops/export-firestore-collections.js --collections="$COLLECTIONS_INPUT" --output-dir="$RUNNER_TEMP/firestore-backup"
+          fi
+
+      - name: Encrypt fallback backup archive
+        if: success()
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.FIRESTORE_BACKUP_PASSPHRASE || secrets.BACKUP_ENCRYPTION_KEY }}
+        run: |
+          if [ -d "$RUNNER_TEMP/firestore-backup" ] && [ -n "$(ls -A "$RUNNER_TEMP/firestore-backup" 2>/dev/null)" ]; then
+            if [ -z "$BACKUP_PASSPHRASE" ]; then
+              echo "::error::GCS_BACKUP_BUCKET is unset and FIRESTORE_BACKUP_PASSPHRASE secret is missing. Fallback backups must be encrypted before artifact upload to prevent exposing sensitive alert data and credentials."
+              exit 1
+            fi
+            echo "Encrypting JSONL fallback backup files..."
+            mkdir -p "$RUNNER_TEMP/firestore-backup-encrypted"
+            tar -czf - -C "$RUNNER_TEMP/firestore-backup" . | \
+              openssl enc -aes-256-cbc -pbkdf2 -salt -out "$RUNNER_TEMP/firestore-backup-encrypted/firestore-backup-${{ github.run_id }}.tar.gz.enc" -pass env:BACKUP_PASSPHRASE
+            rm -rf "$RUNNER_TEMP/firestore-backup"
+            mkdir -p "$RUNNER_TEMP/firestore-backup"
+            mv "$RUNNER_TEMP/firestore-backup-encrypted/firestore-backup-${{ github.run_id }}.tar.gz.enc" "$RUNNER_TEMP/firestore-backup/"
+            rm -rf "$RUNNER_TEMP/firestore-backup-encrypted"
+          fi
+
+      - name: Upload encrypted backup artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firestore-backup-${{ github.run_id }}
+          path: ${{ runner.temp }}/firestore-backup/
+          retention-days: 120
+          if-no-files-found: ignore
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL || 'https://cabros-bot-production.up.railway.app/api/webhook/message' }}
+          NOTIFY_API_KEY: ${{ secrets.WEBHOOK_API_KEY || secrets.NOTIFY_API_KEY || '' }}
+        run: |
+          if [ -n "$NOTIFY_API_KEY" ]; then
+            curl --connect-timeout 10 --max-time 30 --silent --show-error -X POST "$NOTIFY_WEBHOOK_URL" \
+              -H "Content-Type: application/json" \
+              -H "x-api-key: $NOTIFY_API_KEY" \
+              -d '{
+                "message": "[ALERT] Firestore scheduled backup failed on GitHub Actions! Check workflow run: '"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"'",
+                "channels": ["whatsapp"],
+                "whatsappChatId": "120363422033474991@g.us"
+              }' || true
+          fi
