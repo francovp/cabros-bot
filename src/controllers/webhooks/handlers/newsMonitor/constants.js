@@ -16,6 +16,7 @@ const AnalysisStatus = {
 	CACHED: 'cached',
 	TIMEOUT: 'timeout',
 	ERROR: 'error',
+	THROTTLED: 'throttled',
 };
 
 module.exports = {

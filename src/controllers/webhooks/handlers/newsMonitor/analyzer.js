@@ -10,6 +10,12 @@ const { getCacheInstance } = require('./cache');
 const { getEnrichmentService } = require('../../../../services/inference/enrichmentService');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { AnalysisStatus, EventCategory } = require('./constants');
+const {
+	getVolumeTracker,
+	parseNewsMaxAlertsPerBatch,
+	parseNewsMaxAlertsPerWindow,
+	parseNewsMaxAlertsPerWindowMs,
+} = require('./volumeTracker');
 const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
 const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
 const geminiPriceService = require('../../../../services/grounding/geminiPriceService');
@@ -402,9 +408,10 @@ function calculateRSI(closes, period = 14) {
 }
 
 class NewsAnalyzer {
-	constructor() {
+	constructor(options = {}) {
 		this.cache = getCacheInstance();
 		this.enrichmentService = getEnrichmentService();
+		this.volumeTracker = options.volumeTracker || getVolumeTracker();
 		// Do NOT store notificationManager in constructor - get it dynamically
 		// to handle delayed initialization in tests and app startup
 
@@ -479,6 +486,7 @@ class NewsAnalyzer {
 		const results = [];
 		let nextIndex = 0;
 		const batchStartedAt = Date.now();
+		const symbolOptions = { ...options, deferDelivery: true };
 
 		const runNext = async () => {
 			while (nextIndex < symbols.length) {
@@ -486,7 +494,7 @@ class NewsAnalyzer {
 				nextIndex += 1;
 				const symbol = symbols[currentIndex];
 				const symbolTokenUsage = new TokenUsageTracker();
-				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, symbolTokenUsage, routing, batchStartedAt, options)
+				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, symbolTokenUsage, routing, batchStartedAt, symbolOptions)
 					.then((result) => {
 						if (tokenUsage) {
 							tokenUsage.merge(symbolTokenUsage);
@@ -514,7 +522,138 @@ class NewsAnalyzer {
 
 		await Promise.all(Array.from({ length: limit }, runNext));
 
+		await this.applyVolumeThrottling(results, requestId, routing, options);
+
 		return results;
+	}
+
+	async applyVolumeThrottling(results, requestId, routing = {}, options = {}) {
+		if (!Array.isArray(results) || results.length === 0) {
+			return;
+		}
+
+		const candidates = [];
+		for (let i = 0; i < results.length; i++) {
+			const res = results[i];
+			if (!res || !res.alert) {
+				continue;
+			}
+			const isNewAlert = res.status === AnalysisStatus.ANALYZED && !res.cached;
+			const isCachedRetry = res._pendingDelivery?.type === 'cached_retry';
+			if (isNewAlert || isCachedRetry) {
+				const conf = typeof res.alert.confidence === 'number' ? res.alert.confidence : 0;
+				candidates.push({
+					result: res,
+					index: i,
+					confidence: conf,
+					type: isCachedRetry ? 'cached_retry' : 'new',
+				});
+			}
+		}
+
+		if (candidates.length === 0) {
+			return;
+		}
+
+		// Prioritize candidate alerts by confidence score descending
+		candidates.sort((a, b) => {
+			if (b.confidence !== a.confidence) {
+				return b.confidence - a.confidence;
+			}
+			return a.index - b.index;
+		});
+
+		const tracker = this.volumeTracker || getVolumeTracker();
+		const effectiveCap = tracker.getEffectiveBatchCapacity();
+
+		const allowed = candidates.slice(0, effectiveCap);
+		const throttled = candidates.slice(effectiveCap);
+
+		for (const item of throttled) {
+			const res = item.result;
+			if (item.type === 'new') {
+				res.status = AnalysisStatus.THROTTLED;
+				res.reason = 'alert_volume_cap';
+				res.deliveryResults = [];
+			} else {
+				res.status = AnalysisStatus.CACHED;
+				res.deliveryResults = res._pendingDelivery?.activeCachedDeliveryResults || [];
+			}
+			delete res._pendingDelivery;
+		}
+
+		if (options.dryRun) {
+			for (const item of allowed) {
+				const res = item.result;
+				res.deliveryResults = [];
+				delete res._pendingDelivery;
+			}
+			return;
+		}
+
+		tracker.recordThrottled(throttled.length);
+
+		// Synchronously reserve window quota before starting asynchronous deliveries
+		const reservationTtl = typeof options.deadline === 'number'
+			? Math.max(options.deadline - Date.now() + 60000, 600000)
+			: 600000;
+		const reservation = tracker.reserveCapacity(allowed.length, Date.now(), reservationTtl);
+		const grantedCount = reservation ? reservation.count : 0;
+		const deliverable = allowed.slice(0, grantedCount);
+		const extraThrottled = allowed.slice(grantedCount);
+
+		for (const item of extraThrottled) {
+			const res = item.result;
+			if (item.type === 'new') {
+				res.status = AnalysisStatus.THROTTLED;
+				res.reason = 'alert_volume_cap';
+				res.deliveryResults = [];
+			} else {
+				res.status = AnalysisStatus.CACHED;
+				res.deliveryResults = res._pendingDelivery?.activeCachedDeliveryResults || [];
+			}
+			delete res._pendingDelivery;
+		}
+
+		if (extraThrottled.length > 0) {
+			tracker.recordThrottled(extraThrottled.length);
+		}
+
+		let deliveredCount = 0;
+		try {
+			const deadline = options.deadline;
+			const signal = options.signal;
+
+			for (const item of deliverable) {
+				if (signal?.aborted) {
+					console.warn('[Analyzer] Volume delivery aborted by signal');
+					break;
+				}
+				if (typeof deadline === 'number' && Date.now() >= deadline) {
+					console.warn('[Analyzer] Volume delivery aborted: deadline exceeded');
+					break;
+				}
+
+				if (reservation && typeof tracker.renewReservation === 'function') {
+					tracker.renewReservation(reservation, Date.now(), reservationTtl);
+				}
+
+				const res = item.result;
+				if (res._pendingDelivery) {
+					await this.executePendingDelivery(res, requestId, options);
+				}
+				const alertDelivered = res._alertSent === true
+					|| res._redelivered === true
+					|| (Array.isArray(res.deliveryResults) && res.deliveryResults.some((d) => d && d.success === true));
+				if (alertDelivered) {
+					deliveredCount++;
+				}
+			}
+		} finally {
+			if (reservation) {
+				tracker.commitReservation(reservation, deliveredCount);
+			}
+		}
 	}
 
 	async runSymbolAnalysisWithRetry(symbol, requestId, tokenUsage, routing, startedAt, options = {}) {
@@ -641,12 +780,6 @@ class NewsAnalyzer {
 							validateNotificationRouting(notificationMgr, routing);
 							const requestedChannels = getRequestedChannels(notificationMgr, routing);
 							const retryChannels = getCachedRedeliveryChannels(notificationMgr, cached, routing);
-							const claimedRetryChannels = [];
-							for (const channel of retryChannels) {
-								if (await this.cache.claimDelivery(symbol, category, channel)) {
-									claimedRetryChannels.push(channel);
-								}
-							}
 							const activeCachedDeliveryResults = getActiveCachedDeliveryResults(
 								cached,
 								requestedChannels,
@@ -654,6 +787,44 @@ class NewsAnalyzer {
 								routing,
 								notificationMgr,
 							);
+							if (retryChannels.length > 0 && options.deferDelivery) {
+								return {
+									symbol,
+									status: AnalysisStatus.CACHED,
+									alert: cached.alert,
+									deliveryResults: activeCachedDeliveryResults,
+									cached: true,
+									_pendingDelivery: {
+										type: 'cached_retry',
+										symbol,
+										category,
+										cached,
+										routing,
+										notificationMgr,
+										requestedChannels,
+										retryChannels,
+										activeCachedDeliveryResults,
+										options,
+									},
+									analysisRecord: {
+										symbol,
+										eventCategory: category,
+										sentiment: cached.alert?.sentimentScore ?? 0,
+										confidence: cached.alert?.confidence ?? 0,
+										headline: cached.alert?.headline || '',
+										alertSent: false,
+										promptVersion: cached.alert?.promptVersion,
+										tokens: null,
+									},
+									originalPersistedState: cached.originalPersistedState,
+								};
+							}
+							const claimedRetryChannels = [];
+							for (const channel of retryChannels) {
+								if (await this.cache.claimDelivery(symbol, category, channel)) {
+									claimedRetryChannels.push(channel);
+								}
+							}
 							if (claimedRetryChannels.length > 0) {
 								const leaseAbortControllers = new Map(
 									claimedRetryChannels.map((channel) => [channel, new AbortController()]),
@@ -918,29 +1089,21 @@ class NewsAnalyzer {
 			};
 		}
 
-		// Claim the cache key atomically before delivering the alert to prevent race conditions
-		const claimed = await this.cache.claim(symbol, geminiAnalysis.event_category);
-		if (!claimed) {
-			console.info('[Analyzer] Duplicate alert detected during claim, suppressing delivery for:', symbol, geminiAnalysis.event_category);
-			const cached = await this.cache.get(symbol, geminiAnalysis.event_category);
+		if (options.deferDelivery) {
 			return {
-				status: AnalysisStatus.CACHED,
-				alert: cached ? cached.alert : alert,
-				deliveryResults: cached ? cached.deliveryResults : [],
-				cached: true,
-			};
-		}
-
-		// Send to all notification channels
-		console.info('[Analyzer] Sending alert:', symbol, 'confidence:', alert.confidence.toFixed(2), 'event:', alert.eventCategory);
-		const notificationMgr = getNotificationManager();
-		if (!notificationMgr) {
-			console.warn('[Analyzer] NotificationManager not initialized - skipping alert delivery');
-			return {
+				symbol,
 				status: AnalysisStatus.ANALYZED,
 				alert,
 				deliveryResults: [],
 				cached: false,
+				_pendingDelivery: {
+					notificationMgr: getNotificationManager(),
+					alert,
+					routing,
+					geminiAnalysis,
+					options,
+					tokenUsage,
+				},
 				analysisRecord: {
 					symbol,
 					eventCategory: alert.eventCategory,
@@ -953,8 +1116,107 @@ class NewsAnalyzer {
 				},
 			};
 		}
-		const deliveryResults = await sendWithNotificationRouting(notificationMgr, alert, routing);
+
+		const candidate = {
+			symbol,
+			status: AnalysisStatus.ANALYZED,
+			alert,
+			deliveryResults: [],
+			cached: false,
+			_pendingDelivery: {
+				notificationMgr: getNotificationManager(),
+				alert,
+				routing,
+				geminiAnalysis,
+				options,
+				tokenUsage,
+			},
+			analysisRecord: {
+				symbol,
+				eventCategory: alert.eventCategory,
+				sentiment: alert.sentimentScore ?? 0,
+				confidence: alert.confidence,
+				headline: alert.headline || geminiAnalysis.headline || '',
+				alertSent: false,
+				promptVersion: alert.promptVersion || geminiAnalysis.promptVersion,
+				tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+			},
+		};
+
+		await this.executePendingDelivery(candidate, requestId);
+		return candidate;
+	}
+
+	async executePendingDelivery(candidate, requestId, callOptions = {}) {
+		if (!candidate || !candidate._pendingDelivery) {
+			return;
+		}
+
+		if (candidate._pendingDelivery.type === 'cached_retry') {
+			await this.executePendingCachedRedelivery(candidate, requestId, callOptions);
+			return;
+		}
+
+		const {
+			notificationMgr,
+			alert,
+			routing,
+			geminiAnalysis,
+			options = {},
+			tokenUsage,
+		} = candidate._pendingDelivery;
+		const symbol = candidate.symbol;
+		const mergedOptions = { ...options, ...callOptions };
+
+		if (mergedOptions.signal?.aborted) {
+			console.warn('[Analyzer] Pending delivery aborted by signal for:', symbol);
+			delete candidate._pendingDelivery;
+			return;
+		}
+		if (typeof mergedOptions.deadline === 'number' && Date.now() >= mergedOptions.deadline) {
+			console.warn('[Analyzer] Pending delivery aborted: deadline exceeded for:', symbol);
+			delete candidate._pendingDelivery;
+			return;
+		}
+
+		// Claim the cache key atomically before delivering the alert to prevent race conditions
+		const claimed = await this.cache.claim(symbol, geminiAnalysis.event_category);
+		if (!claimed) {
+			console.info('[Analyzer] Duplicate alert detected during claim, suppressing delivery for:', symbol, geminiAnalysis.event_category);
+			const cached = await this.cache.get(symbol, geminiAnalysis.event_category);
+			candidate.status = AnalysisStatus.CACHED;
+			candidate.alert = cached ? cached.alert : alert;
+			candidate.deliveryResults = cached ? cached.deliveryResults : [];
+			candidate.cached = true;
+			delete candidate._pendingDelivery;
+			return;
+		}
+
+		if (!notificationMgr) {
+			console.warn('[Analyzer] NotificationManager not initialized - skipping alert delivery');
+			await this.cache.releaseClaim(symbol, geminiAnalysis.event_category);
+			candidate.deliveryResults = [];
+			delete candidate._pendingDelivery;
+			return;
+		}
+
+		if (mergedOptions.signal?.aborted) {
+			console.warn('[Analyzer] Pending delivery aborted by signal before notification dispatch for:', symbol);
+			await this.cache.releaseClaim(symbol, geminiAnalysis.event_category);
+			delete candidate._pendingDelivery;
+			return;
+		}
+		if (typeof mergedOptions.deadline === 'number' && Date.now() >= mergedOptions.deadline) {
+			console.warn('[Analyzer] Pending delivery aborted: deadline exceeded before notification dispatch for:', symbol);
+			await this.cache.releaseClaim(symbol, geminiAnalysis.event_category);
+			delete candidate._pendingDelivery;
+			return;
+		}
+
+		console.info('[Analyzer] Sending alert:', symbol, 'confidence:', alert.confidence.toFixed(2), 'event:', alert.eventCategory);
+		const deliveryResults = await sendWithNotificationRouting(notificationMgr, alert, routing, { signal: mergedOptions.signal });
 		console.info('[Analyzer] Alert delivery results for', symbol, ':', deliveryResults);
+		candidate.deliveryResults = deliveryResults;
 
 		const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 		if (signalOutcomeService.isEnabled()) {
@@ -975,8 +1237,8 @@ class NewsAnalyzer {
 					requestId,
 					source: 'news-monitor',
 					symbol: alert.symbol,
-					assetClass: options.assetClassBySymbol
-						? options.assetClassBySymbol[String(alert.symbol).trim().toUpperCase()]
+					assetClass: mergedOptions.assetClassBySymbol
+						? mergedOptions.assetClassBySymbol[String(alert.symbol).trim().toUpperCase()]
 						: null,
 					exchange: alert.marketContext && alert.marketContext.source === 'binance' ? 'BINANCE' : 'UNKNOWN',
 					timeframe: null,
@@ -1007,22 +1269,178 @@ class NewsAnalyzer {
 		});
 
 		const alertSent = Array.isArray(deliveryResults) && deliveryResults.some((d) => d && d.success === true);
-		return {
-			status: AnalysisStatus.ANALYZED,
-			alert,
-			deliveryResults,
-			cached: false,
-			analysisRecord: {
-				symbol,
-				eventCategory: alert.eventCategory,
-				sentiment: alert.sentimentScore ?? 0,
-				confidence: alert.confidence,
-				headline: alert.headline || geminiAnalysis.headline || '',
-				alertSent,
-				promptVersion: alert.promptVersion || geminiAnalysis.promptVersion,
-				tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
-			},
+		if (candidate.analysisRecord) {
+			candidate.analysisRecord.alertSent = alertSent;
+		}
+		candidate._alertSent = alertSent;
+		delete candidate._pendingDelivery;
+	}
+
+	async executePendingCachedRedelivery(candidate, requestId, callOptions = {}) {
+		const {
+			symbol,
+			category,
+			cached,
+			routing,
+			notificationMgr,
+			requestedChannels,
+			retryChannels,
+			activeCachedDeliveryResults,
+			options = {},
+		} = candidate._pendingDelivery;
+		const mergedOptions = { ...options, ...callOptions };
+
+		if (mergedOptions.signal?.aborted || (typeof mergedOptions.deadline === 'number' && Date.now() >= mergedOptions.deadline)) {
+			console.warn('[Analyzer] Cached redelivery aborted by signal/deadline for:', symbol);
+			candidate.deliveryResults = activeCachedDeliveryResults;
+			delete candidate._pendingDelivery;
+			return;
+		}
+
+		const claimedRetryChannels = [];
+		for (const channel of retryChannels) {
+			if (mergedOptions.signal?.aborted || (typeof mergedOptions.deadline === 'number' && Date.now() >= mergedOptions.deadline)) {
+				break;
+			}
+			if (await this.cache.claimDelivery(symbol, category, channel)) {
+				claimedRetryChannels.push(channel);
+			}
+		}
+
+		if (claimedRetryChannels.length === 0) {
+			candidate.deliveryResults = activeCachedDeliveryResults;
+			delete candidate._pendingDelivery;
+			return;
+		}
+
+		const leaseAbortControllers = new Map(
+			claimedRetryChannels.map((channel) => [channel, new AbortController()]),
+		);
+		const leaseOwnership = new Map(
+			claimedRetryChannels.map((channel) => [channel, true]),
+		);
+		const persistenceOwnership = new Map(
+			claimedRetryChannels.map((channel) => [channel, true]),
+		);
+		const markLeaseOwnershipLost = (channel) => {
+			if (leaseOwnership.get(channel)) {
+				leaseOwnership.set(channel, false);
+				persistenceOwnership.set(channel, false);
+				leaseAbortControllers.get(channel)?.abort('Cached delivery lease ownership lost');
+			}
 		};
+		const markPersistenceOwnershipLost = (channel) => {
+			persistenceOwnership.set(channel, false);
+		};
+		const renewLease = async (channel) => {
+			try {
+				const renewed = await this.cache.renewDelivery(symbol, category, channel);
+				if (renewed === false) {
+					markLeaseOwnershipLost(channel);
+				} else if (renewed !== true) {
+					markPersistenceOwnershipLost(channel);
+				}
+			} catch (error) {
+				markPersistenceOwnershipLost(channel);
+				console.warn('[Analyzer] Cached delivery lease renewal indeterminate:', error.message);
+			}
+		};
+		const leaseDeadline = mergedOptions.deadline ?? Date.now() + this.timeout;
+		const waitForLeaseRenewals = async (renewalEntries) => {
+			const pending = renewalEntries
+				.filter(([, renewal]) => renewal)
+				.map(([channel, renewal]) => {
+					const state = { channel, settled: false };
+					state.promise = Promise.resolve(renewal).finally(() => { state.settled = true; });
+					return state;
+				});
+			if (pending.length === 0) return [];
+			const remainingMs = leaseDeadline - Date.now();
+			if (remainingMs <= 0) return pending.map(({ channel }) => channel);
+			let timeoutHandle;
+			try {
+				const completed = await Promise.race([
+					Promise.all(pending.map(({ promise }) => promise)).then(() => true),
+					new Promise((resolve) => {
+						timeoutHandle = setTimeout(() => resolve(false), remainingMs);
+					}),
+				]);
+				return completed ? [] : pending.filter(({ settled }) => !settled).map(({ channel }) => channel);
+			} finally {
+				clearTimeout(timeoutHandle);
+			}
+		};
+
+		const pendingLeaseRenewals = new Map(
+			claimedRetryChannels.map((channel) => [channel, null]),
+		);
+		const queueLeaseRenewal = (channel) => {
+			if (pendingLeaseRenewals.get(channel)) {
+				return;
+			}
+			const renewal = renewLease(channel).finally(() => pendingLeaseRenewals.set(channel, null));
+			pendingLeaseRenewals.set(channel, renewal);
+		};
+		const leaseRenewalIntervals = claimedRetryChannels.map((channel) => setInterval(
+			() => queueLeaseRenewal(channel),
+			this.cache.getDeliveryLeaseRenewIntervalMs(),
+		));
+
+		try {
+			const signalByChannel = Object.fromEntries(
+				claimedRetryChannels.map((channel) => [channel, leaseAbortControllers.get(channel).signal]),
+			);
+			const retryResults = await sendWithNotificationRouting(
+				notificationMgr,
+				cached.alert,
+				{ ...routing, channels: claimedRetryChannels },
+				{ signalByChannel, signal: mergedOptions.signal },
+			);
+			leaseRenewalIntervals.forEach(clearInterval);
+			const timedOutPendingChannels = await waitForLeaseRenewals([...pendingLeaseRenewals.entries()]);
+			timedOutPendingChannels.forEach(markPersistenceOwnershipLost);
+			const finalRenewals = claimedRetryChannels
+				.filter((channel) => !pendingLeaseRenewals.get(channel))
+				.map((channel) => [channel, renewLease(channel)]);
+			const timedOutFinalChannels = await waitForLeaseRenewals(finalRenewals);
+			timedOutFinalChannels.forEach(markPersistenceOwnershipLost);
+			const ownedRetryChannels = claimedRetryChannels.filter((channel) => leaseOwnership.get(channel));
+			const persistenceRetryChannels = claimedRetryChannels.filter((channel) => persistenceOwnership.get(channel));
+			const successfulRetryChannels = new Set(
+				retryResults.filter((result) => result.success).map((result) => result.channel),
+			);
+			const attemptedDeliveryResults = retryResults.filter((result) => ownedRetryChannels.includes(result.channel));
+			const redelivered = attemptedDeliveryResults.some((result) => result && result.success);
+			candidate.deliveryResults = mergeDeliveryResults(
+				activeCachedDeliveryResults,
+				retryResults.filter((result) => ownedRetryChannels.includes(result.channel)),
+				requestedChannels,
+			);
+			if (redelivered) {
+				candidate._redelivered = true;
+				candidate.attemptedDeliveryResults = attemptedDeliveryResults;
+			}
+			if (ownedRetryChannels.length > 0) {
+				await this.cache.set(symbol, category, {
+					...cached,
+					routing: getCachedRoutingMetadata(routing, cached.routing, notificationMgr),
+					deliveryResults: candidate.deliveryResults,
+				}, {
+					preserveTtl: true,
+					deliveryChannels: persistenceRetryChannels,
+					localDeliveryChannels: ownedRetryChannels,
+					localOnlyChannels: ownedRetryChannels.filter(
+						(channel) => successfulRetryChannels.has(channel) && !persistenceRetryChannels.includes(channel),
+					),
+					awaitPersistence: persistenceRetryChannels.length > 0,
+					skipPersistence: persistenceRetryChannels.length === 0,
+				});
+			}
+		} finally {
+			leaseRenewalIntervals.forEach(clearInterval);
+			claimedRetryChannels.forEach((channel) => this.cache.releaseDelivery(symbol, category, channel));
+			delete candidate._pendingDelivery;
+		}
 	}
 
 	/**
@@ -1548,6 +1966,9 @@ module.exports = {
 	isKlineOpen,
 	parseNewsTimeoutMs,
 	parseNewsAlertThreshold,
+	parseNewsMaxAlertsPerBatch,
+	parseNewsMaxAlertsPerWindow,
+	parseNewsMaxAlertsPerWindowMs,
 	getCachedRoutingMetadata,
 	hashDiscordWebhook,
 };
