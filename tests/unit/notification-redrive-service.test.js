@@ -1902,6 +1902,157 @@ describe('NotificationRedriveService', () => {
 			// Clean up pending transaction
 			resolveSlowTx();
 		});
+
+		it('does not leak unhandled rejection when tracked write operation rejects after timing out', async () => {
+			let rejectTx;
+			const delayedTx = new Promise((_, reject) => {
+				rejectTx = reject;
+			});
+
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({})),
+				})),
+				runTransaction: jest.fn(() => delayedTx),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			const result = await service.persistWorkerTelemetry({ timeoutMs: 15 });
+			expect(result).toBe(false);
+
+			// Now trigger late rejection in background
+			expect(() => {
+				rejectTx(new Error('Transaction aborted by Firestore'));
+			}).not.toThrow();
+
+			// Wait a tick for microtasks so any unhandled rejection would surface
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(service._activeTelemetryWriteOperation).toBeNull();
+		});
+
+		it('keeps pending-count queries single-flight when first query times out', async () => {
+			let resolveSlowQuery;
+			let queryCount = 0;
+			const slowQuery = new Promise((resolve) => {
+				resolveSlowQuery = resolve;
+			});
+
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					where: jest.fn(() => ({
+						get: jest.fn(() => {
+							queryCount += 1;
+							return slowQuery;
+						}),
+					})),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+			service.persistedPendingCount = 5;
+
+			// First call times out and returns fallback
+			const first = await service.countDurablePendingRecords();
+			expect(first).toBe(5);
+			expect(queryCount).toBe(1);
+
+			// Second call while first query is still running does NOT spawn another query
+			const second = await service.countDurablePendingRecords();
+			expect(second).toBe(5);
+			expect(queryCount).toBe(1);
+
+			// Resolve original query
+			resolveSlowQuery({
+				empty: false,
+				docs: [{ data: () => ({ expiresAt: Date.now() + 60000 }) }],
+			});
+
+			// Await single-flight promise settling
+			await service._activePendingCountPromise;
+			expect(service.persistedPendingCount).toBe(1);
+			expect(service._activePendingCountPromise).toBeNull();
+		});
+
+		it('merges session delivery and exhaustion counters atomically into existing heartbeat counters', async () => {
+			let committedPayload = null;
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({})),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					const mockTx = {
+						get: jest.fn(async () => ({
+							exists: true,
+							data: () => ({
+								deliveredCount: 10,
+								exhaustedCount: 5,
+								zeroChannelBroadcasts: 2,
+								lastSweepAt: new Date(Date.now() - 10000).toISOString(),
+							}),
+						})),
+						set: jest.fn((docRef, payload) => {
+							committedPayload = payload;
+						}),
+					};
+					await updateFn(mockTx);
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			// Simulate worker delivered 3 alerts and exhausted 1 without having pre-seeded
+			service.totalDeliveredCount = 3;
+			service._sessionDeliveredDelta = 3;
+			service.totalExhaustedCount = 1;
+			service._sessionExhaustedDelta = 1;
+
+			const success = await service.persistWorkerTelemetry({ timeoutMs: 100 });
+			expect(success).toBe(true);
+			expect(committedPayload).not.toBeNull();
+			// 10 existing + 3 session delta = 13 delivered
+			expect(committedPayload.deliveredCount).toBe(13);
+			// 5 existing + 1 session delta = 6 exhausted
+			expect(committedPayload.exhaustedCount).toBe(6);
+			// Service counters updated to reflect merged totals
+			expect(service.totalDeliveredCount).toBe(13);
+			expect(service.totalExhaustedCount).toBe(6);
+			expect(service._sessionDeliveredDelta).toBe(0);
+			expect(service._sessionExhaustedDelta).toBe(0);
+		});
+
+		it('normalizes Firestore Timestamp objects and non-string timestamps in getStatus and telemetry sync', async () => {
+			const sweepTimestamp = {
+				toDate: () => new Date(1700000000000),
+				toMillis: () => 1700000000000,
+			};
+			const runTimestamp = {
+				_seconds: 1700000050,
+				_nanoseconds: 0,
+			};
+
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						get: jest.fn(async () => ({
+							exists: true,
+							data: () => ({
+								lastSweepAt: sweepTimestamp,
+								lastRunAt: runTimestamp,
+								deliveredCount: 42,
+							}),
+						})),
+					})),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			const synced = await service.syncWorkerTelemetry({ timeoutMs: 100 });
+			expect(synced).toBe(true);
+
+			const status = service.getStatus();
+			expect(status.lastSweepAt).toBe(new Date(1700000000000).toISOString());
+			expect(status.lastRunAt).toBe(new Date(1700000050000).toISOString());
+			expect(status.deliveredCount).toBe(42);
+		});
 	});
 
 	describe('helpers', () => {
