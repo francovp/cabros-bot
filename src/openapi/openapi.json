@@ -3941,7 +3941,7 @@
                   "intervalMs": 60000,
                   "batchLimit": 50,
                   "maxAttempts": 5,
-                  "maxAgeMs": 86400000,
+                  "maxAgeMs": 3600000,
                   "pendingCount": 0,
                   "deliveredCount": 0,
                   "exhaustedCount": 0,
@@ -7215,7 +7215,9 @@
           "maxAgeMs": {
             "type": "integer",
             "minimum": 1,
-            "description": "Maximum age of a dead-letter record in milliseconds before expiration."
+            "description": "Maximum age of a dead-letter record in milliseconds before expiration.",
+            "default": 3600000,
+            "example": 3600000
           },
           "pendingCount": {
             "type": "integer",

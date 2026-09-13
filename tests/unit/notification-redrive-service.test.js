@@ -1427,6 +1427,114 @@ describe('NotificationRedriveService', () => {
 			expect(commits[commits.length - 1].sequence).toBe(2);
 		});
 
+		it('allows restarted worker with lower sequence to update heartbeat when lastSweepAt is newer', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			let committedPayload = null;
+
+			const preRestartTimestamp = new Date(Date.now() - 3600000).toISOString();
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						set: jest.fn(),
+					})),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					const mockTx = {
+						get: jest.fn(async () => ({
+							exists: true,
+							data: () => ({
+								sequence: 500, // High sequence from pre-restart worker
+								lastSweepAt: preRestartTimestamp,
+							}),
+						})),
+						set: jest.fn((ref, payload) => {
+							committedPayload = payload;
+						}),
+					};
+					await updateFn(mockTx);
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			// New process starts with sequence 0, will increment to 1
+			service._telemetryWriteSequence = 0;
+			service.lastSweepAt = new Date();
+
+			const success = await service.persistWorkerTelemetry();
+			expect(success).toBe(true);
+			expect(committedPayload).not.toBeNull();
+			expect(committedPayload.sequence).toBe(1);
+			expect(new Date(committedPayload.lastSweepAt).getTime()).toBeGreaterThan(new Date(preRestartTimestamp).getTime());
+		});
+
+		it('drops stale telemetry write if existing heartbeat has newer lastSweepAt', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			let transactionSetCalled = false;
+
+			const futureTimestamp = new Date(Date.now() + 60000).toISOString();
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						set: jest.fn(),
+					})),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					const mockTx = {
+						get: jest.fn(async () => ({
+							exists: true,
+							data: () => ({
+								sequence: 1,
+								lastSweepAt: futureTimestamp,
+							}),
+						})),
+						set: jest.fn(() => {
+							transactionSetCalled = true;
+						}),
+					};
+					await updateFn(mockTx);
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			service.lastSweepAt = new Date(); // Older than futureTimestamp
+			const success = await service.persistWorkerTelemetry();
+			expect(success).toBe(true);
+			expect(transactionSetCalled).toBe(false);
+		});
+
+		it('unblocks subsequent telemetry writes when a previous write times out', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			let secondWriteCommitted = false;
+
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						set: jest.fn(),
+					})),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					const mockTx = {
+						get: jest.fn(async () => ({ exists: false })),
+						set: jest.fn(() => {
+							secondWriteCommitted = true;
+						}),
+					};
+					await updateFn(mockTx);
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			// First write: simulate hung write that times out after 20ms
+			const hangingPromise = new Promise(() => {}); // never resolves
+			service._activeTelemetryWritePromise = hangingPromise;
+
+			// Second write with 20ms timeout should unblock itself via race and succeed
+			const success = await service.persistWorkerTelemetry({ timeoutMs: 20 });
+			expect(success).toBe(true);
+			expect(secondWriteCommitted).toBe(true);
+			expect(service._activeTelemetryWritePromise).toBeNull();
+		});
+
 		it('drains both active sweep and active telemetry promise on stopWorker', async () => {
 			let sweepResolved = false;
 			let telemetryResolved = false;

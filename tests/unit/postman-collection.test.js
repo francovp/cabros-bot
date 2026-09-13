@@ -319,6 +319,7 @@ describe('Postman collection contract', () => {
 			enabled: false,
 			role: 'web',
 			workerRole: 'web',
+			maxAgeMs: 3600000,
 			lastSweepAt: null,
 			lastSweepResult: null,
 		}));
@@ -329,6 +330,7 @@ describe('Postman collection contract', () => {
 			enabled: false,
 			role: 'web',
 			workerRole: 'web',
+			maxAgeMs: 3600000,
 			lastSweepAt: null,
 			lastSweepResult: null,
 		}));

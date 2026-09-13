@@ -1167,14 +1167,16 @@ class NotificationRedriveService {
 		};
 	}
 
-	async persistWorkerTelemetry() {
+	async persistWorkerTelemetry(options = {}) {
 		const firestore = this.getFirestore();
 		if (!firestore) {
 			return false;
 		}
 
+		const timeoutMs = options.timeoutMs || this._heartbeatWriteTimeoutMs || HEARTBEAT_WRITE_TIMEOUT_MS;
 		const sequence = ++this._telemetryWriteSequence;
 		const completedAt = this.lastSweepAt || new Date();
+		const currentSweepAtMs = completedAt.getTime();
 		const payload = {
 			worker: 'notification-redrive',
 			role: this.getWorkerRole(),
@@ -1196,8 +1198,16 @@ class NotificationRedriveService {
 				: new Date().toISOString(),
 		};
 
+		const parseSweepTimestampMs = (val) => {
+			if (!val) return 0;
+			if (typeof val.toMillis === 'function') return val.toMillis();
+			if (typeof val.toDate === 'function') return val.toDate().getTime();
+			const parsed = new Date(val).getTime();
+			return Number.isFinite(parsed) ? parsed : 0;
+		};
+
 		const performWrite = async () => {
-			// Skip stale write if a newer sweep write has already been scheduled
+			// Skip stale write if a newer sweep write has already been scheduled in this process
 			if (sequence < this._telemetryWriteSequence) {
 				return false;
 			}
@@ -1205,36 +1215,76 @@ class NotificationRedriveService {
 			const docRef = firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID);
 
 			if (typeof firestore.runTransaction === 'function') {
-				await firestore.runTransaction(async (transaction) => {
+				const txPromise = firestore.runTransaction(async (transaction) => {
 					const doc = await transaction.get(docRef);
 					if (doc && doc.exists) {
 						const data = typeof doc.data === 'function' ? doc.data() : doc;
-						const existingSequence = Number(data?.sequence) || 0;
-						if (existingSequence > sequence) {
-							return; // Stale write; do not overwrite newer metrics
+						const existingSweepAtMs = parseSweepTimestampMs(data?.lastSweepAt);
+						// If persisted heartbeat has a newer sweep completion time, do not overwrite
+						if (existingSweepAtMs > currentSweepAtMs) {
+							return;
+						}
+						// If exact same completion millisecond, use process sequence as tie-breaker
+						if (existingSweepAtMs === currentSweepAtMs) {
+							const existingSequence = Number(data?.sequence) || 0;
+							if (existingSequence > sequence) {
+								return;
+							}
 						}
 					}
 					transaction.set(docRef, payload, { merge: true });
 				});
+				await resolveBeforeDeadline(txPromise, Date.now() + timeoutMs);
 				return true;
 			}
 
-			await docRef.set(payload, { merge: true });
+			const setPromise = docRef.set(payload, { merge: true });
+			await resolveBeforeDeadline(setPromise, Date.now() + timeoutMs);
 			return true;
 		};
 
-		const nextPromise = (this._activeTelemetryWritePromise || Promise.resolve())
-			.catch(() => {})
-			.then(performWrite);
+		// Bound waiting for previous write so an unsettled/hung previous promise never blocks subsequent sweeps
+		const previousPromise = this._activeTelemetryWritePromise;
+		let waitTimer = null;
+		const waitForPrevious = previousPromise
+			? Promise.race([
+				previousPromise.catch(() => {}),
+				new Promise((resolve) => {
+					waitTimer = setTimeout(resolve, timeoutMs);
+				}),
+			]).finally(() => {
+				if (waitTimer) {
+					clearTimeout(waitTimer);
+				}
+			})
+			: Promise.resolve();
 
+		const nextPromise = waitForPrevious.then(performWrite);
 		this._activeTelemetryWritePromise = nextPromise;
 
+		let timedOut = false;
+		let timeoutTimer = null;
 		try {
-			const result = await resolveBeforeDeadline(nextPromise, Date.now() + HEARTBEAT_WRITE_TIMEOUT_MS);
+			const timeoutPromise = new Promise((_, reject) => {
+				timeoutTimer = setTimeout(() => {
+					timedOut = true;
+					reject(new Error(`Telemetry write timed out after ${timeoutMs}ms`));
+				}, timeoutMs);
+			});
+
+			const result = await Promise.race([nextPromise, timeoutPromise]);
 			return result === true;
 		} catch (error) {
 			console.warn('[NotificationRedriveService] Failed to persist worker telemetry:', error.message);
 			return false;
+		} finally {
+			if (timeoutTimer) {
+				clearTimeout(timeoutTimer);
+			}
+			// Clear or replace timed-out / settled chain so future sweeps do not chain behind an unsettled promise
+			if (timedOut || this._activeTelemetryWritePromise === nextPromise) {
+				this._activeTelemetryWritePromise = null;
+			}
 		}
 	}
 

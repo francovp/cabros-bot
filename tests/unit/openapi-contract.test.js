@@ -389,6 +389,9 @@ describe('OpenAPI contract', () => {
 					'lastSweepResult',
 				]),
 			);
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.dependencies.notificationRedrive.maxAgeMs).toBe(3600000);
 		});
 	});
 });
