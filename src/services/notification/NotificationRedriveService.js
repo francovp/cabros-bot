@@ -1177,22 +1177,33 @@ class NotificationRedriveService {
 		};
 	}
 
+	_getPendingFallbackCount() {
+		if (Number.isFinite(this.persistedPendingCount)) {
+			return this.persistedPendingCount;
+		}
+		return this.getPendingCount();
+	}
+
 	async countDurablePendingRecords() {
 		const firestore = this.getFirestore();
 		if (!firestore) {
-			return this.getPendingCount();
+			return this._getPendingFallbackCount();
 		}
 		try {
 			const collection = firestore.collection(COLLECTION_NAME);
 			if (typeof collection?.where !== 'function') {
-				return this.getPendingCount();
+				return this._getPendingFallbackCount();
 			}
 			const query = collection.where('status', 'in', ['pending', 'in_flight']);
 			if (!query || typeof query.get !== 'function') {
-				return this.getPendingCount();
+				return this._getPendingFallbackCount();
 			}
 			const snapshot = await resolveBeforeDeadline(query.get(), Date.now() + 3000);
+			if (snapshot === null) {
+				return this._getPendingFallbackCount();
+			}
 			if (!snapshot || snapshot.empty) {
+				this.persistedPendingCount = 0;
 				return 0;
 			}
 			let count = 0;
@@ -1205,10 +1216,11 @@ class NotificationRedriveService {
 					count += 1;
 				}
 			}
+			this.persistedPendingCount = count;
 			return count;
 		} catch (error) {
 			console.warn('[NotificationRedriveService] Failed to count durable pending records:', error.message);
-			return this.getPendingCount();
+			return this._getPendingFallbackCount();
 		}
 	}
 
@@ -1290,6 +1302,7 @@ class NotificationRedriveService {
 			const docRef = firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID);
 
 			if (typeof firestore.runTransaction === 'function') {
+				let txCompleted = false;
 				const txPromise = firestore.runTransaction(async (transaction) => {
 					const doc = await transaction.get(docRef);
 					let writePayload = { ...payload };
@@ -1318,18 +1331,41 @@ class NotificationRedriveService {
 						this.totalZeroChannelBroadcasts = writePayload.zeroChannelBroadcasts;
 					}
 					transaction.set(docRef, writePayload, { merge: true });
+				}).then(() => {
+					txCompleted = true;
 				});
-				await resolveBeforeDeadline(txPromise, Date.now() + timeoutMs);
+
+				this._activeTelemetryWriteOperation = txPromise.finally(() => {
+					if (this._activeTelemetryWriteOperation === this._activeTelemetryWriteOperation) {
+						this._activeTelemetryWriteOperation = null;
+					}
+				});
+
+				const deadlineResult = await resolveBeforeDeadline(txPromise, Date.now() + timeoutMs);
+				if (deadlineResult === null && !txCompleted) {
+					return false;
+				}
 				return true;
 			}
 
-			const setPromise = docRef.set(payload, { merge: true });
-			await resolveBeforeDeadline(setPromise, Date.now() + timeoutMs);
+			let setCompleted = false;
+			const setPromise = docRef.set(payload, { merge: true }).then(() => {
+				setCompleted = true;
+			});
+			this._activeTelemetryWriteOperation = setPromise.finally(() => {
+				if (this._activeTelemetryWriteOperation === this._activeTelemetryWriteOperation) {
+					this._activeTelemetryWriteOperation = null;
+				}
+			});
+			const deadlineResult = await resolveBeforeDeadline(setPromise, Date.now() + timeoutMs);
+			if (deadlineResult === null && !setCompleted) {
+				return false;
+			}
 			return true;
 		};
 
 		// Bound waiting for previous write so an unsettled/hung previous promise never blocks subsequent sweeps
-		const previousPromise = this._activeTelemetryWritePromise;
+		const previousPromise = this._activeTelemetryWritePromise || this._activeTelemetryWriteOperation;
 		if (previousPromise) {
 			const waitBudgetMs = Number.isFinite(options.waitTimeoutMs)
 				? options.waitTimeoutMs
@@ -1354,11 +1390,11 @@ class NotificationRedriveService {
 			return false;
 		}
 
+		let timedOut = false;
+		let timeoutTimer = null;
 		const writePromise = performWrite();
 		this._activeTelemetryWritePromise = writePromise;
 
-		let timedOut = false;
-		let timeoutTimer = null;
 		try {
 			const timeoutPromise = new Promise((_, reject) => {
 				timeoutTimer = setTimeout(() => {
@@ -1376,7 +1412,6 @@ class NotificationRedriveService {
 			if (timeoutTimer) {
 				clearTimeout(timeoutTimer);
 			}
-			// Clear or replace timed-out / settled promise so future sweeps do not chain behind an unsettled promise
 			if (timedOut || this._activeTelemetryWritePromise === writePromise) {
 				this._activeTelemetryWritePromise = null;
 			}
@@ -1580,11 +1615,12 @@ class NotificationRedriveService {
 				}
 			}
 
-			if (this._activeTelemetryWritePromise) {
+			const activeWrite = this._activeTelemetryWritePromise || this._activeTelemetryWriteOperation;
+			if (activeWrite) {
 				let timer = null;
 				try {
 					await Promise.race([
-						this._activeTelemetryWritePromise,
+						activeWrite,
 						new Promise((_, reject) => {
 							timer = setTimeout(() => reject(new Error('Telemetry drain timeout exceeded')), Math.max(0, drainDeadline - Date.now()));
 						}),

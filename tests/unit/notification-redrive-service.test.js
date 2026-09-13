@@ -1833,6 +1833,75 @@ describe('NotificationRedriveService', () => {
 			await service._activeTelemetryReadPromise;
 			expect(service._activeTelemetryReadPromise).toBeNull();
 		});
+
+		it('preserves pending depth fallback when durable query times out', async () => {
+			let resolveSlowQuery;
+			const slowQuery = new Promise((resolve) => {
+				resolveSlowQuery = resolve;
+			});
+
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					where: jest.fn(() => ({
+						get: jest.fn(() => slowQuery),
+					})),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			// Seed known fallback pending count
+			service.persistedPendingCount = 9;
+
+			// Advance time or trigger timeout in countDurablePendingRecords
+			const fallbackCount = await service.countDurablePendingRecords();
+			expect(fallbackCount).toBe(9);
+
+			// Now resolve query with genuinely empty snapshot
+			resolveSlowQuery({
+				empty: true,
+				docs: [],
+			});
+
+			// Next call with fast empty response should update count to 0
+			mockFirestore.collection.mockReturnValueOnce({
+				where: jest.fn(() => ({
+					get: jest.fn(async () => ({ empty: true, docs: [] })),
+				})),
+			});
+			const emptyCount = await service.countDurablePendingRecords();
+			expect(emptyCount).toBe(0);
+			expect(service.persistedPendingCount).toBe(0);
+		});
+
+		it('treats heartbeat transaction timeouts as failures', async () => {
+			let transactionAttempts = 0;
+			let resolveSlowTx;
+			const slowTx = new Promise((resolve) => {
+				resolveSlowTx = resolve;
+			});
+
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({})),
+					where: jest.fn(() => ({
+						get: jest.fn(async () => ({ empty: true, docs: [] })),
+					})),
+				})),
+				runTransaction: jest.fn(() => {
+					transactionAttempts += 1;
+					return slowTx;
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			// Write times out after 20ms
+			const writeResult = await service.persistWorkerTelemetry({ timeoutMs: 20 });
+			expect(writeResult).toBe(false);
+			expect(transactionAttempts).toBe(1);
+
+			// Clean up pending transaction
+			resolveSlowTx();
+		});
 	});
 
 	describe('helpers', () => {
