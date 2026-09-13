@@ -307,4 +307,30 @@ describe('Postman collection contract', () => {
 		expect(summaryInvalid.response[0].code).toBe(400);
 		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
 	});
+
+	it('documents notificationRedrive in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		const statusBody = JSON.parse(status.response[0].body);
+		expect(statusBody.featureFlags.notificationRedrive).toBe(false);
+		expect(statusBody.dependencies.notificationRedrive).toEqual(expect.objectContaining({
+			enabled: false,
+			role: 'web',
+			workerRole: 'web',
+			lastSweepAt: null,
+			lastSweepResult: null,
+		}));
+
+		const capabilitiesBody = JSON.parse(capabilities.response[0].body);
+		expect(capabilitiesBody.featureFlags.notificationRedrive).toBe(false);
+		expect(capabilitiesBody.dependencies.notificationRedrive).toEqual(expect.objectContaining({
+			enabled: false,
+			role: 'web',
+			workerRole: 'web',
+			lastSweepAt: null,
+			lastSweepResult: null,
+		}));
+	});
 });

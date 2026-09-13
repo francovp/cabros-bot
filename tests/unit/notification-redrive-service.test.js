@@ -102,6 +102,7 @@ describe('NotificationRedriveService', () => {
 				ready: true,
 				status: 'ready',
 				role: 'web',
+				workerRole: 'web',
 				running: false,
 				intervalMs: 60000,
 				batchLimit: 50,
@@ -112,11 +113,89 @@ describe('NotificationRedriveService', () => {
 				exhaustedCount: 0,
 				zeroChannelBroadcasts: 0,
 				lastRunAt: null,
+				lastSweepAt: null,
 				lastRunDurationMs: null,
 				lastRunScannedCount: 0,
 				lastRunRedrivenCount: 0,
 				lastRunErrorCount: 0,
+				lastRunExhaustedCount: 0,
+				lastSweepResult: null,
 			});
+		});
+
+		it('exposes structured lastSweepResult with processed/succeeded/exhausted/errors', () => {
+			service.lastSweepAt = new Date('2026-08-30T00:00:00.000Z');
+			service.lastSweepResult = {
+				processed: 10,
+				succeeded: 4,
+				exhausted: 2,
+				errors: 1,
+			};
+			const status = service.getStatus();
+			expect(status.lastSweepAt).toBe('2026-08-30T00:00:00.000Z');
+			expect(status.lastSweepResult).toEqual({
+				processed: 10,
+				succeeded: 4,
+				exhausted: 2,
+				errors: 1,
+			});
+		});
+
+		it('publishes lastSweepAt and lastSweepResult only upon sweep completion, not during in-flight sweep', async () => {
+			process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
+			let resolveDispatch;
+			const dispatchGate = new Promise((resolve) => {
+				resolveDispatch = resolve;
+			});
+			const mockNotificationManager = {
+				sendToChannels: jest.fn(async () => {
+					await dispatchGate;
+					return [{ channel: 'telegram', success: true }];
+				}),
+			};
+			service.setNotificationManagerGetter(() => mockNotificationManager);
+			await service.recordDeliveryResults(
+				{ text: 'BUY signal', correlationId: 'corr-inflight' },
+				[{ channel: 'telegram', success: false, error: 'Initial failure' }],
+			);
+			service.inMemoryStore.get('corr-inflight_telegram').nextAttemptAt = Date.now() - 1000;
+
+			// Before sweep starts:
+			expect(service.getStatus().lastSweepAt).toBeNull();
+			expect(service.getStatus().lastSweepResult).toBeNull();
+
+			// Start sweep:
+			const sweepPromise = service.sweep();
+
+			// Give event loop tick to enter sweep and await sendToChannels:
+			await new Promise((r) => setImmediate(r));
+
+			// While in flight, lastSweepAt and lastSweepResult should still be null (not mismatched interim numbers)
+			const inFlightStatus = service.getStatus();
+			expect(inFlightStatus.lastSweepAt).toBeNull();
+			expect(inFlightStatus.lastSweepResult).toBeNull();
+
+			// Complete the dispatch:
+			resolveDispatch();
+			await sweepPromise;
+
+			// After sweep completion, both are published as an atomic snapshot:
+			const completedStatus = service.getStatus();
+			expect(completedStatus.lastSweepAt).not.toBeNull();
+			expect(completedStatus.lastSweepResult).toEqual({
+				processed: 1,
+				succeeded: 1,
+				exhausted: 0,
+				errors: 0,
+			});
+		});
+
+		it('reports workerRole mirroring role', () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			const status = service.getStatus();
+			expect(status.role).toBe('worker');
+			expect(status.workerRole).toBe('worker');
 		});
 
 		it('normalizes worker role to web, worker, or disabled', () => {
@@ -1192,6 +1271,183 @@ describe('NotificationRedriveService', () => {
 
 			const stopPromise = service.stopWorker({ drain: true, timeoutMs: 500 });
 			await expect(stopPromise).resolves.toBeUndefined();
+			expect(service.running).toBe(false);
+		});
+
+		it('persists worker telemetry to Firestore upon sweep and syncs worker state for status reporting', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			const storedHeartbeats = new Map();
+			const mockFirestore = {
+				collection: jest.fn((colName) => {
+					if (colName === 'workerHeartbeats') {
+						return {
+							doc: jest.fn((docId) => ({
+								set: jest.fn(async (data) => {
+									storedHeartbeats.set(docId, data);
+								}),
+								get: jest.fn(async () => {
+									const data = storedHeartbeats.get(docId);
+									return {
+										exists: Boolean(data),
+										data: () => data,
+									};
+								}),
+							})),
+						};
+					}
+					return {
+						doc: jest.fn(() => ({ set: jest.fn() })),
+					};
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			service.lastRunAt = new Date('2026-09-13T10:00:00.000Z');
+			service.lastSweepAt = new Date('2026-09-13T10:00:05.000Z');
+			service.lastSweepResult = {
+				processed: 3,
+				succeeded: 2,
+				exhausted: 1,
+				errors: 0,
+			};
+			service.lastRunDurationMs = 5000;
+			service.lastRunScannedCount = 3;
+			service.lastRunRedrivenCount = 2;
+			service.lastRunExhaustedCount = 1;
+			service.totalDeliveredCount = 2;
+			service.totalExhaustedCount = 1;
+
+			const persisted = await service.persistWorkerTelemetry();
+			expect(persisted).toBe(true);
+			expect(storedHeartbeats.get('notification-redrive')).toMatchObject({
+				worker: 'notification-redrive',
+				role: 'worker',
+				workerRole: 'worker',
+				lastSweepAt: '2026-09-13T10:00:05.000Z',
+				lastSweepResult: {
+					processed: 3,
+					succeeded: 2,
+					exhausted: 1,
+					errors: 0,
+				},
+				deliveredCount: 2,
+				exhaustedCount: 1,
+			});
+
+			const webService = new NotificationRedriveService();
+			jest.spyOn(webService, 'getFirestore').mockReturnValue(mockFirestore);
+
+			const synced = await webService.syncWorkerTelemetry();
+			expect(synced).toBe(true);
+
+			const webStatus = webService.getStatus();
+			expect(webStatus.role).toBe('worker');
+			expect(webStatus.workerRole).toBe('worker');
+			expect(webStatus.lastSweepAt).toBe('2026-09-13T10:00:05.000Z');
+			expect(webStatus.lastSweepResult).toEqual({
+				processed: 3,
+				succeeded: 2,
+				exhausted: 1,
+				errors: 0,
+			});
+			expect(webStatus.deliveredCount).toBe(2);
+			expect(webStatus.exhaustedCount).toBe(1);
+			expect(webStatus.lastRunDurationMs).toBe(5000);
+			expect(webStatus.lastRunScannedCount).toBe(3);
+			expect(webStatus.lastRunRedrivenCount).toBe(2);
+			expect(webStatus.lastRunExhaustedCount).toBe(1);
+
+			webService.resetForTesting();
+		});
+
+		it('starts telemetry sync in web process when role is worker', () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			const startSyncSpy = jest.spyOn(service, '_startTelemetrySync').mockImplementation(() => {});
+
+			const started = service.startWorker({ source: 'web' });
+			expect(started).toBe(false);
+			expect(startSyncSpy).toHaveBeenCalled();
+		});
+
+		it('records sweep completion time in lastSweepAt and awaits persistWorkerTelemetry', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			let persistCalled = false;
+			jest.spyOn(service, 'persistWorkerTelemetry').mockImplementation(async () => {
+				persistCalled = true;
+				return true;
+			});
+			jest.spyOn(service, 'getEligibleRecords').mockImplementation(async () => {
+				await new Promise((r) => setTimeout(r, 50));
+				return [];
+			});
+
+			const startTimeBefore = Date.now();
+			await service._executeSweep();
+
+			expect(persistCalled).toBe(true);
+			expect(service.lastSweepAt).toBeInstanceOf(Date);
+			expect(service.lastSweepAt.getTime()).toBeGreaterThanOrEqual(startTimeBefore + 40);
+			expect(service.lastRunDurationMs).toBeGreaterThanOrEqual(40);
+		});
+
+		it('serializes telemetry writes and prevents timed-out writes from overwriting newer metrics', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			let committedSequence = 0;
+			const commits = [];
+
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						set: jest.fn(),
+					})),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					const mockTx = {
+						get: jest.fn(async () => ({
+							exists: committedSequence > 0,
+							data: () => ({ sequence: committedSequence }),
+						})),
+						set: jest.fn((ref, payload) => {
+							committedSequence = payload.sequence;
+							commits.push(payload);
+						}),
+					};
+					await updateFn(mockTx);
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			const p1 = service.persistWorkerTelemetry();
+			const p2 = service.persistWorkerTelemetry();
+
+			await Promise.all([p1, p2]);
+
+			expect(commits.length).toBeGreaterThan(0);
+			expect(committedSequence).toBe(2);
+			expect(commits[commits.length - 1].sequence).toBe(2);
+		});
+
+		it('drains both active sweep and active telemetry promise on stopWorker', async () => {
+			let sweepResolved = false;
+			let telemetryResolved = false;
+
+			service.activeSweepPromise = new Promise((resolve) => {
+				setTimeout(() => {
+					sweepResolved = true;
+					resolve();
+				}, 20);
+			});
+
+			service._activeTelemetryWritePromise = new Promise((resolve) => {
+				setTimeout(() => {
+					telemetryResolved = true;
+					resolve();
+				}, 30);
+			});
+
+			await service.stopWorker({ drain: true, timeoutMs: 500 });
+			expect(sweepResolved).toBe(true);
+			expect(telemetryResolved).toBe(true);
 			expect(service.running).toBe(false);
 		});
 	});

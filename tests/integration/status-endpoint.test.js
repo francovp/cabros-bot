@@ -1797,8 +1797,11 @@ describe('Status endpoints', () => {
 		expect(disabledResponse.body.dependencies.notificationRedrive).toMatchObject({
 			enabled: false,
 			role: 'web',
+			workerRole: 'web',
 			running: false,
 			pendingCount: 0,
+			lastSweepAt: null,
+			lastSweepResult: null,
 		});
 
 		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
@@ -1812,9 +1815,39 @@ describe('Status endpoints', () => {
 		expect(enabledResponse.body.dependencies.notificationRedrive).toMatchObject({
 			enabled: true,
 			role: 'worker',
+			workerRole: 'worker',
 			batchLimit: 50,
 			maxAttempts: 5,
 		});
+		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepAt).toBeNull();
+		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepResult).toBeNull();
+	});
+
+	it('exposes structured lastSweepResult with processed/succeeded/exhausted/errors after a sweep', async () => {
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
+		const service = require('../../src/services/notification/NotificationRedriveService').notificationRedriveService;
+		service.lastSweepAt = new Date('2026-08-30T00:00:00.000Z');
+		service.lastSweepResult = {
+			processed: 8,
+			succeeded: 3,
+			exhausted: 2,
+			errors: 1,
+		};
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.notificationRedrive.lastSweepAt).toBe('2026-08-30T00:00:00.000Z');
+		expect(response.body.dependencies.notificationRedrive.lastSweepResult).toEqual({
+			processed: 8,
+			succeeded: 3,
+			exhausted: 2,
+			errors: 1,
+		});
+		service._resetForTesting();
 	});
 
 	it('reports testAlert feature flag and dependency status', async () => {

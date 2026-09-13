@@ -18,6 +18,9 @@ const DEFAULT_LEASE_MS = 60000; // 60s
 const MAX_DRAIN_TIMEOUT_MS = 10000;
 const RECONCILIATION_TIMEOUT_MS = 500;
 const DURABLE_ENQUEUE_TIMEOUT_MS = 500;
+const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
+const HEARTBEAT_DOCUMENT_ID = 'notification-redrive';
+const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
 const ROUTING_FIELDS = Object.freeze({
 	telegram: 'telegramChatId',
@@ -179,9 +182,26 @@ class NotificationRedriveService {
 		this.lastRunScannedCount = 0;
 		this.lastRunRedrivenCount = 0;
 		this.lastRunErrorCount = 0;
+		this.lastRunExhaustedCount = 0;
+		this.lastSweepAt = null;
+		this.lastSweepResult = null;
+		this.telemetrySyncTimer = null;
+		this.persistedLastRunAt = null;
+		this.persistedLastSweepAt = null;
+		this.persistedLastSweepResult = null;
+		this.persistedLastRunDurationMs = null;
+		this.persistedLastRunScannedCount = 0;
+		this.persistedLastRunRedrivenCount = 0;
+		this.persistedLastRunErrorCount = 0;
+		this.persistedLastRunExhaustedCount = 0;
+		this.persistedDeliveredCount = 0;
+		this.persistedExhaustedCount = 0;
+		this.persistedZeroChannelBroadcasts = 0;
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
 		this.totalZeroChannelBroadcasts = 0;
+		this._telemetryWriteSequence = 0;
+		this._activeTelemetryWritePromise = null;
 	}
 
 	incrementZeroChannelBroadcasts() {
@@ -953,6 +973,7 @@ class NotificationRedriveService {
 	async _executeSweep(options = {}) {
 		const startTime = Date.now();
 		this.lastRunAt = new Date(startTime);
+		const exhaustedBaseline = this.totalExhaustedCount;
 
 		const runtimeConfig = getRuntimeConfig();
 		const batchLimit = parsePositiveInteger(
@@ -972,6 +993,7 @@ class NotificationRedriveService {
 		let scannedCount = 0;
 		let redrivenCount = 0;
 		let errorCount = 0;
+		let exhaustedCount = 0;
 
 		try {
 			const candidates = await this.getEligibleRecords(batchLimit, maxAgeMs);
@@ -1117,10 +1139,25 @@ class NotificationRedriveService {
 			console.error('[NotificationRedriveService] Sweep execution failed:', error.message);
 			errorCount += 1;
 		} finally {
-			this.lastRunDurationMs = Math.max(0, Date.now() - startTime);
+			const sweepEndTime = Date.now();
+			exhaustedCount = Math.max(0, this.totalExhaustedCount - exhaustedBaseline);
+			this.lastRunDurationMs = Math.max(0, sweepEndTime - startTime);
 			this.lastRunScannedCount = scannedCount;
 			this.lastRunRedrivenCount = redrivenCount;
 			this.lastRunErrorCount = errorCount;
+			this.lastRunExhaustedCount = exhaustedCount;
+			this.lastSweepAt = new Date(sweepEndTime);
+			this.lastSweepResult = {
+				processed: scannedCount,
+				succeeded: redrivenCount,
+				exhausted: exhaustedCount,
+				errors: errorCount,
+			};
+			try {
+				await this.persistWorkerTelemetry();
+			} catch (error) {
+				console.warn('[NotificationRedriveService] Sweep telemetry persistence failed:', error.message);
+			}
 		}
 
 		return {
@@ -1128,6 +1165,150 @@ class NotificationRedriveService {
 			redriven: redrivenCount,
 			errors: errorCount,
 		};
+	}
+
+	async persistWorkerTelemetry() {
+		const firestore = this.getFirestore();
+		if (!firestore) {
+			return false;
+		}
+
+		const sequence = ++this._telemetryWriteSequence;
+		const completedAt = this.lastSweepAt || new Date();
+		const payload = {
+			worker: 'notification-redrive',
+			role: this.getWorkerRole(),
+			workerRole: this.getWorkerRole(),
+			sequence,
+			lastRunAt: this.lastRunAt ? this.lastRunAt.toISOString() : null,
+			lastSweepAt: completedAt ? completedAt.toISOString() : null,
+			lastSweepResult: this.lastSweepResult ? { ...this.lastSweepResult } : null,
+			lastRunDurationMs: this.lastRunDurationMs,
+			lastRunScannedCount: this.lastRunScannedCount,
+			lastRunRedrivenCount: this.lastRunRedrivenCount,
+			lastRunErrorCount: this.lastRunErrorCount,
+			lastRunExhaustedCount: this.lastRunExhaustedCount,
+			deliveredCount: this.totalDeliveredCount,
+			exhaustedCount: this.totalExhaustedCount,
+			zeroChannelBroadcasts: this.totalZeroChannelBroadcasts,
+			updatedAt: admin.firestore?.Timestamp?.fromDate
+				? admin.firestore.Timestamp.fromDate(new Date())
+				: new Date().toISOString(),
+		};
+
+		const performWrite = async () => {
+			// Skip stale write if a newer sweep write has already been scheduled
+			if (sequence < this._telemetryWriteSequence) {
+				return false;
+			}
+
+			const docRef = firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID);
+
+			if (typeof firestore.runTransaction === 'function') {
+				await firestore.runTransaction(async (transaction) => {
+					const doc = await transaction.get(docRef);
+					if (doc && doc.exists) {
+						const data = typeof doc.data === 'function' ? doc.data() : doc;
+						const existingSequence = Number(data?.sequence) || 0;
+						if (existingSequence > sequence) {
+							return; // Stale write; do not overwrite newer metrics
+						}
+					}
+					transaction.set(docRef, payload, { merge: true });
+				});
+				return true;
+			}
+
+			await docRef.set(payload, { merge: true });
+			return true;
+		};
+
+		const nextPromise = (this._activeTelemetryWritePromise || Promise.resolve())
+			.catch(() => {})
+			.then(performWrite);
+
+		this._activeTelemetryWritePromise = nextPromise;
+
+		try {
+			const result = await resolveBeforeDeadline(nextPromise, Date.now() + HEARTBEAT_WRITE_TIMEOUT_MS);
+			return result === true;
+		} catch (error) {
+			console.warn('[NotificationRedriveService] Failed to persist worker telemetry:', error.message);
+			return false;
+		}
+	}
+
+	async syncWorkerTelemetry() {
+		const firestore = this.getFirestore();
+		if (!firestore) {
+			return false;
+		}
+		try {
+			const read = firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID).get();
+			const snapshot = await resolveBeforeDeadline(read, Date.now() + HEARTBEAT_WRITE_TIMEOUT_MS);
+			if (!snapshot || !snapshot.exists) {
+				return false;
+			}
+			const data = typeof snapshot.data === 'function' ? snapshot.data() : snapshot;
+			if (!data) {
+				return false;
+			}
+			if (data.lastRunAt) {
+				this.persistedLastRunAt = new Date(data.lastRunAt);
+			}
+			if (data.lastSweepAt) {
+				this.persistedLastSweepAt = new Date(data.lastSweepAt);
+			}
+			if (data.lastSweepResult && typeof data.lastSweepResult === 'object') {
+				this.persistedLastSweepResult = {
+					processed: Number(data.lastSweepResult.processed) || 0,
+					succeeded: Number(data.lastSweepResult.succeeded) || 0,
+					exhausted: Number(data.lastSweepResult.exhausted) || 0,
+					errors: Number(data.lastSweepResult.errors) || 0,
+				};
+			}
+			if (typeof data.lastRunDurationMs === 'number') {
+				this.persistedLastRunDurationMs = data.lastRunDurationMs;
+			}
+			if (typeof data.lastRunScannedCount === 'number') {
+				this.persistedLastRunScannedCount = data.lastRunScannedCount;
+			}
+			if (typeof data.lastRunRedrivenCount === 'number') {
+				this.persistedLastRunRedrivenCount = data.lastRunRedrivenCount;
+			}
+			if (typeof data.lastRunErrorCount === 'number') {
+				this.persistedLastRunErrorCount = data.lastRunErrorCount;
+			}
+			if (typeof data.lastRunExhaustedCount === 'number') {
+				this.persistedLastRunExhaustedCount = data.lastRunExhaustedCount;
+			}
+			if (typeof data.deliveredCount === 'number') {
+				this.persistedDeliveredCount = data.deliveredCount;
+			}
+			if (typeof data.exhaustedCount === 'number') {
+				this.persistedExhaustedCount = data.exhaustedCount;
+			}
+			if (typeof data.zeroChannelBroadcasts === 'number') {
+				this.persistedZeroChannelBroadcasts = data.zeroChannelBroadcasts;
+			}
+			return true;
+		} catch (error) {
+			console.warn('[NotificationRedriveService] Failed to sync worker telemetry:', error.message);
+			return false;
+		}
+	}
+
+	_startTelemetrySync(intervalMs) {
+		if (this.telemetrySyncTimer) {
+			return;
+		}
+		void this.syncWorkerTelemetry();
+		this.telemetrySyncTimer = setInterval(() => {
+			trackBackgroundTask(this.syncWorkerTelemetry()).catch(() => {});
+		}, intervalMs);
+		if (typeof this.telemetrySyncTimer.unref === 'function') {
+			this.telemetrySyncTimer.unref();
+		}
 	}
 
 	startWorker(options = {}) {
@@ -1141,7 +1322,15 @@ class NotificationRedriveService {
 		if (configuredRole === 'disabled') {
 			return false;
 		}
+
+		const runtimeConfig = getRuntimeConfig();
+		const intervalMs = parsePositiveInteger(
+			options.intervalMs ?? runtimeConfig.NOTIFICATION_REDRIVE_INTERVAL_MS ?? process.env.NOTIFICATION_REDRIVE_INTERVAL_MS,
+			DEFAULT_REDRIVE_INTERVAL_MS,
+		);
+
 		if (configuredRole === 'worker' && source !== 'worker') {
+			this._startTelemetrySync(intervalMs);
 			return false;
 		}
 		if (configuredRole === 'web' && source !== 'web') {
@@ -1151,12 +1340,6 @@ class NotificationRedriveService {
 		if (this.workerTimer) {
 			return true;
 		}
-
-		const runtimeConfig = getRuntimeConfig();
-		const intervalMs = parsePositiveInteger(
-			options.intervalMs ?? runtimeConfig.NOTIFICATION_REDRIVE_INTERVAL_MS ?? process.env.NOTIFICATION_REDRIVE_INTERVAL_MS,
-			DEFAULT_REDRIVE_INTERVAL_MS,
-		);
 
 		this.running = true;
 		this.workerTimer = setInterval(() => {
@@ -1178,23 +1361,48 @@ class NotificationRedriveService {
 			clearInterval(this.workerTimer);
 			this.workerTimer = null;
 		}
+		if (this.telemetrySyncTimer) {
+			clearInterval(this.telemetrySyncTimer);
+			this.telemetrySyncTimer = null;
+		}
 		this.running = false;
 
-		if (options.drain && this.activeSweepPromise) {
+		if (options.drain) {
 			const timeoutMs = parsePositiveInteger(options.timeoutMs, MAX_DRAIN_TIMEOUT_MS);
-			let timer = null;
-			try {
-				await Promise.race([
-					this.activeSweepPromise,
-					new Promise((_, reject) => {
-						timer = setTimeout(() => reject(new Error('Drain timeout exceeded')), timeoutMs);
-					}),
-				]);
-			} catch (error) {
-				console.warn('[NotificationRedriveService] Worker drain timeout/error:', error.message);
-			} finally {
-				if (timer) {
-					clearTimeout(timer);
+			const drainDeadline = Date.now() + timeoutMs;
+			if (this.activeSweepPromise) {
+				let timer = null;
+				try {
+					await Promise.race([
+						this.activeSweepPromise,
+						new Promise((_, reject) => {
+							timer = setTimeout(() => reject(new Error('Drain timeout exceeded')), Math.max(0, drainDeadline - Date.now()));
+						}),
+					]);
+				} catch (error) {
+					console.warn('[NotificationRedriveService] Worker drain timeout/error:', error.message);
+				} finally {
+					if (timer) {
+						clearTimeout(timer);
+					}
+				}
+			}
+
+			if (this._activeTelemetryWritePromise) {
+				let timer = null;
+				try {
+					await Promise.race([
+						this._activeTelemetryWritePromise,
+						new Promise((_, reject) => {
+							timer = setTimeout(() => reject(new Error('Telemetry drain timeout exceeded')), Math.max(0, drainDeadline - Date.now()));
+						}),
+					]);
+				} catch (error) {
+					console.warn('[NotificationRedriveService] Worker telemetry drain timeout/error:', error.message);
+				} finally {
+					if (timer) {
+						clearTimeout(timer);
+					}
 				}
 			}
 		}
@@ -1220,26 +1428,55 @@ class NotificationRedriveService {
 		const role = this.getWorkerRole();
 		const runtimeConfig = getRuntimeConfig();
 
+		if (role === 'worker' && this.getFirestore()) {
+			void this.syncWorkerTelemetry();
+		}
+
+		const effectiveLastRunAt = this.lastRunAt || (role === 'worker' ? this.persistedLastRunAt : null);
+		const effectiveLastSweepAt = this.lastSweepAt || (role === 'worker' ? this.persistedLastSweepAt : null);
+		const effectiveLastSweepResult = this.lastSweepResult || (role === 'worker' ? this.persistedLastSweepResult : null);
+		const effectiveLastRunDurationMs = this.lastRunDurationMs !== null ? this.lastRunDurationMs : (role === 'worker' ? this.persistedLastRunDurationMs : null);
+		const effectiveLastRunScannedCount = this.lastRunScannedCount || (role === 'worker' ? (this.persistedLastRunScannedCount || 0) : 0);
+		const effectiveLastRunRedrivenCount = this.lastRunRedrivenCount || (role === 'worker' ? (this.persistedLastRunRedrivenCount || 0) : 0);
+		const effectiveLastRunErrorCount = this.lastRunErrorCount || (role === 'worker' ? (this.persistedLastRunErrorCount || 0) : 0);
+		const effectiveLastRunExhaustedCount = this.lastRunExhaustedCount || (role === 'worker' ? (this.persistedLastRunExhaustedCount || 0) : 0);
+		const effectiveDeliveredCount = Math.max(this.totalDeliveredCount, role === 'worker' ? (this.persistedDeliveredCount || 0) : 0);
+		const effectiveExhaustedCount = Math.max(this.totalExhaustedCount, role === 'worker' ? (this.persistedExhaustedCount || 0) : 0);
+		const effectiveZeroChannelBroadcasts = Math.max(this.totalZeroChannelBroadcasts, role === 'worker' ? (this.persistedZeroChannelBroadcasts || 0) : 0);
+
+		const lastRunAtIso = effectiveLastRunAt
+			? (effectiveLastRunAt instanceof Date ? effectiveLastRunAt.toISOString() : new Date(effectiveLastRunAt).toISOString())
+			: null;
+		const lastSweepAtIso = effectiveLastSweepAt
+			? (effectiveLastSweepAt instanceof Date ? effectiveLastSweepAt.toISOString() : new Date(effectiveLastSweepAt).toISOString())
+			: null;
+
 		return {
 			enabled,
 			configured: true,
 			ready: enabled && role !== 'disabled',
 			status: !enabled ? 'disabled' : (role === 'disabled' ? 'disabled' : 'ready'),
 			role,
+			workerRole: role,
 			running: Boolean(this.running),
 			intervalMs: parsePositiveInteger(runtimeConfig.NOTIFICATION_REDRIVE_INTERVAL_MS ?? process.env.NOTIFICATION_REDRIVE_INTERVAL_MS, DEFAULT_REDRIVE_INTERVAL_MS),
 			batchLimit: parsePositiveInteger(runtimeConfig.NOTIFICATION_REDRIVE_BATCH_LIMIT ?? process.env.NOTIFICATION_REDRIVE_BATCH_LIMIT, DEFAULT_BATCH_LIMIT),
 			maxAttempts: parsePositiveInteger(runtimeConfig.NOTIFICATION_REDRIVE_MAX_ATTEMPTS ?? process.env.NOTIFICATION_REDRIVE_MAX_ATTEMPTS, DEFAULT_MAX_ATTEMPTS),
 			maxAgeMs: parsePositiveInteger(runtimeConfig.NOTIFICATION_REDRIVE_MAX_AGE_MS ?? process.env.NOTIFICATION_REDRIVE_MAX_AGE_MS, DEFAULT_MAX_AGE_MS),
 			pendingCount: this.getPendingCount(),
-			deliveredCount: this.totalDeliveredCount,
-			exhaustedCount: this.totalExhaustedCount,
-			zeroChannelBroadcasts: this.totalZeroChannelBroadcasts,
-			lastRunAt: this.lastRunAt ? this.lastRunAt.toISOString() : null,
-			lastRunDurationMs: this.lastRunDurationMs,
-			lastRunScannedCount: this.lastRunScannedCount,
-			lastRunRedrivenCount: this.lastRunRedrivenCount,
-			lastRunErrorCount: this.lastRunErrorCount,
+			deliveredCount: effectiveDeliveredCount,
+			exhaustedCount: effectiveExhaustedCount,
+			zeroChannelBroadcasts: effectiveZeroChannelBroadcasts,
+			lastRunAt: lastRunAtIso,
+			lastSweepAt: lastSweepAtIso,
+			lastRunDurationMs: effectiveLastRunDurationMs,
+			lastRunScannedCount: effectiveLastRunScannedCount,
+			lastRunRedrivenCount: effectiveLastRunRedrivenCount,
+			lastRunErrorCount: effectiveLastRunErrorCount,
+			lastRunExhaustedCount: effectiveLastRunExhaustedCount,
+			lastSweepResult: effectiveLastSweepResult
+				? { ...effectiveLastSweepResult }
+				: null,
 		};
 	}
 
@@ -1248,16 +1485,36 @@ class NotificationRedriveService {
 			clearInterval(this.workerTimer);
 			this.workerTimer = null;
 		}
+		if (this.telemetrySyncTimer) {
+			clearInterval(this.telemetrySyncTimer);
+			this.telemetrySyncTimer = null;
+		}
 		this.inMemoryStore.clear();
 		this.supersessionStore.clear();
 		this.reconciliationPromises.clear();
 		this.activeSweepPromise = null;
+		this._telemetryWriteSequence = 0;
+		this._activeTelemetryWritePromise = null;
 		this.running = false;
 		this.lastRunAt = null;
 		this.lastRunDurationMs = null;
 		this.lastRunScannedCount = 0;
 		this.lastRunRedrivenCount = 0;
 		this.lastRunErrorCount = 0;
+		this.lastRunExhaustedCount = 0;
+		this.lastSweepAt = null;
+		this.lastSweepResult = null;
+		this.persistedLastRunAt = null;
+		this.persistedLastSweepAt = null;
+		this.persistedLastSweepResult = null;
+		this.persistedLastRunDurationMs = null;
+		this.persistedLastRunScannedCount = 0;
+		this.persistedLastRunRedrivenCount = 0;
+		this.persistedLastRunErrorCount = 0;
+		this.persistedLastRunExhaustedCount = 0;
+		this.persistedDeliveredCount = 0;
+		this.persistedExhaustedCount = 0;
+		this.persistedZeroChannelBroadcasts = 0;
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
 		this.totalZeroChannelBroadcasts = 0;
