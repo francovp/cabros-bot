@@ -2472,6 +2472,94 @@
           ]
         },
         {
+          "name": "GET List Alerts (symbol, exchange, eventCategory)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?limit=10&symbol=BTCUSDT&exchange=BINANCE&eventCategory=price_surge",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "exchange",
+                  "value": "BINANCE"
+                },
+                {
+                  "key": "eventCategory",
+                  "value": "price_surge"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - Filtered by symbol, exchange, and eventCategory",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"alert-123\",\n      \"receivedAt\": \"2026-06-06T12:00:00.000Z\",\n      \"source\": \"webhook\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"eventCategory\": \"price_surge\",\n      \"enriched\": true,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"123\"\n        }\n      ]\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 10,\n    \"nextBefore\": null\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Alerts (invalid symbol - 400 Bad Request)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?symbol=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": ""
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid symbol filter",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Invalid symbol filter. Use a non-empty string up to 64 characters.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "GET List Alerts (news-monitor)",
           "request": {
             "method": "GET",
@@ -3029,6 +3117,104 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"error\": \"Invalid from timestamp. Use an ISO-8601 timestamp.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (symbol, exchange, eventCategory)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500&symbol=BTCUSDT&exchange=BINANCE&eventCategory=price_surge",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "exchange",
+                  "value": "BINANCE"
+                },
+                {
+                  "key": "eventCategory",
+                  "value": "price_surge"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - Filtered analytics summary",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500\n    },\n    \"totalAlerts\": 1,\n    \"bySource\": {\n      \"webhook\": 1\n    },\n    \"bySymbol\": {\n      \"BTCUSDT\": 1\n    },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 0,\n      \"tradingViewData\": 0,\n      \"tradingViewDataApplied\": 0,\n      \"withoutTradingViewData\": 1\n    }\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (invalid symbol - 400 Bad Request)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?symbol=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": ""
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid symbol filter",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Invalid symbol filter. Use a non-empty string up to 64 characters.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
