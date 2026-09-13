@@ -364,5 +364,31 @@ describe('OpenAPI contract', () => {
 			expect(timeoutMs.maximum).toBe(600000); // 10 minutes hard cap
 			expect(timeoutMs.default).toBe(300000); // 5 minutes default
 		});
+
+		it('documents NotificationRedriveDependency schema and references it under Status dependencies', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const redriveRef = contract.components.schemas.Status.properties.dependencies.properties.notificationRedrive;
+			expect(redriveRef).toEqual({
+				$ref: '#/components/schemas/NotificationRedriveDependency',
+			});
+
+			const redriveSchema = contract.components.schemas.NotificationRedriveDependency;
+			expect(redriveSchema).toBeDefined();
+			expect(redriveSchema.type).toBe('object');
+			expect(redriveSchema.required).toEqual(
+				expect.arrayContaining([
+					'enabled',
+					'configured',
+					'ready',
+					'status',
+					'role',
+					'workerRole',
+					'running',
+					'lastSweepResult',
+				]),
+			);
+		});
 	});
 });

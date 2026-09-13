@@ -3830,7 +3830,8 @@
               "featureFlags": {
                 "alertScheduler": false,
                 "equityMarketData": false,
-                "firebaseRemoteConfig": false
+                "firebaseRemoteConfig": false,
+                "notificationRedrive": false
               },
               "dependencies": {
                 "alertScheduler": {
@@ -3928,6 +3929,31 @@
                   "consecutiveFailures": 0,
                   "refreshIntervalMs": 900000,
                   "maxAgeMs": 3600000
+                },
+                "notificationRedrive": {
+                  "enabled": false,
+                  "configured": true,
+                  "ready": false,
+                  "status": "disabled",
+                  "role": "web",
+                  "workerRole": "web",
+                  "running": false,
+                  "intervalMs": 60000,
+                  "batchLimit": 50,
+                  "maxAttempts": 5,
+                  "maxAgeMs": 86400000,
+                  "pendingCount": 0,
+                  "deliveredCount": 0,
+                  "exhaustedCount": 0,
+                  "zeroChannelBroadcasts": 0,
+                  "lastRunAt": null,
+                  "lastSweepAt": null,
+                  "lastRunDurationMs": null,
+                  "lastRunScannedCount": 0,
+                  "lastRunRedrivenCount": 0,
+                  "lastRunErrorCount": 0,
+                  "lastRunExhaustedCount": 0,
+                  "lastSweepResult": null
                 }
               }
             }
@@ -7005,6 +7031,9 @@
             "properties": {
               "firebaseRemoteConfig": {
                 "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
+              },
+              "notificationRedrive": {
+                "$ref": "#/components/schemas/NotificationRedriveDependency"
               }
             }
           }
@@ -7104,6 +7133,187 @@
             "type": "integer",
             "minimum": 1,
             "description": "Configured cache max age in milliseconds before values are considered stale."
+          }
+        }
+      },
+      "NotificationRedriveDependency": {
+        "type": "object",
+        "description": "Safe runtime metadata for dead-letter notification redrive worker without credentials.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "role",
+          "workerRole",
+          "running",
+          "intervalMs",
+          "batchLimit",
+          "maxAttempts",
+          "maxAgeMs",
+          "pendingCount",
+          "deliveredCount",
+          "exhaustedCount",
+          "zeroChannelBroadcasts",
+          "lastRunAt",
+          "lastSweepAt",
+          "lastRunDurationMs",
+          "lastRunScannedCount",
+          "lastRunRedrivenCount",
+          "lastRunErrorCount",
+          "lastRunExhaustedCount",
+          "lastSweepResult"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether dead-letter redrive background evaluation is enabled via ENABLE_NOTIFICATION_REDRIVE."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether redrive configuration is syntactically valid."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True when redrive is enabled and role is not disabled."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "ready"
+            ],
+            "description": "Operational readiness state of notification redrive."
+          },
+          "role": {
+            "type": "string",
+            "description": "Effective worker role (web, worker, or disabled)."
+          },
+          "workerRole": {
+            "type": "string",
+            "description": "Configured worker role from NOTIFICATION_REDRIVE_WORKER_ROLE."
+          },
+          "running": {
+            "type": "boolean",
+            "description": "Whether the background redrive evaluation loop is running in the current process."
+          },
+          "intervalMs": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Configured redrive sweep interval in milliseconds."
+          },
+          "batchLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum number of dead-letter records evaluated per sweep."
+          },
+          "maxAttempts": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum delivery attempts before a dead-letter record is marked exhausted."
+          },
+          "maxAgeMs": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum age of a dead-letter record in milliseconds before expiration."
+          },
+          "pendingCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Current number of dead letters awaiting redrive delivery."
+          },
+          "deliveredCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cumulative total number of successfully redriven dead-letter deliveries."
+          },
+          "exhaustedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cumulative total number of dead-letter records that reached max attempts or expired."
+          },
+          "zeroChannelBroadcasts": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cumulative count of broadcast alerts dispatched to all channels due to empty channel targeting."
+          },
+          "lastRunAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO-8601 timestamp of when the redrive worker last initiated a sweep, or null."
+          },
+          "lastSweepAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO-8601 timestamp of when the redrive worker last completed a sweep, or null."
+          },
+          "lastRunDurationMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Duration of the last completed redrive sweep in milliseconds, or null."
+          },
+          "lastRunScannedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of dead-letter records scanned in the last completed sweep."
+          },
+          "lastRunRedrivenCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of dead-letter records successfully redriven in the last completed sweep."
+          },
+          "lastRunErrorCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of delivery errors encountered in the last completed sweep."
+          },
+          "lastRunExhaustedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of dead-letter records marked exhausted in the last completed sweep."
+          },
+          "lastSweepResult": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Structured summary metrics of the last completed redrive sweep, or null if no sweep has completed.",
+            "required": [
+              "processed",
+              "succeeded",
+              "exhausted",
+              "errors"
+            ],
+            "properties": {
+              "processed": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Total candidate records processed."
+              },
+              "succeeded": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Total records successfully redriven."
+              },
+              "exhausted": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Total records marked exhausted during the sweep."
+              },
+              "errors": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Total delivery errors encountered during the sweep."
+              }
+            }
           }
         }
       },

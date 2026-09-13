@@ -1273,6 +1273,101 @@ describe('NotificationRedriveService', () => {
 			await expect(stopPromise).resolves.toBeUndefined();
 			expect(service.running).toBe(false);
 		});
+
+		it('persists worker telemetry to Firestore upon sweep and syncs worker state for status reporting', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			const storedHeartbeats = new Map();
+			const mockFirestore = {
+				collection: jest.fn((colName) => {
+					if (colName === 'workerHeartbeats') {
+						return {
+							doc: jest.fn((docId) => ({
+								set: jest.fn(async (data) => {
+									storedHeartbeats.set(docId, data);
+								}),
+								get: jest.fn(async () => {
+									const data = storedHeartbeats.get(docId);
+									return {
+										exists: Boolean(data),
+										data: () => data,
+									};
+								}),
+							})),
+						};
+					}
+					return {
+						doc: jest.fn(() => ({ set: jest.fn() })),
+					};
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			service.lastRunAt = new Date('2026-09-13T10:00:00.000Z');
+			service.lastSweepAt = new Date('2026-09-13T10:00:05.000Z');
+			service.lastSweepResult = {
+				processed: 3,
+				succeeded: 2,
+				exhausted: 1,
+				errors: 0,
+			};
+			service.lastRunDurationMs = 5000;
+			service.lastRunScannedCount = 3;
+			service.lastRunRedrivenCount = 2;
+			service.lastRunExhaustedCount = 1;
+			service.totalDeliveredCount = 2;
+			service.totalExhaustedCount = 1;
+
+			const persisted = await service.persistWorkerTelemetry();
+			expect(persisted).toBe(true);
+			expect(storedHeartbeats.get('notification-redrive')).toMatchObject({
+				worker: 'notification-redrive',
+				role: 'worker',
+				workerRole: 'worker',
+				lastSweepAt: '2026-09-13T10:00:05.000Z',
+				lastSweepResult: {
+					processed: 3,
+					succeeded: 2,
+					exhausted: 1,
+					errors: 0,
+				},
+				deliveredCount: 2,
+				exhaustedCount: 1,
+			});
+
+			const webService = new NotificationRedriveService();
+			jest.spyOn(webService, 'getFirestore').mockReturnValue(mockFirestore);
+
+			const synced = await webService.syncWorkerTelemetry();
+			expect(synced).toBe(true);
+
+			const webStatus = webService.getStatus();
+			expect(webStatus.role).toBe('worker');
+			expect(webStatus.workerRole).toBe('worker');
+			expect(webStatus.lastSweepAt).toBe('2026-09-13T10:00:05.000Z');
+			expect(webStatus.lastSweepResult).toEqual({
+				processed: 3,
+				succeeded: 2,
+				exhausted: 1,
+				errors: 0,
+			});
+			expect(webStatus.deliveredCount).toBe(2);
+			expect(webStatus.exhaustedCount).toBe(1);
+			expect(webStatus.lastRunDurationMs).toBe(5000);
+			expect(webStatus.lastRunScannedCount).toBe(3);
+			expect(webStatus.lastRunRedrivenCount).toBe(2);
+			expect(webStatus.lastRunExhaustedCount).toBe(1);
+
+			webService.resetForTesting();
+		});
+
+		it('starts telemetry sync in web process when role is worker', () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			const startSyncSpy = jest.spyOn(service, '_startTelemetrySync').mockImplementation(() => {});
+
+			const started = service.startWorker({ source: 'web' });
+			expect(started).toBe(false);
+			expect(startSyncSpy).toHaveBeenCalled();
+		});
 	});
 
 	describe('helpers', () => {
