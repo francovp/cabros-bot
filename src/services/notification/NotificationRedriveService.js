@@ -200,6 +200,8 @@ class NotificationRedriveService {
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
 		this.totalZeroChannelBroadcasts = 0;
+		this._telemetryWriteSequence = 0;
+		this._activeTelemetryWritePromise = null;
 	}
 
 	incrementZeroChannelBroadcasts() {
@@ -1137,20 +1139,25 @@ class NotificationRedriveService {
 			console.error('[NotificationRedriveService] Sweep execution failed:', error.message);
 			errorCount += 1;
 		} finally {
+			const sweepEndTime = Date.now();
 			exhaustedCount = Math.max(0, this.totalExhaustedCount - exhaustedBaseline);
-			this.lastRunDurationMs = Math.max(0, Date.now() - startTime);
+			this.lastRunDurationMs = Math.max(0, sweepEndTime - startTime);
 			this.lastRunScannedCount = scannedCount;
 			this.lastRunRedrivenCount = redrivenCount;
 			this.lastRunErrorCount = errorCount;
 			this.lastRunExhaustedCount = exhaustedCount;
-			this.lastSweepAt = new Date(startTime);
+			this.lastSweepAt = new Date(sweepEndTime);
 			this.lastSweepResult = {
 				processed: scannedCount,
 				succeeded: redrivenCount,
 				exhausted: exhaustedCount,
 				errors: errorCount,
 			};
-			void this.persistWorkerTelemetry();
+			try {
+				await this.persistWorkerTelemetry();
+			} catch (error) {
+				console.warn('[NotificationRedriveService] Sweep telemetry persistence failed:', error.message);
+			}
 		}
 
 		return {
@@ -1165,29 +1172,66 @@ class NotificationRedriveService {
 		if (!firestore) {
 			return false;
 		}
-		try {
-			const payload = {
-				worker: 'notification-redrive',
-				role: this.getWorkerRole(),
-				workerRole: this.getWorkerRole(),
-				lastRunAt: this.lastRunAt ? this.lastRunAt.toISOString() : null,
-				lastSweepAt: this.lastSweepAt ? this.lastSweepAt.toISOString() : null,
-				lastSweepResult: this.lastSweepResult ? { ...this.lastSweepResult } : null,
-				lastRunDurationMs: this.lastRunDurationMs,
-				lastRunScannedCount: this.lastRunScannedCount,
-				lastRunRedrivenCount: this.lastRunRedrivenCount,
-				lastRunErrorCount: this.lastRunErrorCount,
-				lastRunExhaustedCount: this.lastRunExhaustedCount,
-				deliveredCount: this.totalDeliveredCount,
-				exhaustedCount: this.totalExhaustedCount,
-				zeroChannelBroadcasts: this.totalZeroChannelBroadcasts,
-				updatedAt: admin.firestore?.Timestamp?.fromDate
-					? admin.firestore.Timestamp.fromDate(new Date())
-					: new Date().toISOString(),
-			};
-			const write = firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID).set(payload, { merge: true });
-			await resolveBeforeDeadline(write, Date.now() + HEARTBEAT_WRITE_TIMEOUT_MS);
+
+		const sequence = ++this._telemetryWriteSequence;
+		const completedAt = this.lastSweepAt || new Date();
+		const payload = {
+			worker: 'notification-redrive',
+			role: this.getWorkerRole(),
+			workerRole: this.getWorkerRole(),
+			sequence,
+			lastRunAt: this.lastRunAt ? this.lastRunAt.toISOString() : null,
+			lastSweepAt: completedAt ? completedAt.toISOString() : null,
+			lastSweepResult: this.lastSweepResult ? { ...this.lastSweepResult } : null,
+			lastRunDurationMs: this.lastRunDurationMs,
+			lastRunScannedCount: this.lastRunScannedCount,
+			lastRunRedrivenCount: this.lastRunRedrivenCount,
+			lastRunErrorCount: this.lastRunErrorCount,
+			lastRunExhaustedCount: this.lastRunExhaustedCount,
+			deliveredCount: this.totalDeliveredCount,
+			exhaustedCount: this.totalExhaustedCount,
+			zeroChannelBroadcasts: this.totalZeroChannelBroadcasts,
+			updatedAt: admin.firestore?.Timestamp?.fromDate
+				? admin.firestore.Timestamp.fromDate(new Date())
+				: new Date().toISOString(),
+		};
+
+		const performWrite = async () => {
+			// Skip stale write if a newer sweep write has already been scheduled
+			if (sequence < this._telemetryWriteSequence) {
+				return false;
+			}
+
+			const docRef = firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID);
+
+			if (typeof firestore.runTransaction === 'function') {
+				await firestore.runTransaction(async (transaction) => {
+					const doc = await transaction.get(docRef);
+					if (doc && doc.exists) {
+						const data = typeof doc.data === 'function' ? doc.data() : doc;
+						const existingSequence = Number(data?.sequence) || 0;
+						if (existingSequence > sequence) {
+							return; // Stale write; do not overwrite newer metrics
+						}
+					}
+					transaction.set(docRef, payload, { merge: true });
+				});
+				return true;
+			}
+
+			await docRef.set(payload, { merge: true });
 			return true;
+		};
+
+		const nextPromise = (this._activeTelemetryWritePromise || Promise.resolve())
+			.catch(() => {})
+			.then(performWrite);
+
+		this._activeTelemetryWritePromise = nextPromise;
+
+		try {
+			const result = await resolveBeforeDeadline(nextPromise, Date.now() + HEARTBEAT_WRITE_TIMEOUT_MS);
+			return result === true;
 		} catch (error) {
 			console.warn('[NotificationRedriveService] Failed to persist worker telemetry:', error.message);
 			return false;
@@ -1323,21 +1367,42 @@ class NotificationRedriveService {
 		}
 		this.running = false;
 
-		if (options.drain && this.activeSweepPromise) {
+		if (options.drain) {
 			const timeoutMs = parsePositiveInteger(options.timeoutMs, MAX_DRAIN_TIMEOUT_MS);
-			let timer = null;
-			try {
-				await Promise.race([
-					this.activeSweepPromise,
-					new Promise((_, reject) => {
-						timer = setTimeout(() => reject(new Error('Drain timeout exceeded')), timeoutMs);
-					}),
-				]);
-			} catch (error) {
-				console.warn('[NotificationRedriveService] Worker drain timeout/error:', error.message);
-			} finally {
-				if (timer) {
-					clearTimeout(timer);
+			const drainDeadline = Date.now() + timeoutMs;
+			if (this.activeSweepPromise) {
+				let timer = null;
+				try {
+					await Promise.race([
+						this.activeSweepPromise,
+						new Promise((_, reject) => {
+							timer = setTimeout(() => reject(new Error('Drain timeout exceeded')), Math.max(0, drainDeadline - Date.now()));
+						}),
+					]);
+				} catch (error) {
+					console.warn('[NotificationRedriveService] Worker drain timeout/error:', error.message);
+				} finally {
+					if (timer) {
+						clearTimeout(timer);
+					}
+				}
+			}
+
+			if (this._activeTelemetryWritePromise) {
+				let timer = null;
+				try {
+					await Promise.race([
+						this._activeTelemetryWritePromise,
+						new Promise((_, reject) => {
+							timer = setTimeout(() => reject(new Error('Telemetry drain timeout exceeded')), Math.max(0, drainDeadline - Date.now()));
+						}),
+					]);
+				} catch (error) {
+					console.warn('[NotificationRedriveService] Worker telemetry drain timeout/error:', error.message);
+				} finally {
+					if (timer) {
+						clearTimeout(timer);
+					}
 				}
 			}
 		}
@@ -1428,6 +1493,8 @@ class NotificationRedriveService {
 		this.supersessionStore.clear();
 		this.reconciliationPromises.clear();
 		this.activeSweepPromise = null;
+		this._telemetryWriteSequence = 0;
+		this._activeTelemetryWritePromise = null;
 		this.running = false;
 		this.lastRunAt = null;
 		this.lastRunDurationMs = null;

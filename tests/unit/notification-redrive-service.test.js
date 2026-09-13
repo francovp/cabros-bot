@@ -1368,6 +1368,88 @@ describe('NotificationRedriveService', () => {
 			expect(started).toBe(false);
 			expect(startSyncSpy).toHaveBeenCalled();
 		});
+
+		it('records sweep completion time in lastSweepAt and awaits persistWorkerTelemetry', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			let persistCalled = false;
+			jest.spyOn(service, 'persistWorkerTelemetry').mockImplementation(async () => {
+				persistCalled = true;
+				return true;
+			});
+			jest.spyOn(service, 'getEligibleRecords').mockImplementation(async () => {
+				await new Promise((r) => setTimeout(r, 50));
+				return [];
+			});
+
+			const startTimeBefore = Date.now();
+			await service._executeSweep();
+
+			expect(persistCalled).toBe(true);
+			expect(service.lastSweepAt).toBeInstanceOf(Date);
+			expect(service.lastSweepAt.getTime()).toBeGreaterThanOrEqual(startTimeBefore + 40);
+			expect(service.lastRunDurationMs).toBeGreaterThanOrEqual(40);
+		});
+
+		it('serializes telemetry writes and prevents timed-out writes from overwriting newer metrics', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			let committedSequence = 0;
+			const commits = [];
+
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						set: jest.fn(),
+					})),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					const mockTx = {
+						get: jest.fn(async () => ({
+							exists: committedSequence > 0,
+							data: () => ({ sequence: committedSequence }),
+						})),
+						set: jest.fn((ref, payload) => {
+							committedSequence = payload.sequence;
+							commits.push(payload);
+						}),
+					};
+					await updateFn(mockTx);
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			const p1 = service.persistWorkerTelemetry();
+			const p2 = service.persistWorkerTelemetry();
+
+			await Promise.all([p1, p2]);
+
+			expect(commits.length).toBeGreaterThan(0);
+			expect(committedSequence).toBe(2);
+			expect(commits[commits.length - 1].sequence).toBe(2);
+		});
+
+		it('drains both active sweep and active telemetry promise on stopWorker', async () => {
+			let sweepResolved = false;
+			let telemetryResolved = false;
+
+			service.activeSweepPromise = new Promise((resolve) => {
+				setTimeout(() => {
+					sweepResolved = true;
+					resolve();
+				}, 20);
+			});
+
+			service._activeTelemetryWritePromise = new Promise((resolve) => {
+				setTimeout(() => {
+					telemetryResolved = true;
+					resolve();
+				}, 30);
+			});
+
+			await service.stopWorker({ drain: true, timeoutMs: 500 });
+			expect(sweepResolved).toBe(true);
+			expect(telemetryResolved).toBe(true);
+			expect(service.running).toBe(false);
+		});
 	});
 
 	describe('helpers', () => {
