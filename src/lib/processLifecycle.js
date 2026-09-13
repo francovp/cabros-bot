@@ -171,9 +171,11 @@ function createProcessLifecycle(options = {}) {
 			};
 
 			const cleanup = async () => {
+				const sseCleanup = safelyRun(logger, 'admin SSE streams', closeAllSseConnections);
 				const telegramCleanup = safelyRun(logger, 'Telegram bot', stopBot);
 				const bootstrapCleanup = safelyRun(logger, 'application bootstrap', getBootstrapPromise);
 				await closeServer(server, logger);
+				await sseCleanup;
 				await telegramCleanup;
 				await bootstrapCleanup;
 				await safelyRun(logger, 'background jobs', waitForBackgroundJobs);
@@ -185,7 +187,6 @@ function createProcessLifecycle(options = {}) {
 					safelyRun(logger, 'scanner preset scheduler', () => stopScannerPresetScheduler({ drain: true })),
 					safelyRun(logger, 'news monitor scheduler', () => stopNewsMonitorScheduler({ drain: true })),
 					safelyRun(logger, 'alert scheduler', () => stopAlertScheduler({ drain: true })),
-					safelyRun(logger, 'admin SSE streams', closeAllSseConnections),
 					safelyRun(logger, 'remote config service', stopRemoteConfig),
 					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
 				]);

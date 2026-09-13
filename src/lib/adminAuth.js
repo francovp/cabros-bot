@@ -102,7 +102,7 @@ async function validateAdminAccess(req, res, next) {
 		return next();
 	}
 
-	const authorization = req.headers.authorization || (req.query?.token ? `Bearer ${req.query.token}` : null);
+	const authorization = req.headers.authorization;
 	const match = typeof authorization === 'string' && authorization.match(/^Bearer\s+(\S+)$/i);
 	if (match) {
 		const firebaseAuth = getFirebaseAuth();
@@ -142,6 +142,13 @@ function requireConfiguredAdminAccess(req, res, next) {
 	return validateAdminAccess(req, res, next);
 }
 
+function requireConfiguredSseAccess(req, res, next) {
+	if (!req.headers.authorization && req.query?.token) {
+		req.headers.authorization = `Bearer ${req.query.token}`;
+	}
+	return requireConfiguredAdminAccess(req, res, next);
+}
+
 function requireAdminRole(requiredRole) {
 	return (req, res, next) => {
 		if (req.adminRole === ADMIN_OPERATOR || req.adminRole === requiredRole) return next();
@@ -158,5 +165,6 @@ module.exports = {
 	isFirebaseAdminAuthEnabled,
 	requireAdminRole,
 	requireConfiguredAdminAccess,
+	requireConfiguredSseAccess,
 	validateAdminAccess,
 };

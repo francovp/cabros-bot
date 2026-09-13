@@ -1585,7 +1585,7 @@ class JobService {
 				code: job.code || null,
 				updatedAt: job.updatedAt || job.createdAt || new Date().toISOString(),
 				totalDurationMs: job.totalDurationMs || null,
-				summary: job.result?.summary || null,
+				summary: job.summary || job.result?.summary || null,
 				timestamp: new Date().toISOString(),
 			});
 
@@ -1594,7 +1594,7 @@ class JobService {
 					jobId: job.jobId,
 					type: job.type,
 					status: job.status,
-					summary: job.result?.summary || null,
+					summary: job.summary || job.result?.summary || null,
 					timestamp: new Date().toISOString(),
 				});
 			}

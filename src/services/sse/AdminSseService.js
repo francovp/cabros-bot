@@ -1,7 +1,14 @@
 'use strict';
 
 const { v4: uuidv4 } = require('uuid');
-const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+function resolveRuntimeConfig() {
+	try {
+		const rc = require('../remoteConfig/RemoteConfigService');
+		return typeof rc.getRuntimeConfig === 'function' ? rc.getRuntimeConfig() : null;
+	} catch (_) {
+		return null;
+	}
+}
 
 const DEFAULT_HEARTBEAT_MS = 30000;
 const DEFAULT_MAX_CLIENT_CONNECTIONS = 5;
@@ -31,7 +38,7 @@ class AdminSseService {
 		if (Number.isSafeInteger(this.heartbeatIntervalMs) && this.heartbeatIntervalMs >= 1000) {
 			return this.heartbeatIntervalMs;
 		}
-		const remote = getRuntimeConfig?.()?.ADMIN_SSE_HEARTBEAT_MS;
+		const remote = resolveRuntimeConfig()?.ADMIN_SSE_HEARTBEAT_MS;
 		if (Number.isSafeInteger(remote) && remote >= 1000) {
 			return remote;
 		}
@@ -46,7 +53,7 @@ class AdminSseService {
 		if (Number.isSafeInteger(this.maxClientConnections) && this.maxClientConnections >= 1) {
 			return this.maxClientConnections;
 		}
-		const remote = getRuntimeConfig?.()?.ADMIN_SSE_MAX_CLIENT_CONNECTIONS;
+		const remote = resolveRuntimeConfig()?.ADMIN_SSE_MAX_CLIENT_CONNECTIONS;
 		if (Number.isSafeInteger(remote) && remote >= 1) {
 			return remote;
 		}
@@ -61,7 +68,7 @@ class AdminSseService {
 		if (Number.isSafeInteger(this.maxTotalConnections) && this.maxTotalConnections >= 1) {
 			return this.maxTotalConnections;
 		}
-		const remote = getRuntimeConfig?.()?.ADMIN_SSE_MAX_TOTAL_CONNECTIONS;
+		const remote = resolveRuntimeConfig()?.ADMIN_SSE_MAX_TOTAL_CONNECTIONS;
 		if (Number.isSafeInteger(remote) && remote >= 1) {
 			return remote;
 		}
@@ -97,13 +104,6 @@ class AdminSseService {
 				current: this.clients.size,
 				limit: maxTotal,
 			});
-			if (typeof res.status === 'function' && typeof res.json === 'function' && !res.writableEnded) {
-				res.setHeader?.('Retry-After', '30');
-				res.status(503).json({
-					error: 'Too many active SSE connections',
-					code: 'SSE_CONNECTION_LIMIT_EXCEEDED',
-				});
-			}
 			return {
 				ok: false,
 				status: 503,

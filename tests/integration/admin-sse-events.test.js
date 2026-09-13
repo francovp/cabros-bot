@@ -174,4 +174,45 @@ describe('Admin SSE Events Stream Integration (/api/admin/events)', () => {
 			code: 'FEATURE_DISABLED',
 		}));
 	});
+
+	it('returns 503 with Retry-After header and single response when capacity is exceeded', async () => {
+		adminSseService.maxTotalConnections = 1;
+		adminSseService.clients.set('existing-client', { res: { write: () => {}, end: () => {} } });
+
+		try {
+			const res = await request(testApp)
+				.get('/api/admin/events')
+				.set('x-api-key', 'test-key')
+				.expect(503);
+
+			expect(res.headers['retry-after']).toBe('30');
+			expect(res.body).toEqual({
+				error: 'Server has reached maximum SSE connection capacity. Please retry shortly.',
+				code: 'SSE_CONNECTION_LIMIT_EXCEEDED',
+			});
+		} finally {
+			adminSseService.clients.clear();
+			adminSseService.maxTotalConnections = null;
+		}
+	});
+
+	it('rejects query token on non-SSE admin endpoints while accepting it on /api/admin/events', async () => {
+		process.env.ENABLE_FIREBASE_ADMIN_AUTH = 'true';
+		admin.__setApps([{ name: '[DEFAULT]' }]);
+		admin.auth = jest.fn(() => ({
+			verifyIdToken: jest.fn().mockResolvedValue({
+				uid: 'admin-123',
+				roles: ['admin.viewer'],
+			}),
+		}));
+
+		// Regular admin route (e.g. /api/alerts) should NOT accept ?token= query parameter
+		const alertsRes = await request(testApp)
+			.get('/api/alerts?token=firebase-test-token')
+			.expect(401);
+
+		expect(alertsRes.body).toEqual(expect.objectContaining({
+			code: 'ADMIN_AUTH_REQUIRED',
+		}));
+	});
 });

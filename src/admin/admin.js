@@ -447,7 +447,7 @@ const setupFirebaseAuth = async (config) => {
 	}
 };
 
-let sseEventSource = null;
+let sseAbortController = null;
 let sseReconnectTimer = null;
 let sseReconnectAttempts = 0;
 const sseListeners = new Set();
@@ -497,32 +497,43 @@ const disconnectSse = () => {
 		clearTimeout(sseReconnectTimer);
 		sseReconnectTimer = null;
 	}
-	if (sseEventSource) {
-		if (typeof sseEventSource.close === 'function') sseEventSource.close();
-		sseEventSource = null;
+	if (sseAbortController) {
+		try {
+			sseAbortController.abort();
+		} catch (_) {
+			// Fail-safe
+		}
+		sseAbortController = null;
 	}
 	sseReconnectAttempts = 0;
 	updateSseIndicator('disconnected', 'Offline');
 };
 
 const setupSseStream = async () => {
-	if (typeof window === 'undefined' || typeof window.EventSource === 'undefined') {
+	if (typeof window === 'undefined' || typeof window.fetch === 'undefined') {
 		return;
 	}
 	if (sseReconnectTimer) {
 		clearTimeout(sseReconnectTimer);
 		sseReconnectTimer = null;
 	}
-	if (sseEventSource) {
-		if (typeof sseEventSource.close === 'function') sseEventSource.close();
-		sseEventSource = null;
+	if (sseAbortController) {
+		try {
+			sseAbortController.abort();
+		} catch (_) {
+			// Fail-safe
+		}
+		sseAbortController = null;
 	}
 
-	let authParam = '';
+	const headers = {
+		Accept: 'text/event-stream',
+	};
+
 	if (authState.enabled && authState.user) {
 		try {
 			const token = await authState.user.getIdToken();
-			authParam = `token=${encodeURIComponent(token)}`;
+			headers.Authorization = `Bearer ${token}`;
 		} catch (_) {
 			updateSseIndicator('disconnected', 'Auth error');
 			return;
@@ -530,11 +541,11 @@ const setupSseStream = async () => {
 	} else {
 		const apiKey = getElement('api-key')?.value || '';
 		if (apiKey) {
-			authParam = `api-key=${encodeURIComponent(apiKey)}`;
+			headers['x-api-key'] = apiKey;
 		}
 	}
 
-	if (!authParam) {
+	if (!headers.Authorization && !headers['x-api-key']) {
 		updateSseIndicator('disconnected', 'Offline');
 		return;
 	}
@@ -542,61 +553,89 @@ const setupSseStream = async () => {
 	updateSseIndicator('connecting', 'Connecting…');
 
 	const baseUrl = getApiBaseUrl();
-	const streamUrl = `${baseUrl}/api/admin/events?${authParam}`;
+	const streamUrl = `${baseUrl}/api/admin/events`;
+	const controller = new AbortController();
+	sseAbortController = controller;
 
 	try {
-		const es = new window.EventSource(streamUrl);
-		sseEventSource = es;
-
-		es.onopen = () => {
-			sseReconnectAttempts = 0;
-			updateSseIndicator('connected', 'Live');
-		};
-
-		es.onerror = () => {
-			if (typeof es.close === 'function') es.close();
-			sseEventSource = null;
-			updateSseIndicator('connecting', 'Reconnecting…');
-			const delay = Math.min(30000, 2000 * Math.pow(1.5, sseReconnectAttempts)) + Math.random() * 1000;
-			sseReconnectAttempts++;
-			sseReconnectTimer = setTimeout(() => {
-				setupSseStream();
-			}, delay);
-		};
-
-		es.addEventListener('connected', () => {
-			updateSseIndicator('connected', 'Live');
+		const response = await fetch(streamUrl, {
+			method: 'GET',
+			headers,
+			signal: controller.signal,
 		});
 
-		const attachEventHandler = (type) => {
-			es.addEventListener(type, (event) => {
-				try {
-					const data = JSON.parse(event.data);
-					dispatchSseEvent(type, data);
-					if (type === 'job-progress') {
-						if (data.status === 'completed') {
-							showToast(`Job ${String(data.jobId).slice(0, 8)}… completed`, 'success');
-						} else if (data.status === 'failed' || data.status === 'timed_out') {
-							showToast(`Job ${String(data.jobId).slice(0, 8)}… ${data.status}: ${data.error || 'Failed'}`, 'error');
-						}
-					} else if (type === 'scanner-result') {
-						showToast(`Scanner preset completed${data.name ? `: ${data.name}` : ''}`, 'info');
-					} else if (type === 'alert-delivered') {
-						const channels = Array.isArray(data.channels) ? data.channels.join(', ') : 'channels';
-						showToast(`Alert delivered: ${data.symbol || 'symbol'} (${channels})`, 'success');
-					} else if (type === 'delivery-failure') {
-						showToast(`Delivery failure: ${data.symbol || 'symbol'} (${data.channel || 'channel'}): ${data.error || 'error'}`, 'error');
-					}
-				} catch (err) {
-					console.error('Failed to parse SSE event payload:', err);
-				}
-			});
-		};
+		if (!response.ok) {
+			throw new Error(`SSE stream HTTP ${response.status}`);
+		}
 
-		['job-progress', 'scanner-result', 'alert-delivered', 'delivery-failure'].forEach(attachEventHandler);
+		updateSseIndicator('connected', 'Live');
+		sseReconnectAttempts = 0;
+
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder();
+		let buffer = '';
+
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			const blocks = buffer.split('\n\n');
+			buffer = blocks.pop() || '';
+
+			for (const block of blocks) {
+				const trimmed = block.trim();
+				if (!trimmed || trimmed.startsWith(':')) continue;
+
+				let eventType = 'message';
+				const dataLines = [];
+				for (const line of trimmed.split('\n')) {
+					if (line.startsWith('event:')) {
+						eventType = line.slice(6).trim();
+					} else if (line.startsWith('data:')) {
+						dataLines.push(line.slice(5).trim());
+					}
+				}
+
+				if (eventType === 'connected') {
+					updateSseIndicator('connected', 'Live');
+					continue;
+				}
+
+				if (dataLines.length > 0) {
+					try {
+						const data = JSON.parse(dataLines.join('\n'));
+						dispatchSseEvent(eventType, data);
+						if (eventType === 'job-progress') {
+							if (data.status === 'completed') {
+								showToast(`Job ${String(data.jobId).slice(0, 8)}… completed`, 'success');
+							} else if (data.status === 'failed' || data.status === 'timed_out') {
+								showToast(`Job ${String(data.jobId).slice(0, 8)}… ${data.status}: ${data.error || 'Failed'}`, 'error');
+							}
+						} else if (eventType === 'scanner-result') {
+							showToast(`Scanner preset completed${data.name ? `: ${data.name}` : ''}`, 'info');
+						} else if (eventType === 'alert-delivered') {
+							const channels = Array.isArray(data.channels) ? data.channels.join(', ') : 'channels';
+							showToast(`Alert delivered: ${data.symbol || 'symbol'} (${channels})`, 'success');
+						} else if (eventType === 'delivery-failure') {
+							showToast(`Delivery failure: ${data.symbol || 'symbol'} (${data.channel || 'channel'}): ${data.error || 'error'}`, 'error');
+						}
+					} catch (err) {
+						console.error('Failed to parse SSE event payload:', err);
+					}
+				}
+			}
+		}
 	} catch (error) {
-		console.error('Failed to create EventSource:', error);
-		updateSseIndicator('disconnected', 'Offline');
+		if (controller.signal.aborted) {
+			return;
+		}
+		console.error('SSE stream error:', error);
+		updateSseIndicator('connecting', 'Reconnecting…');
+		const delay = Math.min(30000, 2000 * Math.pow(1.5, sseReconnectAttempts)) + Math.random() * 1000;
+		sseReconnectAttempts++;
+		sseReconnectTimer = setTimeout(() => {
+			setupSseStream();
+		}, delay);
 	}
 };
 

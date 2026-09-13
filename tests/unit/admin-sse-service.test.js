@@ -132,13 +132,13 @@ describe('AdminSseService', () => {
 
 		const req3 = new MockRequest();
 		const res3 = new MockResponse();
-		sseService.addClient(req3, res3, 'user:3');
+		const result = sseService.addClient(req3, res3, 'user:3');
 
-		expect(res3.statusCode).toBe(503);
-		expect(res3.headers['retry-after']).toBe('30');
-		expect(res3.body).toEqual({
-			error: 'Too many active SSE connections',
+		expect(result).toEqual({
+			ok: false,
+			status: 503,
 			code: 'SSE_CONNECTION_LIMIT_EXCEEDED',
+			message: 'Server has reached maximum SSE connection capacity. Please retry shortly.',
 		});
 		expect(sseService.getClientCount()).toBe(2);
 	});
@@ -223,5 +223,25 @@ describe('AdminSseService', () => {
 		expect(res2.writableEnded).toBe(true);
 		expect(res2.chunks.join('')).toContain(':closing server shutdown\n\n');
 		expect(sseService.getClientCount()).toBe(0);
+	});
+
+	it('dynamically reads RemoteConfig overrides when available', () => {
+		const RemoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+		const originalGetRuntimeConfig = RemoteConfigService.getRuntimeConfig;
+
+		try {
+			RemoteConfigService.getRuntimeConfig = () => ({
+				ADMIN_SSE_HEARTBEAT_MS: 15000,
+				ADMIN_SSE_MAX_CLIENT_CONNECTIONS: 10,
+				ADMIN_SSE_MAX_TOTAL_CONNECTIONS: 200,
+			});
+
+			const dynamicService = new AdminSseService();
+			expect(dynamicService.getEffectiveHeartbeatIntervalMs()).toBe(15000);
+			expect(dynamicService.getEffectiveMaxClientConnections()).toBe(10);
+			expect(dynamicService.getEffectiveMaxTotalConnections()).toBe(200);
+		} finally {
+			RemoteConfigService.getRuntimeConfig = originalGetRuntimeConfig;
+		}
 	});
 });
