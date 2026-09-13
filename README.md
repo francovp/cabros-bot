@@ -1391,7 +1391,19 @@ The service caps the queried window at 31 days to keep routine operator usage ch
     },
     "latency": {
       "averageProcessingMs": 250,
-      "averageDeliveryMs": 150
+      "averageDeliveryMs": 150,
+      "byChannel": {
+        "telegram": {
+          "averageMs": 170,
+          "p95Ms": 200,
+          "sampleCount": 2
+        },
+        "whatsapp": {
+          "averageMs": 110,
+          "p95Ms": 110,
+          "sampleCount": 1
+        }
+      }
     }
   }
 }

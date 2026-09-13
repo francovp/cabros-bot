@@ -2278,6 +2278,10 @@ describe('AlertStorageService', () => {
 				latency: {
 					averageProcessingMs: 250,
 					averageDeliveryMs: 150,
+					byChannel: {
+						telegram: { averageMs: 150, p95Ms: 200, sampleCount: 2 },
+						whatsapp: { averageMs: 150, p95Ms: 150, sampleCount: 1 },
+					},
 				},
 			});
 			expect(JSON.stringify(result)).not.toContain('raw alert text');
@@ -2905,6 +2909,106 @@ describe('AlertStorageService', () => {
 				SPX: 1,
 				unknown: 1,
 			});
+		});
+
+		it('aggregates per-channel delivery latency with average, p95, and sampleCount and omits zero-delivery channels', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						deliveryResults: [
+							{ channel: 'telegram', success: true, durationMs: 100 },
+							{ channel: 'whatsapp', success: true, durationMs: 300 },
+							{ channel: 'discord', success: true, durationMs: 80 },
+						],
+					}),
+					buildQueryDoc('alert-2', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						deliveryResults: [
+							{ channel: 'telegram', success: true, durationMs: 200 },
+							{ channel: 'whatsapp', success: false, durationMs: 400 },
+						],
+					}),
+					buildQueryDoc('alert-3', {
+						receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+						deliveryResults: [
+							{ channel: 'telegram', success: true, durationMs: 300 },
+						],
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			});
+
+			expect(result.latency.averageDeliveryMs).toBe(Math.round((100 + 300 + 80 + 200 + 400 + 300) / 6));
+			expect(result.latency.byChannel).toEqual({
+				telegram: {
+					averageMs: 200,
+					p95Ms: 300,
+					sampleCount: 3,
+				},
+				whatsapp: {
+					averageMs: 350,
+					p95Ms: 400,
+					sampleCount: 2,
+				},
+				discord: {
+					averageMs: 80,
+					p95Ms: 80,
+					sampleCount: 1,
+				},
+			});
+		});
+
+		it('returns empty object for latency.byChannel when there are no delivery latency samples', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-no-latency', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						deliveryResults: [],
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			});
+
+			expect(result.latency.averageDeliveryMs).toBeNull();
+			expect(result.latency.byChannel).toEqual({});
+		});
+	});
+
+	describe('calculatePercentileLatency()', () => {
+		it('returns null for empty or non-array input', () => {
+			expect(AlertStorageService.calculatePercentileLatency([])).toBeNull();
+			expect(AlertStorageService.calculatePercentileLatency(null)).toBeNull();
+			expect(AlertStorageService.calculatePercentileLatency(undefined)).toBeNull();
+			expect(AlertStorageService.calculatePercentileLatency('not-an-array')).toBeNull();
+		});
+
+		it('returns the single sample for a 1-item array', () => {
+			expect(AlertStorageService.calculatePercentileLatency([150])).toBe(150);
+		});
+
+		it('calculates p95 using sorted-index nearest-rank method', () => {
+			expect(AlertStorageService.calculatePercentileLatency([100, 200], 95)).toBe(200);
+			const samples = [100, 10, 50, 20, 90, 30, 80, 40, 70, 60];
+			expect(AlertStorageService.calculatePercentileLatency(samples, 95)).toBe(100);
+			expect(AlertStorageService.calculatePercentileLatency(samples, 50)).toBe(50);
+		});
+
+		it('calculates p95 for 20 samples accurately', () => {
+			const samples20 = Array.from({ length: 20 }, (_, i) => (i + 1) * 10);
+			expect(AlertStorageService.calculatePercentileLatency(samples20, 95)).toBe(190);
 		});
 	});
 

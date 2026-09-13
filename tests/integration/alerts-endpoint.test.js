@@ -383,6 +383,10 @@ describe('Alerts API Integration Tests', () => {
 			latency: {
 				averageProcessingMs: null,
 				averageDeliveryMs: 125,
+				byChannel: {
+					telegram: { averageMs: 100, p95Ms: 100, sampleCount: 1 },
+					whatsapp: { averageMs: 150, p95Ms: 150, sampleCount: 1 },
+				},
 			},
 		});
 
@@ -437,6 +441,10 @@ describe('Alerts API Integration Tests', () => {
 				latency: {
 					averageProcessingMs: null,
 					averageDeliveryMs: 125,
+					byChannel: {
+						telegram: { averageMs: 100, p95Ms: 100, sampleCount: 1 },
+						whatsapp: { averageMs: 150, p95Ms: 150, sampleCount: 1 },
+					},
 				},
 			},
 		});
