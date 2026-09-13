@@ -33,7 +33,8 @@ contentSecurityPolicy['connect-src'] = [
 ];
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
 
-app.use('/healthcheck', require('express-healthcheck')());
+const { getDeepHealthcheckHandler } = require('./src/controllers/healthcheck');
+app.use('/healthcheck', getDeepHealthcheckHandler());
 app.get('/ready', (req, res) => {
 	const status = bootstrapReadiness.getStatus();
 	return res.status(status.ready ? 200 : 503).json(status);

@@ -41,6 +41,52 @@
     }
   ],
   "paths": {
+    "/healthcheck": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Service healthcheck",
+        "description": "Default behavior returns 200 with `uptime` JSON only. With `?deep=true`, the endpoint reuses the existing channel readiness logic from `/api/status` dependencies and returns 200 when every enabled channel is ready, 503 when any enabled channel is degraded (with `degradedChannels` and per-channel readiness). The endpoint is never API-key protected.",
+        "operationId": "getHealthcheck",
+        "parameters": [
+          {
+            "name": "deep",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "boolean" },
+            "description": "When `true`, include channel readiness and return 503 if any enabled channel is degraded."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Service is healthy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Healthcheck"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DeepHealthcheck"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "One or more enabled channels are degraded, or readiness evaluation failed.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeepHealthcheck" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/ready": {
       "get": {
         "tags": [
@@ -495,11 +541,23 @@
           },
           {
             "$ref": "#/components/parameters/Enriched"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/AlertEventCategory"
+          },
+          {
+            "$ref": "#/components/parameters/AlertExchange"
           }
         ],
         "responses": {
           "200": {
             "$ref": "#/components/responses/AlertList"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -597,6 +655,15 @@
           },
           {
             "$ref": "#/components/parameters/Enriched"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/AlertEventCategory"
+          },
+          {
+            "$ref": "#/components/parameters/AlertExchange"
           }
         ],
         "responses": {
@@ -2495,6 +2562,42 @@
           "type": "boolean"
         }
       },
+      "AlertSymbol": {
+        "name": "symbol",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "\\S"
+        },
+        "example": "BTCUSDT",
+        "description": "Optional symbol filter (e.g. BTCUSDT, BINANCE:BTCUSDT, or AAPL). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against extracted symbol and exchange fields."
+      },
+      "AlertEventCategory": {
+        "name": "eventCategory",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "\\S"
+        },
+        "example": "price_surge",
+        "description": "Optional event category filter (e.g. price_surge, price_decline, regulatory). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against the eventCategory field."
+      },
+      "AlertExchange": {
+        "name": "exchange",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "\\S"
+        },
+        "example": "BINANCE",
+        "description": "Optional exchange filter (e.g. BINANCE, COINBASE). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against the extracted exchange field."
+      },
       "IncludeText": {
         "name": "includeText",
         "in": "query",
@@ -4093,6 +4196,58 @@
         "type": "object",
         "additionalProperties": true
       },
+      "Healthcheck": {
+        "type": "object",
+        "required": [
+          "uptime"
+        ],
+        "properties": {
+          "uptime": {
+            "type": "number",
+            "description": "Process uptime in seconds."
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeepHealthcheck": {
+        "type": "object",
+        "required": [
+          "status",
+          "uptime",
+          "channels"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded"
+            ]
+          },
+          "uptime": {
+            "type": "number"
+          },
+          "degradedChannels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "channels": {
+            "type": "object",
+            "required": [
+              "telegram",
+              "whatsapp",
+              "discord"
+            ],
+            "properties": {
+              "telegram": { "$ref": "#/components/schemas/ChannelReadiness" },
+              "whatsapp": { "$ref": "#/components/schemas/ChannelReadiness" },
+              "discord": { "$ref": "#/components/schemas/ChannelReadiness" }
+            }
+          }
+        }
+      },
       "TestAlertRequest": {
         "type": "object",
         "properties": {
@@ -4255,6 +4410,29 @@
               "$ref": "#/components/schemas/DeliveryChannelMetrics"
             }
           }
+        }
+      },
+      "ChannelReadiness": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "ready",
+          "status"
+        ],
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "ready": { "type": "boolean" },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "misconfigured",
+              "disabled",
+              "error",
+              "unknown"
+            ]
+          },
+          "error": { "type": "string" }
         }
       },
       "DeliveryChannelMetrics": {

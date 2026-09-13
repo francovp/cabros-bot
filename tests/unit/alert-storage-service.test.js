@@ -987,6 +987,107 @@ describe('AlertStorageService', () => {
 			expect(result.alerts[0].id).toBe('alert-2');
 		});
 
+		it('filters alerts by symbol, eventCategory, and exchange individually and in combination', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const sampleDocs = [
+				buildQueryDoc('alert-btc-binance-surge', {
+					receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+					text: 'BTC surge alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					eventCategory: 'price_surge',
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-eth-binance-surge', {
+					receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+					text: 'ETH surge alert',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					eventCategory: 'price_surge',
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-btc-coinbase-whale', {
+					receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+					text: 'BTC whale alert',
+					symbol: 'BTCUSDT',
+					exchange: 'COINBASE',
+					eventCategory: 'whale_movement',
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-sol-binance-whale', {
+					receivedAt: buildTimestamp('2026-06-06T09:00:00.000Z'),
+					text: 'SOL whale alert',
+					symbol: 'SOLUSDT',
+					exchange: 'BINANCE',
+					eventCategory: 'whale_movement',
+					source: 'webhook',
+				}),
+			];
+
+			// 1. Filter by symbol (case-insensitive)
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const bySymbol = await AlertStorageService.listAlerts({ limit: 10, symbol: 'btcusdt' });
+			expect(bySymbol.alerts.map(a => a.id)).toEqual(['alert-btc-binance-surge', 'alert-btc-coinbase-whale']);
+
+			// 2. Filter by symbol with exchange prefix
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const byPrefixedSymbol = await AlertStorageService.listAlerts({ limit: 10, symbol: 'BINANCE:BTCUSDT' });
+			expect(byPrefixedSymbol.alerts.map(a => a.id)).toEqual(['alert-btc-binance-surge']);
+
+			// 3. Filter by exchange (case-insensitive)
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const byExchange = await AlertStorageService.listAlerts({ limit: 10, exchange: 'coinbase' });
+			expect(byExchange.alerts.map(a => a.id)).toEqual(['alert-btc-coinbase-whale']);
+
+			// 4. Filter by eventCategory (case-insensitive)
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const byCategory = await AlertStorageService.listAlerts({ limit: 10, eventCategory: 'PRICE_SURGE' });
+			expect(byCategory.alerts.map(a => a.id)).toEqual(['alert-btc-binance-surge', 'alert-eth-binance-surge']);
+
+			// 5. Combined filters
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const combined = await AlertStorageService.listAlerts({
+				limit: 10,
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				eventCategory: 'price_surge',
+			});
+			expect(combined.alerts.map(a => a.id)).toEqual(['alert-btc-binance-surge']);
+		});
+
+		it('filters list by eventCategory from nested enrichmentData.event_category and populates eventCategory on formatted output', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const sampleDocs = [
+				buildQueryDoc('alert-nested-cat', {
+					receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+					text: 'BTC breakout',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					enrichmentData: {
+						event_category: 'price_surge',
+					},
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-other-cat', {
+					receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+					text: 'ETH news',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					enrichmentData: {
+						event_category: 'regulatory',
+					},
+					source: 'webhook',
+				}),
+			];
+
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const result = await AlertStorageService.listAlerts({ limit: 10, eventCategory: 'price_surge' });
+			expect(result.alerts).toHaveLength(1);
+			expect(result.alerts[0].id).toBe('alert-nested-cat');
+			expect(result.alerts[0].eventCategory).toBe('price_surge');
+		});
+
 		it('uses the opaque nextBefore cursor to continue within tied timestamps', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
@@ -2286,6 +2387,82 @@ describe('AlertStorageService', () => {
 			expect(result.bySymbol).toEqual({ BTCUSDT: 1 });
 			expect(result.byFeatureFlag.enriched).toBe(1);
 			expect(result.byFeatureFlag.plain).toBe(0);
+		});
+
+		it('applies symbol, eventCategory, and exchange filters before aggregating summaries', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const sampleDocs = [
+				buildQueryDoc('alert-btc-binance-surge', {
+					receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+					text: 'BINANCE:BTCUSDT surge',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					eventCategory: 'price_surge',
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-eth-binance-surge', {
+					receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+					text: 'BINANCE:ETHUSDT surge',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					eventCategory: 'price_surge',
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-btc-coinbase-whale', {
+					receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+					text: 'COINBASE:BTCUSDT whale',
+					symbol: 'BTCUSDT',
+					exchange: 'COINBASE',
+					eventCategory: 'whale_movement',
+					source: 'webhook',
+				}),
+			];
+
+			// 1. By symbol (case-insensitive)
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const bySymbol = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 10,
+				symbol: 'btcusdt',
+			});
+			expect(bySymbol.totalAlerts).toBe(2);
+			expect(bySymbol.bySymbol).toEqual({ BTCUSDT: 2 });
+
+			// 2. By exchange (case-insensitive)
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const byExchange = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 10,
+				exchange: 'binance',
+			});
+			expect(byExchange.totalAlerts).toBe(2);
+			expect(byExchange.bySymbol).toEqual({ BTCUSDT: 1, ETHUSDT: 1 });
+
+			// 3. By eventCategory (case-insensitive)
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const byCategory = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 10,
+				eventCategory: 'WHALE_MOVEMENT',
+			});
+			expect(byCategory.totalAlerts).toBe(1);
+			expect(byCategory.bySymbol).toEqual({ BTCUSDT: 1 });
+
+			// 4. Combined filters
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const combined = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 10,
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				eventCategory: 'price_surge',
+			});
+			expect(combined.totalAlerts).toBe(1);
+			expect(combined.bySymbol).toEqual({ BTCUSDT: 1 });
 		});
 
 		it('pages through bounded alerts until filtered summaries reach the limit', async () => {

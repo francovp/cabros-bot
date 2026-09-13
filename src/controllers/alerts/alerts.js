@@ -164,6 +164,23 @@ function parseOptionalTimestamp(rawValue, name) {
 	return { value: new Date(rawValue).toISOString() };
 }
 
+function parseStringFilter(rawValue, filterName, maxLength = 64) {
+	if (rawValue === undefined) {
+		return { value: undefined };
+	}
+
+	if (typeof rawValue !== 'string' || !rawValue.trim() || rawValue.trim().length > maxLength) {
+		return {
+			error: {
+				error: `Invalid ${filterName} filter. Use a non-empty string up to ${maxLength} characters.`,
+				code: 'INVALID_REQUEST',
+			},
+		};
+	}
+
+	return { value: rawValue.trim() };
+}
+
 function listAlerts(req, res) {
 	return handleAsync(req, res, '/api/alerts', async () => {
 		if (!alertStorageService.isEnabled()) {
@@ -203,6 +220,21 @@ function listAlerts(req, res) {
 			? req.query.source.trim()
 			: undefined;
 
+		const symbol = parseStringFilter(req.query.symbol, 'symbol');
+		if (symbol.error) {
+			return res.status(400).json(symbol.error);
+		}
+
+		const eventCategory = parseStringFilter(req.query.eventCategory, 'eventCategory');
+		if (eventCategory.error) {
+			return res.status(400).json(eventCategory.error);
+		}
+
+		const exchange = parseStringFilter(req.query.exchange, 'exchange');
+		if (exchange.error) {
+			return res.status(400).json(exchange.error);
+		}
+
 		const parsedInclude = parseInclude(req.query.include);
 		if (!parsedInclude.success) {
 			return res.status(400).json({
@@ -217,6 +249,15 @@ function listAlerts(req, res) {
 			limit,
 			source,
 		};
+		if (symbol.value !== undefined) {
+			listParams.symbol = symbol.value;
+		}
+		if (eventCategory.value !== undefined) {
+			listParams.eventCategory = eventCategory.value;
+		}
+		if (exchange.value !== undefined) {
+			listParams.exchange = exchange.value;
+		}
 		if (parsedInclude.values.length > 0) {
 			listParams.include = parsedInclude.values;
 			listParams.includeEnrichmentSummary = parsedInclude.values.includes('enrichment_summary');
@@ -275,15 +316,45 @@ function summarizeAlerts(req, res) {
 			? req.query.source.trim()
 			: undefined;
 
-		const summary = await alertStorageService.summarizeAlerts({
+		const symbol = parseStringFilter(req.query.symbol, 'symbol');
+		if (symbol.error) {
+			return res.status(400).json(symbol.error);
+		}
+
+		const eventCategory = parseStringFilter(req.query.eventCategory, 'eventCategory');
+		if (eventCategory.error) {
+			return res.status(400).json(eventCategory.error);
+		}
+
+		const exchange = parseStringFilter(req.query.exchange, 'exchange');
+		if (exchange.error) {
+			return res.status(400).json(exchange.error);
+		}
+
+		const summaryParams = {
 			from: from.value,
 			limit,
 			to: to.value,
 			source,
 			enriched,
-		});
+		};
+		if (symbol.value !== undefined) {
+			summaryParams.symbol = symbol.value;
+		}
+		if (eventCategory.value !== undefined) {
+			summaryParams.eventCategory = eventCategory.value;
+		}
+		if (exchange.value !== undefined) {
+			summaryParams.exchange = exchange.value;
+		}
 
-		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
+		const summary = await alertStorageService.summarizeAlerts(summaryParams);
+
+		const hasReportFilters = Boolean(source)
+			|| typeof enriched === 'boolean'
+			|| symbol.value !== undefined
+			|| eventCategory.value !== undefined
+			|| exchange.value !== undefined;
 		if (!hasReportFilters) {
 			let shadowModeMetrics = 'No measurements found';
 			if (signalOutcomeService.isEnabled()) {
