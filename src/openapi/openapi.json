@@ -2105,6 +2105,121 @@
         "x-admin-role": "admin.operator"
       }
     },
+    "/api/trading/binance/orders/audit": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Query Binance Spot order audit trail",
+        "description": "Queries durable audit records for Binance Spot order mutations (submissions, dry runs, rejections, cancellations, and reconciliations). Supports filtering by symbol, status, environment, orderId, and time range with cursor pagination.",
+        "operationId": "getBinanceOrderAudit",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records by symbol (e.g. BTCUSDT).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records by status (e.g. dry_run, submitted, confirmed, rejected, ambiguous, queried, canceled).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records by execution environment (e.g. testnet, live, demo).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "orderId",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records by Binance order ID or client order ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records created on or after this ISO 8601 timestamp.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records created on or before this ISO 8601 timestamp.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of audit records to return (default 50, max 100).",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "description": "Cursor for backward pagination.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BinanceOrderAuditList"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/status": {
       "get": {
         "tags": [
@@ -3002,6 +3117,16 @@
       }
     },
     "responses": {
+      "BinanceOrderAuditList": {
+        "description": "Paginated Binance order audit records.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/BinanceOrderAuditList"
+            }
+          }
+        }
+      },
       "BinanceOrdersQueryResult": {
         "description": "Binance Spot order status or recent order history query result.",
         "content": {
@@ -6737,6 +6862,177 @@
             ]
           }
         ],
+        "additionalProperties": false
+      },
+      "BinanceOrderAuditRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "orderId",
+          "action",
+          "status",
+          "timestamp"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "idempotencyKeyHash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "side": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "environment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "requestFingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ]
+          },
+          "price": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ]
+          },
+          "binanceOrderId": {
+            "type": [
+              "integer",
+              "string",
+              "null"
+            ]
+          },
+          "clientOrderId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "processingMs": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BinanceOrderAuditList": {
+        "type": "object",
+        "required": [
+          "success",
+          "records",
+          "audit",
+          "pagination"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BinanceOrderAuditRecord"
+            }
+          },
+          "audit": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BinanceOrderAuditRecord"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "required": [
+              "hasMore",
+              "limit",
+              "nextBefore"
+            ],
+            "properties": {
+              "hasMore": {
+                "type": "boolean"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "nextBefore": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
         "additionalProperties": false
       },
       "BinanceOrdersQueryResult": {

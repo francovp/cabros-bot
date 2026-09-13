@@ -6684,6 +6684,82 @@
               "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
             }
           ]
+        },
+        {
+          "name": "GET Binance Order Audit",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Queries durable audit records for Binance Spot order mutations (submissions, dry runs, rejections, cancellations, and reconciliations). Supports filtering by symbol, status, environment, orderId, and time range with cursor pagination.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders/audit?symbol=BTCUSDT&status=confirmed&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders",
+                "audit"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT",
+                  "description": "Filter by symbol"
+                },
+                {
+                  "key": "status",
+                  "value": "confirmed",
+                  "description": "Filter by status (e.g. dry_run, submitted, confirmed, rejected, ambiguous, queried, canceled)"
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Page size limit (1..100)"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"records\": [\n    {\n      \"id\": \"audit-doc-id\",\n      \"orderId\": \"audit-doc-id\",\n      \"idempotencyKeyHash\": \"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\",\n      \"symbol\": \"BTCUSDT\",\n      \"side\": \"BUY\",\n      \"type\": \"LIMIT\",\n      \"environment\": \"testnet\",\n      \"status\": \"confirmed\",\n      \"errorCode\": null,\n      \"dryRun\": false,\n      \"requestFingerprint\": \"4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a\",\n      \"timestamp\": \"2026-09-12T12:00:00.000Z\",\n      \"operator\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n      \"action\": \"PLACE\",\n      \"quantity\": 0.001,\n      \"price\": 60000,\n      \"binanceOrderId\": 42,\n      \"clientOrderId\": \"cabros-order-1\",\n      \"response\": {},\n      \"processingMs\": 25,\n      \"expiresAt\": \"2026-10-12T12:00:00.000Z\"\n    }\n  ],\n  \"audit\": [\n    {\n      \"id\": \"audit-doc-id\",\n      \"orderId\": \"audit-doc-id\",\n      \"idempotencyKeyHash\": \"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\",\n      \"symbol\": \"BTCUSDT\",\n      \"side\": \"BUY\",\n      \"type\": \"LIMIT\",\n      \"environment\": \"testnet\",\n      \"status\": \"confirmed\",\n      \"errorCode\": null,\n      \"dryRun\": false,\n      \"requestFingerprint\": \"4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a\",\n      \"timestamp\": \"2026-09-12T12:00:00.000Z\",\n      \"operator\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n      \"action\": \"PLACE\",\n      \"quantity\": 0.001,\n      \"price\": 60000,\n      \"binanceOrderId\": 42,\n      \"clientOrderId\": \"cabros-order-1\",\n      \"response\": {},\n      \"processingMs\": 25,\n      \"expiresAt\": \"2026-10-12T12:00:00.000Z\"\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 50,\n    \"nextBefore\": null\n  }\n}"
+            },
+            {
+              "name": "Invalid Query Parameters",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid from date parameter\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance order audit trail is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance order audit trail is enabled but Firestore is not configured\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized\",\n  \"code\": \"ADMIN_AUTH_REQUIRED\"\n}"
+            }
+          ]
         }
       ]
     },
