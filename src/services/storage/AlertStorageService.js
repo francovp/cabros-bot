@@ -211,8 +211,10 @@ function formatAlertDocument(doc, options = {}) {
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
 	}
-	if (typeof data.eventCategory === 'string') {
-		docObj.eventCategory = data.eventCategory;
+	if (typeof data.eventCategory === 'string' && data.eventCategory.trim()) {
+		docObj.eventCategory = data.eventCategory.trim();
+	} else if (data.enrichmentData && typeof (data.enrichmentData.eventCategory || data.enrichmentData.event_category) === 'string' && (data.enrichmentData.eventCategory || data.enrichmentData.event_category).trim()) {
+		docObj.eventCategory = (data.enrichmentData.eventCategory || data.enrichmentData.event_category).trim();
 	}
 	if (typeof data.confidence === 'number' && Number.isFinite(data.confidence)) {
 		docObj.confidence = data.confidence;
@@ -1042,7 +1044,9 @@ function matchesFilters(alert, filters) {
 
 	if (filters.eventCategory) {
 		const targetCategory = filters.eventCategory.trim().toLowerCase();
-		const alertCat = alert.eventCategory ? String(alert.eventCategory).trim().toLowerCase() : null;
+		const rawCat = alert.eventCategory
+			|| (alert.enrichmentData && (alert.enrichmentData.eventCategory || alert.enrichmentData.event_category));
+		const alertCat = rawCat ? String(rawCat).trim().toLowerCase() : null;
 		if (alertCat !== targetCategory) {
 			return false;
 		}

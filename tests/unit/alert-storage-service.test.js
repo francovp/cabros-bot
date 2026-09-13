@@ -1055,6 +1055,39 @@ describe('AlertStorageService', () => {
 			expect(combined.alerts.map(a => a.id)).toEqual(['alert-btc-binance-surge']);
 		});
 
+		it('filters list by eventCategory from nested enrichmentData.event_category and populates eventCategory on formatted output', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const sampleDocs = [
+				buildQueryDoc('alert-nested-cat', {
+					receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+					text: 'BTC breakout',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					enrichmentData: {
+						event_category: 'price_surge',
+					},
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-other-cat', {
+					receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+					text: 'ETH news',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					enrichmentData: {
+						event_category: 'regulatory',
+					},
+					source: 'webhook',
+				}),
+			];
+
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const result = await AlertStorageService.listAlerts({ limit: 10, eventCategory: 'price_surge' });
+			expect(result.alerts).toHaveLength(1);
+			expect(result.alerts[0].id).toBe('alert-nested-cat');
+			expect(result.alerts[0].eventCategory).toBe('price_surge');
+		});
+
 		it('uses the opaque nextBefore cursor to continue within tied timestamps', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({

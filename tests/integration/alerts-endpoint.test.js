@@ -280,6 +280,15 @@ describe('Alerts API Integration Tests', () => {
 			error: 'Invalid exchange filter. Use a non-empty string up to 64 characters.',
 			code: 'INVALID_REQUEST',
 		});
+
+		const whitespaceSymbol = await request(app)
+			.get('/api/alerts?symbol=%20%20%20')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(whitespaceSymbol.body).toEqual({
+			error: 'Invalid symbol filter. Use a non-empty string up to 64 characters.',
+			code: 'INVALID_REQUEST',
+		});
 	});
 
 	it('accepts an opaque nextBefore cursor from a previous response', async () => {
