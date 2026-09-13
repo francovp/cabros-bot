@@ -213,8 +213,10 @@ function formatAlertDocument(doc, options = {}) {
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
 	}
-	if (typeof data.eventCategory === 'string') {
-		docObj.eventCategory = data.eventCategory;
+	if (typeof data.eventCategory === 'string' && data.eventCategory.trim()) {
+		docObj.eventCategory = data.eventCategory.trim();
+	} else if (data.enrichmentData && typeof (data.enrichmentData.eventCategory || data.enrichmentData.event_category) === 'string' && (data.enrichmentData.eventCategory || data.enrichmentData.event_category).trim()) {
+		docObj.eventCategory = (data.enrichmentData.eventCategory || data.enrichmentData.event_category).trim();
 	}
 	if (typeof data.confidence === 'number' && Number.isFinite(data.confidence)) {
 		docObj.confidence = data.confidence;
@@ -1011,6 +1013,47 @@ function matchesFilters(alert, filters) {
 		return false;
 	}
 
+	if (filters.symbol) {
+		const target = filters.symbol.trim().toUpperCase();
+		const [filterEx, filterSym] = target.includes(':') ? target.split(':') : [null, target];
+
+		let alertSym = alert.symbol ? String(alert.symbol).trim().toUpperCase() : null;
+		let alertEx = alert.exchange ? String(alert.exchange).trim().toUpperCase() : null;
+		if (alertSym && alertSym.includes(':')) {
+			const [ex, sym] = alertSym.split(':');
+			alertSym = sym;
+			if (!alertEx) alertEx = ex;
+		}
+
+		if (alertSym !== filterSym) {
+			return false;
+		}
+		if (filterEx && alertEx !== filterEx) {
+			return false;
+		}
+	}
+
+	if (filters.exchange) {
+		const targetExchange = filters.exchange.trim().toUpperCase();
+		let alertEx = alert.exchange ? String(alert.exchange).trim().toUpperCase() : null;
+		if (!alertEx && alert.symbol && String(alert.symbol).includes(':')) {
+			alertEx = String(alert.symbol).split(':')[0].trim().toUpperCase();
+		}
+		if (alertEx !== targetExchange) {
+			return false;
+		}
+	}
+
+	if (filters.eventCategory) {
+		const targetCategory = filters.eventCategory.trim().toLowerCase();
+		const rawCat = alert.eventCategory
+			|| (alert.enrichmentData && (alert.enrichmentData.eventCategory || alert.enrichmentData.event_category));
+		const alertCat = rawCat ? String(rawCat).trim().toLowerCase() : null;
+		if (alertCat !== targetCategory) {
+			return false;
+		}
+	}
+
 	return true;
 }
 
@@ -1275,6 +1318,9 @@ function saveAlert(params) {
  * @param {string|undefined} params.before
  * @param {string|undefined} params.source
  * @param {boolean|undefined} params.enriched
+ * @param {string|undefined} params.symbol Optional symbol filter
+ * @param {string|undefined} params.eventCategory Optional event category filter
+ * @param {string|undefined} params.exchange Optional exchange filter
  * @param {string[]|string|undefined} params.include
  * @param {boolean|undefined} params.includeEnrichmentSummary
  * @returns {Promise<{alerts: Array, hasMore: boolean, nextBefore: string|null}|null>}
@@ -1284,6 +1330,9 @@ async function listAlerts({
 	before,
 	source,
 	enriched,
+	symbol,
+	eventCategory,
+	exchange,
 	include,
 	includeEnrichmentSummary,
 } = {}) {
@@ -1347,7 +1396,7 @@ async function listAlerts({
 			}
 
 			const formatted = formatAlertDocument(doc, { include, includeEnrichmentSummary });
-			if (matchesFilters(formatted, { source, enriched })) {
+			if (matchesFilters(formatted, { source, enriched, symbol, eventCategory, exchange })) {
 				matches.push(formatted);
 				if (matches.length >= targetCount) {
 					break;
@@ -1991,9 +2040,12 @@ async function batchReplayAlerts(attempts) {
  * @param {number|undefined} params.limit Maximum matching documents aggregated, capped at 1000
  * @param {string|undefined} params.source Optional exact source filter
  * @param {boolean|undefined} params.enriched Optional enriched/plain filter
+ * @param {string|undefined} params.symbol Optional symbol filter
+ * @param {string|undefined} params.eventCategory Optional event category filter
+ * @param {string|undefined} params.exchange Optional exchange filter
  * @returns {Promise<Object|null>}
  */
-async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
+async function summarizeAlerts({ from, to, limit, source, enriched, symbol, eventCategory, exchange } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -2004,7 +2056,11 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 	}
 
 	const window = buildSummaryWindow({ from, to, limit });
-	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
+	const hasFilters = typeof source === 'string'
+		|| typeof enriched === 'boolean'
+		|| typeof symbol === 'string'
+		|| typeof eventCategory === 'string'
+		|| typeof exchange === 'string';
 	const scanLimit = Math.max(window.limit, MAX_PAGE_SIZE);
 	const docs = [];
 	let pageCursor = null;
@@ -2036,10 +2092,19 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		const matchingDocs = hasFilters
 			? activeDocs.filter((doc) => {
 				const data = doc.data() || {};
+				const extracted = extractSymbolAndExchange(data);
+				const category = typeof data.eventCategory === 'string'
+					? data.eventCategory
+					: (data.enrichmentData && typeof (data.enrichmentData.eventCategory || data.enrichmentData.event_category) === 'string'
+						? (data.enrichmentData.eventCategory || data.enrichmentData.event_category)
+						: null);
 				return matchesFilters({
 					source: typeof data.source === 'string' ? data.source : null,
 					enriched: Boolean(data.enriched),
-				}, { source, enriched });
+					symbol: extracted.symbol !== 'unknown' ? extracted.symbol : null,
+					exchange: extracted.exchange || null,
+					eventCategory: category,
+				}, { source, enriched, symbol, eventCategory, exchange });
 			})
 			: activeDocs;
 		docs.push(...matchingDocs.slice(0, window.limit - docs.length));

@@ -29,6 +29,29 @@ describe('createRequest', () => {
 		});
 	});
 
+	it('merges custom headers such as idempotency-key without overriding core headers', () => {
+		expect(createRequest({
+			path: '/api/jobs/tradingview-analysis',
+			method: 'POST',
+			apiKey: 'secret',
+			body: { type: 'market-scanner' },
+			headers: {
+				'idempotency-key': 'custom-key-123',
+			},
+		})).toEqual({
+			url: '/api/jobs/tradingview-analysis',
+			options: {
+				method: 'POST',
+				body: '{"type":"market-scanner"}',
+				headers: {
+					'Content-Type': 'application/json',
+					'idempotency-key': 'custom-key-123',
+					'x-api-key': 'secret',
+				},
+			},
+		});
+	});
+
 	it('rejects a non-relative API path', () => {
 		expect(() => createRequest({ path: 'https://example.com', method: 'GET' }))
 			.toThrow('API path must start with /api/');

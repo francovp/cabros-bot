@@ -35,6 +35,12 @@ const {
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
 } = require('../lib/deploymentEnvironment');
+const {
+	getLastRunAt: getTestAlertLastRunAt,
+	getLastRunStatus: getTestAlertLastRunStatus,
+	getRateLimitState: getTestAlertRateLimitState,
+	isTestAlertEnabled,
+} = require('./admin/testAlert');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
 const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
@@ -375,6 +381,7 @@ function getStatus() {
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.isEnabled(),
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
+			testAlert: isTestAlertEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -457,6 +464,12 @@ function getStatus() {
 			binanceTrading: binanceTradingStatus,
 			binanceOrderAudit: binanceOrderAuditService.getStatus(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.getStatus(),
+			testAlert: {
+				enabled: isTestAlertEnabled(),
+				lastRunAt: getTestAlertLastRunAt(),
+				lastRunStatus: getTestAlertLastRunStatus(),
+				rateLimitState: getTestAlertRateLimitState(),
+			},
 		},
 	};
 }

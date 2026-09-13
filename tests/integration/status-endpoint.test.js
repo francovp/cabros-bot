@@ -1817,6 +1817,25 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports testAlert feature flag and dependency status', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.testAlert).toBe(true);
+		expect(response.body.dependencies.testAlert).toEqual({
+			enabled: true,
+			lastRunAt: null,
+			lastRunStatus: null,
+			rateLimitState: {
+				windowMs: 60000,
+				dailyLimit: 30,
+				dailyRunsToday: 0,
+			},
+		});
+	});
+
 	it('omits deliveryMetrics when no deliveries have been recorded', async () => {
 		const response = await request(app)
 			.get('/api/status')

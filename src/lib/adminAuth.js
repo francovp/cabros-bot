@@ -112,6 +112,12 @@ async function validateAdminAccess(req, res, next) {
 		try {
 			const claims = await firebaseAuth.verifyIdToken(match[1], true);
 			req.adminRole = getAdminRole(claims);
+			req.adminUser = {
+				uid: claims.uid || claims.sub || null,
+				email: claims.email || null,
+				claims,
+			};
+			req.user = req.adminUser;
 			if (req.adminRole) return next();
 			return res.status(403).json({ error: 'Forbidden', code: 'ADMIN_ROLE_REQUIRED' });
 		} catch (error) {
