@@ -156,8 +156,9 @@ function idempotencyMiddleware(req, res, next) {
 			if (responseCached) {
 				return;
 			}
-			if (req.requestDeadlineExceeded) {
-				releaseTimedOutReservation();
+			// Do not cache the synthetic 408; a late handler response is still
+			// authoritative for idempotent side effects and must remain replayable.
+			if (req.requestDeadlineExceeded && req.requestDeadlineResponse) {
 				return;
 			}
 
@@ -187,6 +188,7 @@ function idempotencyMiddleware(req, res, next) {
 				&& typeof responseBody === 'object'
 				&& responseBody.code === 'BINANCE_ORDER_STATUS_UNKNOWN';
 			if (res.statusCode >= 500 && !replayableIndeterminateQueueResponse && !replayableIndeterminateOrderResponse) {
+				if (req.requestDeadlineExceeded) releaseTimedOutReservation();
 				return;
 			}
 			responseCached = true;
@@ -226,7 +228,9 @@ function idempotencyMiddleware(req, res, next) {
 		});
 		res.end = function(...args) {
 			const result = originalEnd.apply(this, args);
-			releaseTimedOutReservation();
+			if (req.requestDeadlineExceeded && !req.requestDeadlineResponse) {
+				cacheResponse(args[0]);
+			}
 			return result;
 		};
 
