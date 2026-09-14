@@ -343,6 +343,20 @@ describe('NotificationRedriveService', () => {
 			expect(pending.destinationOverride.whatsappChatId).toBe('120363@g.us');
 		});
 
+		it('updates the cached durable pending count for local enqueue and terminalization', async () => {
+			service.persistedPendingCount = 7;
+			const alert = { text: 'Alert body', correlationId: 'corr-local-count' };
+			const results = [{ channel: 'telegram', success: false, error: 'Connection refused' }];
+
+			await service.recordDeliveryResults(alert, results);
+
+			expect(service.getStatus().pendingCount).toBe(8);
+
+			await service.markTerminal('corr-local-count_telegram', 'cancelled');
+
+			expect(service.getStatus().pendingCount).toBe(7);
+		});
+
 		it('records dead-letters to Firestore when Firestore is available', async () => {
 			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
 			const alert = { text: 'Alert body', correlationId: 'corr-abc' };

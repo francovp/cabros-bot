@@ -228,6 +228,10 @@ function getRedriveRouting(channel, routing, repeatCooldown) {
 	return { ...(routing || {}), [field]: destination };
 }
 
+function isPendingRedriveStatus(status) {
+	return status === 'pending' || status === 'in_flight';
+}
+
 class NotificationRedriveService {
 	constructor(options = {}) {
 		this.inMemoryStore = new Map();
@@ -526,7 +530,9 @@ class NotificationRedriveService {
 			}
 
 			// Persist in-memory store
+			const previousRecord = this.inMemoryStore.get(recordId);
 			this.inMemoryStore.set(recordId, { ...sanitizedRecord });
+			this._adjustPendingCount(previousRecord?.status, sanitizedRecord.status);
 
 			// Try persisting to Firestore if available
 			const firestore = this.getFirestore();
@@ -740,6 +746,7 @@ class NotificationRedriveService {
 		const memCurrent = this.inMemoryStore.get(recordId);
 		if (memCurrent) {
 			this.inMemoryStore.set(recordId, { ...memCurrent, ...sanitized });
+			this._adjustPendingCount(memCurrent.status, sanitized.status);
 		}
 
 		const firestore = this.getFirestore();
@@ -783,6 +790,7 @@ class NotificationRedriveService {
 		const memCurrent = this.inMemoryStore.get(recordId);
 		if (memCurrent) {
 			this.inMemoryStore.set(recordId, { ...memCurrent, ...sanitized });
+			this._adjustPendingCount(memCurrent.status, sanitized.status);
 		}
 
 		const firestore = this.getFirestore();
@@ -2035,7 +2043,7 @@ class NotificationRedriveService {
 		const nowMs = Date.now();
 
 		for (const data of this.inMemoryStore.values()) {
-			if (data.status === 'pending' || data.status === 'in_flight') {
+			if (isPendingRedriveStatus(data.status)) {
 				const expiresAtMs = toMillis(data.expiresAt);
 				if (!expiresAtMs || expiresAtMs > nowMs) {
 					count += 1;
@@ -2043,6 +2051,16 @@ class NotificationRedriveService {
 			}
 		}
 		return count;
+	}
+
+	_adjustPendingCount(previousStatus, nextStatus) {
+		if (!Number.isFinite(this.persistedPendingCount)) return;
+
+		const wasPending = isPendingRedriveStatus(previousStatus);
+		const isPending = isPendingRedriveStatus(nextStatus);
+		if (wasPending === isPending) return;
+
+		this.persistedPendingCount = Math.max(0, this.persistedPendingCount + (isPending ? 1 : -1));
 	}
 
 	getStatus() {
