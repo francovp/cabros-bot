@@ -30,6 +30,9 @@ PR_NUMBER="$1"
 REPO="${REPO:-francovp/cabros-bot}"
 PRODUCTION_URL="${PRODUCTION_URL:-https://cabros-bot-production.up.railway.app}"
 RAILWAY_FALLBACK_URL="https://cabros-bot-cabros-bot-pr-${PR_NUMBER}.up.railway.app"
+# Normalize fallback URLs to ensure no trailing slashes
+PRODUCTION_URL="${PRODUCTION_URL%%/}"
+RAILWAY_FALLBACK_URL="${RAILWAY_FALLBACK_URL%%/}"
 
 # Switch to francovp user for gh commands; restore on exit
 trap 'restore_gh_user' EXIT
@@ -85,7 +88,8 @@ resolve_from_environment() {
     url="$(echo "$status_info" | jq -r '.url // empty')"
 
     if { [ "$state" = "success" ] || [ "$state" = "active" ]; } && [ -n "$url" ]; then
-      echo "$url"
+      # Normalize: remove trailing slashes to prevent //endpoint concatenation issues
+      echo "${url%%/}"
       return 0
     fi
   done <<< "$deploy_ids"
@@ -146,5 +150,6 @@ fi
 
 # 3. Fallback to Railway URL pattern with a warning
 echo "Warning: No active GitHub deployment found for PR #${PR_NUMBER} (env=${ENV_NAME}${PR_BRANCH:+, ref=${PR_BRANCH}}). Falling back to Railway URL." >&2
-echo "$RAILWAY_FALLBACK_URL"
+# Normalize: remove trailing slashes to prevent //endpoint concatenation issues
+echo "${RAILWAY_FALLBACK_URL%%/}"
 exit 0
