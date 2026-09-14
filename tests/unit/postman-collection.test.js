@@ -287,6 +287,7 @@ describe('Postman collection contract', () => {
 				durationMs: expect.any(Number),
 			}));
 		}
+	});
 
 	it('documents include=enrichment_summary success and invalid 400 response in GET List Alerts', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
