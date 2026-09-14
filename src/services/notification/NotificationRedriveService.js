@@ -335,13 +335,12 @@ class NotificationRedriveService {
 			.then((result) => {
 				persisted = result?.persisted === true;
 				retryable = result?.retryable === true;
-				if (!persisted) {
+				if (!persisted && retryable) {
 					this._pendingZeroChannelWriteDelta += delta;
 				}
 				return persisted;
 			})
 			.catch((error) => {
-				this._pendingZeroChannelWriteDelta += delta;
 				console.warn('[NotificationRedriveService] Zero-channel write failed:', error.message);
 				return false;
 			})
@@ -744,9 +743,9 @@ class NotificationRedriveService {
 
 		const sanitized = stripUndefinedFieldsDeep(updateData);
 		const memCurrent = this.inMemoryStore.get(recordId);
+		const previousStatus = memCurrent?.status;
 		if (memCurrent) {
 			this.inMemoryStore.set(recordId, { ...memCurrent, ...sanitized });
-			this._adjustPendingCount(memCurrent.status, sanitized.status);
 		}
 
 		const firestore = this.getFirestore();
@@ -758,14 +757,22 @@ class NotificationRedriveService {
 				});
 				if (Number.isFinite(deadline)) {
 					const persisted = await resolveBeforeDeadline(writePromise, deadline);
+					if (persisted === true) {
+						this._adjustPendingCount(previousStatus, sanitized.status);
+					}
 					return persisted === true;
 				}
-				return await writePromise;
+				const persisted = await writePromise;
+				if (persisted === true) {
+					this._adjustPendingCount(previousStatus, sanitized.status);
+				}
+				return persisted;
 			} catch (error) {
 				console.warn(`[NotificationRedriveService] Failed to mark dead-letter ${recordId} terminal (${status}):`, error.message);
 				return false;
 			}
 		}
+		this._adjustPendingCount(previousStatus, sanitized.status);
 		return true;
 	}
 
@@ -788,19 +795,22 @@ class NotificationRedriveService {
 
 		const sanitized = stripUndefinedFieldsDeep(updateData);
 		const memCurrent = this.inMemoryStore.get(recordId);
+		const previousStatus = memCurrent?.status;
 		if (memCurrent) {
 			this.inMemoryStore.set(recordId, { ...memCurrent, ...sanitized });
-			this._adjustPendingCount(memCurrent.status, sanitized.status);
 		}
 
 		const firestore = this.getFirestore();
 		if (firestore) {
 			try {
 				await firestore.collection(COLLECTION_NAME).doc(recordId).set(sanitized, { merge: true });
+				this._adjustPendingCount(previousStatus, sanitized.status);
 			} catch (error) {
 				console.warn(`[NotificationRedriveService] Failed to update retry for ${recordId}:`, error.message);
 			}
+			return;
 		}
+		this._adjustPendingCount(previousStatus, sanitized.status);
 	}
 
 	async reconcileRepeatCooldown(key, channels = []) {

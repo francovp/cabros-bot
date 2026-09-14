@@ -357,6 +357,27 @@ describe('NotificationRedriveService', () => {
 			expect(service.getStatus().pendingCount).toBe(7);
 		});
 
+		it('does not decrement cached durable pending count when terminalization persistence fails', async () => {
+			service.persistedPendingCount = 7;
+			service.inMemoryStore.set('corr-terminal-failure_telegram', {
+				status: 'pending',
+				expiresAt: new Date(Date.now() + 60000),
+			});
+			const failingFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						set: jest.fn().mockRejectedValue(new Error('Firestore unavailable')),
+					})),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(failingFirestore);
+
+			const marked = await service.markTerminal('corr-terminal-failure_telegram', 'cancelled');
+
+			expect(marked).toBe(false);
+			expect(service.getStatus().pendingCount).toBe(7);
+		});
+
 		it('records dead-letters to Firestore when Firestore is available', async () => {
 			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
 			const alert = { text: 'Alert body', correlationId: 'corr-abc' };
@@ -2524,15 +2545,28 @@ describe('NotificationRedriveService', () => {
 		it('does not retry ambiguous zero-channel persistence failures', async () => {
 			jest.useFakeTimers();
 			let transactionCalls = 0;
+			let persistedCount = 0;
 			const mockFirestore = {
 				collection: jest.fn(() => ({
 					doc: jest.fn(() => ({ id: 'notification-redrive' })),
 				})),
-				runTransaction: jest.fn(async () => {
+				runTransaction: jest.fn(async (updateFn) => {
 					transactionCalls += 1;
-					const error = new Error('ambiguous transport failure');
-					error.code = 'unavailable';
-					throw error;
+					if (transactionCalls === 1) {
+						const error = new Error('ambiguous transport failure');
+						error.code = 'unavailable';
+						throw error;
+					}
+					const mockTx = {
+						get: jest.fn(async () => ({
+							exists: persistedCount > 0,
+							data: () => ({ zeroChannelBroadcasts: persistedCount }),
+						})),
+						set: jest.fn((docRef, payload) => {
+							persistedCount = payload.zeroChannelBroadcasts;
+						}),
+					};
+					await updateFn(mockTx);
 				}),
 			};
 			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
@@ -2541,7 +2575,11 @@ describe('NotificationRedriveService', () => {
 			await jest.advanceTimersByTimeAsync(20000);
 
 			expect(transactionCalls).toBe(1);
-			expect(service._pendingZeroChannelWriteDelta).toBe(1);
+			expect(service._pendingZeroChannelWriteDelta).toBe(0);
+
+			await service.incrementZeroChannelBroadcasts();
+			expect(transactionCalls).toBe(2);
+			expect(persistedCount).toBe(1);
 			jest.useRealTimers();
 		});
 	});
