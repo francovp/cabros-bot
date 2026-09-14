@@ -1835,6 +1835,7 @@ describe('Status endpoints', () => {
 			json: jest.fn(),
 		};
 		const getFirestoreSpy = jest.spyOn(service, 'getFirestore').mockReturnValue({});
+		const getStatusSpy = jest.spyOn(service, 'getStatus');
 		const syncSpy = jest.spyOn(service, 'syncWorkerTelemetry').mockImplementation(() => new Promise((resolve) => {
 			releaseSync = () => {
 				service.persistedPendingCount = 6;
@@ -1856,11 +1857,14 @@ describe('Status endpoints', () => {
 			await responsePromise;
 			expect(response.status).toHaveBeenCalledWith(200);
 			expect(response.json).toHaveBeenCalledTimes(1);
+			expect(getStatusSpy).toHaveBeenCalledWith({ skipTelemetrySync: true });
+			expect(syncSpy).toHaveBeenCalledTimes(1);
 			expect(response.json.mock.calls[0][0].dependencies.notificationRedrive.pendingCount).toBe(6);
 			expect(response.json.mock.calls[0][0].dependencies.notificationRedrive.lastSweepAt).toBe('2026-09-14T08:00:00.000Z');
 		} finally {
 			releaseSync?.();
 			syncSpy.mockRestore();
+			getStatusSpy.mockRestore();
 			getFirestoreSpy.mockRestore();
 			service._resetForTesting();
 		}

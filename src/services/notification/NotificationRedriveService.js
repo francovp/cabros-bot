@@ -264,6 +264,7 @@ class NotificationRedriveService {
 		this.persistedPendingCount = null;
 		this._pendingCountLocalDelta = 0;
 		this._pendingCountLocalMutationAt = 0;
+		this._pendingCountObservedAt = null;
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
 		this.totalZeroChannelBroadcasts = 0;
@@ -1448,6 +1449,14 @@ class NotificationRedriveService {
 				if (!queryToRead || typeof queryToRead.get !== 'function') {
 					return this._getPendingFallbackCount();
 				}
+				const pendingCountQueryStartedAtMs = Date.now();
+				const localPendingCountDeltaAtQueryStart = this._pendingCountLocalDelta;
+				const applyDurablePendingCount = (count) => {
+					const localDeltaSinceQueryStart = this._pendingCountLocalDelta - localPendingCountDeltaAtQueryStart;
+					this.persistedPendingCount = Math.max(0, Math.floor(count + localDeltaSinceQueryStart));
+					this._pendingCountObservedAt = new Date(pendingCountQueryStartedAtMs);
+					return Math.floor(count);
+				};
 
 				const countPromise = Promise.resolve()
 					.then(() => queryToRead.get())
@@ -1456,12 +1465,10 @@ class NotificationRedriveService {
 							const data = typeof snapshot?.data === 'function' ? snapshot.data() : snapshot?.data;
 							const count = Number(data?.count);
 							if (!Number.isFinite(count) || count < 0) return null;
-							this.persistedPendingCount = Math.floor(count);
-							return this.persistedPendingCount;
+							return applyDurablePendingCount(count);
 						}
 						if (!snapshot || snapshot.empty) {
-							this.persistedPendingCount = 0;
-							return 0;
+							return applyDurablePendingCount(0);
 						}
 						let count = 0;
 						const nowMs = Date.now();
@@ -1473,8 +1480,7 @@ class NotificationRedriveService {
 								count += 1;
 							}
 						}
-						this.persistedPendingCount = count;
-						return count;
+						return applyDurablePendingCount(count);
 					})
 					.catch((error) => {
 						console.warn('[NotificationRedriveService] Failed to count durable pending records:', error.message);
@@ -1545,7 +1551,7 @@ class NotificationRedriveService {
 		const completedAt = normalizeTimestampToDate(this.lastSweepAt) || new Date();
 		const currentSweepAtMs = completedAt.getTime();
 		const pendingCount = await this.countDurablePendingRecords();
-		const pendingCountObservedAt = new Date();
+		const pendingCountObservedAt = normalizeTimestampToDate(this._pendingCountObservedAt) || new Date();
 		const payload = {
 			worker: 'notification-redrive',
 			role: this.getWorkerRole(),
@@ -2215,6 +2221,7 @@ class NotificationRedriveService {
 		this.persistedPendingCount = null;
 		this._pendingCountLocalDelta = 0;
 		this._pendingCountLocalMutationAt = 0;
+		this._pendingCountObservedAt = null;
 		this.persistedDeliveredCount = 0;
 		this.persistedExhaustedCount = 0;
 		this.persistedZeroChannelBroadcasts = 0;
