@@ -7643,7 +7643,7 @@
               "exhausted": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Total records marked exhausted during the sweep."
+                "description": "Total records marked exhausted or expired during the sweep."
               },
               "errors": {
                 "type": "integer",

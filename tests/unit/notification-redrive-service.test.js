@@ -2376,6 +2376,72 @@ describe('NotificationRedriveService', () => {
 			expect(service.persistedPendingCount).toBe(3);
 		});
 
+		it('partitions pending mutations at the durable snapshot read time', async () => {
+			let resolveQuery;
+			const slowQuery = new Promise((resolve) => {
+				resolveQuery = resolve;
+			});
+			const query = {
+				where: jest.fn(() => query),
+				get: jest.fn(() => slowQuery),
+			};
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					where: jest.fn(() => query),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+			service.persistedPendingCount = 2;
+			const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1000);
+
+			try {
+				const countPromise = service.countDurablePendingRecords();
+				await new Promise((resolve) => setImmediate(resolve));
+				service._adjustPendingCount(null, 'pending');
+				nowSpy.mockReturnValue(2000);
+				service._adjustPendingCount(null, 'pending');
+				resolveQuery({
+					readTime: new Date(1500),
+					empty: false,
+					docs: [
+						{ data: () => ({ expiresAt: new Date(60000) }) },
+						{ data: () => ({ expiresAt: new Date(60000) }) },
+						{ data: () => ({ expiresAt: new Date(60000) }) },
+					],
+				});
+
+				await countPromise;
+				expect(service.persistedPendingCount).toBe(4);
+			} finally {
+				nowSpy.mockRestore();
+			}
+		});
+
+		it('retains pending mutations before the first durable heartbeat baseline', async () => {
+			const observedAt = new Date(Date.now() - 1000);
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						get: jest.fn(async () => ({
+							exists: true,
+							data: () => ({
+								lastSweepAt: observedAt.toISOString(),
+								pendingCount: 7,
+								pendingCountObservedAt: observedAt.toISOString(),
+							}),
+						})),
+					})),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			service._adjustPendingCount(null, 'pending');
+
+			expect(service._pendingCountLocalDelta).toBe(1);
+			expect(await service.syncWorkerTelemetry()).toBe(true);
+			expect(service.persistedPendingCount).toBe(8);
+		});
+
 		it('merges session delivery and exhaustion counters atomically into existing heartbeat counters', async () => {
 			let committedPayload = null;
 			const mockFirestore = {

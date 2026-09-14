@@ -264,6 +264,8 @@ class NotificationRedriveService {
 		this.persistedPendingCount = null;
 		this._pendingCountLocalDelta = 0;
 		this._pendingCountLocalMutationAt = 0;
+		this._pendingCountLocalMutations = [];
+		this._pendingCountLocalMutationSequence = 0;
 		this._pendingCountObservedAt = null;
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
@@ -1450,14 +1452,15 @@ class NotificationRedriveService {
 					return this._getPendingFallbackCount();
 				}
 				const pendingCountQueryStartedAtMs = Date.now();
-				const localPendingCountDeltaAtQueryStart = this._pendingCountLocalDelta;
+				const localPendingCountMutationSequenceAtQueryStart = this._pendingCountLocalMutationSequence;
 				const applyDurablePendingCount = (count, snapshot = null) => {
 					const snapshotObservedAt = normalizeTimestampToDate(snapshot?.readTime);
 					const observedAtMs = snapshotObservedAt?.getTime() || pendingCountQueryStartedAtMs;
-					const localDeltaSinceQueryStart = this._pendingCountLocalDelta - localPendingCountDeltaAtQueryStart;
-					const localDeltaAfterSnapshot = this._pendingCountLocalMutationAt > observedAtMs
-						? localDeltaSinceQueryStart
-						: 0;
+					const localDeltaAfterSnapshot = this._pendingCountLocalMutations.reduce((delta, mutation) => (
+						mutation.sequence > localPendingCountMutationSequenceAtQueryStart && mutation.at > observedAtMs
+							? delta + mutation.delta
+							: delta
+					), 0);
 					this.persistedPendingCount = Math.max(0, Math.floor(count + localDeltaAfterSnapshot));
 					this._pendingCountObservedAt = new Date(observedAtMs);
 					return Math.floor(count);
@@ -1859,15 +1862,11 @@ class NotificationRedriveService {
 				this.persistedLastRunExhaustedCount = data.lastRunExhaustedCount;
 			}
 			if (typeof data.pendingCount === 'number') {
-				const preserveLocalDelta = this._pendingCountLocalDelta !== 0
-					&& (!pendingCountObservedAtMs || this._pendingCountLocalMutationAt > pendingCountObservedAtMs);
+				const localDeltaAfterSnapshot = this._getPendingCountLocalDeltaAfter(pendingCountObservedAtMs);
 				this.persistedPendingCount = Math.max(0, Math.floor(data.pendingCount + (
-					preserveLocalDelta ? this._pendingCountLocalDelta : 0
+					localDeltaAfterSnapshot
 				)));
-				if (!preserveLocalDelta) {
-					this._pendingCountLocalDelta = 0;
-					this._pendingCountLocalMutationAt = 0;
-				}
+				this._retainPendingCountLocalMutationsAfter(pendingCountObservedAtMs);
 			}
 			if (typeof data.deliveredCount === 'number') {
 				this.persistedDeliveredCount = data.deliveredCount;
@@ -2094,17 +2093,50 @@ class NotificationRedriveService {
 		return count;
 	}
 
-	_adjustPendingCount(previousStatus, nextStatus) {
-		if (!Number.isFinite(this.persistedPendingCount)) return;
+	_getPendingCountLocalDeltaAfter(observedAtMs) {
+		if (this._pendingCountLocalMutations.length > 0) {
+			return this._pendingCountLocalMutations.reduce((delta, mutation) => (
+				mutation.at > observedAtMs ? delta + mutation.delta : delta
+			), 0);
+		}
+		return this._pendingCountLocalMutationAt > observedAtMs ? this._pendingCountLocalDelta : 0;
+	}
 
+	_retainPendingCountLocalMutationsAfter(observedAtMs) {
+		if (this._pendingCountLocalMutations.length > 0) {
+			this._pendingCountLocalMutations = this._pendingCountLocalMutations.filter(
+				(mutation) => mutation.at > observedAtMs,
+			);
+			this._pendingCountLocalDelta = this._pendingCountLocalMutations.reduce(
+				(delta, mutation) => delta + mutation.delta,
+				0,
+			);
+			this._pendingCountLocalMutationAt = this._pendingCountLocalMutations.at(-1)?.at || 0;
+			return;
+		}
+		if (this._pendingCountLocalMutationAt <= observedAtMs) {
+			this._pendingCountLocalDelta = 0;
+			this._pendingCountLocalMutationAt = 0;
+		}
+	}
+
+	_adjustPendingCount(previousStatus, nextStatus) {
 		const wasPending = isPendingRedriveStatus(previousStatus);
 		const isPending = isPendingRedriveStatus(nextStatus);
 		if (wasPending === isPending) return;
 
 		const delta = isPending ? 1 : -1;
-		this.persistedPendingCount = Math.max(0, this.persistedPendingCount + delta);
+		const mutationAt = Date.now();
 		this._pendingCountLocalDelta += delta;
-		this._pendingCountLocalMutationAt = this._pendingCountLocalDelta === 0 ? 0 : Date.now();
+		this._pendingCountLocalMutationAt = this._pendingCountLocalDelta === 0 ? 0 : mutationAt;
+		this._pendingCountLocalMutations.push({
+			sequence: ++this._pendingCountLocalMutationSequence,
+			delta,
+			at: mutationAt,
+		});
+		if (Number.isFinite(this.persistedPendingCount)) {
+			this.persistedPendingCount = Math.max(0, this.persistedPendingCount + delta);
+		}
 	}
 
 	getStatus({ skipTelemetrySync = false } = {}) {
@@ -2226,6 +2258,8 @@ class NotificationRedriveService {
 		this.persistedPendingCount = null;
 		this._pendingCountLocalDelta = 0;
 		this._pendingCountLocalMutationAt = 0;
+		this._pendingCountLocalMutations = [];
+		this._pendingCountLocalMutationSequence = 0;
 		this._pendingCountObservedAt = null;
 		this.persistedDeliveredCount = 0;
 		this.persistedExhaustedCount = 0;
