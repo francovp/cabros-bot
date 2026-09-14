@@ -1536,6 +1536,7 @@ describe('NotificationRedriveService', () => {
 				},
 				deliveredCount: 2,
 				exhaustedCount: 1,
+				pendingCountObservedAt: expect.any(String),
 			});
 
 			const webService = new NotificationRedriveService();
@@ -1629,6 +1630,49 @@ describe('NotificationRedriveService', () => {
 			expect(commits.length).toBeGreaterThan(0);
 			expect(committedSequence).toBe(2);
 			expect(commits[commits.length - 1].sequence).toBe(2);
+		});
+
+		it('keeps newer in-memory totals when a timed-out telemetry transaction commits later', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			let releaseTransaction;
+			const transactionGate = new Promise((resolve) => {
+				releaseTransaction = resolve;
+			});
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({ set: jest.fn() })),
+				})),
+				runTransaction: jest.fn(async (updateFn) => {
+					const mockTx = {
+						get: jest.fn(async () => ({ exists: false })),
+						set: jest.fn(),
+					};
+					await updateFn(mockTx);
+					await transactionGate;
+				}),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+			jest.spyOn(service, 'countDurablePendingRecords').mockResolvedValue(0);
+			service.totalDeliveredCount = 1;
+			service.totalExhaustedCount = 1;
+
+			try {
+				const persistPromise = service.persistWorkerTelemetry({ timeoutMs: 20 });
+				await new Promise((resolve) => setTimeout(resolve, 30));
+				expect(await persistPromise).toBe(false);
+				const lateWrite = service._activeTelemetryWriteOperation;
+				expect(lateWrite).not.toBeNull();
+
+				service.totalDeliveredCount = 3;
+				service.totalExhaustedCount = 4;
+				releaseTransaction();
+				await lateWrite;
+
+				expect(service.totalDeliveredCount).toBe(3);
+				expect(service.totalExhaustedCount).toBe(4);
+			} finally {
+				releaseTransaction();
+			}
 		});
 
 		it('allows restarted worker with lower sequence to update heartbeat when lastSweepAt is newer', async () => {
@@ -1914,6 +1958,33 @@ describe('NotificationRedriveService', () => {
 
 			expect(synced).toBe(true);
 			expect(service.persistedPendingCount).toBe(6);
+		});
+
+		it('uses pending-count observation time instead of sweep time when merging local mutations', async () => {
+			const sweepAt = new Date('2026-09-13T12:00:00.000Z');
+			service.persistedLastSweepAt = sweepAt;
+			service.persistedPendingCount = 7;
+			service._pendingCountLocalDelta = 1;
+			service._pendingCountLocalMutationAt = Date.parse('2026-09-13T12:00:10.000Z');
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						get: jest.fn(async () => ({
+							exists: true,
+							data: () => ({
+								lastSweepAt: sweepAt.toISOString(),
+								pendingCount: 8,
+								pendingCountObservedAt: '2026-09-13T12:00:20.000Z',
+							}),
+						})),
+					})),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			expect(await service.syncWorkerTelemetry()).toBe(true);
+			expect(service.persistedPendingCount).toBe(8);
+			expect(service._pendingCountLocalDelta).toBe(0);
 		});
 
 		it('reports durable queue pending count from worker heartbeat in status and counts unexpired durable records', async () => {

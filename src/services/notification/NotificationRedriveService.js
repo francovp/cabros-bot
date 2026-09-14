@@ -1545,6 +1545,7 @@ class NotificationRedriveService {
 		const completedAt = normalizeTimestampToDate(this.lastSweepAt) || new Date();
 		const currentSweepAtMs = completedAt.getTime();
 		const pendingCount = await this.countDurablePendingRecords();
+		const pendingCountObservedAt = new Date();
 		const payload = {
 			worker: 'notification-redrive',
 			role: this.getWorkerRole(),
@@ -1559,6 +1560,7 @@ class NotificationRedriveService {
 			lastRunErrorCount: this.lastRunErrorCount,
 			lastRunExhaustedCount: this.lastRunExhaustedCount,
 			pendingCount,
+			pendingCountObservedAt: pendingCountObservedAt.toISOString(),
 			deliveredCount: this.totalDeliveredCount,
 			exhaustedCount: this.totalExhaustedCount,
 			updatedAt: admin.firestore?.Timestamp?.fromDate
@@ -1638,10 +1640,10 @@ class NotificationRedriveService {
 						this._sessionDeliveredDelta = Math.max(0, (this._sessionDeliveredDelta || 0) - deliveredDelta);
 						this._sessionExhaustedDelta = Math.max(0, (this._sessionExhaustedDelta || 0) - exhaustedDelta);
 						if (typeof finalWritePayload.deliveredCount === 'number') {
-							this.totalDeliveredCount = finalWritePayload.deliveredCount;
+							this.totalDeliveredCount = Math.max(this.totalDeliveredCount, finalWritePayload.deliveredCount);
 						}
 						if (typeof finalWritePayload.exhaustedCount === 'number') {
-							this.totalExhaustedCount = finalWritePayload.exhaustedCount;
+							this.totalExhaustedCount = Math.max(this.totalExhaustedCount, finalWritePayload.exhaustedCount);
 						}
 					}
 				});
@@ -1808,6 +1810,10 @@ class NotificationRedriveService {
 			const normalizedSweepAt = normalizeTimestampToDate(data.lastSweepAt);
 			const normalizedRunAt = normalizeTimestampToDate(data.lastRunAt);
 			const snapshotSweepAtMs = normalizedSweepAt ? normalizedSweepAt.getTime() : 0;
+			const normalizedPendingCountObservedAt = normalizeTimestampToDate(data.pendingCountObservedAt);
+			const pendingCountObservedAtMs = normalizedPendingCountObservedAt
+				? normalizedPendingCountObservedAt.getTime()
+				: snapshotSweepAtMs;
 			const currentCachedSweepAtMs = this.persistedLastSweepAt ? (normalizeTimestampToDate(this.persistedLastSweepAt)?.getTime() || 0) : 0;
 			if (currentCachedSweepAtMs > 0 && Number.isFinite(snapshotSweepAtMs) && snapshotSweepAtMs < currentCachedSweepAtMs) {
 				return false;
@@ -1843,7 +1849,7 @@ class NotificationRedriveService {
 			}
 			if (typeof data.pendingCount === 'number') {
 				const preserveLocalDelta = this._pendingCountLocalDelta !== 0
-					&& (!snapshotSweepAtMs || this._pendingCountLocalMutationAt > snapshotSweepAtMs);
+					&& (!pendingCountObservedAtMs || this._pendingCountLocalMutationAt > pendingCountObservedAtMs);
 				this.persistedPendingCount = Math.max(0, Math.floor(data.pendingCount + (
 					preserveLocalDelta ? this._pendingCountLocalDelta : 0
 				)));
@@ -2090,12 +2096,12 @@ class NotificationRedriveService {
 		this._pendingCountLocalMutationAt = this._pendingCountLocalDelta === 0 ? 0 : Date.now();
 	}
 
-	getStatus() {
+	getStatus({ skipTelemetrySync = false } = {}) {
 		const enabled = this.isEnabled();
 		const role = this.getWorkerRole();
 		const runtimeConfig = getRuntimeConfig();
 
-		if (role !== 'disabled' && this.getFirestore()) {
+		if (!skipTelemetrySync && role !== 'disabled' && this.getFirestore()) {
 			void this.syncWorkerTelemetry();
 		}
 

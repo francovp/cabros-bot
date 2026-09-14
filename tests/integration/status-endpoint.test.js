@@ -1823,6 +1823,49 @@ describe('Status endpoints', () => {
 		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepResult).toBeNull();
 	});
 
+	it('waits for the initial notification redrive heartbeat before serializing status', async () => {
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
+		const statusController = require('../../src/controllers/status');
+		const service = require('../../src/services/notification/NotificationRedriveService').notificationRedriveService;
+		let releaseSync;
+		let responseSettled = false;
+		const response = {
+			status: jest.fn().mockReturnThis(),
+			json: jest.fn(),
+		};
+		const getFirestoreSpy = jest.spyOn(service, 'getFirestore').mockReturnValue({});
+		const syncSpy = jest.spyOn(service, 'syncWorkerTelemetry').mockImplementation(() => new Promise((resolve) => {
+			releaseSync = () => {
+				service.persistedPendingCount = 6;
+				service.persistedLastSweepAt = new Date('2026-09-14T08:00:00.000Z');
+				resolve(true);
+			};
+		}));
+
+		try {
+			const responsePromise = Promise.resolve(statusController.getApiStatus({}, response))
+				.then(() => {
+					responseSettled = true;
+				});
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(syncSpy).toHaveBeenCalledTimes(1);
+			expect(responseSettled).toBe(false);
+
+			releaseSync();
+			await responsePromise;
+			expect(response.status).toHaveBeenCalledWith(200);
+			expect(response.json).toHaveBeenCalledTimes(1);
+			expect(response.json.mock.calls[0][0].dependencies.notificationRedrive.pendingCount).toBe(6);
+			expect(response.json.mock.calls[0][0].dependencies.notificationRedrive.lastSweepAt).toBe('2026-09-14T08:00:00.000Z');
+		} finally {
+			releaseSync?.();
+			syncSpy.mockRestore();
+			getFirestoreSpy.mockRestore();
+			service._resetForTesting();
+		}
+	});
+
 	it('exposes structured lastSweepResult with processed/succeeded/exhausted/errors after a sweep', async () => {
 		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
 		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
