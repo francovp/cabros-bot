@@ -22,6 +22,7 @@ describe('Rate Limiter Middleware', () => {
 			method: 'GET',
 			url: '/api/test',
 			ip: '127.0.0.1',
+			headers: { 'user-agent': 'test-agent/1.0' },
 		});
 		res = httpMocks.createResponse();
 		next = jest.fn();
@@ -185,5 +186,100 @@ describe('Rate Limiter Middleware', () => {
 		rateLimiter(req, res, next);
 
 		expect(next).toHaveBeenCalledTimes(3);
+	});
+
+	describe('API key-based rate limiting', () => {
+		test('uses API key hash as bucket key when x-api-key header is present', () => {
+			process.env.RATE_LIMIT_MAX = '2';
+			req.headers['x-api-key'] = 'test-api-key-123';
+
+			rateLimiter(req, res, next);
+			rateLimiter(req, res, next);
+			const resBlocked = httpMocks.createResponse();
+			rateLimiter(req, resBlocked, jest.fn());
+
+			expect(resBlocked.statusCode).toBe(429);
+
+			// Different API key should get a different bucket
+			const req2 = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/test',
+				ip: '127.0.0.1',
+				headers: { 'user-agent': 'test-agent/1.0', 'x-api-key': 'different-key-456' },
+			});
+			const res2 = httpMocks.createResponse();
+			rateLimiter(req2, res2, next);
+			rateLimiter(req2, res2, next);
+			const res2Blocked = httpMocks.createResponse();
+			rateLimiter(req2, res2Blocked, jest.fn());
+			expect(res2Blocked.statusCode).toBe(429);
+		});
+
+		test('uses API key hash as bucket key when api-key query param is present', () => {
+			process.env.RATE_LIMIT_MAX = '2';
+			req.query = { 'api-key': 'query-api-key-789' };
+
+			rateLimiter(req, res, next);
+			rateLimiter(req, res, next);
+			const resBlocked = httpMocks.createResponse();
+			rateLimiter(req, resBlocked, jest.fn());
+
+			expect(resBlocked.statusCode).toBe(429);
+		});
+
+		test('falls back to IP+UA fingerprint when no API key is present', () => {
+			process.env.RATE_LIMIT_MAX = '2';
+			delete req.headers['x-api-key'];
+			delete req.query;
+
+			rateLimiter(req, res, next);
+			rateLimiter(req, res, next);
+			const resBlocked = httpMocks.createResponse();
+			rateLimiter(req, resBlocked, jest.fn());
+
+			expect(resBlocked.statusCode).toBe(429);
+
+			// Same IP but different User-Agent should get different bucket
+			const req2 = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/test',
+				ip: '127.0.0.1',
+				headers: { 'user-agent': 'different-agent/2.0' },
+			});
+			const res2 = httpMocks.createResponse();
+			rateLimiter(req2, res2, next);
+			rateLimiter(req2, res2, next);
+			const res2Blocked = httpMocks.createResponse();
+			rateLimiter(req2, res2Blocked, jest.fn());
+			expect(res2Blocked.statusCode).toBe(429);
+		});
+
+		test('webhook ingest paths use API key aware bucket key', () => {
+			process.env.RATE_LIMIT_MAX = '2';
+			req.method = 'POST';
+			req.url = '/api/webhook/alert';
+			req.originalUrl = '/api/webhook/alert';
+			req.headers['x-api-key'] = 'webhook-key';
+
+			// Should not hit limit at 101 requests (webhook max is 1000)
+			for (let i = 0; i < 101; i++) {
+				rateLimiter(req, res, next);
+			}
+			expect(next).toHaveBeenCalledTimes(101);
+
+			// Different API key on webhook should be separate
+			const req2 = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/webhook/alert',
+				originalUrl: '/api/webhook/alert',
+				ip: '127.0.0.1',
+				headers: { 'user-agent': 'test-agent/1.0', 'x-api-key': 'webhook-key-2' },
+			});
+			const res2 = httpMocks.createResponse();
+			for (let i = 0; i < 101; i++) {
+				rateLimiter(req2, res2, next);
+			}
+			expect(next).toHaveBeenCalledTimes(202);
+		});
 	});
 });
