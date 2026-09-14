@@ -2,7 +2,6 @@ require('dotenv').config();
 const crypto = require('crypto');
 const { enrichAlert } = require('./grounding');
 const { validateAlert } = require('../../../../lib/validation');
-const { v4: uuidv4 } = require('uuid');
 const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 const TelegramService = require('../../../../services/notification/TelegramService');
@@ -23,6 +22,7 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
@@ -136,17 +136,6 @@ async function processEnrichment(alert, options) {
 	}
 
 	return enriched;
-}
-
-function resolveRequestId(req) {
-	const raw = req && req.headers && (req.headers['x-request-id'] || req.headers['X-Request-Id'] || req.headers['x-request-ID']);
-	if (typeof raw === 'string') {
-		const trimmed = raw.trim();
-		if (trimmed.length > 0 && trimmed.length <= 128 && /^[\x21-\x7E]+$/.test(trimmed)) {
-			return trimmed;
-		}
-	}
-	return uuidv4();
 }
 
 function resolveDryRun(req) {

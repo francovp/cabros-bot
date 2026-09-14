@@ -1,9 +1,12 @@
 'use strict';
 
 const httpMocks = require('node-mocks-http');
+const express = require('express');
+const request = require('supertest');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
 const { idempotencyMiddleware } = require('../../src/lib/idempotency');
+const requestDeadline = require('../../src/lib/requestDeadline');
 const { waitForBackgroundTasks, resetForTesting } = require('../../src/lib/backgroundTaskTracker');
 
 describe('Idempotency Service & Middleware', () => {
@@ -67,7 +70,7 @@ describe('Idempotency Service & Middleware', () => {
 			idempotencyService.set(key, { body: { text: 'alert-2' }, query: {} }, response);
 
 			expect(
-				() => idempotencyService.reserve(key, { body: { text: 'different-alert' }, query: {} })
+				() => idempotencyService.reserve(key, { body: { text: 'different-alert' }, query: {} }),
 			).toThrow('Idempotency key was reused with a different payload');
 		});
 
@@ -237,7 +240,7 @@ describe('Idempotency Service & Middleware', () => {
 				idempotencyService.reserve('pending-2', { text: '2' });
 
 				expect(
-					() => idempotencyService.reserve('pending-3', { text: '3' })
+					() => idempotencyService.reserve('pending-3', { text: '3' }),
 				).toThrow(expect.objectContaining({
 					code: 'IDEMPOTENCY_LIMIT_EXCEEDED',
 					statusCode: 429,
@@ -284,6 +287,47 @@ describe('Idempotency Service & Middleware', () => {
 
 			expect(next).toHaveBeenCalled();
 			expect(res.getHeader('Idempotency-Replay')).toBe('false');
+		});
+
+		test('keeps a timed-out reservation pending until the late handler settles', async () => {
+			requestDeadline.setTestOverrides({ timeoutMs: 20 });
+			let executions = 0;
+			const app = express();
+			app.use(requestDeadline);
+			app.post('/api/slow', idempotencyMiddleware, (req, res) => {
+				executions += 1;
+				setTimeout(() => {
+					try {
+						res.json({ success: true });
+					} catch (_) {
+						// The deadline middleware owns the response after a timeout.
+					}
+				}, 80);
+			});
+
+			const key = 'deadline-idempotency-key';
+			const send = () => request(app)
+				.post('/api/slow')
+				.set('idempotency-key', key)
+				.send({ value: 'same-payload' });
+
+			await send().expect(408);
+			const retry = send();
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			expect(executions).toBe(1);
+			await retry.expect(408);
+			await new Promise((resolve) => setTimeout(resolve, 70));
+			await send().expect(408);
+			await new Promise((resolve) => setTimeout(resolve, 90));
+
+			expect(executions).toBe(2);
+			expect(await idempotencyService.get(key, {
+				method: 'POST',
+				path: '/api/slow',
+				body: { value: 'same-payload' },
+				query: {},
+			})).toBeNull();
+			requestDeadline.resetForTests();
 		});
 
 		test('should cache and replay a response on second call with same key', async () => {
@@ -705,7 +749,7 @@ describe('Idempotency Service & Middleware', () => {
 			try {
 				await idempotencyService.reserve('pending-durable-1', { text: '1' });
 				await expect(
-					idempotencyService.reserve('pending-durable-2', { text: '2' })
+					idempotencyService.reserve('pending-durable-2', { text: '2' }),
 				).rejects.toThrow(expect.objectContaining({
 					code: 'IDEMPOTENCY_LIMIT_EXCEEDED',
 					statusCode: 429,

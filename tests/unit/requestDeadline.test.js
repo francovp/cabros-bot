@@ -69,6 +69,20 @@ describe('Request Deadline Middleware (unit)', () => {
 		expect(res.getHeader('X-Request-Id')).toBe(req.requestId);
 	});
 
+	test('reuses a valid inbound x-request-id before minting a new id', () => {
+		process.env.REQUEST_TIMEOUT_MS = '5000';
+		const req = httpMocks.createRequest({
+			method: 'POST',
+			url: '/api/webhook/alert',
+			headers: { 'x-request-id': ' inbound-request-42 ' },
+		});
+		const res = httpMocks.createResponse();
+		requestDeadline(req, res, jest.fn());
+
+		expect(req.requestId).toBe('inbound-request-42');
+		expect(res.getHeader('X-Request-Id')).toBe('inbound-request-42');
+	});
+
 	test('honors REQUEST_DEADLINE_EXEMPT_PATHS additions', () => {
 		process.env.REQUEST_TIMEOUT_MS = '1500';
 		process.env.REQUEST_DEADLINE_EXEMPT_PATHS = '/api/exempt, /api/special';
@@ -149,6 +163,58 @@ describe('Request Deadline Middleware (unit)', () => {
 		expect(res.getHeader('X-Request-Id')).toBeUndefined();
 	});
 
+	test('does not let a late handler write after the timeout response', async () => {
+		requestDeadline.setTestOverrides({ timeoutMs: 20 });
+		let lateError;
+		const app = express();
+		app.use(requestDeadline);
+		app.get('/api/slow', (req, res) => {
+			setTimeout(() => {
+				try {
+					res.setHeader('X-Late', 'true');
+					res.json({ late: true });
+				} catch (error) {
+					lateError = error;
+				}
+			}, 50);
+		});
+
+		const response = await request(app).get('/api/slow').expect(408);
+		await new Promise((resolve) => setTimeout(resolve, 70));
+
+		expect(response.body.code).toBe('REQUEST_TIMEOUT');
+		expect(lateError).toBeUndefined();
+	});
+
+	test('stops downstream handlers when parsing outlives the deadline', async () => {
+		requestDeadline.setTestOverrides({ timeoutMs: 20 });
+		let handlerCalled = false;
+		const app = express();
+		app.use(requestDeadline);
+		app.use((req, res, next) => setTimeout(next, 50));
+		app.use(requestDeadline.guard);
+		app.get('/api/slow', (req, res) => {
+			handlerCalled = true;
+			res.json({ late: true });
+		});
+
+		await request(app).get('/api/slow').expect(408);
+		await new Promise((resolve) => setTimeout(resolve, 70));
+
+		expect(handlerCalled).toBe(false);
+	});
+
+	test('starts before body parsers in the main app', () => {
+		const app = require('../../app');
+		const layerNames = app._router.stack.map((layer) => layer.name);
+		const deadlineIndex = layerNames.indexOf('requestDeadline');
+		const parserIndexes = ['urlencodedParser', 'textParser', 'jsonParser']
+			.map((name) => layerNames.indexOf(name));
+
+		expect(deadlineIndex).toBeGreaterThanOrEqual(0);
+		expect(parserIndexes.every((index) => index >= 0 && deadlineIndex < index)).toBe(true);
+	});
+
 	test('reads REQUEST_TIMEOUT_MS from RemoteConfigService runtimeConfig when available', () => {
 		const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 		remoteConfigService._setRemoteOverridesForTesting({ REQUEST_TIMEOUT_MS: 45000 });
@@ -216,7 +282,7 @@ describe('Request Deadline Middleware (supertest)', () => {
 							expect(res.statusCode).toBe(408);
 							const parsed = JSON.parse(body);
 							expect(parsed).toMatchObject({
-								error: 'Request timeout exceeded',
+								error: 'Request Timeout',
 								code: 'REQUEST_TIMEOUT',
 								deadlineMs: 1500,
 							});
@@ -230,7 +296,7 @@ describe('Request Deadline Middleware (supertest)', () => {
 							server.close(() => done(err));
 						}
 					});
-				}
+				},
 			);
 			req.on('error', (err) => {
 				server.close(() => done(err));

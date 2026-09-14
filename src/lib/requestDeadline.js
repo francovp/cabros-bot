@@ -42,7 +42,7 @@ function readPositiveInteger(name, fallback) {
 		if (!invalidConfigWarnings.has(name)) {
 			invalidConfigWarnings.add(name);
 			console.warn(
-				`[RequestDeadline] Invalid ${name}; using the safe default of ${fallback}ms.`
+				`[RequestDeadline] Invalid ${name}; using the safe default of ${fallback}ms.`,
 			);
 		}
 		return fallback;
@@ -58,7 +58,7 @@ function readPositiveInteger(name, fallback) {
 		if (!invalidConfigWarnings.has(name)) {
 			invalidConfigWarnings.add(name);
 			console.warn(
-				`[RequestDeadline] ${name}=${trimmed} outside ${MIN_TIMEOUT_MS}-${MAX_TIMEOUT_MS}; using default ${fallback}ms.`
+				`[RequestDeadline] ${name}=${trimmed} outside ${MIN_TIMEOUT_MS}-${MAX_TIMEOUT_MS}; using default ${fallback}ms.`,
 			);
 		}
 		return fallback;
@@ -109,6 +109,26 @@ function resolveExemptPaths() {
 	return parseExemptPaths();
 }
 
+function resolveRequestId(req) {
+	const headers = req && req.headers;
+	const candidates = [
+		req && req.requestId,
+		headers && headers['x-request-id'],
+		headers && headers['X-Request-Id'],
+		headers && headers['x-request-ID'],
+	];
+
+	for (const raw of candidates) {
+		if (typeof raw !== 'string') continue;
+		const trimmed = raw.trim();
+		if (trimmed.length > 0 && trimmed.length <= 128 && /^[\x21-\x7E]+$/.test(trimmed)) {
+			return trimmed;
+		}
+	}
+
+	return randomUUID();
+}
+
 function normalizePath(req) {
 	const raw = req.originalUrl || req.url || req.path || '';
 	return String(raw).split('?')[0].replace(/\/+$/, '').toLowerCase();
@@ -122,27 +142,63 @@ function requestDeadline(req, res, next) {
 	}
 
 	const timeoutMs = resolveTimeoutMs();
-	const requestId = req.requestId || randomUUID();
+	const requestId = resolveRequestId(req);
 	req.requestId = requestId;
 	res.setHeader('X-Request-Id', requestId);
 
 	const startTime = Date.now();
 	let deadlineFired = false;
 	let responseFinished = false;
+	let allowDeadlineResponse = false;
+	const originalSetHeader = res.setHeader;
+	const originalSend = res.send;
+	const originalJson = res.json;
+	const originalEnd = res.end;
+	const originalWrite = res.write;
+	const originalWriteHead = res.writeHead;
+	const canWrite = () => !req.requestDeadlineExceeded || allowDeadlineResponse;
+
+	res.setHeader = function(...args) {
+		if (!canWrite()) return this;
+		return originalSetHeader.apply(this, args);
+	};
+	res.send = function(...args) {
+		if (!canWrite()) return this;
+		return originalSend.apply(this, args);
+	};
+	res.json = function(...args) {
+		if (!canWrite()) return this;
+		return originalJson.apply(this, args);
+	};
+	res.end = function(...args) {
+		if (!canWrite()) return this;
+		return originalEnd.apply(this, args);
+	};
+	res.write = function(...args) {
+		if (!canWrite()) return false;
+		return originalWrite.apply(this, args);
+	};
+	res.writeHead = function(...args) {
+		if (!canWrite()) return this;
+		return originalWriteHead.apply(this, args);
+	};
 
 	const timer = setTimeout(() => {
 		deadlineFired = true;
-		if (responseFinished) return;
+		if (responseFinished || res.headersSent || res.writableEnded) return;
+		req.requestDeadlineExceeded = true;
 
 		const durationMs = Date.now() - startTime;
 		console.warn(
-			`[RequestDeadline] 408 REQUEST_TIMEOUT after ${durationMs}ms on ${req.method} ${requestPath} (requestId=${requestId})`
+			`[RequestDeadline] 408 REQUEST_TIMEOUT after ${durationMs}ms on ${req.method} ${requestPath} (requestId=${requestId})`,
 		);
 
+		allowDeadlineResponse = true;
+		req.requestDeadlineResponse = true;
 		try {
 			res.setHeader('Content-Type', 'application/json; charset=utf-8');
 			res.status(408).json({
-				error: 'Request timeout exceeded',
+				error: 'Request Timeout',
 				code: 'REQUEST_TIMEOUT',
 				requestId,
 				deadlineMs: timeoutMs,
@@ -150,8 +206,11 @@ function requestDeadline(req, res, next) {
 			});
 		} catch (err) {
 			console.warn(
-				`[RequestDeadline] failed to send 408 for ${requestPath}: ${err && err.message ? err.message : err}`
+				`[RequestDeadline] failed to send 408 for ${requestPath}: ${err && err.message ? err.message : err}`,
 			);
+		} finally {
+			req.requestDeadlineResponse = false;
+			allowDeadlineResponse = false;
 		}
 	}, timeoutMs);
 
@@ -170,19 +229,24 @@ function requestDeadline(req, res, next) {
 	next();
 }
 
-requestDeadline.enableTestMode = function () {
+function rejectExpiredRequest(req, res, next) {
+	if (req.requestDeadlineExceeded) return;
+	return next();
+}
+
+requestDeadline.enableTestMode = function() {
 	// Preserved for compatibility
 };
 
-requestDeadline.disableTestMode = function () {
+requestDeadline.disableTestMode = function() {
 	testOverrides = null;
 };
 
-requestDeadline.setTestOverrides = function (overrides) {
+requestDeadline.setTestOverrides = function(overrides) {
 	testOverrides = overrides;
 };
 
-requestDeadline.resetForTests = function () {
+requestDeadline.resetForTests = function() {
 	invalidConfigWarnings.clear();
 	testOverrides = null;
 };
@@ -195,3 +259,5 @@ requestDeadline.constants = Object.freeze({
 });
 
 module.exports = requestDeadline;
+requestDeadline.resolveRequestId = resolveRequestId;
+requestDeadline.guard = rejectExpiredRequest;

@@ -6,9 +6,13 @@ const { createCorsMiddleware } = require('./src/lib/cors');
 const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
+const requestDeadline = require('./src/lib/requestDeadline');
 
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
+
+// Start the request deadline before body parsing so slow uploads are bounded too.
+app.use(requestDeadline);
 
 // Tell express to use body-parser's urlencoded parsing
 app.use(express.urlencoded({ extended: false }));
@@ -32,19 +36,13 @@ contentSecurityPolicy['connect-src'] = [
 	'https://cabros-bot-production.up.railway.app',
 ];
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
+app.use(requestDeadline.guard);
 
 app.use('/healthcheck', require('express-healthcheck')());
 app.get('/ready', (req, res) => {
 	const status = bootstrapReadiness.getStatus();
 	return res.status(status.ready ? 200 : 503).json(status);
 });
-
-// Request-deadline middleware enforces a per-handler time budget so that
-// slow external providers (Gemini, TradingView MCP, Twelve Data, etc.)
-// cannot hold the connection open past the reverse-proxy timeout.
-// Fast/read-only endpoints (`/healthcheck`, `/ready`, `/openapi.json`,
-// `/docs`) are exempted; the deadline applies to every other route.
-app.use(require('./src/lib/requestDeadline'));
 
 // Rate Limiter (must be after healthcheck to avoid limiting health checks)
 app.use(require('./src/lib/rateLimiter'));

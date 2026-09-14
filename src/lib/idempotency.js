@@ -140,10 +140,24 @@ function idempotencyMiddleware(req, res, next) {
 
 		const originalSend = res.send;
 		const originalJson = res.json;
+		const originalEnd = res.end;
 		let responseCached = false;
+		let reservationReleased = false;
+		const releaseTimedOutReservation = () => {
+			if (reservationReleased || !req.requestDeadlineExceeded || req.requestDeadlineResponse) return;
+			reservationReleased = true;
+			const releaseError = new Error('Initial idempotent request exceeded its request deadline');
+			releaseError.code = 'IDEMPOTENCY_RELEASED';
+			releaseError.statusCode = 409;
+			idempotencyService.release(key, requestFingerprint, releaseError);
+		};
 
 		const cacheResponse = (body) => {
 			if (responseCached) {
+				return;
+			}
+			if (req.requestDeadlineExceeded) {
+				releaseTimedOutReservation();
 				return;
 			}
 
@@ -210,6 +224,11 @@ function idempotencyMiddleware(req, res, next) {
 				idempotencyService.release(key, requestFingerprint, releaseError);
 			}
 		});
+		res.end = function(...args) {
+			const result = originalEnd.apply(this, args);
+			releaseTimedOutReservation();
+			return result;
+		};
 
 		return next();
 	};

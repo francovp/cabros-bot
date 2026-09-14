@@ -1566,8 +1566,8 @@ No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env va
 `app.js` mounts `src/lib/requestDeadline.js` so every `/api` route inherits a server-side time budget and 408s instead of holding the connection open past the reverse-proxy timeout.
 
 **Behavior**
-- `REQUEST_TIMEOUT_MS` (default 30000 ms; integer 1000-120000) caps the response lifecycle. When exceeded, the middleware writes a structured `408 REQUEST_TIMEOUT` with `{ error, code, requestId, deadlineMs, durationMs }` and logs a single `console.warn` with the route, method, duration, and request id.
-- The middleware reuses `req.requestId` from upstream (when available) or mints a fresh `randomUUID()`, stamps `X-Request-Id` on every response, and exposes it via `req.requestId`.
+- `REQUEST_TIMEOUT_MS` (default 30000 ms; integer 1000-120000) caps the response lifecycle. When exceeded, the middleware writes a structured `408 REQUEST_TIMEOUT` with `{ error, code, requestId, deadlineMs, durationMs }`, suppresses late downstream response writes, and logs a single `console.warn` with the route, method, duration, and request id.
+- The middleware reuses a valid upstream `req.requestId` or `x-request-id` (when available) or mints a fresh `randomUUID()`, stamps `X-Request-Id` on every response, and exposes it via `req.requestId`.
 - `/healthcheck`, `/ready`, `/openapi.json`, and `/docs` are always exempt. Operators can add more paths via `REQUEST_DEADLINE_EXEMPT_PATHS` (comma-separated, leading slash optional).
 - If the handler finishes before the deadline, `res.once('finish' | 'close', finalize)` clears the timer so no double-send happens.
 - Malformed, non-numeric, sub-minimum, or out-of-range `REQUEST_TIMEOUT_MS` values fall back to the documented default and log a single warning (no spam).
@@ -1575,7 +1575,7 @@ No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env va
 
 **Core components**
 - `src/lib/requestDeadline.js` — bounded validation, request-id minting, deadline enforcement.
-- `app.js` — middleware mounted after `/healthcheck` and `/ready` (so probes are unaffected) and before the global rate limiter.
+- `app.js` — middleware starts before body parsing so slow uploads are bounded; its post-parser guard prevents timed-out requests from entering route handlers, while probe paths remain exempt.
 - `tests/unit/requestDeadline.test.js` — exempt-path pass-through, request-id reuse/mint, structured 408 payload, `REQUEST_DEADLINE_EXEMPT_PATHS` extension, malformed-value fallback, and integration via supertest + real `http.Server`.
 - `.env.example` and `README.md` — documented the default, valid range, and opt-out behavior.
 
