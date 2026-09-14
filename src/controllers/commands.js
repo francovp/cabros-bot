@@ -4,6 +4,7 @@ const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor'
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
+const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 
 const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	precio: { max: 10, windowMs: 60_000 },
@@ -155,6 +156,26 @@ const createTradingViewJobCommand = (type, command, buildPayload) => async (cont
 	});
 
 	try {
+		// Check TradingView MCP readiness before creating job
+		let readinessWarning = null;
+		try {
+			const readiness = tradingViewMcpService.getStatus({ enabled: true });
+			if (readiness.status === 'degraded') {
+				const lastErrorCategory = readiness.lastErrorCategory || readiness.circuitBreaker?.state === 'open' ? 'circuit_breaker_open' : 'unknown';
+				readinessWarning = `⚠️ TradingView MCP está degradado (último error: ${lastErrorCategory}). El job se creará pero puede fallar. ¿Continuar?`;
+				await context.reply(readinessWarning);
+				// Wait for user confirmation - but in Telegram commands we can't easily wait
+				// So we proceed but log the warning
+				console.warn(`[Telegram ${command}] MCP degraded (${lastErrorCategory}), creating job anyway`);
+			} else if (readiness.status === 'unknown') {
+				// First call - proceed without warning but log the readiness state
+				console.debug(`[Telegram ${command}] MCP readiness unknown (first call), proceeding`);
+			}
+		} catch (readinessError) {
+			// Fail-open: if readiness check fails, proceed with job creation
+			console.warn(`[Telegram ${command}] MCP readiness check failed (fail-open): ${readinessError.message}`);
+		}
+
 		const payload = {
 			...buildPayload(args),
 			...(chatId !== undefined && chatId !== null ? { telegramChatId: String(chatId) } : {}),
