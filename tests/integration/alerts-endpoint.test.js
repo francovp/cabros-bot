@@ -4,7 +4,12 @@ jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	isEnabled: jest.fn(),
 	listAlerts: jest.fn(),
 	getAlertById: jest.fn(),
+	getAlertsByIds: jest.fn(),
+	exportAlertsByIds: jest.fn(),
+	deleteAlerts: jest.fn(),
+	batchReplayAlerts: jest.fn(),
 	saveReplayAttempt: jest.fn(),
+	getReplayAttemptByIdempotencyKey: jest.fn(),
 	listReplayAttempts: jest.fn(),
 	getLatestReplayForAlert: jest.fn(),
 	summarizeAlerts: jest.fn(),
@@ -25,6 +30,7 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	getMetricsSummary: jest.fn(),
 }));
 
+const crypto = require('crypto');
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
@@ -136,6 +142,91 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	it('passes include and includeEnrichmentSummary when include=enrichment_summary is requested', async () => {
+		alertStorageService.listAlerts.mockResolvedValue({
+			alerts: [
+				{
+					id: 'alert-1',
+					receivedAt: '2026-06-06T12:00:00.000Z',
+					text: 'BTC alert',
+					enriched: true,
+					enrichmentData: {
+						sentiment: 'BULLISH',
+						sentiment_score: 0.9,
+						setup_type: 'breakout',
+						invalidation_level: 64000,
+						target_level: 68000,
+						risk_reward_ratio: 2,
+						sourceCount: 1,
+						sourceDomains: ['coindesk.com'],
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'full',
+						promptProvenance: {
+							name: 'crypto-sentiment',
+							source: 'langfuse',
+							label: 'production',
+							version: 1,
+						},
+					},
+					enrichmentSummary: {
+						sentiment: 'BULLISH',
+						sentiment_score: 0.9,
+						setup_type: 'breakout',
+						invalidation_level: 64000,
+						target_level: 68000,
+						risk_reward_ratio: 2,
+						sourceCount: 1,
+						sourceDomains: ['coindesk.com'],
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'full',
+						promptProvenance: {
+							name: 'crypto-sentiment',
+							source: 'langfuse',
+							label: 'production',
+							version: 1,
+						},
+					},
+					channels: ['telegram'],
+					deliveryResults: [{ channel: 'telegram', success: true }],
+					source: 'webhook',
+					useTradingViewData: false,
+					tradingViewEnrichmentApplied: true,
+				},
+			],
+			hasMore: false,
+			nextBefore: null,
+		});
+
+		const res = await request(app)
+			.get('/api/alerts?limit=10&include=enrichment_summary')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listAlerts).toHaveBeenCalledWith({
+			before: undefined,
+			enriched: undefined,
+			limit: 10,
+			source: undefined,
+			include: ['enrichment_summary'],
+			includeEnrichmentSummary: true,
+		});
+		expect(res.body.success).toBe(true);
+		expect(res.body.alerts[0].enrichmentData.sentiment).toBe('BULLISH');
+		expect(res.body.alerts[0].enrichmentSummary.sentiment).toBe('BULLISH');
+	});
+
+	it('returns 400 for invalid include values', async () => {
+		const res = await request(app)
+			.get('/api/alerts?include=unknown_field')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: "Invalid include parameter 'unknown_field'. Allowed values: enrichment_summary.",
+			code: 'INVALID_REQUEST',
+		});
+	});
+
 	it('returns 400 for invalid before cursor values', async () => {
 		const res = await request(app)
 			.get('/api/alerts?before=not-a-date')
@@ -144,6 +235,63 @@ describe('Alerts API Integration Tests', () => {
 
 		expect(res.body).toEqual({
 			error: 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.',
+			code: 'INVALID_REQUEST',
+		});
+	});
+
+	it('passes symbol, eventCategory, and exchange filters to alertStorageService.listAlerts', async () => {
+		alertStorageService.listAlerts.mockResolvedValue({
+			alerts: [],
+			hasMore: false,
+			nextBefore: null,
+		});
+
+		await request(app)
+			.get('/api/alerts?symbol=BTCUSDT&eventCategory=price_surge&exchange=BINANCE')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listAlerts).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			eventCategory: 'price_surge',
+			exchange: 'BINANCE',
+		}));
+	});
+
+	it('returns 400 when GET /api/alerts receives invalid filter values', async () => {
+		const emptySymbol = await request(app)
+			.get('/api/alerts?symbol=')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(emptySymbol.body).toEqual({
+			error: 'Invalid symbol filter. Use a non-empty string up to 64 characters.',
+			code: 'INVALID_REQUEST',
+		});
+
+		const emptyCategory = await request(app)
+			.get('/api/alerts?eventCategory=')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(emptyCategory.body).toEqual({
+			error: 'Invalid eventCategory filter. Use a non-empty string up to 64 characters.',
+			code: 'INVALID_REQUEST',
+		});
+
+		const emptyExchange = await request(app)
+			.get('/api/alerts?exchange=')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(emptyExchange.body).toEqual({
+			error: 'Invalid exchange filter. Use a non-empty string up to 64 characters.',
+			code: 'INVALID_REQUEST',
+		});
+
+		const whitespaceSymbol = await request(app)
+			.get('/api/alerts?symbol=%20%20%20')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(whitespaceSymbol.body).toEqual({
+			error: 'Invalid symbol filter. Use a non-empty string up to 64 characters.',
 			code: 'INVALID_REQUEST',
 		});
 	});
@@ -388,6 +536,54 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	it('passes symbol, eventCategory, and exchange filters to alertStorageService.summarizeAlerts', async () => {
+		alertStorageService.summarizeAlerts.mockResolvedValue({
+			totalAlerts: 0,
+			bySource: {},
+			bySymbol: {},
+		});
+
+		await request(app)
+			.get('/api/alerts/summary?symbol=BTCUSDT&eventCategory=price_surge&exchange=BINANCE')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.summarizeAlerts).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			eventCategory: 'price_surge',
+			exchange: 'BINANCE',
+		}));
+	});
+
+	it('returns 400 when GET /api/alerts/summary receives invalid filter values', async () => {
+		const emptySymbol = await request(app)
+			.get('/api/alerts/summary?symbol=')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(emptySymbol.body).toEqual({
+			error: 'Invalid symbol filter. Use a non-empty string up to 64 characters.',
+			code: 'INVALID_REQUEST',
+		});
+
+		const emptyCategory = await request(app)
+			.get('/api/alerts/summary?eventCategory=')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(emptyCategory.body).toEqual({
+			error: 'Invalid eventCategory filter. Use a non-empty string up to 64 characters.',
+			code: 'INVALID_REQUEST',
+		});
+
+		const emptyExchange = await request(app)
+			.get('/api/alerts/summary?exchange=')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+		expect(emptyExchange.body).toEqual({
+			error: 'Invalid exchange filter. Use a non-empty string up to 64 characters.',
+			code: 'INVALID_REQUEST',
+		});
+	});
+
 	it('exports bounded stored alerts as JSONL without raw text by default', async () => {
 		alertStorageService.exportAlerts.mockResolvedValue({
 			window: {
@@ -421,6 +617,7 @@ describe('Alerts API Integration Tests', () => {
 			source: 'webhook',
 			enriched: true,
 			includeText: false,
+			includeEnrichment: false,
 		});
 		expect(res.headers['content-type']).toContain('application/x-ndjson');
 		expect(res.headers['x-shadow-mode-metrics']).toBeUndefined();
@@ -474,6 +671,7 @@ describe('Alerts API Integration Tests', () => {
 			source: undefined,
 			enriched: undefined,
 			includeText: true,
+			includeEnrichment: false,
 		});
 		expect(res.headers['content-type']).toContain('text/csv');
 		expect(res.text).toContain('id,requestId,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
@@ -563,6 +761,111 @@ describe('Alerts API Integration Tests', () => {
 			code: 'INVALID_REQUEST',
 		});
 		expect(alertStorageService.exportAlerts).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 when includeEnrichment flag is invalid', async () => {
+		const res = await request(app)
+			.get('/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&includeEnrichment=maybe')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: 'Invalid includeEnrichment flag. Use true or false.',
+			code: 'INVALID_REQUEST',
+		});
+		expect(alertStorageService.exportAlerts).not.toHaveBeenCalled();
+	});
+
+	it('exports bounded stored alerts with enrichmentData when includeEnrichment=true is requested', async () => {
+		alertStorageService.exportAlerts.mockResolvedValue({
+			window: {
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 1,
+				maxDays: 31,
+			},
+			alerts: [
+				{
+					id: 'alert-enrich-1',
+					receivedAt: '2026-06-06T12:00:00.000Z',
+					source: 'webhook',
+					enriched: true,
+					enrichmentData: {
+						sentiment: 'BULLISH',
+						sentiment_score: 0.85,
+						setup_type: 'breakout',
+						invalidation_level: 64200,
+						target_level: 68500,
+						risk_reward_ratio: 2.5,
+						sourceCount: 2,
+						sourceDomains: ['coindesk.com'],
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'full',
+						promptProvenance: {
+							name: 'crypto-sentiment',
+							source: 'langfuse',
+							label: 'production',
+							version: 3,
+							schemaDriftDetected: false,
+						},
+					},
+				},
+			],
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&includeEnrichment=true')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.exportAlerts).toHaveBeenCalledWith({
+			from: '2026-06-06T00:00:00.000Z',
+			to: '2026-06-07T00:00:00.000Z',
+			limit: 500,
+			source: undefined,
+			enriched: undefined,
+			includeText: false,
+			includeEnrichment: true,
+		});
+
+		const parsed = JSON.parse(res.text.trim());
+		expect(parsed).toHaveProperty('enrichmentData');
+		expect(parsed.enrichmentData.sentiment).toBe('BULLISH');
+		expect(parsed.enrichmentData.sourceDomains).toEqual(['coindesk.com']);
+	});
+
+	it('exports bounded stored alerts as CSV with enrichmentData column when includeEnrichment=true', async () => {
+		alertStorageService.exportAlerts.mockResolvedValue({
+			window: {
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 1,
+				maxDays: 31,
+			},
+			alerts: [
+				{
+					id: 'alert-csv-enrich-1',
+					receivedAt: '2026-06-06T12:00:00.000Z',
+					source: 'webhook',
+					enriched: true,
+					enrichmentData: {
+						sentiment: 'BULLISH',
+						sentiment_score: 0.85,
+						setup_type: 'breakout',
+					},
+				},
+			],
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/export?format=csv&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&includeEnrichment=true')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(res.headers['content-type']).toContain('text/csv');
+		expect(res.text).toContain('enrichmentData');
+		expect(res.text).toContain('alert-csv-enrich-1');
+		expect(res.text).toContain('""sentiment"":""BULLISH""');
 	});
 
 	it('returns a single stored alert by id', async () => {
@@ -728,6 +1031,224 @@ describe('Alerts API Integration Tests', () => {
 			error: 'Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord.',
 			code: 'INVALID_REQUEST',
 		});
+	});
+
+	it('returns payload preview and skips delivery/persistence on dryRun=true via body', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me (dry-run)',
+			enriched: true,
+			enrichmentData: { sentiment: 'bullish' },
+			tokenUsage: { totalTokens: 42 },
+			deliveryResults: [{ channel: 'telegram', success: true, threadId: 7 }],
+			source: 'webhook',
+			useTradingViewData: false,
+			telegramChatId: '111',
+			whatsappChatId: '222',
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-dry-key-1')
+			.send({ channels: ['telegram'], dryRun: true })
+			.expect(200);
+
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+
+		const expectedHashPrefix1 = crypto.createHash('sha256').update('replay-dry-key-1').digest('hex').slice(0, 12);
+		expect(res.body).toEqual({
+			success: true,
+			dryRun: true,
+			alertId: 'alert-123',
+			channels: ['telegram'],
+			idempotencyKeyHashPrefix: expectedHashPrefix1,
+			payloadPreview: {
+				text: 'Replay me (dry-run)',
+				enriched: { sentiment: 'bullish' },
+				channelRouting: {
+					telegramChatId: '111',
+					telegramThreadId: 7,
+					whatsappChatId: '222',
+				},
+			},
+		});
+		expect(res.body.idempotencyKey).toBeUndefined();
+	});
+
+	it('returns payload preview when dryRun is provided via query string', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-456',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Body-less dry-run',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		delete process.env.WHATSAPP_CHAT_ID;
+
+		const res = await request(app)
+			.post('/api/alerts/alert-456/replay?dryRun=true')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-dry-key-2')
+			.send({ channels: ['whatsapp'] })
+			.expect(200);
+
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+
+		const expectedHashPrefix2 = crypto.createHash('sha256').update('replay-dry-key-2').digest('hex').slice(0, 12);
+		expect(res.body.dryRun).toBe(true);
+		expect(res.body.alertId).toBe('alert-456');
+		expect(res.body.channels).toEqual(['whatsapp']);
+		expect(res.body.idempotencyKeyHashPrefix).toBe(expectedHashPrefix2);
+		expect(res.body.idempotencyKey).toBeUndefined();
+		expect(res.body.payloadPreview).toEqual({
+			text: 'Body-less dry-run',
+			enriched: null,
+			channelRouting: {},
+		});
+	});
+
+	it('resolves effective channel routing and topic routes from environment when stored alert lacks overrides', async () => {
+		process.env.TELEGRAM_CHAT_ID = '-100123456789';
+		process.env.TELEGRAM_TOPIC_ROUTES = 'webhook-signal:88,alert-replay:99';
+		process.env.WHATSAPP_CHAT_ID = '12345@c.us';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/xyz';
+
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-effective-1',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Effective routing preview',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [{ channel: 'telegram', success: false }],
+			source: 'webhook-signal',
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-effective-1/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-effective-key')
+			.send({ channels: ['telegram', 'whatsapp', 'discord'], dryRun: true })
+			.expect(200);
+
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+
+		const expectedHashPrefix = crypto.createHash('sha256').update('replay-effective-key').digest('hex').slice(0, 12);
+		expect(res.body.dryRun).toBe(true);
+		expect(res.body.idempotencyKeyHashPrefix).toBe(expectedHashPrefix);
+		expect(res.body.idempotencyKey).toBeUndefined();
+		expect(res.body.payloadPreview.channelRouting).toEqual({
+			telegramChatId: '-100123456789',
+			telegramThreadId: 88,
+			whatsappChatId: '12345@c.us',
+			discordWebhookUrl: 'https://discord.com/api/webhooks/123/xyz',
+		});
+	});
+
+	it('resolves alert-replay topic route when stored alert has no source and env routes are present', async () => {
+		process.env.TELEGRAM_CHAT_ID = '-100123456789';
+		process.env.TELEGRAM_TOPIC_ROUTES = 'webhook-signal:88,alert-replay:99';
+
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-effective-2',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay fallback topic route',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [],
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-effective-2/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-fallback-source')
+			.send({ channels: ['telegram'], dryRun: true })
+			.expect(200);
+
+		expect(res.body.payloadPreview.channelRouting).toEqual({
+			telegramChatId: '-100123456789',
+			telegramThreadId: 99,
+		});
+	});
+
+	it('preserves custom chat without applying topic routes from environment', async () => {
+		process.env.TELEGRAM_CHAT_ID = '-100123456789';
+		process.env.TELEGRAM_TOPIC_ROUTES = 'webhook-signal:88,alert-replay:99';
+
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-effective-3',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Custom chat without topic route',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [],
+			source: 'webhook-signal',
+			telegramChatId: '-100999999999',
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-effective-3/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-custom-chat')
+			.send({ channels: ['telegram'], dryRun: true })
+			.expect(200);
+
+		expect(res.body.payloadPreview.channelRouting).toEqual({
+			telegramChatId: '-100999999999',
+		});
+	});
+
+	it('still returns payload preview when dryRun=false is explicitly provided', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-789',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Explicit false',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-789/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-explicit-false')
+			.send({ channels: ['telegram'], dryRun: false })
+			.expect(200);
+
+		expect(res.body.dryRun).toBeUndefined();
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith({
+			alertId: 'alert-789',
+			idempotencyKey: 'replay-explicit-false',
+			channels: ['telegram'],
+			deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+		});
+	});
+
+	it('returns 404 in dry-run mode when the stored alert does not exist', async () => {
+		alertStorageService.getAlertById.mockResolvedValue(null);
+
+		const res = await request(app)
+			.post('/api/alerts/missing/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-dry-key-3')
+			.send({ channels: ['telegram'], dryRun: true })
+			.expect(404);
+
+		expect(res.body).toEqual({
+			error: 'Alert not found',
+			code: 'NOT_FOUND',
+		});
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
 	});
 
 	it('returns 403 when GET /api/alerts/replays has storage disabled', async () => {
@@ -896,5 +1417,438 @@ describe('Alerts API Integration Tests', () => {
 			.expect(200);
 
 		expect(res.body.lastReplay).toBeNull();
+	});
+
+	describe('POST /api/alerts/batch/replay', () => {
+		it('returns 401 when request lacks valid api key', async () => {
+			await request(app)
+				.post('/api/alerts/batch/replay')
+				.send({ alertIds: ['alert-1'] })
+				.expect(401);
+		});
+
+		it('returns 403 when alert storage is disabled', async () => {
+			alertStorageService.isEnabled.mockReturnValue(false);
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], idempotencyKey: 'k-1' })
+				.expect(403);
+			expect(res.body.code).toBe('FEATURE_DISABLED');
+		});
+
+		it('returns 400 when alertIds is missing or empty', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: [], idempotencyKey: 'k-1' })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when alertIds exceeds MAX_BATCH_REPLAY_LIMIT (50)', async () => {
+			const tooMany = Array.from({ length: 51 }, (_, i) => `alert-${i}`);
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: tooMany, idempotencyKey: 'k-1' })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when idempotency key is missing', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'] })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when channels contain invalid names', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], idempotencyKey: 'k-1', channels: ['telegram', 'slack'] })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('replays alerts live to selected channels and records attempts', async () => {
+			alertStorageService.getAlertById
+				.mockResolvedValueOnce({
+					id: 'alert-1',
+					text: 'Alert 1 body',
+					source: 'webhook',
+					telegramChatId: '-100123',
+				})
+				.mockResolvedValueOnce({
+					id: 'alert-2',
+					text: 'Alert 2 body',
+					source: 'webhook',
+				});
+			alertStorageService.saveReplayAttempt
+				.mockResolvedValueOnce('replay-doc-1')
+				.mockResolvedValueOnce('replay-doc-2');
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.set('x-idempotency-key', 'batch-k-1')
+				.send({ alertIds: ['alert-1', 'alert-2'], channels: ['telegram'] })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results).toHaveLength(2);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'alert-1',
+				success: true,
+				replayId: 'replay-doc-1',
+				results: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+			});
+			expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(2);
+			expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledTimes(2);
+		});
+
+		it('handles missing or expired alerts gracefully in the results list', async () => {
+			alertStorageService.getAlertById
+				.mockResolvedValueOnce(null)
+				.mockResolvedValueOnce({ id: 'alert-2', text: 'Live alert' });
+			alertStorageService.saveReplayAttempt.mockResolvedValueOnce('replay-doc-2');
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['missing-alert', 'alert-2'], idempotencyKey: 'batch-k-2' })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'missing-alert',
+				success: false,
+				error: 'Alert not found',
+				code: 'NOT_FOUND',
+			});
+			expect(res.body.results[1].success).toBe(true);
+		});
+
+		it('supports dryRun preview without sending notifications or writing to Firestore', async () => {
+			alertStorageService.getAlertById.mockResolvedValueOnce({
+				id: 'alert-1',
+				text: 'Dry run alert',
+				enrichmentData: { sentiment: 'BULLISH' },
+				telegramChatId: '12345',
+			});
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], dryRun: true, idempotencyKey: 'batch-dry-1' })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.dryRun).toBe(true);
+			expect(res.body.results[0].dryRun).toBe(true);
+			expect(res.body.results[0].payloadPreview.text).toBe('Dry run alert');
+			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+
+		it('reconciles and skips previously delivered alerts on batch retry', async () => {
+			alertStorageService.getAlertById
+				.mockResolvedValueOnce({ id: 'alert-1', text: 'Alert 1' })
+				.mockResolvedValueOnce({ id: 'alert-2', text: 'Alert 2' });
+			alertStorageService.getReplayAttemptByIdempotencyKey
+				.mockResolvedValueOnce({ id: 'replay-doc-1', deliveryResults: [{ channel: 'telegram', success: true }] })
+				.mockResolvedValueOnce(null);
+			alertStorageService.saveReplayAttempt.mockResolvedValueOnce('replay-doc-2');
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.set('x-idempotency-key', 'batch-retry-key')
+				.send({ alertIds: ['alert-1', 'alert-2'], channels: ['telegram'] })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results).toHaveLength(2);
+			// alert-1 was reconciled, so sendToChannels was only called once (for alert-2)
+			expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'alert-1',
+				success: true,
+				replayId: 'replay-doc-1',
+				results: [{ channel: 'telegram', success: true }],
+			});
+			expect(res.body.results[1].success).toBe(true);
+			expect(res.body.results[1].replayId).toBe('replay-doc-2');
+		});
+
+		it('fails open when saveReplayAttempt rejects, preserving delivery results without returning 503', async () => {
+			alertStorageService.getAlertById.mockResolvedValueOnce({ id: 'alert-1', text: 'Alert 1' });
+			alertStorageService.getReplayAttemptByIdempotencyKey.mockResolvedValueOnce(null);
+			alertStorageService.saveReplayAttempt.mockRejectedValueOnce(new Error('Firestore write quota exceeded'));
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], idempotencyKey: 'fail-open-k' })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'alert-1',
+				success: true,
+				replayId: null,
+				results: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+			});
+		});
+
+		it('records per-alert failure when sendToChannels throws without breaking remaining items in batch', async () => {
+			alertStorageService.getAlertById
+				.mockResolvedValueOnce({ id: 'alert-1', text: 'Alert 1' })
+				.mockResolvedValueOnce({ id: 'alert-2', text: 'Alert 2' });
+			alertStorageService.getReplayAttemptByIdempotencyKey
+				.mockResolvedValue(null);
+			mockNotificationManager.sendToChannels
+				.mockRejectedValueOnce(new Error('Telegram API unreachable'))
+				.mockResolvedValueOnce([{ channel: 'telegram', success: true, messageId: 'tg-2' }]);
+			alertStorageService.saveReplayAttempt.mockResolvedValueOnce('replay-doc-2');
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1', 'alert-2'], idempotencyKey: 'delivery-fail-k' })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'alert-1',
+				success: false,
+				error: 'Telegram API unreachable',
+				code: 'DELIVERY_FAILED',
+			});
+			expect(res.body.results[1].success).toBe(true);
+		});
+
+		it('marks replay item failed and avoids saving attempt when sendToChannels returns failure or empty array', async () => {
+			alertStorageService.getAlertById
+				.mockResolvedValueOnce({ id: 'alert-1', text: 'Alert 1' })
+				.mockResolvedValueOnce({ id: 'alert-2', text: 'Alert 2' });
+			alertStorageService.getReplayAttemptByIdempotencyKey.mockResolvedValue(null);
+			mockNotificationManager.sendToChannels
+				.mockResolvedValueOnce([{ channel: 'telegram', success: false, error: 'Chat not found' }])
+				.mockResolvedValueOnce([]);
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1', 'alert-2'], idempotencyKey: 'fail-channels-k' })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'alert-1',
+				success: false,
+				error: 'Channel delivery failed',
+				code: 'DELIVERY_FAILED',
+				results: [{ channel: 'telegram', success: false, error: 'Chat not found' }],
+			});
+			expect(res.body.results[1]).toEqual({
+				alertId: 'alert-2',
+				success: false,
+				error: 'No notification channels delivered',
+				code: 'DELIVERY_FAILED',
+				results: [],
+			});
+			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+
+		it('does not reconcile failed or empty past attempts as delivered on retry', async () => {
+			alertStorageService.getAlertById.mockResolvedValueOnce({ id: 'alert-1', text: 'Alert 1' });
+			alertStorageService.getReplayAttemptByIdempotencyKey.mockResolvedValueOnce({
+				id: 'replay-doc-failed',
+				deliveryResults: [{ channel: 'telegram', success: false }],
+			});
+			mockNotificationManager.sendToChannels.mockResolvedValueOnce([{ channel: 'telegram', success: true, messageId: 'tg-retry' }]);
+			alertStorageService.saveReplayAttempt.mockResolvedValueOnce('replay-doc-new');
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], idempotencyKey: 'retry-past-failed-k' })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
+			expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledTimes(1);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'alert-1',
+				success: true,
+				replayId: 'replay-doc-new',
+				results: [{ channel: 'telegram', success: true, messageId: 'tg-retry' }],
+			});
+		});
+
+		it('fails closed and reports RECONCILIATION_FAILED without duplicate delivery when checking past replay fails', async () => {
+			alertStorageService.getAlertById
+				.mockResolvedValueOnce({ id: 'alert-1', text: 'Alert 1' })
+				.mockResolvedValueOnce({ id: 'alert-2', text: 'Alert 2' });
+			alertStorageService.getReplayAttemptByIdempotencyKey
+				.mockRejectedValueOnce(new Error('Firestore read timeout'))
+				.mockResolvedValueOnce(null);
+			mockNotificationManager.sendToChannels
+				.mockResolvedValueOnce([{ channel: 'telegram', success: true, messageId: 'tg-2' }]);
+			alertStorageService.saveReplayAttempt.mockResolvedValueOnce('replay-doc-2');
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1', 'alert-2'], idempotencyKey: 'reconcile-fail-key' })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results).toHaveLength(2);
+			// alert-1 failed closed on reconciliation error, so sendToChannels was only called once (for alert-2)
+			expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
+			expect(res.body.results[0]).toEqual({
+				alertId: 'alert-1',
+				success: false,
+				error: 'Failed to reconcile existing replay attempt: Firestore read timeout',
+				code: 'RECONCILIATION_FAILED',
+			});
+			expect(res.body.results[1].success).toBe(true);
+			expect(res.body.results[1].alertId).toBe('alert-2');
+		});
+	});
+
+	describe('POST /api/alerts/batch/export', () => {
+		it('returns 401 when lacking valid api key', async () => {
+			await request(app)
+				.post('/api/alerts/batch/export')
+				.send({ alertIds: ['alert-1'] })
+				.expect(401);
+		});
+
+		it('returns 400 when alertIds is missing or invalid', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/export')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: [] })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when alertIds exceeds 1000', async () => {
+			const tooMany = Array.from({ length: 1001 }, (_, i) => `alert-${i}`);
+			const res = await request(app)
+				.post('/api/alerts/batch/export')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: tooMany })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when format is invalid', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/export')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], format: 'xml' })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('exports batch alerts as JSONL by default', async () => {
+			alertStorageService.exportAlertsByIds.mockResolvedValueOnce({
+				alerts: [
+					{ id: 'alert-1', receivedAt: '2026-06-06T12:00:00.000Z', source: 'webhook' },
+					{ id: 'alert-2', receivedAt: '2026-06-06T13:00:00.000Z', source: 'webhook' },
+				],
+			});
+
+			const res = await request(app)
+				.post('/api/alerts/batch/export')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1', 'alert-2'] })
+				.expect(200);
+
+			expect(res.headers['content-type']).toContain('application/x-ndjson');
+			expect(res.headers['content-disposition']).toContain('attachment; filename="alerts-batch-export-');
+			expect(res.text).toContain('alert-1');
+			expect(res.text).toContain('alert-2');
+		});
+
+		it('exports batch alerts as CSV when requested', async () => {
+			alertStorageService.exportAlertsByIds.mockResolvedValueOnce({
+				alerts: [
+					{ id: 'alert-1', receivedAt: '2026-06-06T12:00:00.000Z', source: 'webhook', deliverySummary: { total: 1, sent: 1, failed: 0 } },
+				],
+			});
+
+			const res = await request(app)
+				.post('/api/alerts/batch/export')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], format: 'csv' })
+				.expect(200);
+
+			expect(res.headers['content-type']).toContain('text/csv');
+			expect(res.text).toContain('id,requestId,receivedAt');
+			expect(res.text).toContain('alert-1');
+		});
+
+		it('returns 503 when exportAlertsByIds throws STORAGE_UNAVAILABLE', async () => {
+			const error = new Error('Firestore read timeout');
+			error.code = 'STORAGE_UNAVAILABLE';
+			alertStorageService.exportAlertsByIds.mockRejectedValueOnce(error);
+
+			const res = await request(app)
+				.post('/api/alerts/batch/export')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'] })
+				.expect(503);
+
+			expect(res.body.code).toBe('STORAGE_UNAVAILABLE');
+		});
+	});
+
+	describe('POST /api/alerts/batch/delete', () => {
+		it('returns 401 when lacking valid api key', async () => {
+			await request(app)
+				.post('/api/alerts/batch/delete')
+				.send({ alertIds: ['alert-1'] })
+				.expect(401);
+		});
+
+		it('returns 400 when alertIds is missing or invalid', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/delete')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: [] })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when alertIds exceeds MAX_BATCH_DELETE_LIMIT (500)', async () => {
+			const tooMany = Array.from({ length: 501 }, (_, i) => `alert-${i}`);
+			const res = await request(app)
+				.post('/api/alerts/batch/delete')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: tooMany })
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('deletes batch of alerts and returns deleted count', async () => {
+			alertStorageService.deleteAlerts.mockResolvedValueOnce({ deleted: 3 });
+
+			const res = await request(app)
+				.post('/api/alerts/batch/delete')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1', 'alert-2', 'alert-3'] })
+				.expect(200);
+
+			expect(res.body).toEqual({ success: true, deleted: 3 });
+			expect(alertStorageService.deleteAlerts).toHaveBeenCalledWith(['alert-1', 'alert-2', 'alert-3']);
+		});
 	});
 });

@@ -34,6 +34,7 @@ function createRuntimeStatus({ includeEnrichment = true } = {}) {
 		lastErrorCategory: null,
 		successCount: 0,
 		failureCount: 0,
+		errorCategoryCounts: createEmptyErrorCategoryCounts(),
 	};
 	if (includeEnrichment) {
 		status.enrichment = {
@@ -45,6 +46,17 @@ function createRuntimeStatus({ includeEnrichment = true } = {}) {
 	}
 
 	return status;
+}
+
+function createEmptyErrorCategoryCounts() {
+	return {
+		circuit_breaker_open: 0,
+		http_5xx: 0,
+		http_4xx: 0,
+		timeout: 0,
+		invalid_response: 0,
+		request_failed: 0,
+	};
 }
 
 function getPercentage(value, total) {
@@ -220,6 +232,11 @@ class TradingViewMcpService {
 
 	getVolumeConfirmationStatus({ enabled = this.isEnabled() } = {}) {
 		return this.getStatus({ enabled, runtimeStatus: this.volumeRuntimeStatus });
+	}
+
+	getScannerErrorCategoryCounts() {
+		const counts = (this.runtimeStatus && this.runtimeStatus.errorCategoryCounts) || createEmptyErrorCategoryCounts();
+		return { ...counts };
 	}
 
 	async enrichFromAlertText(alertText, options = {}) {
@@ -493,6 +510,27 @@ class TradingViewMcpService {
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
 				throw new Error('TradingView MCP multi_timeframe_analysis returned invalid payload');
+			}
+
+			return normalizedResult;
+		}, { signal });
+	}
+
+	async callMultiAgentAnalysis({ symbol, exchange, timeframe, signal }) {
+		return this._withRuntimeStatus(async () => {
+			const rpcResult = await this._callTool('multi_agent_analysis', {
+				symbol,
+				exchange,
+				timeframe,
+			}, { signal });
+			const normalizedResult = this._unwrapSchemaResult(rpcResult);
+
+			if (normalizedResult && normalizedResult.error) {
+				throw new Error(normalizedResult.error);
+			}
+
+			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
+				throw new Error('TradingView MCP multi_agent_analysis returned invalid payload');
 			}
 
 			return normalizedResult;
@@ -1136,14 +1174,23 @@ class TradingViewMcpService {
 
 			const timestamp = new Date().toISOString();
 			this._recordFailure(error);
+			const errorCategory = this._getErrorCategory(error);
 			runtimeStatusKeys.forEach((key) => {
+				const prevCounts = (this[key] && this[key].errorCategoryCounts) || createEmptyErrorCategoryCounts();
+				const nextCounts = { ...prevCounts };
+				if (Object.prototype.hasOwnProperty.call(nextCounts, errorCategory)) {
+					nextCounts[errorCategory] += 1;
+				} else {
+					nextCounts.request_failed = (nextCounts.request_failed || 0) + 1;
+				}
 				this[key] = {
 					...this[key],
 					status: 'degraded',
 					lastCheckedAt: timestamp,
 					lastFailureAt: timestamp,
-					lastErrorCategory: this._getErrorCategory(error),
+					lastErrorCategory: errorCategory,
 					failureCount: this[key].failureCount + 1,
+					errorCategoryCounts: nextCounts,
 				};
 			});
 			throw error;

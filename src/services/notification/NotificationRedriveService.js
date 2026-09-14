@@ -224,7 +224,14 @@ class NotificationRedriveService {
 	}
 
 	async recordDeliveryResults(alert, deliveryResults = [], options = {}) {
-		if (!this.isEnabled() || !Array.isArray(deliveryResults)) {
+		if (
+			!this.isEnabled() ||
+			!Array.isArray(deliveryResults) ||
+			Boolean(options.isProbe) ||
+			options.redriveEligible === false ||
+			Boolean(alert?.isProbe) ||
+			alert?.redriveEligible === false
+		) {
 			return [];
 		}
 
