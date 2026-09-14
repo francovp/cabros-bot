@@ -80,6 +80,8 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 #### URL Shortening (003-news-monitor)
 
 - `URL_SHORTENER_SERVICE` - URL-shortening provider for WhatsApp citations (optional; defaults to `picsee`; supported values: `picsee`, `tinyurl`, `cuttly`)
+- `URL_SHORTENER_CACHE_MAX_ENTRIES` - Maximum in-memory URL-shortener cache entries before LRU eviction (default: `1000`, range `1`-`100000`; Remote Config supported)
+- `URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES` - Maximum tracked URL-shortener providers (default: `32`, range `1`-`1024`; effective minimum is the number of configured providers)
 - `PICSEE_API_KEY` - PicSee API key, required when PicSee is selected
 - `CUTTLY_API_KEY` - Cuttly API key, required when Cuttly is selected
 - TinyURL uses its free endpoint and requires no credential. Bitly, reurl, and Pixnet0rz.tw are unavailable in the runtime.
@@ -233,6 +235,8 @@ pnpm test:firebase
 - `NEWS_SYMBOLS_STOCKS` - Default stock symbols if not provided in request (comma-separated)
 - `NEWS_ALERT_THRESHOLD` - Confidence score threshold for sending alerts (default: `0.7`, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` - Cache time-to-live for deduplication (default: `6` hours)
+- `NEWS_CACHE_MAX_ENTRIES` - Maximum in-memory news-cache entries before LRU eviction (default: `5000`, range `1`-`1000000`; Remote Config supported)
+- `NEWS_DELIVERY_LOCK_MAX_ENTRIES` - Maximum in-memory channel delivery leases (default: `1000`, range `1`-`100000`; active leases are preserved)
 - `ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP` - Enable Firestore-backed news deduplication (`true` or `false`, default: `false`; failures fall back to memory)
 - `NEWS_TIMEOUT_MS` - Per-symbol analysis timeout (default: `30000` ms)
 - `NEWS_GEMINI_CONCURRENCY` - Max concurrent Gemini-backed symbol analyses. Production policy is `3`; unset keeps legacy parallel fan-out for backward compatibility.

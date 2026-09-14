@@ -673,6 +673,8 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - `NEWS_SYMBOLS_STOCKS` — Default stock symbols if not provided in request (comma-separated)
 - `NEWS_ALERT_THRESHOLD` — Confidence score threshold (default: 0.7, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` — Cache time-to-live (default: 6 hours)
+- `NEWS_CACHE_MAX_ENTRIES` — Maximum in-memory news-cache entries before LRU eviction (default: `5000`, range `1`-`1000000`; Remote Config supported)
+- `NEWS_DELIVERY_LOCK_MAX_ENTRIES` — Maximum in-memory channel delivery leases (default: `1000`, range `1`-`100000`; active leases are preserved)
 - `NEWS_TIMEOUT_MS` — Per-symbol analysis timeout (default: 30000 ms)
 - `NEWS_GEMINI_CONCURRENCY` — Max concurrent Gemini-backed symbol analyses. Production policy is `3`; leave unset only for backward-compatible legacy full fan-out.
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` — Per-symbol retry count for Gemini `429 RESOURCE_EXHAUSTED` errors (default: 2)
@@ -680,6 +682,8 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - `ENABLE_BINANCE_PRICE_CHECK` — Enable Binance crypto price fetching (default: false)
 - `ENABLE_LLM_ALERT_ENRICHMENT` — Enable optional secondary LLM enrichment (default: false)
 - `URL_SHORTENER_SERVICE` — URL shortening service for WhatsApp citations (default: `picsee`; options: `picsee`, `tinyurl`, `cuttly`)
+- `URL_SHORTENER_CACHE_MAX_ENTRIES` — Maximum in-memory URL-shortener cache entries before LRU eviction (default: `1000`, range `1`-`100000`; Remote Config supported)
+- `URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES` — Maximum tracked URL-shortener providers (default: `32`, range `1`-`1024`; effective minimum is the number of configured providers)
 - Service-specific tokens: `PICSEE_API_KEY` and `CUTTLY_API_KEY`; TinyURL requires no token. Bitly, reurl, and Pixnet0rz.tw are unavailable.
 - Azure AI Inference (if enrichment enabled): `AZURE_LLM_ENDPOINT`, `AZURE_LLM_KEY`, `AZURE_LLM_MODEL`
 

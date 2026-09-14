@@ -1671,7 +1671,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: false,
 			configured: false,
 			ready: false,
@@ -1679,6 +1679,8 @@ describe('Status endpoints', () => {
 			mode: 'in-memory',
 			backend: null,
 		});
+		expect(response.body.dependencies.newsMonitorDedup.cacheSize).toBeDefined();
+		expect(typeof response.body.dependencies.newsMonitorDedup.cacheSize.entries).toBe('number');
 	});
 
 	it('reports news monitor deduplication as persistent (firestore) when enabled', async () => {
@@ -1689,7 +1691,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: true,
 			configured: true,
 			ready: true,
@@ -1711,7 +1713,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: true,
 			configured: true,
 			ready: true,
@@ -1733,7 +1735,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: false,
 			configured: false,
 			ready: false,
