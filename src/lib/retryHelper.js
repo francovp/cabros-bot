@@ -83,6 +83,9 @@ async function sendWithRetry(sendFn, maxRetries = 3, logger = null, options = {}
 
 			// Failure; retry if attempts remain
 			lastResult = result;
+			if (result.retryable === false) {
+				return { ...result, attemptCount: attempt, durationMs };
+			}
 			if (signal && signal.aborted) {
 				return buildAbortedResult(signal, lastResult, totalStartTime, attempt);
 			}
@@ -109,10 +112,16 @@ async function sendWithRetry(sendFn, maxRetries = 3, logger = null, options = {}
 				success: false,
 				channel: 'unknown',
 				error: error.message,
+				...(error.category ? { category: error.category } : {}),
+				...(error.retryable === false ? { retryable: false } : {}),
 			};
 
 			if (isAbortError(error, signal)) {
 				return buildAbortedResult(signal, lastResult, totalStartTime, attempt, error);
+			}
+
+			if (error.retryable === false) {
+				return { ...lastResult, attemptCount: attempt, durationMs: Date.now() - totalStartTime };
 			}
 
 			if (logger) {
