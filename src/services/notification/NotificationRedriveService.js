@@ -271,6 +271,7 @@ class NotificationRedriveService {
 		this._pendingZeroChannelWriteDelta = 0;
 		this._zeroChannelRetryTimer = null;
 		this._zeroChannelRetryAttempts = 0;
+		this._isDraining = false;
 		this._initialSeedPromise = null;
 		this._sessionDeliveredDelta = 0;
 		this._sessionExhaustedDelta = 0;
@@ -289,6 +290,7 @@ class NotificationRedriveService {
 			this._zeroChannelRetryTimer
 			|| this._pendingZeroChannelWriteDelta <= 0
 			|| !this.hasDurableStore()
+			|| this._isDraining
 			|| this._zeroChannelRetryAttempts >= MAX_ZERO_CHANNEL_RETRY_ATTEMPTS
 		) {
 			return;
@@ -349,7 +351,7 @@ class NotificationRedriveService {
 						followUpWriteStarted = true;
 						this._flushZeroChannelWrites();
 					}
-				} else if (retryable) {
+				} else if (retryable && !this._isDraining) {
 					this._scheduleZeroChannelRetry();
 				}
 			});
@@ -1877,6 +1879,7 @@ class NotificationRedriveService {
 			return true;
 		}
 
+		this._isDraining = false;
 		this.running = true;
 		if (configuredRole === 'worker') {
 			this._initialSeedPromise = this.seedCountersFromHeartbeat();
@@ -1907,6 +1910,7 @@ class NotificationRedriveService {
 		this.running = false;
 
 		if (options.drain) {
+			this._isDraining = true;
 			const timeoutMs = parsePositiveInteger(options.timeoutMs, MAX_DRAIN_TIMEOUT_MS);
 			const drainDeadline = Date.now() + timeoutMs;
 			if (this.activeSweepPromise) {
@@ -1982,11 +1986,30 @@ class NotificationRedriveService {
 				}
 			}
 
-			if (this._activeZeroChannelWritePromise) {
+			if (this._zeroChannelRetryTimer) {
+				clearTimeout(this._zeroChannelRetryTimer);
+				this._zeroChannelRetryTimer = null;
+			}
+
+			let zeroChannelFlushStarted = false;
+			while (Date.now() < drainDeadline) {
+				if (!this._activeZeroChannelWritePromise && this._pendingZeroChannelWriteDelta > 0) {
+					if (zeroChannelFlushStarted) {
+						break;
+					}
+					zeroChannelFlushStarted = true;
+					this._flushZeroChannelWrites();
+				}
+
+				const activeZeroChannelWrite = this._activeZeroChannelWritePromise;
+				if (!activeZeroChannelWrite) {
+					break;
+				}
+
 				let timer = null;
 				try {
 					await Promise.race([
-						this._activeZeroChannelWritePromise,
+						activeZeroChannelWrite,
 						new Promise((_, reject) => {
 							timer = setTimeout(() => reject(new Error('Zero-channel write drain timeout exceeded')), Math.max(0, drainDeadline - Date.now()));
 						}),
@@ -1998,6 +2021,11 @@ class NotificationRedriveService {
 						clearTimeout(timer);
 					}
 				}
+			}
+
+			if (this._zeroChannelRetryTimer) {
+				clearTimeout(this._zeroChannelRetryTimer);
+				this._zeroChannelRetryTimer = null;
 			}
 		}
 	}
@@ -2107,6 +2135,7 @@ class NotificationRedriveService {
 		this._activeZeroChannelWritePromise = null;
 		this._activeZeroChannelWriteResultPromise = null;
 		this._pendingZeroChannelWriteDelta = 0;
+		this._isDraining = false;
 		if (this._zeroChannelRetryTimer) {
 			clearTimeout(this._zeroChannelRetryTimer);
 		}

@@ -1735,6 +1735,29 @@ describe('NotificationRedriveService', () => {
 			expect(service.running).toBe(false);
 		});
 
+		it('flushes scheduled zero-channel retries before shutdown completes', async () => {
+			jest.useFakeTimers();
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+			const persistSpy = jest
+				.spyOn(service, '_persistZeroChannelIncrement')
+				.mockResolvedValue({ persisted: true, retryable: false });
+
+			service._pendingZeroChannelWriteDelta = 2;
+			service._scheduleZeroChannelRetry();
+
+			expect(service._zeroChannelRetryTimer).not.toBeNull();
+
+			try {
+				await service.stopWorker({ drain: true, timeoutMs: 500 });
+
+				expect(persistSpy).toHaveBeenCalledWith(2);
+				expect(service._pendingZeroChannelWriteDelta).toBe(0);
+				expect(service._zeroChannelRetryTimer).toBeNull();
+			} finally {
+				jest.useRealTimers();
+			}
+		});
+
 		it('deduplicates concurrent syncWorkerTelemetry calls into a single-flight read', async () => {
 			let readCount = 0;
 			const delayedRead = new Promise((resolve) => {
