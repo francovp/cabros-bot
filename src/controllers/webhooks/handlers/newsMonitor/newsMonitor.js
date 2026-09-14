@@ -9,6 +9,7 @@ const { v4: uuidv4 } = require('uuid');
 const { getAnalyzer, setNotificationManager } = require('./analyzer');
 const { getCacheInstance } = require('./cache');
 const { AnalysisStatus } = require('./constants');
+const { getVolumeTracker } = require('./volumeTracker');
 const { getNotificationManager } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
@@ -33,6 +34,7 @@ class NewsMonitorHandler {
 	constructor() {
 		this.analyzer = getAnalyzer();
 		this.cache = getCacheInstance();
+		this.volumeTracker = getVolumeTracker();
 		this.maxSymbols = 100;
 	}
 
@@ -144,6 +146,7 @@ class NewsMonitorHandler {
 				if (analysisSpan && typeof analysisSpan.setAttribute === 'function') {
 					analysisSpan.setAttribute('news.quota_exhausted', summary.quota_exhausted);
 					analysisSpan.setAttribute('news.error_count', summary.error);
+					analysisSpan.setAttribute('news.throttled_count', summary.throttled);
 				}
 			} finally {
 				sentryService.endSpan(analysisSpan);
@@ -157,8 +160,9 @@ class NewsMonitorHandler {
 			const responseResults = (results || []).map(
 				({ attemptedDeliveryResults, originalPersistedState, analysisRecord, ...publicResult }) => publicResult,
 			);
+			const tracker = this.volumeTracker || getVolumeTracker();
 			const response = {
-				success: summary.analyzed > 0 || summary.cached > 0,
+				success: summary.analyzed > 0 || summary.cached > 0 || summary.throttled > 0,
 				partial_success: summary.timeout > 0 || summary.error > 0,
 				results: responseResults,
 				summary,
@@ -167,6 +171,7 @@ class NewsMonitorHandler {
 				totalDurationMs: Date.now() - startTime,
 				requestId,
 				tokenUsage: tokenUsage.toJSON(),
+				windowUsage: tracker.getWindowUsage(),
 			};
 
 			if (dryRun) {
@@ -428,6 +433,7 @@ class NewsMonitorHandler {
 			total: results.length,
 			analyzed: 0,
 			cached: 0,
+			throttled: 0,
 			timeout: 0,
 			error: 0,
 			quota_exhausted: 0,
@@ -445,6 +451,8 @@ class NewsMonitorHandler {
 				if (result.alert) {
 					summary.alerts_sent++;
 				}
+			} else if (result.status === AnalysisStatus.THROTTLED) {
+				summary.throttled++;
 			} else if (result.status === AnalysisStatus.TIMEOUT) {
 				summary.timeout++;
 			} else if (result.status === AnalysisStatus.ERROR) {
