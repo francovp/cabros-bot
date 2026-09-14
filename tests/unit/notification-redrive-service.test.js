@@ -1375,6 +1375,34 @@ describe('NotificationRedriveService', () => {
 			expect(notifySpy).not.toHaveBeenCalled();
 		});
 
+		it('does not count a redrive as delivered if terminal persistence fails', async () => {
+			const mockTelegramSend = jest.fn().mockResolvedValue({ success: true });
+			const mockNotificationManager = {
+				channels: new Map([
+					['telegram', { name: 'telegram', send: mockTelegramSend, isEnabled: () => true }],
+				]),
+				sendToChannels: jest.fn(async (payload, channels, options) => {
+					const result = await mockTelegramSend(payload, options);
+					return [{ channel: 'telegram', ...result }];
+				}),
+			};
+			service.setNotificationManagerGetter(() => mockNotificationManager);
+			await service.recordDeliveryResults(
+				{ text: 'Delivery persistence failure', correlationId: 'corr-delivery-terminal-failure' },
+				[{ channel: 'telegram', success: false, error: 'Initial failure' }],
+			);
+			service.inMemoryStore.get('corr-delivery-terminal-failure_telegram').nextAttemptAt = Date.now() - 1000;
+			jest.spyOn(service, 'markTerminal').mockResolvedValue(false);
+
+			const sweepResult = await service.sweep();
+
+			expect(sweepResult.redriven).toBe(0);
+			expect(sweepResult.errors).toBe(1);
+			expect(service.totalDeliveredCount).toBe(0);
+			expect(service.lastSweepResult).toMatchObject({ succeeded: 0, errors: 1 });
+			expect(service.inMemoryStore.get('corr-delivery-terminal-failure_telegram').status).toBe('in_flight');
+		});
+
 		it('increments exhaustedCount when markTerminal succeeds', async () => {
 			const candidate = {
 				id: 'record_success',
@@ -1852,6 +1880,40 @@ describe('NotificationRedriveService', () => {
 			expect(result).toBe(false);
 			expect(service.persistedLastSweepAt).toEqual(cachedDate);
 			expect(service.persistedLastRunDurationMs).toBe(5000);
+		});
+
+		it('preserves local pending-count adjustments when syncing the same heartbeat snapshot', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			const cachedDate = new Date('2026-09-13T12:00:00.000Z');
+			service.persistedLastSweepAt = cachedDate;
+			service.persistedPendingCount = 7;
+			service.inMemoryStore.set('corr-sync-local_telegram', {
+				status: 'pending',
+				expiresAt: new Date(Date.now() + 60000),
+			});
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						get: jest.fn(async () => ({
+							exists: true,
+							data: () => ({
+								lastSweepAt: cachedDate.toISOString(),
+								pendingCount: 7,
+							}),
+						})),
+						set: jest.fn().mockResolvedValue(undefined),
+					})),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+
+			await service.markTerminal('corr-sync-local_telegram', 'cancelled');
+			expect(service.persistedPendingCount).toBe(6);
+
+			const synced = await service.syncWorkerTelemetry();
+
+			expect(synced).toBe(true);
+			expect(service.persistedPendingCount).toBe(6);
 		});
 
 		it('reports durable queue pending count from worker heartbeat in status and counts unexpired durable records', async () => {

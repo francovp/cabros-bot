@@ -262,6 +262,8 @@ class NotificationRedriveService {
 		this.persistedExhaustedCount = 0;
 		this.persistedZeroChannelBroadcasts = 0;
 		this.persistedPendingCount = null;
+		this._pendingCountLocalDelta = 0;
+		this._pendingCountLocalMutationAt = 0;
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
 		this.totalZeroChannelBroadcasts = 0;
@@ -1316,13 +1318,17 @@ class NotificationRedriveService {
 							signalRepeatCooldown.refresh(claimed.repeatCooldown.key, [claimed.repeatCooldown.channel]);
 						}
 						// Delivery succeeded
-						await this.markTerminal(claimed.id, 'delivered', {
+						const marked = await this.markTerminal(claimed.id, 'delivered', {
 							deliveredAt: toTimestamp(new Date()),
 						});
-						this.totalDeliveredCount += 1;
-						this._sessionDeliveredDelta = (this._sessionDeliveredDelta || 0) + 1;
-						redrivenCount += 1;
-						console.info(`[NotificationRedriveService] Successfully redelivered dead-letter ${claimed.id}`);
+						if (marked) {
+							this.totalDeliveredCount += 1;
+							this._sessionDeliveredDelta = (this._sessionDeliveredDelta || 0) + 1;
+							redrivenCount += 1;
+							console.info(`[NotificationRedriveService] Successfully redelivered dead-letter ${claimed.id}`);
+						} else {
+							errorCount += 1;
+						}
 					} else {
 						// Delivery failed again
 						const nextAttempts = (claimed.attemptCount || 0) + 1;
@@ -1836,7 +1842,15 @@ class NotificationRedriveService {
 				this.persistedLastRunExhaustedCount = data.lastRunExhaustedCount;
 			}
 			if (typeof data.pendingCount === 'number') {
-				this.persistedPendingCount = data.pendingCount;
+				const preserveLocalDelta = this._pendingCountLocalDelta !== 0
+					&& (!snapshotSweepAtMs || this._pendingCountLocalMutationAt > snapshotSweepAtMs);
+				this.persistedPendingCount = Math.max(0, Math.floor(data.pendingCount + (
+					preserveLocalDelta ? this._pendingCountLocalDelta : 0
+				)));
+				if (!preserveLocalDelta) {
+					this._pendingCountLocalDelta = 0;
+					this._pendingCountLocalMutationAt = 0;
+				}
 			}
 			if (typeof data.deliveredCount === 'number') {
 				this.persistedDeliveredCount = data.deliveredCount;
@@ -2070,7 +2084,10 @@ class NotificationRedriveService {
 		const isPending = isPendingRedriveStatus(nextStatus);
 		if (wasPending === isPending) return;
 
-		this.persistedPendingCount = Math.max(0, this.persistedPendingCount + (isPending ? 1 : -1));
+		const delta = isPending ? 1 : -1;
+		this.persistedPendingCount = Math.max(0, this.persistedPendingCount + delta);
+		this._pendingCountLocalDelta += delta;
+		this._pendingCountLocalMutationAt = this._pendingCountLocalDelta === 0 ? 0 : Date.now();
 	}
 
 	getStatus() {
@@ -2190,6 +2207,8 @@ class NotificationRedriveService {
 		this.persistedLastRunErrorCount = 0;
 		this.persistedLastRunExhaustedCount = 0;
 		this.persistedPendingCount = null;
+		this._pendingCountLocalDelta = 0;
+		this._pendingCountLocalMutationAt = 0;
 		this.persistedDeliveredCount = 0;
 		this.persistedExhaustedCount = 0;
 		this.persistedZeroChannelBroadcasts = 0;
