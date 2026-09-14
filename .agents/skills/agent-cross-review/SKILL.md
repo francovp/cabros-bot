@@ -65,6 +65,34 @@ gh pr view "$PR_NUM" --json number,title,body,headRefName,author,labels,url
 gh pr diff "$PR_NUM"
 ```
 
+**Fetch review thread state (required for the CodeQL/GHAS gate in rubric item 4):**
+
+```bash
+# Paginate all review threads; check isResolved and comment author
+gh api graphql -f query='
+{
+  repository(owner:"francovp", name:"cabros-bot") {
+    pullRequest(number: '"$PR_NUM"') {
+      reviewThreads(first: 50) {
+        nodes {
+          isResolved
+          path
+          line
+          comments(first: 1) {
+            nodes { author { login } body }
+          }
+        }
+      }
+    }
+  }
+}' --jq '
+  .data.repository.pullRequest.reviewThreads.nodes[]
+  | select(.isResolved == false)
+  | {path:.path, line:.line, author:.comments.nodes[0].author.login, snippet:(.comments.nodes[0].body[:120])}'
+```
+
+Any thread whose `author.login` is `github-advanced-security` and `isResolved` is `false` is a **security blocker** — resolve it before approving (rubric item 4).
+
 Read the linked GitHub issues, Linear tickets (e.g. `CB-xxx`), or user stories mentioned in the PR description to understand the intended behavior.
 
 ### 4. Evaluate Against Cabros Bot Rubric
@@ -88,6 +116,7 @@ Review the diff systematically against [cabros-bot-review-rubric.md](references/
    - Does API key validation use `crypto.timingSafeEqual`?
    - In production (`NODE_ENV=production`, Render, Railway), does missing `WEBHOOK_API_KEY` fail closed with HTTP 503?
    - Are secrets, credentials, or API tokens strictly protected from logs, URL query strings, and output?
+   - **CodeQL / GHAS alerts** (evidence: PR #1100): are there open `github-advanced-security` inline review threads? Common findings in this codebase: clear-text logging of sensitive auth values (`src/lib/auth.js`) and sensitive data read from GET query parameters. Treat open CodeQL threads as blockers; they must be resolved before merge, not deferred.
 
 5. **Contract & Configuration Parity**:
    - Is `.env.example` updated for new application-owned environment variables?
@@ -147,6 +176,7 @@ Assemble the review using this standard structure:
 - [ ] Telegram MarkdownV2 escaping
 - [ ] Firestore undefined sanitization
 - [ ] Timing-safe auth & fail-closed production check
+- [ ] No open CodeQL / GHAS inline threads (clear-text logging, GET query param secrets)
 - [ ] `.env.example` & Remote Config parity
 - [ ] OpenAPI 3.1 & Postman collection sync
 - [ ] Agent & Model attribution label (`<agent>-<model>`)
