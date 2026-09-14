@@ -132,11 +132,12 @@ describe('webhookBodySize.buildWebhookBodySize', () => {
 		Object.assign(process.env, savedEnv);
 	});
 
-	it('returns matching JSON and text limits derived from the env var', () => {
-		process.env.WEBHOOK_MAX_BODY_SIZE = '128kb';
+	it('passes normalized byte counts to both body parsers', () => {
+		process.env.WEBHOOK_MAX_BODY_SIZE = ' 128KB ';
 		const result = buildWebhookBodySize();
-		expect(result.jsonLimit).toBe('128kb');
-		expect(result.textLimit).toBe('128kb');
+		expect(result.jsonLimit).toBe(128 * 1024);
+		expect(result.textLimit).toBe(128 * 1024);
+		expect(result.limitString).toBe('128kb');
 	});
 
 	it('exposes a middleware that responds to entity.too.large errors with a structured 413', () => {
@@ -165,7 +166,7 @@ describe('webhookBodySize.buildWebhookBodySize', () => {
 			expect.objectContaining({
 				success: false,
 				error: 'PAYLOAD_TOO_LARGE',
-			})
+			}),
 		);
 		expect(res.body.limit).toBe(DEFAULT_MAX_BODY_SIZE);
 		expect(next).not.toHaveBeenCalled();

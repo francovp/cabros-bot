@@ -1,15 +1,28 @@
-/* global jest, describe, it, beforeEach, afterEach, expect */
+/* global jest, describe, it, beforeEach, afterEach, expect, saveEnv, restoreEnv */
 
 const express = require('express');
 const request = require('supertest');
 const { buildWebhookBodySize } = require('../../src/lib/webhookBodySize');
 
+function buildConfiguredApp(limit) {
+	const previous = process.env.WEBHOOK_MAX_BODY_SIZE;
+	process.env.WEBHOOK_MAX_BODY_SIZE = limit;
+	let app;
+	jest.isolateModules(() => {
+		app = require('../../app');
+	});
+	if (previous === undefined) delete process.env.WEBHOOK_MAX_BODY_SIZE;
+	else process.env.WEBHOOK_MAX_BODY_SIZE = previous;
+	return app;
+}
+
 function buildTestApp(options = {}) {
-	const { jsonLimit = '2kb', textLimit = '1kb', route = '/api/webhook/alert' } = options;
+	const { limit = '2kb', route = '/api/webhook/alert' } = options;
+	const bodySize = buildWebhookBodySize({ env: { WEBHOOK_MAX_BODY_SIZE: limit } });
 	const app = express();
 	app.use(express.urlencoded({ extended: false }));
-	app.use(express.text({ type: 'text/plain', limit: textLimit }));
-	app.use(express.json({ limit: jsonLimit }));
+	app.use(express.text({ type: 'text/plain', limit: bodySize.textLimit }));
+	app.use(express.json({ limit: bodySize.jsonLimit }));
 	app.use((req, res, next) => {
 		req.rawBodyLength = req.rawBody ? req.rawBody.length : 0;
 		next();
@@ -17,7 +30,6 @@ function buildTestApp(options = {}) {
 	app.post(route, (req, res) => {
 		res.status(200).json({ success: true, received: true, body: req.body });
 	});
-	const bodySize = buildWebhookBodySize({ env: { WEBHOOK_MAX_BODY_SIZE: jsonLimit } });
 	app.use(bodySize.middleware);
 	return app;
 }
@@ -34,7 +46,7 @@ describe('POST /api/webhook/* - Webhook body size limits', () => {
 	});
 
 	it('accepts a JSON body within the configured size limit', async () => {
-		const app = buildTestApp({ jsonLimit: '2kb' });
+		const app = buildTestApp({ limit: '2kb' });
 		const payload = { text: 'A'.repeat(1024) }; // ~1KB body, under 2KB
 		const response = await request(app)
 			.post('/api/webhook/alert')
@@ -44,8 +56,20 @@ describe('POST /api/webhook/* - Webhook body size limits', () => {
 		expect(response.body.success).toBe(true);
 	});
 
+	it('accepts a valid JSON body when the configured limit has surrounding whitespace', async () => {
+		const app = buildTestApp({ limit: ' 2kb ' });
+		const payload = { text: 'A'.repeat(1024) };
+		const response = await request(app)
+			.post('/api/webhook/alert')
+			.set('Content-Type', 'application/json')
+			.send(payload);
+
+		expect(response.status).toBe(200);
+		expect(response.body.body).toEqual(payload);
+	});
+
 	it('rejects an oversized JSON body with a structured 413 PAYLOAD_TOO_LARGE response', async () => {
-		const app = buildTestApp({ jsonLimit: '2kb' });
+		const app = buildTestApp({ limit: '2kb' });
 		const payload = { text: 'A'.repeat(4096) }; // ~4KB body, over 2KB
 		const response = await request(app)
 			.post('/api/webhook/alert')
@@ -59,13 +83,13 @@ describe('POST /api/webhook/* - Webhook body size limits', () => {
 				error: 'PAYLOAD_TOO_LARGE',
 				message: expect.stringContaining('exceeds maximum size'),
 				limit: '2kb',
-			})
+			}),
 		);
 	});
 
 	it('rejects an oversized text/plain body with a structured 413 response', async () => {
-		const app = buildTestApp({ jsonLimit: '4kb', textLimit: '1kb' });
-		const longText = 'B'.repeat(2048); // 2KB, over 1KB text limit
+		const app = buildTestApp({ limit: '1kb' });
+		const longText = 'B'.repeat(2048); // 2KB, over 1KB shared limit
 		const response = await request(app)
 			.post('/api/webhook/alert')
 			.set('Content-Type', 'text/plain')
@@ -73,11 +97,11 @@ describe('POST /api/webhook/* - Webhook body size limits', () => {
 
 		expect(response.status).toBe(413);
 		expect(response.body.error).toBe('PAYLOAD_TOO_LARGE');
-		expect(response.body.limit).toBe('4kb'); // jsonLimit is the source of truth
+		expect(response.body.limit).toBe('1kb');
 	});
 
 	it('does not modify valid requests within the size limit', async () => {
-		const app = buildTestApp({ jsonLimit: '4kb' });
+		const app = buildTestApp({ limit: '4kb' });
 		const payload = { message: 'hello world', count: 5 };
 		const response = await request(app)
 			.post('/api/webhook/alert')
@@ -89,7 +113,7 @@ describe('POST /api/webhook/* - Webhook body size limits', () => {
 	});
 
 	it('returns 413 for a 10MB JSON payload instead of buffering it through the parser', async () => {
-		const app = buildTestApp({ jsonLimit: '256kb' });
+		const app = buildTestApp({ limit: '256kb' });
 		const hugePayload = { text: 'X'.repeat(10 * 1024 * 1024) };
 		const response = await request(app)
 			.post('/api/webhook/alert')
@@ -120,5 +144,34 @@ describe('POST /api/webhook/* - Webhook body size limits', () => {
 			.send({ ok: true });
 		expect(response.status).toBe(500);
 		expect(response.body.error).toBe('unhandled');
+	});
+
+	it('returns the structured 413 response for a webhook path in the application', async () => {
+		const app = buildConfiguredApp('1kb');
+		app.post('/api/webhook/test', (req, res) => res.status(200).json({ body: req.body }));
+		const response = await request(app)
+			.post('/api/webhook/test')
+			.set('Content-Type', 'application/json')
+			.send({ text: 'W'.repeat(2048) });
+
+		expect(response.status).toBe(413);
+		expect(response.body).toEqual(expect.objectContaining({
+			success: false,
+			error: 'PAYLOAD_TOO_LARGE',
+			limit: '1kb',
+		}));
+	});
+
+	it('does not apply the webhook limit to non-webhook JSON routes', async () => {
+		const app = buildConfiguredApp('1kb');
+		app.post('/api/non-webhook', (req, res) => res.status(200).json({ body: req.body }));
+		const payload = { text: 'N'.repeat(2048) };
+		const response = await request(app)
+			.post('/api/non-webhook')
+			.set('Content-Type', 'application/json')
+			.send(payload);
+
+		expect(response.status).toBe(200);
+		expect(response.body.body).toEqual(payload);
 	});
 });

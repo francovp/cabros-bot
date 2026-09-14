@@ -2663,7 +2663,7 @@
         }
       },
       "PayloadTooLarge": {
-        "description": "The request body exceeded the configured WEBHOOK_MAX_BODY_SIZE limit (default 256kb). Both JSON and text/plain body types share the same effective limit.",
+        "description": "The webhook or news-monitor request body exceeded the configured WEBHOOK_MAX_BODY_SIZE limit (default 256kb). Both JSON and text/plain body types share the same effective limit.",
         "content": {
           "application/json": {
             "schema": {
@@ -3461,7 +3461,7 @@
       },
       "PayloadTooLarge": {
         "type": "object",
-        "description": "Structured 413 response returned when a webhook request body exceeds the WEBHOOK_MAX_BODY_SIZE limit (default 256kb).",
+        "description": "Structured 413 response returned when a webhook or news-monitor request body exceeds the WEBHOOK_MAX_BODY_SIZE limit (default 256kb).",
         "required": [
           "success",
           "error"

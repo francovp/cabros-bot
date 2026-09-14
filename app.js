@@ -15,21 +15,27 @@ setupTrustProxy(app);
 // Centralized so both JSON and text/plain parsers share the same effective limit and
 // the structured 413 error handler is wired in one place.
 const webhookBodySize = buildWebhookBodySize();
+const webhookBodyPaths = ['/api/webhook', '/api/news-monitor'];
 
 // Tell express to use body-parser's urlencoded parsing
 app.use(express.urlencoded({ extended: false }));
-// Tell express to use body-parser's JSON and text parsing with explicit size limits
-app.use(express.text({ type: 'text/plain', limit: webhookBodySize.textLimit }));
-app.use(express.json({ limit: webhookBodySize.jsonLimit }));
+// Apply the configurable limit only to webhook-style request bodies. Other API
+// routes retain Express' existing parser behavior and limit.
+app.use(webhookBodyPaths, express.text({ type: 'text/plain', limit: webhookBodySize.textLimit }));
+app.use(webhookBodyPaths, express.json({ limit: webhookBodySize.jsonLimit }));
+app.use(webhookBodyPaths, webhookBodySize.middleware);
+// Preserve the existing default parsers for non-webhook routes.
+app.use(express.text({ type: 'text/plain' }));
+app.use(express.json());
 
 // Configurar Cabeseras y CORS
 app.use(createCorsMiddleware());
 
 // Use helmet for improved security
 const contentSecurityPolicy = helmet.contentSecurityPolicy.getDefaultDirectives();
-contentSecurityPolicy['script-src'] = ["'self'", 'https://www.gstatic.com'];
+contentSecurityPolicy['script-src'] = ['\'self\'', 'https://www.gstatic.com'];
 contentSecurityPolicy['connect-src'] = [
-	"'self'",
+	'\'self\'',
 	'https://identitytoolkit.googleapis.com',
 	'https://securetoken.googleapis.com',
 	'https://www.googleapis.com',
@@ -50,10 +56,5 @@ app.use(require('./src/lib/rateLimiter'));
 
 // Public, read-only API contract and interactive documentation.
 app.use(getOpenApiDocsRouter());
-
-// Convert body-parser `entity.too.large` errors into a structured 413 response.
-// Registered after the body parsers (above) so it can intercept oversized payloads
-// raised during JSON/text parsing before any controller runs.
-app.use(webhookBodySize.middleware);
 
 module.exports = app;

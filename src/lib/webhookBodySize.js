@@ -56,16 +56,17 @@ function resolveWebhookMaxBodySize(env = process.env) {
 	const rawValue = env.WEBHOOK_MAX_BODY_SIZE;
 	const parsed = parseByteSize(rawValue);
 	if (parsed !== null) {
+		const limitString = rawValue.trim().toLowerCase();
 		return {
 			limitBytes: parsed,
 			source: 'env',
 			rawValue,
-			limitString: rawValue,
+			limitString,
 		};
 	}
 	if (rawValue) {
 		console.warn(
-			`[webhookBodySize] Ignoring invalid WEBHOOK_MAX_BODY_SIZE=${rawValue}; using default ${DEFAULT_MAX_BODY_SIZE}`
+			`[webhookBodySize] Ignoring invalid WEBHOOK_MAX_BODY_SIZE=${rawValue}; using default ${DEFAULT_MAX_BODY_SIZE}`,
 		);
 	}
 	return {
@@ -84,15 +85,17 @@ function resolveWebhookMaxBodySize(env = process.env) {
  * @param {object} [options]
  * @param {object} [options.env=process.env] Environment variables object (injectable for tests)
  * @returns {{
- *   jsonLimit: string,
- *   textLimit: string,
+ *   jsonLimit: number,
+ *   textLimit: number,
+ *   limitBytes: number,
+ *   limitString: string,
  *   middleware: import('express').RequestHandler,
  *   payloadTooLargeResponse: (req: import('express').Request, res: import('express').Response) => void
  * }}
  */
 function buildWebhookBodySize(options = {}) {
 	const env = options.env || process.env;
-	const { limitString } = resolveWebhookMaxBodySize(env);
+	const { limitBytes, limitString } = resolveWebhookMaxBodySize(env);
 
 	const payloadTooLargeResponse = (req, res) => {
 		res.status(413).json({
@@ -104,7 +107,6 @@ function buildWebhookBodySize(options = {}) {
 	};
 
 	// 4-arg signature is required for Express to recognize this as an error-handling middleware.
-	// eslint-disable-next-line no-unused-vars
 	const middleware = (err, req, res, next) => {
 		if (err && err.type === 'entity.too.large') {
 			payloadTooLargeResponse(req, res);
@@ -114,8 +116,10 @@ function buildWebhookBodySize(options = {}) {
 	};
 
 	return {
-		jsonLimit: limitString,
-		textLimit: limitString,
+		jsonLimit: limitBytes,
+		textLimit: limitBytes,
+		limitBytes,
+		limitString,
 		middleware,
 		payloadTooLargeResponse,
 	};

@@ -1290,7 +1290,7 @@
           "name": "POST Send Message (oversized body)",
           "request": {
             "method": "POST",
-            "description": "Both /api/webhook/alert and /api/webhook/message share the WEBHOOK_MAX_BODY_SIZE limit (default 256kb). Oversized JSON or text/plain payloads return a structured 413 PAYLOAD_TOO_LARGE response before any downstream middleware or controller runs. Set WEBHOOK_MAX_BODY_SIZE=1kb locally to reproduce with a smaller payload, or send a body larger than the configured limit.",
+            "description": "Webhook and /api/news-monitor requests share the WEBHOOK_MAX_BODY_SIZE limit (default 256kb). Oversized JSON or text/plain payloads return a structured 413 PAYLOAD_TOO_LARGE response before any downstream middleware or controller runs. Set WEBHOOK_MAX_BODY_SIZE=1kb locally to reproduce with a smaller payload, or send a body larger than the configured limit.",
             "header": [
               {
                 "key": "Content-Type",
