@@ -7615,7 +7615,7 @@
           "lastRunExhaustedCount": {
             "type": "integer",
             "minimum": 0,
-            "description": "Number of dead-letter records marked exhausted in the last completed sweep."
+            "description": "Number of dead-letter records marked exhausted or expired in the last completed sweep."
           },
           "lastSweepResult": {
             "type": [

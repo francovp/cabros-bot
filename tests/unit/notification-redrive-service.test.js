@@ -2342,6 +2342,40 @@ describe('NotificationRedriveService', () => {
 			expect(service.persistedPendingCount).toBe(3);
 		});
 
+		it('does not reapply pending mutations included in the durable snapshot', async () => {
+			let resolveQuery;
+			const slowQuery = new Promise((resolve) => {
+				resolveQuery = resolve;
+			});
+			const query = {
+				where: jest.fn(() => query),
+				get: jest.fn(() => slowQuery),
+			};
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					where: jest.fn(() => query),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+			service.persistedPendingCount = 2;
+
+			const countPromise = service.countDurablePendingRecords();
+			await new Promise((resolve) => setImmediate(resolve));
+			service._adjustPendingCount(null, 'pending');
+			resolveQuery({
+				readTime: new Date(Date.now() + 1000),
+				empty: false,
+				docs: [
+					{ data: () => ({ expiresAt: Date.now() + 60000 }) },
+					{ data: () => ({ expiresAt: Date.now() + 60000 }) },
+					{ data: () => ({ expiresAt: Date.now() + 60000 }) },
+				],
+			});
+
+			await countPromise;
+			expect(service.persistedPendingCount).toBe(3);
+		});
+
 		it('merges session delivery and exhaustion counters atomically into existing heartbeat counters', async () => {
 			let committedPayload = null;
 			const mockFirestore = {

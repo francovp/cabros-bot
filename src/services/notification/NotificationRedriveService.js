@@ -1451,10 +1451,15 @@ class NotificationRedriveService {
 				}
 				const pendingCountQueryStartedAtMs = Date.now();
 				const localPendingCountDeltaAtQueryStart = this._pendingCountLocalDelta;
-				const applyDurablePendingCount = (count) => {
+				const applyDurablePendingCount = (count, snapshot = null) => {
+					const snapshotObservedAt = normalizeTimestampToDate(snapshot?.readTime);
+					const observedAtMs = snapshotObservedAt?.getTime() || pendingCountQueryStartedAtMs;
 					const localDeltaSinceQueryStart = this._pendingCountLocalDelta - localPendingCountDeltaAtQueryStart;
-					this.persistedPendingCount = Math.max(0, Math.floor(count + localDeltaSinceQueryStart));
-					this._pendingCountObservedAt = new Date(pendingCountQueryStartedAtMs);
+					const localDeltaAfterSnapshot = this._pendingCountLocalMutationAt > observedAtMs
+						? localDeltaSinceQueryStart
+						: 0;
+					this.persistedPendingCount = Math.max(0, Math.floor(count + localDeltaAfterSnapshot));
+					this._pendingCountObservedAt = new Date(observedAtMs);
 					return Math.floor(count);
 				};
 
@@ -1465,10 +1470,10 @@ class NotificationRedriveService {
 							const data = typeof snapshot?.data === 'function' ? snapshot.data() : snapshot?.data;
 							const count = Number(data?.count);
 							if (!Number.isFinite(count) || count < 0) return null;
-							return applyDurablePendingCount(count);
+							return applyDurablePendingCount(count, snapshot);
 						}
 						if (!snapshot || snapshot.empty) {
-							return applyDurablePendingCount(0);
+							return applyDurablePendingCount(0, snapshot);
 						}
 						let count = 0;
 						const nowMs = Date.now();
@@ -1480,7 +1485,7 @@ class NotificationRedriveService {
 								count += 1;
 							}
 						}
-						return applyDurablePendingCount(count);
+						return applyDurablePendingCount(count, snapshot);
 					})
 					.catch((error) => {
 						console.warn('[NotificationRedriveService] Failed to count durable pending records:', error.message);
