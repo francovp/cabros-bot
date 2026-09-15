@@ -4432,7 +4432,9 @@ const renderPlayground = (contract, view) => {
 		if (currentValStillAvailable) {
 			select.value = currentVal;
 		} else if (firstAvailableValue !== null) {
+			saveCurrentInputs(previousDefinition);
 			select.value = firstAvailableValue;
+			previousDefinition = definitions[Number(firstAvailableValue)];
 			renderFields();
 		} else {
 			select.value = '';
