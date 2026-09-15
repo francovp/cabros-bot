@@ -1,4 +1,5 @@
 const request = require('supertest');
+const { assertWithinBudget } = require('../helpers/perfBudget');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
@@ -40,11 +41,14 @@ describe('Volume confirmation endpoint', () => {
 			confidence: 0.91,
 		});
 
+		const start = process.hrtime.bigint();
 		const res = await request(app)
 			.post('/api/webhook/volume-confirmation')
 			.set('x-api-key', 'test-key')
 			.send({ symbol: 'BINANCE:BTCUSDT' })
 			.expect(200);
+		const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+		assertWithinBudget('/api/webhook/volume-confirmation', durationMs);
 
 		expect(res.body).toEqual(expect.objectContaining({
 			success: true,
