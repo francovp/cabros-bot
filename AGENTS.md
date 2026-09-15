@@ -1360,16 +1360,16 @@ The allow-list is limited to news thresholds/concurrency/retries, TradingView ti
 - `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document key locations, replay output, invalid key handling, and the message-specific conflict response without overriding the shared async-job conflict component.
 
 ## Alert Replay Dry-Run Mode (Issue #680)
- 
+
 `POST /api/alerts/:alertId/replay` accepts an optional `dryRun` flag (boolean body field or `dryRun=true` query string). When enabled, the controller fetches the stored alert, builds the exact replay payload (text + enrichmentData + per-channel routing including the resolved Telegram `message_thread_id` and effective service defaults / `TELEGRAM_TOPIC_ROUTES` when the stored alert lacks explicit overrides), and returns it inside `payloadPreview` without dispatching to any notification channel and without persisting a `alertReplays` audit document. The dry-run response returns the 12-character SHA-256 hash prefix `idempotencyKeyHashPrefix` without leaking the raw key into upstream caches; live replays never return it (only the SHA-256 hash prefix is exposed via `GET /api/alerts/replays`).
- 
+
 **Behavior**:
 - Gated by the same `ENABLE_FIRESTORE_ALERT_STORAGE=true` requirement as the live replay; the existing `400 INVALID_REQUEST` and `404 NOT_FOUND` mappings apply unchanged.
 - `dryRun: false` (or omitted) preserves the existing replay behavior byte-for-byte: `sendToChannels()` runs, `saveReplayAttempt()` persists, and the response shape is `{ success, alertId, replayId, results }`.
 - A dry-run request that fails the `getAlertById` lookup still returns `404 NOT_FOUND` — we never run a no-op replay on a missing alert.
 - Notification-manager initialization is skipped on dry-run, so the dry-run path never lazy-starts Telegram/WhatsApp/Discord services when no actual delivery is requested.
 - MarkdownV2 rendering, idempotency contract, channel routing, and feature gates are untouched.
- 
+
 **Coverage and contracts**:
 - `tests/integration/alerts-endpoint.test.js` adds focused tests: dryRun via body returns `payloadPreview` and skips `sendToChannels`/`saveReplayAttempt`; dryRun via query string returns the same shape; effective channel routing and topic routes are resolved from environment defaults; custom chats preserve their destination without applying global topic routes; explicit `dryRun: false` preserves the live path; missing alert returns `404 NOT_FOUND` in dry-run mode without dispatching.
 - `src/openapi/openapi.json` adds `dryRun` to the `Replay` request body schema and `payloadPreview` / `channels` / `idempotencyKeyHashPrefix` / `replayId` to the `DeliveryResult` response schema.
@@ -1600,6 +1600,32 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Global Request Deadline Middleware (GH-693)
+
+`app.js` mounts `src/lib/requestDeadline.js` so every `/api` route inherits a server-side time budget and 408s instead of holding the connection open past the reverse-proxy timeout.
+
+**Behavior**
+- `REQUEST_TIMEOUT_MS` (default 30000 ms; integer 1000-120000) caps the response lifecycle. When exceeded, the middleware writes a structured `408 REQUEST_TIMEOUT` with `{ error, code, requestId, deadlineMs, durationMs }`, suppresses late downstream response writes, and logs a single `console.warn` with the route, method, duration, and request id.
+- The middleware reuses a valid upstream `req.requestId` or `x-request-id` (when available) or mints a fresh `randomUUID()`, stamps `X-Request-Id` on every response, and exposes it via `req.requestId`.
+- `/healthcheck`, `/ready`, `/openapi.json`, and `/docs` are always exempt. Operators can add more paths via `REQUEST_DEADLINE_EXEMPT_PATHS` (comma-separated, leading slash optional).
+- If the handler finishes before the deadline, `res.once('finish' | 'close', finalize)` clears the timer so no double-send happens.
+- Malformed, non-numeric, sub-minimum, or out-of-range `REQUEST_TIMEOUT_MS` values fall back to the documented default and log a single warning (no spam).
+- Handlers that already enforce per-call timeouts (e.g. `/api/webhook/expanded-analysis-alert` with `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS`) keep their internal abort signal — the request deadline is the absolute backstop, not a replacement.
+
+**Core components**
+- `src/lib/requestDeadline.js` — bounded validation, request-id minting, deadline enforcement.
+- `app.js` — middleware starts before body parsing so slow uploads are bounded; its post-parser guard prevents timed-out requests from entering route handlers, while probe paths remain exempt.
+- `tests/unit/requestDeadline.test.js` — exempt-path pass-through, request-id reuse/mint, structured 408 payload, `REQUEST_DEADLINE_EXEMPT_PATHS` extension, malformed-value fallback, and integration via supertest + real `http.Server`.
+- `.env.example` and `README.md` — documented the default, valid range, and opt-out behavior.
+
+**Configuration**
+- `REQUEST_TIMEOUT_MS` — Optional request-deadline ceiling (default 30000, integer 1000-120000; invalid values fall back to 30000 with a single warning). Classified as **remote-config eligible** and integrated into `RemoteConfigService` (`PARAMETER_SCHEMA`), `firebase-remote-config-template.json`, and dynamic runtime config overrides.
+- `REQUEST_DEADLINE_EXEMPT_PATHS` — Optional comma-separated path list (defaults to `/healthcheck,/ready,/openapi.json,/docs`). Classified as **environment-only** for Remote Config parity (path allow-list is a route/security control, not a runtime tuning knob).
+
+**API Contracts**
+- The structured `408` timeout response (`RequestTimeoutError` schema and `RequestTimeout` response component) is formally specified in `src/openapi/openapi.json` for all non-exempt `/api` operation paths.
+- Response examples for `Request Timeout (408)` are documented in `CabrosBot.postman_collection.json` across primary webhook and job ingest operations.
 
 ## Admin Status Dependency Explorer (Issue #673)
 

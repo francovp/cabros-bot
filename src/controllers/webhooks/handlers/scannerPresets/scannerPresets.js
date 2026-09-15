@@ -2,7 +2,6 @@
 
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
 const {
 	scannerPresetService,
 	parseIfMatchHeader,
@@ -34,6 +33,7 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 
 const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 	'5', '5M', '15', '15M', '60', '1H', '240', '4H',
@@ -404,7 +404,7 @@ function validatePresetConfig(preset, reqBody = {}) {
 
 function postRunPreset(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 
 		try {

@@ -4,6 +4,7 @@ const httpMocks = require('node-mocks-http');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
 const { idempotencyMiddleware } = require('../../src/lib/idempotency');
+const requestDeadline = require('../../src/lib/requestDeadline');
 const { waitForBackgroundTasks, resetForTesting } = require('../../src/lib/backgroundTaskTracker');
 
 describe('Idempotency Service & Middleware', () => {
@@ -67,7 +68,7 @@ describe('Idempotency Service & Middleware', () => {
 			idempotencyService.set(key, { body: { text: 'alert-2' }, query: {} }, response);
 
 			expect(
-				() => idempotencyService.reserve(key, { body: { text: 'different-alert' }, query: {} })
+				() => idempotencyService.reserve(key, { body: { text: 'different-alert' }, query: {} }),
 			).toThrow('Idempotency key was reused with a different payload');
 		});
 
@@ -237,7 +238,7 @@ describe('Idempotency Service & Middleware', () => {
 				idempotencyService.reserve('pending-2', { text: '2' });
 
 				expect(
-					() => idempotencyService.reserve('pending-3', { text: '3' })
+					() => idempotencyService.reserve('pending-3', { text: '3' }),
 				).toThrow(expect.objectContaining({
 					code: 'IDEMPOTENCY_LIMIT_EXCEEDED',
 					statusCode: 429,
@@ -284,6 +285,52 @@ describe('Idempotency Service & Middleware', () => {
 
 			expect(next).toHaveBeenCalled();
 			expect(res.getHeader('Idempotency-Replay')).toBe('false');
+		});
+
+		test('caches a late successful response after the request deadline', async () => {
+			jest.useFakeTimers();
+			requestDeadline.setTestOverrides({ timeoutMs: 20 });
+			const key = 'deadline-idempotency-key';
+			const payload = { value: 'same-payload' };
+			const firstReq = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/slow',
+				headers: { 'idempotency-key': key },
+				body: payload,
+			});
+			const firstRes = httpMocks.createResponse();
+			const firstNext = jest.fn();
+
+			try {
+				requestDeadline(firstReq, firstRes, () => idempotencyMiddleware(firstReq, firstRes, firstNext));
+				expect(firstNext).toHaveBeenCalled();
+
+				jest.advanceTimersByTime(20);
+				expect(firstReq.requestDeadlineExceeded).toBe(true);
+
+				firstRes.status(201).json({ success: true, orderId: 'order-1' });
+
+				const retryReq = httpMocks.createRequest({
+					method: 'POST',
+					url: '/api/slow',
+					headers: { 'idempotency-key': key },
+					body: payload,
+				});
+				const retryRes = httpMocks.createResponse();
+				const retryNext = jest.fn();
+				await idempotencyMiddleware(retryReq, retryRes, retryNext);
+
+				expect(retryNext).not.toHaveBeenCalled();
+				expect(retryRes.statusCode).toBe(201);
+				expect(JSON.parse(retryRes._getData())).toEqual(expect.objectContaining({
+					success: true,
+					orderId: 'order-1',
+					idempotencyReplayed: true,
+				}));
+			} finally {
+				requestDeadline.resetForTests();
+				jest.useRealTimers();
+			}
 		});
 
 		test('should cache and replay a response on second call with same key', async () => {
@@ -705,7 +752,7 @@ describe('Idempotency Service & Middleware', () => {
 			try {
 				await idempotencyService.reserve('pending-durable-1', { text: '1' });
 				await expect(
-					idempotencyService.reserve('pending-durable-2', { text: '2' })
+					idempotencyService.reserve('pending-durable-2', { text: '2' }),
 				).rejects.toThrow(expect.objectContaining({
 					code: 'IDEMPOTENCY_LIMIT_EXCEEDED',
 					statusCode: 429,

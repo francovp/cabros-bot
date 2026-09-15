@@ -259,6 +259,36 @@ describe('Postman collection contract', () => {
 		expect(marketBuyResp.order.newClientOrderId).toBeUndefined();
 	});
 
+	it('documents Request Timeout (408) response examples with required fields', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const endpointsWithTimeout = [
+			'POST Send Alert',
+			'POST Send Message',
+			'POST Create TradingView Analysis Job',
+		];
+
+		for (const name of endpointsWithTimeout) {
+			const item = findItem(collection.item, name);
+			expect(item).toBeDefined();
+			const timeoutExample = item.response.find((res) => res.code === 408);
+			expect(timeoutExample).toBeDefined();
+			expect(timeoutExample.name).toBe('Request Timeout (408)');
+			expect(timeoutExample.status).toBe('Request Timeout');
+			expect(timeoutExample.header).toEqual(expect.arrayContaining([
+				expect.objectContaining({ key: 'X-Request-Id' }),
+			]));
+
+			const parsed = JSON.parse(timeoutExample.body);
+			expect(parsed).toEqual(expect.objectContaining({
+				error: 'Request Timeout',
+				code: 'REQUEST_TIMEOUT',
+				requestId: expect.any(String),
+				deadlineMs: expect.any(Number),
+				durationMs: expect.any(Number),
+			}));
+		}
+	});
+
 	it('documents include=enrichment_summary success and invalid 400 response in GET List Alerts', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const includeItem = findItem(collection.item, 'GET List Alerts (include=enrichment_summary)');

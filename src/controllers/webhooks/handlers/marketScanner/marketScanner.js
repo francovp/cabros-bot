@@ -1,7 +1,7 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	MarketScannerRequestError,
 	parseMarketScannerRequest,
@@ -50,7 +50,7 @@ function resolveDryRun(req) {
 
 function postMarketScannerAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 
 		try {

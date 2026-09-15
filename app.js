@@ -6,9 +6,13 @@ const { createCorsMiddleware } = require('./src/lib/cors');
 const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
+const requestDeadline = require('./src/lib/requestDeadline');
 
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
+
+// Start the request deadline before body parsing so slow uploads are bounded too.
+app.use(requestDeadline);
 
 // Tell express to use body-parser's urlencoded parsing
 app.use(express.urlencoded({ extended: false }));
@@ -32,6 +36,7 @@ contentSecurityPolicy['connect-src'] = [
 	'https://cabros-bot-production.up.railway.app',
 ];
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
+app.use(requestDeadline.guard);
 
 const { getDeepHealthcheckHandler } = require('./src/controllers/healthcheck');
 app.use('/healthcheck', getDeepHealthcheckHandler());

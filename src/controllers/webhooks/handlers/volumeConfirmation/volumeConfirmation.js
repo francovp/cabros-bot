@@ -1,5 +1,5 @@
-const { v4: uuidv4 } = require('uuid');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	VolumeConfirmationRequestError,
 	parseVolumeConfirmationRequest,
@@ -9,7 +9,7 @@ const sentryService = require('../../../../services/monitoring/SentryService');
 
 function postVolumeConfirmation() {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 
 		try {

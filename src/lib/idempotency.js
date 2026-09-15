@@ -140,10 +140,25 @@ function idempotencyMiddleware(req, res, next) {
 
 		const originalSend = res.send;
 		const originalJson = res.json;
+		const originalEnd = res.end;
 		let responseCached = false;
+		let reservationReleased = false;
+		const releaseTimedOutReservation = () => {
+			if (reservationReleased || !req.requestDeadlineExceeded || req.requestDeadlineResponse) return;
+			reservationReleased = true;
+			const releaseError = new Error('Initial idempotent request exceeded its request deadline');
+			releaseError.code = 'IDEMPOTENCY_RELEASED';
+			releaseError.statusCode = 409;
+			idempotencyService.release(key, requestFingerprint, releaseError);
+		};
 
 		const cacheResponse = (body) => {
 			if (responseCached) {
+				return;
+			}
+			// Do not cache the synthetic 408; a late handler response is still
+			// authoritative for idempotent side effects and must remain replayable.
+			if (req.requestDeadlineExceeded && req.requestDeadlineResponse) {
 				return;
 			}
 
@@ -173,6 +188,7 @@ function idempotencyMiddleware(req, res, next) {
 				&& typeof responseBody === 'object'
 				&& responseBody.code === 'BINANCE_ORDER_STATUS_UNKNOWN';
 			if (res.statusCode >= 500 && !replayableIndeterminateQueueResponse && !replayableIndeterminateOrderResponse) {
+				if (req.requestDeadlineExceeded) releaseTimedOutReservation();
 				return;
 			}
 			responseCached = true;
@@ -210,6 +226,13 @@ function idempotencyMiddleware(req, res, next) {
 				idempotencyService.release(key, requestFingerprint, releaseError);
 			}
 		});
+		res.end = function(...args) {
+			const result = originalEnd.apply(this, args);
+			if (req.requestDeadlineExceeded && !req.requestDeadlineResponse) {
+				cacheResponse(args[0]);
+			}
+			return result;
+		};
 
 		return next();
 	};
