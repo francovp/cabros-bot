@@ -10,11 +10,17 @@ const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
 
+// Explicit body-size limits for all body parsers. Without an explicit `limit`
+// option, express.json()/text()/urlencoded() rely on undocumented defaults
+// (100kb) that can be changed accidentally. Capping at 100kb matches the
+// existing default and rejects oversized payloads with 413 before they
+// consume application memory.
+const BODY_PARSER_LIMIT = '100kb';
 // Tell express to use body-parser's urlencoded parsing
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: BODY_PARSER_LIMIT }));
 // Tell express to use body-parser's JSON and text parsing
-app.use(express.text({ type: 'text/plain' }));
-app.use(express.json());
+app.use(express.text({ type: 'text/plain', limit: BODY_PARSER_LIMIT }));
+app.use(express.json({ limit: BODY_PARSER_LIMIT }));
 
 // Configurar Cabeseras y CORS
 app.use(createCorsMiddleware());
