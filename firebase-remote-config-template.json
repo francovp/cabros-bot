@@ -231,6 +231,13 @@
       "description": "Retention window in days for tradingSignalOutcomes documents before expiration and cleanup",
       "valueType": "NUMBER"
     },
+    "SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES": {
+      "defaultValue": {
+        "value": ""
+      },
+      "description": "Optional ordered signal outcome entry-price providers; empty preserves asset-class defaults",
+      "valueType": "STRING"
+    },
     "EQUITY_MARKET_DATA_RPM": {
       "defaultValue": {
         "value": "8"
@@ -292,6 +299,20 @@
         "value": "50"
       },
       "description": "Maximum default news-monitor symbols to process per scheduler sweep",
+      "valueType": "NUMBER"
+    },
+    "ALERT_SCHEDULER_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Background sweep interval in milliseconds for the JSON-defined alert scheduler",
+      "valueType": "NUMBER"
+    },
+    "ALERT_SCHEDULER_BATCH_LIMIT": {
+      "defaultValue": {
+        "value": "10"
+      },
+      "description": "Maximum due alert-scheduler entries to execute per sweep",
       "valueType": "NUMBER"
     },
     "ENABLE_GEMINI_GROUNDING": {
@@ -378,30 +399,37 @@
       "description": "Audit log retention in days before Firestore TTL expiry",
       "valueType": "NUMBER"
     },
-    "ENABLE_STRATEGY_RESEARCH": {
+    "ENABLE_SYMBOL_ANALYSIS_STORAGE": {
       "defaultValue": {
         "value": "false"
       },
-      "description": "Enable TradingView MCP strategy research and backtest endpoints",
+      "description": "Enable Firestore persistence of symbol-analysis results for decision history and accuracy trending",
       "valueType": "BOOLEAN"
     },
-    "STRATEGY_RESEARCH_CACHE_TTL_MS": {
+    "SYMBOL_ANALYSIS_RETENTION_DAYS": {
       "defaultValue": {
-        "value": "300000"
+        "value": "7"
       },
-      "description": "Strategy research cache TTL in milliseconds",
+      "description": "Retention window in days for persisted symbol-analysis records before Firestore TTL expiry",
       "valueType": "NUMBER"
     },
-    "STRATEGY_RESEARCH_RETENTION_DAYS": {
+    "ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT": {
       "defaultValue": {
-        "value": "30"
+        "value": "false"
       },
-      "description": "Strategy research Firestore persistence retention in days",
-      "valueType": "NUMBER"
+      "description": "Enable multi-agent consensus analysis in symbol-analysis webhook",
+      "valueType": "BOOLEAN"
+    },
+    "WHATSAPP_TEMPLATE_PARAM_ORDER": {
+      "defaultValue": {
+        "value": "symbol,price,action,setup,timeframe,source"
+      },
+      "description": "Comma-separated ordered parameter names extracted from the alert for GreenAPI sendTemplate placeholders. Each maps to a field in alert.enriched or alert. Missing fields produce empty strings. WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, and WHATSAPP_TEMPLATE_NAMESPACE are excluded (notification destinations).",
+      "valueType": "STRING"
     }
   },
   "version": {
-    "versionNumber": "21",
+    "versionNumber": "22",
     "isLegacy": true
   }
 }
