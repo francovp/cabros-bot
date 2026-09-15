@@ -6,13 +6,25 @@ const { createCorsMiddleware } = require('./src/lib/cors');
 const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
+const { buildWebhookBodySize } = require('./src/lib/webhookBodySize');
 
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
 
+// Webhook body size limits (configurable via WEBHOOK_MAX_BODY_SIZE; default 256kb).
+// Centralized so both JSON and text/plain parsers share the same effective limit and
+// the structured 413 error handler is wired in one place.
+const webhookBodySize = buildWebhookBodySize();
+const webhookBodyPaths = ['/api/webhook', '/api/news-monitor'];
+
 // Tell express to use body-parser's urlencoded parsing
 app.use(express.urlencoded({ extended: false }));
-// Tell express to use body-parser's JSON and text parsing
+// Apply the configurable limit only to webhook-style request bodies. Other API
+// routes retain Express' existing parser behavior and limit.
+app.use(webhookBodyPaths, express.text({ type: 'text/plain', limit: webhookBodySize.textLimit }));
+app.use(webhookBodyPaths, express.json({ limit: webhookBodySize.jsonLimit }));
+app.use(webhookBodyPaths, webhookBodySize.middleware);
+// Preserve the existing default parsers for non-webhook routes.
 app.use(express.text({ type: 'text/plain' }));
 app.use(express.json());
 
@@ -21,9 +33,9 @@ app.use(createCorsMiddleware());
 
 // Use helmet for improved security
 const contentSecurityPolicy = helmet.contentSecurityPolicy.getDefaultDirectives();
-contentSecurityPolicy['script-src'] = ["'self'", 'https://www.gstatic.com'];
+contentSecurityPolicy['script-src'] = ['\'self\'', 'https://www.gstatic.com'];
 contentSecurityPolicy['connect-src'] = [
-	"'self'",
+	'\'self\'',
 	'https://identitytoolkit.googleapis.com',
 	'https://securetoken.googleapis.com',
 	'https://www.googleapis.com',
