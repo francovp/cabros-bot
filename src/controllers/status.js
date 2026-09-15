@@ -189,7 +189,7 @@ function getGeminiQuotaDependency({ gemini }) {
 }
 
 
-function getStatus() {
+function getStatus({ skipTelemetrySync = false } = {}) {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
 	const runtimeConfig = remoteConfigService.getRuntimeConfig();
@@ -455,7 +455,7 @@ function getStatus() {
 				lastRunPendingCount: signalOutcomeWorkerStatus.lastRunPendingCount,
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
 			},
-			notificationRedrive: notificationRedriveService.getStatus(),
+			notificationRedrive: notificationRedriveService.getStatus({ skipTelemetrySync }),
 			alertSignalRepeatSuppression: {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
@@ -474,9 +474,16 @@ function getStatus() {
 	};
 }
 
-function getApiStatus(req, res) {
+async function getApiStatus(req, res) {
 	try {
-		return res.status(200).json(getStatus());
+		if (
+			notificationRedriveService.isEnabled()
+			&& notificationRedriveService.getWorkerRole() !== 'disabled'
+			&& notificationRedriveService.hasDurableStore()
+		) {
+			await notificationRedriveService.syncWorkerTelemetry();
+		}
+		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {
 		console.error('[StatusController] getStatus failed:', error);
 		return res.status(500).json({ error: error.message, code: 'INTERNAL_ERROR' });
