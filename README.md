@@ -2,6 +2,8 @@
 
 Express + Telegraf-based Telegram bot service with multi-channel alert delivery (Telegram and WhatsApp) and intelligent news monitoring.
 
+> **New here?** Start with [`docs/PRODUCT.md`](docs/PRODUCT.md) for a human-readable capability map, status legend, and the first-24-hours operator journey. This README is the detailed operator reference.
+
 ## Features
 
 - 📱 **Multi-Channel Alerts**: Send trading alerts to both Telegram and WhatsApp
