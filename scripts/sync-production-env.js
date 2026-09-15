@@ -50,6 +50,8 @@ function parseArgs(argv = process.argv.slice(2)) {
 		noOpReasons: {},
 		logFile: DEFAULT_LOG_FILE,
 		checkDrift: false,
+		checkWorkerMirror: false,
+		exitOnWorkerMirrorDrift: false,
 		json: false,
 		help: false,
 	};
@@ -66,6 +68,13 @@ function parseArgs(argv = process.argv.slice(2)) {
 			i++;
 		} else if (arg === '--diff' || arg === '--check-drift') {
 			args.checkDrift = true;
+			i++;
+		} else if (arg === '--check-worker-mirror') {
+			args.checkWorkerMirror = true;
+			i++;
+		} else if (arg === '--exit-on-worker-mirror-drift') {
+			args.checkWorkerMirror = true;
+			args.exitOnWorkerMirrorDrift = true;
 			i++;
 		} else if (arg === '--apply' || arg === '--record-log') {
 			args.apply = true;
@@ -333,6 +342,156 @@ function checkEnvironmentDrift(repoRoot = path.join(__dirname, '..')) {
 }
 
 /**
+ * Parses render.yaml to extract env keys per service block.
+ * Returns a Map keyed by service name with the Set of env keys that service declares
+ * (direct `key:` declarations) or mirrors via `fromService { envVarKey }`.
+ * @param {string} repoRoot
+ * @returns {Map<string, Set<string>>}
+ */
+function collectServiceEnvKeys(repoRoot = path.join(__dirname, '..')) {
+	const blueprintPath = path.join(repoRoot, 'render.yaml');
+	const result = new Map();
+	if (!fs.existsSync(blueprintPath)) return result;
+
+	const lines = fs.readFileSync(blueprintPath, 'utf8').split('\n');
+	let currentService = null;
+	let serviceIndent = -1;
+	let envVarsIndent = -1;
+	for (const rawLine of lines) {
+		const line = rawLine.replace(/\t/g, '  ');
+		const leadingWhitespace = line.match(/^(\s*)/)[1].length;
+
+		const serviceMatch = line.match(/^-\s+type:\s+(\S+)/);
+		if (serviceMatch) {
+			currentService = null;
+			serviceIndent = leadingWhitespace;
+			envVarsIndent = -1;
+			continue;
+		}
+		// Only treat `name:` as a service name when it sits at a deeper indent
+		// than the `- type:` marker (i.e. a direct property of the service block).
+		// This prevents nested `fromService:` name references from resetting the
+		// active service.
+		if (
+			currentService === null &&
+			serviceIndent >= 0 &&
+			leadingWhitespace > serviceIndent
+		) {
+			const nameMatch = line.match(/^\s+name:\s*([a-zA-Z0-9_-]+)/);
+			if (nameMatch) {
+				currentService = nameMatch[1];
+				if (!result.has(currentService)) result.set(currentService, new Set());
+				envVarsIndent = -1;
+				continue;
+			}
+		}
+		if (!currentService) continue;
+
+		// Track the envVars: header indentation so we know when we exit the block.
+		const envVarsHeader = line.match(/^(\s+)envVars:\s*$/);
+		if (envVarsHeader) {
+			envVarsIndent = envVarsHeader[1].length;
+			continue;
+		}
+		// If envVars is open and we encounter a non-list line at or above the
+		// header indent, the envVars block has ended. List items (leading `-`)
+		// at deeper indent are still part of the block.
+		if (envVarsIndent >= 0 && line.trim() !== '') {
+			const isListItem = /^\s+-\s/.test(line);
+			if (!isListItem && leadingWhitespace <= envVarsIndent) {
+				envVarsIndent = -1;
+			}
+		}
+
+		if (envVarsIndent < 0) continue;
+
+		const keyMatch = line.match(/^\s+-\s+key:\s*([A-Za-z0-9_]+)/);
+		const envVarKeyMatch = line.match(/^\s+envVarKey:\s*([A-Za-z0-9_]+)/);
+		if (keyMatch) {
+			result.get(currentService).add(keyMatch[1]);
+		} else if (envVarKeyMatch) {
+			result.get(currentService).add(envVarKeyMatch[1]);
+		}
+	}
+	return result;
+}
+
+/**
+ * Compares the web service env block to the jobs-worker env block, returning
+ * any keys the web service declares (directly or via envVarKey mirror) that
+ * the worker does NOT mirror. Optional restrict set limits the comparison to
+ * the keys that the worker actually reads in-process; if omitted, the function
+ * reports every missing mirror.
+ *
+ * @param {Object} options
+ * @param {string} options.repoRoot
+ * @param {string} [options.webServiceName='cabros-crypto-bot-telegram-iac']
+ * @param {string} [options.workerServiceName='cabros-crypto-bot-telegram-worker']
+ * @param {string[]} [options.restrict] Job-execution env keys that must be mirrored
+ * @returns {Object}
+ */
+function checkWorkerMirrorDrift({
+	repoRoot = path.join(__dirname, '..'),
+	webServiceName = 'cabros-crypto-bot-telegram-iac',
+	workerServiceName = 'cabros-crypto-bot-telegram-worker',
+	restrict,
+} = {}) {
+	const serviceKeys = collectServiceEnvKeys(repoRoot);
+	const webKeys = serviceKeys.get(webServiceName) || new Set();
+	const workerKeys = serviceKeys.get(workerServiceName) || new Set();
+
+	let candidateKeys;
+	if (Array.isArray(restrict) && restrict.length > 0) {
+		candidateKeys = restrict;
+	} else {
+		candidateKeys = Array.from(webKeys);
+	}
+
+	const missingOnWorker = [];
+	const checkedKeys = [];
+	for (const key of candidateKeys) {
+		checkedKeys.push(key);
+		if (webKeys.has(key) && !workerKeys.has(key)) {
+			missingOnWorker.push(key);
+		}
+	}
+
+	return {
+		webService: webServiceName,
+		workerService: workerServiceName,
+		restrictMode: Array.isArray(restrict) && restrict.length > 0 ? 'restrict' : 'full',
+		totalWebKeys: webKeys.size,
+		totalWorkerKeys: workerKeys.size,
+		checkedKeys: checkedKeys.sort(),
+		missingOnWorker: missingOnWorker.sort(),
+	};
+}
+
+/**
+ * Job-execution env keys that the jobs-worker (`cabros-crypto-bot-telegram-worker`)
+ * must mirror from the web service. Mirrors `render.yaml` for the in-process
+ * job-execution path (TradingView MCP defaults, Remote Config, Notification
+ * redrive, zero-channel cooldown, API-only mode). See issue #855.
+ */
+const JOBS_WORKER_MIRROR_KEYS = Object.freeze([
+	'TRADINGVIEW_MCP_DEFAULT_EXCHANGE',
+	'MARKET_SCANNER_DEFAULT_EXCHANGE',
+	'EXPANDED_ANALYSIS_ALERT_SYMBOLS',
+	'ENABLE_FIREBASE_REMOTE_CONFIG',
+	'FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS',
+	'FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS',
+	'FIREBASE_REMOTE_CONFIG_MAX_AGE_MS',
+	'ENABLE_NOTIFICATION_REDRIVE',
+	'NOTIFICATION_REDRIVE_WORKER_ROLE',
+	'NOTIFICATION_REDRIVE_INTERVAL_MS',
+	'NOTIFICATION_REDRIVE_BATCH_LIMIT',
+	'NOTIFICATION_REDRIVE_MAX_ATTEMPTS',
+	'NOTIFICATION_REDRIVE_MAX_AGE_MS',
+	'ZERO_CHANNEL_ALERT_COOLDOWN_MS',
+	'ENABLE_API_ONLY_MODE',
+]);
+
+/**
  * CLI Main execution
  */
 function main() {
@@ -359,6 +518,8 @@ Options:
   --no-op-reason <p=r>   Reason for no-op (e.g. --no-op-reason vercel="Web-only host")
   --log-file <path>      Path to local sync log (default: .env-sync.log)
   --check-drift, --diff  Diff .env.example against platform deployment definitions
+  --check-worker-mirror  Compare web service env block to jobs-worker env block for the job-execution path keys; report missing mirrors
+  --exit-on-worker-mirror-drift  With --check-worker-mirror, exit 2 if any required job-execution mirror is missing
   --json                 Output results as JSON
   --help, -h             Show this help message
 
@@ -384,6 +545,34 @@ Security Rules:
 					console.log('Unmanaged in blueprint:');
 					drift.unmanagedKeys.forEach((k) => console.log(`  - ${k}`));
 				}
+			}
+			process.exit(0);
+		}
+
+		if (args.checkWorkerMirror) {
+			const mirror = checkWorkerMirrorDrift({
+				repoRoot,
+				restrict: JOBS_WORKER_MIRROR_KEYS,
+			});
+			if (args.json) {
+				console.log(JSON.stringify(mirror, null, 2));
+			} else {
+				console.log('\n=== Jobs-Worker Mirror Drift Analysis ===\n');
+				console.log(`Web service: ${mirror.webService} (${mirror.totalWebKeys} keys)`);
+				console.log(`Worker service: ${mirror.workerService} (${mirror.totalWorkerKeys} keys)`);
+				console.log(`Mode: ${mirror.restrictMode}\n`);
+				if (mirror.missingOnWorker.length === 0) {
+					console.log('✓ All web env keys are mirrored on the jobs worker.');
+				} else {
+					console.log(`✗ ${mirror.missingOnWorker.length} web env key(s) missing on the jobs worker:`);
+					mirror.missingOnWorker.forEach((k) => console.log(`  - ${k}`));
+				}
+			}
+			if (args.exitOnWorkerMirrorDrift && mirror.missingOnWorker.length > 0) {
+				console.error(
+					`\n✗ Worker mirror drift detected: ${mirror.missingOnWorker.length} key(s) missing. Failing because --exit-on-worker-mirror-drift was set.`
+				);
+				process.exit(2);
 			}
 			process.exit(0);
 		}
@@ -492,4 +681,7 @@ module.exports = {
 	generateSyncPlan,
 	recordSyncLog,
 	checkEnvironmentDrift,
+	collectServiceEnvKeys,
+	checkWorkerMirrorDrift,
+	JOBS_WORKER_MIRROR_KEYS,
 };

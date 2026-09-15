@@ -7,6 +7,21 @@ on:
         description: 'Optional single variable name to inspect across platforms (leave blank to audit full .env.example)'
         required: false
         default: ''
+  schedule:
+    # Weekly Monday 09:00 UTC drift audit. Catches drift between scheduled
+    # runs even when the post-merge branch was fast-forwarded without
+    # triggering this workflow.
+    - cron: '0 9 * * 1'
+  push:
+    # Post-merge drift audit on master. Adds the same enforcement loop the
+    # AGENTS.md "post-merge production environment synchronization" workflow
+    # describes.
+    branches: [master]
+    paths:
+      - '.env.example'
+      - 'render.yaml'
+      - 'scripts/sync-production-env.js'
+      - '.github/workflows/env-drift-check.yml'
 
 permissions:
   contents: read
@@ -37,5 +52,6 @@ jobs:
         if [ -n "${{ github.event.inputs.variable_name }}" ]; then
           pnpm run sync:production-env --key "${{ github.event.inputs.variable_name }}"
         else
-          pnpm run sync:production-env --check-drift
+          pnpm run sync:production-env --check-drift --exit-on-drift
+          pnpm run sync:production-env --check-worker-mirror --exit-on-worker-mirror-drift
         fi
