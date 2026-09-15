@@ -472,6 +472,30 @@ describe('RemoteConfigService', () => {
 		expect(config.SIGNAL_OUTCOME_RETENTION_DAYS).toBe(180);
 	});
 
+	it('validates and applies Admin SSE operational parameters and keeps enablement gate out', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.ADMIN_SSE_MAX_CLIENT_CONNECTIONS = '3';
+		process.env.ADMIN_SSE_MAX_TOTAL_CONNECTIONS = '50';
+		process.env.ADMIN_SSE_HEARTBEAT_MS = '20000';
+		mockTemplate({
+			ADMIN_SSE_MAX_CLIENT_CONNECTIONS: 8,
+			ADMIN_SSE_MAX_TOTAL_CONNECTIONS: 200,
+			ADMIN_SSE_HEARTBEAT_MS: 15000,
+			ENABLE_ADMIN_SSE: true,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.ADMIN_SSE_MAX_CLIENT_CONNECTIONS).toBe(8);
+		expect(config.ADMIN_SSE_MAX_TOTAL_CONNECTIONS).toBe(200);
+		expect(config.ADMIN_SSE_HEARTBEAT_MS).toBe(15000);
+
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('ENABLE_ADMIN_SSE');
+		expect(config).not.toHaveProperty('ENABLE_ADMIN_SSE');
+	});
+
 	describe('getStatus readiness and lifecycle states', () => {
 		it('reports disabled readiness status when Remote Config is disabled', () => {
 			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'false';
