@@ -1001,6 +1001,7 @@ async function saveAlertInternal({
 
 	const firestore = getFirestore();
 	if (!firestore) {
+		firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN_ALERTS);
 		return null;
 	}
 
@@ -1250,6 +1251,9 @@ async function getAlertById(alertId) {
 async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults }) {
 	const firestore = getFirestore();
 	if (!firestore) {
+		if (isEnabled()) {
+			firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN_REPLAYS);
+		}
 		throw createStorageUnavailableError();
 	}
 

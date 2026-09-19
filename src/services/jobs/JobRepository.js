@@ -131,6 +131,9 @@ class JobRepository {
 
 		const firestore = this._getFirestore();
 		if (!firestore) {
+			if (isFirestoreEnabled()) {
+				firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN_JOBS);
+			}
 			memoryJobs.set(sanitized.jobId, cloneJob(sanitized));
 			return sanitized.jobId;
 		}
