@@ -11,6 +11,10 @@ const { buildWebhookBodySize } = require('./src/lib/webhookBodySize');
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
 
+// Apply CORS before body parsers so parser errors, including structured 413
+// responses, retain the same browser-visible headers as successful requests.
+app.use(createCorsMiddleware());
+
 // Webhook body size limits (configurable via WEBHOOK_MAX_BODY_SIZE; default 256kb).
 // Centralized so both JSON and text/plain parsers share the same effective limit and
 // the structured 413 error handler is wired in one place.
@@ -27,9 +31,6 @@ app.use(webhookBodyPaths, webhookBodySize.middleware);
 app.use(express.urlencoded({ extended: false }));
 app.use(express.text({ type: 'text/plain' }));
 app.use(express.json());
-
-// Configurar Cabeseras y CORS
-app.use(createCorsMiddleware());
 
 // Use helmet for improved security
 const contentSecurityPolicy = helmet.contentSecurityPolicy.getDefaultDirectives();

@@ -162,6 +162,19 @@ describe('POST /api/webhook/* - Webhook body size limits', () => {
 		}));
 	});
 
+	it('preserves CORS headers on structured 413 responses', async () => {
+		const app = buildConfiguredApp('1kb');
+		app.post('/api/webhook/test-cors', (req, res) => res.status(200).json({ body: req.body }));
+		const response = await request(app)
+			.post('/api/webhook/test-cors')
+			.set('Origin', 'https://cabros-bot.web.app')
+			.set('Content-Type', 'application/json')
+			.send({ text: 'C'.repeat(2048) });
+
+		expect(response.status).toBe(413);
+		expect(response.headers['access-control-allow-origin']).toBe('https://cabros-bot.web.app');
+	});
+
 	it('rejects an oversized urlencoded body with a structured 413 response', async () => {
 		const app = buildConfiguredApp('1kb');
 		app.post('/api/webhook/test-form', (req, res) => res.status(200).json({ body: req.body }));
