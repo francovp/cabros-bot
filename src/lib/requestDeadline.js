@@ -204,7 +204,6 @@ function requestDeadline(req, res, next) {
 			req.destroy();
 		}
 	};
-
 	const timer = setTimeout(() => {
 		deadlineFired = true;
 		if (responseFinished || res.headersSent || res.writableEnded) return;
@@ -246,9 +245,19 @@ function requestDeadline(req, res, next) {
 		responseFinished = true;
 		if (!deadlineFired) clearTimeout(timer);
 	};
+	const abortOnPrematureClose = () => {
+		if (responseFinished || res.writableFinished || res.writableEnded || res.finished) {
+			finalize();
+			return;
+		}
+
+		req.requestDeadlineClientDisconnected = true;
+		deadlineController.abort(new Error('Request client disconnected before the response finished'));
+		finalize();
+	};
 
 	res.once('finish', finalize);
-	res.once('close', finalize);
+	res.once('close', abortOnPrematureClose);
 	res.once('finish', closeIncompleteRequest);
 	res.once('close', closeIncompleteRequest);
 

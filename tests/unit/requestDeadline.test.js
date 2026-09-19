@@ -221,6 +221,24 @@ describe('Request Deadline Middleware (unit)', () => {
 		}, 35);
 	});
 
+	test('aborts the request signal when the client disconnects before the response finishes', (done) => {
+		requestDeadline.setTestOverrides({ timeoutMs: 1000 });
+		const req = httpMocks.createRequest({ method: 'POST', url: '/api/slow' });
+		const res = httpMocks.createResponse({ eventEmitter: require('events').EventEmitter });
+		requestDeadline(req, res, jest.fn());
+
+		res.emit('close');
+		setImmediate(() => {
+			try {
+				expect(req.requestDeadlineSignal.aborted).toBe(true);
+				expect(req.requestDeadlineClientDisconnected).toBe(true);
+				done();
+			} catch (error) {
+				done(error);
+			}
+		});
+	});
+
 	test('closes an incomplete request body after sending 408', (done) => {
 		requestDeadline.setTestOverrides({ timeoutMs: 20 });
 		const app = express();
