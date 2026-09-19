@@ -17,14 +17,14 @@ setupTrustProxy(app);
 const webhookBodySize = buildWebhookBodySize();
 const webhookBodyPaths = ['/api/webhook', '/api/news-monitor'];
 
-// Tell express to use body-parser's urlencoded parsing
-app.use(express.urlencoded({ extended: false }));
 // Apply the configurable limit only to webhook-style request bodies. Other API
 // routes retain Express' existing parser behavior and limit.
+app.use(webhookBodyPaths, express.urlencoded({ extended: false, limit: webhookBodySize.jsonLimit }));
 app.use(webhookBodyPaths, express.text({ type: 'text/plain', limit: webhookBodySize.textLimit }));
 app.use(webhookBodyPaths, express.json({ limit: webhookBodySize.jsonLimit }));
 app.use(webhookBodyPaths, webhookBodySize.middleware);
 // Preserve the existing default parsers for non-webhook routes.
+app.use(express.urlencoded({ extended: false }));
 app.use(express.text({ type: 'text/plain' }));
 app.use(express.json());
 

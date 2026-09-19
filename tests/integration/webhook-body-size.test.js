@@ -162,6 +162,22 @@ describe('POST /api/webhook/* - Webhook body size limits', () => {
 		}));
 	});
 
+	it('rejects an oversized urlencoded body with a structured 413 response', async () => {
+		const app = buildConfiguredApp('1kb');
+		app.post('/api/webhook/test-form', (req, res) => res.status(200).json({ body: req.body }));
+		const response = await request(app)
+			.post('/api/webhook/test-form')
+			.set('Content-Type', 'application/x-www-form-urlencoded')
+			.send(`message=${'U'.repeat(2048)}`);
+
+		expect(response.status).toBe(413);
+		expect(response.body).toEqual(expect.objectContaining({
+			success: false,
+			error: 'PAYLOAD_TOO_LARGE',
+			limit: '1kb',
+		}));
+	});
+
 	it('does not apply the webhook limit to non-webhook JSON routes', async () => {
 		const app = buildConfiguredApp('1kb');
 		app.post('/api/non-webhook', (req, res) => res.status(200).json({ body: req.body }));
