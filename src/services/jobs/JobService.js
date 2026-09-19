@@ -719,6 +719,10 @@ class JobService {
 				scans: parsed.scans,
 				limit: parsed.limit,
 				bbwThreshold: parsed.bbwThreshold,
+				rating: parsed.rating,
+				pattern_type: parsed.consecutiveCandlesPatternType,
+				candle_count: parsed.candleCount,
+				...(parsed.minGrowth !== undefined ? { min_growth: parsed.minGrowth } : {}),
 				ranked: parsed.ranked,
 				includeMultiTimeframe: parsed.includeMultiTimeframe,
 			}),
@@ -1655,6 +1659,14 @@ class JobService {
 		};
 		if (scanType === 'bollinger_scan') {
 			args.bbw_threshold = parsed.bbwThreshold;
+		} else if (scanType === 'rating_filter') {
+			args.rating = parsed.rating;
+		} else if (scanType === 'consecutive_candles_scan') {
+			args.pattern_type = parsed.consecutiveCandlesPatternType;
+			args.candle_count = parsed.candleCount;
+			if (parsed.minGrowth !== undefined) {
+				args.min_growth = parsed.minGrowth;
+			}
 		}
 		return args;
 	}

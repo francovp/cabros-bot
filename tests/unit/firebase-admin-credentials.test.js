@@ -121,7 +121,7 @@ describe('firebaseAdminCredentials helper', () => {
 			expect(FAKE_ADMIN.credential.cert).toHaveBeenCalled();
 		});
 
-		it('returns null and warns once when no credential sources are configured', () => {
+		it('returns null without warning when no credential sources are configured', () => {
 			const helper = loadHelper({
 				FIREBASE_SERVICE_ACCOUNT_JSON: '',
 				GOOGLE_APPLICATION_CREDENTIALS: '',
@@ -130,7 +130,24 @@ describe('firebaseAdminCredentials helper', () => {
 			});
 			const result = helper.loadFirebaseAdminCredentialsOrNull();
 			expect(result).toBeNull();
-			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(warnSpy).not.toHaveBeenCalled();
+		});
+
+		it('preserves explicit project ID when Firebase credentials use application defaults', () => {
+			const helper = loadHelper({
+				FIREBASE_SERVICE_ACCOUNT_JSON: '',
+				GOOGLE_APPLICATION_CREDENTIALS: '',
+				FIREBASE_PROJECT_ID: 'override-project',
+				HOME: '/nonexistent-home',
+				APPDATA: '',
+			});
+
+			const result = helper.loadFirebaseAdminCredentials();
+
+			expect(result).toEqual(expect.objectContaining({
+				projectId: 'override-project',
+				source: 'adc',
+			}));
 		});
 
 		it('warns once per process for repeated calls with bad credentials', () => {
@@ -145,6 +162,7 @@ describe('firebaseAdminCredentials helper', () => {
 	describe('GOOGLE_APPLICATION_CREDENTIALS file path', () => {
 		it('returns credential + source=gac_path when file is readable and contains a service account', () => {
 			const tmpFile = path.join(__dirname, '__fixtures__', 'mock-sa.json');
+			fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
 			fs.writeFileSync(tmpFile, VALID_INLINE);
 
 			const helper = loadHelper({
@@ -182,6 +200,7 @@ describe('firebaseAdminCredentials helper', () => {
 				private_key: VALID_PEM,
 				client_email: 'svc@other-project.iam.gserviceaccount.com',
 			});
+			fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
 			fs.writeFileSync(tmpFile, OTHER_PROJECT);
 
 			const helper = loadHelper({
