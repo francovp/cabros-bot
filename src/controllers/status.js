@@ -303,9 +303,21 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			&& hasValue(process.env.AZURE_LLM_MODEL),
 	});
 	const { getCacheInstance } = require('./webhooks/handlers/newsMonitor/cache');
+	const { getURLShortener } = require('./webhooks/handlers/newsMonitor/urlShortener');
 	const cache = getCacheInstance();
+	const urlShortener = getURLShortener();
 	const newsMonitorDedupEnabled = runtimeConfig.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP;
 	const newsMonitorDedupConfigured = newsMonitorDedupEnabled && firestore.configured;
+	const newsMonitorCacheSize = {
+		entries: cache.cache.size,
+		maxEntries: cache.maxEntries,
+		evictionCount: cache._evictionCount,
+		deliveryLocks: cache.deliveryLocks.size,
+		deliveryLockMaxEntries: cache.deliveryLockMaxEntries,
+		deliveryLockEvictionCount: cache._deliveryLockEvictionCount,
+		urlShortenerCache: urlShortener.cache.getStats(),
+		urlShortenerServiceFailures: urlShortener.serviceFailuresStats,
+	};
 	const newsMonitorDedup = {
 		enabled: newsMonitorDedupEnabled,
 		configured: newsMonitorDedupConfigured,
@@ -316,6 +328,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		}),
 		mode: cache.dedupMode.mode,
 		backend: cache.dedupMode.backend,
+		cacheSize: newsMonitorCacheSize,
 	};
 
 	const signalOutcomeWorkerStatus = SignalOutcomeService.getWorkerStatus();
