@@ -585,8 +585,7 @@ class NewsCache {
 	}
 
 	/**
-	 * Claim a channel-specific cached redelivery lease.
-	 *
+	 * Acquire an atomic delivery lease for an individual channel retry.
 	 * Local leases suppress same-process races. Persistent leases use the same
 	 * atomic Firestore claim primitive so separate replicas cannot retry the
 	 * same channel concurrently.
@@ -594,9 +593,10 @@ class NewsCache {
 	 * @param {string} symbol
 	 * @param {string} eventCategory
 	 * @param {string} channel
+	 * @param {Object} [options]
 	 * @returns {Promise<boolean>} true when this process may deliver
 	 */
-	async claimDelivery(symbol, eventCategory, channel) {
+	async claimDelivery(symbol, eventCategory, channel, options = {}) {
 		const key = `${this.generateKey(symbol, eventCategory)}:delivery:${channel}`;
 		const existingLease = this.deliveryLocks.get(key);
 		const now = Date.now();
@@ -629,7 +629,10 @@ class NewsCache {
 		}
 
 		try {
-			const claimed = await newsDedupStorageService.claimEntry(key, DELIVERY_LOCK_TTL_MS, claimToken);
+			const claimed = await this._executeBoundedClaim(
+				() => newsDedupStorageService.claimEntry(key, DELIVERY_LOCK_TTL_MS, claimToken),
+				options,
+			);
 			if (!claimed) {
 				this.deliveryLocks.delete(key);
 				return false;
@@ -679,9 +682,7 @@ class NewsCache {
 	}
 
 	/**
-	 * Release the local portion of a channel-specific cached redelivery lease.
-	 * Persistent leases expire automatically so another replica cannot race the
-	 * cache update immediately after delivery.
+	 * Release a local and/or persistent channel delivery lease.
 	 */
 	releaseDelivery(symbol, eventCategory, channel) {
 		const key = `${this.generateKey(symbol, eventCategory)}:delivery:${channel}`;
@@ -697,13 +698,98 @@ class NewsCache {
 	}
 
 	/**
+	 * Execute a durable claim bounded by deadline, timeout, and abort signal.
+	 * Fails open (resolves true) when remaining delivery budget expires or signal aborts.
+	 *
+	 * @param {Function} fn
+	 * @param {Object} [options]
+	 * @returns {Promise<boolean>}
+	 * @private
+	 */
+	async _executeBoundedClaim(fn, options = {}) {
+		const { signal } = options;
+		const deadline = typeof options.deliveryDeadline === 'number'
+			? options.deliveryDeadline
+			: (typeof options.deadline === 'number' ? options.deadline : undefined);
+
+		let timeoutMs = typeof options.timeoutMs === 'number' ? options.timeoutMs : undefined;
+		if (typeof deadline === 'number') {
+			const remainingMs = Math.max(0, deadline - Date.now());
+			timeoutMs = typeof timeoutMs === 'number' ? Math.min(timeoutMs, remainingMs) : remainingMs;
+		}
+
+		if (signal?.aborted) {
+			console.warn('[NewsCache] Claim aborted by signal (fail-open)');
+			return true;
+		}
+
+		if (typeof timeoutMs === 'number' && timeoutMs <= 0) {
+			console.warn('[NewsCache] Claim delivery budget expired (fail-open)');
+			return true;
+		}
+
+		return new Promise((resolve, reject) => {
+			let settled = false;
+			let timer = null;
+			let abortListener = null;
+
+			const cleanup = () => {
+				if (timer) {
+					clearTimeout(timer);
+					timer = null;
+				}
+				if (signal && abortListener) {
+					signal.removeEventListener('abort', abortListener);
+					abortListener = null;
+				}
+			};
+
+			const failOpen = (reason) => {
+				if (!settled) {
+					settled = true;
+					cleanup();
+					console.warn(`[NewsCache] Firestore claimEntry ${reason} (fail-open)`);
+					resolve(true);
+				}
+			};
+
+			if (signal) {
+				abortListener = () => failOpen('aborted by signal');
+				signal.addEventListener('abort', abortListener, { once: true });
+			}
+
+			if (typeof timeoutMs === 'number' && Number.isFinite(timeoutMs)) {
+				timer = setTimeout(() => failOpen('budget expired'), timeoutMs);
+			}
+
+			Promise.resolve()
+				.then(fn)
+				.then((result) => {
+					if (!settled) {
+						settled = true;
+						cleanup();
+						resolve(result);
+					}
+				})
+				.catch((error) => {
+					if (!settled) {
+						settled = true;
+						cleanup();
+						reject(error);
+					}
+				});
+		});
+	}
+
+	/**
 	 * Claim a cache key atomically to prevent concurrent replica alerts.
 	 *
 	 * @param {string} symbol
 	 * @param {string} eventCategory
+	 * @param {Object} [options]
 	 * @returns {Promise<boolean>} true if claim succeeded, false if already claimed/exists
 	 */
-	async claim(symbol, eventCategory) {
+	async claim(symbol, eventCategory, options = {}) {
 		const key = this.generateKey(symbol, eventCategory);
 		const entry = this.cache.get(key);
 
@@ -715,7 +801,10 @@ class NewsCache {
 				if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
 					let deleted = false;
 					try {
-						deleted = await newsDedupStorageService.deleteEntry(key);
+						deleted = await this._executeBoundedClaim(
+							() => newsDedupStorageService.deleteEntry(key),
+							options,
+						);
 					} catch (error) {
 						console.warn('[NewsCache] Retrying abandoned claim deletion failed:', error.message);
 					}
@@ -751,7 +840,10 @@ class NewsCache {
 		// Persistent check/write
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
 			try {
-				const claimed = await newsDedupStorageService.claimEntry(key, this.ttlMs);
+				const claimed = await this._executeBoundedClaim(
+					() => newsDedupStorageService.claimEntry(key, this.ttlMs),
+					options,
+				);
 				if (claimed) {
 					return true;
 				}

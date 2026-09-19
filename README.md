@@ -811,6 +811,7 @@ Dry-run response excerpt:
     "total": 2,
     "analyzed": 1,
     "cached": 1,
+    "throttled": 0,
     "timeout": 0,
     "error": 0,
     "quota_exhausted": 0,
@@ -836,6 +837,7 @@ Dry-run response excerpt:
 **Response Status Values**:
 - `analyzed` - Symbol successfully analyzed, alerts generated/filtered
 - `cached` - Result returned from cache (within TTL for same event category)
+- `throttled` - Alert delivery suppressed by alert volume throttling (exceeded batch capacity or sliding window limit)
 - `timeout` - Analysis exceeded per-symbol timeout (30s default)
 - `error` - API failure (Binance, Gemini, or other service error). Gemini quota exhaustion is reported as `error.code = "GEMINI_QUOTA_EXHAUSTED"` and counted in `summary.quota_exhausted`.
 

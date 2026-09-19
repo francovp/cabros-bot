@@ -7,6 +7,7 @@ const {
 	getVolumeTracker,
 	resetVolumeTrackerForTesting,
 } = require('../../src/controllers/webhooks/handlers/newsMonitor/volumeTracker');
+const newsDedupStorageService = require('../../src/services/storage/NewsDedupStorageService');
 
 describe('News Monitor Volume Throttling & Adaptive Caps', () => {
 	let originalEnv;
@@ -22,6 +23,7 @@ describe('News Monitor Volume Throttling & Adaptive Caps', () => {
 		Object.keys(process.env).forEach((k) => delete process.env[k]);
 		Object.assign(process.env, originalEnv);
 		resetVolumeTrackerForTesting();
+		jest.restoreAllMocks();
 	});
 
 	describe('batch throttling and confidence prioritization', () => {
@@ -801,6 +803,98 @@ describe('News Monitor Volume Throttling & Adaptive Caps', () => {
 			const usage = tracker.getWindowUsage();
 			expect(usage.alertsDelivered).toBe(1);
 			expect(usage.alertsThrottled).toBe(1);
+		});
+
+		it('bounds deferred cache claim by delivery deadline and fails open when Firestore stalls', async () => {
+			const analyzer = new NewsAnalyzer();
+			const candidate = {
+				symbol: 'STALL_SYM',
+				status: AnalysisStatus.ANALYZED,
+				confidence: 90,
+				totalDurationMs: 50,
+				_pendingDelivery: {
+					notificationMgr: {
+						getAllChannelNames: () => ['telegram'],
+						sendToAll: jest.fn().mockResolvedValue([{ channel: 'telegram', success: true }]),
+					},
+					alert: {
+						text: 'Alert text',
+						confidence: 0.9,
+						eventCategory: 'price_surge',
+					},
+					routing: {},
+					options: {},
+					geminiAnalysis: { event_category: 'price_surge' },
+					tokenUsage: {},
+				},
+			};
+
+			let observedOptions;
+			const origClaim = analyzer.cache.claim.bind(analyzer.cache);
+			jest.spyOn(analyzer.cache, 'claim').mockImplementation(async (sym, cat, opts) => {
+				observedOptions = opts;
+				return origClaim(sym, cat, opts);
+			});
+
+			jest.spyOn(newsDedupStorageService, 'isEnabled').mockReturnValue(true);
+			jest.spyOn(newsDedupStorageService, 'isReady').mockReturnValue(true);
+			jest.spyOn(newsDedupStorageService, 'claimEntry').mockReturnValue(new Promise(() => {}));
+
+			const deadline = Date.now() + 200;
+			const controller = new AbortController();
+
+			await analyzer.executePendingDelivery(candidate, 'req-stall', {
+				deadline,
+				deliveryDeadline: deadline,
+				timeoutMs: 40,
+				signal: controller.signal,
+			});
+
+			expect(observedOptions).toBeDefined();
+			expect(observedOptions.deliveryDeadline).toBe(deadline);
+			expect(observedOptions.signal).toBe(controller.signal);
+			expect(candidate.status).toBe(AnalysisStatus.ANALYZED);
+			expect(candidate._alertSent).toBe(true);
+		});
+
+		it('passes caller signal through cached redelivery and composes with lease abort controller', async () => {
+			const analyzer = new NewsAnalyzer();
+			const callerController = new AbortController();
+			let observedCallSignal;
+
+			const notificationMgr = {
+				getAllChannelNames: () => ['telegram'],
+				getEnabledChannelNames: () => ['telegram'],
+				getEnabledChannels: () => ['telegram'],
+				sendToChannels: jest.fn().mockImplementation((_, __, opts) => {
+					observedCallSignal = opts.signal;
+					return Promise.resolve([{ channel: 'telegram', success: true }]);
+				}),
+			};
+
+			const candidate = {
+				symbol: 'RETRY_SYM',
+				status: AnalysisStatus.CACHED,
+				confidence: 85,
+				totalDurationMs: 20,
+				_pendingDelivery: {
+					notificationMgr,
+					cached: {
+						category: 'price_surge',
+						alert: { text: 'Cached alert' },
+						deliveryResults: [{ channel: 'telegram', success: false }],
+					},
+					routing: { channels: ['telegram'] },
+					options: { signal: callerController.signal },
+				},
+			};
+
+			await analyzer.executePendingCachedRedelivery(candidate, 'req-cached-compose', {});
+
+			expect(observedCallSignal).toBeDefined();
+			expect(observedCallSignal.aborted).toBe(false);
+			callerController.abort('caller cancelled');
+			expect(observedCallSignal.aborted).toBe(true);
 		});
 	});
 });

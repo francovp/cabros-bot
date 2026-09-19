@@ -896,7 +896,7 @@ class NewsAnalyzer {
 							}
 							const claimedRetryChannels = [];
 							for (const channel of retryChannels) {
-								if (await this.cache.claimDelivery(symbol, category, channel)) {
+								if (await this.cache.claimDelivery(symbol, category, channel, options)) {
 									claimedRetryChannels.push(channel);
 								}
 							}
@@ -974,13 +974,17 @@ class NewsAnalyzer {
 								));
 								try {
 									const signalByChannel = Object.fromEntries(
-										claimedRetryChannels.map((channel) => [channel, leaseAbortControllers.get(channel).signal]),
+										claimedRetryChannels.map((channel) => {
+											const leaseSignal = leaseAbortControllers.get(channel).signal;
+											const signals = [leaseSignal, options.signal].filter(Boolean);
+											return [channel, signals.length > 1 ? AbortSignal.any(signals) : leaseSignal];
+										}),
 									);
 									const retryResults = await sendWithNotificationRouting(
 										notificationMgr,
 										cached.alert,
 										{ ...routing, channels: claimedRetryChannels },
-										{ signalByChannel },
+										{ signalByChannel, signal: options.signal },
 									);
 									leaseRenewalIntervals.forEach(clearInterval);
 									const timedOutPendingChannels = await waitForLeaseRenewals([...pendingLeaseRenewals.entries()],
@@ -1255,7 +1259,7 @@ class NewsAnalyzer {
 		}
 
 		// Claim the cache key atomically before delivering the alert to prevent race conditions
-		const claimed = await this.cache.claim(symbol, geminiAnalysis.event_category);
+		const claimed = await this.cache.claim(symbol, geminiAnalysis.event_category, mergedOptions);
 		if (!claimed) {
 			console.info('[Analyzer] Duplicate alert detected during claim, suppressing delivery for:', symbol, geminiAnalysis.event_category);
 			const cached = await this.cache.get(symbol, geminiAnalysis.event_category);
@@ -1288,7 +1292,7 @@ class NewsAnalyzer {
 			return;
 		}
 
-		console.info('[Analyzer] Sending alert:', symbol, 'confidence:', alert.confidence.toFixed(2), 'event:', alert.eventCategory);
+		console.info('[Analyzer] Sending alert:', symbol, 'confidence:', typeof alert?.confidence === 'number' ? alert.confidence.toFixed(2) : 'N/A', 'event:', alert?.eventCategory || geminiAnalysis?.event_category);
 		const deliveryResults = await sendWithNotificationRouting(notificationMgr, alert, routing, { signal: mergedOptions.signal });
 		console.info('[Analyzer] Alert delivery results for', symbol, ':', deliveryResults);
 		candidate.deliveryResults = deliveryResults;
@@ -1364,26 +1368,42 @@ class NewsAnalyzer {
 			options = {},
 		} = candidate._pendingDelivery;
 		const mergedOptions = { ...options, ...callOptions };
+		const activeCachedResults = Array.isArray(activeCachedDeliveryResults)
+			? activeCachedDeliveryResults
+			: (Array.isArray(cached?.deliveryResults) ? cached.deliveryResults : []);
+		const resolvedRetryChannels = Array.isArray(retryChannels)
+			? retryChannels
+			: (() => {
+				const successfulChannels = new Set(
+					activeCachedResults.filter((r) => r.success).map((r) => r.channel),
+				);
+				const targetChannels = Array.isArray(requestedChannels)
+					? requestedChannels
+					: (routing?.channels && routing.channels.length > 0
+						? routing.channels
+						: (notificationMgr?.getAllChannelNames?.() || []));
+				return targetChannels.filter((c) => !successfulChannels.has(c));
+			})();
 
 		if (mergedOptions.signal?.aborted || (typeof mergedOptions.deadline === 'number' && Date.now() >= mergedOptions.deadline)) {
 			console.warn('[Analyzer] Cached redelivery aborted by signal/deadline for:', symbol);
-			candidate.deliveryResults = activeCachedDeliveryResults;
+			candidate.deliveryResults = activeCachedResults;
 			delete candidate._pendingDelivery;
 			return;
 		}
 
 		const claimedRetryChannels = [];
-		for (const channel of retryChannels) {
+		for (const channel of resolvedRetryChannels) {
 			if (mergedOptions.signal?.aborted || (typeof mergedOptions.deadline === 'number' && Date.now() >= mergedOptions.deadline)) {
 				break;
 			}
-			if (await this.cache.claimDelivery(symbol, category, channel)) {
+			if (await this.cache.claimDelivery(symbol, category, channel, mergedOptions)) {
 				claimedRetryChannels.push(channel);
 			}
 		}
 
 		if (claimedRetryChannels.length === 0) {
-			candidate.deliveryResults = activeCachedDeliveryResults;
+			candidate.deliveryResults = activeCachedResults;
 			delete candidate._pendingDelivery;
 			return;
 		}
@@ -1463,7 +1483,11 @@ class NewsAnalyzer {
 
 		try {
 			const signalByChannel = Object.fromEntries(
-				claimedRetryChannels.map((channel) => [channel, leaseAbortControllers.get(channel).signal]),
+				claimedRetryChannels.map((channel) => {
+					const leaseSignal = leaseAbortControllers.get(channel).signal;
+					const signals = [leaseSignal, mergedOptions.signal].filter(Boolean);
+					return [channel, signals.length > 1 ? AbortSignal.any(signals) : leaseSignal];
+				}),
 			);
 			const retryResults = await sendWithNotificationRouting(
 				notificationMgr,

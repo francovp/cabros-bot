@@ -146,6 +146,41 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			expect(result).toBe(true);
 		});
 
+		it('bounds Firestore claimEntry by deadline and fails open when Firestore stalls', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			// Firestore stalls indefinitely
+			mockClaimEntry.mockReturnValue(new Promise(() => {}));
+
+			const start = Date.now();
+			const result = await cache.claim('BTCUSDT', EventCategory.PRICE_SURGE, {
+				deadline: Date.now() + 40,
+			});
+			const elapsed = Date.now() - start;
+
+			expect(result).toBe(true);
+			expect(elapsed).toBeGreaterThanOrEqual(30);
+			expect(elapsed).toBeLessThan(500);
+			// Local reservation is preserved
+			expect(cache.cache.has('BTCUSDT:price_surge')).toBe(true);
+		});
+
+		it('bounds Firestore claimEntry by options.signal and fails open immediately', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			mockClaimEntry.mockReturnValue(new Promise(() => {}));
+
+			const controller = new AbortController();
+			const claimPromise = cache.claim('BTCUSDT', EventCategory.PRICE_SURGE, {
+				signal: controller.signal,
+			});
+			controller.abort('caller timeout');
+
+			const result = await claimPromise;
+			expect(result).toBe(true);
+			expect(cache.cache.has('BTCUSDT:price_surge')).toBe(true);
+		});
+
 		it('retains an abandoned marker and retries durable deletion before reclaiming', async () => {
 			mockIsEnabled.mockReturnValue(true);
 			mockIsReady.mockReturnValue(true);
@@ -610,6 +645,35 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			cache.releaseDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp');
 			await expect(cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp')).resolves.toBe(true);
 			expect(mockClaimEntry).toHaveBeenCalledTimes(1);
+		});
+
+		it('bounds persistent channel lease claim by deadline and fails open when Firestore stalls', async () => {
+			mockClaimEntry.mockReturnValue(new Promise(() => {}));
+
+			const start = Date.now();
+			const result = await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp', {
+				deadline: Date.now() + 40,
+			});
+			const elapsed = Date.now() - start;
+
+			expect(result).toBe(true);
+			expect(elapsed).toBeGreaterThanOrEqual(30);
+			expect(elapsed).toBeLessThan(500);
+			expect(cache.deliveryLocks.has('BTCUSDT:price_surge:delivery:whatsapp')).toBe(true);
+		});
+
+		it('bounds persistent channel lease claim by options.signal and fails open immediately', async () => {
+			mockClaimEntry.mockReturnValue(new Promise(() => {}));
+
+			const controller = new AbortController();
+			const claimPromise = cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp', {
+				signal: controller.signal,
+			});
+			controller.abort('sweep shutdown');
+
+			const result = await claimPromise;
+			expect(result).toBe(true);
+			expect(cache.deliveryLocks.has('BTCUSDT:price_surge:delivery:whatsapp')).toBe(true);
 		});
 
 		it('renews an active persistent channel lease', async () => {
