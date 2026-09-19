@@ -14,6 +14,7 @@ jest.mock('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor', () 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
 		getStatus: jest.fn(),
+		syncDurableStatus: jest.fn().mockResolvedValue(null),
 	},
 }));
 
@@ -47,6 +48,7 @@ const {
 	parseCommandArgs,
 	getTradingViewReadinessWarning,
 	formatReadinessErrorLabel,
+	sendReadinessWarning,
 	telegramCommandRateLimiter,
 	setWarningReplyTimeoutMsForTest,
 } = require('../../src/controllers/commands');
@@ -525,20 +527,86 @@ describe('Telegram TradingView commands', () => {
 			expect(jobService.createJob).not.toHaveBeenCalled();
 		});
 
-		it('exposes readiness warning helper for tests', () => {
+		it('exposes readiness warning helper for tests', async () => {
 			tradingViewMcpService.getStatus.mockReturnValue({
 				status: 'degraded',
 				lastErrorCategory: 'timeout',
 			});
-			expect(getTradingViewReadinessWarning()).toContain('timeout');
+			expect(await getTradingViewReadinessWarning()).toContain('timeout');
 			tradingViewMcpService.getStatus.mockReturnValue({ status: 'ready' });
-			expect(getTradingViewReadinessWarning()).toBeNull();
+			expect(await getTradingViewReadinessWarning()).toBeNull();
 			tradingViewMcpService.getStatus.mockReturnValue({ status: 'unknown' });
-			expect(getTradingViewReadinessWarning()).toBeNull();
+			expect(await getTradingViewReadinessWarning()).toBeNull();
 			tradingViewMcpService.getStatus.mockImplementation(() => {
 				throw new Error('boom');
 			});
-			expect(getTradingViewReadinessWarning()).toBeNull();
+			expect(await getTradingViewReadinessWarning()).toBeNull();
+		});
+
+		it('syncs durable status before checking readiness and handles sync failure fail-open', async () => {
+			tradingViewMcpService.syncDurableStatus.mockRejectedValueOnce(new Error('Firestore network error'));
+			tradingViewMcpService.getStatus.mockReturnValue({
+				status: 'degraded',
+				lastErrorCategory: 'circuit_breaker_open',
+			});
+			const warning = await getTradingViewReadinessWarning();
+			expect(tradingViewMcpService.syncDurableStatus).toHaveBeenCalled();
+			expect(warning).toContain('circuit breaker abierto');
+		});
+
+		it('passes signal to warning reply via callApi and aborts stalled telegram request on timeout', async () => {
+			setWarningReplyTimeoutMsForTest(20);
+			try {
+				jobService.createJob.mockResolvedValue({
+					success: true,
+					jobId: 'job-abort-callapi',
+					status: 'pending',
+				});
+				tradingViewMcpService.getStatus.mockReturnValue({
+					status: 'degraded',
+					lastErrorCategory: 'timeout',
+				});
+				const context = buildContext('/scanner scans=top_gainers');
+				let receivedSignal;
+				context.telegram.callApi = jest.fn().mockImplementation((method, payload, options) => {
+					receivedSignal = options && options.signal;
+					return new Promise((resolve) => setTimeout(resolve, 80));
+				});
+
+				await marketScannerCmd(context);
+
+				expect(context.telegram.callApi).toHaveBeenCalledTimes(1);
+				expect(context.telegram.callApi).toHaveBeenCalledWith(
+					'sendMessage',
+					expect.objectContaining({ chat_id: 123, text: expect.stringContaining('degradado') }),
+					expect.objectContaining({ signal: expect.any(Object) })
+				);
+				expect(receivedSignal).toBeDefined();
+				expect(receivedSignal.aborted).toBe(true);
+				expect(jobService.createJob).toHaveBeenCalledTimes(1);
+			} finally {
+				setWarningReplyTimeoutMsForTest();
+			}
+		});
+
+		it('sendReadinessWarning helper dispatches to context.telegram.callApi with signal or context.reply', async () => {
+			const callApiMock = jest.fn().mockResolvedValue({ message_id: 1 });
+			const contextWithCallApi = {
+				update: { message: { chat: { id: 456 } } },
+				telegram: { callApi: callApiMock },
+				reply: jest.fn(),
+			};
+			const testSignal = new AbortController().signal;
+			await sendReadinessWarning(contextWithCallApi, 'warn', testSignal);
+			expect(callApiMock).toHaveBeenCalledWith('sendMessage', { chat_id: 456, text: 'warn' }, { signal: testSignal });
+			expect(contextWithCallApi.reply).not.toHaveBeenCalled();
+
+			const replyMock = jest.fn().mockResolvedValue({ message_id: 2 });
+			const contextWithReplyOnly = {
+				reply: replyMock,
+			};
+			await sendReadinessWarning(contextWithReplyOnly, 'warn2', testSignal);
+			expect(replyMock).toHaveBeenCalledWith('warn2', { signal: testSignal });
 		});
 
 		it('maps known and unknown readiness error categories to labels', () => {

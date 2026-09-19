@@ -20,9 +20,16 @@ function formatReadinessErrorLabel(category) {
 	return READINESS_ERROR_LABELS[category] || null;
 }
 
-function getTradingViewReadinessWarning() {
+async function getTradingViewReadinessWarning() {
 	if (!tradingViewMcpService || typeof tradingViewMcpService.getStatus !== 'function') {
 		return null;
+	}
+	try {
+		if (typeof tradingViewMcpService.syncDurableStatus === 'function') {
+			await tradingViewMcpService.syncDurableStatus();
+		}
+	} catch {
+		// Fail open: remote sync failure must never block readiness checks
 	}
 	let status;
 	try {
@@ -184,6 +191,20 @@ function setWarningReplyTimeoutMsForTest(timeoutMs) {
 	warningReplyTimeoutMs = typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : DEFAULT_WARNING_REPLY_TIMEOUT_MS;
 }
 
+function sendReadinessWarning(context, warningText, signal) {
+	const chatId = getChatId(context);
+	if (context?.telegram && typeof context.telegram.callApi === 'function' && chatId !== undefined && chatId !== null) {
+		return context.telegram.callApi('sendMessage', {
+			chat_id: chatId,
+			text: warningText,
+		}, { signal });
+	}
+	if (typeof context?.reply === 'function') {
+		return context.reply(warningText, { signal });
+	}
+	return Promise.resolve();
+}
+
 const createTradingViewJobCommand = (type, command, buildPayload) => async (context) => {
 	const chatId = getChatId(context);
 	const args = parseCommandArgs(context);
@@ -206,11 +227,11 @@ const createTradingViewJobCommand = (type, command, buildPayload) => async (cont
 		if (typeof jobService.validateJobRequest === 'function') {
 			jobService.validateJobRequest(type, payload);
 		}
-		const readinessWarning = getTradingViewReadinessWarning();
+		const readinessWarning = await getTradingViewReadinessWarning();
 		if (readinessWarning) {
 			try {
 				await withTimeout(
-					context.reply(readinessWarning),
+					(signal) => sendReadinessWarning(context, readinessWarning, signal),
 					getWarningReplyTimeoutMs(),
 					'Timeout sending MCP readiness warning'
 				);
@@ -781,6 +802,7 @@ module.exports = {
 	parseCommandArgs,
 	getTradingViewReadinessWarning,
 	formatReadinessErrorLabel,
+	sendReadinessWarning,
 	telegramCommandRateLimiter,
 	setWarningReplyTimeoutMsForTest,
 };
