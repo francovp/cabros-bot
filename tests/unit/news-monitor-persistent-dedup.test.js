@@ -201,6 +201,21 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual({ status: 'claiming' });
 		});
 
+		it('fails open and allows local reclaim when retrying abandoned claim deletion fails', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			mockDeleteEntry.mockResolvedValue(false);
+			mockClaimEntry.mockResolvedValue(true);
+
+			await expect(cache.claim('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBe(true);
+			await cache.releaseClaim('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual({ status: 'claiming-abandoned' });
+
+			await expect(cache.claim('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBe(true);
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual({ status: 'claiming' });
+		});
+
 		it('removes the reserved local slot when Firestore claim returns false', async () => {
 			mockIsEnabled.mockReturnValue(true);
 			mockIsReady.mockReturnValue(true);

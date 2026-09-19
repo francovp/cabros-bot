@@ -799,17 +799,13 @@ class NewsCache {
 					return false;
 				}
 				if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
-					let deleted = false;
 					try {
-						deleted = await this._executeBoundedClaim(
+						await this._executeBoundedClaim(
 							() => newsDedupStorageService.deleteEntry(key),
 							options,
 						);
 					} catch (error) {
 						console.warn('[NewsCache] Retrying abandoned claim deletion failed:', error.message);
-					}
-					if (!deleted) {
-						return false;
 					}
 				}
 			}
