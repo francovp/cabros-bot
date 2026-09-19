@@ -222,12 +222,13 @@ class NewsCache {
 	async get(symbol, eventCategory) {
 		const key = this.generateKey(symbol, eventCategory);
 		const entry = this.cache.get(key);
+		const abandonedClaim = entry?.data?.status === 'claiming-abandoned';
 
 		let localData = null;
 		if (entry) {
 			if (this.isExpired(entry)) {
 				this.cache.delete(key);
-			} else {
+			} else if (!abandonedClaim) {
 				localData = entry.data;
 			}
 		}
@@ -248,6 +249,9 @@ class NewsCache {
 					const refreshedData = refreshedLocalData && localOnlyChannels.length > 0
 						? mergeDeliveryData(entryRecord.data, refreshedLocalData, localOnlyChannels)
 						: entryRecord.data;
+					if (abandonedClaim && entryRecord.data?.status === 'claiming') {
+						return null;
+					}
 					if (refreshedLocalData && refreshedLocalData.status !== 'claiming' && entryRecord.data?.status === 'claiming') {
 						return refreshedLocalData;
 					}
@@ -542,7 +546,21 @@ class NewsCache {
 		const entry = this.cache.get(key);
 
 		if (entry && !this.isExpired(entry)) {
-			return false;
+			if (entry.data?.status !== 'claiming-abandoned') {
+				return false;
+			}
+			if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
+				let deleted = false;
+				try {
+					deleted = await newsDedupStorageService.deleteEntry(key);
+				} catch (error) {
+					console.warn('[NewsCache] Retrying abandoned claim deletion failed:', error.message);
+				}
+				if (!deleted) {
+					return false;
+				}
+			}
+			this.cache.delete(key);
 		}
 
 		// Persistent check/write
@@ -584,15 +602,24 @@ class NewsCache {
 	async releaseClaim(symbol, eventCategory) {
 		const key = this.generateKey(symbol, eventCategory);
 		const entry = this.cache.get(key);
-		if (entry?.data?.status === 'claiming') {
-			this.cache.delete(key);
-		}
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
+			let deleted = false;
 			try {
-				await newsDedupStorageService.deleteEntry(key);
+				deleted = await newsDedupStorageService.deleteEntry(key);
 			} catch (error) {
 				console.warn('[NewsCache] Firestore releaseClaim/deleteEntry failed (fail-open):', error.message);
 			}
+			if (!deleted && entry?.data?.status === 'claiming') {
+				this.cache.set(key, {
+					...entry,
+					timestamp: Date.now(),
+					data: { status: 'claiming-abandoned' },
+				});
+				return;
+			}
+		}
+		if (entry?.data?.status === 'claiming') {
+			this.cache.delete(key);
 		}
 	}
 

@@ -52,6 +52,7 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 		mockSetEntry.mockResolvedValue(undefined);
 		mockUpdateEntry.mockResolvedValue(true);
 		mockRenewEntry.mockResolvedValue(true);
+		mockDeleteEntry.mockResolvedValue(true);
 		cache = new NewsCache();
 		cache.ttlMs = 1000; // 1 second for fast tests
 	});
@@ -143,6 +144,26 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			const result = await cache.claim('BTCUSDT', EventCategory.PRICE_SURGE);
 			// Fail-open allows the local claim to succeed
 			expect(result).toBe(true);
+		});
+
+		it('retains an abandoned marker and retries durable deletion before reclaiming', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			mockDeleteEntry.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+			await expect(cache.claim('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBe(true);
+			await cache.releaseClaim('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual({ status: 'claiming-abandoned' });
+			mockGetEntryRecord.mockResolvedValue({
+				data: { status: 'claiming' },
+				expiresAtMs: Date.now() + cache.ttlMs,
+			});
+			await expect(cache.get('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBeNull();
+
+			await expect(cache.claim('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBe(true);
+			expect(mockDeleteEntry).toHaveBeenCalledTimes(2);
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual({ status: 'claiming' });
 		});
 	});
 

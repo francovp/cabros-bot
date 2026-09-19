@@ -491,14 +491,21 @@ class NewsAnalyzer {
 		const totalTimeout = options.timeout ?? this.timeout;
 		const deliveryBudgetMs = options.deliveryBudgetMs ?? Math.floor(totalTimeout / 3);
 		const configuredAnalysisDeadline = batchStartedAt + totalTimeout;
-		const analysisDeadline = Number.isFinite(options.deadline)
-			? Math.min(configuredAnalysisDeadline, options.deadline)
-			: configuredAnalysisDeadline;
+		const overallDeadline = Number.isFinite(options.deadline) ? options.deadline : null;
+		const scheduledAnalysisDeadline = options.scheduledSweep && overallDeadline !== null
+			? Math.max(batchStartedAt + 1, overallDeadline - deliveryBudgetMs)
+			: null;
+		const analysisDeadline = scheduledAnalysisDeadline !== null
+			? Math.min(configuredAnalysisDeadline, scheduledAnalysisDeadline)
+			: overallDeadline !== null
+				? Math.min(configuredAnalysisDeadline, overallDeadline)
+				: configuredAnalysisDeadline;
+		const defaultDeliveryDeadline = overallDeadline !== null
+			? Math.min(overallDeadline, analysisDeadline + deliveryBudgetMs)
+			: analysisDeadline + deliveryBudgetMs;
 		const deliveryDeadline = Number.isFinite(options.deliveryDeadline)
 			? options.deliveryDeadline
-			: Number.isFinite(options.deadline)
-				? Math.min(options.deadline, analysisDeadline + deliveryBudgetMs)
-				: analysisDeadline + deliveryBudgetMs;
+			: defaultDeliveryDeadline;
 
 		const symbolOptions = {
 			...options,

@@ -539,6 +539,40 @@ describe('News Monitor Volume Throttling & Adaptive Caps', () => {
 			expect(observed[0].options.analysisDeadline - observed[0].startedAt).toBe(300);
 		});
 
+		it('reserves scheduled-sweep delivery time inside the overall deadline', async () => {
+			const analyzer = new NewsAnalyzer();
+			analyzer.timeout = 300;
+			const overallDeadline = Date.now() + 150;
+			let observedAnalysisOptions;
+			let observedDeliveryOptions;
+
+			analyzer.analyzeSymbol = jest.fn(async (symbol, requestId, tokenUsage, routing, startedAt, options) => {
+				observedAnalysisOptions = options;
+				return {
+					symbol,
+					status: AnalysisStatus.TIMEOUT,
+					error: { code: 'ANALYSIS_TIMEOUT', message: 'Analysis exceeded budget' },
+					totalDurationMs: 0,
+					cached: false,
+					requestId,
+				};
+			});
+			analyzer.applyVolumeThrottling = jest.fn(async (results, requestId, routing, options) => {
+				observedDeliveryOptions = options;
+			});
+
+			await analyzer.analyzeSymbols(
+				['SCHEDULED_SYM'],
+				'req-scheduled-deadline',
+				null,
+				{},
+				{ deadline: overallDeadline, scheduledSweep: true, deliveryBudgetMs: 100 },
+			);
+
+			expect(observedAnalysisOptions.analysisDeadline).toBeLessThanOrEqual(overallDeadline - 90);
+			expect(observedDeliveryOptions.deliveryDeadline).toBe(overallDeadline);
+		});
+
 		it('aborts an in-flight deferred delivery at the delivery deadline', async () => {
 			const tracker = getVolumeTracker();
 			tracker.resetForTesting(Date.now());
