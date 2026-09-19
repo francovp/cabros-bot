@@ -54,7 +54,9 @@
             "name": "deep",
             "in": "query",
             "required": false,
-            "schema": { "type": "boolean" },
+            "schema": {
+              "type": "boolean"
+            },
             "description": "When `true`, include channel readiness and return 503 if any enabled channel is degraded."
           }
         ],
@@ -80,7 +82,9 @@
             "description": "One or more enabled channels are degraded, or readiness evaluation failed.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/DeepHealthcheck" }
+                "schema": {
+                  "$ref": "#/components/schemas/DeepHealthcheck"
+                }
               }
             }
           }
@@ -446,6 +450,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "429": {
             "description": "Rate limited by the 60-second caller cooldown or TEST_ALERT_DAILY_LIMIT.",
             "headers": {
@@ -776,6 +783,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -834,6 +844,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -889,6 +902,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
@@ -1739,6 +1755,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -1798,6 +1817,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -1839,6 +1861,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -1872,6 +1897,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -1905,6 +1933,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -1968,6 +1999,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -2026,6 +2060,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -4625,7 +4662,7 @@
                     }
                   }
                 }
-      }
+              }
             }
           }
         }
@@ -4721,9 +4758,15 @@
               "discord"
             ],
             "properties": {
-              "telegram": { "$ref": "#/components/schemas/ChannelReadiness" },
-              "whatsapp": { "$ref": "#/components/schemas/ChannelReadiness" },
-              "discord": { "$ref": "#/components/schemas/ChannelReadiness" }
+              "telegram": {
+                "$ref": "#/components/schemas/ChannelReadiness"
+              },
+              "whatsapp": {
+                "$ref": "#/components/schemas/ChannelReadiness"
+              },
+              "discord": {
+                "$ref": "#/components/schemas/ChannelReadiness"
+              }
             }
           }
         }
@@ -4900,8 +4943,12 @@
           "status"
         ],
         "properties": {
-          "enabled": { "type": "boolean" },
-          "ready": { "type": "boolean" },
+          "enabled": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -4912,7 +4959,9 @@
               "unknown"
             ]
           },
-          "error": { "type": "string" }
+          "error": {
+            "type": "string"
+          }
         }
       },
       "DeliveryChannelMetrics": {

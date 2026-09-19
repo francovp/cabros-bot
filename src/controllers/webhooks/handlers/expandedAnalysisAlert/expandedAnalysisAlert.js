@@ -60,7 +60,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseExpandedAnalysisAlertRequest(req);
 			const timeoutMs = getAlertTimeoutMs();
-			const deadline = createAlertDeadline(timeoutMs);
+			const deadline = createAlertDeadline(timeoutMs, req.requestDeadlineSignal);
 			let results;
 
 			try {
@@ -332,14 +332,14 @@ function getAlertTimeoutMs() {
 	return Math.min(parsedTimeout, MAX_ALERT_TIMEOUT_MS);
 }
 
-function createAlertDeadline(timeoutMs) {
+function createAlertDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => {
 		controller.abort(new Error(`Expanded analysis alert timeout after ${timeoutMs}ms`));
 	}, timeoutMs);
 
 	return {
-		signal: controller.signal,
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
 		clear: () => clearTimeout(timeoutId),
 	};
 }

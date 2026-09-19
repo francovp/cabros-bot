@@ -103,14 +103,14 @@ function getScannerTimeoutMs() {
 	return Math.min(parsedTimeout, MAX_SCANNER_TIMEOUT_MS);
 }
 
-function createScannerDeadline(timeoutMs) {
+function createScannerDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => {
 		controller.abort(new Error(`Market scanner timeout after ${timeoutMs}ms`));
 	}, timeoutMs);
 
 	return {
-		signal: controller.signal,
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
 		clear: () => clearTimeout(timeoutId),
 	};
 }
@@ -518,7 +518,7 @@ function postRunPreset(botOrGetter) {
 			}
 
 			const timeoutMs = getScannerTimeoutMs();
-			const deadline = createScannerDeadline(timeoutMs);
+			const deadline = createScannerDeadline(timeoutMs, req.requestDeadlineSignal);
 			let scanResults;
 
 			try {

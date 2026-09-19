@@ -204,6 +204,70 @@ describe('Request Deadline Middleware (unit)', () => {
 		expect(handlerCalled).toBe(false);
 	});
 
+	test('aborts the request signal when the deadline fires', (done) => {
+		requestDeadline.setTestOverrides({ timeoutMs: 20 });
+		const req = httpMocks.createRequest({ method: 'POST', url: '/api/slow' });
+		const res = httpMocks.createResponse();
+		requestDeadline(req, res, jest.fn());
+
+		setTimeout(() => {
+			try {
+				expect(req.requestDeadlineSignal).toBeDefined();
+				expect(req.requestDeadlineSignal.aborted).toBe(true);
+			done();
+		} catch (error) {
+			done(error);
+		}
+		}, 35);
+	});
+
+	test('closes an incomplete request body after sending 408', (done) => {
+		requestDeadline.setTestOverrides({ timeoutMs: 20 });
+		const app = express();
+		let requestClosed = false;
+		app.use(requestDeadline);
+		app.use((req, res, next) => {
+			req.once('close', () => {
+				requestClosed = true;
+			});
+			next();
+		});
+		app.use(express.json());
+		app.post('/api/upload', (req, res) => res.json({ ok: true }));
+
+		const server = app.listen(0, () => {
+			const { port } = server.address();
+			const http = require('http');
+			const clientRequest = http.request({
+				host: '127.0.0.1',
+				port,
+				path: '/api/upload',
+				method: 'POST',
+				headers: { 'content-type': 'application/json', 'content-length': '100' },
+			}, (response) => {
+				response.resume();
+				response.once('end', () => {
+					setTimeout(() => {
+						try {
+							expect(response.statusCode).toBe(408);
+							expect(requestClosed).toBe(true);
+							done();
+						} catch (error) {
+							done(error);
+						} finally {
+							clientRequest.destroy();
+							server.close();
+						}
+					}, 35);
+				});
+			});
+			clientRequest.on('error', (error) => {
+				if (error.code !== 'ECONNRESET') done(error);
+			});
+			clientRequest.write('{');
+		});
+	});
+
 	test('starts before body parsers in the main app', () => {
 		const app = require('../../app');
 		const layerNames = app._router.stack.map((layer) => layer.name);
@@ -213,6 +277,17 @@ describe('Request Deadline Middleware (unit)', () => {
 
 		expect(deadlineIndex).toBeGreaterThanOrEqual(0);
 		expect(parserIndexes.every((index) => index >= 0 && deadlineIndex < index)).toBe(true);
+	});
+
+	test('runs CORS before the request deadline in the main app', () => {
+		const app = require('../../app');
+		const stack = app._router.stack;
+		const corsIndex = stack.findIndex((layer) => layer.name === 'corsMiddleware');
+		const deadlineIndex = stack.findIndex((layer) => layer.name === 'requestDeadline');
+
+		expect(corsIndex).toBeGreaterThanOrEqual(0);
+		expect(deadlineIndex).toBeGreaterThanOrEqual(0);
+		expect(corsIndex).toBeLessThan(deadlineIndex);
 	});
 
 	test('reads REQUEST_TIMEOUT_MS from RemoteConfigService runtimeConfig when available', () => {

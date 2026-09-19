@@ -2336,6 +2336,18 @@
                 }
               ],
               "body": "{\n  \"error\": \"Admin operator role required\",\n  \"code\": \"ADMIN_ROLE_REQUIRED\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -2389,6 +2401,18 @@
                 }
               ],
               "body": "{\n  \"error\": \"Unauthorized\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -2442,6 +2466,18 @@
                 }
               ],
               "body": "{\n  \"error\": \"Unauthorized\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         }
@@ -3876,6 +3912,18 @@
               "code": 400,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"error\": \"alertIds must be a non-empty array of up to 50 alert IDs.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -3937,6 +3985,18 @@
               "code": 400,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"error\": \"alertIds must be a non-empty array of up to 1000 alert IDs.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -3998,6 +4058,18 @@
               "code": 400,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"error\": \"format must be either 'jsonl' or 'csv'.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -4049,6 +4121,18 @@
               "code": 400,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"error\": \"alertIds must be a non-empty array of up to 500 alert IDs.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -4692,6 +4776,18 @@
                   ]
                 }
               }
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -4770,6 +4866,18 @@
                   ]
                 }
               }
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -4848,6 +4956,18 @@
                   ]
                 }
               }
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -4930,6 +5050,18 @@
                   ]
                 }
               }
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -5008,6 +5140,18 @@
                   ]
                 }
               }
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         }
@@ -5456,6 +5600,18 @@
               "status": "Service Unavailable",
               "code": 503,
               "body": "{\n  \"error\": \"Firestore is unavailable or not configured.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -5507,6 +5663,18 @@
               "status": "Service Unavailable",
               "code": 503,
               "body": "{\n  \"error\": \"Firestore is unavailable or not configured.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         }

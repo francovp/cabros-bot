@@ -56,6 +56,18 @@ describe('OpenAPI contract', () => {
 		expect(getDocumentedApiOperations(contract)).toEqual(getMountedApiOperations());
 	});
 
+	it('documents the request-timeout response on every API operation', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const missingTimeoutResponses = Object.entries(contract.paths)
+			.filter(([routePath]) => routePath.startsWith('/api/'))
+			.flatMap(([routePath, pathItem]) => Object.entries(pathItem)
+				.filter(([method]) => ['get', 'post', 'put', 'patch', 'delete'].includes(method))
+				.filter(([, operation]) => !operation.responses || !operation.responses['408'])
+				.map(([method]) => `${method.toUpperCase()} ${routePath}`));
+
+		expect(missingTimeoutResponses).toEqual([]);
+	});
+
 	it('is a valid OpenAPI document', async () => {
 		if (!fs.existsSync(contractPath)) return;
 

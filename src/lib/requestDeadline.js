@@ -147,6 +147,7 @@ function requestDeadline(req, res, next) {
 	res.setHeader('X-Request-Id', requestId);
 
 	const startTime = Date.now();
+	const deadlineController = new AbortController();
 	let deadlineFired = false;
 	let responseFinished = false;
 	let allowDeadlineResponse = false;
@@ -156,7 +157,10 @@ function requestDeadline(req, res, next) {
 	const originalEnd = res.end;
 	const originalWrite = res.write;
 	const originalWriteHead = res.writeHead;
+	const originalStatus = res.status;
 	const canWrite = () => !req.requestDeadlineExceeded || allowDeadlineResponse;
+	req.requestDeadlineSignal = deadlineController.signal;
+	req.requestDeadlineLateStatusCode = 200;
 
 	res.setHeader = function(...args) {
 		if (!canWrite()) return this;
@@ -182,11 +186,30 @@ function requestDeadline(req, res, next) {
 		if (!canWrite()) return this;
 		return originalWriteHead.apply(this, args);
 	};
+	if (typeof originalStatus === 'function') {
+		res.status = function(...args) {
+			if (req.requestDeadlineExceeded && !allowDeadlineResponse) {
+				const statusCode = Number(args[0]);
+				if (Number.isInteger(statusCode) && statusCode >= 100 && statusCode <= 599) {
+					req.requestDeadlineLateStatusCode = statusCode;
+				}
+				return this;
+			}
+			return originalStatus.apply(this, args);
+		};
+	}
+
+	const closeIncompleteRequest = () => {
+		if (req.requestDeadlineExceeded && !req.complete && !req.destroyed && typeof req.destroy === 'function') {
+			req.destroy();
+		}
+	};
 
 	const timer = setTimeout(() => {
 		deadlineFired = true;
 		if (responseFinished || res.headersSent || res.writableEnded) return;
 		req.requestDeadlineExceeded = true;
+		deadlineController.abort(new Error(`Request deadline exceeded after ${timeoutMs}ms`));
 
 		const durationMs = Date.now() - startTime;
 		console.warn(
@@ -197,6 +220,7 @@ function requestDeadline(req, res, next) {
 		req.requestDeadlineResponse = true;
 		try {
 			res.setHeader('Content-Type', 'application/json; charset=utf-8');
+			res.setHeader('Connection', 'close');
 			res.status(408).json({
 				error: 'Request Timeout',
 				code: 'REQUEST_TIMEOUT',
@@ -225,6 +249,8 @@ function requestDeadline(req, res, next) {
 
 	res.once('finish', finalize);
 	res.once('close', finalize);
+	res.once('finish', closeIncompleteRequest);
+	res.once('close', closeIncompleteRequest);
 
 	next();
 }

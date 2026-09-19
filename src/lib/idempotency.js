@@ -177,17 +177,20 @@ function idempotencyMiddleware(req, res, next) {
 				}
 			}
 
-			const replayableIndeterminateQueueResponse = res.statusCode === 503
+			const responseStatusCode = req.requestDeadlineExceeded && !req.requestDeadlineResponse
+				? (req.requestDeadlineLateStatusCode || 200)
+				: res.statusCode;
+			const replayableIndeterminateQueueResponse = responseStatusCode === 503
 				&& responseBody
 				&& typeof responseBody === 'object'
 				&& responseBody.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN'
 				&& typeof responseBody.jobId === 'string'
 				&& responseBody.jobId.length > 0;
-			const replayableIndeterminateOrderResponse = res.statusCode === 503
+			const replayableIndeterminateOrderResponse = responseStatusCode === 503
 				&& responseBody
 				&& typeof responseBody === 'object'
 				&& responseBody.code === 'BINANCE_ORDER_STATUS_UNKNOWN';
-			if (res.statusCode >= 500 && !replayableIndeterminateQueueResponse && !replayableIndeterminateOrderResponse) {
+			if (responseStatusCode >= 500 && !replayableIndeterminateQueueResponse && !replayableIndeterminateOrderResponse) {
 				if (req.requestDeadlineExceeded) releaseTimedOutReservation();
 				return;
 			}
@@ -200,7 +203,7 @@ function idempotencyMiddleware(req, res, next) {
 			}
 
 			idempotencyService.set(key, requestFingerprint, {
-				statusCode: res.statusCode,
+				statusCode: responseStatusCode,
 				body: responseBody,
 				headers,
 			});

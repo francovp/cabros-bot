@@ -18,6 +18,14 @@ function findHeader(item, key) {
 	return item.request.header.find((header) => header.key === key);
 }
 
+function collectRequestItems(items, result = []) {
+	for (const item of items) {
+		if (item.request) result.push(item);
+		if (Array.isArray(item.item)) collectRequestItems(item.item, result);
+	}
+	return result;
+}
+
 describe('Postman collection contract', () => {
 	it('documents Firebase admin configuration and bearer-auth status access', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
@@ -300,6 +308,33 @@ describe('Postman collection contract', () => {
 				deadlineMs: expect.any(Number),
 				durationMs: expect.any(Number),
 			}));
+		}
+	});
+
+	it('documents Request Timeout (408) on every affected admin request variant', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const affectedPaths = [
+			'/api/admin/test-alert',
+			'/api/alerts/batch/delete',
+			'/api/alerts/batch/export',
+			'/api/alerts/batch/replay',
+			'/api/news-monitor/pause',
+			'/api/news-monitor/resume',
+			'/api/news-monitor/status',
+			'/api/symbol-analyses',
+			'/api/symbol-analyses/summary',
+		];
+		const requestItems = collectRequestItems(collection.item);
+
+		for (const routePath of affectedPaths) {
+			const variants = requestItems.filter((item) => {
+				const rawUrl = item.request.url && item.request.url.raw;
+				return typeof rawUrl === 'string' && rawUrl.split('?')[0] === `{{baseUrl}}${routePath}`;
+			});
+			expect(variants.length).toBeGreaterThan(0);
+			for (const item of variants) {
+				expect(item.response.some((response) => response.code === 408)).toBe(true);
+			}
 		}
 	});
 
