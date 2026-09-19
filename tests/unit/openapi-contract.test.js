@@ -368,5 +368,83 @@ describe('OpenAPI contract', () => {
 			expect(timeoutMs.maximum).toBe(600000); // 10 minutes hard cap
 			expect(timeoutMs.default).toBe(300000); // 5 minutes default
 		});
+
+		it('documents NotificationRedriveDependency schema and references it under Status dependencies', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const redriveRef = contract.components.schemas.Status.properties.dependencies.properties.notificationRedrive;
+			expect(redriveRef).toEqual({
+				$ref: '#/components/schemas/NotificationRedriveDependency',
+			});
+
+			const redriveSchema = contract.components.schemas.NotificationRedriveDependency;
+			expect(redriveSchema).toBeDefined();
+			expect(redriveSchema.type).toBe('object');
+			expect(redriveSchema.required).toEqual(
+				expect.arrayContaining([
+					'enabled',
+					'configured',
+					'ready',
+					'status',
+					'role',
+					'workerRole',
+					'running',
+					'lastSweepResult',
+				]),
+			);
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.dependencies.notificationRedrive.maxAgeMs).toBe(3600000);
+			expect(redriveSchema.properties.zeroChannelBroadcasts.description)
+				.toContain('dropped because no notification channels were enabled');
+		});
+
+		it('documents NewsMonitorDedupDependency and NewsMonitorCacheSize under Status dependencies', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const dedupRef = contract.components.schemas.Status.properties.dependencies.properties.newsMonitorDedup;
+			expect(dedupRef).toEqual({
+				$ref: '#/components/schemas/NewsMonitorDedupDependency',
+			});
+
+			const dedupSchema = contract.components.schemas.NewsMonitorDedupDependency;
+			expect(dedupSchema).toBeDefined();
+			expect(dedupSchema.type).toBe('object');
+			expect(dedupSchema.required).toEqual(
+				expect.arrayContaining([
+					'enabled',
+					'configured',
+					'ready',
+					'status',
+					'mode',
+					'backend',
+					'cacheSize',
+				]),
+			);
+
+			const cacheSizeSchema = contract.components.schemas.NewsMonitorCacheSize;
+			expect(cacheSizeSchema).toBeDefined();
+			expect(cacheSizeSchema.type).toBe('object');
+			expect(cacheSizeSchema.required).toEqual(
+				expect.arrayContaining([
+					'entries',
+					'maxEntries',
+					'evictionCount',
+					'deliveryLocks',
+					'deliveryLockMaxEntries',
+					'deliveryLockEvictionCount',
+					'urlShortenerCache',
+					'urlShortenerServiceFailures',
+				]),
+			);
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.dependencies.newsMonitorDedup).toBeDefined();
+			expect(statusExample.dependencies.newsMonitorDedup.cacheSize.maxEntries).toBe(5000);
+			expect(statusExample.dependencies.newsMonitorDedup.cacheSize.deliveryLockMaxEntries).toBe(1000);
+			expect(contract.components.schemas.Status.description).toContain('dependencies.newsMonitorDedup reports');
+		});
 	});
 });

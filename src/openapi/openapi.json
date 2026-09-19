@@ -161,6 +161,9 @@
           },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         },
         "security": [
@@ -212,6 +215,9 @@
           },
           "409": {
             "$ref": "#/components/responses/MessageIdempotencyConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         },
         "security": [
@@ -252,11 +258,17 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -312,6 +324,9 @@
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "502": {
             "$ref": "#/components/responses/Error"
           },
@@ -349,6 +364,9 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "502": {
             "$ref": "#/components/responses/Error"
           }
@@ -382,6 +400,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -1625,6 +1646,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         },
         "security": [
@@ -1662,6 +1686,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         },
         "security": [
@@ -3666,6 +3693,22 @@
           }
         }
       },
+      "PayloadTooLarge": {
+        "description": "The webhook or news-monitor request body exceeded the configured WEBHOOK_MAX_BODY_SIZE limit (default 256kb). JSON, text/plain, and application/x-www-form-urlencoded body types share the same effective limit.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PayloadTooLarge"
+            },
+            "example": {
+              "success": false,
+              "error": "PAYLOAD_TOO_LARGE",
+              "message": "Request body exceeds maximum size of 256kb",
+              "limit": "256kb"
+            }
+          }
+        }
+      },
       "JobConflict": {
         "description": "A job retry conflict, either because the job is not retryable or because the idempotency key conflicts with an earlier request",
         "content": {
@@ -4224,7 +4267,8 @@
               "featureFlags": {
                 "alertScheduler": false,
                 "equityMarketData": false,
-                "firebaseRemoteConfig": false
+                "firebaseRemoteConfig": false,
+                "notificationRedrive": false
               },
               "dependencies": {
                 "alertScheduler": {
@@ -4322,6 +4366,57 @@
                   "consecutiveFailures": 0,
                   "refreshIntervalMs": 900000,
                   "maxAgeMs": 3600000
+                },
+                "notificationRedrive": {
+                  "enabled": false,
+                  "configured": true,
+                  "ready": false,
+                  "status": "disabled",
+                  "role": "web",
+                  "workerRole": "web",
+                  "running": false,
+                  "intervalMs": 60000,
+                  "batchLimit": 50,
+                  "maxAttempts": 5,
+                  "maxAgeMs": 3600000,
+                  "pendingCount": 0,
+                  "deliveredCount": 0,
+                  "exhaustedCount": 0,
+                  "zeroChannelBroadcasts": 0,
+                  "lastRunAt": null,
+                  "lastSweepAt": null,
+                  "lastRunDurationMs": null,
+                  "lastRunScannedCount": 0,
+                  "lastRunRedrivenCount": 0,
+                  "lastRunErrorCount": 0,
+                  "lastRunExhaustedCount": 0,
+                  "lastSweepResult": null
+                },
+                "newsMonitorDedup": {
+                  "enabled": false,
+                  "configured": false,
+                  "ready": false,
+                  "status": "disabled",
+                  "mode": "in-memory",
+                  "backend": null,
+                  "cacheSize": {
+                    "entries": 0,
+                    "maxEntries": 5000,
+                    "evictionCount": 0,
+                    "deliveryLocks": 0,
+                    "deliveryLockMaxEntries": 1000,
+                    "deliveryLockEvictionCount": 0,
+                    "urlShortenerCache": {
+                      "size": 0,
+                      "maxEntries": 1000,
+                      "evictionCount": 0
+                    },
+                    "urlShortenerServiceFailures": {
+                      "size": 0,
+                      "maxEntries": 32,
+                      "evictionCount": 0
+                    }
+                  }
                 }
               }
             }
@@ -4955,6 +5050,36 @@
           "jobId": {
             "type": "string",
             "description": "Durably stored job identifier returned when queue acceptance is indeterminate."
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "type": "object",
+        "description": "Structured 413 response returned when a webhook or news-monitor request body (JSON, text/plain, or application/x-www-form-urlencoded) exceeds the WEBHOOK_MAX_BODY_SIZE limit (default 256kb).",
+        "required": [
+          "success",
+          "error"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "error": {
+            "type": "string",
+            "enum": [
+              "PAYLOAD_TOO_LARGE"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable explanation of the size violation."
+          },
+          "limit": {
+            "type": "string",
+            "description": "Effective size limit (e.g., `256kb`) the request exceeded, parsed from WEBHOOK_MAX_BODY_SIZE."
           }
         }
       },
@@ -7441,7 +7566,7 @@
       },
       "Status": {
         "type": "object",
-        "description": "Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals).",
+        "description": "Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts.",
         "properties": {
           "readiness": {
             "$ref": "#/components/schemas/BootstrapReadiness"
@@ -7464,6 +7589,12 @@
             "properties": {
               "firebaseRemoteConfig": {
                 "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
+              },
+              "notificationRedrive": {
+                "$ref": "#/components/schemas/NotificationRedriveDependency"
+              },
+              "newsMonitorDedup": {
+                "$ref": "#/components/schemas/NewsMonitorDedupDependency"
               }
             }
           }
@@ -7563,6 +7694,328 @@
             "type": "integer",
             "minimum": 1,
             "description": "Configured cache max age in milliseconds before values are considered stale."
+          }
+        }
+      },
+      "NotificationRedriveDependency": {
+        "type": "object",
+        "description": "Safe runtime metadata for dead-letter notification redrive worker without credentials.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "role",
+          "workerRole",
+          "running",
+          "intervalMs",
+          "batchLimit",
+          "maxAttempts",
+          "maxAgeMs",
+          "pendingCount",
+          "deliveredCount",
+          "exhaustedCount",
+          "zeroChannelBroadcasts",
+          "lastRunAt",
+          "lastSweepAt",
+          "lastRunDurationMs",
+          "lastRunScannedCount",
+          "lastRunRedrivenCount",
+          "lastRunErrorCount",
+          "lastRunExhaustedCount",
+          "lastSweepResult"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether dead-letter redrive background evaluation is enabled via ENABLE_NOTIFICATION_REDRIVE."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether redrive configuration is syntactically valid."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True when redrive is enabled and role is not disabled."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "ready"
+            ],
+            "description": "Operational readiness state of notification redrive."
+          },
+          "role": {
+            "type": "string",
+            "description": "Effective worker role (web, worker, or disabled)."
+          },
+          "workerRole": {
+            "type": "string",
+            "description": "Configured worker role from NOTIFICATION_REDRIVE_WORKER_ROLE."
+          },
+          "running": {
+            "type": "boolean",
+            "description": "Whether the background redrive evaluation loop is running in the current process."
+          },
+          "intervalMs": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Configured redrive sweep interval in milliseconds."
+          },
+          "batchLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum number of dead-letter records evaluated per sweep."
+          },
+          "maxAttempts": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum delivery attempts before a dead-letter record is marked exhausted."
+          },
+          "maxAgeMs": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum age of a dead-letter record in milliseconds before expiration.",
+            "default": 3600000,
+            "example": 3600000
+          },
+          "pendingCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Current number of dead letters awaiting redrive delivery."
+          },
+          "deliveredCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cumulative total number of successfully redriven dead-letter deliveries."
+          },
+          "exhaustedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cumulative total number of dead-letter records that reached max attempts or expired."
+          },
+          "zeroChannelBroadcasts": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cumulative count of broadcast alerts dropped because no notification channels were enabled at broadcast time."
+          },
+          "lastRunAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO-8601 timestamp of when the redrive worker last initiated a sweep, or null."
+          },
+          "lastSweepAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO-8601 timestamp of when the redrive worker last completed a sweep, or null."
+          },
+          "lastRunDurationMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Duration of the last completed redrive sweep in milliseconds, or null."
+          },
+          "lastRunScannedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of dead-letter records scanned in the last completed sweep."
+          },
+          "lastRunRedrivenCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of dead-letter records successfully redriven in the last completed sweep."
+          },
+          "lastRunErrorCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of delivery errors encountered in the last completed sweep."
+          },
+          "lastRunExhaustedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of dead-letter records marked exhausted or expired in the last completed sweep."
+          },
+          "lastSweepResult": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Structured summary metrics of the last completed redrive sweep, or null if no sweep has completed.",
+            "required": [
+              "processed",
+              "succeeded",
+              "exhausted",
+              "errors"
+            ],
+            "properties": {
+              "processed": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Total candidate records processed."
+              },
+              "succeeded": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Total records successfully redriven."
+              },
+              "exhausted": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Total records marked exhausted or expired during the sweep."
+              },
+              "errors": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Total delivery errors encountered during the sweep."
+              }
+            }
+          }
+        }
+      },
+      "NewsMonitorCacheSize": {
+        "type": "object",
+        "description": "Safe operational counters and capacity bounds for the in-memory news monitor deduplication cache and URL shortener.",
+        "required": [
+          "entries",
+          "maxEntries",
+          "evictionCount",
+          "deliveryLocks",
+          "deliveryLockMaxEntries",
+          "deliveryLockEvictionCount",
+          "urlShortenerCache",
+          "urlShortenerServiceFailures"
+        ],
+        "properties": {
+          "entries": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Current number of in-memory news cache entries."
+          },
+          "maxEntries": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum capacity of the in-memory news cache."
+          },
+          "evictionCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total number of LRU cache entries evicted since startup."
+          },
+          "deliveryLocks": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Current number of in-memory delivery lock leases."
+          },
+          "deliveryLockMaxEntries": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum capacity of the in-memory delivery lock map."
+          },
+          "deliveryLockEvictionCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total number of delivery lock entries evicted since startup."
+          },
+          "urlShortenerCache": {
+            "type": "object",
+            "required": [
+              "size",
+              "maxEntries",
+              "evictionCount"
+            ],
+            "properties": {
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "maxEntries": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "evictionCount": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "urlShortenerServiceFailures": {
+            "type": "object",
+            "required": [
+              "size",
+              "maxEntries",
+              "evictionCount"
+            ],
+            "properties": {
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "maxEntries": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "evictionCount": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      },
+      "NewsMonitorDedupDependency": {
+        "type": "object",
+        "description": "Safe runtime metadata for news monitor deduplication and cache size bounds without exposing sensitive credentials.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "mode",
+          "backend",
+          "cacheSize"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether persistent news deduplication is enabled via ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether Firestore is configured for persistent news deduplication."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True when persistent deduplication is ready and connected to Firestore."
+          },
+          "status": {
+            "type": "string",
+            "description": "Operational readiness status (ready, disabled, degraded, misconfigured)."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "in-memory",
+              "persistent"
+            ],
+            "description": "Active deduplication storage mode."
+          },
+          "backend": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Storage backend provider name (e.g. firestore) or null if running in-memory."
+          },
+          "cacheSize": {
+            "$ref": "#/components/schemas/NewsMonitorCacheSize"
           }
         }
       },
