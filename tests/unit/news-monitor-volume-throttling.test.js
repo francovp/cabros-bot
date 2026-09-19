@@ -516,6 +516,68 @@ describe('News Monitor Volume Throttling & Adaptive Caps', () => {
 	});
 
 	describe('Codex review feedback: delivery budget isolation, cached redelivery accounting, and backfill', () => {
+		it('keeps the configured analysis timeout when delivery is deferred', async () => {
+			const analyzer = new NewsAnalyzer();
+			analyzer.timeout = 300;
+			const observed = [];
+
+			analyzer.analyzeSymbol = jest.fn(async (symbol, requestId, tokenUsage, routing, startedAt, options) => {
+				observed.push({ startedAt, options });
+				return {
+					symbol,
+					status: AnalysisStatus.TIMEOUT,
+					error: { code: 'ANALYSIS_TIMEOUT', message: 'Analysis exceeded budget' },
+					totalDurationMs: 0,
+					cached: false,
+					requestId,
+				};
+			});
+
+			await analyzer.analyzeSymbols(['BUDGET_SYM'], 'req-full-analysis-budget');
+
+			expect(observed).toHaveLength(1);
+			expect(observed[0].options.analysisDeadline - observed[0].startedAt).toBe(300);
+		});
+
+		it('aborts an in-flight deferred delivery at the delivery deadline', async () => {
+			const tracker = getVolumeTracker();
+			tracker.resetForTesting(Date.now());
+			tracker.maxAlertsPerWindow = 1;
+			tracker.maxAlertsPerBatch = 1;
+
+			const analyzer = new NewsAnalyzer();
+			analyzer.volumeTracker = tracker;
+			const candidate = {
+				symbol: 'DEADLINE_SYM',
+				status: AnalysisStatus.ANALYZED,
+				cached: false,
+				alert: { symbol: 'DEADLINE_SYM', confidence: 0.9 },
+				deliveryResults: [],
+				_pendingDelivery: {
+					type: 'new',
+					alert: { symbol: 'DEADLINE_SYM', confidence: 0.9 },
+				},
+			};
+
+			analyzer.executePendingDelivery = jest.fn(async (pendingCandidate, requestId, options) => {
+				await new Promise((resolve) => options.signal.addEventListener('abort', resolve, { once: true }));
+			});
+
+			await analyzer.applyVolumeThrottling(
+				[candidate],
+				'req-delivery-deadline',
+				{},
+				{ deliveryDeadline: Date.now() + 25 },
+			);
+
+			expect(analyzer.executePendingDelivery).toHaveBeenCalledWith(
+				candidate,
+				'req-delivery-deadline',
+				expect.objectContaining({ signal: expect.any(AbortSignal) }),
+			);
+			expect(tracker.getWindowUsage().alertsDelivered).toBe(0);
+		});
+
 		it('preserves ready alerts when another symbol times out in batch analysis', async () => {
 			process.env.NEWS_MAX_ALERTS_PER_BATCH = '5';
 			const analyzer = new NewsAnalyzer();

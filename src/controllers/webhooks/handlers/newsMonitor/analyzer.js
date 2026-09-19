@@ -487,11 +487,18 @@ class NewsAnalyzer {
 		let nextIndex = 0;
 		const batchStartedAt = Date.now();
 
-		// Isolate delivery budget so external analysis timeouts do not suppress already-ready alerts
+		// Preserve the configured analysis budget; delivery gets a separate bounded deadline.
 		const totalTimeout = options.timeout ?? this.timeout;
 		const deliveryBudgetMs = options.deliveryBudgetMs ?? Math.floor(totalTimeout / 3);
-		const analysisBudgetMs = Math.max(1, totalTimeout - deliveryBudgetMs);
-		const analysisDeadline = batchStartedAt + analysisBudgetMs;
+		const configuredAnalysisDeadline = batchStartedAt + totalTimeout;
+		const analysisDeadline = Number.isFinite(options.deadline)
+			? Math.min(configuredAnalysisDeadline, options.deadline)
+			: configuredAnalysisDeadline;
+		const deliveryDeadline = Number.isFinite(options.deliveryDeadline)
+			? options.deliveryDeadline
+			: Number.isFinite(options.deadline)
+				? Math.min(options.deadline, analysisDeadline + deliveryBudgetMs)
+				: analysisDeadline + deliveryBudgetMs;
 
 		const symbolOptions = {
 			...options,
@@ -534,7 +541,10 @@ class NewsAnalyzer {
 
 		await Promise.all(Array.from({ length: limit }, runNext));
 
-		await this.applyVolumeThrottling(results, requestId, routing, options);
+		await this.applyVolumeThrottling(results, requestId, routing, {
+			...options,
+			deliveryDeadline,
+		});
 
 		return results;
 	}
@@ -635,13 +645,26 @@ class NewsAnalyzer {
 			?? (typeof options.deadline === 'number'
 				? options.deadline
 				: Date.now() + (options.deliveryTimeoutMs ?? this.timeout));
+		const deliverySignals = [];
+		if (options.signal) {
+			deliverySignals.push(options.signal);
+		}
+		if (Number.isFinite(deliveryDeadline)) {
+			deliverySignals.push(AbortSignal.timeout(Math.max(0, deliveryDeadline - Date.now())));
+		}
+		const deliverySignal = deliverySignals.length === 0
+			? undefined
+			: deliverySignals.length === 1
+				? deliverySignals[0]
+				: AbortSignal.any(deliverySignals);
 		const deliveryCallOptions = {
 			...options,
 			deadline: deliveryDeadline,
+			signal: deliverySignal,
 		};
 
 		try {
-			const signal = options.signal;
+			const signal = deliverySignal;
 
 			for (let i = 0; i < candidates.length; i++) {
 				const item = candidates[i];
@@ -737,7 +760,7 @@ class NewsAnalyzer {
 				lastQuotaError = error;
 				attempt += 1;
 				const delayMs = geminiQuotaManager.triggerQuotaCooldown(error, attempt, this.geminiQuotaRetryBaseMs);
-				const remainingAfterAttemptMs = this.timeout - (Date.now() - startedAt);
+				const remainingAfterAttemptMs = analysisDeadline - Date.now();
 				if (delayMs >= remainingAfterAttemptMs) {
 					console.warn('[Analyzer] Gemini quota retry skipped; delay exceeds remaining budget:', symbol);
 					throw lastQuotaError;
