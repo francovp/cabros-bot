@@ -1655,3 +1655,21 @@ The highest-traffic `/api/webhook/alert` endpoint's catch block (`NotificationRo
 - `pnpm test -- tests/integration/alert-grounding.test.js --testTimeout=10000`
 
 No environment variable, Remote Config key, endpoint, or feature flag was added. HTTP status codes and existing fail-open/fail-safe patterns are unchanged.
+
+## Admin Binance Order-Status View (CB-278 / Issue #589)
+
+The `/admin` console provides a dedicated read-only **Orders** view consuming `GET /api/trading/binance/orders` so operators can inspect Binance order status during incident response or after ambiguous submissions without exposing the `WEBHOOK_API_KEY` in shell history.
+
+### Invariants & Implementation Details
+- **Read-Only**: Only `GET /api/trading/binance/orders` is exposed. No order placement or cancellation write paths exist in this view.
+- **Forms**:
+  - `createOrderListForm()`: Queries recent orders by `symbol` (required, 5-20 uppercase chars) and optional bounded `limit` (1-100, default 50).
+  - `createOrderLookupForm()`: Queries a single order by `symbol` and exactly one identifier: either numeric `orderId` (positive integer, leading zeros stripped) or `origClientOrderId` (validated against `^[A-Za-z0-9._:-]{1,36}$` both via HTML pattern/maxlength and submit validation).
+- **Environment Rendering**: Uses `formatOrderEnvironment()` with defined badge tones: `testnet` renders `status-ready`, `live` renders `status-danger` (defined in `src/admin/admin.css` with warning color), and unknown/disabled renders `status-disabled`.
+- **Request Invalidation & Safe Rendering**: Uses monotonic request versions (`listRequestVersion`, `lookupRequestVersion`) to prevent out-of-order stale responses from overwriting current view state. All values flow through DOM text nodes (`element()`, `createTimestamp()`) to prevent XSS.
+- **Hosting Parity**: `src/admin/admin.js` is the source file; `public/admin/admin.js` is the built artifact copied via `pnpm run build:hosting` (or `node scripts/build-hosting.js`). Both must stay synchronized in commits.
+- **Authentication**: Uses the existing session-stored API key or Firebase bearer token exclusively via request headers; never places keys in query params or URLs.
+
+**Coverage**:
+- `tests/unit/admin-client.test.js` covers recent orders list, single order lookup, identifier validation, DOM sanitization, request invalidation, and environment badges.
+
