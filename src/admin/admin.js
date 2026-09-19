@@ -4432,6 +4432,11 @@ const renderPlayground = (contract, view) => {
 		if (currentValStillAvailable) {
 			select.value = currentVal;
 		} else if (firstAvailableValue !== null) {
+			// Filter-driven selection: save current inputs under the old definition
+			// and update previousDefinition to the newly selected one so subsequent
+			// explicit changes save under the correct operation.
+			saveCurrentInputs(previousDefinition);
+			previousDefinition = definitions[Number(firstAvailableValue)];
 			select.value = firstAvailableValue;
 			renderFields();
 		} else {
