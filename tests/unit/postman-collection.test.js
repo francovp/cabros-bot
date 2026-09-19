@@ -279,4 +279,79 @@ describe('Postman collection contract', () => {
 		expect(errorBody.code).toBe('INVALID_REQUEST');
 		expect(errorBody.error).toContain('enrichment_summary');
 	});
+
+	it('documents symbol, exchange, and eventCategory query filters in GET List Alerts and GET Alert Analytics Summary', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const listFiltered = findItem(collection.item, 'GET List Alerts (symbol, exchange, eventCategory)');
+		const listInvalid = findItem(collection.item, 'GET List Alerts (invalid symbol - 400 Bad Request)');
+		const summaryFiltered = findItem(collection.item, 'GET Alert Analytics Summary (symbol, exchange, eventCategory)');
+		const summaryInvalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid symbol - 400 Bad Request)');
+
+		expect(listFiltered).toBeDefined();
+		expect(listFiltered.request.url.raw).toContain('symbol=BTCUSDT');
+		expect(listFiltered.request.url.raw).toContain('exchange=BINANCE');
+		expect(listFiltered.request.url.raw).toContain('eventCategory=price_surge');
+		expect(listFiltered.response[0].code).toBe(200);
+
+		expect(listInvalid).toBeDefined();
+		expect(listInvalid.response[0].code).toBe(400);
+		expect(JSON.parse(listInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+
+		expect(summaryFiltered).toBeDefined();
+		expect(summaryFiltered.request.url.raw).toContain('symbol=BTCUSDT');
+		expect(summaryFiltered.request.url.raw).toContain('exchange=BINANCE');
+		expect(summaryFiltered.request.url.raw).toContain('eventCategory=price_surge');
+		expect(summaryFiltered.response[0].code).toBe(200);
+
+		expect(summaryInvalid).toBeDefined();
+		expect(summaryInvalid.response[0].code).toBe(400);
+		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+	});
+
+	it('documents notificationRedrive in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		const statusBody = JSON.parse(status.response[0].body);
+		expect(statusBody.featureFlags.notificationRedrive).toBe(false);
+		expect(statusBody.dependencies.notificationRedrive).toEqual(expect.objectContaining({
+			enabled: false,
+			role: 'web',
+			workerRole: 'web',
+			maxAgeMs: 3600000,
+			lastSweepAt: null,
+			lastSweepResult: null,
+		}));
+
+		const capabilitiesBody = JSON.parse(capabilities.response[0].body);
+		expect(capabilitiesBody.featureFlags.notificationRedrive).toBe(false);
+		expect(capabilitiesBody.dependencies.notificationRedrive).toEqual(expect.objectContaining({
+			enabled: false,
+			role: 'web',
+			workerRole: 'web',
+			maxAgeMs: 3600000,
+			lastSweepAt: null,
+			lastSweepResult: null,
+		}));
+	});
+
+	it('documents both JSONL and CSV request variants and response examples for batch alert export', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const jsonlExport = findItem(collection.item, 'POST Batch Export Alerts (JSONL)') || findItem(collection.item, 'POST Batch Export Alerts');
+		const csvExport = findItem(collection.item, 'POST Batch Export Alerts (CSV)');
+
+		expect(jsonlExport).toBeDefined();
+		expect(csvExport).toBeDefined();
+
+		const jsonlBody = JSON.parse(jsonlExport.request.body.raw);
+		expect(jsonlBody.format).toBe('jsonl');
+
+		const csvBody = JSON.parse(csvExport.request.body.raw);
+		expect(csvBody.format).toBe('csv');
+
+		const csvSuccess = csvExport.response.find((r) => r.name.includes('CSV'));
+		expect(csvSuccess).toBeDefined();
+		expect(csvSuccess.code).toBe(200);
+	});
 });

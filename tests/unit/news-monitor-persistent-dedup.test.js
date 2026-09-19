@@ -165,6 +165,49 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			expect(mockDeleteEntry).toHaveBeenCalledTimes(2);
 			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual({ status: 'claiming' });
 		});
+
+		it('removes the reserved local slot when Firestore claim returns false', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			mockClaimEntry.mockResolvedValue(false);
+
+			const result = await cache.claim('BTCUSDT', EventCategory.PRICE_SURGE);
+			expect(result).toBe(false);
+			expect(cache.cache.has('BTCUSDT:price_surge')).toBe(false);
+		});
+
+		it('prevents concurrent claims from exceeding maxEntries while awaiting Firestore', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			const tinyCache = new NewsCache(undefined, { maxEntries: 1 });
+
+			let resolveFirstClaim;
+			const firstClaimPromise = new Promise(resolve => {
+				resolveFirstClaim = resolve;
+			});
+			mockClaimEntry.mockImplementationOnce(() => firstClaimPromise);
+
+			// First claim starts and awaits Firestore
+			const p1 = tinyCache.claim('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			// Verify that the first claim reserved the slot locally
+			expect(tinyCache.cache.size).toBe(1);
+
+			// Second claim for another symbol arrives while first is in-flight
+			const p2 = tinyCache.claim('ETHUSDT', EventCategory.PRICE_SURGE);
+
+			// Second claim should be rejected immediately because capacity is 1 and already reserved with active claim
+			const result2 = await p2;
+			expect(result2).toBe(false);
+
+			// First claim completes
+			resolveFirstClaim(true);
+			const result1 = await p1;
+			expect(result1).toBe(true);
+			expect(tinyCache.cache.size).toBe(1);
+			expect(tinyCache.cache.has('BTCUSDT:price_surge')).toBe(true);
+			tinyCache.shutdown();
+		});
 	});
 
 	// ─────────────────────────────────────────

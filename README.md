@@ -80,6 +80,8 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 #### URL Shortening (003-news-monitor)
 
 - `URL_SHORTENER_SERVICE` - URL-shortening provider for WhatsApp citations (optional; defaults to `picsee`; supported values: `picsee`, `tinyurl`, `cuttly`)
+- `URL_SHORTENER_CACHE_MAX_ENTRIES` - Maximum in-memory URL-shortener cache entries before LRU eviction (default: `1000`, range `1`-`100000`; Remote Config supported)
+- `URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES` - Maximum tracked URL-shortener providers (default: `32`, range `1`-`1024`; effective minimum is the number of configured providers)
 - `PICSEE_API_KEY` - PicSee API key, required when PicSee is selected
 - `CUTTLY_API_KEY` - Cuttly API key, required when Cuttly is selected
 - TinyURL uses its free endpoint and requires no credential. Bitly, reurl, and Pixnet0rz.tw are unavailable in the runtime.
@@ -233,6 +235,8 @@ pnpm test:firebase
 - `NEWS_SYMBOLS_STOCKS` - Default stock symbols if not provided in request (comma-separated)
 - `NEWS_ALERT_THRESHOLD` - Confidence score threshold for sending alerts (default: `0.7`, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` - Cache time-to-live for deduplication (default: `6` hours)
+- `NEWS_CACHE_MAX_ENTRIES` - Maximum in-memory news-cache entries before LRU eviction (default: `5000`, range `1`-`1000000`; Remote Config supported)
+- `NEWS_DELIVERY_LOCK_MAX_ENTRIES` - Maximum in-memory channel delivery leases (default: `1000`, range `1`-`100000`; active leases are preserved)
 - `ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP` - Enable Firestore-backed news deduplication (`true` or `false`, default: `false`; failures fall back to memory)
 - `NEWS_TIMEOUT_MS` - Per-symbol analysis timeout (default: `30000` ms)
 - `NEWS_GEMINI_CONCURRENCY` - Max concurrent Gemini-backed symbol analyses. Production policy is `3`; unset keeps legacy parallel fan-out for backward compatibility.
@@ -405,11 +409,40 @@ The canonical API contract is served publicly at [`/openapi.json`](http://localh
 
 ### GET /healthcheck
 
-Health check endpoint.
+Liveness health check endpoint. The default behavior returns 200 with `uptime` only.
 
-**Response:**
+When called with `?deep=true`, the endpoint reuses the existing channel readiness logic from `/api/status` dependencies and returns 200 when every enabled channel is ready, or 503 when any enabled channel is degraded. Disabled channels are treated as healthy (not required). The endpoint is never API-key protected.
+
+**Default response (200):**
 ```json
 {"uptime":"..."}
+```
+
+**Deep response (200 — all enabled channels ready):**
+```json
+{
+  "status": "healthy",
+  "uptime": 42.5,
+  "channels": {
+    "telegram": { "enabled": true, "ready": true, "status": "ready" },
+    "whatsapp": { "enabled": false, "ready": false, "status": "disabled" },
+    "discord": { "enabled": false, "ready": false, "status": "disabled" }
+  }
+}
+```
+
+**Deep response (503 — enabled channel degraded):**
+```json
+{
+  "status": "degraded",
+  "uptime": 42.5,
+  "degradedChannels": ["whatsapp"],
+  "channels": {
+    "telegram": { "enabled": true, "ready": true, "status": "ready" },
+    "whatsapp": { "enabled": true, "ready": false, "status": "error", "error": "Missing WHATSAPP_API_KEY" },
+    "discord": { "enabled": false, "ready": false, "status": "disabled" }
+  }
+}
 ```
 
 ### GET /ready
@@ -1192,6 +1225,9 @@ List stored alerts ordered by `receivedAt` descending.
 - `before` - Either a legacy ISO-8601 timestamp cursor or the opaque `nextBefore` token from a previous response
 - `source` - Optional source filter. Valid values include `webhook`, `news-monitor`, `market-scanner`, and `expanded-analysis`.
 - `enriched` - Optional boolean filter (`true` or `false`)
+- `symbol` - Optional symbol filter (e.g. `BTCUSDT`, `BINANCE:BTCUSDT`, `AAPL`). Case-insensitive and matched against extracted symbol and exchange fields. Up to 64 characters.
+- `exchange` - Optional exchange filter (e.g. `BINANCE`, `COINBASE`). Case-insensitive and matched against the extracted exchange field. Up to 64 characters.
+- `eventCategory` - Optional event category filter (e.g. `price_surge`, `price_decline`, `regulatory`). Case-insensitive and matched against `eventCategory`. Up to 64 characters.
 - `include` - Optional projection filter. Allowed value: `enrichment_summary`. When set, each returned alert item includes a sanitized `enrichmentSummary` projection object (with `sentiment`, `sentiment_score`, `setup_type`, `invalidation_level`, `target_level`, `risk_reward_ratio`, `sourceCount`, `sourceDomains`, `tradingViewEnrichmentApplied`, `tradingViewEnrichmentStatus`, and `promptProvenance`) and a sanitized `enrichmentData` payload without requiring N+1 detail fetches.
 
 **Response (200 OK):**
@@ -1253,6 +1289,11 @@ Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited gr
 - `from` - Optional ISO-8601 lower bound; defaults to 24 hours before `to`
 - `to` - Optional ISO-8601 upper bound; defaults to request time
 - `limit` - Integer between `1` and `1000` (default: `500`)
+- `source` - Optional source filter
+- `enriched` - Optional boolean filter (`true` or `false`)
+- `symbol` - Optional symbol filter (e.g. `BTCUSDT`, `BINANCE:BTCUSDT`, `AAPL`). Case-insensitive and matched against extracted symbol and exchange fields. Up to 64 characters.
+- `exchange` - Optional exchange filter (e.g. `BINANCE`, `COINBASE`). Case-insensitive and matched against the extracted exchange field. Up to 64 characters.
+- `eventCategory` - Optional event category filter (e.g. `price_surge`, `price_decline`, `regulatory`). Case-insensitive and matched against `eventCategory`. Up to 64 characters.
 
 The service caps the queried window at 31 days to keep routine operator usage cheap.
 

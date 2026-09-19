@@ -33,6 +33,10 @@ const PARAMETER_SCHEMA = Object.freeze({
 	GROUNDING_MAX_LENGTH: { type: 'number', defaultValue: 2000, integer: true, min: 1, max: 10000 },
 	ALERT_GROUNDING_COALESCE_MS: { type: 'number', defaultValue: 0, integer: true, min: 0, max: 60000 },
 	NEWS_CACHE_TTL_HOURS: { type: 'number', defaultValue: 6, min: 0, max: 720 },
+	NEWS_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 1000000 },
+	NEWS_DELIVERY_LOCK_MAX_ENTRIES: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 100000 },
+	URL_SHORTENER_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 100000 },
+	URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: { type: 'number', defaultValue: 32, integer: true, min: 1, max: 1024 },
 	BINANCE_FETCH_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
 	TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: {
 		type: 'string',
@@ -96,6 +100,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
 	// notification destinations — must remain deployment-controlled.
 	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
+	// ENABLE_TEST_ALERT, TEST_ALERT_DAILY_LIMIT excluded:
+	// route-enablement gate and abuse rate-limiting controls must remain deployment-controlled.
 });
 
 let remoteOverrides = {};
