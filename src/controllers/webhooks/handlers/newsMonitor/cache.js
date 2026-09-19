@@ -198,12 +198,24 @@ class NewsCache {
 		return parsePositiveInteger(runtime, DEFAULT_NEWS_CACHE_MAX_ENTRIES, 'NEWS_CACHE_MAX_ENTRIES');
 	}
 
+	set maxEntries(val) {
+		this._explicitMaxEntries = val !== undefined
+			? parsePositiveInteger(val, DEFAULT_NEWS_CACHE_MAX_ENTRIES, 'maxEntries')
+			: undefined;
+	}
+
 	get deliveryLockMaxEntries() {
 		if (this._explicitDeliveryLockMaxEntries !== undefined) {
 			return this._explicitDeliveryLockMaxEntries;
 		}
 		const runtime = getRuntimeConfig().NEWS_DELIVERY_LOCK_MAX_ENTRIES;
 		return parsePositiveInteger(runtime, DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES, 'NEWS_DELIVERY_LOCK_MAX_ENTRIES');
+	}
+
+	set deliveryLockMaxEntries(val) {
+		this._explicitDeliveryLockMaxEntries = val !== undefined
+			? parsePositiveInteger(val, DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES, 'deliveryLockMaxEntries')
+			: undefined;
 	}
 
 	/**
@@ -230,15 +242,14 @@ class NewsCache {
 			return;
 		}
 		let evicted = 0;
-		while (this.cache.size > max) {
-			const oldestEvictable = Array.from(this.cache.entries())
-				.find(([, entry]) => !this._isActiveClaimEntry(entry));
-			if (!oldestEvictable) {
+		for (const [key, entry] of this.cache.entries()) {
+			if (this.cache.size <= max) {
 				break;
 			}
-			const [oldestKey] = oldestEvictable;
-			this.cache.delete(oldestKey);
-			evicted++;
+			if (!this._isActiveClaimEntry(entry)) {
+				this.cache.delete(key);
+				evicted++;
+			}
 		}
 		if (evicted > 0) {
 			this._evictionCount += evicted;
@@ -682,41 +693,51 @@ class NewsCache {
 		const key = this.generateKey(symbol, eventCategory);
 		const entry = this.cache.get(key);
 
-		if (entry && !this.isExpired(entry)) {
-			return false;
+		if (entry) {
+			if (!this.isExpired(entry)) {
+				return false;
+			}
+			this.cache.delete(key);
 		}
-		if (!entry && this.cache.size >= this.maxEntries
-			&& !Array.from(this.cache.values()).some(cacheEntry => !this._isActiveClaimEntry(cacheEntry))) {
-			console.warn('[NewsCache] Cache capacity saturated with active claims; rejecting new claim');
-			return false;
+
+		if (this.cache.size >= this.maxEntries) {
+			let hasEvictable = false;
+			for (const cacheEntry of this.cache.values()) {
+				if (!this._isActiveClaimEntry(cacheEntry)) {
+					hasEvictable = true;
+					break;
+				}
+			}
+			if (!hasEvictable) {
+				console.warn('[NewsCache] Cache capacity saturated with active claims; rejecting new claim');
+				return false;
+			}
 		}
+
+		// Reserve a cache slot before awaiting Firestore to avoid pre-await capacity race
+		this._setCacheEntry(key, {
+			key,
+			timestamp: Date.now(),
+			data: { status: 'claiming' },
+		});
 
 		// Persistent check/write
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
 			try {
 				const claimed = await newsDedupStorageService.claimEntry(key, this.ttlMs);
 				if (claimed) {
-					// Warm local cache so we don't hit Firestore on future calls
-					this._setCacheEntry(key, {
-						key,
-						timestamp: Date.now(),
-						data: { status: 'claiming' },
-					});
 					return true;
 				}
+				// Remote claim was denied (already claimed/exists elsewhere)
+				this.cache.delete(key);
 				return false;
 			} catch (error) {
 				console.warn('[NewsCache] Firestore claimEntry failed (fail-open):', error.message);
-				// Fail-open: continue to local check/claim
+				// Fail-open: keep reserved local claim
+				return true;
 			}
 		}
 
-		// Local claim
-		this._setCacheEntry(key, {
-			key,
-			timestamp: Date.now(),
-			data: { status: 'claiming' },
-		});
 		return true;
 	}
 

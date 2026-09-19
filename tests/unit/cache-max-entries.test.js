@@ -118,6 +118,32 @@ describe('Cache Max Entries / LRU Eviction', () => {
 			}
 		});
 
+		it('evicts multiple over-capacity entries in a single pass while preserving active claims', async () => {
+			const c = new NewsCache(undefined, { maxEntries: 5 });
+			try {
+				await c.set('E1', EventCategory.PRICE_SURGE, { data: '1' });
+				await c.claim('CLAIM1', EventCategory.PRICE_SURGE);
+				await c.set('E2', EventCategory.PRICE_SURGE, { data: '2' });
+				await c.set('E3', EventCategory.PRICE_SURGE, { data: '3' });
+				await c.set('E4', EventCategory.PRICE_SURGE, { data: '4' });
+				expect(c.cache.size).toBe(5);
+
+				// Manually reduce maxEntries to 2 and trigger eviction
+				c.maxEntries = 2;
+				c._evictIfOverCapacity();
+
+				// Size should now be 2, CLAIM1 preserved, oldest evictables (E1, E2, E3) evicted, newest (E4) kept
+				expect(c.cache.size).toBe(2);
+				expect(c.cache.has('CLAIM1:price_surge')).toBe(true);
+				expect(c.cache.has('E4:price_surge')).toBe(true);
+				expect(c.cache.has('E1:price_surge')).toBe(false);
+				expect(c.cache.has('E2:price_surge')).toBe(false);
+				expect(c.cache.has('E3:price_surge')).toBe(false);
+			} finally {
+				c.shutdown();
+			}
+		});
+
 		it('exposes maxEntries + evictionCount in getStats()', () => {
 			expect(cache.maxEntries).toBe(3);
 			const stats = cache.getStats();
