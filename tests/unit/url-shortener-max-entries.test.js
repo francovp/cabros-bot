@@ -55,6 +55,33 @@ describe('URLShortenerCache - Max Entries / LRU', () => {
 			expect(cache.get('https://example.com/a')).toBe('https://bit.ly/a');
 			expect(cache.get('https://example.com/b')).toBeNull();
 		});
+
+		it('evicts over-capacity entries when read via get() after capacity is reduced', () => {
+			cache.set('https://example.com/1', 'https://bit.ly/1');
+			cache.set('https://example.com/2', 'https://bit.ly/2');
+			cache.set('https://example.com/3', 'https://bit.ly/3');
+			expect(cache.size()).toBe(3);
+
+			// Lower capacity to 2
+			cache.maxEntries = 2;
+
+			// Reading a key should enforce the bound and evict the oldest
+			const res = cache.get('https://example.com/3');
+			expect(res).toBe('https://bit.ly/3');
+			expect(cache.size()).toBe(2);
+			expect(cache.get('https://example.com/1')).toBeNull();
+		});
+
+		it('immediately evicts over-capacity entries upon setting maxEntries', () => {
+			cache.set('https://example.com/1', 'https://bit.ly/1');
+			cache.set('https://example.com/2', 'https://bit.ly/2');
+			cache.set('https://example.com/3', 'https://bit.ly/3');
+			expect(cache.size()).toBe(3);
+
+			cache.maxEntries = 1;
+			expect(cache.size()).toBe(1);
+			expect(cache.get('https://example.com/3')).toBe('https://bit.ly/3');
+		});
 	});
 
 	describe('env var fallback', () => {
@@ -85,6 +112,12 @@ describe('URLShortenerCache - Max Entries / LRU', () => {
 			const cache = new URLShortenerCache();
 			expect(cache.maxEntries).toBe(1000);
 		});
+
+		it('falls back to default when env override exceeds upper bound', () => {
+			process.env.URL_SHORTENER_CACHE_MAX_ENTRIES = '100001';
+			const cache = new URLShortenerCache();
+			expect(cache.maxEntries).toBe(1000);
+		});
 	});
 });
 
@@ -106,6 +139,23 @@ describe('URLShortener.serviceFailures size bound', () => {
 
 	it('defaults to 32 entries', () => {
 		expect(shortener._serviceFailuresMaxEntries).toBe(32);
+	});
+
+	it('falls back to default when env override exceeds upper bound', () => {
+		process.env.URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES = '1025';
+		const localShortener = new URLShortener();
+		expect(localShortener._serviceFailuresMaxEntries).toBe(32);
+	});
+
+	it('immediately evicts over-capacity serviceFailures upon setting serviceFailuresMaxEntries', () => {
+		const localShortener = new URLShortener({ serviceFailuresMaxEntries: 10 });
+		for (let i = 0; i < 5; i += 1) {
+			localShortener.serviceFailures.set(`svc-${i}`, 1);
+		}
+		expect(localShortener.serviceFailures.size).toBe(5);
+
+		localShortener.serviceFailuresMaxEntries = 2;
+		expect(localShortener.serviceFailures.size).toBeLessThanOrEqual(2);
 	});
 
 	it('respects the configured cap via env var', () => {

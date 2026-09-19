@@ -144,6 +144,64 @@ describe('Cache Max Entries / LRU Eviction', () => {
 			}
 		});
 
+		it('evicts over-capacity entries when read via get() after capacity is reduced', async () => {
+			const c = new NewsCache(undefined, { maxEntries: 4 });
+			try {
+				await c.set('K1', EventCategory.PRICE_SURGE, { data: '1' });
+				await c.set('K2', EventCategory.PRICE_SURGE, { data: '2' });
+				await c.set('K3', EventCategory.PRICE_SURGE, { data: '3' });
+				expect(c.cache.size).toBe(3);
+
+				// Lower maxEntries to 2 without calling set()
+				c.maxEntries = 2;
+
+				// Calling get() on an existing key should refresh recency and evict oldest to enforce maxEntries = 2
+				const val = await c.get('K3', EventCategory.PRICE_SURGE);
+				expect(val).toEqual({ data: '3' });
+				expect(c.cache.size).toBe(2);
+				expect(await c.get('K1', EventCategory.PRICE_SURGE)).toBeNull();
+				expect(await c.get('K2', EventCategory.PRICE_SURGE)).not.toBeNull();
+			} finally {
+				c.shutdown();
+			}
+		});
+
+		it('evicts over-capacity entries during periodic cleanup()', async () => {
+			const c = new NewsCache(undefined, { maxEntries: 4 });
+			try {
+				await c.set('K1', EventCategory.PRICE_SURGE, { data: '1' });
+				await c.set('K2', EventCategory.PRICE_SURGE, { data: '2' });
+				await c.set('K3', EventCategory.PRICE_SURGE, { data: '3' });
+				expect(c.cache.size).toBe(3);
+
+				// Lower maxEntries directly
+				c._explicitMaxEntries = 1;
+
+				c.cleanup();
+				expect(c.cache.size).toBe(1);
+				expect(await c.get('K3', EventCategory.PRICE_SURGE)).not.toBeNull();
+			} finally {
+				c.shutdown();
+			}
+		});
+
+		it('immediately evicts over-capacity entries upon setting maxEntries', async () => {
+			const c = new NewsCache(undefined, { maxEntries: 5 });
+			try {
+				await c.set('A', EventCategory.PRICE_SURGE, { v: 1 });
+				await c.set('B', EventCategory.PRICE_SURGE, { v: 2 });
+				await c.set('C', EventCategory.PRICE_SURGE, { v: 3 });
+				expect(c.cache.size).toBe(3);
+
+				// Setting maxEntries property should trigger immediate eviction
+				c.maxEntries = 1;
+				expect(c.cache.size).toBe(1);
+				expect(await c.get('C', EventCategory.PRICE_SURGE)).not.toBeNull();
+			} finally {
+				c.shutdown();
+			}
+		});
+
 		it('exposes maxEntries + evictionCount in getStats()', () => {
 			expect(cache.maxEntries).toBe(3);
 			const stats = cache.getStats();
@@ -271,6 +329,29 @@ describe('Cache Max Entries / LRU Eviction', () => {
 			expect(c.maxEntries).toBe(5000);
 			expect(c.deliveryLockMaxEntries).toBe(1000);
 			c.shutdown();
+		});
+
+		it('falls back to default when env var exceeds upper bound', () => {
+			process.env.NEWS_CACHE_MAX_ENTRIES = '1000001';
+			process.env.NEWS_DELIVERY_LOCK_MAX_ENTRIES = '100001';
+			const c = new NewsCache();
+			expect(c.maxEntries).toBe(5000);
+			expect(c.deliveryLockMaxEntries).toBe(1000);
+			c.shutdown();
+		});
+
+		it('immediately evicts over-capacity deliveryLocks upon setting deliveryLockMaxEntries', () => {
+			const c = new NewsCache(undefined, { deliveryLockMaxEntries: 5 });
+			try {
+				c.deliveryLocks.set('lock1', { active: false, persistentUntil: Date.now() + 60000 });
+				c.deliveryLocks.set('lock2', { active: false, persistentUntil: Date.now() + 60000 });
+				expect(c.deliveryLocks.size).toBe(2);
+
+				c.deliveryLockMaxEntries = 1;
+				expect(c.deliveryLocks.size).toBe(1);
+			} finally {
+				c.shutdown();
+			}
 		});
 	});
 

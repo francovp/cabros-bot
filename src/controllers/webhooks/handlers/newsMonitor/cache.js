@@ -130,7 +130,7 @@ function parseNewsCacheTtlHours(value, fallback = 6) {
 	return parsed;
 }
 
-function parsePositiveInteger(value, fallback, envVarName) {
+function parsePositiveInteger(value, fallback, envVarName, maxBound) {
 	if (value === undefined || value === null) {
 		return fallback;
 	}
@@ -143,7 +143,7 @@ function parsePositiveInteger(value, fallback, envVarName) {
 		return fallback;
 	}
 	const parsed = Number(str);
-	if (!Number.isFinite(parsed) || parsed < 1) {
+	if (!Number.isFinite(parsed) || parsed < 1 || (maxBound !== undefined && parsed > maxBound)) {
 		console.warn(`[NewsCache] Invalid ${envVarName} configuration, using default`);
 		return fallback;
 	}
@@ -151,7 +151,9 @@ function parsePositiveInteger(value, fallback, envVarName) {
 }
 
 const DEFAULT_NEWS_CACHE_MAX_ENTRIES = 5000;
+const MAX_NEWS_CACHE_ENTRIES = 1_000_000;
 const DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES = 1000;
+const MAX_NEWS_DELIVERY_LOCK_ENTRIES = 100_000;
 
 class NewsCache {
 	constructor(ttlHours, options = {}) {
@@ -165,10 +167,10 @@ class NewsCache {
 		this.cleanupInterval = null;
 		this.deliveryLocks = new Map();
 		this._explicitMaxEntries = options.maxEntries !== undefined
-			? parsePositiveInteger(options.maxEntries, DEFAULT_NEWS_CACHE_MAX_ENTRIES, 'maxEntries')
+			? parsePositiveInteger(options.maxEntries, DEFAULT_NEWS_CACHE_MAX_ENTRIES, 'maxEntries', MAX_NEWS_CACHE_ENTRIES)
 			: undefined;
 		this._explicitDeliveryLockMaxEntries = options.deliveryLockMaxEntries !== undefined
-			? parsePositiveInteger(options.deliveryLockMaxEntries, DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES, 'deliveryLockMaxEntries')
+			? parsePositiveInteger(options.deliveryLockMaxEntries, DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES, 'deliveryLockMaxEntries', MAX_NEWS_DELIVERY_LOCK_ENTRIES)
 			: undefined;
 		this._evictionCount = 0;
 		this._deliveryLockEvictionCount = 0;
@@ -195,13 +197,14 @@ class NewsCache {
 			return this._explicitMaxEntries;
 		}
 		const runtime = getRuntimeConfig().NEWS_CACHE_MAX_ENTRIES;
-		return parsePositiveInteger(runtime, DEFAULT_NEWS_CACHE_MAX_ENTRIES, 'NEWS_CACHE_MAX_ENTRIES');
+		return parsePositiveInteger(runtime, DEFAULT_NEWS_CACHE_MAX_ENTRIES, 'NEWS_CACHE_MAX_ENTRIES', MAX_NEWS_CACHE_ENTRIES);
 	}
 
 	set maxEntries(val) {
 		this._explicitMaxEntries = val !== undefined
-			? parsePositiveInteger(val, DEFAULT_NEWS_CACHE_MAX_ENTRIES, 'maxEntries')
+			? parsePositiveInteger(val, DEFAULT_NEWS_CACHE_MAX_ENTRIES, 'maxEntries', MAX_NEWS_CACHE_ENTRIES)
 			: undefined;
+		this._evictIfOverCapacity();
 	}
 
 	get deliveryLockMaxEntries() {
@@ -209,13 +212,14 @@ class NewsCache {
 			return this._explicitDeliveryLockMaxEntries;
 		}
 		const runtime = getRuntimeConfig().NEWS_DELIVERY_LOCK_MAX_ENTRIES;
-		return parsePositiveInteger(runtime, DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES, 'NEWS_DELIVERY_LOCK_MAX_ENTRIES');
+		return parsePositiveInteger(runtime, DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES, 'NEWS_DELIVERY_LOCK_MAX_ENTRIES', MAX_NEWS_DELIVERY_LOCK_ENTRIES);
 	}
 
 	set deliveryLockMaxEntries(val) {
 		this._explicitDeliveryLockMaxEntries = val !== undefined
-			? parsePositiveInteger(val, DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES, 'deliveryLockMaxEntries')
+			? parsePositiveInteger(val, DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES, 'deliveryLockMaxEntries', MAX_NEWS_DELIVERY_LOCK_ENTRIES)
 			: undefined;
+		this._evictDeliveryLocksIfOverCapacity();
 	}
 
 	/**
@@ -364,12 +368,16 @@ class NewsCache {
 		if (entry) {
 			if (this.isExpired(entry)) {
 				this.cache.delete(key);
+				this._evictIfOverCapacity();
 			} else {
 				// Refresh LRU recency on hit: move entry to the most-recently used position in the Map
 				this.cache.delete(key);
 				this.cache.set(key, entry);
+				this._evictIfOverCapacity();
 				localData = entry.data;
 			}
+		} else {
+			this._evictIfOverCapacity();
 		}
 
 		// Persistent dedup: refresh Firestore state before reusing local data so
@@ -756,11 +764,13 @@ class NewsCache {
 		if (removed > 0) {
 			console.debug('[NewsCache] Cleanup removed', removed, 'expired entries. Cache size:', this.cache.size);
 		}
+		this._evictIfOverCapacity();
 		for (const [key, lease] of this.deliveryLocks.entries()) {
 			if (!lease.active && lease.persistentUntil <= Date.now()) {
 				this.deliveryLocks.delete(key);
 			}
 		}
+		this._evictDeliveryLocksIfOverCapacity();
 	}
 
 	/**

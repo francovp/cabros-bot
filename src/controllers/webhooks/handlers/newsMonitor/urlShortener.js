@@ -7,9 +7,11 @@ const { sendWithRetry } = require('../../../../lib/retryHelper');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 
 const DEFAULT_URL_SHORTENER_CACHE_MAX_ENTRIES = 1000;
+const MAX_URL_SHORTENER_CACHE_MAX_ENTRIES = 100_000;
 const DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES = 32;
+const MAX_URL_SHORTENER_FAILURES_MAX_ENTRIES = 1024;
 
-function parsePositiveInteger(value, fallback, envVarName) {
+function parsePositiveInteger(value, fallback, envVarName, maxBound) {
 	if (value === undefined || value === null) {
 		return fallback;
 	}
@@ -22,7 +24,7 @@ function parsePositiveInteger(value, fallback, envVarName) {
 		return fallback;
 	}
 	const parsed = Number(str);
-	if (!Number.isFinite(parsed) || parsed < 1) {
+	if (!Number.isFinite(parsed) || parsed < 1 || (maxBound !== undefined && parsed > maxBound)) {
 		console.warn(`[URLShortener] Invalid ${envVarName} configuration, using default`);
 		return fallback;
 	}
@@ -37,7 +39,7 @@ class URLShortenerCache {
 		this.cache = new Map();
 		this.ttlMs = 60 * 60 * 1000; // 1 hour session cache
 		this._explicitMaxEntries = options.maxEntries !== undefined
-			? parsePositiveInteger(options.maxEntries, DEFAULT_URL_SHORTENER_CACHE_MAX_ENTRIES, 'maxEntries')
+			? parsePositiveInteger(options.maxEntries, DEFAULT_URL_SHORTENER_CACHE_MAX_ENTRIES, 'maxEntries', MAX_URL_SHORTENER_CACHE_MAX_ENTRIES)
 			: undefined;
 		this._evictionCount = 0;
 	}
@@ -47,7 +49,14 @@ class URLShortenerCache {
 			return this._explicitMaxEntries;
 		}
 		const runtime = getRuntimeConfig().URL_SHORTENER_CACHE_MAX_ENTRIES;
-		return parsePositiveInteger(runtime, DEFAULT_URL_SHORTENER_CACHE_MAX_ENTRIES, 'URL_SHORTENER_CACHE_MAX_ENTRIES');
+		return parsePositiveInteger(runtime, DEFAULT_URL_SHORTENER_CACHE_MAX_ENTRIES, 'URL_SHORTENER_CACHE_MAX_ENTRIES', MAX_URL_SHORTENER_CACHE_MAX_ENTRIES);
+	}
+
+	set maxEntries(val) {
+		this._explicitMaxEntries = val !== undefined
+			? parsePositiveInteger(val, DEFAULT_URL_SHORTENER_CACHE_MAX_ENTRIES, 'maxEntries', MAX_URL_SHORTENER_CACHE_MAX_ENTRIES)
+			: undefined;
+		this._evictIfOverCapacity();
 	}
 
 	get evictionCount() {
@@ -76,16 +85,19 @@ class URLShortenerCache {
 	get(url) {
 		const entry = this.cache.get(url);
 		if (!entry) {
+			this._evictIfOverCapacity();
 			return null;
 		}
 
 		if (Date.now() - entry.timestamp > this.ttlMs) {
 			this.cache.delete(url);
+			this._evictIfOverCapacity();
 			return null;
 		}
 
 		this.cache.delete(url);
 		this.cache.set(url, entry);
+		this._evictIfOverCapacity();
 		return entry.shortUrl;
 	}
 
@@ -126,7 +138,7 @@ class URLShortener {
 		this.cache = new URLShortenerCache(options.cacheOptions);
 		this.serviceFailures = new Map(); // Track consecutive failures per service
 		this._explicitServiceFailuresMaxEntries = options.serviceFailuresMaxEntries !== undefined
-			? parsePositiveInteger(options.serviceFailuresMaxEntries, DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES, 'serviceFailuresMaxEntries')
+			? parsePositiveInteger(options.serviceFailuresMaxEntries, DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES, 'serviceFailuresMaxEntries', MAX_URL_SHORTENER_FAILURES_MAX_ENTRIES)
 			: undefined;
 		this._serviceFailureEvictionCount = 0;
 
@@ -260,8 +272,16 @@ class URLShortener {
 				getRuntimeConfig().URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES,
 				DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES,
 				'URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES',
+				MAX_URL_SHORTENER_FAILURES_MAX_ENTRIES,
 			);
 		return Math.max(configuredMaxEntries, this.configuredServices?.length ?? 0);
+	}
+
+	set serviceFailuresMaxEntries(val) {
+		this._explicitServiceFailuresMaxEntries = val !== undefined
+			? parsePositiveInteger(val, DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES, 'serviceFailuresMaxEntries', MAX_URL_SHORTENER_FAILURES_MAX_ENTRIES)
+			: undefined;
+		this._evictServiceFailuresIfOverCapacity();
 	}
 
 	get _serviceFailuresMaxEntries() {
