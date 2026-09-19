@@ -173,9 +173,15 @@ const getPrice = async (context) => {
 	}
 };
 
+const DEFAULT_WARNING_REPLY_TIMEOUT_MS = 3000;
+let warningReplyTimeoutMs = DEFAULT_WARNING_REPLY_TIMEOUT_MS;
+
 function getWarningReplyTimeoutMs() {
-	const parsed = Number(process.env.TELEGRAM_WARNING_REPLY_TIMEOUT_MS);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : 3000;
+	return warningReplyTimeoutMs;
+}
+
+function setWarningReplyTimeoutMsForTest(timeoutMs) {
+	warningReplyTimeoutMs = typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : DEFAULT_WARNING_REPLY_TIMEOUT_MS;
 }
 
 const createTradingViewJobCommand = (type, command, buildPayload) => async (context) => {
@@ -776,4 +782,5 @@ module.exports = {
 	getTradingViewReadinessWarning,
 	formatReadinessErrorLabel,
 	telegramCommandRateLimiter,
+	setWarningReplyTimeoutMsForTest,
 };

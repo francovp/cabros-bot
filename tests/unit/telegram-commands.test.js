@@ -48,6 +48,7 @@ const {
 	getTradingViewReadinessWarning,
 	formatReadinessErrorLabel,
 	telegramCommandRateLimiter,
+	setWarningReplyTimeoutMsForTest,
 } = require('../../src/controllers/commands');
 
 function buildContext(text) {
@@ -480,8 +481,7 @@ describe('Telegram TradingView commands', () => {
 		});
 
 		it('still creates the job when readiness warning reply times out', async () => {
-			const originalTimeout = process.env.TELEGRAM_WARNING_REPLY_TIMEOUT_MS;
-			process.env.TELEGRAM_WARNING_REPLY_TIMEOUT_MS = '20';
+			setWarningReplyTimeoutMsForTest(20);
 			try {
 				jobService.createJob.mockResolvedValue({
 					success: true,
@@ -502,11 +502,7 @@ describe('Telegram TradingView commands', () => {
 				expect(context.reply).toHaveBeenCalledTimes(2);
 				expect(context.reply.mock.calls[1][0]).toContain('Job job-timeout-reply creado');
 			} finally {
-				if (originalTimeout !== undefined) {
-					process.env.TELEGRAM_WARNING_REPLY_TIMEOUT_MS = originalTimeout;
-				} else {
-					delete process.env.TELEGRAM_WARNING_REPLY_TIMEOUT_MS;
-				}
+				setWarningReplyTimeoutMsForTest();
 			}
 		});
 
