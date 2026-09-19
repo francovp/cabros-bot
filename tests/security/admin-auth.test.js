@@ -7,6 +7,7 @@ const { generateKeyPairSync } = require('crypto');
 jest.mock('firebase-admin');
 const admin = require('firebase-admin');
 const { validateAdminAccess, requireAdminRole } = require('../../src/lib/adminAuth');
+const requestDeadline = require('../../src/lib/requestDeadline');
 
 const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
 	type: 'pkcs1',
@@ -63,6 +64,38 @@ describe('Firebase admin authorization', () => {
 		expect(write.status).toBe(403);
 		expect(write.body.code).toBe('ADMIN_ROLE_REQUIRED');
 		expect(verifyIdToken).toHaveBeenCalledWith('firebase-token', true);
+	});
+
+	it('does not enter the route when async token verification outlives the request deadline', async () => {
+		requestDeadline.setTestOverrides({ timeoutMs: 20 });
+		let releaseVerification;
+		admin.auth = jest.fn(() => ({
+			verifyIdToken: jest.fn(() => new Promise((resolve) => {
+				releaseVerification = resolve;
+			})),
+		}));
+		let handlerCalled = false;
+		const app = express();
+		app.use(requestDeadline);
+		app.get('/read', validateAdminAccess, (req, res) => {
+			handlerCalled = true;
+			res.json({ role: req.adminRole });
+		});
+
+		try {
+			const responsePromise = request(app)
+				.get('/read')
+				.set('Authorization', 'Bearer slow-token');
+			await new Promise((resolve) => setTimeout(resolve, 35));
+			const response = await responsePromise;
+			releaseVerification({ uid: 'viewer-1', roles: ['admin.viewer'] });
+			await new Promise((resolve) => setImmediate(resolve));
+
+			expect(response.status).toBe(408);
+			expect(handlerCalled).toBe(false);
+		} finally {
+			requestDeadline.resetForTests();
+		}
 	});
 
 	it.each(['auth/id-token-expired', 'auth/id-token-revoked', 'auth/argument-error'])

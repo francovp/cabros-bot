@@ -379,6 +379,46 @@ describe('Idempotency Service & Middleware', () => {
 			}
 		});
 
+		test('does not enter the controller when an async reservation resolves after the deadline', async () => {
+			jest.useFakeTimers();
+			requestDeadline.setTestOverrides({ timeoutMs: 20 });
+			const key = 'deadline-idempotency-reservation-key';
+			const payload = { value: 'reservation-payload' };
+			const req = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/slow',
+				headers: { 'idempotency-key': key },
+				body: payload,
+			});
+			const res = httpMocks.createResponse();
+			const next = jest.fn();
+			let resolveReservation;
+			jest.spyOn(idempotencyService, 'reserve').mockReturnValue(new Promise((resolve) => {
+				resolveReservation = resolve;
+			}));
+			const release = jest.spyOn(idempotencyService, 'release');
+
+			try {
+				requestDeadline(req, res, () => idempotencyMiddleware(req, res, next));
+				jest.advanceTimersByTime(20);
+				expect(req.requestDeadlineExceeded).toBe(true);
+
+				resolveReservation({ state: 'fresh' });
+				await Promise.resolve();
+				await Promise.resolve();
+
+				expect(next).not.toHaveBeenCalled();
+				expect(release).toHaveBeenCalledWith(
+					key,
+					expect.objectContaining({ body: payload }),
+					expect.objectContaining({ code: 'IDEMPOTENCY_RELEASED' }),
+				);
+			} finally {
+				requestDeadline.resetForTests();
+				jest.useRealTimers();
+			}
+		});
+
 		test('should cache and replay a response on second call with same key', async () => {
 			const key = 'test-replay-key';
 			req.headers['idempotency-key'] = key;

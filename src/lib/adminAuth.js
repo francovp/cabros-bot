@@ -4,6 +4,7 @@ const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const { loadFirebaseAdminCredentials } = require('../services/storage/firebaseAdminCredentials');
 const { isValidApiKey, validateApiKey } = require('./auth');
+const requestDeadline = require('./requestDeadline');
 
 const ADMIN_VIEWER = 'admin.viewer';
 const ADMIN_OPERATOR = 'admin.operator';
@@ -99,7 +100,7 @@ async function validateAdminAccess(req, res, next) {
 	const suppliedApiKey = req.headers['x-api-key'] || req.query['api-key'];
 	if (suppliedApiKey !== undefined && isValidApiKey(req)) {
 		req.adminRole = ADMIN_OPERATOR;
-		return next();
+		return requestDeadline.guard(req, res, next);
 	}
 
 	const authorization = req.headers.authorization;
@@ -118,7 +119,7 @@ async function validateAdminAccess(req, res, next) {
 				claims,
 			};
 			req.user = req.adminUser;
-			if (req.adminRole) return next();
+			if (req.adminRole) return requestDeadline.guard(req, res, next);
 			return res.status(403).json({ error: 'Forbidden', code: 'ADMIN_ROLE_REQUIRED' });
 		} catch (error) {
 			return res.status(401).json({ error: 'Unauthorized', code: 'ADMIN_AUTH_INVALID' });

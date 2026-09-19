@@ -18,6 +18,7 @@ function postVolumeConfirmation() {
 				symbol: parsed.symbol,
 				exchange: parsed.exchange,
 				timeframe: parsed.timeframe,
+				signal: req.requestDeadlineSignal,
 			});
 			const decision = getVolumeDecision(analysis);
 
