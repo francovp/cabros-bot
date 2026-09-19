@@ -8,6 +8,7 @@ jest.mock('firebase-admin');
 const admin = require('firebase-admin');
 const { validateAdminAccess, requireAdminRole } = require('../../src/lib/adminAuth');
 const requestDeadline = require('../../src/lib/requestDeadline');
+const rateLimiter = require('../../src/lib/rateLimiter');
 
 const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
 	type: 'pkcs1',
@@ -77,6 +78,7 @@ describe('Firebase admin authorization', () => {
 		let handlerCalled = false;
 		const app = express();
 		app.use(requestDeadline);
+		app.use(rateLimiter);
 		app.get('/read', validateAdminAccess, (req, res) => {
 			handlerCalled = true;
 			res.json({ role: req.adminRole });
