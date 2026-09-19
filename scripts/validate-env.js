@@ -3,6 +3,7 @@
 
 const { isFirestoreConfigured } = require('../src/services/storage/firestoreConfig');
 const { isPreviewEnvironment } = require('../src/lib/deploymentEnvironment');
+const { parseEntryPriceSources } = require('../src/lib/signalOutcomeEntryPriceSources');
 
 const ENV_EXAMPLE = '.env.example';
 const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
@@ -14,6 +15,10 @@ const INTEGER_RULES = {
 	RATE_LIMIT_WINDOW_MS: [1000, 86400000],
 	RATE_LIMIT_MAX: [1, 100000],
 	SIGNAL_OUTCOME_RETENTION_DAYS: [1, 3650],
+	NEWS_CACHE_MAX_ENTRIES: [1, 1000000],
+	NEWS_DELIVERY_LOCK_MAX_ENTRIES: [1, 100000],
+	URL_SHORTENER_CACHE_MAX_ENTRIES: [1, 100000],
+	URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: [1, 1024],
 };
 
 function hasValue(value) {
@@ -146,6 +151,13 @@ function validateEnv(env = process.env) {
 	if (hasValue(env.TRADINGVIEW_MCP_URL) && !isHttpUrl(env.TRADINGVIEW_MCP_URL)) {
 		addInvalid(warnings, 'TRADINGVIEW_MCP_URL', 'has an invalid HTTP URL');
 	}
+	if (hasValue(env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES)) {
+		try {
+			parseEntryPriceSources(env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES);
+		} catch (_) {
+			addInvalid(warnings, 'SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES', 'must contain only mcp, binance, twelve-data, or gemini providers');
+		}
+	}
 
 	const firestoreGateEnabled = [
 		'ENABLE_FIRESTORE_ALERT_STORAGE',
@@ -154,6 +166,7 @@ function validateEnv(env = process.env) {
 		'ENABLE_FIRESTORE_IDEMPOTENCY',
 		'ENABLE_FIREBASE_REMOTE_CONFIG',
 		'ENABLE_SIGNAL_OUTCOME_TRACKING',
+		'ENABLE_FIRESTORE_NEWS_ANALYSIS',
 	].some((name) => isEnabled(env, name));
 	if (firestoreGateEnabled && !isFirestoreConfigured()) {
 		addInvalid(warnings, 'FIREBASE_CREDENTIALS', 'are not configured or readable for an enabled Firebase feature');

@@ -286,6 +286,7 @@ class DiscordService extends NotificationChannel {
 						channel: 'discord',
 						error: `Discord webhook 429: ${errorText}`,
 						statusCode: 429,
+						attemptCount: attempt,
 					};
 				}
 
