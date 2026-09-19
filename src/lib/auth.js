@@ -65,19 +65,43 @@ function validateApiKey(req, res, next) {
 	next();
 }
 
+function getValidApiKeys() {
+	const keys = new Set();
+	const single = process.env.WEBHOOK_API_KEY;
+	if (single && single.trim()) keys.add(single.trim());
+	const list = process.env.WEBHOOK_API_KEYS;
+	if (list && list.trim()) {
+		for (const entry of list.split(',')) {
+			const trimmed = entry.trim();
+			if (trimmed) keys.add(trimmed);
+		}
+	}
+	return Array.from(keys);
+}
+
 function isValidApiKey(req) {
-	const validApiKey = process.env.WEBHOOK_API_KEY;
-	if (!validApiKey) return false;
+	const validApiKeys = getValidApiKeys();
+	if (validApiKeys.length === 0) return false;
 
 	const apiKey = req && req.headers && (req.headers['x-api-key'] || req.headers['X-API-Key'])
 		|| req && req.query && req.query['api-key'];
 	const keyToCheck = Array.isArray(apiKey) ? apiKey[0] : apiKey;
 	if (typeof keyToCheck !== 'string') return false;
 
+	// Timing-safe comparison against every configured key. A request is
+	// accepted when it matches any of the configured keys; the constant-time
+	// comparison is performed against each candidate so the check does not
+	// leak which key matched through timing.
 	const bufferApiKey = Buffer.from(keyToCheck);
-	const bufferValidApiKey = Buffer.from(validApiKey);
-	return bufferApiKey.length === bufferValidApiKey.length
-		&& crypto.timingSafeEqual(bufferApiKey, bufferValidApiKey);
+	let matched = false;
+	for (const candidate of validApiKeys) {
+		const bufferCandidate = Buffer.from(candidate);
+		if (bufferApiKey.length !== bufferCandidate.length) continue;
+		if (crypto.timingSafeEqual(bufferApiKey, bufferCandidate)) {
+			matched = true;
+		}
+	}
+	return matched;
 }
 
-module.exports = { isValidApiKey, validateApiKey };
+module.exports = { isValidApiKey, validateApiKey, getValidApiKeys };
