@@ -115,9 +115,9 @@ function getConfiguredApiKeys() {
 // Periodic cleanup
 setInterval(() => {
 	const now = Date.now();
-	for (const [ip, data] of rateLimit.entries()) {
+	for (const [key, data] of rateLimit.entries()) {
 		if (now > data.resetTime) {
-			rateLimit.delete(ip);
+			rateLimit.delete(key);
 		}
 	}
 }, 60000).unref();

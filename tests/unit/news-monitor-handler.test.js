@@ -74,4 +74,41 @@ describe('NewsMonitorHandler', () => {
 			quota_exhausted: 1,
 		}));
 	});
+
+	it('returns 503 NEWS_MONITOR_PAUSED when news monitor analysis is paused', async () => {
+		const previousFlag = process.env.ENABLE_NEWS_MONITOR;
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		const { pauseNewsMonitor, resetNewsMonitorPauseStateForTest } = require('../../src/controllers/webhooks/handlers/newsMonitor/pauseState');
+
+		pauseNewsMonitor({ reason: 'Gemini quota exhausted' });
+
+		const handler = new NewsMonitorHandler();
+		const req = {
+			method: 'POST',
+			query: {},
+			body: { crypto: ['BTCUSDT'] },
+		};
+		const res = {
+			status: jest.fn().mockReturnThis(),
+			json: jest.fn().mockReturnThis(),
+		};
+
+		try {
+			await handler.handleRequest(req, res);
+
+			expect(res.status).toHaveBeenCalledWith(503);
+			expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+				code: 'NEWS_MONITOR_PAUSED',
+				paused: true,
+				reason: 'Gemini quota exhausted',
+				pausedAt: expect.any(String),
+				requestId: expect.any(String),
+				error: expect.stringContaining('temporarily paused'),
+			}));
+		} finally {
+			resetNewsMonitorPauseStateForTest();
+			if (previousFlag === undefined) delete process.env.ENABLE_NEWS_MONITOR;
+			else process.env.ENABLE_NEWS_MONITOR = previousFlag;
+		}
+	});
 });
