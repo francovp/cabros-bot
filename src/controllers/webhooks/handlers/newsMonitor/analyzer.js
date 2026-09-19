@@ -486,7 +486,19 @@ class NewsAnalyzer {
 		const results = [];
 		let nextIndex = 0;
 		const batchStartedAt = Date.now();
-		const symbolOptions = { ...options, deferDelivery: true };
+
+		// Isolate delivery budget so external analysis timeouts do not suppress already-ready alerts
+		const totalTimeout = options.timeout ?? this.timeout;
+		const deliveryBudgetMs = options.deliveryBudgetMs ?? Math.floor(totalTimeout / 3);
+		const analysisBudgetMs = Math.max(1, totalTimeout - deliveryBudgetMs);
+		const analysisDeadline = batchStartedAt + analysisBudgetMs;
+
+		const symbolOptions = {
+			...options,
+			deferDelivery: true,
+			analysisDeadline,
+			deadline: options.deadline,
+		};
 
 		const runNext = async () => {
 			while (nextIndex < symbols.length) {
@@ -566,23 +578,21 @@ class NewsAnalyzer {
 		const tracker = this.volumeTracker || getVolumeTracker();
 		const effectiveCap = tracker.getEffectiveBatchCapacity();
 
-		const allowed = candidates.slice(0, effectiveCap);
-		const throttled = candidates.slice(effectiveCap);
-
-		for (const item of throttled) {
-			const res = item.result;
-			if (item.type === 'new') {
-				res.status = AnalysisStatus.THROTTLED;
-				res.reason = 'alert_volume_cap';
-				res.deliveryResults = [];
-			} else {
-				res.status = AnalysisStatus.CACHED;
-				res.deliveryResults = res._pendingDelivery?.activeCachedDeliveryResults || [];
-			}
-			delete res._pendingDelivery;
-		}
-
 		if (options.dryRun) {
+			const allowed = candidates.slice(0, effectiveCap);
+			const throttled = candidates.slice(effectiveCap);
+			for (const item of throttled) {
+				const res = item.result;
+				if (item.type === 'new') {
+					res.status = AnalysisStatus.THROTTLED;
+					res.reason = 'alert_volume_cap';
+					res.deliveryResults = [];
+				} else {
+					res.status = AnalysisStatus.CACHED;
+					res.deliveryResults = res._pendingDelivery?.activeCachedDeliveryResults || [];
+				}
+				delete res._pendingDelivery;
+			}
 			for (const item of allowed) {
 				const res = item.result;
 				res.deliveryResults = [];
@@ -591,65 +601,101 @@ class NewsAnalyzer {
 			return;
 		}
 
-		tracker.recordThrottled(throttled.length);
-
 		// Synchronously reserve window quota before starting asynchronous deliveries
 		const reservationTtl = typeof options.deadline === 'number'
 			? Math.max(options.deadline - Date.now() + 60000, 600000)
 			: 600000;
-		const reservation = tracker.reserveCapacity(allowed.length, Date.now(), reservationTtl);
-		const grantedCount = reservation ? reservation.count : 0;
-		const deliverable = allowed.slice(0, grantedCount);
-		const extraThrottled = allowed.slice(grantedCount);
+		const targetReservation = Math.min(effectiveCap, candidates.length);
+		const reservation = tracker.reserveCapacity(targetReservation, Date.now(), reservationTtl);
+		const maxDeliveriesAllowed = reservation ? reservation.count : 0;
 
-		for (const item of extraThrottled) {
-			const res = item.result;
-			if (item.type === 'new') {
-				res.status = AnalysisStatus.THROTTLED;
-				res.reason = 'alert_volume_cap';
-				res.deliveryResults = [];
-			} else {
-				res.status = AnalysisStatus.CACHED;
-				res.deliveryResults = res._pendingDelivery?.activeCachedDeliveryResults || [];
+		if (maxDeliveriesAllowed === 0) {
+			for (const item of candidates) {
+				const res = item.result;
+				if (item.type === 'new') {
+					res.status = AnalysisStatus.THROTTLED;
+					res.reason = 'alert_volume_cap';
+					res.deliveryResults = [];
+				} else {
+					res.status = AnalysisStatus.CACHED;
+					res.deliveryResults = res._pendingDelivery?.activeCachedDeliveryResults || [];
+				}
+				delete res._pendingDelivery;
 			}
-			delete res._pendingDelivery;
-		}
-
-		if (extraThrottled.length > 0) {
-			tracker.recordThrottled(extraThrottled.length);
+			tracker.recordThrottled(candidates.length);
+			if (reservation) {
+				tracker.commitReservation(reservation, 0);
+			}
+			return;
 		}
 
 		let deliveredCount = 0;
+		let throttledCount = 0;
+		const deliveryDeadline = options.deliveryDeadline
+			?? (typeof options.deadline === 'number'
+				? options.deadline
+				: Date.now() + (options.deliveryTimeoutMs ?? this.timeout));
+		const deliveryCallOptions = {
+			...options,
+			deadline: deliveryDeadline,
+		};
+
 		try {
-			const deadline = options.deadline;
 			const signal = options.signal;
 
-			for (const item of deliverable) {
-				if (signal?.aborted) {
-					console.warn('[Analyzer] Volume delivery aborted by signal');
-					break;
-				}
-				if (typeof deadline === 'number' && Date.now() >= deadline) {
-					console.warn('[Analyzer] Volume delivery aborted: deadline exceeded');
-					break;
-				}
-
-				if (reservation && typeof tracker.renewReservation === 'function') {
-					tracker.renewReservation(reservation, Date.now(), reservationTtl);
-				}
-
+			for (let i = 0; i < candidates.length; i++) {
+				const item = candidates[i];
 				const res = item.result;
-				if (res._pendingDelivery) {
-					await this.executePendingDelivery(res, requestId, options);
-				}
-				const alertDelivered = res._alertSent === true
-					|| res._redelivered === true
-					|| (Array.isArray(res.deliveryResults) && res.deliveryResults.some((d) => d && d.success === true));
-				if (alertDelivered) {
-					deliveredCount++;
+
+				if (deliveredCount < maxDeliveriesAllowed) {
+					if (signal?.aborted) {
+						console.warn('[Analyzer] Volume delivery aborted by signal');
+						for (let j = i; j < candidates.length; j++) {
+							delete candidates[j].result._pendingDelivery;
+						}
+						break;
+					}
+					if (typeof deliveryDeadline === 'number' && Date.now() >= deliveryDeadline) {
+						console.warn('[Analyzer] Volume delivery aborted: deadline exceeded');
+						for (let j = i; j < candidates.length; j++) {
+							delete candidates[j].result._pendingDelivery;
+						}
+						break;
+					}
+
+					if (reservation && typeof tracker.renewReservation === 'function') {
+						tracker.renewReservation(reservation, Date.now(), reservationTtl);
+					}
+
+					if (res._pendingDelivery) {
+						await this.executePendingDelivery(res, requestId, deliveryCallOptions);
+					}
+
+					const alertDelivered = item.type === 'cached_retry'
+						? (res._redelivered === true || (Array.isArray(res.attemptedDeliveryResults) && res.attemptedDeliveryResults.some((d) => d && d.success === true)))
+						: (res._alertSent === true || (!res.cached && Array.isArray(res.deliveryResults) && res.deliveryResults.some((d) => d && d.success === true)));
+
+					if (alertDelivered) {
+						deliveredCount++;
+					}
+				} else {
+					// Cap reached: throttle remaining candidates
+					if (item.type === 'new') {
+						res.status = AnalysisStatus.THROTTLED;
+						res.reason = 'alert_volume_cap';
+						res.deliveryResults = [];
+					} else {
+						res.status = AnalysisStatus.CACHED;
+						res.deliveryResults = res._pendingDelivery?.activeCachedDeliveryResults || [];
+					}
+					delete res._pendingDelivery;
+					throttledCount++;
 				}
 			}
 		} finally {
+			if (throttledCount > 0) {
+				tracker.recordThrottled(throttledCount);
+			}
 			if (reservation) {
 				tracker.commitReservation(reservation, deliveredCount);
 			}
@@ -659,19 +705,18 @@ class NewsAnalyzer {
 	async runSymbolAnalysisWithRetry(symbol, requestId, tokenUsage, routing, startedAt, options = {}) {
 		let attempt = 0;
 		let lastQuotaError = null;
-		const deadline = options.deadline ?? startedAt + this.timeout;
+		const analysisDeadline = options.analysisDeadline ?? (options.deadline ?? (startedAt + this.timeout));
 
 		while (attempt <= this.geminiQuotaMaxRetries) {
 			let timeoutHandle;
-			const elapsedMs = Date.now() - startedAt;
-			const remainingMs = this.timeout - elapsedMs;
+			const remainingMs = analysisDeadline - Date.now();
 			if (remainingMs <= 0) {
 				throw new Error('TIMEOUT');
 			}
 
 			await geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: remainingMs, throwOnExceeded: true });
 
-			const remainingAfterWaitMs = this.timeout - (Date.now() - startedAt);
+			const remainingAfterWaitMs = analysisDeadline - Date.now();
 			if (remainingAfterWaitMs <= 0) {
 				throw new Error('TIMEOUT');
 			}
@@ -681,7 +726,7 @@ class NewsAnalyzer {
 					timeoutHandle = setTimeout(() => reject(new Error('TIMEOUT')), remainingAfterWaitMs);
 				});
 				return await Promise.race([
-					this.analyzeSymbolInternal(symbol, requestId, tokenUsage, routing, { ...options, deadline }),
+					this.analyzeSymbolInternal(symbol, requestId, tokenUsage, routing, { ...options, deadline: options.deadline }),
 					timeoutPromise,
 				]);
 			} catch (error) {
@@ -1416,9 +1461,9 @@ class NewsAnalyzer {
 				retryResults.filter((result) => ownedRetryChannels.includes(result.channel)),
 				requestedChannels,
 			);
+			candidate.attemptedDeliveryResults = attemptedDeliveryResults;
 			if (redelivered) {
 				candidate._redelivered = true;
-				candidate.attemptedDeliveryResults = attemptedDeliveryResults;
 			}
 			if (ownedRetryChannels.length > 0) {
 				await this.cache.set(symbol, category, {

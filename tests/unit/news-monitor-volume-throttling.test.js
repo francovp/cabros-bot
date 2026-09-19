@@ -514,4 +514,197 @@ describe('News Monitor Volume Throttling & Adaptive Caps', () => {
 			expect(candidate._pendingDelivery).toBeUndefined();
 		});
 	});
+
+	describe('Codex review feedback: delivery budget isolation, cached redelivery accounting, and backfill', () => {
+		it('preserves ready alerts when another symbol times out in batch analysis', async () => {
+			process.env.NEWS_MAX_ALERTS_PER_BATCH = '5';
+			const analyzer = new NewsAnalyzer();
+			analyzer.timeout = 200; // 200ms total budget
+
+			const delivered = [];
+			analyzer.analyzeSymbol = jest.fn(async (symbol, requestId, tokenUsage, routing, startedAt, options) => {
+				if (symbol === 'SLOW_SYM') {
+					// Simulate slow symbol running up to analysis deadline and timing out
+					const delay = (options.analysisDeadline ? options.analysisDeadline - Date.now() : 100) + 10;
+					await new Promise((resolve) => setTimeout(resolve, Math.max(10, delay)));
+					return {
+						symbol,
+						status: AnalysisStatus.TIMEOUT,
+						error: { code: 'ANALYSIS_TIMEOUT', message: 'Analysis exceeded budget' },
+						totalDurationMs: delay,
+						cached: false,
+						requestId,
+					};
+				}
+
+				// FAST_SYM completes immediately
+				return {
+					symbol,
+					status: AnalysisStatus.ANALYZED,
+					cached: false,
+					alert: { symbol, confidence: 0.9, eventCategory: 'surge' },
+					deliveryResults: [],
+					_pendingDelivery: {
+						type: 'new',
+						notificationMgr: {},
+						alert: { symbol, confidence: 0.9, eventCategory: 'surge' },
+						routing,
+						geminiAnalysis: { event_category: 'surge' },
+						options,
+					},
+				};
+			});
+
+			analyzer.executePendingDelivery = jest.fn(async (candidate) => {
+				delivered.push(candidate.symbol);
+				candidate.deliveryResults = [{ channel: 'telegram', success: true }];
+				candidate._alertSent = true;
+				delete candidate._pendingDelivery;
+			});
+
+			const results = await analyzer.analyzeSymbols(
+				['FAST_SYM', 'SLOW_SYM'],
+				'req-timeout-isolation',
+				null,
+				{},
+				{},
+			);
+
+			expect(delivered).toContain('FAST_SYM');
+			const fastResult = results.find((r) => r.symbol === 'FAST_SYM');
+			expect(fastResult.status).toBe(AnalysisStatus.ANALYZED);
+			expect(fastResult.deliveryResults).toEqual([{ channel: 'telegram', success: true }]);
+
+			const slowResult = results.find((r) => r.symbol === 'SLOW_SYM');
+			expect(slowResult.status).toBe(AnalysisStatus.TIMEOUT);
+		});
+
+		it('counts only current attempt for cached redeliveries when prior channels succeeded', async () => {
+			const tracker = getVolumeTracker();
+			tracker.resetForTesting(Date.now());
+			tracker.maxAlertsPerWindow = 5;
+			tracker.maxAlertsPerBatch = 5;
+
+			const analyzer = new NewsAnalyzer();
+			analyzer.volumeTracker = tracker;
+
+			const results = [
+				{
+					symbol: 'CACHED_RETRY_SYM',
+					status: AnalysisStatus.CACHED,
+					alert: { symbol: 'CACHED_RETRY_SYM', confidence: 0.9 },
+					// deliveryResults has historical Telegram success from prior delivery
+					deliveryResults: [{ channel: 'telegram', success: true }],
+					_pendingDelivery: {
+						type: 'cached_retry',
+						activeCachedDeliveryResults: [{ channel: 'telegram', success: true }],
+					},
+				},
+			];
+
+			// Discord retry fails in current attempt
+			analyzer.executePendingDelivery = jest.fn(async (candidate) => {
+				candidate._redelivered = false;
+				candidate.attemptedDeliveryResults = [{ channel: 'discord', success: false, error: 'Discord rate limit' }];
+				candidate.deliveryResults = [
+					{ channel: 'telegram', success: true },
+					{ channel: 'discord', success: false, error: 'Discord rate limit' },
+				];
+				delete candidate._pendingDelivery;
+			});
+
+			await analyzer.applyVolumeThrottling(results, 'req-cached-accounting', {}, {});
+
+			// Historical Telegram success must NOT be counted as a new window delivery
+			const usage = tracker.getWindowUsage();
+			expect(usage.alertsDelivered).toBe(0);
+			expect(tracker.getRemainingWindowQuota()).toBe(5);
+		});
+
+		it('backfills capacity to next ranked candidate when higher-confidence candidate is deduplicated', async () => {
+			const tracker = getVolumeTracker();
+			tracker.resetForTesting(Date.now());
+			tracker.maxAlertsPerWindow = 1;
+			tracker.maxAlertsPerBatch = 1; // Cap is 1 delivery
+
+			const analyzer = new NewsAnalyzer();
+			analyzer.volumeTracker = tracker;
+
+			const delivered = [];
+			const results = [
+				{
+					symbol: 'HIGH_CONF_DEDUP',
+					status: AnalysisStatus.ANALYZED,
+					cached: false,
+					alert: { symbol: 'HIGH_CONF_DEDUP', confidence: 0.95 },
+					deliveryResults: [],
+					_pendingDelivery: {
+						type: 'new',
+						alert: { symbol: 'HIGH_CONF_DEDUP', confidence: 0.95 },
+					},
+				},
+				{
+					symbol: 'NEXT_CONF_VALID',
+					status: AnalysisStatus.ANALYZED,
+					cached: false,
+					alert: { symbol: 'NEXT_CONF_VALID', confidence: 0.85 },
+					deliveryResults: [],
+					_pendingDelivery: {
+						type: 'new',
+						alert: { symbol: 'NEXT_CONF_VALID', confidence: 0.85 },
+					},
+				},
+				{
+					symbol: 'THIRD_CONF_THROTTLED',
+					status: AnalysisStatus.ANALYZED,
+					cached: false,
+					alert: { symbol: 'THIRD_CONF_THROTTLED', confidence: 0.70 },
+					deliveryResults: [],
+					_pendingDelivery: {
+						type: 'new',
+						alert: { symbol: 'THIRD_CONF_THROTTLED', confidence: 0.70 },
+					},
+				},
+			];
+
+			analyzer.executePendingDelivery = jest.fn(async (candidate) => {
+				if (candidate.symbol === 'HIGH_CONF_DEDUP') {
+					// Simulate concurrent claim race deduplication: marked cached, not delivered
+					candidate.status = AnalysisStatus.CACHED;
+					candidate.cached = true;
+					candidate._alertSent = false;
+					delete candidate._pendingDelivery;
+					return;
+				}
+
+				// NEXT_CONF_VALID delivers successfully
+				delivered.push(candidate.symbol);
+				candidate._alertSent = true;
+				candidate.deliveryResults = [{ channel: 'telegram', success: true }];
+				delete candidate._pendingDelivery;
+			});
+
+			await analyzer.applyVolumeThrottling(results, 'req-backfill', {}, {});
+
+			// NEXT_CONF_VALID should have backfilled the slot freed by HIGH_CONF_DEDUP
+			expect(delivered).toEqual(['NEXT_CONF_VALID']);
+
+			const highResult = results.find((r) => r.symbol === 'HIGH_CONF_DEDUP');
+			expect(highResult.status).toBe(AnalysisStatus.CACHED);
+			expect(highResult.cached).toBe(true);
+
+			const validResult = results.find((r) => r.symbol === 'NEXT_CONF_VALID');
+			expect(validResult.status).toBe(AnalysisStatus.ANALYZED);
+			expect(validResult.deliveryResults).toEqual([{ channel: 'telegram', success: true }]);
+
+			// THIRD_CONF_THROTTLED should be throttled because the 1 allowed slot was filled by NEXT_CONF_VALID
+			const thirdResult = results.find((r) => r.symbol === 'THIRD_CONF_THROTTLED');
+			expect(thirdResult.status).toBe(AnalysisStatus.THROTTLED);
+			expect(thirdResult.reason).toBe('alert_volume_cap');
+
+			const usage = tracker.getWindowUsage();
+			expect(usage.alertsDelivered).toBe(1);
+			expect(usage.alertsThrottled).toBe(1);
+		});
+	});
 });
