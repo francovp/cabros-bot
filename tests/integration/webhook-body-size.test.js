@@ -190,4 +190,17 @@ describe('POST /api/webhook/* - Webhook body size limits', () => {
 		expect(response.status).toBe(200);
 		expect(response.body.body).toEqual(payload);
 	});
+
+	it('does not apply the news-monitor ingest limit to pause control routes', async () => {
+		const app = buildConfiguredApp('1kb');
+		app.post('/api/news-monitor/pause', (req, res) => res.status(200).json({ body: req.body }));
+		const payload = { reason: 'P'.repeat(2048) };
+		const response = await request(app)
+			.post('/api/news-monitor/pause')
+			.set('Content-Type', 'application/json')
+			.send(payload);
+
+		expect(response.status).toBe(200);
+		expect(response.body.body).toEqual(payload);
+	});
 });

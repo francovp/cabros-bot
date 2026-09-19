@@ -15,7 +15,7 @@ setupTrustProxy(app);
 // Centralized so both JSON and text/plain parsers share the same effective limit and
 // the structured 413 error handler is wired in one place.
 const webhookBodySize = buildWebhookBodySize();
-const webhookBodyPaths = ['/api/webhook', '/api/news-monitor'];
+const webhookBodyPaths = ['/api/webhook', /^\/api\/news-monitor\/?$/];
 
 // Apply the configurable limit only to webhook-style request bodies. Other API
 // routes retain Express' existing parser behavior and limit.
