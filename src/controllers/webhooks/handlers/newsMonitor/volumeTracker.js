@@ -130,9 +130,7 @@ class NewsAlertVolumeTracker {
 		while (this.throttled.length > 0 && this.throttled[0] <= cutoff) {
 			this.throttled.shift();
 		}
-		while (this.reservations.length > 0 && this.reservations[0].expiresAt <= now) {
-			this.reservations.shift();
-		}
+		this.reservations = this.reservations.filter(r => r && r.expiresAt > now);
 	}
 
 	getReservedCount(now = Date.now()) {

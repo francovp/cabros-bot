@@ -177,6 +177,20 @@ describe('NewsAlertVolumeTracker', () => {
 				// At T + 60s, it would have expired without renewal, but remains active
 				expect(tracker.getRemainingWindowQuota(start + 60000)).toBe(6);
 			});
+
+			it('prunes expired reservations even when renewals cause out-of-order expiry times', () => {
+				const start = 1700000000000;
+				const tracker = new NewsAlertVolumeTracker({ maxAlertsPerWindow: 10, windowMs: 300000 });
+				const resA = tracker.reserveCapacity(2, start, 50000);
+				const resB = tracker.reserveCapacity(3, start, 30000);
+
+				// Renew resA so its expiry is pushed past resB (out of order: resA expires at 100s, resB at 30s)
+				tracker.renewReservation(resA, start, 100000);
+
+				// At T + 40s, resB has expired (30s) but resA is still active (100s)
+				tracker.prune(start + 40000);
+				expect(tracker.getReservedCount(start + 40000)).toBe(2);
+			});
 		});
 	});
 
