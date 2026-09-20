@@ -1,10 +1,136 @@
 const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoSymbol');
 const { jobService } = require('../services/jobs/JobService');
 const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor');
+const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
 
+const READINESS_ERROR_LABELS = {
+	http_5xx: 'error HTTP 5xx del servidor TradingView',
+	http_4xx: 'error HTTP 4xx del servidor TradingView',
+	timeout: 'timeout de TradingView',
+	invalid_response: 'respuesta inválida de TradingView',
+	request_failed: 'fallo de petición a TradingView',
+	circuit_breaker_open: 'circuit breaker abierto por fallos consecutivos',
+};
+
+function formatReadinessErrorLabel(category) {
+	if (typeof category !== 'string' || !category) return null;
+	return READINESS_ERROR_LABELS[category] || null;
+}
+
+async function getTradingViewReadinessWarning() {
+	if (!tradingViewMcpService || typeof tradingViewMcpService.getStatus !== 'function') {
+		return null;
+	}
+	try {
+		if (typeof tradingViewMcpService.syncDurableStatus === 'function') {
+			await tradingViewMcpService.syncDurableStatus();
+		}
+	} catch {
+		// Fail open: remote sync failure must never block readiness checks
+	}
+	let status;
+	try {
+		status = tradingViewMcpService.getStatus({ enabled: true });
+	} catch (error) {
+		// Fail open: a broken readiness probe must never block job creation.
+		return null;
+	}
+	if (!status || status.status !== 'degraded') {
+		return null;
+	}
+	const categoryLabel = formatReadinessErrorLabel(status.lastErrorCategory);
+	const detail = categoryLabel ? ` (último error: ${categoryLabel})` : '';
+	return `⚠️ TradingView MCP está degradado${detail}. El job se creará pero puede fallar.`;
+}
+
+const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
+	precio: { max: 10, windowMs: 60_000 },
+	analisis: { max: 3, windowMs: 3_600_000 },
+	scanner: { max: 3, windowMs: 3_600_000 },
+	noticias: { max: 3, windowMs: 3_600_000 },
+});
+const MAX_TELEGRAM_COMMAND_RATE_LIMIT = 1_000;
+const MAX_TELEGRAM_COMMAND_WINDOW_MS = 86_400_000;
+const telegramCommandRateLimitBuckets = new Map();
+
+function getTelegramCommandRateLimits() {
+	const raw = process.env.TELEGRAM_COMMAND_RATE_LIMITS_JSON;
+	if (!raw) return DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS;
+	try {
+		const configured = JSON.parse(raw);
+		return Object.fromEntries(Object.entries(DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS).map(([command, fallback]) => {
+			const candidate = configured && configured[command];
+			const max = candidate && typeof candidate.max === 'number' ? candidate.max : NaN;
+			const windowMs = candidate && typeof candidate.windowMs === 'number' ? candidate.windowMs : NaN;
+			return [command, Number.isSafeInteger(max) && max > 0 && max <= MAX_TELEGRAM_COMMAND_RATE_LIMIT
+				&& Number.isSafeInteger(windowMs) && windowMs > 0 && windowMs <= MAX_TELEGRAM_COMMAND_WINDOW_MS
+				? { max, windowMs }
+				: fallback];
+		}));
+	} catch {
+		return DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS;
+	}
+}
+
+async function telegramCommandRateLimiter(context, next) {
+	if (process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING === 'false') return next();
+	const message = context.message || {};
+	const text = String(message.text || '');
+	const commandEntity = Array.isArray(message.entities)
+		&& message.entities.find((entity) => entity.type === 'bot_command'
+			&& entity.offset === 0);
+	if (!commandEntity) return next();
+	const commandToken = text.slice(commandEntity.offset, commandEntity.offset + commandEntity.length);
+	if (!commandToken.startsWith('/')) return next();
+	const [rawCommand, recipient] = commandToken.slice(1).split('@', 2);
+	if (recipient !== undefined
+		&& (!context.me || recipient.toLowerCase() !== String(context.me).replace(/^@/, '').toLowerCase())) return next();
+	const command = { analysis: 'analisis', news: 'noticias' }[rawCommand] || rawCommand;
+	const rule = getTelegramCommandRateLimits()[command];
+	const chatId = getChatId(context);
+	if (!rule || chatId === undefined || chatId === null) return next();
+
+	const now = Date.now();
+	const key = `${chatId}:${command}`;
+	const timestamps = (telegramCommandRateLimitBuckets.get(key) || []).filter((timestamp) => now - timestamp < rule.windowMs);
+	if (timestamps.length >= rule.max) {
+		const retryAfterSeconds = Math.max(1, Math.ceil((timestamps[0] + rule.windowMs - now) / 1000));
+		try {
+			await context.reply(`demasiadas solicitudes para /${command}. Intenta nuevamente en ${retryAfterSeconds} s.`);
+		} catch (error) {
+			console.error('[commands] Failed to send Telegram rate-limit reply:', error.message);
+		}
+		return;
+	}
+
+	if (telegramCommandRateLimitBuckets.size >= 10_000 && !telegramCommandRateLimitBuckets.has(key)) {
+		const configuredLimits = getTelegramCommandRateLimits();
+		for (const [bucketKey, bucket] of telegramCommandRateLimitBuckets) {
+			const bucketCommand = bucketKey.slice(bucketKey.lastIndexOf(':') + 1);
+			const bucketRule = configuredLimits[bucketCommand];
+			if (!bucketRule || bucket.every((timestamp) => now - timestamp >= bucketRule.windowMs)) {
+				telegramCommandRateLimitBuckets.delete(bucketKey);
+			}
+		}
+		// ponytail: reject new buckets at the cap; use an overflow/LRU bucket if this ceiling matters.
+		if (telegramCommandRateLimitBuckets.size >= 10_000) {
+			try {
+				await context.reply(`demasiadas solicitudes para /${command}. Intenta nuevamente más tarde.`);
+			} catch (error) {
+				console.error('[commands] Failed to send Telegram rate-limit reply:', error.message);
+			}
+			return;
+		}
+	}
+	timestamps.push(now);
+	telegramCommandRateLimitBuckets.set(key, timestamps);
+	return next();
+}
+
+telegramCommandRateLimiter.reset = () => telegramCommandRateLimitBuckets.clear();
 const getPrice = async (context) => {
 	const chatId = getChatId(context);
 	const text = (context.message && context.message.text) || '';
@@ -54,6 +180,31 @@ const getPrice = async (context) => {
 	}
 };
 
+const DEFAULT_WARNING_REPLY_TIMEOUT_MS = 3000;
+let warningReplyTimeoutMs = DEFAULT_WARNING_REPLY_TIMEOUT_MS;
+
+function getWarningReplyTimeoutMs() {
+	return warningReplyTimeoutMs;
+}
+
+function setWarningReplyTimeoutMsForTest(timeoutMs) {
+	warningReplyTimeoutMs = typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : DEFAULT_WARNING_REPLY_TIMEOUT_MS;
+}
+
+function sendReadinessWarning(context, warningText, signal) {
+	const chatId = getChatId(context);
+	if (context?.telegram && typeof context.telegram.callApi === 'function' && chatId !== undefined && chatId !== null) {
+		return context.telegram.callApi('sendMessage', {
+			chat_id: chatId,
+			text: warningText,
+		}, { signal });
+	}
+	if (typeof context?.reply === 'function') {
+		return context.reply(warningText, { signal });
+	}
+	return Promise.resolve();
+}
+
 const createTradingViewJobCommand = (type, command, buildPayload) => async (context) => {
 	const chatId = getChatId(context);
 	const args = parseCommandArgs(context);
@@ -73,6 +224,22 @@ const createTradingViewJobCommand = (type, command, buildPayload) => async (cont
 			...buildPayload(args),
 			...(chatId !== undefined && chatId !== null ? { telegramChatId: String(chatId) } : {}),
 		};
+		if (typeof jobService.validateJobRequest === 'function') {
+			jobService.validateJobRequest(type, payload);
+		}
+		const readinessWarning = await getTradingViewReadinessWarning();
+		if (readinessWarning) {
+			try {
+				await withTimeout(
+					(signal) => sendReadinessWarning(context, readinessWarning, signal),
+					getWarningReplyTimeoutMs(),
+					'Timeout sending MCP readiness warning'
+				);
+			} catch (replyError) {
+				// A failed or timed-out warning reply must never block job creation.
+				console.error('Failed to send MCP readiness warning:', replyError.message);
+			}
+		}
 		const result = await jobService.createJob(type, payload, buildBotFromContext(context));
 		await context.reply(`Job ${result.jobId} creado para ${type}. Estado: ${result.status}.`);
 	} catch (error) {
@@ -633,4 +800,9 @@ module.exports = {
 	buildHelpMessage,
 	getTelegramCommandMenu,
 	parseCommandArgs,
+	getTradingViewReadinessWarning,
+	formatReadinessErrorLabel,
+	sendReadinessWarning,
+	telegramCommandRateLimiter,
+	setWarningReplyTimeoutMsForTest,
 };
