@@ -209,6 +209,68 @@ describe('ChatPreferenceService', () => {
 			const pref = await chatPreferenceService.getPreferences('123456', 'telegram');
 			expect(pref.symbolFilter).toEqual([]);
 		});
+
+		it('returns null from getFirestore if isEnabled() becomes false after initialization', () => {
+			chatPreferenceService._setFirestoreForTesting(mockFirestore);
+			process.env.ENABLE_FIRESTORE_CHAT_PREFERENCES = 'false';
+			expect(chatPreferenceService.getFirestore()).toBeNull();
+			process.env.ENABLE_FIRESTORE_CHAT_PREFERENCES = 'true';
+		});
+
+		it('bounds cache cardinality and evicts least-recently used entries when capacity is exceeded', () => {
+			const { ChatPreferenceService } = require('../../src/services/preferences/ChatPreferenceService');
+			const service = new ChatPreferenceService({ maxEntries: 2 });
+			service._setFirestoreForTesting(mockFirestore);
+
+			service._setCache('telegram_chat1', { symbolFilter: ['BTCUSDT'] });
+			service._setCache('telegram_chat2', { symbolFilter: ['ETHUSDT'] });
+			expect(service._cache.size).toBe(2);
+
+			// Access chat1 to make it most recently used
+			service._getFromCache('telegram_chat1');
+
+			// Insert 3rd entry, should evict chat2 (least recently used)
+			service._setCache('telegram_chat3', { symbolFilter: ['SOLUSDT'] });
+			expect(service._cache.size).toBe(2);
+			expect(service._cache.has('telegram_chat1')).toBe(true);
+			expect(service._cache.has('telegram_chat2')).toBe(false);
+			expect(service._cache.has('telegram_chat3')).toBe(true);
+		});
+
+		it('persists only updated sanitized fields with merge: true to avoid clobbering concurrent updates', async () => {
+			mockDoc.get.mockResolvedValueOnce({
+				exists: true,
+				data: () => ({
+					chatId: '123456',
+					channel: 'telegram',
+					symbolFilter: ['BTCUSDT'],
+					quietHoursStart: 22,
+					quietHoursEnd: 8,
+				}),
+			});
+
+			await chatPreferenceService.setPreferences('123456', 'telegram', {
+				minConfidence: 0.85,
+			});
+
+			expect(mockDoc.set).toHaveBeenCalledTimes(1);
+			const payload = mockDoc.set.mock.calls[0][0];
+			const options = mockDoc.set.mock.calls[0][1];
+
+			expect(options).toEqual({ merge: true });
+			expect(payload.minConfidence).toBe(0.85);
+			expect(payload.chatId).toBe('123456');
+			expect(payload.channel).toBe('telegram');
+			expect(payload.symbolFilter).toBeUndefined();
+			expect(payload.quietHoursStart).toBeUndefined();
+			expect(payload.quietHoursEnd).toBeUndefined();
+		});
+
+		it('extracts category as scanner for alert-scheduler and scanner sources', () => {
+			expect(chatPreferenceService.extractAlertMetadata({ source: 'alert-scheduler' }).category).toBe('scanner');
+			expect(chatPreferenceService.extractAlertMetadata({ source: 'market_scanner' }).category).toBe('scanner');
+			expect(chatPreferenceService.extractAlertMetadata({ source: 'tradingview-analysis', category: 'scanner' }).category).toBe('scanner');
+		});
 	});
 
 	describe('shouldDeliverAlert evaluation', () => {

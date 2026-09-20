@@ -9,6 +9,7 @@ const VALID_CATEGORIES = Object.freeze(['scanner', 'news', 'expanded', 'core', '
 const DEFAULT_TIMEZONE = 'America/Santiago';
 const DEFAULT_RETENTION_DAYS = 90;
 const DEFAULT_CACHE_TTL_MS = 60000;
+const DEFAULT_MAX_CACHE_ENTRIES = 1000;
 
 function stripUndefinedFields(obj) {
 	if (!obj || typeof obj !== 'object') {
@@ -61,9 +62,14 @@ function matchesSymbol(candidate, target) {
 }
 
 class ChatPreferenceService {
-	constructor() {
+	constructor(options = {}) {
 		this._db = null;
 		this._cache = new Map();
+		this._maxCacheEntries = options.maxEntries || DEFAULT_MAX_CACHE_ENTRIES;
+	}
+
+	getMaxCacheEntries() {
+		return this._maxCacheEntries;
 	}
 
 	isEnabled() {
@@ -105,11 +111,11 @@ class ChatPreferenceService {
 	}
 
 	getFirestore() {
-		if (this._db) {
-			return this._db;
-		}
 		if (!this.isEnabled()) {
 			return null;
+		}
+		if (this._db) {
+			return this._db;
 		}
 		try {
 			const loaded = loadFirebaseAdminCredentialsOrNull();
@@ -267,14 +273,39 @@ class ChatPreferenceService {
 			this._cache.delete(docId);
 			return null;
 		}
+		// Refresh LRU recency
+		this._cache.delete(docId);
+		this._cache.set(docId, cached);
 		return cached.data;
 	}
 
+	_evictIfOverCapacity() {
+		const max = this.getMaxCacheEntries();
+		if (this._cache.size <= max) return;
+		const now = Date.now();
+		const ttl = this.getCacheTtlMs();
+		// First pass: remove any expired entries
+		for (const [key, entry] of this._cache.entries()) {
+			if (now - entry.cachedAt > ttl) {
+				this._cache.delete(key);
+				if (this._cache.size <= max) return;
+			}
+		}
+		// Second pass: LRU eviction (oldest inserted / accessed key in Map)
+		while (this._cache.size > max) {
+			const oldestKey = this._cache.keys().next().value;
+			if (oldestKey === undefined) break;
+			this._cache.delete(oldestKey);
+		}
+	}
+
 	_setCache(docId, data) {
+		this._cache.delete(docId);
 		this._cache.set(docId, {
 			cachedAt: Date.now(),
 			data: { ...data },
 		});
+		this._evictIfOverCapacity();
 	}
 
 	async getPreferences(chatId, channel = 'telegram') {
@@ -354,7 +385,9 @@ class ChatPreferenceService {
 					: expiresAtDate;
 
 				const payload = stripUndefinedFields({
-					...merged,
+					...sanitizedUpdates,
+					chatId: String(chatId),
+					channel: String(channel).toLowerCase().trim(),
 					updatedAt: serverTimestamp,
 					expiresAt: timestampFromDate,
 				});
@@ -400,7 +433,7 @@ class ChatPreferenceService {
 			category = alert.category.trim().toLowerCase();
 		} else {
 			const source = String(alert.source || '').toLowerCase();
-			if (source.includes('scanner') || source.includes('market_scanner')) {
+			if (source.includes('scanner') || source.includes('market_scanner') || source === 'alert-scheduler') {
 				category = 'scanner';
 			} else if (source.includes('news') || source.includes('news_monitor')) {
 				category = 'news';

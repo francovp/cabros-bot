@@ -59,6 +59,15 @@ const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	umbral: { max: 20, windowMs: 60_000 },
 	categorias: { max: 20, windowMs: 60_000 },
 });
+const TELEGRAM_COMMAND_ALIASES = Object.freeze({
+	analysis: 'analisis',
+	news: 'noticias',
+	preferences: 'preferencias',
+	filter: 'filtro',
+	quiet: 'silencio',
+	threshold: 'umbral',
+	categories: 'categorias',
+});
 const MAX_TELEGRAM_COMMAND_RATE_LIMIT = 1_000;
 const MAX_TELEGRAM_COMMAND_WINDOW_MS = 86_400_000;
 const telegramCommandRateLimitBuckets = new Map();
@@ -95,7 +104,7 @@ async function telegramCommandRateLimiter(context, next) {
 	const [rawCommand, recipient] = commandToken.slice(1).split('@', 2);
 	if (recipient !== undefined
 		&& (!context.me || recipient.toLowerCase() !== String(context.me).replace(/^@/, '').toLowerCase())) return next();
-	const command = { analysis: 'analisis', news: 'noticias' }[rawCommand] || rawCommand;
+	const command = TELEGRAM_COMMAND_ALIASES[rawCommand] || rawCommand;
 	const rule = getTelegramCommandRateLimits()[command];
 	const chatId = getChatId(context);
 	if (!rule || chatId === undefined || chatId === null) return next();
