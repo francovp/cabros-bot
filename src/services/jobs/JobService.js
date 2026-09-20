@@ -1529,7 +1529,7 @@ class JobService {
 		const deliveryResults = await this._sendQueuedNotification(
 			job,
 			notificationManager,
-			{ text: alertText, source: 'tradingview-analysis' },
+			{ text: alertText, source: 'tradingview-analysis', category: 'scanner' },
 			routing,
 		);
 		if (this._isClaimLost(signal)) {

@@ -359,6 +359,34 @@ describe('Postman collection contract', () => {
 		expect(errorBody.error).toContain('enrichment_summary');
 	});
 
+	it('documents chat preferences endpoints with request and response examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const getItem = findItem(collection.item, 'GET Get Chat Preferences');
+		const putItem = findItem(collection.item, 'PUT Update Chat Preferences');
+		const deleteItem = findItem(collection.item, 'DELETE Reset Chat Preferences');
+
+		expect(getItem).toBeDefined();
+		expect(getItem.request.url.raw).toContain('/api/preferences/telegram/');
+		expect(getItem.response).toEqual(expect.arrayContaining([
+			expect.objectContaining({ code: 200 }),
+			expect.objectContaining({ code: 400 }),
+			expect.objectContaining({ code: 401 }),
+		]));
+
+		expect(putItem).toBeDefined();
+		expect(putItem.request.method).toBe('PUT');
+		const putBody = JSON.parse(putItem.request.body.raw);
+		expect(putBody.symbolFilter).toContain('BTCUSDT');
+		expect(putItem.response).toEqual(expect.arrayContaining([
+			expect.objectContaining({ code: 200 }),
+			expect.objectContaining({ code: 400 }),
+		]));
+
+		expect(deleteItem).toBeDefined();
+		expect(deleteItem.request.method).toBe('DELETE');
+		expect(deleteItem.response[0].code).toBe(200);
+	});
+
 	it('documents symbol, exchange, and eventCategory query filters in GET List Alerts and GET Alert Analytics Summary', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const listFiltered = findItem(collection.item, 'GET List Alerts (symbol, exchange, eventCategory)');
@@ -456,3 +484,4 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
 	});
 });
+

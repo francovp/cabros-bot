@@ -230,7 +230,7 @@ function getRequestedChannels(notificationManager, routing = {}) {
 
 function getDeliveredChannels(results = []) {
 	return results
-		.filter((result) => result && result.success)
+		.filter((result) => result && result.success && !result.skipped)
 		.map((result) => result.channel);
 }
 

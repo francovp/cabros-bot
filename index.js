@@ -14,6 +14,11 @@ const {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	preferenciasCmd,
+	filtroCmd,
+	silencioCmd,
+	umbralCmd,
+	categoriasCmd,
 	telegramCommandRateLimiter,
 } = require('./src/controllers/commands');
 const app = require('./app.js');
@@ -140,6 +145,11 @@ async function bootstrapApplication() {
 		bot.command(['jobs', 'trabajos'], jobsCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
+		bot.command(['preferencias', 'preferences'], preferenciasCmd);
+		bot.command(['filtro', 'filter'], filtroCmd);
+		bot.command(['silencio', 'quiet'], silencioCmd);
+		bot.command(['umbral', 'threshold'], umbralCmd);
+		bot.command(['categorias', 'categories'], categoriasCmd);
 		bot.command(['help', 'start'], helpCmd);
 
 		// Register inline keyboard action handlers for Telegram alerts.

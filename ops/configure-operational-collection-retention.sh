@@ -9,6 +9,7 @@
 #   - notificationDeadLetters (ENABLE_NOTIFICATION_REDRIVE)
 #   - tradingSignalOutcomes (ENABLE_SIGNAL_OUTCOME_TRACKING)
 #   - symbolAnalyses (ENABLE_SYMBOL_ANALYSIS_STORAGE)
+#   - chatPreferences (ENABLE_FIRESTORE_CHAT_PREFERENCES)
 #   - binanceOrderAudit (ENABLE_BINANCE_ORDER_AUDIT)
 #
 # Run once per Firebase project. Safe to re-run: enabling TTL on a field that
@@ -42,7 +43,7 @@ if [[ "$BACKFILL" == "true" ]]; then
 	FIREBASE_PROJECT_ID="$project" node ops/backfill-operational-collection-retention.js
 fi
 
-for collection_group in idempotency_keys news-monitor-dedup notificationDeadLetters tradingSignalOutcomes symbolAnalyses binanceOrderAudit; do
+for collection_group in idempotency_keys news-monitor-dedup notificationDeadLetters tradingSignalOutcomes symbolAnalyses chatPreferences binanceOrderAudit; do
 	echo "Enabling TTL on expiresAt for collection group: $collection_group"
 	gcloud firestore fields ttls update expiresAt \
 		--collection-group="$collection_group" \
@@ -50,4 +51,4 @@ for collection_group in idempotency_keys news-monitor-dedup notificationDeadLett
 		--project="$project"
 done
 
-echo "Done. Firestore will now auto-delete expired documents in idempotency_keys, news-monitor-dedup, notificationDeadLetters, tradingSignalOutcomes, symbolAnalyses, and binanceOrderAudit."
+echo "Done. Firestore will now auto-delete expired documents in idempotency_keys, news-monitor-dedup, notificationDeadLetters, tradingSignalOutcomes, symbolAnalyses, chatPreferences, and binanceOrderAudit."
