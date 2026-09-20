@@ -54,7 +54,9 @@
             "name": "deep",
             "in": "query",
             "required": false,
-            "schema": { "type": "boolean" },
+            "schema": {
+              "type": "boolean"
+            },
             "description": "When `true`, include channel readiness and return 503 if any enabled channel is degraded."
           }
         ],
@@ -80,7 +82,9 @@
             "description": "One or more enabled channels are degraded, or readiness evaluation failed.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/DeepHealthcheck" }
+                "schema": {
+                  "$ref": "#/components/schemas/DeepHealthcheck"
+                }
               }
             }
           }
@@ -156,6 +160,9 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
@@ -207,6 +214,9 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/MessageIdempotencyConflict"
           },
@@ -254,6 +264,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
@@ -309,6 +322,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
@@ -349,6 +365,9 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
@@ -382,6 +401,9 @@
           },
           "400": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
@@ -427,6 +449,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "429": {
             "description": "Rate limited by the 60-second caller cooldown or TEST_ALERT_DAILY_LIMIT.",
@@ -509,6 +534,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -561,6 +589,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -622,6 +653,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -701,6 +735,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -745,6 +782,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -804,6 +844,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -860,6 +903,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
@@ -899,6 +945,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -952,6 +1001,9 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
@@ -983,6 +1035,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/ScannerPresetResult"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -1020,6 +1075,9 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -1056,6 +1114,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -1115,6 +1176,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "description": "Preset is locked by an in-flight sweep (lockedUntil > now). Response body includes code=PRESET_LOCKED and the lockedUntil timestamp; the current preset is also returned so the client can decide whether to retry.",
@@ -1191,6 +1255,9 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "412": {
             "description": "If-Match version does not match the current preset version. Response body includes code=PRECONDITION_FAILED and the current preset so the client can rebase.",
             "content": {
@@ -1256,6 +1323,9 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
@@ -1304,6 +1374,9 @@
           },
           "400": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
@@ -1354,6 +1427,9 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -1391,6 +1467,9 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -1427,6 +1506,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "$ref": "#/components/responses/Error"
@@ -1473,6 +1555,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "$ref": "#/components/responses/JobConflict"
@@ -1523,6 +1608,9 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/JobConflict"
           },
@@ -1572,6 +1660,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           }
@@ -1608,6 +1699,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
@@ -1660,6 +1754,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -1720,6 +1817,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -1761,6 +1861,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -1794,6 +1897,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -1827,6 +1933,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -1890,6 +1999,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -1948,6 +2060,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -2017,6 +2132,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -2078,6 +2196,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -2178,6 +2299,9 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "502": {
             "$ref": "#/components/responses/BinanceOrderFailure"
           },
@@ -2228,6 +2352,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "description": "The idempotency key conflicts with the request, or the recovered Binance order does not match the requested order.",
@@ -2340,6 +2467,9 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "502": {
             "$ref": "#/components/responses/BinanceOrderFailure"
           },
@@ -2371,6 +2501,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/StatusResult"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -2397,6 +2530,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/StatusResult"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -4324,6 +4460,31 @@
           }
         }
       },
+      "RequestTimeout": {
+        "description": "Request processing exceeded the global request-deadline ceiling",
+        "headers": {
+          "X-Request-Id": {
+            "description": "Unique identifier assigned to the request",
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RequestTimeoutError"
+            },
+            "example": {
+              "error": "Request Timeout",
+              "code": "REQUEST_TIMEOUT",
+              "requestId": "req-1726214400000-abcdef",
+              "deadlineMs": 30000,
+              "durationMs": 30005
+            }
+          }
+        }
+      },
       "NewsAnalysisSummaryResult": {
         "description": "Aggregated news-monitor analyses and false-positive tracking metrics.",
         "content": {
@@ -4597,9 +4758,15 @@
               "discord"
             ],
             "properties": {
-              "telegram": { "$ref": "#/components/schemas/ChannelReadiness" },
-              "whatsapp": { "$ref": "#/components/schemas/ChannelReadiness" },
-              "discord": { "$ref": "#/components/schemas/ChannelReadiness" }
+              "telegram": {
+                "$ref": "#/components/schemas/ChannelReadiness"
+              },
+              "whatsapp": {
+                "$ref": "#/components/schemas/ChannelReadiness"
+              },
+              "discord": {
+                "$ref": "#/components/schemas/ChannelReadiness"
+              }
             }
           }
         }
@@ -4776,8 +4943,12 @@
           "status"
         ],
         "properties": {
-          "enabled": { "type": "boolean" },
-          "ready": { "type": "boolean" },
+          "enabled": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -4788,7 +4959,9 @@
               "unknown"
             ]
           },
-          "error": { "type": "string" }
+          "error": {
+            "type": "string"
+          }
         }
       },
       "DeliveryChannelMetrics": {
@@ -7959,6 +8132,38 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "RequestTimeoutError": {
+        "type": "object",
+        "required": [
+          "error",
+          "code",
+          "requestId",
+          "deadlineMs",
+          "durationMs"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "Request Timeout"
+          },
+          "code": {
+            "type": "string",
+            "example": "REQUEST_TIMEOUT"
+          },
+          "requestId": {
+            "type": "string",
+            "example": "req-1726214400000-abcdef"
+          },
+          "deadlineMs": {
+            "type": "integer",
+            "example": 30000
+          },
+          "durationMs": {
+            "type": "integer",
+            "example": 30005
           }
         }
       },

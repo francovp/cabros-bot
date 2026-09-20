@@ -1,6 +1,7 @@
 'use strict';
 
 const { idempotencyService } = require('../services/storage/IdempotencyService');
+const requestDeadline = require('./requestDeadline');
 
 function getRequestPath(req) {
 	if (typeof req.path === 'string' && req.path.length > 0) {
@@ -115,6 +116,16 @@ function idempotencyMiddleware(req, res, next) {
 	const requestFingerprint = buildRequestFingerprint(req);
 
 	const handleReservation = (reservation) => {
+		if (requestDeadline.isTerminated ? requestDeadline.isTerminated(req) : req.requestDeadlineExceeded) {
+			if (reservation && reservation.state === 'fresh') {
+				const releaseError = new Error('Initial idempotent request exceeded its request deadline or disconnected before the controller started');
+				releaseError.code = 'IDEMPOTENCY_RELEASED';
+				releaseError.statusCode = 409;
+				idempotencyService.release(key, requestFingerprint, releaseError);
+			}
+			return requestDeadline.guard(req, res, () => {});
+		}
+
 		if (reservation.state === 'completed') {
 			console.debug('[Idempotency] Replaying cached response');
 			return sendCachedResponse(res, reservation.record);
@@ -140,10 +151,25 @@ function idempotencyMiddleware(req, res, next) {
 
 		const originalSend = res.send;
 		const originalJson = res.json;
+		const originalEnd = res.end;
 		let responseCached = false;
+		let reservationReleased = false;
+		const releaseTimedOutReservation = () => {
+			if (reservationReleased || !req.requestDeadlineExceeded || req.requestDeadlineResponse) return;
+			reservationReleased = true;
+			const releaseError = new Error('Initial idempotent request exceeded its request deadline');
+			releaseError.code = 'IDEMPOTENCY_RELEASED';
+			releaseError.statusCode = 409;
+			idempotencyService.release(key, requestFingerprint, releaseError);
+		};
 
 		const cacheResponse = (body) => {
 			if (responseCached) {
+				return;
+			}
+			// Do not cache the synthetic 408; a late handler response is still
+			// authoritative for idempotent side effects and must remain replayable.
+			if (req.requestDeadlineExceeded && req.requestDeadlineResponse) {
 				return;
 			}
 
@@ -162,17 +188,21 @@ function idempotencyMiddleware(req, res, next) {
 				}
 			}
 
-			const replayableIndeterminateQueueResponse = res.statusCode === 503
+			const responseStatusCode = req.requestDeadlineExceeded && !req.requestDeadlineResponse
+				? (req.requestDeadlineLateStatusCode || 200)
+				: res.statusCode;
+			const replayableIndeterminateQueueResponse = responseStatusCode === 503
 				&& responseBody
 				&& typeof responseBody === 'object'
 				&& responseBody.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN'
 				&& typeof responseBody.jobId === 'string'
 				&& responseBody.jobId.length > 0;
-			const replayableIndeterminateOrderResponse = res.statusCode === 503
+			const replayableIndeterminateOrderResponse = responseStatusCode === 503
 				&& responseBody
 				&& typeof responseBody === 'object'
 				&& responseBody.code === 'BINANCE_ORDER_STATUS_UNKNOWN';
-			if (res.statusCode >= 500 && !replayableIndeterminateQueueResponse && !replayableIndeterminateOrderResponse) {
+			if (responseStatusCode >= 500 && !replayableIndeterminateQueueResponse && !replayableIndeterminateOrderResponse) {
+				if (req.requestDeadlineExceeded) releaseTimedOutReservation();
 				return;
 			}
 			responseCached = true;
@@ -184,7 +214,7 @@ function idempotencyMiddleware(req, res, next) {
 			}
 
 			idempotencyService.set(key, requestFingerprint, {
-				statusCode: res.statusCode,
+				statusCode: responseStatusCode,
 				body: responseBody,
 				headers,
 			});
@@ -210,6 +240,13 @@ function idempotencyMiddleware(req, res, next) {
 				idempotencyService.release(key, requestFingerprint, releaseError);
 			}
 		});
+		res.end = function(...args) {
+			const result = originalEnd.apply(this, args);
+			if (req.requestDeadlineExceeded && !req.requestDeadlineResponse) {
+				cacheResponse(args[0]);
+			}
+			return result;
+		};
 
 		return next();
 	};
@@ -220,6 +257,9 @@ function idempotencyMiddleware(req, res, next) {
 			return reservation
 				.then(handleReservation)
 				.catch((error) => {
+					if (requestDeadline.isTerminated ? requestDeadline.isTerminated(req) : req.requestDeadlineExceeded) {
+						return requestDeadline.guard(req, res, () => {});
+					}
 					if (error.code === 'IDEMPOTENCY_CONFLICT') {
 						console.warn('[Idempotency] Conflict detected');
 						return res.status(409).json({
@@ -239,6 +279,9 @@ function idempotencyMiddleware(req, res, next) {
 		}
 		return handleReservation(reservation);
 	} catch (error) {
+		if (requestDeadline.isTerminated ? requestDeadline.isTerminated(req) : req.requestDeadlineExceeded) {
+			return requestDeadline.guard(req, res, () => {});
+		}
 		if (error.code === 'IDEMPOTENCY_CONFLICT') {
 			console.warn('[Idempotency] Conflict detected');
 			return res.status(409).json({

@@ -413,6 +413,27 @@
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
     },
+    "ENABLE_FIRESTORE_NEWS_ANALYSIS": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable Firestore persistence for news-monitor analysis records",
+      "valueType": "BOOLEAN"
+    },
+    "NEWS_ANALYSIS_RETENTION_DAYS": {
+      "defaultValue": {
+        "value": "30"
+      },
+      "description": "Retention window in days for persisted news-monitor analysis records before Firestore TTL expiry",
+      "valueType": "NUMBER"
+    },
+    "REQUEST_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "30000"
+      },
+      "description": "Global request-deadline timeout ceiling in milliseconds",
+      "valueType": "NUMBER"
+    },
     "ENABLE_BINANCE_ORDER_AUDIT": {
       "defaultValue": {
         "value": "false"

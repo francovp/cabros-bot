@@ -5,7 +5,6 @@
  * 003-news-monitor: User Story 1 (endpoint & analysis), User Story 2 (alert delivery)
  */
 
-const { v4: uuidv4 } = require('uuid');
 const { getAnalyzer, setNotificationManager } = require('./analyzer');
 const { getCacheInstance } = require('./cache');
 const { AnalysisStatus } = require('./constants');
@@ -22,6 +21,7 @@ const {
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
 const newsAnalysisStorageService = require('../../../../services/storage/NewsAnalysisStorageService');
 const { isNewsMonitorPaused, getNewsMonitorPauseState } = require('./pauseState');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 
 function resolveDryRun(req) {
 	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
@@ -51,7 +51,7 @@ class NewsMonitorHandler {
    * @returns {void}
    */
 	async handleRequest(req, res) {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 		const tokenUsage = new TokenUsageTracker();
 
