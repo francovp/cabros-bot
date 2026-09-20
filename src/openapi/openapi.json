@@ -4508,6 +4508,81 @@
       }
     },
     "schemas": {
+      "CanaryAlertResponse": {
+        "type": "object",
+        "required": [
+          "canary",
+          "success",
+          "overall",
+          "mode",
+          "stages",
+          "executionTimeMs",
+          "timestamp"
+        ],
+        "properties": {
+          "canary": {
+            "type": "boolean",
+            "example": true
+          },
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "overall": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded",
+              "unhealthy"
+            ],
+            "example": "healthy"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "dry_run",
+              "delivery"
+            ],
+            "example": "dry_run"
+          },
+          "stages": {
+            "type": "object",
+            "required": [
+              "validation",
+              "enrichment",
+              "notification",
+              "storage"
+            ],
+            "properties": {
+              "validation": {
+                "type": "object"
+              },
+              "enrichment": {
+                "type": "object"
+              },
+              "notification": {
+                "type": "object"
+              },
+              "storage": {
+                "type": "object"
+              }
+            }
+          },
+          "totalMs": {
+            "type": "integer",
+            "example": 45
+          },
+          "executionTimeMs": {
+            "type": "integer",
+            "example": 45
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-09-04T08:00:00.000Z"
+          }
+        }
+      },
       "JsonObject": {
         "type": "object",
         "additionalProperties": true
