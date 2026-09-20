@@ -2153,6 +2153,71 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/outcomes/calibration": {
+      "get": {
+        "tags": [
+          "Signal outcomes"
+        ],
+        "summary": "Retrieve confidence calibration analysis for signal outcomes",
+        "description": "Calculates empirical target-hit rates and average returns grouped by confidence score buckets (e.g. 0.70–0.75, 0.75–0.80, 0.80–0.85, 0.85–0.90, 0.90–1.00) over evaluated signals, suggesting an optimal confidence threshold.",
+        "operationId": "getOutcomesCalibration",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CalibrationLimit"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeExchange"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeWindow"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OutcomesCalibrationResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/outcomes/summary": {
       "get": {
         "tags": [
@@ -2672,6 +2737,17 @@
           "default": 50
         },
         "description": "Maximum number of outcomes to return (1-100)."
+      },
+      "CalibrationLimit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 1000
+        },
+        "description": "Maximum number of signals to evaluate for calibration (1-1000)."
       },
       "BeforeCursor": {
         "name": "before",
@@ -4134,6 +4210,29 @@
           }
         }
       },
+      "OutcomesCalibrationResult": {
+        "description": "Signal outcomes confidence calibration result",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "calibration"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "calibration": {
+                  "$ref": "#/components/schemas/OutcomesCalibration"
+                }
+              }
+            }
+          }
+        }
+      },
       "OutcomesSummaryResult": {
         "description": "Signal outcomes aggregate metrics summary",
         "content": {
@@ -5295,6 +5394,84 @@
               "null"
             ],
             "example": 150
+          }
+        }
+      },
+      "OutcomesCalibration": {
+        "type": "object",
+        "required": [
+          "available",
+          "totalScoredAlerts",
+          "buckets",
+          "suggestedThreshold",
+          "suggestedThresholdRationale"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "example": true
+          },
+          "totalScoredAlerts": {
+            "type": "integer",
+            "example": 45
+          },
+          "buckets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CalibrationBucket"
+            }
+          },
+          "suggestedThreshold": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 0.78
+          },
+          "suggestedThresholdRationale": {
+            "type": "string",
+            "example": "Alerts at 0.78+ show 55%+ target hit rate at 4h window"
+          }
+        }
+      },
+      "CalibrationBucket": {
+        "type": "object",
+        "required": [
+          "range",
+          "count",
+          "avgReturn1h",
+          "avgReturn4h",
+          "targetHitRate"
+        ],
+        "properties": {
+          "range": {
+            "type": "string",
+            "example": "0.75-0.80"
+          },
+          "count": {
+            "type": "integer",
+            "example": 15
+          },
+          "avgReturn1h": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 0.82
+          },
+          "avgReturn4h": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 1.45
+          },
+          "targetHitRate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 0.6
           }
         }
       },

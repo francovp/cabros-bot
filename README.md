@@ -1747,6 +1747,68 @@ Query aggregated performance and coverage metrics for recorded signal outcomes, 
 }
 ```
 
+#### GET /api/outcomes/calibration
+
+Query empirical confidence calibration feedback metrics comparing news-monitor and alert confidence scores against realized signal outcomes. Groups evaluated signals into confidence buckets (`<0.70`, `0.70-0.75`, `0.75-0.80`, `0.80-0.85`, `0.85-0.90`, `0.90-1.00`), calculating count, average 1h and 4h returns, and target hit rate per bucket. Also computes a recommended confidence threshold with deterministic rationale once an empirical sample of at least 20 scored alerts is available. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
+
+**Query Parameters:**
+- `limit` - Maximum number of recent signals to evaluate for calibration (integer between `1` and `1000`, default: `1000`)
+- `symbol` - Filter by trading symbol (e.g. `BTCUSDT` or `BINANCE:BTCUSDT`)
+- `exchange` - Filter by exchange identifier (e.g. `BINANCE`, `NASDAQ`)
+- `window` - Evaluation window for hit-rate benchmark (`1h`, `4h`, `1D`, `1W`, default: `4h`)
+- `from` - Optional ISO-8601 lower bound timestamp
+- `to` - Optional ISO-8601 upper bound timestamp
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "calibration": {
+    "available": true,
+    "totalScoredAlerts": 45,
+    "buckets": [
+      {
+        "range": "0.70-0.75",
+        "count": 10,
+        "avgReturn1h": 0.45,
+        "avgReturn4h": 0.82,
+        "targetHitRate": 0.4
+      },
+      {
+        "range": "0.75-0.80",
+        "count": 15,
+        "avgReturn1h": 1.12,
+        "avgReturn4h": 1.85,
+        "targetHitRate": 0.6
+      },
+      {
+        "range": "0.80-0.85",
+        "count": 12,
+        "avgReturn1h": 1.45,
+        "avgReturn4h": 2.3,
+        "targetHitRate": 0.67
+      },
+      {
+        "range": "0.85-0.90",
+        "count": 6,
+        "avgReturn1h": 1.95,
+        "avgReturn4h": 3.1,
+        "targetHitRate": 0.83
+      },
+      {
+        "range": "0.90-1.00",
+        "count": 2,
+        "avgReturn1h": 2.4,
+        "avgReturn4h": 3.8,
+        "targetHitRate": 1.0
+      }
+    ],
+    "suggestedThreshold": 0.75,
+    "suggestedThresholdRationale": "Alerts at 0.75+ show 60%+ target hit rate at 4h window"
+  }
+}
+```
+
 ## Multi-Channel Alerts (002)
 
 The alert webhook system supports simultaneous delivery to multiple channels (Telegram, WhatsApp, and Discord) with independent retry logic and graceful degradation.

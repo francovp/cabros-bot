@@ -32,7 +32,7 @@ const {
 	exportAlerts,
 	listReplays,
 } = require('../controllers/alerts/alerts');
-const { listOutcomes, summarizeOutcomes } = require('../controllers/outcomes/outcomes');
+const { listOutcomes, summarizeOutcomes, getOutcomesCalibration } = require('../controllers/outcomes/outcomes');
 const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/symbolAnalyses/symbolAnalyses');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
@@ -71,6 +71,7 @@ function getRoutes(botOrGetter) {
 	router.post('/admin/test-alert', ...adminWrite, idempotencyMiddleware, postTestAlert(botOrGetter));
 	router.get('/outcomes', ...adminRead, listOutcomes);
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
+	router.get('/outcomes/calibration', ...adminRead, getOutcomesCalibration);
 	router.get('/symbol-analyses', ...adminRead, listSymbolAnalyses);
 	router.get('/symbol-analyses/summary', ...adminRead, summarizeSymbolAnalyses);
 	router.post('/scanner-presets', ...adminWrite, postPreset);
