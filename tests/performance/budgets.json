@@ -1,0 +1,7 @@
+{
+  "/api/webhook/alert": { "p95Ms": 250 },
+  "/api/webhook/expanded-analysis-alert": { "p95Ms": 4000 },
+  "/api/webhook/market-scanner-alert": { "p95Ms": 4000 },
+  "/api/jobs/tradingview-analysis": { "p95Ms": 150 },
+  "/api/news-monitor": { "p95Ms": 150 }
+}

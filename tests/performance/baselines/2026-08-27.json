@@ -1,0 +1,14 @@
+{
+  "_meta": {
+    "capturedAt": "2026-09-08T13:17:00Z",
+    "runner": "local sequential smoke",
+    "nodeVersion": "26.7.0",
+    "samplesPerEndpoint": 20,
+    "note": "Reference measurements for the API-only test boot; rerun the k6 workflow for arrival-rate comparisons."
+  },
+  "/api/webhook/alert": { "p50Ms": 0.93, "p95Ms": 2.07 },
+  "/api/webhook/expanded-analysis-alert": { "p50Ms": 523.54, "p95Ms": 660.32 },
+  "/api/webhook/market-scanner-alert": { "p50Ms": 1.16, "p95Ms": 1.81 },
+  "/api/jobs/tradingview-analysis": { "p50Ms": 0.35, "p95Ms": 0.74 },
+  "/api/news-monitor": { "p50Ms": 0.28, "p95Ms": 0.66 }
+}
