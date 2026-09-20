@@ -139,6 +139,14 @@ describe('AlertStorageService', () => {
 			expect(result.collection).toBeDefined();
 		});
 
+		it('initializes Firestore when only ENABLE_TOKEN_COST_BUDGET is true', () => {
+			process.env.ENABLE_TOKEN_COST_BUDGET = 'true';
+			const result = AlertStorageService.getFirestore();
+			expect(mockInitializeApp).toHaveBeenCalledTimes(1);
+			expect(result).not.toBeNull();
+			expect(result.collection).toBeDefined();
+		});
+
 		it('uses FIREBASE_SERVICE_ACCOUNT_JSON when set', () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			const serviceAccount = { type: 'service_account', project_id: 'test-project' };

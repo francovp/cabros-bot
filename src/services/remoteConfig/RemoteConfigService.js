@@ -106,6 +106,9 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ADMIN_SSE_MAX_CLIENT_CONNECTIONS: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 20 },
 	ADMIN_SSE_MAX_TOTAL_CONNECTIONS: { type: 'number', defaultValue: 100, integer: true, min: 10, max: 1000 },
 	ADMIN_SSE_HEARTBEAT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 5000, max: 120000 },
+	ENABLE_TOKEN_COST_BUDGET: { type: 'boolean', defaultValue: false },
+	TOKEN_COST_DAILY_BUDGET_USD: { type: 'number', defaultValue: 5.0, min: 0.01, max: 10000 },
+	TOKEN_COST_WARN_THRESHOLD_PCT: { type: 'number', defaultValue: 80, integer: true, min: 1, max: 100 },
 });
 
 let remoteOverrides = {};

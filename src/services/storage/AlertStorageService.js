@@ -82,6 +82,17 @@ function isEnabled() {
 }
 
 function canInitializeFirestore() {
+	let rcBudgetEnabled = false;
+	try {
+		const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+		const rc = typeof getRuntimeConfig === 'function' ? getRuntimeConfig() : {};
+		if (rc.ENABLE_TOKEN_COST_BUDGET !== undefined) {
+			rcBudgetEnabled = Boolean(rc.ENABLE_TOKEN_COST_BUDGET);
+		}
+	} catch {
+		rcBudgetEnabled = false;
+	}
+
 	return isEnabled()
 		|| process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true'
 		|| process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
@@ -90,7 +101,9 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_NOTIFICATION_REDRIVE === 'true'
 		|| process.env.ENABLE_NEWS_MONITOR_SCHEDULER === 'true'
 		|| process.env.ENABLE_BINANCE_ORDER_AUDIT === 'true'
-		|| process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS === 'true';
+		|| process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS === 'true'
+		|| process.env.ENABLE_TOKEN_COST_BUDGET === 'true'
+		|| rcBudgetEnabled;
 }
 
 function getAlertStorageRetentionDays() {

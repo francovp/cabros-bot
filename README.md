@@ -98,6 +98,12 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - `GROUNDING_MAX_LENGTH` - Maximum alert text length used in grounding prompts (default: `2000` characters)
 - `ALERT_GROUNDING_COALESCE_MS` - Optional equity-alert search coalescing window in milliseconds (default: `0`, disabled; Remote Config supported)
 
+#### Token Spend Tracking & Cost Budgeting
+
+- `ENABLE_TOKEN_COST_BUDGET` - Enable daily LLM token cost tracking and budget limits (`true` or `false`, default: `false`; Remote Config supported)
+- `TOKEN_COST_DAILY_BUDGET_USD` - Maximum daily spend in USD before LLM calls fail open safely (default: `5.00`, range `0.01`-`1000.00`; Remote Config supported)
+- `TOKEN_COST_WARN_THRESHOLD_PCT` - Percentage of daily budget that triggers an admin Telegram alert (default: `80`, range `1`-`100`; Remote Config supported)
+
 #### Cloudflare AI Gateway
 
 - `MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing when the gateway credentials are configured
@@ -619,6 +625,9 @@ When `ENABLE_GEMINI_GROUNDING=true`:
 
 - `ENABLE_GEMINI_GROUNDING` - Enable/disable enrichment (default: `false`)
 - `GEMINI_API_KEY` - Google API key with Generative AI enabled
+- `ENABLE_TOKEN_COST_BUDGET` - Enable/disable global LLM daily token spend tracking and budget enforcement (default: `false`)
+- `TOKEN_COST_DAILY_BUDGET_USD` - Daily LLM spend ceiling in USD before calls fail open (default: `5.00`)
+- `TOKEN_COST_WARN_THRESHOLD_PCT` - Percentage of daily budget that triggers an admin Telegram alert (default: `80`)
 
 ### How Langfuse Prompt Management Works
 
