@@ -383,7 +383,7 @@ describe('maintenanceMode', () => {
 
 			expect(next).not.toHaveBeenCalled();
 			expect(reply).toHaveBeenCalledTimes(1);
-			expect(reply).toHaveBeenCalledWith(expect.stringMatching(/mantenimiento/i));
+			expect(reply).toHaveBeenCalledWith(expect.stringMatching(/mantenimiento/i), { parse_mode: 'MarkdownV2' });
 		});
 
 		it('throttles rapid maintenance replies to the same chat within cooldown window', async () => {
@@ -483,7 +483,7 @@ describe('maintenanceMode', () => {
 
 			// First command sent maintenance notice, subsequent ones throttled
 			expect(reply).toHaveBeenCalledTimes(1);
-			expect(reply).toHaveBeenCalledWith(maintenanceMode.TELEGRAM_MAINTENANCE_NOTICE);
+			expect(reply).toHaveBeenCalledWith(maintenanceMode.TELEGRAM_MAINTENANCE_NOTICE, { parse_mode: 'MarkdownV2' });
 			// Command handler never executed
 			expect(handler).not.toHaveBeenCalled();
 
@@ -514,7 +514,12 @@ describe('maintenanceMode', () => {
 			expect(maintenanceMode._isMaintenanceReplyThrottled(1, now + 40, { maxBuckets: 3 })).toBe(false);
 		});
 
-		it('sends maintenance reply via context.telegram.callApi with AbortController signal', async () => {
+		it('escapes maintenance notice special characters for Telegram MarkdownV2', () => {
+			expect(maintenanceMode.TELEGRAM_MAINTENANCE_NOTICE).toContain('\\.');
+			expect(maintenanceMode.TELEGRAM_MAINTENANCE_NOTICE.endsWith('\\.')).toBe(true);
+		});
+
+		it('sends maintenance reply via context.telegram.callApi with MarkdownV2 and AbortController signal', async () => {
 			const callApi = jest.fn().mockResolvedValue({ message_id: 42 });
 			const context = {
 				telegram: { callApi },
@@ -529,6 +534,7 @@ describe('maintenanceMode', () => {
 				{
 					chat_id: 777,
 					text: maintenanceMode.TELEGRAM_MAINTENANCE_NOTICE,
+					parse_mode: 'MarkdownV2',
 				},
 				expect.objectContaining({
 					signal: expect.any(AbortSignal),

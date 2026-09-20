@@ -2,13 +2,17 @@
 
 const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
 const defaultSentryService = require('../services/monitoring/SentryService');
+const MarkdownV2Formatter = require('../services/notification/formatters/markdownV2Formatter');
+
+const markdownV2Formatter = new MarkdownV2Formatter();
 
 const MAINTENANCE_ERROR_RESPONSE = Object.freeze({
 	error: 'MAINTENANCE_MODE',
 	message: 'Service is temporarily unavailable for maintenance',
 });
 
-const TELEGRAM_MAINTENANCE_NOTICE = '⚠️ El bot se encuentra temporalmente en modo de mantenimiento. Por favor, intenta más tarde.';
+const RAW_TELEGRAM_MAINTENANCE_NOTICE = '⚠️ El bot se encuentra temporalmente en modo de mantenimiento. Por favor, intenta más tarde.';
+const TELEGRAM_MAINTENANCE_NOTICE = markdownV2Formatter.format(RAW_TELEGRAM_MAINTENANCE_NOTICE);
 
 let lastNotifiedMaintenanceMode = false;
 let lastNotificationFailureAt = 0;
@@ -303,9 +307,10 @@ async function sendMaintenanceReply(context, chatId, timeoutMs = DEFAULT_MAINTEN
 			? context.telegram.callApi('sendMessage', {
 				chat_id: chatId,
 				text: TELEGRAM_MAINTENANCE_NOTICE,
+				parse_mode: 'MarkdownV2',
 			}, { signal: controller.signal })
 			: (typeof context?.reply === 'function'
-				? context.reply(TELEGRAM_MAINTENANCE_NOTICE)
+				? context.reply(TELEGRAM_MAINTENANCE_NOTICE, { parse_mode: 'MarkdownV2' })
 				: Promise.resolve());
 
 		await Promise.race([sendPromise, timeoutPromise]);
