@@ -34,7 +34,7 @@ function getReplayOperatorIds() {
 		.filter((value) => /^\d+$/.test(value));
 }
 
-function isReplayAuthorized(context) {
+function isOperatorAuthorized(context) {
 	const senderId = context?.update?.callbackQuery?.from?.id;
 	return senderId !== undefined
 		&& getReplayOperatorIds().includes(String(senderId));
@@ -162,24 +162,41 @@ function truncate(text, limit = REPLY_MESSAGE_TRUNCATE) {
 	return `${text.slice(0, limit)}\n… (truncado)`;
 }
 
-function buildQualityFeedbackKey(alertId, side) {
-	if (typeof alertId !== 'string' || !alertId) return null;
-	const normalizedSide = side === 'up' ? 'up' : 'down';
-	return `${alertId}::${normalizedSide}`;
+function truncateTelegramMessage(text, limit = REPLY_MESSAGE_TRUNCATE) {
+	if (typeof text !== 'string' || text.length <= limit) return text;
+	const suffix = '\n… \\(truncado\\)';
+	const contentLimit = Math.max(0, limit - suffix.length);
+	let content = text.slice(0, contentLimit).trimEnd();
+	if (content.endsWith('\\')) content = content.slice(0, -1).trimEnd();
+	return `${content}${suffix}`;
 }
 
-function recordQualityFeedback(alertId, side) {
+function buildQualityFeedbackKey(alertId, side, senderId) {
+	if (typeof alertId !== 'string' || !alertId) return null;
+	const normalizedSide = side === 'up' ? 'up' : 'down';
+	const normalizedSenderId = senderId === undefined || senderId === null
+		? 'unknown'
+		: String(senderId);
+	return `${alertId}::${normalizedSide}::${normalizedSenderId}`;
+}
+
+function recordQualityFeedback(alertId, side, senderId) {
 	// In-process recorder. Quality feedback is intentionally an in-memory log
 	// for now: a future issue will persist these to SignalOutcomeService for
 	// long-term aggregation. Storing the most recent N entries is enough to
 	// power operator debugging and short-window aggregation.
-	const key = buildQualityFeedbackKey(alertId, side);
+	const key = buildQualityFeedbackKey(alertId, side, senderId);
 	if (!key) return;
 	if (!recordQualityFeedback._store) {
 		recordQualityFeedback._store = new Map();
 	}
 	const store = recordQualityFeedback._store;
-	store.set(key, { alertId, side, recordedAt: Date.now() });
+	store.set(key, {
+		alertId,
+		side,
+		senderId: senderId === undefined || senderId === null ? 'unknown' : String(senderId),
+		recordedAt: Date.now(),
+	});
 	if (store.size > VOTE_RECORD_LIMIT * 50) {
 		// Drop oldest entries to keep the map bounded.
 		const oldestKey = store.keys().next().value;
@@ -197,9 +214,20 @@ function buildDetailsMessage(alert) {
 			lines.push('*Insights:*');
 			enrichment.insights.forEach((insight) => lines.push(`• ${escapeRiskFieldValue(String(insight))}`));
 		}
-		if (Array.isArray(enrichment.technical_levels) && enrichment.technical_levels.length > 0) {
+		const technicalLevels = enrichment.technical_levels;
+		const technicalLevelLines = Array.isArray(technicalLevels)
+			? technicalLevels.map((level) => `• ${escapeRiskFieldValue(String(level))}`)
+			: [
+				...(Array.isArray(technicalLevels?.supports)
+					? technicalLevels.supports.map((level) => `• Soporte: ${escapeRiskFieldValue(String(level))}`)
+					: []),
+				...(Array.isArray(technicalLevels?.resistances)
+					? technicalLevels.resistances.map((level) => `• Resistencia: ${escapeRiskFieldValue(String(level))}`)
+					: []),
+			];
+		if (technicalLevelLines.length > 0) {
 			lines.push('*Niveles técnicos:*');
-			enrichment.technical_levels.forEach((level) => lines.push(`• ${escapeRiskFieldValue(String(level))}`));
+			lines.push(...technicalLevelLines);
 		}
 		if (enrichment.invalidation_level !== undefined && enrichment.invalidation_level !== null) {
 			lines.push(`*Invalidación:* ${escapeRiskFieldValue(String(enrichment.invalidation_level))}`);
@@ -231,11 +259,11 @@ function buildDetailsMessage(alert) {
 function formatDetailsForTelegram(alert) {
 	const message = buildDetailsMessage(alert);
 	if (!message) return null;
-	return message;
+	return truncateTelegramMessage(message);
 }
 
 async function handleReplay(context, parsed, storeEntry) {
-	if (!isReplayAuthorized(context)) {
+	if (!isOperatorAuthorized(context)) {
 		await answerCallback(context, 'No autorizado para reenviar alertas');
 		return;
 	}
@@ -383,6 +411,10 @@ async function handleDetails(context, storeEntry) {
 }
 
 async function handleDismiss(context) {
+	if (!isOperatorAuthorized(context)) {
+		await answerCallback(context, 'No autorizado para modificar alertas');
+		return;
+	}
 	try {
 		if (context.update && context.update.callbackQuery && context.update.callbackQuery.message) {
 			const message = context.update.callbackQuery.message;
@@ -402,7 +434,7 @@ async function handleDismiss(context) {
 
 async function handleVote(context, parsed, storeEntry) {
 	const side = parsed.action === getActionCodes().ACTION_VOTE_UP ? 'up' : 'down';
-	recordQualityFeedback(storeEntry.alertId, side);
+	recordQualityFeedback(storeEntry.alertId, side, context?.update?.callbackQuery?.from?.id);
 	await context.answerCbQuery(side === 'up' ? '👍 Gracias por tu feedback' : '👎 Gracias por tu feedback', { show_alert: false });
 }
 

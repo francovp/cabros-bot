@@ -4,6 +4,8 @@ const {
 	handleAlertAction,
 	registerAlertActionHandlers,
 	ACTION_CALLBACK_REGEX,
+	recordQualityFeedback,
+	getRecordedQualityFeedback,
 } = require('../../src/lib/telegramAlertActions');
 
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
@@ -38,6 +40,7 @@ describe('telegramAlertActions', () => {
 		jest.restoreAllMocks();
 		jest.clearAllMocks();
 		idempotencyService.clear();
+		delete recordQualityFeedback._store;
 		process.env.TELEGRAM_ACTION_OPERATOR_USER_IDS = '42';
 	});
 
@@ -129,6 +132,16 @@ describe('telegramAlertActions', () => {
 			expect(ctx.answerCbQuery).toHaveBeenCalledWith('Alerta descartada', { show_alert: false });
 		});
 
+		it('rejects dismiss from a non-operator before mutating the shared message', async () => {
+			process.env.TELEGRAM_ACTION_OPERATOR_USER_IDS = '99';
+			const ctx = makeContext('x:alert-dismiss-unauthorized');
+
+			await handleAlertAction(ctx);
+
+			expect(ctx.telegram.editMessageReplyMarkup).not.toHaveBeenCalled();
+			expect(ctx.answerCbQuery).toHaveBeenCalledWith('No autorizado para modificar alertas', { show_alert: false });
+		});
+
 		it('handles vote up by acknowledging the feedback', async () => {
 			const ctx = makeContext('vu:alert-vote-up');
 			await handleAlertAction(ctx);
@@ -139,6 +152,20 @@ describe('telegramAlertActions', () => {
 			const ctx = makeContext('vd:alert-vote-down');
 			await handleAlertAction(ctx);
 			expect(ctx.answerCbQuery).toHaveBeenCalledWith('👎 Gracias por tu feedback', { show_alert: false });
+		});
+
+		it('keeps feedback from different recipients as separate records', async () => {
+			const firstContext = makeContext('vu:alert-vote-recipient', 'callback-vote-1');
+			const secondContext = makeContext('vu:alert-vote-recipient', 'callback-vote-2');
+			secondContext.update.callbackQuery.from.id = 43;
+
+			await handleAlertAction(firstContext);
+			await handleAlertAction(secondContext);
+
+			expect(getRecordedQualityFeedback()).toEqual(expect.arrayContaining([
+				expect.objectContaining({ alertId: 'alert-vote-recipient', side: 'up', senderId: '42' }),
+				expect.objectContaining({ alertId: 'alert-vote-recipient', side: 'up', senderId: '43' }),
+			]));
 		});
 
 		it('handles details by replying with the stored alert enrichment', async () => {
@@ -171,6 +198,43 @@ describe('telegramAlertActions', () => {
 			expect(replyArgs[1]).toEqual({ parse_mode: 'MarkdownV2' });
 			expect(ctx.answerCbQuery).toHaveBeenCalled();
 			getAlertById.mockRestore();
+		});
+
+		it('renders canonical object-shaped technical levels', async () => {
+			const alertId = 'alert-details-levels-object';
+			jest.spyOn(alertStorageService, 'getAlertById').mockResolvedValue({
+				id: alertId,
+				text: 'BTC long',
+				enrichmentData: {
+					technical_levels: {
+						supports: ['58000'],
+						resistances: ['65000'],
+					},
+				},
+			});
+			const ctx = makeContext(`d:${alertId}`);
+
+			await handleAlertAction(ctx);
+
+			expect(ctx.reply.mock.calls[0][0]).toContain('Soporte: 58000');
+			expect(ctx.reply.mock.calls[0][0]).toContain('Resistencia: 65000');
+		});
+
+		it('bounds oversized Details replies below Telegram limits', async () => {
+			const alertId = 'alert-details-long';
+			jest.spyOn(alertStorageService, 'getAlertById').mockResolvedValue({
+				id: alertId,
+				text: 'BTC long',
+				enrichmentData: {
+					insights: Array.from({ length: 20 }, () => 'Long insight '.repeat(400)),
+				},
+			});
+			const ctx = makeContext(`d:${alertId}`);
+
+			await handleAlertAction(ctx);
+
+			expect(ctx.reply.mock.calls[0][0].length).toBeLessThanOrEqual(4096);
+			expect(ctx.reply.mock.calls[0][0]).toContain('truncado');
 		});
 
 		it('returns a bounded unavailable response when details storage hangs', async () => {
