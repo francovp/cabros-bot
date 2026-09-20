@@ -71,6 +71,11 @@ describe('RemoteConfigService', () => {
 			['TRADINGVIEW_MCP_TIMEOUT_MS', '999', 12000],
 			['TRADINGVIEW_MCP_MAX_RETRIES', '6', 3],
 			['TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS', '-1', 12000],
+			['ALERT_SCHEDULER_INTERVAL_MS', 'not-a-number', 60000],
+			['ALERT_SCHEDULER_INTERVAL_MS', '500', 60000],
+			['ALERT_SCHEDULER_INTERVAL_MS', '4000000', 60000],
+			['ALERT_SCHEDULER_BATCH_LIMIT', '0', 10],
+			['ALERT_SCHEDULER_BATCH_LIMIT', '101', 10],
 		].forEach(([key, value, expected]) => {
 			process.env[key] = value;
 			expect(remoteConfigService.getRuntimeConfig()[key]).toBe(expected);
@@ -132,6 +137,18 @@ describe('RemoteConfigService', () => {
 		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
 			WEBHOOK_IDEMPOTENCY_TTL_MS: 604800000,
 		}));
+		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
+	});
+
+	it('rejects invalid remote entry-price chains and preserves the environment chain', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'binance';
+		mockTemplate({ SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES: 'wat' });
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getRuntimeConfig().SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES).toBe('binance');
 		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
 	});
 
@@ -356,6 +373,7 @@ describe('RemoteConfigService', () => {
 			ENABLE_MARKET_SCANNER: true,
 			ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: true,
 			ENABLE_ALERT_HTF_RENDER: false,
+			ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT: true,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -368,6 +386,7 @@ describe('RemoteConfigService', () => {
 		expect(config.ENABLE_MARKET_SCANNER).toBe(true);
 		expect(config.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP).toBe(true);
 		expect(config.ENABLE_ALERT_HTF_RENDER).toBe(false);
+		expect(config.ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT).toBe(true);
 	});
 
 	it('keeps the startup-only signal outcome cadence out of Remote Config', async () => {
@@ -380,6 +399,31 @@ describe('RemoteConfigService', () => {
 
 		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS');
 		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS');
+	});
+
+	it('keeps test-alert security controls and enablement gate out of Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.ENABLE_TEST_ALERT = 'true';
+		process.env.TEST_ALERT_DAILY_LIMIT = '30';
+		mockTemplate({ ENABLE_TEST_ALERT: false, TEST_ALERT_DAILY_LIMIT: 50 });
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('ENABLE_TEST_ALERT');
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('TEST_ALERT_DAILY_LIMIT');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('ENABLE_TEST_ALERT');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('TEST_ALERT_DAILY_LIMIT');
+	});
+
+	it('keeps the request-time signal outcome entry-price chain eligible for Remote Config', () => {
+		process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'mcp,binance,gemini';
+
+		expect(remoteConfigService.PARAMETER_SCHEMA.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES).toEqual(expect.objectContaining({
+			type: 'string',
+			defaultValue: '',
+		}));
+		expect(remoteConfigService.getRuntimeConfig().SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES).toBe('mcp,binance,gemini');
 	});
 
 	it('enforces bounds on new operational parameters in env parsing', () => {
@@ -395,6 +439,8 @@ describe('RemoteConfigService', () => {
 		process.env.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS = '3000000000'; // max 2592000000
 		process.env.SIGNAL_OUTCOME_RETENTION_DAYS = '5000'; // max 3650
 		process.env.EQUITY_MARKET_DATA_RPM = '2000'; // max 1200
+		process.env.URL_SHORTENER_CACHE_MAX_ENTRIES = '500000'; // max 100000
+		process.env.URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES = '2000'; // max 1024
 
 		const config = remoteConfigService.getRuntimeConfig();
 		expect(config.GROUNDING_MAX_SOURCES).toBe(3); // fallback to default
@@ -409,6 +455,8 @@ describe('RemoteConfigService', () => {
 		expect(config.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS).toBe(604800000); // fallback to default
 		expect(config.SIGNAL_OUTCOME_RETENTION_DAYS).toBe(365); // fallback to default
 		expect(config.EQUITY_MARKET_DATA_RPM).toBe(8); // fallback to default
+		expect(config.URL_SHORTENER_CACHE_MAX_ENTRIES).toBe(1000); // fallback to default
+		expect(config.URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES).toBe(32); // fallback to default
 	});
 
 	it('supports ZERO_CHANNEL_ALERT_COOLDOWN_MS and ENABLE_API_ONLY_MODE via Remote Config', async () => {
@@ -417,6 +465,8 @@ describe('RemoteConfigService', () => {
 			ZERO_CHANNEL_ALERT_COOLDOWN_MS: 600000,
 			ENABLE_API_ONLY_MODE: true,
 			SIGNAL_OUTCOME_RETENTION_DAYS: 180,
+			URL_SHORTENER_CACHE_MAX_ENTRIES: 2000,
+			URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: 64,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -426,6 +476,8 @@ describe('RemoteConfigService', () => {
 		expect(config.ZERO_CHANNEL_ALERT_COOLDOWN_MS).toBe(600000);
 		expect(config.ENABLE_API_ONLY_MODE).toBe(true);
 		expect(config.SIGNAL_OUTCOME_RETENTION_DAYS).toBe(180);
+		expect(config.URL_SHORTENER_CACHE_MAX_ENTRIES).toBe(2000);
+		expect(config.URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES).toBe(64);
 	});
 
 	describe('getStatus readiness and lifecycle states', () => {
