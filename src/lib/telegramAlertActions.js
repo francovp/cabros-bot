@@ -15,6 +15,7 @@
 
 const { parseCallbackData, getActionCodes } = require('../services/alerts/telegramAlertKeyboard');
 const alertStorageService = require('../services/storage/AlertStorageService');
+const { idempotencyService } = require('../services/storage/IdempotencyService');
 const sentryService = require('../services/monitoring/SentryService');
 const alertModule = require('../controllers/webhooks/handlers/alert/alert');
 const { escapeRiskFieldValue } = require('../services/notification/formatters/markdownV2Formatter');
@@ -24,6 +25,7 @@ const REPLY_MESSAGE_TRUNCATE = 3500;
 const VOTE_RECORD_LIMIT = 5;
 const REPLAY_OPERATOR_IDS_ENV = 'TELEGRAM_ACTION_OPERATOR_USER_IDS';
 const VALID_REPLAY_CHANNELS = new Set(['telegram', 'whatsapp', 'discord']);
+const CALLBACK_STORAGE_TIMEOUT_MS = 5000;
 
 function getReplayOperatorIds() {
 	return String(process.env[REPLAY_OPERATOR_IDS_ENV] || '')
@@ -53,6 +55,62 @@ async function replyToUser(context, text) {
 	} catch (error) {
 		console.warn('[telegramAlertActions] Failed to send callback result:', error.message);
 	}
+}
+
+function withCallbackTimeout(operation, onLateResult) {
+	let timeoutId;
+	let timedOut = false;
+	const operationPromise = Promise.resolve().then(operation);
+	operationPromise.then((result) => {
+		if (timedOut && typeof onLateResult === 'function') {
+			onLateResult(result);
+		}
+	}, () => {});
+	const timeoutPromise = new Promise((resolve, reject) => {
+		timeoutId = setTimeout(() => {
+			timedOut = true;
+			const error = new Error('Telegram callback storage operation timed out');
+			error.code = 'TELEGRAM_CALLBACK_STORAGE_TIMEOUT';
+			reject(error);
+		}, CALLBACK_STORAGE_TIMEOUT_MS);
+	});
+
+	return Promise.race([
+		operationPromise,
+		timeoutPromise,
+	]).finally(() => clearTimeout(timeoutId));
+}
+
+function getReplayCallbackId(context) {
+	const callbackId = context?.update?.callbackQuery?.id;
+	if (typeof callbackId === 'string' && callbackId.trim()) {
+		return callbackId.trim();
+	}
+	return context?.update?.callbackQuery?.data || 'unknown';
+}
+
+function buildReplayIdempotencyKey(context, alertId) {
+	return `telegram:replay:${alertId}:${getReplayCallbackId(context)}`;
+}
+
+function buildReplayFingerprint(alertId, idempotencyKey) {
+	return {
+		action: 'telegram-replay',
+		alertId,
+		idempotencyKey,
+	};
+}
+
+function releaseReplayReservation(idempotencyKey, fingerprint, error) {
+	try {
+		idempotencyService.release(idempotencyKey, fingerprint, error);
+	} catch (releaseError) {
+		console.warn('[telegramAlertActions] Failed to release replay reservation:', releaseError.message);
+	}
+}
+
+function isCallbackStorageTimeout(error) {
+	return error?.code === 'TELEGRAM_CALLBACK_STORAGE_TIMEOUT';
 }
 
 function normalizeChannels(channels) {
@@ -183,25 +241,59 @@ async function handleReplay(context, parsed, storeEntry) {
 	}
 	await answerCallback(context, 'Reenvío iniciado');
 
-	const alert = await alertStorageService.getAlertById(storeEntry.alertId).catch((error) => {
+	const idempotencyKey = buildReplayIdempotencyKey(context, storeEntry.alertId);
+	const fingerprint = buildReplayFingerprint(storeEntry.alertId, idempotencyKey);
+	let reservation;
+	try {
+		reservation = await withCallbackTimeout(
+			() => idempotencyService.reserve(idempotencyKey, fingerprint),
+			(lateReservation) => {
+				if (lateReservation?.state === 'fresh') {
+					releaseReplayReservation(idempotencyKey, fingerprint);
+				}
+			},
+		);
+	} catch (error) {
+		console.warn('[telegramAlertActions] Failed to reserve replay:', error.message);
+		await replyToUser(context, 'Servicio de almacenamiento no disponible; intenta de nuevo');
+		return;
+	}
+	if (reservation?.state === 'completed') {
+		await replyToUser(context, 'Reenvío ya procesado');
+		return;
+	}
+	if (reservation?.state === 'pending') {
+		await replyToUser(context, 'Reenvío ya en curso');
+		return;
+	}
+
+	let readError = null;
+	let alert;
+	try {
+		alert = await withCallbackTimeout(() => alertStorageService.getAlertById(storeEntry.alertId));
+	} catch (error) {
+		readError = error;
 		console.warn('[telegramAlertActions] Failed to fetch stored alert for replay:', error.message);
-		return null;
-	});
+	}
 	if (!alert) {
-		await replyToUser(context, 'Alerta no encontrada o ya expirada');
+		releaseReplayReservation(idempotencyKey, fingerprint, readError);
+		await replyToUser(context, isCallbackStorageTimeout(readError)
+			? 'Servicio de almacenamiento no disponible; intenta de nuevo'
+			: 'Alerta no encontrada o ya expirada');
 		return;
 	}
 	const notificationManager = alertModule.getNotificationManager();
 	if (!notificationManager) {
+		releaseReplayReservation(idempotencyKey, fingerprint);
 		await replyToUser(context, 'Servicio de notificaciones no disponible');
 		return;
 	}
 	const channels = getReplayChannels(alert, notificationManager);
 	if (channels.length === 0) {
+		releaseReplayReservation(idempotencyKey, fingerprint);
 		await replyToUser(context, 'No hay canales habilitados para reenviar la alerta');
 		return;
 	}
-	const idempotencyKey = `tg-replay:${storeEntry.alertId}:${Date.now()}`;
 	const telegramThreadId = getStoredTelegramThreadId(alert);
 	const replayPayload = {
 		text: alert.text,
@@ -220,11 +312,31 @@ async function handleReplay(context, parsed, storeEntry) {
 		const delivered = Array.isArray(results)
 			? results.filter((result) => result && result.success).length
 			: 0;
+		try {
+			await withCallbackTimeout(() => alertStorageService.saveReplayAttempt({
+				alertId: storeEntry.alertId,
+				idempotencyKey,
+				channels,
+				deliveryResults: results,
+			}));
+		} catch (error) {
+			console.warn('[telegramAlertActions] Failed to persist replay audit:', error.message);
+		}
+		try {
+			idempotencyService.set(idempotencyKey, fingerprint, {
+				statusCode: 200,
+				body: { delivered },
+				headers: {},
+			});
+		} catch (error) {
+			console.warn('[telegramAlertActions] Failed to complete replay reservation:', error.message);
+		}
 		await replyToUser(context, delivered > 0
 			? `Reenviado a ${delivered} canal${delivered === 1 ? '' : 'es'}`
 			: 'No se pudo reenviar la alerta');
 	} catch (error) {
 		console.error('[telegramAlertActions] Replay failed:', error.message);
+		releaseReplayReservation(idempotencyKey, fingerprint, error);
 		sentryService.captureRuntimeError({
 			channel: 'telegram',
 			error,
@@ -236,13 +348,17 @@ async function handleReplay(context, parsed, storeEntry) {
 
 async function handleDetails(context, storeEntry) {
 	let alert;
+	let readError = null;
 	try {
-		alert = await alertStorageService.getAlertById(storeEntry.alertId);
+		alert = await withCallbackTimeout(() => alertStorageService.getAlertById(storeEntry.alertId));
 	} catch (error) {
+		readError = error;
 		console.warn('[telegramAlertActions] Failed to read alert for details:', error.message);
 	}
 	if (!alert) {
-		await context.answerCbQuery('Alerta no encontrada o ya expirada', { show_alert: false });
+		await answerCallback(context, isCallbackStorageTimeout(readError)
+			? 'Servicio de almacenamiento no disponible; intenta de nuevo'
+			: 'Alerta no encontrada o ya expirada');
 		return;
 	}
 	const message = formatDetailsForTelegram(alert);
@@ -349,6 +465,7 @@ module.exports = {
 	registerAlertActionHandlers,
 	handleAlertAction,
 	ACTION_CALLBACK_REGEX,
+	CALLBACK_STORAGE_TIMEOUT_MS,
 	recordQualityFeedback,
 	getRecordedQualityFeedback,
 };

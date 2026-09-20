@@ -54,10 +54,12 @@ function buildApp() {
 describe('Inline keyboard markup on /api/webhook/alert', () => {
 	let sendToAllMock;
 	let sendToChannelsMock;
+	let editMessageReplyMarkupMock;
 
 	beforeEach(() => {
 		jest.clearAllMocks();
 		alertModule.__resetNotificationManagerForTesting();
+		editMessageReplyMarkupMock = jest.fn().mockResolvedValue(undefined);
 		sendToAllMock = jest.fn().mockImplementation((alert) => Promise.resolve([
 			{ channel: 'telegram', success: true, messageId: '101', alert },
 		]));
@@ -69,6 +71,9 @@ describe('Inline keyboard markup on /api/webhook/alert', () => {
 			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
 			sendToAll: sendToAllMock,
 			sendToChannels: sendToChannelsMock,
+			channels: new Map([['telegram', {
+				bot: { telegram: { editMessageReplyMarkup: editMessageReplyMarkupMock } },
+			}]]),
 			isIntentionalApiOnly: jest.fn(() => false),
 		}));
 		process.env.WEBHOOK_API_KEY = 'test-api-key';
@@ -88,22 +93,45 @@ describe('Inline keyboard markup on /api/webhook/alert', () => {
 		delete process.env.TELEGRAM_ACTION_OPERATOR_USER_IDS;
 	});
 
-	it('attaches a reply_markup to the alert payload when storage is enabled', async () => {
+	it('attaches a reply_markup only after the alert is durably stored', async () => {
 		const app = buildApp();
 		const response = await request(app)
 			.post('/api/webhook/alert')
 			.set('x-api-key', 'test-api-key')
 			.send({ text: 'BINANCE:BTCUSDT' });
+		await new Promise((resolve) => setImmediate(resolve));
 
 		expect(response.status).toBe(200);
 		expect(sendToAllMock).toHaveBeenCalledTimes(1);
 		const sentAlert = sendToAllMock.mock.calls[0][0];
-		expect(sentAlert.replyMarkup).toBeDefined();
-		expect(sentAlert.replyMarkup.inline_keyboard).toBeDefined();
-		const callbackActions = sentAlert.replyMarkup.inline_keyboard
+		expect(sentAlert.replyMarkup).toBeUndefined();
+		expect(editMessageReplyMarkupMock).toHaveBeenCalledTimes(1);
+		const replyMarkup = editMessageReplyMarkupMock.mock.calls[0][3];
+		expect(replyMarkup.inline_keyboard).toBeDefined();
+		const callbackActions = replyMarkup.inline_keyboard
 			.flat()
 			.map((button) => button.callback_data.split(':')[0]);
 		expect(callbackActions).toEqual(expect.arrayContaining(['r', 'x', 'd', 'vu', 'vd']));
+		expect(editMessageReplyMarkupMock).toHaveBeenCalledWith(
+			'chat-1',
+			101,
+			undefined,
+			replyMarkup,
+		);
+	});
+
+	it('does not attach a keyboard when durable alert storage fails', async () => {
+		alertStorageService.saveAlert.mockResolvedValue(null);
+		const app = buildApp();
+		const response = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-api-key')
+			.send({ text: 'BINANCE:BTCUSDT' });
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(response.status).toBe(200);
+		expect(sendToAllMock.mock.calls[0][0].replyMarkup).toBeUndefined();
+		expect(editMessageReplyMarkupMock).not.toHaveBeenCalled();
 	});
 
 	it('does not attach reply_markup when storage is disabled', async () => {
@@ -127,13 +155,16 @@ describe('Inline keyboard markup on /api/webhook/alert', () => {
 			.post('/api/webhook/alert')
 			.set('x-api-key', 'test-api-key')
 			.send({ text: 'BINANCE:BTCUSDT' });
+		await new Promise((resolve) => setImmediate(resolve));
 
+		const savedAlertId = alertStorageService.saveAlert.mock.calls[0][0].alertId;
 		const sentAlert = sendToAllMock.mock.calls[0][0];
-		const expectedAlertId = sentAlert.replyMarkup.inline_keyboard[0][0].callback_data.split(':')[1];
+		const replyMarkup = editMessageReplyMarkupMock.mock.calls[0][3];
+		const expectedAlertId = replyMarkup.inline_keyboard[0][0].callback_data.split(':')[1];
 		expect(expectedAlertId).toMatch(/^[a-f0-9-]{36}$/);
 		expect(alertStorageService.saveAlert).toHaveBeenCalledTimes(1);
-		const savedAlertId = alertStorageService.saveAlert.mock.calls[0][0].alertId;
 		expect(savedAlertId).toBe(expectedAlertId);
+		expect(sentAlert.replyMarkup).toBeUndefined();
 	});
 
 	it('each callback_data is within the 64-byte Telegram limit', async () => {
@@ -142,9 +173,10 @@ describe('Inline keyboard markup on /api/webhook/alert', () => {
 			.post('/api/webhook/alert')
 			.set('x-api-key', 'test-api-key')
 			.send({ text: 'BINANCE:BTCUSDT' });
+		await new Promise((resolve) => setImmediate(resolve));
 
-		const sentAlert = sendToAllMock.mock.calls[0][0];
-		sentAlert.replyMarkup.inline_keyboard.flat().forEach((button) => {
+		const replyMarkup = editMessageReplyMarkupMock.mock.calls[0][3];
+		replyMarkup.inline_keyboard.flat().forEach((button) => {
 			expect(Buffer.byteLength(button.callback_data, 'utf8')).toBeLessThanOrEqual(64);
 		});
 	});
@@ -155,9 +187,11 @@ describe('Inline keyboard markup on /api/webhook/alert', () => {
 			.post('/api/webhook/alert')
 			.set('x-api-key', 'test-api-key')
 			.send({ text: 'BINANCE:BTCUSDT', channels: ['telegram'] });
+		await new Promise((resolve) => setImmediate(resolve));
 
 		expect(sendToChannelsMock).toHaveBeenCalledTimes(1);
 		const sentAlert = sendToChannelsMock.mock.calls[0][0];
-		expect(sentAlert.replyMarkup).toBeDefined();
+		expect(sentAlert.replyMarkup).toBeUndefined();
+		expect(editMessageReplyMarkupMock).toHaveBeenCalledTimes(1);
 	});
 });

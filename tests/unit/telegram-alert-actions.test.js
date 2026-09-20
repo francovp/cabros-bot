@@ -8,11 +8,13 @@ const {
 
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const alertModule = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 
-function makeContext(callbackData) {
+function makeContext(callbackData, callbackId = `callback-${callbackData}`) {
 	const ctx = {
 		update: {
 			callbackQuery: {
+				id: callbackId,
 				data: callbackData,
 				from: { id: 42 },
 				message: {
@@ -33,11 +35,14 @@ function makeContext(callbackData) {
 
 describe('telegramAlertActions', () => {
 	beforeEach(() => {
+		jest.restoreAllMocks();
 		jest.clearAllMocks();
+		idempotencyService.clear();
 		process.env.TELEGRAM_ACTION_OPERATOR_USER_IDS = '42';
 	});
 
 	afterEach(() => {
+		jest.useRealTimers();
 		delete process.env.TELEGRAM_ACTION_OPERATOR_USER_IDS;
 	});
 
@@ -91,6 +96,25 @@ describe('telegramAlertActions', () => {
 			await handleAlertAction(ctx);
 			expect(ctx.answerCbQuery).toHaveBeenCalledWith('Reenvío iniciado', { show_alert: false });
 			expect(ctx.reply).toHaveBeenCalledWith('Alerta no encontrada o ya expirada');
+		});
+
+		it('returns a bounded unavailable response when replay storage hangs', async () => {
+			jest.useFakeTimers();
+			const alertId = 'alert-replay-timeout';
+			let resolveLookup;
+			jest.spyOn(alertStorageService, 'getAlertById').mockImplementation(() => new Promise((resolve) => {
+				resolveLookup = resolve;
+			}));
+			const ctx = makeContext(`r:${alertId}`);
+			const actionPromise = handleAlertAction(ctx);
+
+			await Promise.resolve();
+			await jest.advanceTimersByTimeAsync(5000);
+			await actionPromise;
+
+			expect(ctx.reply).toHaveBeenCalledWith('Servicio de almacenamiento no disponible; intenta de nuevo');
+			resolveLookup(null);
+			jest.useRealTimers();
 		});
 
 		it('handles dismiss by removing the inline keyboard and acknowledging', async () => {
@@ -149,6 +173,24 @@ describe('telegramAlertActions', () => {
 			getAlertById.mockRestore();
 		});
 
+		it('returns a bounded unavailable response when details storage hangs', async () => {
+			jest.useFakeTimers();
+			let resolveLookup;
+			jest.spyOn(alertStorageService, 'getAlertById').mockImplementation(() => new Promise((resolve) => {
+				resolveLookup = resolve;
+			}));
+			const ctx = makeContext('d:alert-details-timeout');
+			const actionPromise = handleAlertAction(ctx);
+
+			await Promise.resolve();
+			await jest.advanceTimersByTimeAsync(5000);
+			await actionPromise;
+
+			expect(ctx.answerCbQuery).toHaveBeenCalledWith('Servicio de almacenamiento no disponible; intenta de nuevo', { show_alert: false });
+			resolveLookup(null);
+			jest.useRealTimers();
+		});
+
 		it('falls back to plain text when MarkdownV2 parse fails on the details reply', async () => {
 			const alertId = 'alert-details-fallback';
 			jest.spyOn(alertStorageService, 'getAlertById').mockResolvedValue({
@@ -200,6 +242,54 @@ describe('telegramAlertActions', () => {
 			expect(sendToChannels.mock.calls[0][1]).toEqual(['telegram']);
 			expect(ctx.answerCbQuery).toHaveBeenCalledWith('Reenvío iniciado', { show_alert: false });
 			expect(ctx.reply).toHaveBeenCalledWith('Reenviado a 1 canal');
+		});
+
+		it('persists a replay audit with a stable callback-derived idempotency key', async () => {
+			const alertId = 'alert-replay-audit';
+			jest.spyOn(alertStorageService, 'getAlertById').mockResolvedValue({
+				id: alertId,
+				text: 'Replay target',
+				channels: ['telegram'],
+			});
+			const sendToChannels = jest.fn().mockResolvedValue([
+				{ channel: 'telegram', success: true, messageId: '123' },
+			]);
+			jest.spyOn(alertModule, 'getNotificationManager').mockReturnValue({ sendToChannels });
+			const saveReplayAttempt = jest.spyOn(alertStorageService, 'saveReplayAttempt').mockResolvedValue('replay-audit-id');
+			const callbackId = 'telegram-callback-123';
+			const ctx = makeContext(`r:${alertId}`, callbackId);
+
+			await handleAlertAction(ctx);
+
+			const sentPayload = sendToChannels.mock.calls[0][0];
+			const expectedKey = `telegram:replay:${alertId}:${callbackId}`;
+			expect(sentPayload.replay.idempotencyKey).toBe(expectedKey);
+			expect(saveReplayAttempt).toHaveBeenCalledWith({
+				alertId,
+				idempotencyKey: expectedKey,
+				channels: ['telegram'],
+				deliveryResults: [{ channel: 'telegram', success: true, messageId: '123' }],
+			});
+		});
+
+		it('does not redeliver a replay for the same callback delivery', async () => {
+			const alertId = 'alert-replay-deduped';
+			jest.spyOn(alertStorageService, 'getAlertById').mockResolvedValue({
+				id: alertId,
+				text: 'Replay target',
+				channels: ['telegram'],
+			});
+			const sendToChannels = jest.fn().mockResolvedValue([{ channel: 'telegram', success: true }]);
+			jest.spyOn(alertModule, 'getNotificationManager').mockReturnValue({ sendToChannels });
+			jest.spyOn(alertStorageService, 'saveReplayAttempt').mockResolvedValue('replay-audit-id');
+			const callbackId = 'telegram-callback-duplicate';
+
+			await handleAlertAction(makeContext(`r:${alertId}`, callbackId));
+			const secondContext = makeContext(`r:${alertId}`, callbackId);
+			await handleAlertAction(secondContext);
+
+			expect(sendToChannels).toHaveBeenCalledTimes(1);
+			expect(secondContext.reply).toHaveBeenCalledWith('Reenvío ya procesado');
 		});
 
 		it('rejects replay from a non-operator before reading or sending the alert', async () => {

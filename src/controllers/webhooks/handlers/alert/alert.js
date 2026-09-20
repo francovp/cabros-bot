@@ -87,6 +87,37 @@ function resolveBot(botOrGetter) {
 	return botOrGetter || null;
 }
 
+function getFirstTelegramMessageId(result) {
+	const rawMessageId = Array.isArray(result?.messageIds)
+		? result.messageIds[0]
+		: (typeof result?.messageId === 'string' ? result.messageId.split(',')[0] : result?.messageId);
+	if (rawMessageId === undefined || rawMessageId === null || rawMessageId === '') return null;
+	const numericMessageId = Number(rawMessageId);
+	return Number.isSafeInteger(numericMessageId) ? numericMessageId : rawMessageId;
+}
+
+async function attachInlineKeyboardAfterPersistence({ manager, results, routing, replyMarkup }) {
+	if (!replyMarkup || !Array.isArray(results)) return;
+	const telegramResult = results.find((result) => result?.channel === 'telegram' && result.success);
+	const messageId = getFirstTelegramMessageId(telegramResult);
+	const telegramService = manager?.channels?.get?.('telegram');
+	const editMessageReplyMarkup = telegramService?.bot?.telegram?.editMessageReplyMarkup;
+	const chatId = routing?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+	if (!messageId || !chatId || typeof editMessageReplyMarkup !== 'function') return;
+
+	try {
+		await editMessageReplyMarkup.call(
+			telegramService.bot.telegram,
+			chatId,
+			messageId,
+			undefined,
+			replyMarkup,
+		);
+	} catch (error) {
+		console.warn('[Alert] Failed to attach inline keyboard after persistence:', error.message);
+	}
+}
+
 async function processEnrichment(alert, options) {
 	const { tokenUsage, useTradingViewData, parentSpan } = options;
 	const runtimeConfig = getRuntimeConfig();
@@ -332,6 +363,7 @@ function postAlert(botOrGetter) {
 			// synchronously so it can be embedded in the markup callback_data
 			// before the message is sent.
 			let inlineAlertId = null;
+			let inlineReplyMarkup = null;
 			try {
 				const storageEnabled = typeof alertStorageService.isEnabled === 'function'
 					&& alertStorageService.isEnabled();
@@ -346,7 +378,7 @@ function postAlert(botOrGetter) {
 						includeReplay: true,
 					});
 					if (replyMarkup) {
-						alert.replyMarkup = replyMarkup;
+						inlineReplyMarkup = replyMarkup;
 					}
 				}
 			} catch (error) {
@@ -472,7 +504,7 @@ function postAlert(botOrGetter) {
 
 			// Fire-and-forget: persist alert to Firestore after responding to the caller.
 			// Errors are caught inside saveAlert — delivery is never blocked by storage.
-			alertStorageService.saveAlert({
+			const saveAlertPromise = alertStorageService.saveAlert({
 				requestId,
 				text: alert.text,
 				symbol: extracted.symbol !== 'unknown' ? extracted.symbol : null,
@@ -493,7 +525,18 @@ function postAlert(botOrGetter) {
 				whatsappChatId: routing.whatsappChatId,
 				discordWebhookUrl: routing.discordWebhookUrl,
 				alertId: inlineAlertId || undefined,
-			}).catch(() => {}); // errors already logged inside AlertStorageService
+			});
+			Promise.resolve(saveAlertPromise)
+				.then((storedAlertId) => {
+					if (!storedAlertId) return null;
+					return attachInlineKeyboardAfterPersistence({
+						manager: notificationManager,
+						results,
+						routing,
+						replyMarkup: inlineReplyMarkup,
+					});
+				})
+				.catch(() => {}); // errors already logged inside AlertStorageService
 
 			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
 				const parsed = parseTradingViewSignal(alert.text);
