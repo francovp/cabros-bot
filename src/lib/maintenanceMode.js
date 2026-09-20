@@ -19,15 +19,23 @@ let globalBotGetter = null;
  * @returns {boolean}
  */
 function isMaintenanceModeEnabled() {
+	let enabled = false;
 	try {
 		const runtimeConfig = remoteConfigService.getRuntimeConfig();
 		if (typeof runtimeConfig.ENABLE_MAINTENANCE_MODE === 'boolean') {
-			return runtimeConfig.ENABLE_MAINTENANCE_MODE;
+			enabled = runtimeConfig.ENABLE_MAINTENANCE_MODE;
+		} else {
+			enabled = process.env.ENABLE_MAINTENANCE_MODE === 'true';
 		}
 	} catch (_) {
 		// Fail-open: fall back to environment variable if RemoteConfigService fails
+		enabled = process.env.ENABLE_MAINTENANCE_MODE === 'true';
 	}
-	return process.env.ENABLE_MAINTENANCE_MODE === 'true';
+
+	if (!enabled && lastNotifiedMaintenanceMode) {
+		lastNotifiedMaintenanceMode = false;
+	}
+	return enabled;
 }
 
 /**
@@ -124,6 +132,24 @@ async function checkAndNotifyMaintenanceModeToggle(options = {}) {
 }
 
 /**
+ * Determines whether a Telegraf context represents a bot command.
+ * @param {Object} context
+ * @returns {boolean}
+ */
+function isTelegramCommand(context) {
+	const message = context?.message;
+	if (!message || typeof message.text !== 'string') {
+		return false;
+	}
+	if (Array.isArray(message.entities) && message.entities.length > 0) {
+		return message.entities.some(
+			(entity) => entity.type === 'bot_command' && entity.offset === 0
+		);
+	}
+	return message.text.startsWith('/');
+}
+
+/**
  * Express middleware to gate protected endpoints during maintenance mode.
  * Returns HTTP 503 SERVICE_UNAVAILABLE with a structured JSON envelope when active.
  *
@@ -131,9 +157,9 @@ async function checkAndNotifyMaintenanceModeToggle(options = {}) {
  * @param {import('express').Response} res
  * @param {import('express').NextFunction} next
  */
-async function maintenanceModeMiddleware(req, res, next) {
+function maintenanceModeMiddleware(req, res, next) {
 	if (isMaintenanceModeEnabled()) {
-		await checkAndNotifyMaintenanceModeToggle();
+		checkAndNotifyMaintenanceModeToggle().catch(() => {});
 		return res.status(503).json(MAINTENANCE_ERROR_RESPONSE);
 	}
 	return next();
@@ -141,14 +167,18 @@ async function maintenanceModeMiddleware(req, res, next) {
 
 /**
  * Telegraf middleware to intercept incoming bot commands when maintenance mode is active.
+ * Leaves non-command updates (callbacks, plain text messages) unaffected.
  *
  * @param {Object} context
  * @param {Function} next
  */
 async function telegramMaintenanceMode(context, next) {
+	if (!isTelegramCommand(context)) {
+		return next();
+	}
 	if (isMaintenanceModeEnabled()) {
 		const bot = context && (context.bot || { telegram: context.telegram });
-		await checkAndNotifyMaintenanceModeToggle({ bot });
+		checkAndNotifyMaintenanceModeToggle({ bot }).catch(() => {});
 		if (context && typeof context.reply === 'function') {
 			try {
 				await context.reply(TELEGRAM_MAINTENANCE_NOTICE);
@@ -178,5 +208,6 @@ module.exports = {
 	checkAndNotifyMaintenanceModeToggle,
 	maintenanceModeMiddleware,
 	telegramMaintenanceMode,
+	isTelegramCommand,
 	_resetForTesting: resetForTesting,
 };

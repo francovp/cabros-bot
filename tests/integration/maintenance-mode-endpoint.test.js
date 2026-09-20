@@ -73,6 +73,16 @@ describe('Maintenance Mode Integration Tests', () => {
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = 'admin-chat-123';
 		});
 
+		it('returns 401 when request is unauthorized even if maintenance mode is enabled', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert')
+				.send({ message: 'unauthorized' })
+				.expect(401);
+
+			expect(res.body).toHaveProperty('error');
+			expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+		});
+
 		it('returns 503 with exact MAINTENANCE_MODE payload for POST /api/webhook/alert', async () => {
 			const res = await request(app)
 				.post('/api/webhook/alert')

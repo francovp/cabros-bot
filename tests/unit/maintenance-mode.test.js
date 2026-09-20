@@ -119,9 +119,62 @@ describe('maintenanceMode', () => {
 			const status = jest.fn().mockReturnValue({ json });
 			const res = { status, json };
 			const next = jest.fn();
-
-			await expect(maintenanceMode.maintenanceModeMiddleware(req, res, next)).resolves.not.toThrow();
+			expect(() => maintenanceMode.maintenanceModeMiddleware(req, res, next)).not.toThrow();
 			expect(status).toHaveBeenCalledWith(503);
+		});
+		it('resets notification latch when maintenance mode transitions to disabled', async () => {
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '123456789';
+
+			const sendMessage = jest.fn().mockResolvedValue({ message_id: 1 });
+			const mockBot = { telegram: { sendMessage } };
+			maintenanceMode.setBotGetter(() => mockBot);
+
+			// First notification
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+
+			// Calling again while enabled: no new notification
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+
+			// Mode is turned off -> isMaintenanceModeEnabled() resets latch
+			process.env.ENABLE_MAINTENANCE_MODE = 'false';
+			expect(maintenanceMode.isMaintenanceModeEnabled()).toBe(false);
+
+			// Mode is turned back on -> should notify again
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(2);
+		});
+	});
+
+	describe('isTelegramCommand', () => {
+		it('returns true for text starting with slash', () => {
+			expect(maintenanceMode.isTelegramCommand({ message: { text: '/start' } })).toBe(true);
+			expect(maintenanceMode.isTelegramCommand({ message: { text: '/precio btc' } })).toBe(true);
+		});
+
+		it('returns true for messages with bot_command entity at offset 0', () => {
+			expect(
+				maintenanceMode.isTelegramCommand({
+					message: {
+						text: 'precio btc',
+						entities: [{ type: 'bot_command', offset: 0, length: 6 }],
+					},
+				}),
+			).toBe(true);
+		});
+
+		it('returns false for plain text messages without command', () => {
+			expect(maintenanceMode.isTelegramCommand({ message: { text: 'hello world' } })).toBe(false);
+			expect(maintenanceMode.isTelegramCommand({ message: { text: '' } })).toBe(false);
+		});
+
+		it('returns false for callback queries, empty messages, or non-object contexts', () => {
+			expect(maintenanceMode.isTelegramCommand({ callbackQuery: { data: 'confirm' } })).toBe(false);
+			expect(maintenanceMode.isTelegramCommand({})).toBe(false);
+			expect(maintenanceMode.isTelegramCommand(null)).toBe(false);
 		});
 	});
 
@@ -137,7 +190,7 @@ describe('maintenanceMode', () => {
 			expect(reply).not.toHaveBeenCalled();
 		});
 
-		it('replies with maintenance notice and suppresses next() when maintenance mode is enabled', async () => {
+		it('replies with maintenance notice and suppresses next() when maintenance mode is enabled for commands', async () => {
 			process.env.ENABLE_MAINTENANCE_MODE = 'true';
 			const reply = jest.fn().mockResolvedValue({});
 			const context = { reply, message: { text: '/precio btc' } };
@@ -148,6 +201,30 @@ describe('maintenanceMode', () => {
 			expect(next).not.toHaveBeenCalled();
 			expect(reply).toHaveBeenCalledTimes(1);
 			expect(reply).toHaveBeenCalledWith(expect.stringMatching(/mantenimiento/i));
+		});
+
+		it('calls next() without replying when message is not a command even if maintenance mode is enabled', async () => {
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+			const reply = jest.fn();
+			const context = { reply, message: { text: 'just a normal message' } };
+			const next = jest.fn();
+
+			await maintenanceMode.telegramMaintenanceMode(context, next);
+
+			expect(next).toHaveBeenCalledTimes(1);
+			expect(reply).not.toHaveBeenCalled();
+		});
+
+		it('calls next() for callback queries even if maintenance mode is enabled', async () => {
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+			const reply = jest.fn();
+			const context = { reply, callbackQuery: { id: 'cb1', data: 'action' } };
+			const next = jest.fn();
+
+			await maintenanceMode.telegramMaintenanceMode(context, next);
+
+			expect(next).toHaveBeenCalledTimes(1);
+			expect(reply).not.toHaveBeenCalled();
 		});
 	});
 });

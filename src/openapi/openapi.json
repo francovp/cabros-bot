@@ -168,6 +168,9 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/MaintenanceMode"
           }
         },
         "security": [
@@ -222,6 +225,9 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/MaintenanceMode"
           }
         },
         "security": [
@@ -276,6 +282,9 @@
           },
           "502": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/MaintenanceMode"
           },
           "504": {
             "$ref": "#/components/responses/Error"
@@ -334,6 +343,9 @@
           "502": {
             "$ref": "#/components/responses/Error"
           },
+          "503": {
+            "$ref": "#/components/responses/MaintenanceMode"
+          },
           "504": {
             "$ref": "#/components/responses/Error"
           }
@@ -373,6 +385,9 @@
           },
           "502": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/MaintenanceMode"
           }
         },
         "security": [
@@ -410,6 +425,9 @@
           },
           "502": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/MaintenanceMode"
           },
           "504": {
             "$ref": "#/components/responses/Error"
@@ -1868,6 +1886,9 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/MaintenanceMode"
           }
         },
         "security": [
@@ -1908,6 +1929,9 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/MaintenanceMode"
           }
         },
         "security": [
