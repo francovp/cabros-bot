@@ -37,6 +37,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 #### Security
 
 - `WEBHOOK_API_KEY` - API key used to secure `/api/*` webhook endpoints. Required in production-like environments (`NODE_ENV=production`, Render, Vercel, Railway), where endpoints fail-closed with HTTP 503 if unset. When configured, clients must provide the key via the `x-api-key` header (or the `api-key` query parameter)
+- `WEBHOOK_MAX_BODY_SIZE` - Maximum accepted webhook request body size for `/api/webhook/*` and `/api/news-monitor` (default `256kb`). Applies to `application/json`, `text/plain`, and `application/x-www-form-urlencoded` bodies. Accepts human-readable units (`b`, `kb`, `mb`, `gb`). Values outside `[1kb, 10mb]` or malformed strings fall back to the default with a startup warning. Oversized payloads are rejected with a structured `413 PAYLOAD_TOO_LARGE` response before any controller or middleware downstream of the body parsers runs, so a misconfigured client cannot consume CPU/memory by streaming a 10 MB body. Classified as environment-only (security control; excluded from Remote Config).
 - `ENABLE_FIREBASE_ADMIN_AUTH` - Enable opt-in Firebase email/password authentication for the browser admin console (`false` by default)
 - `FIREBASE_WEB_API_KEY` - Public Firebase Web API key used by the browser sign-in flow; not a service-account credential
 - `FIREBASE_AUTH_DOMAIN` - Public Firebase Auth domain used by the browser sign-in flow
@@ -80,6 +81,8 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 #### URL Shortening (003-news-monitor)
 
 - `URL_SHORTENER_SERVICE` - URL-shortening provider for WhatsApp citations (optional; defaults to `picsee`; supported values: `picsee`, `tinyurl`, `cuttly`)
+- `URL_SHORTENER_CACHE_MAX_ENTRIES` - Maximum in-memory URL-shortener cache entries before LRU eviction (default: `1000`, range `1`-`100000`; Remote Config supported)
+- `URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES` - Maximum tracked URL-shortener providers (default: `32`, range `1`-`1024`; effective minimum is the number of configured providers)
 - `PICSEE_API_KEY` - PicSee API key, required when PicSee is selected
 - `CUTTLY_API_KEY` - Cuttly API key, required when Cuttly is selected
 - TinyURL uses its free endpoint and requires no credential. Bitly, reurl, and Pixnet0rz.tw are unavailable in the runtime.
@@ -233,6 +236,8 @@ pnpm test:firebase
 - `NEWS_SYMBOLS_STOCKS` - Default stock symbols if not provided in request (comma-separated)
 - `NEWS_ALERT_THRESHOLD` - Confidence score threshold for sending alerts (default: `0.7`, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` - Cache time-to-live for deduplication (default: `6` hours)
+- `NEWS_CACHE_MAX_ENTRIES` - Maximum in-memory news-cache entries before LRU eviction (default: `5000`, range `1`-`1000000`; Remote Config supported)
+- `NEWS_DELIVERY_LOCK_MAX_ENTRIES` - Maximum in-memory channel delivery leases (default: `1000`, range `1`-`100000`; active leases are preserved)
 - `ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP` - Enable Firestore-backed news deduplication (`true` or `false`, default: `false`; failures fall back to memory)
 - `NEWS_TIMEOUT_MS` - Per-symbol analysis timeout (default: `30000` ms)
 - `NEWS_GEMINI_CONCURRENCY` - Max concurrent Gemini-backed symbol analyses. Production policy is `3`; unset keeps legacy parallel fan-out for backward compatibility.

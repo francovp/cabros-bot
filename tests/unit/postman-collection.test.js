@@ -100,6 +100,20 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('makes the oversized webhook example generate padding in Postman', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const oversized = findItem(collection.item, 'POST Send Message (oversized body)');
+
+		expect(oversized).toBeDefined();
+		const preRequest = oversized.event?.find((event) => event.listen === 'prerequest');
+		const script = preRequest?.script?.exec?.join('\n') || '';
+
+		expect(preRequest).toBeDefined();
+		expect(script).toContain('pm.variables.set(\'oversizedWebhookPadding\'');
+		expect(oversized.request.body.raw).toContain('{{oversizedWebhookPadding}}');
+		expect(oversized.request.body.raw).not.toContain('{{$padString}}');
+	});
+
 	it('uses distinct demo keys for middleware-backed scanner requests', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const expandedAnalysis = findItem(collection.item, 'POST Expanded Analysis Alert');
