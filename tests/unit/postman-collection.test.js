@@ -461,6 +461,5 @@ describe('Postman collection contract', () => {
 		expect(csvSuccess).toBeDefined();
 		expect(csvSuccess.code).toBe(200);
 	});
-	});
 });
 
