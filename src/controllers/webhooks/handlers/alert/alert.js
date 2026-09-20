@@ -2,6 +2,7 @@ require('dotenv').config();
 const crypto = require('crypto');
 const { enrichAlert } = require('./grounding');
 const { validateAlert } = require('../../../../lib/validation');
+const { v4: uuidv4 } = require('uuid');
 const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 const TelegramService = require('../../../../services/notification/TelegramService');
