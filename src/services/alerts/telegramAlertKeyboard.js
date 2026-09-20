@@ -6,19 +6,18 @@
  * inside Telegram's 64-byte callback_data limit. Each action code is a
  * short, ASCII, deterministic string:
  *
- *   r:<shortId>   — Replay the alert to the originating channels.
- *   d:<shortId>   — Return the stored enrichment (sources, technical levels,
+ *   r:<alertId>   — Replay the alert to the originating channels.
+ *   d:<alertId>   — Return the stored enrichment (sources, technical levels,
  *                   risk parameters) as a follow-up message.
- *   x:<shortId>   — Acknowledge / dismiss the alert; reply_markup is removed
+ *   x:<alertId>   — Acknowledge / dismiss the alert; reply_markup is removed
  *                   from the source message and a dismissal marker is
  *                   recorded.
- *   vu:<shortId>  — Quality feedback: thumbs up.
- *   vd:<shortId>  — Quality feedback: thumbs down.
+ *   vu:<alertId>  — Quality feedback: thumbs up.
+ *   vd:<alertId>  — Quality feedback: thumbs down.
  *
- * `shortId` is 8 characters of the telegramActionStore mapping. The longest
- * callback_data is therefore `vd:<8chars>` = 11 bytes, well within the
- * 64-byte limit and leaves room for future prefixes without touching the
- * handler regex.
+ * The alert UUID is used directly so callbacks survive process restarts and
+ * rolling deployments. `vd:<uuid>` is 39 bytes, below Telegram's 64-byte
+ * callback_data limit.
  */
 
 const TELEGRAM_MAX_CALLBACK_BYTES = 64;
@@ -27,15 +26,19 @@ const ACTION_DETAILS = 'd';
 const ACTION_DISMISS = 'x';
 const ACTION_VOTE_UP = 'vu';
 const ACTION_VOTE_DOWN = 'vd';
+const CALLBACK_ALERT_ID_PATTERN = /^[A-Za-z0-9_-]{1,60}$/;
 
-function buildCallbackData(action, shortId) {
+function buildCallbackData(action, alertId) {
 	if (typeof action !== 'string' || !action) {
 		throw new TypeError('action must be a non-empty string');
 	}
-	if (typeof shortId !== 'string' || !shortId) {
-		throw new TypeError('shortId must be a non-empty string');
+	if (typeof alertId !== 'string' || !alertId) {
+		throw new TypeError('alertId must be a non-empty string');
 	}
-	const data = `${action}:${shortId}`;
+	if (!CALLBACK_ALERT_ID_PATTERN.test(alertId)) {
+		throw new RangeError('alertId is not valid for Telegram callback_data');
+	}
+	const data = `${action}:${alertId}`;
 	if (Buffer.byteLength(data, 'utf8') > TELEGRAM_MAX_CALLBACK_BYTES) {
 		throw new RangeError(
 			`Telegram callback_data exceeds ${TELEGRAM_MAX_CALLBACK_BYTES} bytes (${data})`,
@@ -52,8 +55,8 @@ const BUTTON_LABELS = Object.freeze({
 	[ACTION_VOTE_DOWN]: '👎',
 });
 
-function buildReplyMarkup({ shortId, hasEnrichment = true, includeReplay = true } = {}) {
-	if (typeof shortId !== 'string' || !shortId) {
+function buildReplyMarkup({ alertId, hasEnrichment = true, includeReplay = true } = {}) {
+	if (typeof alertId !== 'string' || !alertId || !CALLBACK_ALERT_ID_PATTERN.test(alertId)) {
 		return null;
 	}
 	const rows = [];
@@ -61,12 +64,12 @@ function buildReplyMarkup({ shortId, hasEnrichment = true, includeReplay = true 
 	if (includeReplay) {
 		topRow.push({
 			text: BUTTON_LABELS[ACTION_REPLAY],
-			callback_data: buildCallbackData(ACTION_REPLAY, shortId),
+			callback_data: buildCallbackData(ACTION_REPLAY, alertId),
 		});
 	}
 	topRow.push({
 		text: BUTTON_LABELS[ACTION_DISMISS],
-		callback_data: buildCallbackData(ACTION_DISMISS, shortId),
+		callback_data: buildCallbackData(ACTION_DISMISS, alertId),
 	});
 	rows.push(topRow);
 
@@ -74,7 +77,7 @@ function buildReplyMarkup({ shortId, hasEnrichment = true, includeReplay = true 
 		rows.push([
 			{
 				text: BUTTON_LABELS[ACTION_DETAILS],
-				callback_data: buildCallbackData(ACTION_DETAILS, shortId),
+				callback_data: buildCallbackData(ACTION_DETAILS, alertId),
 			},
 		]);
 	}
@@ -82,11 +85,11 @@ function buildReplyMarkup({ shortId, hasEnrichment = true, includeReplay = true 
 	rows.push([
 		{
 			text: BUTTON_LABELS[ACTION_VOTE_UP],
-			callback_data: buildCallbackData(ACTION_VOTE_UP, shortId),
+			callback_data: buildCallbackData(ACTION_VOTE_UP, alertId),
 		},
 		{
 			text: BUTTON_LABELS[ACTION_VOTE_DOWN],
-			callback_data: buildCallbackData(ACTION_VOTE_DOWN, shortId),
+			callback_data: buildCallbackData(ACTION_VOTE_DOWN, alertId),
 		},
 	]);
 
@@ -102,11 +105,11 @@ function parseCallbackData(data) {
 		return null;
 	}
 	const action = data.slice(0, separatorIndex);
-	const shortId = data.slice(separatorIndex + 1);
-	if (!shortId) {
+	const alertId = data.slice(separatorIndex + 1);
+	if (!CALLBACK_ALERT_ID_PATTERN.test(alertId)) {
 		return null;
 	}
-	return { action, shortId };
+	return { action, alertId };
 }
 
 function getActionCodes() {

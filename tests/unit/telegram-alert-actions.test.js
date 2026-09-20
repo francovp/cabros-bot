@@ -1,6 +1,5 @@
 'use strict';
 
-const { defaultStore, createTelegramActionStore, shortIdFor } = require('../../src/services/alerts/telegramActionStore');
 const {
 	handleAlertAction,
 	registerAlertActionHandlers,
@@ -15,6 +14,7 @@ function makeContext(callbackData) {
 		update: {
 			callbackQuery: {
 				data: callbackData,
+				from: { id: 42 },
 				message: {
 					chat: { id: 100 },
 					message_id: 42,
@@ -31,31 +31,29 @@ function makeContext(callbackData) {
 	return ctx;
 }
 
-function registerAlert(alertId) {
-	const shortId = shortIdFor(alertId);
-	defaultStore.register(alertId, { chatId: '100', threadId: null, messageIds: [] });
-	return { shortId, alertId };
-}
-
 describe('telegramAlertActions', () => {
 	beforeEach(() => {
-		defaultStore.clear();
 		jest.clearAllMocks();
+		process.env.TELEGRAM_ACTION_OPERATOR_USER_IDS = '42';
+	});
+
+	afterEach(() => {
+		delete process.env.TELEGRAM_ACTION_OPERATOR_USER_IDS;
 	});
 
 	describe('ACTION_CALLBACK_REGEX', () => {
-		it('matches all known action codes with an 8-character shortId', () => {
-			expect(ACTION_CALLBACK_REGEX.test('r:ABCDEFGH')).toBe(true);
-			expect(ACTION_CALLBACK_REGEX.test('d:ABCDEFGH')).toBe(true);
-			expect(ACTION_CALLBACK_REGEX.test('x:ABCDEFGH')).toBe(true);
-			expect(ACTION_CALLBACK_REGEX.test('vu:ABCDEFGH')).toBe(true);
-			expect(ACTION_CALLBACK_REGEX.test('vd:ABCDEFGH')).toBe(true);
+		it('matches all known action codes with an alert id', () => {
+			expect(ACTION_CALLBACK_REGEX.test('r:alert-123')).toBe(true);
+			expect(ACTION_CALLBACK_REGEX.test('d:alert-123')).toBe(true);
+			expect(ACTION_CALLBACK_REGEX.test('x:alert-123')).toBe(true);
+			expect(ACTION_CALLBACK_REGEX.test('vu:alert-123')).toBe(true);
+			expect(ACTION_CALLBACK_REGEX.test('vd:alert-123')).toBe(true);
 		});
 
-		it('rejects unknown action codes and malformed shortIds', () => {
+		it('rejects unknown action codes and malformed alert ids', () => {
 			expect(ACTION_CALLBACK_REGEX.test('z:ABCDEFGH')).toBe(false);
-			expect(ACTION_CALLBACK_REGEX.test('r:tooshort')).toBe(false);
-			expect(ACTION_CALLBACK_REGEX.test('r:toooooooolong')).toBe(false);
+			expect(ACTION_CALLBACK_REGEX.test('r:alert/invalid')).toBe(false);
+			expect(ACTION_CALLBACK_REGEX.test(`r:${'a'.repeat(61)}`)).toBe(false);
 			expect(ACTION_CALLBACK_REGEX.test('noColon')).toBe(false);
 		});
 	});
@@ -88,18 +86,15 @@ describe('telegramAlertActions', () => {
 			expect(ctx.answerCbQuery).toHaveBeenCalledWith('Acción no reconocida', { show_alert: false });
 		});
 
-		it('answers gracefully when the shortId is not in the store', async () => {
-			const ctx = makeContext('r:00000000');
+		it('answers gracefully when the alert is not stored', async () => {
+			const ctx = makeContext('r:missing-alert');
 			await handleAlertAction(ctx);
-			expect(ctx.answerCbQuery).toHaveBeenCalledWith(
-				'La alerta ya no está disponible para acciones',
-				{ show_alert: false },
-			);
+			expect(ctx.answerCbQuery).toHaveBeenCalledWith('Reenvío iniciado', { show_alert: false });
+			expect(ctx.reply).toHaveBeenCalledWith('Alerta no encontrada o ya expirada');
 		});
 
 		it('handles dismiss by removing the inline keyboard and acknowledging', async () => {
-			const { shortId } = registerAlert('alert-dismiss');
-			const ctx = makeContext(`x:${shortId}`);
+			const ctx = makeContext('x:alert-dismiss');
 			await handleAlertAction(ctx);
 			expect(ctx.telegram.editMessageReplyMarkup).toHaveBeenCalledWith(
 				100,
@@ -111,41 +106,41 @@ describe('telegramAlertActions', () => {
 		});
 
 		it('handles vote up by acknowledging the feedback', async () => {
-			const { shortId } = registerAlert('alert-vote-up');
-			const ctx = makeContext(`vu:${shortId}`);
+			const ctx = makeContext('vu:alert-vote-up');
 			await handleAlertAction(ctx);
 			expect(ctx.answerCbQuery).toHaveBeenCalledWith('👍 Gracias por tu feedback', { show_alert: false });
 		});
 
 		it('handles vote down by acknowledging the feedback', async () => {
-			const { shortId } = registerAlert('alert-vote-down');
-			const ctx = makeContext(`vd:${shortId}`);
+			const ctx = makeContext('vd:alert-vote-down');
 			await handleAlertAction(ctx);
 			expect(ctx.answerCbQuery).toHaveBeenCalledWith('👎 Gracias por tu feedback', { show_alert: false });
 		});
 
 		it('handles details by replying with the stored alert enrichment', async () => {
-			const { shortId, alertId } = registerAlert('alert-details-1');
+			const alertId = 'alert-details-1';
 			const getAlertById = jest.spyOn(alertStorageService, 'getAlertById').mockResolvedValue({
 				id: alertId,
 				text: 'BTC long @ 60000',
 				enrichmentData: {
 					sentiment: 'bullish',
-					insights: ['Strong momentum', 'Volume rising'],
-					technical_levels: ['Support 58000'],
+					insights: ['Strong momentum.', 'Volume rising - [confirmed]!'],
+					technical_levels: ['Support (58000)'],
 					invalidation_level: 58000,
 					target_level: 65000,
-					sources: [{ url: 'https://example.com', title: 'Example' }],
+					sources: [{ url: 'https://example.com', title: 'Example.com [source]' }],
 				},
 			});
-			const ctx = makeContext(`d:${shortId}`);
+			const ctx = makeContext(`d:${alertId}`);
 			await handleAlertAction(ctx);
 			expect(getAlertById).toHaveBeenCalledWith(alertId);
 			const replyArgs = ctx.reply.mock.calls[0];
 			expect(replyArgs[0]).toContain('*Sentimiento:* bullish');
 			expect(replyArgs[0]).toContain('*Insights:*');
-			expect(replyArgs[0]).toContain('Strong momentum');
+			expect(replyArgs[0]).toContain('Strong momentum\\.');
+			expect(replyArgs[0]).toContain('Volume rising \\- \\[confirmed\\]\\!');
 			expect(replyArgs[0]).toContain('*Niveles técnicos:*');
+			expect(replyArgs[0]).toContain('Support \\(58000\\)');
 			expect(replyArgs[0]).toContain('*Invalidación:* 58000');
 			expect(replyArgs[0]).toContain('*Objetivo:* 65000');
 			expect(replyArgs[0]).toContain('*Fuentes:*');
@@ -155,13 +150,13 @@ describe('telegramAlertActions', () => {
 		});
 
 		it('falls back to plain text when MarkdownV2 parse fails on the details reply', async () => {
-			const { shortId, alertId } = registerAlert('alert-details-fallback');
+			const alertId = 'alert-details-fallback';
 			jest.spyOn(alertStorageService, 'getAlertById').mockResolvedValue({
 				id: alertId,
 				text: 'Sample',
 				enrichmentData: { sentiment: 'bullish' },
 			});
-			const ctx = makeContext(`d:${shortId}`);
+			const ctx = makeContext(`d:${alertId}`);
 			ctx.reply = jest.fn()
 				.mockRejectedValueOnce(new Error('parse entities failed'))
 				.mockResolvedValueOnce({ message_id: 100 });
@@ -171,31 +166,30 @@ describe('telegramAlertActions', () => {
 		});
 
 		it('replay answers with a not-found toast when the stored alert is missing', async () => {
-			const { shortId } = registerAlert('alert-replay-missing');
+			const alertId = 'alert-replay-missing';
 			jest.spyOn(alertStorageService, 'getAlertById').mockResolvedValue(null);
 			// Stub the notification manager to a no-op (should not be called)
 			const notifSpy = jest.spyOn(alertModule, 'getNotificationManager').mockReturnValue(null);
-			const ctx = makeContext(`r:${shortId}`);
+			const ctx = makeContext(`r:${alertId}`);
 			await handleAlertAction(ctx);
-			expect(ctx.answerCbQuery).toHaveBeenCalledWith(
-				'Alerta no encontrada o ya expirada',
-				{ show_alert: false },
-			);
+			expect(ctx.answerCbQuery).toHaveBeenCalledWith('Reenvío iniciado', { show_alert: false });
+			expect(ctx.reply).toHaveBeenCalledWith('Alerta no encontrada o ya expirada');
 			notifSpy.mockRestore();
 		});
 
 		it('replay dispatches to notification manager when the stored alert exists', async () => {
-			const { shortId, alertId } = registerAlert('alert-replay-ok');
+			const alertId = 'alert-replay-ok';
 			jest.spyOn(alertStorageService, 'getAlertById').mockResolvedValue({
 				id: alertId,
 				text: 'Replay target',
 				enrichmentData: null,
+				channels: ['telegram'],
 			});
 			const sendToChannels = jest.fn().mockResolvedValue([
 				{ channel: 'telegram', success: true },
 			]);
 			jest.spyOn(alertModule, 'getNotificationManager').mockReturnValue({ sendToChannels });
-			const ctx = makeContext(`r:${shortId}`);
+			const ctx = makeContext(`r:${alertId}`);
 			await handleAlertAction(ctx);
 			expect(sendToChannels).toHaveBeenCalledTimes(1);
 			const sentPayload = sendToChannels.mock.calls[0][0];
@@ -203,8 +197,58 @@ describe('telegramAlertActions', () => {
 				text: 'Replay target',
 				source: 'telegram-replay',
 			});
-			expect(sendToChannels.mock.calls[0][1]).toEqual(expect.arrayContaining(['telegram']));
-			expect(ctx.answerCbQuery).toHaveBeenCalledWith('Reenviado a 1 canal', { show_alert: false });
+			expect(sendToChannels.mock.calls[0][1]).toEqual(['telegram']);
+			expect(ctx.answerCbQuery).toHaveBeenCalledWith('Reenvío iniciado', { show_alert: false });
+			expect(ctx.reply).toHaveBeenCalledWith('Reenviado a 1 canal');
+		});
+
+		it('rejects replay from a non-operator before reading or sending the alert', async () => {
+			process.env.TELEGRAM_ACTION_OPERATOR_USER_IDS = '99';
+			const getAlertById = jest.spyOn(alertStorageService, 'getAlertById');
+			const ctx = makeContext('r:alert-unauthorized');
+
+			await handleAlertAction(ctx);
+
+			expect(getAlertById).not.toHaveBeenCalled();
+			expect(ctx.answerCbQuery).toHaveBeenCalledWith('No autorizado para reenviar alertas', { show_alert: false });
+		});
+
+		it('acknowledges replay before storage and provider work', async () => {
+			const events = [];
+			const alertId = 'alert-replay-order';
+			jest.spyOn(alertStorageService, 'getAlertById').mockImplementation(async () => {
+				events.push('storage');
+				return { id: alertId, text: 'Replay target', channels: ['telegram'] };
+			});
+			const sendToChannels = jest.fn().mockImplementation(async () => {
+				events.push('provider');
+				return [{ channel: 'telegram', success: true }];
+			});
+			jest.spyOn(alertModule, 'getNotificationManager').mockReturnValue({ sendToChannels });
+			const ctx = makeContext(`r:${alertId}`);
+			ctx.answerCbQuery = jest.fn().mockImplementation(async () => events.push('ack'));
+
+			await handleAlertAction(ctx);
+
+			expect(events).toEqual(['ack', 'storage', 'provider']);
+		});
+
+		it('uses broadcast-enabled channels only for legacy alerts without stored routing', async () => {
+			const alertId = 'alert-replay-legacy';
+			jest.spyOn(alertStorageService, 'getAlertById').mockResolvedValue({
+				id: alertId,
+				text: 'Legacy replay',
+				channels: [],
+			});
+			const sendToChannels = jest.fn().mockResolvedValue([{ channel: 'telegram', success: true }]);
+			jest.spyOn(alertModule, 'getNotificationManager').mockReturnValue({
+				sendToChannels,
+				getEnabledChannels: () => ['telegram', 'whatsapp'],
+			});
+
+			await handleAlertAction(makeContext(`r:${alertId}`));
+
+			expect(sendToChannels.mock.calls[0][1]).toEqual(['telegram', 'whatsapp']);
 		});
 	});
 });

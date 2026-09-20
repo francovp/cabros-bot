@@ -34,7 +34,6 @@ jest.mock('../../src/lib/validation', () => ({
 	validateAlert: jest.fn((text) => ({ text })),
 }));
 
-const { shortIdFor, defaultStore } = require('../../src/services/alerts/telegramActionStore');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const NotificationManager = require('../../src/services/notification/NotificationManager');
 const alertModule = require('../../src/controllers/webhooks/handlers/alert/alert');
@@ -72,11 +71,11 @@ describe('Inline keyboard markup on /api/webhook/alert', () => {
 			sendToChannels: sendToChannelsMock,
 			isIntentionalApiOnly: jest.fn(() => false),
 		}));
-		defaultStore.clear();
 		process.env.WEBHOOK_API_KEY = 'test-api-key';
 		process.env.ENABLE_TELEGRAM_BOT = 'true';
 		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 		process.env.TELEGRAM_CHAT_ID = 'chat-1';
+		process.env.TELEGRAM_ACTION_OPERATOR_USER_IDS = '42';
 		alertStorageService.isEnabled = jest.fn(() => true);
 		alertStorageService.saveAlert = jest.fn().mockResolvedValue('stored-alert-id');
 	});
@@ -86,6 +85,7 @@ describe('Inline keyboard markup on /api/webhook/alert', () => {
 		delete process.env.ENABLE_TELEGRAM_BOT;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.TELEGRAM_CHAT_ID;
+		delete process.env.TELEGRAM_ACTION_OPERATOR_USER_IDS;
 	});
 
 	it('attaches a reply_markup to the alert payload when storage is enabled', async () => {
@@ -121,7 +121,7 @@ describe('Inline keyboard markup on /api/webhook/alert', () => {
 		expect(sentAlert.replyMarkup).toBeUndefined();
 	});
 
-	it('persists the alert with a pre-generated alertId that matches the markup shortId', async () => {
+	it('persists the alert with a pre-generated alertId used by the markup', async () => {
 		const app = buildApp();
 		await request(app)
 			.post('/api/webhook/alert')
@@ -129,11 +129,11 @@ describe('Inline keyboard markup on /api/webhook/alert', () => {
 			.send({ text: 'BINANCE:BTCUSDT' });
 
 		const sentAlert = sendToAllMock.mock.calls[0][0];
-		const expectedShortId = sentAlert.replyMarkup.inline_keyboard[0][0].callback_data.split(':')[1];
-		expect(expectedShortId).toMatch(/^[0-9A-Z]{8}$/);
+		const expectedAlertId = sentAlert.replyMarkup.inline_keyboard[0][0].callback_data.split(':')[1];
+		expect(expectedAlertId).toMatch(/^[a-f0-9-]{36}$/);
 		expect(alertStorageService.saveAlert).toHaveBeenCalledTimes(1);
 		const savedAlertId = alertStorageService.saveAlert.mock.calls[0][0].alertId;
-		expect(shortIdFor(savedAlertId)).toBe(expectedShortId);
+		expect(savedAlertId).toBe(expectedAlertId);
 	});
 
 	it('each callback_data is within the 64-byte Telegram limit', async () => {

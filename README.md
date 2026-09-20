@@ -31,6 +31,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 - `TELEGRAM_TOPIC_ROUTES` - Optional mapping of alert categories/sources to Telegram forum topic `message_thread_id` values. Format: comma-separated pairs `category:threadId` (e.g. `webhook-signal:101,market-scanner:202,news-monitor:303,default:0`) or JSON object string `{"webhook-signal":101,"market-scanner":202}`. Thread ID `0` or `null` routes alerts to the chat's General topic.
 - `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` - Dedicated Telegram chat ID for admin/error notices (optional, falls back to `TELEGRAM_CHAT_ID`)
+- `TELEGRAM_ACTION_OPERATOR_USER_IDS` - Comma-separated numeric Telegram user IDs allowed to use inline Replay. Empty or unset rejects replay callbacks; this security control is environment-only and is not published through Remote Config.
 
 #### Security
 

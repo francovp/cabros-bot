@@ -323,4 +323,4 @@ class MarkdownV2Formatter {
 }
 
 module.exports = MarkdownV2Formatter;
-
+module.exports.escapeRiskFieldValue = escapeRiskFieldValue;

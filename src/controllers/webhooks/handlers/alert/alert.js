@@ -28,7 +28,6 @@ const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../.
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
 const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
-const { defaultStore: telegramActionStore } = require('../../../../services/alerts/telegramActionStore');
 
 // Initialize services
 let notificationManager = null;
@@ -326,17 +325,8 @@ function postAlert(botOrGetter) {
 					|| requestedChannels.includes('telegram');
 				if (storageEnabled && telegramEnabled && telegramRequested && !suppressedRepeat) {
 					inlineAlertId = uuidv4();
-					const chatIdForStore = routing.telegramChatId || process.env.TELEGRAM_CHAT_ID || null;
-					const threadIdForStore = routing.telegramThreadId !== undefined
-						? routing.telegramThreadId
-						: null;
-					const shortId = telegramActionStore.register(inlineAlertId, {
-						chatId: chatIdForStore,
-						threadId: threadIdForStore,
-						messageIds: [],
-					});
 					const replyMarkup = buildReplyMarkup({
-						shortId,
+						alertId: inlineAlertId,
 						hasEnrichment: Boolean(alert.enriched),
 						includeReplay: true,
 					});

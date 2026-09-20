@@ -600,7 +600,7 @@ The alert delivery system now supports parallel delivery to multiple channels (T
 **Configuration**:
 - WhatsApp disabled by default (ENABLE_WHATSAPP_ALERTS=false for backward compat)
 - Requires: WHATSAPP_API_URL, WHATSAPP_API_KEY, WHATSAPP_CHAT_ID (format: 120363xxxxx@g.us)
-- Telegram requires existing: BOT_TOKEN, TELEGRAM_CHAT_ID
+- Telegram requires existing: BOT_TOKEN, TELEGRAM_CHAT_ID. Inline Replay callbacks additionally require the comma-separated environment-only `TELEGRAM_ACTION_OPERATOR_USER_IDS` allowlist; it is a security control excluded from Firebase Remote Config.
 
 **Extending**:
 - Add new channel: Create class extending NotificationChannel, implement send(), validate(), isEnabled()
