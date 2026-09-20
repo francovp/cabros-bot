@@ -496,7 +496,6 @@ function postAlert(botOrGetter) {
 			}).catch(() => {}); // errors already logged inside AlertStorageService
 
 			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
-				const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
 				const parsed = parseTradingViewSignal(alert.text);
 				if (parsed) {
 					const mcpPrice = (alert.enriched && typeof alert.enriched.current_price === 'number' && Number.isFinite(alert.enriched.current_price) && alert.enriched.current_price > 0)
