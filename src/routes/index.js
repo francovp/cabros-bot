@@ -55,20 +55,22 @@ const {
 	requireConfiguredSseAccess,
 	validateAdminAccess,
 } = require('../lib/adminAuth');
+const { maintenanceModeMiddleware, setBotGetter } = require('../lib/maintenanceMode');
 
 function getRoutes(botOrGetter) {
+	setBotGetter(botOrGetter);
 	const router = express.Router();
 	const adminRead = [validateAdminAccess, requireAdminRole(ADMIN_VIEWER)];
 	const adminWrite = [validateAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
 	const sseRead = [requireConfiguredSseAccess, requireAdminRole(ADMIN_VIEWER)];
 	const binanceOrderRead = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_VIEWER)];
 	const binanceOrderWrite = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
-	router.post('/webhook/alert', validateApiKey, idempotencyMiddleware, postAlert(botOrGetter));
-	router.post('/webhook/message', validateApiKey, idempotencyMiddleware, postMessage(botOrGetter));
-	router.post('/webhook/expanded-analysis-alert', validateApiKey, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
-	router.post('/webhook/market-scanner-alert', validateApiKey, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
-	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
-	router.post('/webhook/symbol-analysis', validateApiKey, postSymbolAnalysis());
+	router.post('/webhook/alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postAlert(botOrGetter));
+	router.post('/webhook/message', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMessage(botOrGetter));
+	router.post('/webhook/expanded-analysis-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
+	router.post('/webhook/market-scanner-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
+	router.post('/webhook/volume-confirmation', validateApiKey, maintenanceModeMiddleware, postVolumeConfirmation());
+	router.post('/webhook/symbol-analysis', validateApiKey, maintenanceModeMiddleware, postSymbolAnalysis());
 	router.get('/alerts', ...adminRead, listAlerts);
 	router.get('/alerts/replays', ...adminRead, listReplays);
 	router.get('/alerts/summary', ...adminRead, summarizeAlerts);
@@ -115,8 +117,8 @@ function getRoutes(botOrGetter) {
 	const newsMonitor = getNewsMonitor();
 	router.get('/news-monitor/summary', ...adminRead, newsMonitor.handleSummary.bind(newsMonitor));
 	router.get('/news-monitor/analyses', ...adminRead, newsMonitor.handleListAnalyses.bind(newsMonitor));
-	router.post('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
-	router.get('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
+	router.post('/news-monitor', validateApiKey, maintenanceModeMiddleware, newsMonitor.handleRequest.bind(newsMonitor));
+	router.get('/news-monitor', validateApiKey, maintenanceModeMiddleware, newsMonitor.handleRequest.bind(newsMonitor));
 	router.post('/news-monitor/pause', ...adminWrite, postPauseNewsMonitor);
 	router.post('/news-monitor/resume', ...adminWrite, postResumeNewsMonitor);
 	router.get('/news-monitor/status', ...adminRead, getNewsMonitorStatus);
