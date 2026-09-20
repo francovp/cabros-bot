@@ -78,6 +78,22 @@ describe('validate-env', () => {
 		]));
 	});
 
+	it('reports news cache max-entries bounds for issue #689', () => {
+		process.env.NEWS_CACHE_MAX_ENTRIES = '0';
+		process.env.NEWS_DELIVERY_LOCK_MAX_ENTRIES = '-1';
+		process.env.URL_SHORTENER_CACHE_MAX_ENTRIES = 'not-a-number';
+		process.env.URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES = '999999';
+
+		const variables = validateEnv().map((warning) => warning.variable);
+
+		expect(variables).toEqual(expect.arrayContaining([
+			'NEWS_CACHE_MAX_ENTRIES',
+			'NEWS_DELIVERY_LOCK_MAX_ENTRIES',
+			'URL_SHORTENER_CACHE_MAX_ENTRIES',
+			'URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES',
+		]));
+	});
+
 	it('accepts personal WhatsApp chat IDs ending with @c.us', () => {
 		process.env.WHATSAPP_CHAT_ID = '56912345678@c.us';
 
@@ -117,6 +133,12 @@ describe('validate-env', () => {
 		process.env.TELEGRAM_TOPIC_ROUTES = 'webhook-signal:101,market-scanner:202';
 		warnings = validateEnv();
 		expect(warnings.map((w) => w.variable)).not.toContain('TELEGRAM_TOPIC_ROUTES');
+	});
+
+	it('rejects unknown signal outcome entry-price providers', () => {
+		process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'mcp,wat';
+
+		expect(validateEnv().map((warning) => warning.variable)).toContain('SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES');
 	});
 
 	it('formats warnings with remediation and no raw value', () => {
