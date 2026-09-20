@@ -167,6 +167,33 @@ describe('Analyzer - Unit Tests', () => {
 		expect(result.error).toBeUndefined();
 	});
 
+	it('uses the analysis deadline when bounding a Gemini quota retry', async () => {
+		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
+		geminiQuotaManager.resetForTesting();
+
+		const analyzer = new NewsAnalyzer();
+		analyzer.timeout = 1000;
+		const quotaError = new Error('429 RESOURCE_EXHAUSTED: RetryDelay: 100ms');
+		analyzer.analyzeSymbolInternal = jest.fn()
+			.mockRejectedValueOnce(quotaError)
+			.mockResolvedValueOnce({ status: 'analyzed', alert: null, cached: false });
+
+		const startedAt = Date.now();
+		await expect(analyzer.runSymbolAnalysisWithRetry(
+			'BTCUSDT',
+			'req-analysis-deadline-retry',
+			null,
+			{},
+			startedAt,
+			{ analysisDeadline: startedAt + 20 },
+		)).rejects.toThrow(quotaError.message);
+
+		expect(analyzer.analyzeSymbolInternal).toHaveBeenCalledTimes(1);
+		geminiQuotaManager.resetForTesting();
+	});
+
 	it('should honor quoted Gemini retryDelay values from RetryInfo JSON', async () => {
 		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
 		process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS = '1000';

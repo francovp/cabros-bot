@@ -464,6 +464,96 @@ describe('NotificationManager admin failure notifications', () => {
 			delete process.env.ENABLE_API_ONLY_MODE;
 			notificationRedriveService.resetForTesting();
 		});
+
+		it('suppresses dead-lettering when alert or options is marked as probe or redrive ineligible', async () => {
+			process.env.BOT_TOKEN = 'configured-token';
+			process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+
+			const recordSpy = jest.spyOn(notificationRedriveService, 'recordDeliveryResults');
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => false),
+				send: jest.fn(),
+			};
+
+			const manager = new NotificationManager(telegramService);
+			notificationRedriveService.resetForTesting();
+
+			await manager.sendToAll({ text: 'Probe test', isProbe: true });
+			await waitForBackgroundTasks();
+
+			expect(recordSpy).not.toHaveBeenCalled();
+			recordSpy.mockRestore();
+			notificationRedriveService.resetForTesting();
+		});
+	});
+
+	describe('sendToChannels signal composition', () => {
+		it('composes channel lease signal with caller signal so caller abort cancels delivery', async () => {
+			const callerController = new AbortController();
+			const channelController = new AbortController();
+			let observedSignal;
+
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => true),
+				send: jest.fn().mockImplementation((_, options) => {
+					observedSignal = options.signal;
+					return Promise.resolve({ success: true, channel: 'telegram' });
+				}),
+			};
+
+			const manager = new NotificationManager(telegramService);
+			await manager.sendToChannels(
+				{ text: 'BTC alert' },
+				['telegram'],
+				{
+					signal: callerController.signal,
+					signalByChannel: {
+						telegram: channelController.signal,
+					},
+				},
+			);
+
+			expect(observedSignal).toBeDefined();
+			expect(observedSignal.aborted).toBe(false);
+
+			callerController.abort('caller cancelled');
+			expect(observedSignal.aborted).toBe(true);
+		});
+
+		it('composes channel lease signal with caller signal so channel lease loss cancels delivery', async () => {
+			const callerController = new AbortController();
+			const channelController = new AbortController();
+			let observedSignal;
+
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => true),
+				send: jest.fn().mockImplementation((_, options) => {
+					observedSignal = options.signal;
+					return Promise.resolve({ success: true, channel: 'telegram' });
+				}),
+			};
+
+			const manager = new NotificationManager(telegramService);
+			await manager.sendToChannels(
+				{ text: 'BTC alert' },
+				['telegram'],
+				{
+					signal: callerController.signal,
+					signalByChannel: {
+						telegram: channelController.signal,
+					},
+				},
+			);
+
+			expect(observedSignal).toBeDefined();
+			expect(observedSignal.aborted).toBe(false);
+
+			channelController.abort('lease lost');
+			expect(observedSignal.aborted).toBe(true);
+		});
 	});
 });
 

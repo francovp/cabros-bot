@@ -2,7 +2,6 @@ require('dotenv').config();
 const crypto = require('crypto');
 const { enrichAlert } = require('./grounding');
 const { validateAlert } = require('../../../../lib/validation');
-const { v4: uuidv4 } = require('uuid');
 const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 const TelegramService = require('../../../../services/notification/TelegramService');
@@ -23,11 +22,17 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
 const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
+const {
+	buildErrorEnvelope,
+	sendError,
+	STANDARD_ERROR_CODES,
+} = require('../../../../lib/errorEnvelope');
 
 // Initialize services
 let notificationManager = null;
@@ -139,17 +144,6 @@ async function processEnrichment(alert, options) {
 	return enriched;
 }
 
-function resolveRequestId(req) {
-	const raw = req && req.headers && (req.headers['x-request-id'] || req.headers['X-Request-Id'] || req.headers['x-request-ID']);
-	if (typeof raw === 'string') {
-		const trimmed = raw.trim();
-		if (trimmed.length > 0 && trimmed.length <= 128 && /^[\x21-\x7E]+$/.test(trimmed)) {
-			return trimmed;
-		}
-	}
-	return uuidv4();
-}
-
 function resolveDryRun(req) {
 	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
 	const bodyFlag = req.body && typeof req.body === 'object' && (req.body.dryRun === true || req.body.dryRun === 'true');
@@ -191,6 +185,26 @@ function getCooldownChannelIdentityForDestination(channel, destination) {
 
 function getChannelName(identity) {
 	return String(identity).split(':', 1)[0];
+}
+
+function resolveSignalOutcomePriceSource(enriched, parsed) {
+	const explicitSource = typeof enriched?.priceSource === 'string'
+		? enriched.priceSource.trim().toLowerCase()
+		: '';
+	if (explicitSource && explicitSource !== 'derived-quote') {
+		return explicitSource;
+	}
+
+	if (enriched?.tradingViewEnrichmentApplied === true
+		|| ['full', 'partial'].includes(enriched?.tradingViewEnrichmentStatus)) {
+		return 'tradingview-mcp';
+	}
+
+	if (enriched?.levelsSource === 'derived-quote') {
+		return (parsed?.exchange || 'BINANCE') === 'BINANCE' ? 'binance' : 'twelve-data';
+	}
+
+	return enriched?.levelsSource === 'gemini-grounding' ? 'gemini-grounding' : 'tradingview-mcp';
 }
 
 function postAlert(botOrGetter) {
@@ -502,9 +516,8 @@ function postAlert(botOrGetter) {
 							? Number(alert.enriched.target_level)
 							: null);
 
-					const levelsSource = alert.enriched && alert.enriched.levelsSource;
 					const priceSource = mcpPrice !== null
-						? (levelsSource === 'derived-quote' ? 'derived-quote' : (levelsSource === 'gemini-grounding' ? 'gemini-grounding' : 'tradingview-mcp'))
+						? resolveSignalOutcomePriceSource(alert.enriched, parsed)
 						: null;
 
 					signalOutcomeService.recordSignal({
@@ -528,11 +541,11 @@ function postAlert(botOrGetter) {
 			}
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(error.statusCode).json({
-					success: false,
+				return sendError(res, error.statusCode, {
 					error: error.message,
-					details: error.details,
+					code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 					requestId,
+					details: error.details,
 				});
 			}
 
@@ -557,8 +570,17 @@ function postAlert(botOrGetter) {
 			});
 
 			const status = (error.response && error.response.error_code) || 500;
-			const errorResponse = error.response || { error: 'Internal server error', details: error.message, requestId };
-			res.status(status).send(errorResponse);
+			const upstreamEnvelope = error.response && typeof error.response === 'object'
+				? error.response
+				: null;
+			const envelope = buildErrorEnvelope({
+				error: (upstreamEnvelope && upstreamEnvelope.error) || error.message || 'Internal server error',
+				code: (upstreamEnvelope && upstreamEnvelope.code) || STANDARD_ERROR_CODES.INTERNAL_ERROR,
+				requestId,
+				statusCode: status,
+				details: (upstreamEnvelope && upstreamEnvelope.details) || undefined,
+			});
+			res.status(status).json(envelope);
 		}
 	};
 }
@@ -572,4 +594,5 @@ module.exports = {
 	},
 	getNotificationManager,
 	getCooldownChannelIdentity,
+	processEnrichment,
 };

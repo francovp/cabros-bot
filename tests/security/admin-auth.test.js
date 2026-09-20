@@ -2,11 +2,13 @@
 
 const request = require('supertest');
 const express = require('express');
+const httpMocks = require('node-mocks-http');
 const { generateKeyPairSync } = require('crypto');
 
 jest.mock('firebase-admin');
 const admin = require('firebase-admin');
 const { validateAdminAccess, requireAdminRole } = require('../../src/lib/adminAuth');
+const requestDeadline = require('../../src/lib/requestDeadline');
 
 const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
 	type: 'pkcs1',
@@ -63,6 +65,66 @@ describe('Firebase admin authorization', () => {
 		expect(write.status).toBe(403);
 		expect(write.body.code).toBe('ADMIN_ROLE_REQUIRED');
 		expect(verifyIdToken).toHaveBeenCalledWith('firebase-token', true);
+	});
+
+	it('does not enter the route when async token verification outlives the request deadline', async () => {
+		requestDeadline.setTestOverrides({ timeoutMs: 20 });
+		let releaseVerification;
+		admin.auth = jest.fn(() => ({
+			verifyIdToken: jest.fn(() => new Promise((resolve) => {
+				releaseVerification = resolve;
+			})),
+		}));
+		const req = httpMocks.createRequest({
+			method: 'GET',
+			url: '/read',
+			headers: { authorization: 'Bearer slow-token' },
+		});
+		const res = httpMocks.createResponse({ eventEmitter: require('events').EventEmitter });
+		const next = jest.fn();
+
+		try {
+			requestDeadline(req, res, jest.fn());
+			const validationPromise = validateAdminAccess(req, res, next);
+			await new Promise((resolve) => setTimeout(resolve, 35));
+			expect(res.statusCode).toBe(408);
+			releaseVerification({ uid: 'viewer-1', roles: ['admin.viewer'] });
+			await validationPromise;
+
+			expect(next).not.toHaveBeenCalled();
+		} finally {
+			requestDeadline.resetForTests();
+		}
+	});
+
+	it('does not enter the route when client disconnects during async token verification', async () => {
+		let releaseVerification;
+		admin.auth = jest.fn(() => ({
+			verifyIdToken: jest.fn(() => new Promise((resolve) => {
+				releaseVerification = resolve;
+			})),
+		}));
+		const req = httpMocks.createRequest({
+			method: 'POST',
+			url: '/api/trading/binance/orders',
+			headers: { authorization: 'Bearer client-token' },
+		});
+		const res = httpMocks.createResponse({ eventEmitter: require('events').EventEmitter });
+		const next = jest.fn();
+
+		try {
+			requestDeadline(req, res, jest.fn());
+			const validationPromise = validateAdminAccess(req, res, next);
+			res.emit('close');
+			expect(req.requestDeadlineClientDisconnected).toBe(true);
+			expect(req.requestDeadlineSignal.aborted).toBe(true);
+			releaseVerification({ uid: 'operator-1', roles: ['admin.operator'] });
+			await validationPromise;
+
+			expect(next).not.toHaveBeenCalled();
+		} finally {
+			requestDeadline.resetForTests();
+		}
 	});
 
 	it.each(['auth/id-token-expired', 'auth/id-token-revoked', 'auth/argument-error'])
