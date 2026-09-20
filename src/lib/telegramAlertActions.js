@@ -204,44 +204,54 @@ function recordQualityFeedback(alertId, side, senderId) {
 	}
 }
 
-function buildDetailsMessage(alert) {
+function buildDetailsLines(alert, { escapeMarkdown = true } = {}) {
 	if (!alert) return null;
 	const lines = [];
 	const enrichment = alert.enrichmentData;
+	const formatValue = (val) => (escapeMarkdown ? escapeRiskFieldValue(String(val)) : String(val));
+
 	if (enrichment) {
-		if (enrichment.sentiment) lines.push(`*Sentimiento:* ${escapeRiskFieldValue(String(enrichment.sentiment))}`);
+		if (enrichment.sentiment) {
+			lines.push(escapeMarkdown
+				? `*Sentimiento:* ${formatValue(enrichment.sentiment)}`
+				: `Sentimiento: ${formatValue(enrichment.sentiment)}`);
+		}
 		if (Array.isArray(enrichment.insights) && enrichment.insights.length > 0) {
-			lines.push('*Insights:*');
-			enrichment.insights.forEach((insight) => lines.push(`• ${escapeRiskFieldValue(String(insight))}`));
+			lines.push(escapeMarkdown ? '*Insights:*' : 'Insights:');
+			enrichment.insights.forEach((insight) => lines.push(`• ${formatValue(insight)}`));
 		}
 		const technicalLevels = enrichment.technical_levels;
 		const technicalLevelLines = Array.isArray(technicalLevels)
-			? technicalLevels.map((level) => `• ${escapeRiskFieldValue(String(level))}`)
+			? technicalLevels.map((level) => `• ${formatValue(level)}`)
 			: [
 				...(Array.isArray(technicalLevels?.supports)
-					? technicalLevels.supports.map((level) => `• Soporte: ${escapeRiskFieldValue(String(level))}`)
+					? technicalLevels.supports.map((level) => `• Soporte: ${formatValue(level)}`)
 					: []),
 				...(Array.isArray(technicalLevels?.resistances)
-					? technicalLevels.resistances.map((level) => `• Resistencia: ${escapeRiskFieldValue(String(level))}`)
+					? technicalLevels.resistances.map((level) => `• Resistencia: ${formatValue(level)}`)
 					: []),
 			];
 		if (technicalLevelLines.length > 0) {
-			lines.push('*Niveles técnicos:*');
+			lines.push(escapeMarkdown ? '*Niveles técnicos:*' : 'Niveles técnicos:');
 			lines.push(...technicalLevelLines);
 		}
 		if (enrichment.invalidation_level !== undefined && enrichment.invalidation_level !== null) {
-			lines.push(`*Invalidación:* ${escapeRiskFieldValue(String(enrichment.invalidation_level))}`);
+			lines.push(escapeMarkdown
+				? `*Invalidación:* ${formatValue(enrichment.invalidation_level)}`
+				: `Invalidación: ${formatValue(enrichment.invalidation_level)}`);
 		}
 		if (enrichment.target_level !== undefined && enrichment.target_level !== null) {
-			lines.push(`*Objetivo:* ${escapeRiskFieldValue(String(enrichment.target_level))}`);
+			lines.push(escapeMarkdown
+				? `*Objetivo:* ${formatValue(enrichment.target_level)}`
+				: `Objetivo: ${formatValue(enrichment.target_level)}`);
 		}
 		if (Array.isArray(enrichment.sources) && enrichment.sources.length > 0) {
-			lines.push('*Fuentes:*');
+			lines.push(escapeMarkdown ? '*Fuentes:*' : 'Fuentes:');
 			enrichment.sources.slice(0, 5).forEach((source) => {
 				if (source && source.url) {
-					lines.push(`• ${escapeRiskFieldValue(String(source.title || source.url))}`);
+					lines.push(`• ${formatValue(source.title || source.url)}`);
 				} else if (source && source.title) {
-					lines.push(`• ${escapeRiskFieldValue(String(source.title))}`);
+					lines.push(`• ${formatValue(source.title)}`);
 				}
 			});
 		}
@@ -251,9 +261,21 @@ function buildDetailsMessage(alert) {
 	}
 	if (alert.text) {
 		lines.push('');
-		lines.push(`_Alerta:_ ${escapeRiskFieldValue(truncate(alert.text, 200))}`);
+		lines.push(escapeMarkdown
+			? `_Alerta:_ ${formatValue(truncate(alert.text, 200))}`
+			: `Alerta: ${truncate(alert.text, 200)}`);
 	}
 	return lines.join('\n');
+}
+
+function buildDetailsMessage(alert) {
+	return buildDetailsLines(alert, { escapeMarkdown: true });
+}
+
+function buildPlainDetailsMessage(alert) {
+	const message = buildDetailsLines(alert, { escapeMarkdown: false });
+	if (!message) return null;
+	return truncate(message, REPLY_MESSAGE_TRUNCATE);
 }
 
 function formatDetailsForTelegram(alert) {
@@ -375,6 +397,7 @@ async function handleReplay(context, parsed, storeEntry) {
 }
 
 async function handleDetails(context, storeEntry) {
+	await answerCallback(context);
 	let alert;
 	let readError = null;
 	try {
@@ -384,20 +407,19 @@ async function handleDetails(context, storeEntry) {
 		console.warn('[telegramAlertActions] Failed to read alert for details:', error.message);
 	}
 	if (!alert) {
-		await answerCallback(context, isCallbackStorageTimeout(readError)
+		await replyToUser(context, isCallbackStorageTimeout(readError)
 			? 'Servicio de almacenamiento no disponible; intenta de nuevo'
 			: 'Alerta no encontrada o ya expirada');
 		return;
 	}
 	const message = formatDetailsForTelegram(alert);
 	try {
-		await context.reply(message || 'Sin datos para mostrar', { parse_mode: 'MarkdownV2' });
-		await context.answerCbQuery();
+		await withCallbackTimeout(() => context.reply(message || 'Sin datos para mostrar', { parse_mode: 'MarkdownV2' }));
 	} catch (error) {
 		console.warn('[telegramAlertActions] Failed to send details reply:', error.message);
 		try {
-			await context.reply(message || 'Sin datos para mostrar');
-			await context.answerCbQuery();
+			const plainMessage = buildPlainDetailsMessage(alert) || message;
+			await withCallbackTimeout(() => context.reply(plainMessage || 'Sin datos para mostrar'));
 		} catch (fallbackError) {
 			console.error('[telegramAlertActions] Plain-text fallback also failed:', fallbackError.message);
 			sentryService.captureRuntimeError({
@@ -405,7 +427,7 @@ async function handleDetails(context, storeEntry) {
 				error: fallbackError,
 				extra: { action: 'details', alertId: storeEntry.alertId },
 			});
-			await context.answerCbQuery('No pude mostrar los detalles', { show_alert: false });
+			await replyToUser(context, 'No pude mostrar los detalles');
 		}
 	}
 }
@@ -415,20 +437,23 @@ async function handleDismiss(context) {
 		await answerCallback(context, 'No autorizado para modificar alertas');
 		return;
 	}
+	await answerCallback(context, 'Alerta descartada');
 	try {
 		if (context.update && context.update.callbackQuery && context.update.callbackQuery.message) {
 			const message = context.update.callbackQuery.message;
-			await context.telegram.editMessageReplyMarkup(
-				message.chat.id,
-				message.message_id,
-				undefined,
-				{ inline_keyboard: [] },
-			).catch(() => { /* best-effort: message may have been deleted */ });
+			if (typeof context.telegram?.editMessageReplyMarkup === 'function') {
+				await withCallbackTimeout(() => context.telegram.editMessageReplyMarkup(
+					message.chat.id,
+					message.message_id,
+					undefined,
+					{ inline_keyboard: [] },
+				)).catch((err) => {
+					console.warn('[telegramAlertActions] Failed to clear inline keyboard on dismiss:', err.message);
+				});
+			}
 		}
-		await context.answerCbQuery('Alerta descartada', { show_alert: false });
 	} catch (error) {
-		console.warn('[telegramAlertActions] Dismiss failed:', error.message);
-		await context.answerCbQuery('No pude descartar la alerta', { show_alert: false });
+		console.warn('[telegramAlertActions] Dismiss edit failed:', error.message);
 	}
 }
 

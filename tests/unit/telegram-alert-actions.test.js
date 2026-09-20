@@ -132,6 +132,17 @@ describe('telegramAlertActions', () => {
 			expect(ctx.answerCbQuery).toHaveBeenCalledWith('Alerta descartada', { show_alert: false });
 		});
 
+		it('acknowledges dismiss before editing the inline keyboard', async () => {
+			const events = [];
+			const ctx = makeContext('x:alert-dismiss-order');
+			ctx.answerCbQuery = jest.fn().mockImplementation(async () => events.push('ack'));
+			ctx.telegram.editMessageReplyMarkup = jest.fn().mockImplementation(async () => events.push('edit'));
+
+			await handleAlertAction(ctx);
+
+			expect(events).toEqual(['ack', 'edit']);
+		});
+
 		it('rejects dismiss from a non-operator before mutating the shared message', async () => {
 			process.env.TELEGRAM_ACTION_OPERATOR_USER_IDS = '99';
 			const ctx = makeContext('x:alert-dismiss-unauthorized');
@@ -250,9 +261,28 @@ describe('telegramAlertActions', () => {
 			await jest.advanceTimersByTimeAsync(5000);
 			await actionPromise;
 
-			expect(ctx.answerCbQuery).toHaveBeenCalledWith('Servicio de almacenamiento no disponible; intenta de nuevo', { show_alert: false });
+			expect(ctx.reply).toHaveBeenCalledWith('Servicio de almacenamiento no disponible; intenta de nuevo');
 			resolveLookup(null);
 			jest.useRealTimers();
+		});
+
+		it('acknowledges details before storage and reply work', async () => {
+			const events = [];
+			const alertId = 'alert-details-order';
+			jest.spyOn(alertStorageService, 'getAlertById').mockImplementation(async () => {
+				events.push('storage');
+				return { id: alertId, text: 'BTC long', enrichmentData: { sentiment: 'bullish' } };
+			});
+			const ctx = makeContext(`d:${alertId}`);
+			ctx.answerCbQuery = jest.fn().mockImplementation(async () => events.push('ack'));
+			ctx.reply = jest.fn().mockImplementation(async () => {
+				events.push('reply');
+				return { message_id: 101 };
+			});
+
+			await handleAlertAction(ctx);
+
+			expect(events).toEqual(['ack', 'storage', 'reply']);
 		});
 
 		it('falls back to plain text when MarkdownV2 parse fails on the details reply', async () => {
