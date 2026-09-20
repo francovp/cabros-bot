@@ -47,6 +47,17 @@ const VIEW_ACTIONS = {
 				return chips.children.length ? chips : null;
 			},
 		},
+		{
+			method: 'POST', path: '/api/alerts/batch/replay', label: 'Batch replay alerts',
+			confirm: 'Replay selected alerts?',
+		},
+		{
+			method: 'POST', path: '/api/alerts/batch/export', label: 'Batch export alerts',
+		},
+		{
+			method: 'POST', path: '/api/alerts/batch/delete', label: 'Batch delete alerts',
+			confirm: 'Delete selected alerts? This action cannot be undone.',
+		},
 	],
 	presets: [
 		{ method: 'PUT', path: '/api/scanner-presets/{id}', label: 'Update preset' },
@@ -189,16 +200,33 @@ const LONG_RUNNING_REQUEST_PATHS = typeof window !== 'undefined' && window.Cabro
 		'/api/webhook/alert',
 		'/api/webhook/message',
 		'/api/alerts/{alertId}/replay',
+		'/api/alerts/batch/replay',
 	]);
 
-const getApiRequestTimeout = (definition) => {
+const getApiRequestTimeout = (definition, options) => {
 	if (typeof window !== 'undefined' && window.CabrosAdminRequest && typeof window.CabrosAdminRequest.getApiRequestTimeout === 'function') {
-		return window.CabrosAdminRequest.getApiRequestTimeout(definition);
+		return window.CabrosAdminRequest.getApiRequestTimeout(definition, options);
 	}
 	if (!definition || !definition.path) return API_REQUEST_TIMEOUT_MS;
 	if (definition.path === '/api/webhook/volume-confirmation'
 		|| definition.path === '/api/webhook/symbol-analysis') {
 		return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+	}
+	if (definition.path === '/api/alerts/batch/replay') {
+		let count = 1;
+		if (options && typeof options === 'object') {
+			if (typeof options.batchSize === 'number' && options.batchSize > 0) {
+				count = Math.min(options.batchSize, 50);
+			} else if (options.body) {
+				try {
+					const parsed = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
+					if (Array.isArray(parsed && parsed.alertIds) && parsed.alertIds.length > 0) {
+						count = Math.min(parsed.alertIds.length, 50);
+					}
+				} catch (_) {}
+			}
+		}
+		return count > 1 ? count * LONG_RUNNING_API_REQUEST_TIMEOUT_MS : LONG_RUNNING_API_REQUEST_TIMEOUT_MS;
 	}
 	return LONG_RUNNING_REQUEST_PATHS.has(definition.path)
 		? LONG_RUNNING_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS;
@@ -486,7 +514,7 @@ const createIdempotencyKey = () => (window.crypto && typeof window.crypto.random
 const SYMBOL_PATTERN = /^[A-Za-z0-9_]+:[A-Za-z0-9._-]+$/;
 
 const withReplayIdempotencyKey = (definition, body) => {
-	if (definition.method !== 'POST' || definition.path !== '/api/alerts/{alertId}/replay') return body;
+	if (definition.method !== 'POST' || (definition.path !== '/api/alerts/{alertId}/replay' && definition.path !== '/api/alerts/batch/replay')) return body;
 	if (body && ['idempotencyKey', 'idempotency_key'].some((key) => typeof body[key] === 'string' && body[key].trim())) return body;
 	return { ...(body || {}), idempotencyKey: createIdempotencyKey() };
 };
@@ -1238,9 +1266,20 @@ const createAlertDetailPanel = (alert) => {
 	return panel;
 };
 
-const createAlertCard = (alert) => {
+const createAlertCard = (alert, { onSelect, isSelected = false, registerCheckbox } = {}) => {
 	const card = element('article', { className: 'operation-card alert-card' });
 	const headCopy = element('div');
+	if (alert && alert.id && typeof onSelect === 'function') {
+		const selectLabel = element('label', { className: 'alert-select-label' });
+		const checkbox = element('input', { className: 'alert-select-checkbox' });
+		checkbox.type = 'checkbox';
+		checkbox.checked = Boolean(isSelected);
+		checkbox.setAttribute('aria-label', `Select alert ${alert.id}`);
+		checkbox.addEventListener('change', () => onSelect(alert.id, checkbox.checked));
+		if (typeof registerCheckbox === 'function') registerCheckbox(checkbox);
+		selectLabel.append(checkbox);
+		headCopy.append(selectLabel);
+	}
 	headCopy.append(element('p', {
 		className: 'eyebrow',
 		text: alert && alert.source ? `Source: ${alert.source}` : 'Stored alert',
@@ -1637,7 +1676,7 @@ const sendRequest = async ({
 	);
 	const started = performance.now();
 	try {
-		const result = await fetchWithTimeout(request.url, request.options, getApiRequestTimeout(definition), async (response) => {
+		const result = await fetchWithTimeout(request.url, request.options, getApiRequestTimeout(definition, request.options), async (response) => {
 			if (typeof captureResponseStatus === 'function') captureResponseStatus(response.status);
 			const elapsed = Math.round(performance.now() - started);
 			let data;
@@ -1714,7 +1753,177 @@ const createAlertListForm = () => {
 		rawCopyButton,
 		rawOutput,
 	);
-	form.append(button, prev, next, output, alertList, rawToggle);
+
+	const batchToolbar = element('div', { className: 'batch-toolbar' });
+	const selectAllLabel = element('label', { className: 'alert-select-all-label' });
+	const selectAllCheckbox = element('input', { className: 'alert-select-all' });
+	selectAllCheckbox.type = 'checkbox';
+	selectAllCheckbox.checked = false;
+	selectAllCheckbox.setAttribute('aria-label', 'Select all alerts on page');
+	selectAllLabel.append(selectAllCheckbox, element('span', { text: 'Select all' }));
+
+	const selectionCount = element('span', { className: 'batch-selection-count', text: '0 selected' });
+
+	const batchReplayButton = element('button', { className: 'button-secondary batch-replay-btn', text: 'Replay selected' });
+	batchReplayButton.type = 'button';
+	batchReplayButton.disabled = true;
+
+	const batchExportButton = element('button', { className: 'button-secondary batch-export-btn', text: 'Export selected' });
+	batchExportButton.type = 'button';
+	batchExportButton.disabled = true;
+
+	const batchDeleteButton = element('button', { className: 'button-secondary destructive-action batch-delete-btn', text: 'Delete selected' });
+	batchDeleteButton.type = 'button';
+	batchDeleteButton.disabled = true;
+
+	const batchOutput = element('pre', { className: 'response-block batch-output' });
+	batchOutput.hidden = true;
+
+	batchToolbar.append(selectAllLabel, selectionCount, batchReplayButton, batchExportButton, batchDeleteButton, batchOutput);
+
+	form.append(button, prev, next, output, batchToolbar, alertList, rawToggle);
+
+	let currentAlerts = [];
+	const selectedAlertIds = new Set();
+	const cardCheckboxes = [];
+
+	const updateBatchToolbar = () => {
+		const count = selectedAlertIds.size;
+		selectionCount.textContent = `${count} selected`;
+		const hasSelection = count > 0;
+		const isOperator = canPerformMutation();
+		const exceedsReplayLimit = count > 50;
+
+		batchReplayButton.disabled = !hasSelection || !isOperator || exceedsReplayLimit;
+		if (!isOperator) {
+			batchReplayButton.title = 'Requires admin.operator role';
+		} else if (exceedsReplayLimit) {
+			batchReplayButton.title = `Batch replay is limited to 50 alerts at a time (${count} selected)`;
+		} else {
+			batchReplayButton.removeAttribute('title');
+		}
+
+		batchExportButton.disabled = !hasSelection;
+
+		batchDeleteButton.disabled = !hasSelection || !isOperator;
+		if (!isOperator) batchDeleteButton.title = 'Requires admin.operator role';
+		else batchDeleteButton.removeAttribute('title');
+
+		const selectable = currentAlerts.filter((a) => a && a.id);
+		selectAllCheckbox.checked = selectable.length > 0 && selectedAlertIds.size === selectable.length;
+	};
+
+	const onAlertSelect = (alertId, isChecked) => {
+		if (isChecked) {
+			selectedAlertIds.add(alertId);
+		} else {
+			selectedAlertIds.delete(alertId);
+		}
+		updateBatchToolbar();
+	};
+
+	selectAllCheckbox.addEventListener('change', () => {
+		const shouldSelect = selectAllCheckbox.checked;
+		currentAlerts.forEach((alert) => {
+			if (alert && alert.id) {
+				if (shouldSelect) {
+					selectedAlertIds.add(alert.id);
+				} else {
+					selectedAlertIds.delete(alert.id);
+				}
+			}
+		});
+		cardCheckboxes.forEach((cb) => {
+			cb.checked = shouldSelect;
+		});
+		updateBatchToolbar();
+	});
+
+	batchReplayButton.addEventListener('click', async () => {
+		const ids = Array.from(selectedAlertIds);
+		if (!ids.length) return;
+		if (!canPerformMutation()) return;
+		if (ids.length > 50) {
+			batchOutput.hidden = false;
+			batchOutput.textContent = `Batch replay limit exceeded: up to 50 alerts can be replayed at once (${ids.length} selected). Please narrow your selection.`;
+			return;
+		}
+
+		batchOutput.hidden = false;
+		await sendRequest({
+			definition: {
+				method: 'POST',
+				path: '/api/alerts/batch/replay',
+				label: 'Batch replay alerts',
+				confirm: 'Replay selected alerts?',
+			},
+			path: '/api/alerts/batch/replay',
+			button: batchReplayButton,
+			output: batchOutput,
+			options: { batchSize: ids.length },
+			body: withReplayIdempotencyKey({ method: 'POST', path: '/api/alerts/batch/replay' }, { alertIds: ids }),
+			formatResponse: ({ summary, status, elapsed, data }) => {
+				const count = data && Array.isArray(data.results) ? data.results.length : 0;
+				const successful = data && Array.isArray(data.results) ? data.results.filter((r) => r.success).length : 0;
+				return `${summary}\nHTTP ${status} · ${elapsed} ms\n\nBatch replay complete: ${successful}/${count} succeeded.`;
+			},
+		});
+		updateBatchToolbar();
+	});
+
+	batchExportButton.addEventListener('click', async () => {
+		const ids = Array.from(selectedAlertIds);
+		if (!ids.length) return;
+
+		batchOutput.hidden = false;
+		await sendRequest({
+			definition: {
+				method: 'POST',
+				path: '/api/alerts/batch/export',
+				label: 'Batch export alerts',
+				requiredRole: 'admin.viewer',
+			},
+			path: '/api/alerts/batch/export',
+			button: batchExportButton,
+			output: batchOutput,
+			body: { alertIds: ids, format: 'jsonl' },
+			parseSuccessResponse: parseAlertExportResponse('jsonl'),
+			formatResponse: ({ summary, status, elapsed, data }) => (
+				`${summary}\nHTTP ${status} · ${elapsed} ms\n\nDownloaded ${data.filename} (${data.contentType || 'unknown content type'}).`
+			),
+		});
+		updateBatchToolbar();
+	});
+
+	batchDeleteButton.addEventListener('click', async () => {
+		const ids = Array.from(selectedAlertIds);
+		if (!ids.length) return;
+		if (!canPerformMutation()) return;
+
+		batchOutput.hidden = false;
+		const res = await sendRequest({
+			definition: {
+				method: 'POST',
+				path: '/api/alerts/batch/delete',
+				label: 'Batch delete alerts',
+				confirm: 'Delete selected alerts? This action cannot be undone.',
+			},
+			path: '/api/alerts/batch/delete',
+			button: batchDeleteButton,
+			output: batchOutput,
+			body: { alertIds: ids },
+			formatResponse: ({ summary, status, elapsed, data }) => (
+				`${summary}\nHTTP ${status} · ${elapsed} ms\n\nBatch delete complete: ${data && data.deleted ? data.deleted : 0} alerts deleted.`
+			),
+		});
+		if (res && res.success) {
+			selectedAlertIds.clear();
+			updateBatchToolbar();
+			requestPage(before.value);
+		} else {
+			updateBatchToolbar();
+		}
+	});
 
 	let nextBefore;
 	let backCursors = [];
@@ -1742,6 +1951,11 @@ const createAlertListForm = () => {
 		});
 		if (generation !== pageGeneration) return false;
 		if (data && Array.isArray(data.alerts)) {
+			currentAlerts = data.alerts;
+			selectedAlertIds.clear();
+			cardCheckboxes.length = 0;
+			selectAllCheckbox.checked = false;
+			updateBatchToolbar();
 			lastRawJson = JSON.stringify(data, null, 2);
 			rawOutput.textContent = lastRawJson;
 			rawCopyButton.hidden = false;
@@ -1749,9 +1963,18 @@ const createAlertListForm = () => {
 			if (!data.alerts.length) {
 				alertList.append(createEmptyState('No stored alerts match these filters.'));
 			} else {
-				data.alerts.forEach((alert) => alertList.append(createAlertCard(alert)));
+				data.alerts.forEach((alert) => alertList.append(createAlertCard(alert, {
+					onSelect: onAlertSelect,
+					isSelected: selectedAlertIds.has(alert.id),
+					registerCheckbox: (cb) => cardCheckboxes.push(cb),
+				})));
 			}
 		} else {
+			currentAlerts = [];
+			selectedAlertIds.clear();
+			cardCheckboxes.length = 0;
+			selectAllCheckbox.checked = false;
+			updateBatchToolbar();
 			lastRawJson = '';
 			rawOutput.textContent = '';
 			rawCopyButton.hidden = true;
@@ -1773,6 +1996,11 @@ const createAlertListForm = () => {
 		pageGeneration += 1;
 		nextBefore = undefined;
 		backCursors = [];
+		currentAlerts = [];
+		selectedAlertIds.clear();
+		cardCheckboxes.length = 0;
+		selectAllCheckbox.checked = false;
+		updateBatchToolbar();
 		next.disabled = true;
 		prev.disabled = true;
 		button.disabled = false;
@@ -2652,10 +2880,438 @@ const createOutcomesSummaryForm = () => {
 	return form;
 };
 
+const renderOutcomesCalibrationBlocks = (data) => {
+	const calibration = asObject(data && data.calibration);
+	const wrap = element('div', { className: 'dashboard' });
+	const metrics = element('div', { className: 'metric-grid' });
+	wrap.append(metrics);
+
+	const available = calibration.available === true;
+	const totalScored = calibration.totalScoredAlerts ?? 0;
+	const suggestedThreshold = calibration.suggestedThreshold;
+	const rationale = calibration.suggestedThresholdRationale || '—';
+
+	metrics.append(
+		createMetricCard(
+			'Scored alerts',
+			formatJobValue(totalScored),
+			available ? 'Sufficient sample size' : 'Minimum 20 scored alerts required',
+		),
+		createMetricCard(
+			'Suggested threshold',
+			suggestedThreshold !== null && suggestedThreshold !== undefined ? `${suggestedThreshold}` : '—',
+			rationale,
+		),
+	);
+
+	const buckets = Array.isArray(calibration.buckets) ? calibration.buckets : [];
+	if (buckets.length) {
+		const section = element('section', { className: 'dashboard-section' });
+		section.append(element('h3', { text: 'Calibration buckets' }));
+		const table = element('table', { className: 'data-table' });
+		const head = element('tr');
+		['Confidence Range', 'Alerts', 'Avg Return (1h)', 'Avg Return (4h)', 'Target Hit Rate'].forEach((label) => head.append(element('th', { text: label })));
+		table.append(head);
+		buckets.forEach((b) => {
+			const detail = asObject(b);
+			const row = element('tr');
+			const hitRatePct = detail.targetHitRate !== undefined && detail.targetHitRate !== null
+				? `${Math.round(detail.targetHitRate * 100)}%`
+				: '—';
+			const ret1h = detail.avgReturn1h !== undefined && detail.avgReturn1h !== null
+				? `${detail.avgReturn1h > 0 ? '+' : ''}${detail.avgReturn1h}%`
+				: '—';
+			const ret4h = detail.avgReturn4h !== undefined && detail.avgReturn4h !== null
+				? `${detail.avgReturn4h > 0 ? '+' : ''}${detail.avgReturn4h}%`
+				: '—';
+			row.append(
+				element('td', { text: detail.range || '—' }),
+				element('td', { text: formatJobValue(detail.count ?? 0) }),
+				element('td', { text: ret1h }),
+				element('td', { text: ret4h }),
+				element('td', { text: hitRatePct }),
+			);
+			table.append(row);
+		});
+		section.append(table);
+		wrap.append(section);
+	}
+
+	return wrap;
+};
+
+const createOutcomesCalibrationForm = () => {
+	const definition = { method: 'GET', path: '/api/outcomes/calibration', label: 'Load outcomes calibration' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const symbol = addField(form, 'Symbol', 'symbol', { placeholder: 'BTCUSDT or BINANCE:BTCUSDT' });
+	const exchange = addField(form, 'Exchange', 'exchange', { placeholder: 'BINANCE' });
+	const windowField = addField(form, 'Window', 'window', { tag: 'select' });
+	[
+		['4h', '4h (Default)'],
+		['1h', '1h'],
+		['1D', '1D'],
+		['1W', '1W'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		windowField.append(option);
+	});
+	const from = addField(form, 'From', 'from', { placeholder: 'ISO-8601 timestamp' });
+	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
+	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 1000, value: 1000 });
+
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const blocks = element('div', { className: 'summary-host' });
+	let lastRawJson = '';
+	const rawOutput = element('pre', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.append(
+		element('summary', { text: 'Show raw calibration response' }),
+		rawCopyButton,
+		rawOutput,
+	);
+	form.append(button, output, blocks, rawToggle);
+
+	let calibrationGeneration = 0;
+	const invalidateCalibration = () => {
+		calibrationGeneration += 1;
+		button.disabled = false;
+		blocks.replaceChildren();
+		lastRawJson = '';
+		rawOutput.textContent = '';
+		rawCopyButton.hidden = true;
+		output.textContent = 'Filters changed — load outcomes calibration to refresh.';
+	};
+	[symbol, exchange, windowField, from, to, limit].forEach((field) => {
+		field.addEventListener('input', invalidateCalibration);
+		field.addEventListener('change', invalidateCalibration);
+	});
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		const generation = ++calibrationGeneration;
+		const query = Object.fromEntries(Object.entries({
+			limit: limit.value,
+			symbol: symbol.value,
+			exchange: exchange.value,
+			window: windowField.value,
+			from: from.value,
+			to: to.value,
+		}).filter(([, value]) => value !== ''));
+		sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button,
+			output,
+			isCurrent: () => generation === calibrationGeneration,
+			formatResponse: ({ summary: sumText, status: respStatus, elapsed, data }) => {
+				if (!data || !data.calibration) return `${sumText}\nHTTP ${respStatus} · ${elapsed} ms\n\nNo calibration data returned.`;
+				lastRawJson = JSON.stringify(data, null, 2);
+				return `${sumText}\nHTTP ${respStatus} · ${elapsed} ms`;
+			},
+		}).then((data) => {
+			if (generation !== calibrationGeneration) return;
+			if (!data || !data.calibration) {
+				blocks.replaceChildren();
+				lastRawJson = '';
+				rawOutput.textContent = '';
+				rawCopyButton.hidden = true;
+				return;
+			}
+			blocks.replaceChildren(renderOutcomesCalibrationBlocks(data));
+			rawOutput.textContent = lastRawJson;
+			rawCopyButton.hidden = false;
+		});
+	});
+	return form;
+};
+
 const getQueryEnum = (contract, definition, name) => {
 	const operation = getOperation(contract, definition);
 	const parameter = getParameters(contract, operation).find((item) => item.name === name);
 	return parameter && parameter.schema && parameter.schema.enum || [];
+};
+
+const formatOrderValue = (value) => value === undefined || value === null || value === '' ? '—' : String(value);
+
+const formatOrderEnvironment = (environment) => {
+	if (environment === 'live') return element('span', {
+		className: 'status-badge status-danger',
+		text: 'Environment: live',
+	});
+	if (environment === 'testnet') return element('span', {
+		className: 'status-badge status-ready',
+		text: 'Environment: testnet',
+	});
+	return element('span', {
+		className: 'status-badge status-disabled',
+		text: `Environment: ${formatOrderValue(environment)}`,
+	});
+};
+
+const ORDER_SUMMARY_FIELDS = [
+	['Symbol', 'symbol'],
+	['Side', 'side'],
+	['Type', 'type'],
+	['Status', 'status'],
+	['Price', 'price'],
+	['Orig qty', 'origQty'],
+	['Executed qty', 'executedQty'],
+	['Cumulative quote', 'cummulativeQuoteQty'],
+	['Time in force', 'timeInForce'],
+	['Stop price', 'stopPrice'],
+];
+
+const ORDER_IDENTIFIER_FIELDS = [
+	['Order ID', 'orderId'],
+	['Client order ID', 'clientOrderId'],
+];
+
+const createOrderCard = (order) => {
+	const card = element('article', { className: 'operation-card order-card' });
+	const symbol = formatOrderValue(order && order.symbol);
+	const heading = element('h3');
+	heading.append(
+		element('span', { text: symbol }),
+		createCopyButton(() => `${formatOrderValue(order && order.symbol)} · ${formatOrderValue(order && order.orderId)}`, 'Copy summary'),
+	);
+	card.append(heading);
+
+	const identifiers = element('dl');
+	ORDER_IDENTIFIER_FIELDS.forEach(([label, key]) => {
+		if (!order || order[key] === undefined || order[key] === null) return;
+		const dd = element('dd');
+		dd.append(element('span', { text: formatOrderValue(order[key]) }));
+		dd.append(createCopyButton(() => formatOrderValue(order[key]), 'Copy'));
+		identifiers.append(element('dt', { text: label }), dd);
+	});
+	if (identifiers.children.length) card.append(identifiers);
+
+	const details = element('dl');
+	ORDER_SUMMARY_FIELDS.forEach(([label, key]) => {
+		details.append(
+			element('dt', { text: label }),
+			element('dd', { text: formatOrderValue(order && order[key]) }),
+		);
+	});
+	card.append(details);
+
+	const timestamps = element('dl');
+	const stampFields = [
+		['Created', order && order.time],
+		['Transact', order && order.transactTime],
+		['Working', order && order.workingTime],
+		['Updated', order && order.updateTime],
+	];
+	stampFields.forEach(([label, value]) => {
+		const dd = element('dd');
+		if (value !== undefined && value !== null && value !== '') dd.append(createTimestamp(value));
+		else dd.textContent = '—';
+		timestamps.append(element('dt', { text: label }), dd);
+	});
+	card.append(timestamps);
+
+	const fills = Array.isArray(order && order.fills) ? order.fills : [];
+	if (fills.length) {
+		const fillsBlock = element('div', { className: 'order-fills' });
+		fillsBlock.append(element('h4', { text: `Fills (${fills.length})` }));
+		const list = element('dl');
+		fills.forEach((fill) => {
+			['price', 'qty', 'commission', 'commissionAsset', 'tradeId'].forEach((key) => {
+				if (fill[key] === undefined || fill[key] === null) return;
+				list.append(element('dt', { text: key }), element('dd', { text: formatOrderValue(fill[key]) }));
+			});
+		});
+		fillsBlock.append(list);
+		card.append(fillsBlock);
+	}
+
+	return card;
+};
+
+const ORDER_LIST_QUERY_VALIDATION = {
+	symbol: (value) => typeof value === 'string' && /^[A-Z0-9]{5,20}$/.test(String(value).trim().toUpperCase()),
+	limit: (value) => {
+		const normalized = String(value).trim();
+		const parsed = Number(normalized);
+		return /^\d+$/.test(normalized) && Number.isFinite(parsed) && parsed >= 1 && parsed <= 100;
+	},
+	orderId: (value) => {
+		const normalized = String(value).trim();
+		const parsed = Number(normalized);
+		return /^\d+$/.test(normalized) && Number.isFinite(parsed) && parsed > 0;
+	},
+	origClientOrderId: (value) => {
+		const normalized = String(value).trim();
+		return /^[A-Za-z0-9._:-]{1,36}$/.test(normalized);
+	},
+};
+
+const trimFormValue = (value) => (value === undefined || value === null ? '' : String(value).trim());
+
+const createOrderListForm = () => {
+	const definition = { method: 'GET', path: '/api/trading/binance/orders', label: 'Load recent orders' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const symbol = addField(form, 'Symbol', 'symbol', { placeholder: 'BTCUSDT', required: true });
+	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: —' });
+	const list = element('div', { className: 'form-fields' });
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	form.append(button, environmentBadge, list, output);
+
+	let listRequestVersion = 0;
+	const invalidateListRequest = () => {
+		listRequestVersion += 1;
+		list.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
+		button.disabled = false;
+		output.className = 'response-block request-state';
+		output.textContent = 'Filters changed. Submit to load recent orders.';
+	};
+	symbol.addEventListener('input', invalidateListRequest);
+	limit.addEventListener('input', invalidateListRequest);
+
+	const renderOrders = (orders, environment) => {
+		list.replaceChildren();
+		environmentBadge.replaceChildren(formatOrderEnvironment(environment));
+		if (!orders.length) {
+			list.append(createEmptyState('No recent orders found.'));
+			return;
+		}
+		orders.forEach((order) => list.append(createOrderCard(order)));
+	};
+
+	form.addEventListener('submit', async (event) => {
+		event.preventDefault();
+		list.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
+		const requestVersion = ++listRequestVersion;
+		const query = {};
+		const symbolValue = trimFormValue(symbol.value).toUpperCase();
+		if (ORDER_LIST_QUERY_VALIDATION.symbol(symbolValue)) query.symbol = symbolValue;
+		const limitValue = trimFormValue(limit.value);
+		if (limitValue && ORDER_LIST_QUERY_VALIDATION.limit(limitValue)) query.limit = String(Number(limitValue));
+		if (!query.symbol) {
+			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button,
+			output,
+			isCurrent: () => requestVersion === listRequestVersion,
+			formatResponse: ({ summary, status: responseStatus, elapsed }) => (
+				`${summary}\nHTTP ${responseStatus} · ${elapsed} ms`
+			),
+		});
+		if (requestVersion === listRequestVersion && data && Array.isArray(data.orders)) {
+			renderOrders(data.orders, data.environment);
+		}
+	});
+
+	return form;
+};
+
+const createOrderLookupForm = () => {
+	const definition = { method: 'GET', path: '/api/trading/binance/orders', label: 'Get single order' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const symbol = addField(form, 'Symbol', 'symbol', { placeholder: 'BTCUSDT', required: true });
+	const orderId = addField(form, 'Order ID', 'path-orderId', { type: 'number', min: 1, placeholder: 'Binance numeric order ID' });
+	const origClientOrderId = addField(form, 'origClientOrderId', 'path-origClientOrderId', {
+		placeholder: '1-36 safe characters (A-Z a-z 0-9 . _ : -)',
+		pattern: '^[A-Za-z0-9._:-]{1,36}$',
+		maxLength: 36,
+	});
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: —' });
+	const result = element('div');
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const hint = element('p', { className: 'hint', text: 'Provide either orderId or origClientOrderId to query a single order.' });
+	form.append(button, environmentBadge, hint, result, output);
+
+	let lookupRequestVersion = 0;
+	const invalidateLookup = () => {
+		lookupRequestVersion += 1;
+		result.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
+		button.disabled = false;
+		output.className = 'response-block request-state';
+		output.textContent = 'Filters changed. Submit to load order.';
+	};
+	symbol.addEventListener('input', invalidateLookup);
+	orderId.addEventListener('input', invalidateLookup);
+	origClientOrderId.addEventListener('input', invalidateLookup);
+
+	form.addEventListener('submit', async (event) => {
+		event.preventDefault();
+		result.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
+		const requestVersion = ++lookupRequestVersion;
+		const symbolValue = trimFormValue(symbol.value).toUpperCase();
+		const orderIdValue = trimFormValue(orderId.value);
+		const origClientOrderIdValue = trimFormValue(origClientOrderId.value);
+		if (!ORDER_LIST_QUERY_VALIDATION.symbol(symbolValue)) {
+			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+		if (!orderIdValue && !origClientOrderIdValue) {
+			showError(output, 'orderId or origClientOrderId is required for single-order lookup.');
+			return;
+		}
+		if (orderIdValue && origClientOrderIdValue) {
+			showError(output, 'Provide exactly one order identifier.');
+			return;
+		}
+		if (orderIdValue && !ORDER_LIST_QUERY_VALIDATION.orderId(orderIdValue)) {
+			showError(output, 'orderId must be a positive integer.');
+			return;
+		}
+		if (origClientOrderIdValue && !ORDER_LIST_QUERY_VALIDATION.origClientOrderId(origClientOrderIdValue)) {
+			showError(output, 'origClientOrderId must contain 1-36 safe characters (letters, numbers, ., _, :, -).');
+			return;
+		}
+		const query = { symbol: symbolValue };
+		if (orderIdValue) query.orderId = orderIdValue.replace(/^0+(?=\d)/, '');
+		else if (origClientOrderIdValue) query.origClientOrderId = origClientOrderIdValue;
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button,
+			output,
+			isCurrent: () => requestVersion === lookupRequestVersion,
+			formatResponse: ({ summary, status: responseStatus, elapsed }) => (
+				`${summary}\nHTTP ${responseStatus} · ${elapsed} ms`
+			),
+		});
+		if (requestVersion === lookupRequestVersion && data && data.order) {
+			environmentBadge.replaceChildren(formatOrderEnvironment(data.environment));
+			result.replaceChildren(createOrderCard(data.order));
+		}
+	});
+
+	return form;
 };
 
 const formatJobValue = (value) => value === undefined || value === null || value === '' ? '—' : String(value);
@@ -3973,6 +4629,7 @@ const PLAYGROUND_STRUCTURED_RENDERERS = {
 	'POST /api/jobs/tradingview-analysis': (data) => (data && (data.jobId || data.status) ? createJobPanel(data) : null),
 	'GET /api/outcomes/{id}': (data) => (data && data.id ? createOutcomeDetailPanel(data) : null),
 	'GET /api/outcomes/summary': (data) => (data && data.summary ? renderOutcomesSummaryBlocks(data) : null),
+	'GET /api/outcomes/calibration': (data) => (data && data.calibration ? renderOutcomesCalibrationBlocks(data) : null),
 };
 
 const getPlaygroundRenderer = (definition) => {
@@ -4204,6 +4861,11 @@ const renderPlayground = (contract, view) => {
 		if (currentValStillAvailable) {
 			select.value = currentVal;
 		} else if (firstAvailableValue !== null) {
+			// Filter-driven selection: save current inputs under the old definition
+			// and update previousDefinition to the newly selected one so subsequent
+			// explicit changes save under the correct operation.
+			saveCurrentInputs(previousDefinition);
+			previousDefinition = definitions[Number(firstAvailableValue)];
 			select.value = firstAvailableValue;
 			renderFields();
 		} else {
@@ -5171,6 +5833,7 @@ const renderView = async (name) => {
 		if (name === 'outcomes') {
 			view.append(createOutcomesListForm());
 			view.append(createOutcomesSummaryForm());
+			view.append(createOutcomesCalibrationForm());
 			return;
 		}
 		if (name === 'jobs') {
@@ -5180,6 +5843,11 @@ const renderView = async (name) => {
 				status.selectJob(jobId, { autoLoad: true });
 			})));
 			view.append(status.form);
+			return;
+		}
+		if (name === 'orders') {
+			view.append(createOrderListForm());
+			view.append(createOrderLookupForm());
 			return;
 		}
 		if (name === 'presets') {

@@ -31,6 +31,7 @@ const {
 	isNewsMonitorPaused,
 	getNewsMonitorPauseState,
 } = require('./webhooks/handlers/newsMonitor/pauseState');
+const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTracker');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -190,7 +191,7 @@ function getGeminiQuotaDependency({ gemini }) {
 }
 
 
-function getStatus() {
+function getStatus({ skipTelemetrySync = false } = {}) {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
 	const runtimeConfig = remoteConfigService.getRuntimeConfig();
@@ -304,9 +305,21 @@ function getStatus() {
 			&& hasValue(process.env.AZURE_LLM_MODEL),
 	});
 	const { getCacheInstance } = require('./webhooks/handlers/newsMonitor/cache');
+	const { getURLShortener } = require('./webhooks/handlers/newsMonitor/urlShortener');
 	const cache = getCacheInstance();
+	const urlShortener = getURLShortener();
 	const newsMonitorDedupEnabled = runtimeConfig.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP;
 	const newsMonitorDedupConfigured = newsMonitorDedupEnabled && firestore.configured;
+	const newsMonitorCacheSize = {
+		entries: cache.cache.size,
+		maxEntries: cache.maxEntries,
+		evictionCount: cache._evictionCount,
+		deliveryLocks: cache.deliveryLocks.size,
+		deliveryLockMaxEntries: cache.deliveryLockMaxEntries,
+		deliveryLockEvictionCount: cache._deliveryLockEvictionCount,
+		urlShortenerCache: urlShortener.cache.getStats(),
+		urlShortenerServiceFailures: urlShortener.serviceFailuresStats,
+	};
 	const newsMonitorDedup = {
 		enabled: newsMonitorDedupEnabled,
 		configured: newsMonitorDedupConfigured,
@@ -317,6 +330,7 @@ function getStatus() {
 		}),
 		mode: cache.dedupMode.mode,
 		backend: cache.dedupMode.backend,
+		cacheSize: newsMonitorCacheSize,
 	};
 
 	const signalOutcomeWorkerStatus = SignalOutcomeService.getWorkerStatus();
@@ -422,6 +436,7 @@ function getStatus() {
 			newsMonitor: {
 				enabled: newsMonitorEnabled,
 				...getNewsMonitorPauseState(),
+				...getVolumeTracker().getWindowUsage(),
 			},
 			newsMonitorLlm,
 			llmAlertEnrichment,
@@ -458,7 +473,7 @@ function getStatus() {
 				lastRunPendingCount: signalOutcomeWorkerStatus.lastRunPendingCount,
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
 			},
-			notificationRedrive: notificationRedriveService.getStatus(),
+			notificationRedrive: notificationRedriveService.getStatus({ skipTelemetrySync }),
 			alertSignalRepeatSuppression: {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
@@ -477,9 +492,16 @@ function getStatus() {
 	};
 }
 
-function getApiStatus(req, res) {
+async function getApiStatus(req, res) {
 	try {
-		return res.status(200).json(getStatus());
+		if (
+			notificationRedriveService.isEnabled()
+			&& notificationRedriveService.getWorkerRole() !== 'disabled'
+			&& notificationRedriveService.hasDurableStore()
+		) {
+			await notificationRedriveService.syncWorkerTelemetry();
+		}
+		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {
 		console.error('[StatusController] getStatus failed:', error);
 		return res.status(500).json({ error: error.message, code: 'INTERNAL_ERROR' });

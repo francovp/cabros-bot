@@ -165,6 +165,12 @@ textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas
 .preset-scans-fieldset legend { color: var(--muted); font-size: .78rem; font-weight: 700; padding: 0 .4rem; }
 .checkbox-label { display: flex; align-items: center; gap: .5rem; cursor: pointer; }
 .checkbox-label input[type="checkbox"] { width: auto; }
+.batch-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; padding: .75rem; background: #0c1c30; border: 1px solid var(--border); border-radius: var(--radius-sm); margin: .5rem 0; }
+.alert-select-all-label, .alert-select-label { display: flex; align-items: center; gap: .4rem; cursor: pointer; font-size: .85rem; }
+.alert-select-all-label input[type="checkbox"], .alert-select-label input[type="checkbox"] { width: auto; margin: 0; cursor: pointer; }
+.batch-selection-count { font-size: .85rem; font-weight: 600; color: var(--accent); margin-right: .25rem; }
+.batch-toolbar button { justify-self: auto; font-size: .82rem; padding: .4rem .75rem; }
+.batch-toolbar .batch-output { width: 100%; margin-top: .5rem; }
 .playground-actions { margin-top: .4rem; }
 .playground-structured-result { margin-top: 1rem; display: grid; gap: .75rem; }
 .playground-history { margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1rem; }

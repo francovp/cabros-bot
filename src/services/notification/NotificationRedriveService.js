@@ -18,6 +18,30 @@ const DEFAULT_LEASE_MS = 60000; // 60s
 const MAX_DRAIN_TIMEOUT_MS = 10000;
 const RECONCILIATION_TIMEOUT_MS = 500;
 const DURABLE_ENQUEUE_TIMEOUT_MS = 500;
+const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
+const HEARTBEAT_DOCUMENT_ID = 'notification-redrive';
+const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
+const ZERO_CHANNEL_RETRY_DELAY_MS = HEARTBEAT_WRITE_TIMEOUT_MS;
+const MAX_ZERO_CHANNEL_RETRY_ATTEMPTS = 3;
+const ZERO_CHANNEL_NON_COMMIT_ERROR_CODES = new Set([
+	'aborted',
+	'already-exists',
+	'failed-precondition',
+	'invalid-argument',
+	'not-found',
+	'permission-denied',
+	'resource-exhausted',
+	'unauthenticated',
+	'3',
+	'5',
+	'6',
+	'7',
+	'8',
+	'9',
+	'10',
+	'16',
+]);
+const PENDING_COUNT_FALLBACK_LIMIT = 1000;
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
 const ROUTING_FIELDS = Object.freeze({
 	telegram: 'telegramChatId',
@@ -98,6 +122,45 @@ function toMillis(timestampOrDate) {
 	return new Date(timestampOrDate).getTime() || 0;
 }
 
+function normalizeTimestampToDate(val) {
+	if (!val) return null;
+	if (val instanceof Date) {
+		return Number.isFinite(val.getTime()) ? val : null;
+	}
+	if (typeof val.toDate === 'function') {
+		try {
+			const d = val.toDate();
+			return (d instanceof Date && Number.isFinite(d.getTime())) ? d : null;
+		} catch (_) {
+			return null;
+		}
+	}
+	if (typeof val.toMillis === 'function') {
+		try {
+			const ms = val.toMillis();
+			return Number.isFinite(ms) ? new Date(ms) : null;
+		} catch (_) {
+			return null;
+		}
+	}
+	if (typeof val === 'number' && Number.isFinite(val)) {
+		return new Date(val);
+	}
+	if (typeof val === 'string') {
+		const parsed = new Date(val);
+		return Number.isFinite(parsed.getTime()) ? parsed : null;
+	}
+	if (typeof val._seconds === 'number') {
+		const ms = val._seconds * 1000 + Math.round((val._nanoseconds || 0) / 1e6);
+		return Number.isFinite(ms) ? new Date(ms) : null;
+	}
+	return null;
+}
+
+function isZeroChannelNonCommitError(error) {
+	return ZERO_CHANNEL_NON_COMMIT_ERROR_CODES.has(String(error?.code || '').trim().toLowerCase());
+}
+
 function compareGenerations(supersessionGen, recordGen) {
 	if (Number.isFinite(supersessionGen) && Number.isFinite(recordGen)) {
 		return supersessionGen - recordGen;
@@ -165,6 +228,10 @@ function getRedriveRouting(channel, routing, repeatCooldown) {
 	return { ...(routing || {}), [field]: destination };
 }
 
+function isPendingRedriveStatus(status) {
+	return status === 'pending' || status === 'in_flight';
+}
+
 class NotificationRedriveService {
 	constructor(options = {}) {
 		this.inMemoryStore = new Map();
@@ -179,13 +246,176 @@ class NotificationRedriveService {
 		this.lastRunScannedCount = 0;
 		this.lastRunRedrivenCount = 0;
 		this.lastRunErrorCount = 0;
+		this.lastRunExhaustedCount = 0;
+		this.lastSweepAt = null;
+		this.lastSweepResult = null;
+		this.telemetrySyncTimer = null;
+		this.persistedLastRunAt = null;
+		this.persistedLastSweepAt = null;
+		this.persistedLastSweepResult = null;
+		this.persistedLastRunDurationMs = null;
+		this.persistedLastRunScannedCount = 0;
+		this.persistedLastRunRedrivenCount = 0;
+		this.persistedLastRunErrorCount = 0;
+		this.persistedLastRunExhaustedCount = 0;
+		this.persistedDeliveredCount = 0;
+		this.persistedExhaustedCount = 0;
+		this.persistedZeroChannelBroadcasts = 0;
+		this.persistedPendingCount = null;
+		this._pendingCountLocalDelta = 0;
+		this._pendingCountLocalMutationAt = 0;
+		this._pendingCountLocalMutations = [];
+		this._pendingCountLocalMutationSequence = 0;
+		this._pendingCountObservedAt = null;
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
 		this.totalZeroChannelBroadcasts = 0;
+		this._telemetryWriteSequence = 0;
+		this._activeTelemetryWritePromise = null;
+		this._activeTelemetryWriteOperation = null;
+		this._activeTelemetryReadPromise = null;
+		this._activePendingCountPromise = null;
+		this._activeZeroChannelWritePromise = null;
+		this._activeZeroChannelWriteResultPromise = null;
+		this._pendingZeroChannelWriteDelta = 0;
+		this._zeroChannelRetryTimer = null;
+		this._zeroChannelRetryAttempts = 0;
+		this._isDraining = false;
+		this._initialSeedPromise = null;
+		this._sessionDeliveredDelta = 0;
+		this._sessionExhaustedDelta = 0;
 	}
 
 	incrementZeroChannelBroadcasts() {
 		this.totalZeroChannelBroadcasts += 1;
+		if (!this.hasDurableStore()) return Promise.resolve();
+
+		this._pendingZeroChannelWriteDelta += 1;
+		return this._flushZeroChannelWrites();
+	}
+
+	_scheduleZeroChannelRetry() {
+		if (
+			this._zeroChannelRetryTimer
+			|| this._pendingZeroChannelWriteDelta <= 0
+			|| !this.hasDurableStore()
+			|| this._isDraining
+			|| this._zeroChannelRetryAttempts >= MAX_ZERO_CHANNEL_RETRY_ATTEMPTS
+		) {
+			return;
+		}
+
+		this._zeroChannelRetryAttempts += 1;
+		this._zeroChannelRetryTimer = setTimeout(() => {
+			this._zeroChannelRetryTimer = null;
+			if (this._pendingZeroChannelWriteDelta > 0) {
+				trackBackgroundTask(this._flushZeroChannelWrites()).catch(() => {});
+			}
+		}, ZERO_CHANNEL_RETRY_DELAY_MS);
+		if (typeof this._zeroChannelRetryTimer.unref === 'function') {
+			this._zeroChannelRetryTimer.unref();
+		}
+	}
+
+	_flushZeroChannelWrites() {
+		if (this._activeZeroChannelWritePromise) {
+			return this._activeZeroChannelWriteResultPromise || this._activeZeroChannelWritePromise;
+		}
+		if (this._pendingZeroChannelWriteDelta <= 0 || !this.hasDurableStore()) {
+			return Promise.resolve(true);
+		}
+		if (this._zeroChannelRetryTimer) {
+			clearTimeout(this._zeroChannelRetryTimer);
+			this._zeroChannelRetryTimer = null;
+		}
+
+		const delta = this._pendingZeroChannelWriteDelta;
+		this._pendingZeroChannelWriteDelta = 0;
+		let persisted = false;
+		let retryable = false;
+		let followUpWriteStarted = false;
+		let trackedWrite;
+		const writePromise = Promise.resolve()
+			.then(() => this._persistZeroChannelIncrement(delta))
+			.then((result) => {
+				persisted = result?.persisted === true;
+				retryable = result?.retryable === true;
+				if (!persisted && retryable) {
+					this._pendingZeroChannelWriteDelta += delta;
+				}
+				return persisted;
+			})
+			.catch((error) => {
+				console.warn('[NotificationRedriveService] Zero-channel write failed:', error.message);
+				return false;
+			})
+			.finally(() => {
+				if (this._activeZeroChannelWritePromise !== trackedWrite) return;
+				this._activeZeroChannelWritePromise = null;
+				this._activeZeroChannelWriteResultPromise = null;
+				if (persisted) {
+					this._zeroChannelRetryAttempts = 0;
+					if (this._pendingZeroChannelWriteDelta > 0) {
+						followUpWriteStarted = true;
+						this._flushZeroChannelWrites();
+					}
+				} else if (retryable && !this._isDraining) {
+					this._scheduleZeroChannelRetry();
+				}
+			});
+		trackedWrite = writePromise;
+		this._activeZeroChannelWritePromise = trackedWrite;
+
+		const boundedResult = resolveBeforeDeadline(
+			trackedWrite,
+			Date.now() + HEARTBEAT_WRITE_TIMEOUT_MS,
+		).then((result) => {
+			if (result === null) {
+				console.warn(`[NotificationRedriveService] Zero-channel write timed out after ${HEARTBEAT_WRITE_TIMEOUT_MS}ms`);
+				return false;
+			}
+			if (result === true && followUpWriteStarted) {
+				return this._activeZeroChannelWriteResultPromise || Promise.resolve(true);
+			}
+			return result === true;
+		}).catch(() => false);
+		this._activeZeroChannelWriteResultPromise = boundedResult;
+		trackBackgroundTask(trackedWrite).catch(() => {});
+		return boundedResult;
+	}
+
+	_persistZeroChannelIncrement(delta = 1) {
+		const firestore = this.getFirestore();
+		if (!firestore) {
+			return Promise.resolve({ persisted: false, retryable: false });
+		}
+		try {
+			const docRef = firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID);
+			let writePromise = null;
+			if (admin?.firestore?.FieldValue?.increment) {
+				writePromise = docRef.set({
+					zeroChannelBroadcasts: admin.firestore.FieldValue.increment(delta),
+				}, { merge: true });
+			} else if (typeof firestore.runTransaction === 'function') {
+				writePromise = firestore.runTransaction(async (tx) => {
+					const snapshot = await tx.get(docRef);
+					const data = snapshot && snapshot.exists ? (typeof snapshot.data === 'function' ? snapshot.data() : snapshot) : null;
+					const current = Number(data?.zeroChannelBroadcasts) || 0;
+					tx.set(docRef, { zeroChannelBroadcasts: current + delta }, { merge: true });
+				});
+			} else if (typeof docRef.set === 'function') {
+				writePromise = docRef.set({ zeroChannelBroadcasts: this.totalZeroChannelBroadcasts }, { merge: true });
+			} else {
+				return Promise.resolve({ persisted: false, retryable: false });
+			}
+			return Promise.resolve(writePromise).then(() => ({ persisted: true, retryable: false })).catch((error) => {
+				console.warn('[NotificationRedriveService] Failed to persist zero-channel increment:', error.message);
+				return { persisted: false, retryable: isZeroChannelNonCommitError(error) };
+			});
+		} catch (error) {
+			console.warn('[NotificationRedriveService] Failed to persist zero-channel increment:', error.message);
+			return Promise.resolve({ persisted: false, retryable: true });
+		}
 	}
 
 	getZeroChannelBroadcastsCount() {
@@ -304,7 +534,9 @@ class NotificationRedriveService {
 			}
 
 			// Persist in-memory store
+			const previousRecord = this.inMemoryStore.get(recordId);
 			this.inMemoryStore.set(recordId, { ...sanitizedRecord });
+			this._adjustPendingCount(previousRecord?.status, sanitizedRecord.status);
 
 			// Try persisting to Firestore if available
 			const firestore = this.getFirestore();
@@ -516,6 +748,7 @@ class NotificationRedriveService {
 
 		const sanitized = stripUndefinedFieldsDeep(updateData);
 		const memCurrent = this.inMemoryStore.get(recordId);
+		const previousStatus = memCurrent?.status;
 		if (memCurrent) {
 			this.inMemoryStore.set(recordId, { ...memCurrent, ...sanitized });
 		}
@@ -529,14 +762,22 @@ class NotificationRedriveService {
 				});
 				if (Number.isFinite(deadline)) {
 					const persisted = await resolveBeforeDeadline(writePromise, deadline);
+					if (persisted === true) {
+						this._adjustPendingCount(previousStatus, sanitized.status);
+					}
 					return persisted === true;
 				}
-				return await writePromise;
+				const persisted = await writePromise;
+				if (persisted === true) {
+					this._adjustPendingCount(previousStatus, sanitized.status);
+				}
+				return persisted;
 			} catch (error) {
 				console.warn(`[NotificationRedriveService] Failed to mark dead-letter ${recordId} terminal (${status}):`, error.message);
 				return false;
 			}
 		}
+		this._adjustPendingCount(previousStatus, sanitized.status);
 		return true;
 	}
 
@@ -559,6 +800,7 @@ class NotificationRedriveService {
 
 		const sanitized = stripUndefinedFieldsDeep(updateData);
 		const memCurrent = this.inMemoryStore.get(recordId);
+		const previousStatus = memCurrent?.status;
 		if (memCurrent) {
 			this.inMemoryStore.set(recordId, { ...memCurrent, ...sanitized });
 		}
@@ -567,10 +809,13 @@ class NotificationRedriveService {
 		if (firestore) {
 			try {
 				await firestore.collection(COLLECTION_NAME).doc(recordId).set(sanitized, { merge: true });
+				this._adjustPendingCount(previousStatus, sanitized.status);
 			} catch (error) {
 				console.warn(`[NotificationRedriveService] Failed to update retry for ${recordId}:`, error.message);
 			}
+			return;
 		}
+		this._adjustPendingCount(previousStatus, sanitized.status);
 	}
 
 	async reconcileRepeatCooldown(key, channels = []) {
@@ -943,7 +1188,15 @@ class NotificationRedriveService {
 			return this.activeSweepPromise;
 		}
 
-		this.activeSweepPromise = this._executeSweep(options).finally(() => {
+		this.activeSweepPromise = (async () => {
+			if (this._initialSeedPromise) {
+				try {
+					await this._initialSeedPromise;
+				} catch (_) {}
+				this._initialSeedPromise = null;
+			}
+			return this._executeSweep(options);
+		})().finally(() => {
 			this.activeSweepPromise = null;
 		});
 
@@ -972,6 +1225,7 @@ class NotificationRedriveService {
 		let scannedCount = 0;
 		let redrivenCount = 0;
 		let errorCount = 0;
+		let exhaustedCount = 0;
 
 		try {
 			const candidates = await this.getEligibleRecords(batchLimit, maxAgeMs);
@@ -988,11 +1242,17 @@ class NotificationRedriveService {
 				if (candidate.expired || candidate.attemptCount >= maxAttempts) {
 					const terminalStatus = candidate.expired ? 'expired' : 'exhausted';
 					releaseRepeatCooldown(candidate);
-					await this.markTerminal(candidate.id, terminalStatus, {
+					const marked = await this.markTerminal(candidate.id, terminalStatus, {
 						terminalAt: toTimestamp(new Date()),
 					});
-					this.totalExhaustedCount += 1;
-					trackBackgroundTask(this.notifyAdminPermanentFailure(candidate, `Terminal status: ${terminalStatus}`)).catch(() => {});
+					if (marked) {
+						this.totalExhaustedCount += 1;
+						exhaustedCount += 1;
+						this._sessionExhaustedDelta = (this._sessionExhaustedDelta || 0) + 1;
+						trackBackgroundTask(this.notifyAdminPermanentFailure(candidate, `Terminal status: ${terminalStatus}`)).catch(() => {});
+					} else {
+						errorCount += 1;
+					}
 					continue;
 				}
 
@@ -1061,12 +1321,17 @@ class NotificationRedriveService {
 							signalRepeatCooldown.refresh(claimed.repeatCooldown.key, [claimed.repeatCooldown.channel]);
 						}
 						// Delivery succeeded
-						await this.markTerminal(claimed.id, 'delivered', {
+						const marked = await this.markTerminal(claimed.id, 'delivered', {
 							deliveredAt: toTimestamp(new Date()),
 						});
-						this.totalDeliveredCount += 1;
-						redrivenCount += 1;
-						console.info(`[NotificationRedriveService] Successfully redelivered dead-letter ${claimed.id}`);
+						if (marked) {
+							this.totalDeliveredCount += 1;
+							this._sessionDeliveredDelta = (this._sessionDeliveredDelta || 0) + 1;
+							redrivenCount += 1;
+							console.info(`[NotificationRedriveService] Successfully redelivered dead-letter ${claimed.id}`);
+						} else {
+							errorCount += 1;
+						}
 					} else {
 						// Delivery failed again
 						const nextAttempts = (claimed.attemptCount || 0) + 1;
@@ -1075,17 +1340,21 @@ class NotificationRedriveService {
 
 						if (nextAttempts >= maxAttempts) {
 							releaseRepeatCooldown(claimed);
-							await this.markTerminal(claimed.id, 'exhausted', {
+							const marked = await this.markTerminal(claimed.id, 'exhausted', {
 								lastError: String(lastErr),
 								lastStatusCode: lastCode,
 								attemptCount: nextAttempts,
 							});
-							this.totalExhaustedCount += 1;
-							trackBackgroundTask(this.notifyAdminPermanentFailure({
-								...claimed,
-								attemptCount: nextAttempts,
-								lastError: lastErr,
-							}, 'Exhausted maximum retry attempts')).catch(() => {});
+							if (marked) {
+								this.totalExhaustedCount += 1;
+								exhaustedCount += 1;
+								this._sessionExhaustedDelta = (this._sessionExhaustedDelta || 0) + 1;
+								trackBackgroundTask(this.notifyAdminPermanentFailure({
+									...claimed,
+									attemptCount: nextAttempts,
+									lastError: lastErr,
+								}, 'Exhausted maximum retry attempts')).catch(() => {});
+							}
 							errorCount += 1;
 						} else {
 							await this.markRetry(claimed.id, nextAttempts, lastErr, lastCode);
@@ -1097,16 +1366,20 @@ class NotificationRedriveService {
 					const nextAttempts = (claimed.attemptCount || 0) + 1;
 					if (nextAttempts >= maxAttempts) {
 						releaseRepeatCooldown(claimed);
-						await this.markTerminal(claimed.id, 'exhausted', {
+						const marked = await this.markTerminal(claimed.id, 'exhausted', {
 							lastError: error.message,
 							attemptCount: nextAttempts,
 						});
-						this.totalExhaustedCount += 1;
-						trackBackgroundTask(this.notifyAdminPermanentFailure({
-							...claimed,
-							attemptCount: nextAttempts,
-							lastError: error.message,
-						}, 'Exhausted maximum retry attempts')).catch(() => {});
+						if (marked) {
+							this.totalExhaustedCount += 1;
+							exhaustedCount += 1;
+							this._sessionExhaustedDelta = (this._sessionExhaustedDelta || 0) + 1;
+							trackBackgroundTask(this.notifyAdminPermanentFailure({
+								...claimed,
+								attemptCount: nextAttempts,
+								lastError: error.message,
+							}, 'Exhausted maximum retry attempts')).catch(() => {});
+						}
 					} else {
 						await this.markRetry(claimed.id, nextAttempts, error.message, null);
 					}
@@ -1117,10 +1390,24 @@ class NotificationRedriveService {
 			console.error('[NotificationRedriveService] Sweep execution failed:', error.message);
 			errorCount += 1;
 		} finally {
-			this.lastRunDurationMs = Math.max(0, Date.now() - startTime);
+			const sweepEndTime = Date.now();
+			this.lastRunDurationMs = Math.max(0, sweepEndTime - startTime);
 			this.lastRunScannedCount = scannedCount;
 			this.lastRunRedrivenCount = redrivenCount;
 			this.lastRunErrorCount = errorCount;
+			this.lastRunExhaustedCount = exhaustedCount;
+			this.lastSweepAt = new Date(sweepEndTime);
+			this.lastSweepResult = {
+				processed: scannedCount,
+				succeeded: redrivenCount,
+				exhausted: exhaustedCount,
+				errors: errorCount,
+			};
+			try {
+				await this.persistWorkerTelemetry();
+			} catch (error) {
+				console.warn('[NotificationRedriveService] Sweep telemetry persistence failed:', error.message);
+			}
 		}
 
 		return {
@@ -1128,6 +1415,490 @@ class NotificationRedriveService {
 			redriven: redrivenCount,
 			errors: errorCount,
 		};
+	}
+
+	_getPendingFallbackCount() {
+		if (Number.isFinite(this.persistedPendingCount)) {
+			return this.persistedPendingCount;
+		}
+		return this.getPendingCount();
+	}
+
+	async countDurablePendingRecords() {
+		const firestore = this.getFirestore();
+		if (!firestore) {
+			return this._getPendingFallbackCount();
+		}
+		try {
+			if (!this._activePendingCountPromise) {
+				const collection = firestore.collection(COLLECTION_NAME);
+				if (typeof collection?.where !== 'function') {
+					return this._getPendingFallbackCount();
+				}
+				const query = collection.where('status', 'in', ['pending', 'in_flight']);
+				if (!query) {
+					return this._getPendingFallbackCount();
+				}
+				const expiryAwareQuery = typeof query.where === 'function'
+					? query.where('expiresAt', '>', toTimestamp(new Date()))
+					: query;
+				const aggregateQuery = typeof expiryAwareQuery.count === 'function' ? expiryAwareQuery.count() : null;
+				const queryToRead = aggregateQuery || (
+					typeof expiryAwareQuery.limit === 'function'
+						? expiryAwareQuery.limit(PENDING_COUNT_FALLBACK_LIMIT)
+						: expiryAwareQuery
+				);
+				if (!queryToRead || typeof queryToRead.get !== 'function') {
+					return this._getPendingFallbackCount();
+				}
+				const pendingCountQueryStartedAtMs = Date.now();
+				const localPendingCountMutationSequenceAtQueryStart = this._pendingCountLocalMutationSequence;
+				const applyDurablePendingCount = (count, snapshot = null) => {
+					const snapshotObservedAt = normalizeTimestampToDate(snapshot?.readTime);
+					const observedAtMs = snapshotObservedAt?.getTime() || pendingCountQueryStartedAtMs;
+					const localDeltaAfterSnapshot = this._pendingCountLocalMutations.reduce((delta, mutation) => {
+						if (mutation.sequence <= localPendingCountMutationSequenceAtQueryStart) {
+							return delta;
+						}
+						if (snapshotObservedAt && mutation.at <= observedAtMs) {
+							return delta;
+						}
+						return delta + mutation.delta;
+					}, 0);
+					this.persistedPendingCount = Math.max(0, Math.floor(count + localDeltaAfterSnapshot));
+					this._pendingCountObservedAt = new Date(observedAtMs);
+					return Math.floor(count);
+				};
+
+				const countPromise = Promise.resolve()
+					.then(() => queryToRead.get())
+					.then((snapshot) => {
+						if (aggregateQuery) {
+							const data = typeof snapshot?.data === 'function' ? snapshot.data() : snapshot?.data;
+							const count = Number(data?.count);
+							if (!Number.isFinite(count) || count < 0) return null;
+							return applyDurablePendingCount(count, snapshot);
+						}
+						if (!snapshot || snapshot.empty) {
+							return applyDurablePendingCount(0, snapshot);
+						}
+						let count = 0;
+						const nowMs = Date.now();
+						const docs = Array.isArray(snapshot.docs) ? snapshot.docs : [];
+						for (const doc of docs) {
+							const data = typeof doc.data === 'function' ? doc.data() : doc;
+							const expiresAtMs = toMillis(data?.expiresAt);
+							if (!expiresAtMs || expiresAtMs > nowMs) {
+								count += 1;
+							}
+						}
+						return applyDurablePendingCount(count, snapshot);
+					})
+					.catch((error) => {
+						console.warn('[NotificationRedriveService] Failed to count durable pending records:', error.message);
+						return null;
+					})
+					.finally(() => {
+						if (this._activePendingCountPromise === countPromise) {
+							this._activePendingCountPromise = null;
+						}
+					});
+
+				this._activePendingCountPromise = countPromise;
+			}
+
+			const result = await resolveBeforeDeadline(this._activePendingCountPromise, Date.now() + 3000);
+			if (result === null || !Number.isFinite(result)) {
+				return this._getPendingFallbackCount();
+			}
+			return result;
+		} catch (error) {
+			console.warn('[NotificationRedriveService] Failed to count durable pending records:', error.message);
+			return this._getPendingFallbackCount();
+		}
+	}
+
+	async seedCountersFromHeartbeat(retries = 1) {
+		const firestore = this.getFirestore();
+		if (!firestore) return;
+		for (let attempt = 0; attempt <= retries; attempt++) {
+			try {
+				const collection = firestore.collection(HEARTBEAT_COLLECTION_NAME);
+				if (typeof collection?.doc !== 'function') return;
+				const docRef = collection.doc(HEARTBEAT_DOCUMENT_ID);
+				if (!docRef || typeof docRef.get !== 'function') return;
+				const doc = await resolveBeforeDeadline(docRef.get(), Date.now() + 3000);
+				if (doc && doc.exists) {
+					const data = typeof doc.data === 'function' ? doc.data() : doc;
+					if (data) {
+						if (Number.isFinite(data.deliveredCount) && data.deliveredCount > this.totalDeliveredCount) {
+							this.totalDeliveredCount = data.deliveredCount;
+						}
+						if (Number.isFinite(data.exhaustedCount) && data.exhaustedCount > this.totalExhaustedCount) {
+							this.totalExhaustedCount = data.exhaustedCount;
+						}
+						if (Number.isFinite(data.zeroChannelBroadcasts) && data.zeroChannelBroadcasts > this.totalZeroChannelBroadcasts) {
+							this.totalZeroChannelBroadcasts = data.zeroChannelBroadcasts;
+						}
+					}
+					return;
+				}
+				return;
+			} catch (error) {
+				if (attempt === retries) {
+					console.warn('[NotificationRedriveService] Failed to seed counters from heartbeat:', error.message);
+				}
+			}
+		}
+	}
+
+	async persistWorkerTelemetry(options = {}) {
+		const firestore = this.getFirestore();
+		if (!firestore) {
+			return false;
+		}
+
+		const timeoutMs = options.timeoutMs || this._heartbeatWriteTimeoutMs || HEARTBEAT_WRITE_TIMEOUT_MS;
+		const sequence = ++this._telemetryWriteSequence;
+		const completedAt = normalizeTimestampToDate(this.lastSweepAt) || new Date();
+		const currentSweepAtMs = completedAt.getTime();
+		const pendingCount = await this.countDurablePendingRecords();
+		const pendingCountObservedAt = normalizeTimestampToDate(this._pendingCountObservedAt) || new Date();
+		const payload = {
+			worker: 'notification-redrive',
+			role: this.getWorkerRole(),
+			workerRole: this.getWorkerRole(),
+			sequence,
+			lastRunAt: this.lastRunAt ? this.lastRunAt.toISOString() : null,
+			lastSweepAt: completedAt ? completedAt.toISOString() : null,
+			lastSweepResult: this.lastSweepResult ? { ...this.lastSweepResult } : null,
+			lastRunDurationMs: this.lastRunDurationMs,
+			lastRunScannedCount: this.lastRunScannedCount,
+			lastRunRedrivenCount: this.lastRunRedrivenCount,
+			lastRunErrorCount: this.lastRunErrorCount,
+			lastRunExhaustedCount: this.lastRunExhaustedCount,
+			pendingCount,
+			pendingCountObservedAt: pendingCountObservedAt.toISOString(),
+			deliveredCount: this.totalDeliveredCount,
+			exhaustedCount: this.totalExhaustedCount,
+			updatedAt: admin.firestore?.Timestamp?.fromDate
+				? admin.firestore.Timestamp.fromDate(new Date())
+				: new Date().toISOString(),
+		};
+
+		const parseSweepTimestampMs = (val) => {
+			if (!val) return 0;
+			if (typeof val.toMillis === 'function') return val.toMillis();
+			if (typeof val.toDate === 'function') return val.toDate().getTime();
+			const parsed = new Date(val).getTime();
+			return Number.isFinite(parsed) ? parsed : 0;
+		};
+
+		const performWrite = async () => {
+			// Skip stale write if a newer sweep write has already been scheduled in this process
+			if (sequence < this._telemetryWriteSequence) {
+				return false;
+			}
+
+			const docRef = firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID);
+
+			if (typeof firestore.runTransaction === 'function') {
+				let txCompleted = false;
+				let deliveredDelta = 0;
+				let exhaustedDelta = 0;
+				let finalWritePayload = null;
+				const txPromise = firestore.runTransaction(async (transaction) => {
+					const doc = await transaction.get(docRef);
+					let writePayload = { ...payload };
+					deliveredDelta = this._sessionDeliveredDelta || 0;
+					exhaustedDelta = this._sessionExhaustedDelta || 0;
+
+					if (doc && doc.exists) {
+						const data = typeof doc.data === 'function' ? doc.data() : doc;
+						const existingDelivered = Number(data?.deliveredCount) || 0;
+						const existingExhausted = Number(data?.exhaustedCount) || 0;
+						const existingSweepAtMs = parseSweepTimestampMs(data?.lastSweepAt);
+						const currentSweepAtMs = parseSweepTimestampMs(payload.lastSweepAt);
+
+						// If persisted heartbeat has a newer sweep completion time, do not overwrite sweep metadata
+						if (existingSweepAtMs > currentSweepAtMs) {
+							if (deliveredDelta > 0 || exhaustedDelta > 0) {
+								const deltaPayload = {
+									deliveredCount: existingDelivered + deliveredDelta,
+									exhaustedCount: existingExhausted + exhaustedDelta,
+								};
+								finalWritePayload = deltaPayload;
+								transaction.set(docRef, deltaPayload, { merge: true });
+							}
+							return;
+						}
+						// If exact same completion millisecond, use process sequence as tie-breaker
+						if (existingSweepAtMs === currentSweepAtMs) {
+							const existingSequence = Number(data?.sequence) || 0;
+							if (existingSequence > sequence) {
+								if (deliveredDelta > 0 || exhaustedDelta > 0) {
+									const deltaPayload = {
+										deliveredCount: existingDelivered + deliveredDelta,
+										exhaustedCount: existingExhausted + exhaustedDelta,
+									};
+									finalWritePayload = deltaPayload;
+									transaction.set(docRef, deltaPayload, { merge: true });
+								}
+								return;
+							}
+						}
+						writePayload.deliveredCount = Math.max(existingDelivered + deliveredDelta, payload.deliveredCount);
+						writePayload.exhaustedCount = Math.max(existingExhausted + exhaustedDelta, payload.exhaustedCount);
+					}
+					finalWritePayload = writePayload;
+					transaction.set(docRef, writePayload, { merge: true });
+				}).then(() => {
+					txCompleted = true;
+					if (finalWritePayload) {
+						this._sessionDeliveredDelta = Math.max(0, (this._sessionDeliveredDelta || 0) - deliveredDelta);
+						this._sessionExhaustedDelta = Math.max(0, (this._sessionExhaustedDelta || 0) - exhaustedDelta);
+						if (typeof finalWritePayload.deliveredCount === 'number') {
+							this.totalDeliveredCount = Math.max(this.totalDeliveredCount, finalWritePayload.deliveredCount);
+						}
+						if (typeof finalWritePayload.exhaustedCount === 'number') {
+							this.totalExhaustedCount = Math.max(this.totalExhaustedCount, finalWritePayload.exhaustedCount);
+						}
+					}
+				});
+
+				const trackedOp = txPromise
+					.catch(() => null)
+					.finally(() => {
+						if (this._activeTelemetryWriteOperation === trackedOp) {
+							this._activeTelemetryWriteOperation = null;
+						}
+					});
+				this._activeTelemetryWriteOperation = trackedOp;
+
+				const deadlineResult = await resolveBeforeDeadline(txPromise.catch(() => null), Date.now() + timeoutMs);
+				if (deadlineResult === null && !txCompleted) {
+					return false;
+				}
+				return txCompleted;
+			}
+
+			let setCompleted = false;
+			const setPromise = docRef.set(payload, { merge: true }).then(() => {
+				setCompleted = true;
+			});
+			const trackedOp = setPromise
+				.catch(() => null)
+				.finally(() => {
+					if (this._activeTelemetryWriteOperation === trackedOp) {
+						this._activeTelemetryWriteOperation = null;
+					}
+				});
+			this._activeTelemetryWriteOperation = trackedOp;
+			const deadlineResult = await resolveBeforeDeadline(setPromise.catch(() => null), Date.now() + timeoutMs);
+			if (deadlineResult === null && !setCompleted) {
+				return false;
+			}
+			return setCompleted;
+		};
+
+		// If a previous telemetry write operation is still active in Firestore, keep writes single-flight
+		if (this._activeTelemetryWriteOperation) {
+			const waitBudgetMs = Number.isFinite(options.waitTimeoutMs)
+				? options.waitTimeoutMs
+				: Math.min(timeoutMs, 2000);
+			let waitTimer = null;
+			try {
+				await Promise.race([
+					this._activeTelemetryWriteOperation,
+					new Promise((resolve) => {
+						waitTimer = setTimeout(resolve, waitBudgetMs);
+					}),
+				]);
+			} finally {
+				if (waitTimer) {
+					clearTimeout(waitTimer);
+				}
+			}
+			// If previous Firestore operation has not settled, prevent starting a concurrent write
+			if (this._activeTelemetryWriteOperation) {
+				return false;
+			}
+		} else if (this._activeTelemetryWritePromise) {
+			const waitBudgetMs = Number.isFinite(options.waitTimeoutMs)
+				? options.waitTimeoutMs
+				: Math.min(timeoutMs, 2000);
+			let waitTimer = null;
+			try {
+				await Promise.race([
+					this._activeTelemetryWritePromise.catch(() => {}),
+					new Promise((resolve) => {
+						waitTimer = setTimeout(resolve, waitBudgetMs);
+					}),
+				]);
+			} finally {
+				if (waitTimer) {
+					clearTimeout(waitTimer);
+				}
+			}
+		}
+
+		// Skip stale write if a newer sweep write has already been scheduled in this process
+		if (sequence < this._telemetryWriteSequence) {
+			return false;
+		}
+
+		let timedOut = false;
+		let timeoutTimer = null;
+		const writePromise = performWrite();
+		this._activeTelemetryWritePromise = writePromise;
+
+		try {
+			const timeoutPromise = new Promise((_, reject) => {
+				timeoutTimer = setTimeout(() => {
+					timedOut = true;
+					reject(new Error(`Telemetry write timed out after ${timeoutMs}ms`));
+				}, timeoutMs);
+			});
+
+			const result = await Promise.race([writePromise, timeoutPromise]);
+			return result === true;
+		} catch (error) {
+			console.warn('[NotificationRedriveService] Failed to persist worker telemetry:', error.message);
+			return false;
+		} finally {
+			if (timeoutTimer) {
+				clearTimeout(timeoutTimer);
+			}
+			if (timedOut || this._activeTelemetryWritePromise === writePromise) {
+				this._activeTelemetryWritePromise = null;
+			}
+		}
+	}
+
+	async syncWorkerTelemetry(options = {}) {
+		const firestore = this.getFirestore();
+		if (!firestore) {
+			return false;
+		}
+
+		// Keep underlying read promise single-flight until it settles
+		if (!this._activeTelemetryReadPromise) {
+			let readPromise;
+			readPromise = Promise.resolve()
+				.then(() => this._performSyncWorkerTelemetry(firestore))
+				.catch((error) => {
+					console.warn('[NotificationRedriveService] Telemetry read error:', error.message);
+					return false;
+				})
+				.finally(() => {
+					if (this._activeTelemetryReadPromise === readPromise) {
+						this._activeTelemetryReadPromise = null;
+					}
+				});
+			this._activeTelemetryReadPromise = readPromise;
+		}
+
+		const timeoutMs = options.timeoutMs || HEARTBEAT_WRITE_TIMEOUT_MS;
+		let timer = null;
+		try {
+			return await Promise.race([
+				this._activeTelemetryReadPromise,
+				new Promise((resolve) => {
+					timer = setTimeout(() => resolve(false), timeoutMs);
+				}),
+			]);
+		} finally {
+			if (timer) {
+				clearTimeout(timer);
+			}
+		}
+	}
+
+	async _performSyncWorkerTelemetry(firestore) {
+		try {
+			const docRef = firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID);
+			const snapshot = await docRef.get();
+			if (!snapshot || !snapshot.exists) {
+				return false;
+			}
+			const data = typeof snapshot.data === 'function' ? snapshot.data() : snapshot;
+			if (!data) {
+				return false;
+			}
+			const normalizedSweepAt = normalizeTimestampToDate(data.lastSweepAt);
+			const normalizedRunAt = normalizeTimestampToDate(data.lastRunAt);
+			const snapshotSweepAtMs = normalizedSweepAt ? normalizedSweepAt.getTime() : 0;
+			const normalizedPendingCountObservedAt = normalizeTimestampToDate(data.pendingCountObservedAt);
+			const pendingCountObservedAtMs = normalizedPendingCountObservedAt
+				? normalizedPendingCountObservedAt.getTime()
+				: snapshotSweepAtMs;
+			const currentCachedSweepAtMs = this.persistedLastSweepAt ? (normalizeTimestampToDate(this.persistedLastSweepAt)?.getTime() || 0) : 0;
+			if (currentCachedSweepAtMs > 0 && Number.isFinite(snapshotSweepAtMs) && snapshotSweepAtMs < currentCachedSweepAtMs) {
+				return false;
+			}
+			if (normalizedRunAt) {
+				this.persistedLastRunAt = normalizedRunAt;
+			}
+			if (normalizedSweepAt) {
+				this.persistedLastSweepAt = normalizedSweepAt;
+			}
+			if (data.lastSweepResult && typeof data.lastSweepResult === 'object') {
+				this.persistedLastSweepResult = {
+					processed: Number(data.lastSweepResult.processed) || 0,
+					succeeded: Number(data.lastSweepResult.succeeded) || 0,
+					exhausted: Number(data.lastSweepResult.exhausted) || 0,
+					errors: Number(data.lastSweepResult.errors) || 0,
+				};
+			}
+			if (typeof data.lastRunDurationMs === 'number') {
+				this.persistedLastRunDurationMs = data.lastRunDurationMs;
+			}
+			if (typeof data.lastRunScannedCount === 'number') {
+				this.persistedLastRunScannedCount = data.lastRunScannedCount;
+			}
+			if (typeof data.lastRunRedrivenCount === 'number') {
+				this.persistedLastRunRedrivenCount = data.lastRunRedrivenCount;
+			}
+			if (typeof data.lastRunErrorCount === 'number') {
+				this.persistedLastRunErrorCount = data.lastRunErrorCount;
+			}
+			if (typeof data.lastRunExhaustedCount === 'number') {
+				this.persistedLastRunExhaustedCount = data.lastRunExhaustedCount;
+			}
+			if (typeof data.pendingCount === 'number') {
+				const localDeltaAfterSnapshot = this._getPendingCountLocalDeltaAfter(pendingCountObservedAtMs);
+				this.persistedPendingCount = Math.max(0, Math.floor(data.pendingCount + (
+					localDeltaAfterSnapshot
+				)));
+				this._retainPendingCountLocalMutationsAfter(pendingCountObservedAtMs);
+			}
+			if (typeof data.deliveredCount === 'number') {
+				this.persistedDeliveredCount = data.deliveredCount;
+			}
+			if (typeof data.exhaustedCount === 'number') {
+				this.persistedExhaustedCount = data.exhaustedCount;
+			}
+			if (typeof data.zeroChannelBroadcasts === 'number') {
+				this.persistedZeroChannelBroadcasts = data.zeroChannelBroadcasts;
+			}
+			return true;
+		} catch (error) {
+			console.warn('[NotificationRedriveService] Failed to sync worker telemetry:', error.message);
+			return false;
+		}
+	}
+
+	_startTelemetrySync(intervalMs) {
+		if (this.telemetrySyncTimer) {
+			return;
+		}
+		void this.syncWorkerTelemetry();
+		this.telemetrySyncTimer = setInterval(() => {
+			trackBackgroundTask(this.syncWorkerTelemetry()).catch(() => {});
+		}, intervalMs);
+		if (typeof this.telemetrySyncTimer.unref === 'function') {
+			this.telemetrySyncTimer.unref();
+		}
 	}
 
 	startWorker(options = {}) {
@@ -1141,7 +1912,15 @@ class NotificationRedriveService {
 		if (configuredRole === 'disabled') {
 			return false;
 		}
+
+		const runtimeConfig = getRuntimeConfig();
+		const intervalMs = parsePositiveInteger(
+			options.intervalMs ?? runtimeConfig.NOTIFICATION_REDRIVE_INTERVAL_MS ?? process.env.NOTIFICATION_REDRIVE_INTERVAL_MS,
+			DEFAULT_REDRIVE_INTERVAL_MS,
+		);
+
 		if (configuredRole === 'worker' && source !== 'worker') {
+			this._startTelemetrySync(intervalMs);
 			return false;
 		}
 		if (configuredRole === 'web' && source !== 'web') {
@@ -1152,13 +1931,11 @@ class NotificationRedriveService {
 			return true;
 		}
 
-		const runtimeConfig = getRuntimeConfig();
-		const intervalMs = parsePositiveInteger(
-			options.intervalMs ?? runtimeConfig.NOTIFICATION_REDRIVE_INTERVAL_MS ?? process.env.NOTIFICATION_REDRIVE_INTERVAL_MS,
-			DEFAULT_REDRIVE_INTERVAL_MS,
-		);
-
+		this._isDraining = false;
 		this.running = true;
+		if (configuredRole === 'worker') {
+			this._initialSeedPromise = this.seedCountersFromHeartbeat();
+		}
 		this.workerTimer = setInterval(() => {
 			trackBackgroundTask(this.sweep()).catch((err) => {
 				console.warn('[NotificationRedriveService] Worker sweep error:', err.message);
@@ -1178,24 +1955,129 @@ class NotificationRedriveService {
 			clearInterval(this.workerTimer);
 			this.workerTimer = null;
 		}
+		if (this.telemetrySyncTimer) {
+			clearInterval(this.telemetrySyncTimer);
+			this.telemetrySyncTimer = null;
+		}
 		this.running = false;
 
-		if (options.drain && this.activeSweepPromise) {
+		if (options.drain) {
+			this._isDraining = true;
 			const timeoutMs = parsePositiveInteger(options.timeoutMs, MAX_DRAIN_TIMEOUT_MS);
-			let timer = null;
-			try {
-				await Promise.race([
-					this.activeSweepPromise,
-					new Promise((_, reject) => {
-						timer = setTimeout(() => reject(new Error('Drain timeout exceeded')), timeoutMs);
-					}),
-				]);
-			} catch (error) {
-				console.warn('[NotificationRedriveService] Worker drain timeout/error:', error.message);
-			} finally {
-				if (timer) {
-					clearTimeout(timer);
+			const drainDeadline = Date.now() + timeoutMs;
+			if (this.activeSweepPromise) {
+				let timer = null;
+				try {
+					await Promise.race([
+						this.activeSweepPromise,
+						new Promise((_, reject) => {
+							timer = setTimeout(() => reject(new Error('Drain timeout exceeded')), Math.max(0, drainDeadline - Date.now()));
+						}),
+					]);
+				} catch (error) {
+					console.warn('[NotificationRedriveService] Worker drain timeout/error:', error.message);
+				} finally {
+					if (timer) {
+						clearTimeout(timer);
+					}
 				}
+			}
+
+			const activeWrite = this._activeTelemetryWritePromise || this._activeTelemetryWriteOperation;
+			if (activeWrite) {
+				let timer = null;
+				try {
+					await Promise.race([
+						activeWrite,
+						new Promise((_, reject) => {
+							timer = setTimeout(() => reject(new Error('Telemetry drain timeout exceeded')), Math.max(0, drainDeadline - Date.now()));
+						}),
+					]);
+				} catch (error) {
+					console.warn('[NotificationRedriveService] Worker telemetry drain timeout/error:', error.message);
+				} finally {
+					if (timer) {
+						clearTimeout(timer);
+					}
+				}
+			}
+
+			if (this._activeTelemetryReadPromise) {
+				let timer = null;
+				try {
+					await Promise.race([
+						this._activeTelemetryReadPromise,
+						new Promise((_, reject) => {
+							timer = setTimeout(() => reject(new Error('Telemetry read drain timeout exceeded')), Math.max(0, drainDeadline - Date.now()));
+						}),
+					]);
+				} catch (error) {
+					console.warn('[NotificationRedriveService] Worker telemetry read drain timeout/error:', error.message);
+				} finally {
+					if (timer) {
+						clearTimeout(timer);
+					}
+				}
+			}
+
+			if (this._activePendingCountPromise) {
+				let timer = null;
+				try {
+					await Promise.race([
+						this._activePendingCountPromise,
+						new Promise((_, reject) => {
+							timer = setTimeout(() => reject(new Error('Pending count drain timeout exceeded')), Math.max(0, drainDeadline - Date.now()));
+						}),
+					]);
+				} catch (error) {
+					console.warn('[NotificationRedriveService] Worker pending count drain timeout/error:', error.message);
+				} finally {
+					if (timer) {
+						clearTimeout(timer);
+					}
+				}
+			}
+
+			if (this._zeroChannelRetryTimer) {
+				clearTimeout(this._zeroChannelRetryTimer);
+				this._zeroChannelRetryTimer = null;
+			}
+
+			let zeroChannelFlushStarted = false;
+			while (Date.now() < drainDeadline) {
+				if (!this._activeZeroChannelWritePromise && this._pendingZeroChannelWriteDelta > 0) {
+					if (zeroChannelFlushStarted) {
+						break;
+					}
+					zeroChannelFlushStarted = true;
+					this._flushZeroChannelWrites();
+				}
+
+				const activeZeroChannelWrite = this._activeZeroChannelWritePromise;
+				if (!activeZeroChannelWrite) {
+					break;
+				}
+
+				let timer = null;
+				try {
+					await Promise.race([
+						activeZeroChannelWrite,
+						new Promise((_, reject) => {
+							timer = setTimeout(() => reject(new Error('Zero-channel write drain timeout exceeded')), Math.max(0, drainDeadline - Date.now()));
+						}),
+					]);
+				} catch (error) {
+					console.warn('[NotificationRedriveService] Worker zero-channel write drain timeout/error:', error.message);
+				} finally {
+					if (timer) {
+						clearTimeout(timer);
+					}
+				}
+			}
+
+			if (this._zeroChannelRetryTimer) {
+				clearTimeout(this._zeroChannelRetryTimer);
+				this._zeroChannelRetryTimer = null;
 			}
 		}
 	}
@@ -1205,7 +2087,7 @@ class NotificationRedriveService {
 		const nowMs = Date.now();
 
 		for (const data of this.inMemoryStore.values()) {
-			if (data.status === 'pending' || data.status === 'in_flight') {
+			if (isPendingRedriveStatus(data.status)) {
 				const expiresAtMs = toMillis(data.expiresAt);
 				if (!expiresAtMs || expiresAtMs > nowMs) {
 					count += 1;
@@ -1215,10 +2097,91 @@ class NotificationRedriveService {
 		return count;
 	}
 
-	getStatus() {
+	_getPendingCountLocalDeltaAfter(observedAtMs) {
+		if (this._pendingCountLocalMutations.length > 0) {
+			return this._pendingCountLocalMutations.reduce((delta, mutation) => (
+				mutation.at > observedAtMs ? delta + mutation.delta : delta
+			), 0);
+		}
+		return this._pendingCountLocalMutationAt > observedAtMs ? this._pendingCountLocalDelta : 0;
+	}
+
+	_retainPendingCountLocalMutationsAfter(observedAtMs) {
+		if (this._pendingCountLocalMutations.length > 0) {
+			this._pendingCountLocalMutations = this._pendingCountLocalMutations.filter(
+				(mutation) => mutation.at > observedAtMs,
+			);
+			this._pendingCountLocalDelta = this._pendingCountLocalMutations.reduce(
+				(delta, mutation) => delta + mutation.delta,
+				0,
+			);
+			this._pendingCountLocalMutationAt = this._pendingCountLocalMutations.at(-1)?.at || 0;
+			return;
+		}
+		if (this._pendingCountLocalMutationAt <= observedAtMs) {
+			this._pendingCountLocalDelta = 0;
+			this._pendingCountLocalMutationAt = 0;
+		}
+	}
+
+	_adjustPendingCount(previousStatus, nextStatus) {
+		const wasPending = isPendingRedriveStatus(previousStatus);
+		const isPending = isPendingRedriveStatus(nextStatus);
+		if (wasPending === isPending) return;
+
+		const delta = isPending ? 1 : -1;
+		const mutationAt = Date.now();
+		this._pendingCountLocalDelta += delta;
+		this._pendingCountLocalMutationAt = this._pendingCountLocalDelta === 0 ? 0 : mutationAt;
+		this._pendingCountLocalMutations.push({
+			sequence: ++this._pendingCountLocalMutationSequence,
+			delta,
+			at: mutationAt,
+		});
+		if (Number.isFinite(this.persistedPendingCount)) {
+			this.persistedPendingCount = Math.max(0, this.persistedPendingCount + delta);
+		}
+	}
+
+	getStatus({ skipTelemetrySync = false } = {}) {
 		const enabled = this.isEnabled();
 		const role = this.getWorkerRole();
 		const runtimeConfig = getRuntimeConfig();
+
+		if (!skipTelemetrySync && role !== 'disabled' && this.getFirestore()) {
+			void this.syncWorkerTelemetry();
+		}
+
+		const localSweepAt = normalizeTimestampToDate(this.lastSweepAt);
+		const persistedSweepAt = normalizeTimestampToDate(this.persistedLastSweepAt);
+		const usePersistedSnapshot = Boolean(
+			persistedSweepAt && (!localSweepAt || persistedSweepAt.getTime() >= localSweepAt.getTime()),
+		);
+		const selectSnapshotValue = (localValue, persistedValue) => usePersistedSnapshot
+			? (persistedValue ?? localValue)
+			: (localValue ?? persistedValue);
+		const effectiveLastRunAt = selectSnapshotValue(this.lastRunAt, this.persistedLastRunAt);
+		const effectiveLastSweepAt = selectSnapshotValue(this.lastSweepAt, this.persistedLastSweepAt);
+		const effectiveLastSweepResult = selectSnapshotValue(this.lastSweepResult, this.persistedLastSweepResult);
+		const effectiveLastRunDurationMs = selectSnapshotValue(this.lastRunDurationMs, this.persistedLastRunDurationMs);
+		const effectiveLastRunScannedCount = selectSnapshotValue(this.lastRunScannedCount, this.persistedLastRunScannedCount) ?? 0;
+		const effectiveLastRunRedrivenCount = selectSnapshotValue(this.lastRunRedrivenCount, this.persistedLastRunRedrivenCount) ?? 0;
+		const effectiveLastRunErrorCount = selectSnapshotValue(this.lastRunErrorCount, this.persistedLastRunErrorCount) ?? 0;
+		const effectiveLastRunExhaustedCount = selectSnapshotValue(this.lastRunExhaustedCount, this.persistedLastRunExhaustedCount) ?? 0;
+		const effectivePendingCount = Number.isFinite(this.persistedPendingCount)
+			? this.persistedPendingCount
+			: this.getPendingCount();
+		const effectiveDeliveredCount = Math.max(this.totalDeliveredCount, this.persistedDeliveredCount || 0);
+		const effectiveExhaustedCount = Math.max(this.totalExhaustedCount, this.persistedExhaustedCount || 0);
+		const effectiveZeroChannelBroadcasts = Math.max(this.totalZeroChannelBroadcasts, this.persistedZeroChannelBroadcasts || 0);
+
+		const formatSafeIso = (dateVal) => {
+			const normalized = normalizeTimestampToDate(dateVal);
+			return normalized ? normalized.toISOString() : null;
+		};
+
+		const lastRunAtIso = formatSafeIso(effectiveLastRunAt);
+		const lastSweepAtIso = formatSafeIso(effectiveLastSweepAt);
 
 		return {
 			enabled,
@@ -1226,20 +2189,26 @@ class NotificationRedriveService {
 			ready: enabled && role !== 'disabled',
 			status: !enabled ? 'disabled' : (role === 'disabled' ? 'disabled' : 'ready'),
 			role,
+			workerRole: role,
 			running: Boolean(this.running),
 			intervalMs: parsePositiveInteger(runtimeConfig.NOTIFICATION_REDRIVE_INTERVAL_MS ?? process.env.NOTIFICATION_REDRIVE_INTERVAL_MS, DEFAULT_REDRIVE_INTERVAL_MS),
 			batchLimit: parsePositiveInteger(runtimeConfig.NOTIFICATION_REDRIVE_BATCH_LIMIT ?? process.env.NOTIFICATION_REDRIVE_BATCH_LIMIT, DEFAULT_BATCH_LIMIT),
 			maxAttempts: parsePositiveInteger(runtimeConfig.NOTIFICATION_REDRIVE_MAX_ATTEMPTS ?? process.env.NOTIFICATION_REDRIVE_MAX_ATTEMPTS, DEFAULT_MAX_ATTEMPTS),
 			maxAgeMs: parsePositiveInteger(runtimeConfig.NOTIFICATION_REDRIVE_MAX_AGE_MS ?? process.env.NOTIFICATION_REDRIVE_MAX_AGE_MS, DEFAULT_MAX_AGE_MS),
-			pendingCount: this.getPendingCount(),
-			deliveredCount: this.totalDeliveredCount,
-			exhaustedCount: this.totalExhaustedCount,
-			zeroChannelBroadcasts: this.totalZeroChannelBroadcasts,
-			lastRunAt: this.lastRunAt ? this.lastRunAt.toISOString() : null,
-			lastRunDurationMs: this.lastRunDurationMs,
-			lastRunScannedCount: this.lastRunScannedCount,
-			lastRunRedrivenCount: this.lastRunRedrivenCount,
-			lastRunErrorCount: this.lastRunErrorCount,
+			pendingCount: effectivePendingCount,
+			deliveredCount: effectiveDeliveredCount,
+			exhaustedCount: effectiveExhaustedCount,
+			zeroChannelBroadcasts: effectiveZeroChannelBroadcasts,
+			lastRunAt: lastRunAtIso,
+			lastSweepAt: lastSweepAtIso,
+			lastRunDurationMs: effectiveLastRunDurationMs,
+			lastRunScannedCount: effectiveLastRunScannedCount,
+			lastRunRedrivenCount: effectiveLastRunRedrivenCount,
+			lastRunErrorCount: effectiveLastRunErrorCount,
+			lastRunExhaustedCount: effectiveLastRunExhaustedCount,
+			lastSweepResult: effectiveLastSweepResult
+				? { ...effectiveLastSweepResult }
+				: null,
 		};
 	}
 
@@ -1248,16 +2217,57 @@ class NotificationRedriveService {
 			clearInterval(this.workerTimer);
 			this.workerTimer = null;
 		}
+		if (this.telemetrySyncTimer) {
+			clearInterval(this.telemetrySyncTimer);
+			this.telemetrySyncTimer = null;
+		}
 		this.inMemoryStore.clear();
 		this.supersessionStore.clear();
 		this.reconciliationPromises.clear();
 		this.activeSweepPromise = null;
+		this._telemetryWriteSequence = 0;
+		this._activeTelemetryWritePromise = null;
+		this._activeTelemetryWriteOperation = null;
+		this._activeTelemetryReadPromise = null;
+		this._activePendingCountPromise = null;
+		this._activeZeroChannelWritePromise = null;
+		this._activeZeroChannelWriteResultPromise = null;
+		this._pendingZeroChannelWriteDelta = 0;
+		this._isDraining = false;
+		if (this._zeroChannelRetryTimer) {
+			clearTimeout(this._zeroChannelRetryTimer);
+		}
+		this._zeroChannelRetryTimer = null;
+		this._zeroChannelRetryAttempts = 0;
+		this._initialSeedPromise = null;
+		this._sessionDeliveredDelta = 0;
+		this._sessionExhaustedDelta = 0;
 		this.running = false;
 		this.lastRunAt = null;
 		this.lastRunDurationMs = null;
 		this.lastRunScannedCount = 0;
 		this.lastRunRedrivenCount = 0;
 		this.lastRunErrorCount = 0;
+		this.lastRunExhaustedCount = 0;
+		this.lastSweepAt = null;
+		this.lastSweepResult = null;
+		this.persistedLastRunAt = null;
+		this.persistedLastSweepAt = null;
+		this.persistedLastSweepResult = null;
+		this.persistedLastRunDurationMs = null;
+		this.persistedLastRunScannedCount = 0;
+		this.persistedLastRunRedrivenCount = 0;
+		this.persistedLastRunErrorCount = 0;
+		this.persistedLastRunExhaustedCount = 0;
+		this.persistedPendingCount = null;
+		this._pendingCountLocalDelta = 0;
+		this._pendingCountLocalMutationAt = 0;
+		this._pendingCountLocalMutations = [];
+		this._pendingCountLocalMutationSequence = 0;
+		this._pendingCountObservedAt = null;
+		this.persistedDeliveredCount = 0;
+		this.persistedExhaustedCount = 0;
+		this.persistedZeroChannelBroadcasts = 0;
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
 		this.totalZeroChannelBroadcasts = 0;
