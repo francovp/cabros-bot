@@ -109,6 +109,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_TOKEN_COST_BUDGET: { type: 'boolean', defaultValue: false },
 	TOKEN_COST_DAILY_BUDGET_USD: { type: 'number', defaultValue: 5.0, min: 0.01, max: 10000 },
 	TOKEN_COST_WARN_THRESHOLD_PCT: { type: 'number', defaultValue: 80, integer: true, min: 1, max: 100 },
+	ENABLE_MAINTENANCE_MODE: { type: 'boolean', defaultValue: false },
 });
 
 let remoteOverrides = {};

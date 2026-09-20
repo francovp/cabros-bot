@@ -463,6 +463,12 @@
                 }
               ],
               "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            },
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
             }
           ]
         },
