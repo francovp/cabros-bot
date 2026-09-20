@@ -1457,7 +1457,11 @@ class NotificationRedriveService {
 					const snapshotObservedAt = normalizeTimestampToDate(snapshot?.readTime);
 					const observedAtMs = snapshotObservedAt?.getTime() || pendingCountQueryStartedAtMs;
 					const localDeltaAfterSnapshot = this._pendingCountLocalMutations.reduce((delta, mutation) => (
-						mutation.sequence > localPendingCountMutationSequenceAtQueryStart && mutation.at > observedAtMs
+						mutation.sequence > localPendingCountMutationSequenceAtQueryStart && (
+							snapshotObservedAt
+								? mutation.at > observedAtMs
+								: mutation.at >= observedAtMs
+						)
 							? delta + mutation.delta
 							: delta
 					), 0);

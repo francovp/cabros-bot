@@ -55,7 +55,7 @@ describe('dependabot runtime SDK major suppression (GH-1170)', () => {
       // Escape package name for regex (e.g. @google/genai)
       const escapedPkg = pkgName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const pattern = new RegExp(
-        `dependency-name:\\s*"${escapedPkg}"[\\s\\S]*?update-types:\\s*\\[\\s*"version-update:semver-major"\\s*\\]`
+        `dependency-name:\\s*"${escapedPkg}"(?:(?!dependency-name)[\\s\\S])*?update-types:\\s*\\[\\s*"version-update:semver-major"\\s*\\]`
       );
       expect(npmBlock).toMatch(pattern);
     });
