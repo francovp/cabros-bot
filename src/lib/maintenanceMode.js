@@ -128,8 +128,10 @@ async function checkAndNotifyMaintenanceModeToggle(options = {}) {
 		isNotifying = true;
 		try {
 			const notified = await notifyAdminOnToggle(options);
-			if (notified) {
+			if (notified && isMaintenanceModeEnabled()) {
 				lastNotifiedMaintenanceMode = true;
+			} else if (!isMaintenanceModeEnabled()) {
+				lastNotifiedMaintenanceMode = false;
 			}
 		} finally {
 			isNotifying = false;

@@ -170,6 +170,35 @@ describe('maintenanceMode', () => {
 			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
 			expect(sendMessage).toHaveBeenCalledTimes(2);
 		});
+
+		it('does not latch notification if maintenance mode is disabled while notification is in flight', async () => {
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '123456789';
+
+			let resolveSend;
+			const sendPromise = new Promise((resolve) => {
+				resolveSend = resolve;
+			});
+			const sendMessage = jest.fn().mockImplementation(() => sendPromise);
+			const mockBot = { telegram: { sendMessage } };
+			maintenanceMode.setBotGetter(() => mockBot);
+
+			// Start check while enabled
+			const checkPromise = maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+
+			// Maintenance mode is turned off while send is in flight
+			process.env.ENABLE_MAINTENANCE_MODE = 'false';
+
+			// Notification resolves successfully
+			resolveSend({ message_id: 1 });
+			await checkPromise;
+
+			// Mode is turned back on -> should notify again because it was not latched
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(2);
+		});
 	});
 
 	describe('isTelegramCommand', () => {
