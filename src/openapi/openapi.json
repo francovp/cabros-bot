@@ -4208,6 +4208,20 @@
                     "timeoutRequests": 0
                   }
                 },
+                "grounding": {
+                  "enabled": true,
+                  "configured": true,
+                  "ready": true,
+                  "status": "ready",
+                  "metrics": {
+                    "totalRequests": 1234,
+                    "successRequests": 1180,
+                    "failureRequests": 40,
+                    "timeoutRequests": 14,
+                    "successRate": 0.956,
+                    "uptimeSince": "2026-08-25T10:00:00Z"
+                  }
+                },
                 "tradingViewMcp": {
                   "enabled": true,
                   "configured": true,

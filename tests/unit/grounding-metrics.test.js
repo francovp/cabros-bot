@@ -21,6 +21,39 @@ describe('grounding metrics', () => {
 		});
 	});
 
+	it('returns operational metrics including successRate and uptimeSince on getMetrics', () => {
+		const result = metrics.getMetrics();
+		expect(result).toEqual({
+			totalRequests: 0,
+			successRequests: 0,
+			failureRequests: 0,
+			timeoutRequests: 0,
+			successRate: 0,
+			uptimeSince: expect.any(String),
+		});
+		expect(new Date(result.uptimeSince).toISOString()).toBe(result.uptimeSince);
+	});
+
+	it('calculates successRate accurately on getMetrics with rounded 3 decimal places', () => {
+		// 1180 successes out of 1234 total requests = 0.956
+		for (let i = 0; i < 1180; i++) {
+			metrics.recordSuccess(50, 'ALERT_ENRICHMENT');
+		}
+		for (let i = 0; i < 40; i++) {
+			metrics.recordFailure('error', new Error('fail'), 'ALERT_ENRICHMENT');
+		}
+		for (let i = 0; i < 14; i++) {
+			metrics.recordFailure('timeout', new Error('timeout'), 'ALERT_ENRICHMENT');
+		}
+
+		const result = metrics.getMetrics();
+		expect(result.totalRequests).toBe(1234);
+		expect(result.successRequests).toBe(1180);
+		expect(result.failureRequests).toBe(40);
+		expect(result.timeoutRequests).toBe(14);
+		expect(result.successRate).toBe(0.956);
+	});
+
 	it('increments total and success counters on recordSuccess', () => {
 		metrics.recordSuccess(120, 'ALERT_ENRICHMENT');
 		expect(metrics.getSnapshot()).toEqual({
