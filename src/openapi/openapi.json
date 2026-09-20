@@ -531,6 +531,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "description": "Maximum server SSE connection capacity exceeded.",
             "headers": {
