@@ -11,6 +11,7 @@ const MAINTENANCE_ERROR_RESPONSE = Object.freeze({
 const TELEGRAM_MAINTENANCE_NOTICE = '⚠️ El bot se encuentra temporalmente en modo de mantenimiento. Por favor, intenta más tarde.';
 
 let lastNotifiedMaintenanceMode = false;
+let isNotifying = false;
 let globalBotGetter = null;
 
 /**
@@ -123,9 +124,16 @@ async function notifyAdminOnToggle({
  */
 async function checkAndNotifyMaintenanceModeToggle(options = {}) {
 	const isEnabled = isMaintenanceModeEnabled();
-	if (isEnabled && !lastNotifiedMaintenanceMode) {
-		lastNotifiedMaintenanceMode = true;
-		await notifyAdminOnToggle(options);
+	if (isEnabled && !lastNotifiedMaintenanceMode && !isNotifying) {
+		isNotifying = true;
+		try {
+			const notified = await notifyAdminOnToggle(options);
+			if (notified) {
+				lastNotifiedMaintenanceMode = true;
+			}
+		} finally {
+			isNotifying = false;
+		}
 	} else if (!isEnabled && lastNotifiedMaintenanceMode) {
 		lastNotifiedMaintenanceMode = false;
 	}
@@ -196,6 +204,7 @@ async function telegramMaintenanceMode(context, next) {
  */
 function resetForTesting() {
 	lastNotifiedMaintenanceMode = false;
+	isNotifying = false;
 	globalBotGetter = null;
 }
 

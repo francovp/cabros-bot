@@ -147,6 +147,29 @@ describe('maintenanceMode', () => {
 			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
 			expect(sendMessage).toHaveBeenCalledTimes(2);
 		});
+
+		it('retries notification on subsequent check if previous notification failed', async () => {
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '123456789';
+
+			const sendMessage = jest.fn()
+				.mockRejectedValueOnce(new Error('Network timeout'))
+				.mockResolvedValueOnce({ message_id: 2 });
+			const mockBot = { telegram: { sendMessage } };
+			maintenanceMode.setBotGetter(() => mockBot);
+
+			// First attempt fails -> should not set permanent latch
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+
+			// Second attempt while still enabled -> should retry and succeed
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(2);
+
+			// Third attempt -> already latched because previous succeeded
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(2);
+		});
 	});
 
 	describe('isTelegramCommand', () => {
