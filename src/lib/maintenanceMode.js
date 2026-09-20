@@ -187,22 +187,72 @@ async function checkAndNotifyMaintenanceModeToggle(options = {}) {
 	}
 }
 
+const maintenanceReplyBuckets = new Map();
+const MAINTENANCE_REPLY_COOLDOWN_MS = 5000;
+const MAX_MAINTENANCE_BUCKETS = 10_000;
+
+function isMaintenanceReplyThrottled(chatId, now = Date.now()) {
+	if (chatId === undefined || chatId === null) {
+		return false;
+	}
+	const lastReplyAt = maintenanceReplyBuckets.get(chatId) || 0;
+	if (now - lastReplyAt < MAINTENANCE_REPLY_COOLDOWN_MS) {
+		return true;
+	}
+	maintenanceReplyBuckets.set(chatId, now);
+
+	if (maintenanceReplyBuckets.size > MAX_MAINTENANCE_BUCKETS) {
+		for (const [id, timestamp] of maintenanceReplyBuckets) {
+			if (now - timestamp >= MAINTENANCE_REPLY_COOLDOWN_MS * 2) {
+				maintenanceReplyBuckets.delete(id);
+			}
+		}
+	}
+	return false;
+}
+
 /**
- * Determines whether a Telegraf context represents a bot command.
+ * Determines whether a Telegraf context represents a bot command addressed to this bot.
+ * If the command includes a recipient (@bot_username), verifies that it matches the current bot.
+ * Commands directed to other bots in group chats return false so they can pass through.
+ *
  * @param {Object} context
  * @returns {boolean}
  */
 function isTelegramCommand(context) {
-	const message = context?.message;
+	const message = context && (context.message || context.channelPost);
 	if (!message || typeof message.text !== 'string') {
 		return false;
 	}
-	if (Array.isArray(message.entities) && message.entities.length > 0) {
-		return message.entities.some(
-			(entity) => entity.type === 'bot_command' && entity.offset === 0
-		);
+	const text = message.text.trim();
+	if (!text) {
+		return false;
 	}
-	return message.text.startsWith('/');
+
+	let commandToken = '';
+	const commandEntity = Array.isArray(message.entities)
+		&& message.entities.find((entity) => entity.type === 'bot_command' && entity.offset === 0);
+
+	if (commandEntity) {
+		commandToken = text.slice(commandEntity.offset, commandEntity.offset + commandEntity.length);
+	} else if (text.startsWith('/')) {
+		commandToken = text.split(/\s+/)[0];
+	}
+
+	if (!commandToken) {
+		return false;
+	}
+
+	const tokenWithoutSlash = commandToken.startsWith('/') ? commandToken.slice(1) : commandToken;
+	const [rawCommand, recipient] = tokenWithoutSlash.split('@', 2);
+	if (recipient !== undefined) {
+		const myUsername = context?.me || context?.botInfo?.username;
+		if (!myUsername || recipient.toLowerCase() !== String(myUsername).replace(/^@/, '').toLowerCase()) {
+			return false;
+		}
+	}
+
+	return true;
 }
 
 /**
@@ -224,6 +274,7 @@ function maintenanceModeMiddleware(req, res, next) {
 /**
  * Telegraf middleware to intercept incoming bot commands when maintenance mode is active.
  * Leaves non-command updates (callbacks, plain text messages) unaffected.
+ * Applies a per-chat throttle to prevent outbound spam flooding during an incident.
  *
  * @param {Object} context
  * @param {Function} next
@@ -236,11 +287,14 @@ async function telegramMaintenanceMode(context, next) {
 		const bot = context && (context.bot || { telegram: context.telegram });
 		checkAndNotifyMaintenanceModeToggle({ bot }).catch(() => {});
 
-		if (context && typeof context.reply === 'function') {
-			try {
-				await context.reply(TELEGRAM_MAINTENANCE_NOTICE);
-			} catch (error) {
-				console.error('[commands] Failed to send Telegram maintenance reply:', error.message);
+		const chatId = context?.chat?.id ?? context?.message?.chat?.id ?? context?.update?.message?.chat?.id;
+		if (!isMaintenanceReplyThrottled(chatId)) {
+			if (context && typeof context.reply === 'function') {
+				try {
+					await context.reply(TELEGRAM_MAINTENANCE_NOTICE);
+				} catch (error) {
+					console.error('[commands] Failed to send Telegram maintenance reply:', error.message);
+				}
 			}
 		}
 		return;
@@ -255,6 +309,7 @@ function resetForTesting() {
 	resetNotificationLatch();
 	isNotifying = false;
 	globalBotGetter = null;
+	maintenanceReplyBuckets.clear();
 	if (typeof remoteConfigService.addChangeListener === 'function') {
 		remoteConfigService.addChangeListener(handleRemoteConfigChange);
 	}

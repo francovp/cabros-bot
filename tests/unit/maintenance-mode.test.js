@@ -276,6 +276,44 @@ describe('maintenanceMode', () => {
 			).toBe(true);
 		});
 
+		it('returns true when command is addressed to current bot via @recipient', () => {
+			expect(
+				maintenanceMode.isTelegramCommand({
+					me: 'cabros_bot',
+					message: { text: '/scanner@cabros_bot' },
+				}),
+			).toBe(true);
+			expect(
+				maintenanceMode.isTelegramCommand({
+					botInfo: { username: 'cabros_bot' },
+					message: { text: '/precio@CABROS_BOT btc' },
+				}),
+			).toBe(true);
+		});
+
+		it('returns false when command is addressed to a different bot', () => {
+			expect(
+				maintenanceMode.isTelegramCommand({
+					me: 'cabros_bot',
+					message: { text: '/scanner@some_other_bot' },
+				}),
+			).toBe(false);
+			expect(
+				maintenanceMode.isTelegramCommand({
+					botInfo: { username: 'cabros_bot' },
+					message: { text: '/precio@other_bot btc' },
+				}),
+			).toBe(false);
+		});
+
+		it('returns false when command has @recipient but bot identity is unknown', () => {
+			expect(
+				maintenanceMode.isTelegramCommand({
+					message: { text: '/scanner@other_bot' },
+				}),
+			).toBe(false);
+		});
+
 		it('returns false for plain text messages without command', () => {
 			expect(maintenanceMode.isTelegramCommand({ message: { text: 'hello world' } })).toBe(false);
 			expect(maintenanceMode.isTelegramCommand({ message: { text: '' } })).toBe(false);
@@ -313,6 +351,43 @@ describe('maintenanceMode', () => {
 			expect(reply).toHaveBeenCalledWith(expect.stringMatching(/mantenimiento/i));
 		});
 
+		it('throttles rapid maintenance replies to the same chat within cooldown window', async () => {
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+			const reply = jest.fn().mockResolvedValue({});
+			const context = { reply, chat: { id: 777 }, message: { text: '/precio btc' } };
+			const next = jest.fn();
+
+			// First command receives maintenance reply
+			await maintenanceMode.telegramMaintenanceMode(context, next);
+			expect(reply).toHaveBeenCalledTimes(1);
+
+			// Second rapid command from same chat is throttled (no reply sent)
+			await maintenanceMode.telegramMaintenanceMode(context, next);
+			expect(reply).toHaveBeenCalledTimes(1);
+			expect(next).not.toHaveBeenCalled();
+
+			// Command from a different chat receives reply
+			const otherContext = { reply, chat: { id: 888 }, message: { text: '/precio btc' } };
+			await maintenanceMode.telegramMaintenanceMode(otherContext, next);
+			expect(reply).toHaveBeenCalledTimes(2);
+		});
+
+		it('passes command to next() without replying when addressed to another bot during maintenance', async () => {
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+			const reply = jest.fn();
+			const context = {
+				me: 'cabros_bot',
+				reply,
+				message: { text: '/scanner@other_bot' },
+			};
+			const next = jest.fn();
+
+			await maintenanceMode.telegramMaintenanceMode(context, next);
+
+			expect(next).toHaveBeenCalledTimes(1);
+			expect(reply).not.toHaveBeenCalled();
+		});
+
 		it('calls next() without replying when message is not a command even if maintenance mode is enabled', async () => {
 			process.env.ENABLE_MAINTENANCE_MODE = 'true';
 			const reply = jest.fn();
@@ -337,7 +412,7 @@ describe('maintenanceMode', () => {
 			expect(reply).not.toHaveBeenCalled();
 		});
 
-		it('drops spam before reaching maintenance reply when rate limiter is placed ahead in pipeline', async () => {
+		it('keeps maintenance replies out of expensive command quotas in telegramCommandRateLimiter', async () => {
 			const { telegramCommandRateLimiter } = require('../../src/controllers/commands');
 			telegramCommandRateLimiter.reset();
 			process.env.ENABLE_MAINTENANCE_MODE = 'true';
@@ -359,22 +434,33 @@ describe('maintenanceMode', () => {
 			}
 
 			const handler = jest.fn();
+			// Pipeline matches index.js order: telegramMaintenanceMode then telegramCommandRateLimiter
 			async function runPipeline(ctx) {
-				await telegramCommandRateLimiter(ctx, async () => {
-					await maintenanceMode.telegramMaintenanceMode(ctx, handler);
+				await maintenanceMode.telegramMaintenanceMode(ctx, async () => {
+					await telegramCommandRateLimiter(ctx, handler);
 				});
 			}
 
+			// During maintenance, user triggers /scanner multiple times
+			for (let i = 0; i < 5; i++) {
+				await runPipeline(buildCmdCtx(999));
+			}
+
+			// First command sent maintenance notice, subsequent ones throttled
+			expect(reply).toHaveBeenCalledTimes(1);
+			expect(reply).toHaveBeenCalledWith(maintenanceMode.TELEGRAM_MAINTENANCE_NOTICE);
+			// Command handler never executed
+			expect(handler).not.toHaveBeenCalled();
+
+			// Maintenance mode is now restored / resolved!
+			process.env.ENABLE_MAINTENANCE_MODE = 'false';
+
+			// User should have their full expensive quota available (3 scanner runs allowed)
 			for (let i = 0; i < 3; i++) {
 				await runPipeline(buildCmdCtx(999));
 			}
-			expect(reply).toHaveBeenCalledTimes(3);
-			expect(reply).toHaveBeenLastCalledWith(maintenanceMode.TELEGRAM_MAINTENANCE_NOTICE);
-
-			await runPipeline(buildCmdCtx(999));
-			expect(reply).toHaveBeenCalledTimes(4);
-			expect(reply).toHaveBeenLastCalledWith(expect.stringContaining('demasiadas solicitudes'));
-			expect(handler).not.toHaveBeenCalled();
+			// All 3 post-maintenance calls passed through to handler because quota was NOT consumed
+			expect(handler).toHaveBeenCalledTimes(3);
 		});
 	});
 });
