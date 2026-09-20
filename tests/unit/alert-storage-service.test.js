@@ -2259,6 +2259,7 @@ describe('AlertStorageService', () => {
 						totalTokens: 30,
 						totalCost: 0.001,
 					},
+					costEstimateUsd: 0.001,
 				},
 				delivery: {
 					totalSuccess: 2,

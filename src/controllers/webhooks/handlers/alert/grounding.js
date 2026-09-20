@@ -4,10 +4,31 @@ const { GROUNDING_MODEL_NAME } = require('../../../../services/grounding/config'
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
+const { isEnrichmentRenderable } = require('../../../../services/grounding/renderableEnrichment');
 const {
 	deriveFallbackTradePlan,
 	calculateFallbackRiskLevels,
 } = require('../../../../services/tradingview/fallbackTradePlan');
+
+// CB-583 / Issue #583: when the post-call renderable-gate discards the
+// enrichment result we want to drop its accumulated token spend so the
+// `/api/alerts/summary` aggregates do not charge operators for
+// invisible work. The shared tracker exposes a `reset()` method that
+// zeroes every counter; we fall back to direct assignment when a
+// non-standard tracker (e.g. test double) is provided.
+function resetTokenUsage(tokenUsage) {
+	if (!tokenUsage || typeof tokenUsage !== 'object') {
+		return;
+	}
+	if (typeof tokenUsage.reset === 'function') {
+		tokenUsage.reset();
+		return;
+	}
+	tokenUsage.inputTokens = 0;
+	tokenUsage.outputTokens = 0;
+	tokenUsage.inputCost = 0;
+	tokenUsage.outputCost = 0;
+}
 
 function mergeUnique(first = [], second = [], maxItems = 6) {
 	const result = [];
@@ -506,8 +527,21 @@ async function enrichAlert(alert, options = {}) {
 	try {
 		const geminiEnrichedAlert = await enrichWithGemini(text, tokenUsage);
 
+		// CB-583 / Issue #583: when TradingView MCP is enabled and produced
+		// renderable output, prefer that path. When MCP is absent or the
+		// Gemini-only call produced unrenderable output (no insights, no
+		// sources, no technical levels, no risk metadata), discard the call
+		// entirely so callers see `enriched: false` instead of paying for
+		// invisible output. Token usage is reset so the call doesn't show
+		// up in cost aggregates.
 		if (mcpEnrichedAlert) {
-			return mergeEnrichmentData(text, geminiEnrichedAlert, mcpEnrichedAlert);
+			const merged = mergeEnrichmentData(text, geminiEnrichedAlert, mcpEnrichedAlert);
+			if (isMcpEnabled && !isEnrichmentRenderable(merged)) {
+				console.debug('[Alert] Skipping merged enrichment: no renderable insights/sources/levels/risk');
+				resetTokenUsage(tokenUsage);
+				return null;
+			}
+			return merged;
 		}
 
 		if (geminiEnrichedAlert) {
@@ -535,6 +569,17 @@ async function enrichAlert(alert, options = {}) {
 						levelsSource: result.levelsSource || 'derived-quote',
 					};
 				}
+			}
+
+			// CB-583 / Issue #583: Gemini-only path. After risk-metadata
+			// fallback, if the result is still unrenderable, drop it and
+			// reset token usage. This is the safety net for the pre-call
+			// heuristic above: even when context looked renderable, an
+			// empty/short Gemini response is discarded.
+			if (!isEnrichmentRenderable(result)) {
+				console.debug('[Alert] Skipping Gemini-only enrichment: no renderable insights/sources/levels/risk');
+				resetTokenUsage(tokenUsage);
+				return null;
 			}
 
 			return result;
