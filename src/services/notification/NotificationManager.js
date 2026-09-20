@@ -336,7 +336,14 @@ class NotificationManager {
 			}
 		}
 
-		if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+		const isRedriveIneligible =
+			Boolean(options.isRedrive) ||
+			options.redriveEligible === false ||
+			Boolean(options.isProbe) ||
+			Boolean(alert?.isProbe) ||
+			alert?.redriveEligible === false;
+
+		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 			const failedResults = formattedResults.filter(result => result && !result.success);
 			if (failedResults.length > 0) {
 				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
@@ -400,7 +407,14 @@ class NotificationManager {
 				http: httpContext,
 			});
 
-			if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+		const isRedriveIneligible =
+			Boolean(options.isRedrive) ||
+			options.redriveEligible === false ||
+			Boolean(options.isProbe) ||
+			Boolean(alert?.isProbe) ||
+			alert?.redriveEligible === false;
+
+		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 				const candidateChannels = Array.from(this.channels.keys());
 				const channelsToQueue = candidateChannels.length > 0 ? candidateChannels : ['telegram', 'whatsapp', 'discord'];
 				const syntheticResults = channelsToQueue.map(channelName => ({
@@ -521,7 +535,14 @@ class NotificationManager {
 			}
 		}
 
-		if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+		const isRedriveIneligible =
+			Boolean(options.isRedrive) ||
+			options.redriveEligible === false ||
+			Boolean(options.isProbe) ||
+			Boolean(alert?.isProbe) ||
+			alert?.redriveEligible === false;
+
+		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 			const failedResults = formattedResults.filter(result => result && !result.success);
 			if (failedResults.length > 0) {
 				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
