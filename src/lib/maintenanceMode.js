@@ -14,15 +14,17 @@ const MAINTENANCE_ERROR_RESPONSE = Object.freeze({
 const RAW_TELEGRAM_MAINTENANCE_NOTICE = '⚠️ El bot se encuentra temporalmente en modo de mantenimiento. Por favor, intenta más tarde.';
 const TELEGRAM_MAINTENANCE_NOTICE = markdownV2Formatter.format(RAW_TELEGRAM_MAINTENANCE_NOTICE);
 
-let lastNotifiedMaintenanceMode = false;
+let activationGeneration = 0;
+let lastNotifiedGeneration = -1;
 let lastNotificationFailureAt = 0;
 const NOTIFICATION_FAILURE_RETRY_COOLDOWN_MS = 60_000;
 let isNotifying = false;
 let globalBotGetter = null;
+let lastSeenEnabled = false;
 
 function resetNotificationLatch() {
-	lastNotifiedMaintenanceMode = false;
 	lastNotificationFailureAt = 0;
+	activationGeneration++;
 }
 
 function getEffectiveMaintenanceMode(overrides) {
@@ -67,9 +69,8 @@ function isMaintenanceModeEnabled() {
 		enabled = process.env.ENABLE_MAINTENANCE_MODE === 'true';
 	}
 
-	if (!enabled && lastNotifiedMaintenanceMode) {
-		lastNotifiedMaintenanceMode = false;
-		lastNotificationFailureAt = 0;
+	if (!enabled && lastNotifiedGeneration === activationGeneration) {
+		resetNotificationLatch();
 	}
 	return enabled;
 }
@@ -160,29 +161,41 @@ async function notifyAdminOnToggle({
 async function checkAndNotifyMaintenanceModeToggle(options = {}) {
 	const isEnabled = isMaintenanceModeEnabled();
 	const now = Date.now();
-	if (isEnabled && !lastNotifiedMaintenanceMode && !isNotifying) {
+
+	if (isEnabled !== lastSeenEnabled) {
+		lastSeenEnabled = isEnabled;
+		if (!isEnabled) {
+			resetNotificationLatch();
+		} else {
+			activationGeneration++;
+		}
+	}
+
+	const isNotified = lastNotifiedGeneration === activationGeneration;
+
+	if (isEnabled && !isNotified && !isNotifying) {
 		const failureCooldownMs = options.failureRetryCooldownMs ?? NOTIFICATION_FAILURE_RETRY_COOLDOWN_MS;
 		if (lastNotificationFailureAt > 0 && now - lastNotificationFailureAt < failureCooldownMs) {
 			return;
 		}
+		const currentGeneration = activationGeneration;
 		isNotifying = true;
 		try {
 			const notified = await notifyAdminOnToggle(options);
-			if (notified && isMaintenanceModeEnabled()) {
-				lastNotifiedMaintenanceMode = true;
+			if (notified && isMaintenanceModeEnabled() && currentGeneration === activationGeneration) {
+				lastNotifiedGeneration = currentGeneration;
 				lastNotificationFailureAt = 0;
 			} else if (!isMaintenanceModeEnabled()) {
-				lastNotifiedMaintenanceMode = false;
-				lastNotificationFailureAt = 0;
-			} else {
-				// Notification attempt failed while maintenance remained enabled.
+				resetNotificationLatch();
+			} else if (currentGeneration === activationGeneration) {
+				// Notification attempt failed while maintenance remained enabled on the same activation.
 				// Apply a bounded failure cooldown before trying again.
 				lastNotificationFailureAt = Date.now();
 			}
 		} finally {
 			isNotifying = false;
 		}
-	} else if (!isEnabled && lastNotifiedMaintenanceMode) {
+	} else if (!isEnabled && (isNotified || lastNotificationFailureAt > 0)) {
 		resetNotificationLatch();
 	}
 }
@@ -292,7 +305,19 @@ const DEFAULT_MAINTENANCE_REPLY_TIMEOUT_MS = 5000;
  * @param {number} [timeoutMs]
  * @returns {Promise<void>}
  */
-async function sendMaintenanceReply(context, chatId, timeoutMs = DEFAULT_MAINTENANCE_REPLY_TIMEOUT_MS) {
+async function sendMaintenanceReply(context, chatId, options = {}) {
+	const targetChatId = chatId !== undefined && chatId !== null
+		? chatId
+		: (context?.chat?.id ?? context?.message?.chat?.id ?? context?.update?.message?.chat?.id);
+
+	if (targetChatId !== undefined && targetChatId !== null && isMaintenanceReplyThrottled(targetChatId)) {
+		return;
+	}
+
+	const timeoutMs = typeof options === 'number'
+		? options
+		: (options?.timeoutMs ?? DEFAULT_MAINTENANCE_REPLY_TIMEOUT_MS);
+
 	const controller = new AbortController();
 	let timeoutId;
 	const timeoutPromise = new Promise((_, reject) => {
@@ -303,9 +328,9 @@ async function sendMaintenanceReply(context, chatId, timeoutMs = DEFAULT_MAINTEN
 	});
 
 	try {
-		const sendPromise = typeof context?.telegram?.callApi === 'function' && chatId !== undefined && chatId !== null
+		const sendPromise = typeof context?.telegram?.callApi === 'function' && targetChatId !== undefined && targetChatId !== null
 			? context.telegram.callApi('sendMessage', {
-				chat_id: chatId,
+				chat_id: targetChatId,
 				text: TELEGRAM_MAINTENANCE_NOTICE,
 				parse_mode: 'MarkdownV2',
 			}, { signal: controller.signal })
@@ -339,10 +364,7 @@ async function telegramMaintenanceMode(context, next) {
 		const bot = context && (context.bot || { telegram: context.telegram });
 		checkAndNotifyMaintenanceModeToggle({ bot }).catch(() => {});
 
-		const chatId = context?.chat?.id ?? context?.message?.chat?.id ?? context?.update?.message?.chat?.id;
-		if (!isMaintenanceReplyThrottled(chatId)) {
-			await sendMaintenanceReply(context, chatId);
-		}
+		await sendMaintenanceReply(context);
 		return;
 	}
 	return next();
@@ -352,7 +374,10 @@ async function telegramMaintenanceMode(context, next) {
  * Testing reset helper
  */
 function resetForTesting() {
-	resetNotificationLatch();
+	activationGeneration = 0;
+	lastNotifiedGeneration = -1;
+	lastNotificationFailureAt = 0;
+	lastSeenEnabled = false;
 	isNotifying = false;
 	globalBotGetter = null;
 	maintenanceReplyBuckets.clear();
@@ -375,7 +400,12 @@ module.exports = {
 	telegramMaintenanceMode,
 	isTelegramCommand,
 	resetNotificationLatch,
-	_getLatchState: () => ({ lastNotifiedMaintenanceMode, lastNotificationFailureAt }),
+	_getLatchState: () => ({
+		lastNotifiedMaintenanceMode: lastNotifiedGeneration === activationGeneration,
+		lastNotificationFailureAt,
+		activationGeneration,
+		lastNotifiedGeneration,
+	}),
 	_setLastNotificationFailureAt: (ts) => { lastNotificationFailureAt = ts; },
 	_isMaintenanceReplyThrottled: isMaintenanceReplyThrottled,
 	_getMaintenanceReplyBucketsSize: () => maintenanceReplyBuckets.size,

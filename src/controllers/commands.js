@@ -8,6 +8,7 @@ const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
 const {
 	isMaintenanceModeEnabled,
 	telegramMaintenanceMode,
+	sendMaintenanceReply,
 	TELEGRAM_MAINTENANCE_NOTICE,
 } = require('../lib/maintenanceMode');
 
@@ -138,7 +139,7 @@ async function telegramCommandRateLimiter(context, next) {
 telegramCommandRateLimiter.reset = () => telegramCommandRateLimitBuckets.clear();
 const getPrice = async (context) => {
 	if (isMaintenanceModeEnabled()) {
-		await context.reply(TELEGRAM_MAINTENANCE_NOTICE);
+		await sendMaintenanceReply(context);
 		return;
 	}
 	const chatId = getChatId(context);
@@ -216,7 +217,7 @@ function sendReadinessWarning(context, warningText, signal) {
 
 const createTradingViewJobCommand = (type, command, buildPayload) => async (context) => {
 	if (isMaintenanceModeEnabled()) {
-		await context.reply(TELEGRAM_MAINTENANCE_NOTICE);
+		await sendMaintenanceReply(context);
 		return;
 	}
 	const chatId = getChatId(context);
@@ -328,7 +329,7 @@ function formatJobDetail(job) {
 
 const jobsCommand = async (context) => {
 	if (isMaintenanceModeEnabled()) {
-		await context.reply(TELEGRAM_MAINTENANCE_NOTICE);
+		await sendMaintenanceReply(context);
 		return;
 	}
 	const chatId = getChatId(context);
@@ -416,7 +417,7 @@ const marketScannerCmd = createTradingViewJobCommand(
 
 const newsMonitorCmd = async (context) => {
 	if (isMaintenanceModeEnabled()) {
-		await context.reply(TELEGRAM_MAINTENANCE_NOTICE);
+		await sendMaintenanceReply(context);
 		return;
 	}
 	const chatId = getChatId(context);
@@ -467,7 +468,7 @@ const newsMonitorCmd = async (context) => {
 
 const cryptoBotCmd = async (context) => {
 	if (isMaintenanceModeEnabled()) {
-		await context.reply(TELEGRAM_MAINTENANCE_NOTICE);
+		await sendMaintenanceReply(context);
 		return;
 	}
 	const chatId = getChatId(context);
@@ -525,7 +526,7 @@ function escapeOutcomeText(value) {
 
 const outcomesCommand = async (context) => {
 	if (isMaintenanceModeEnabled()) {
-		await context.reply(TELEGRAM_MAINTENANCE_NOTICE);
+		await sendMaintenanceReply(context);
 		return;
 	}
 	const chatId = getChatId(context);
@@ -707,7 +708,7 @@ function buildHelpMessage() {
 
 const helpCmd = async (context) => {
 	if (isMaintenanceModeEnabled()) {
-		await context.reply(TELEGRAM_MAINTENANCE_NOTICE);
+		await sendMaintenanceReply(context);
 		return;
 	}
 	const chatId = getChatId(context);
