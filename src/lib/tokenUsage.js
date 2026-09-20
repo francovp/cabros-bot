@@ -58,9 +58,15 @@ function resolveModelPricing(model) {
 		return PRICING_PER_1M[raw];
 	}
 
-	// Handle gemma / local models as free
-	if (raw.includes('gemma')) {
+	// Handle explicitly free models (e.g. openrouter models with :free suffix or /free)
+	if (raw.endsWith(':free') || raw.includes('/free') || raw === 'free') {
 		return { input: 0, output: 0 };
+	}
+
+	// Gemma hosted variants (e.g. google/gemma-2-9b-it, google/gemma-2-27b-it)
+	if (raw.includes('gemma-2-27b')) return { input: 0.27, output: 0.27 };
+	if (raw.includes('gemma-2-9b') || raw.includes('gemma-2-2b') || raw.includes('gemma')) {
+		return { input: 0.07, output: 0.07 };
 	}
 
 	// Strip provider prefix (e.g. google/, google-ai-studio/, openai/, azure/, meta/, @cf/meta/)
@@ -318,14 +324,241 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 				}, { merge: true });
 			}
 
-			if (writePromise && typeof writePromise.catch === 'function') {
-				writePromise.catch((err) => {
-					console.warn(`[TokenCostBudget] Failed to persist spend increment to Firestore: ${err.message}`);
-				});
+			if (writePromise) {
+				try {
+					const { trackBackgroundTask } = require('./backgroundTaskTracker');
+					if (typeof trackBackgroundTask === 'function') {
+						trackBackgroundTask(writePromise);
+					}
+				} catch (_) {}
+				if (typeof writePromise.catch === 'function') {
+					writePromise.catch((err) => {
+						console.warn(`[TokenCostBudget] Failed to persist spend increment to Firestore: ${err.message}`);
+					});
+				}
 			}
 		} catch (err) {
 			console.warn(`[TokenCostBudget] Error persisting spend increment: ${err.message}`);
 		}
+	}
+
+	async _claimAlertAtomically(type) {
+		const firestore = this._getFirestore();
+		if (!firestore || typeof firestore.runTransaction !== 'function') {
+			if (type === 'limit') {
+				if (this.limitAlertSent) return false;
+				this.limitAlertSent = true;
+				this.alertsSent++;
+				return true;
+			} else if (type === 'warning') {
+				if (this.warningAlertSent) return false;
+				this.warningAlertSent = true;
+				this.alertsSent++;
+				return true;
+			}
+			return false;
+		}
+
+		try {
+			const docRef = firestore.collection('tokenBudgets').doc(this.currentDay);
+			const claimed = await firestore.runTransaction(async (tx) => {
+				const snap = await tx.get(docRef);
+				const data = snap && snap.exists ? (typeof snap.data === 'function' ? snap.data() : snap) : {};
+				const fieldName = type === 'limit' ? 'limitAlertSent' : 'warningAlertSent';
+				if (data && data[fieldName]) {
+					return false;
+				}
+				const currentAlertsSent = Number(data?.alertsSent) || 0;
+				tx.set(docRef, {
+					[fieldName]: true,
+					alertsSent: currentAlertsSent + 1,
+					updatedAt: new Date().toISOString(),
+				}, { merge: true });
+				return true;
+			});
+
+			if (claimed) {
+				if (type === 'limit') this.limitAlertSent = true;
+				if (type === 'warning') this.warningAlertSent = true;
+				this.alertsSent++;
+				return true;
+			} else {
+				if (type === 'limit') this.limitAlertSent = true;
+				if (type === 'warning') this.warningAlertSent = true;
+				return false;
+			}
+		} catch (err) {
+			console.warn(`[TokenCostBudget] Error claiming ${type} alert in Firestore: ${err.message}`);
+			if (type === 'limit') {
+				if (this.limitAlertSent) return false;
+				this.limitAlertSent = true;
+				this.alertsSent++;
+				return true;
+			} else if (type === 'warning') {
+				if (this.warningAlertSent) return false;
+				this.warningAlertSent = true;
+				this.alertsSent++;
+				return true;
+			}
+			return false;
+		}
+	}
+
+	async _releaseAlertClaimAtomically(type) {
+		const firestore = this._getFirestore();
+		if (!firestore || typeof firestore.runTransaction !== 'function') {
+			if (type === 'limit') {
+				this.limitAlertSent = false;
+				this.alertsSent = Math.max(0, this.alertsSent - 1);
+			} else if (type === 'warning') {
+				this.warningAlertSent = false;
+				this.alertsSent = Math.max(0, this.alertsSent - 1);
+			}
+			return;
+		}
+
+		try {
+			const docRef = firestore.collection('tokenBudgets').doc(this.currentDay);
+			await firestore.runTransaction(async (tx) => {
+				const snap = await tx.get(docRef);
+				const data = snap && snap.exists ? (typeof snap.data === 'function' ? snap.data() : snap) : {};
+				const fieldName = type === 'limit' ? 'limitAlertSent' : 'warningAlertSent';
+				const currentAlertsSent = Number(data?.alertsSent) || 0;
+				tx.set(docRef, {
+					[fieldName]: false,
+					alertsSent: Math.max(0, currentAlertsSent - 1),
+					updatedAt: new Date().toISOString(),
+				}, { merge: true });
+			});
+		} catch (err) {
+			console.warn(`[TokenCostBudget] Failed to release ${type} alert claim: ${err.message}`);
+		} finally {
+			if (type === 'limit') {
+				this.limitAlertSent = false;
+				this.alertsSent = Math.max(0, this.alertsSent - 1);
+			} else if (type === 'warning') {
+				this.warningAlertSent = false;
+				this.alertsSent = Math.max(0, this.alertsSent - 1);
+			}
+		}
+	}
+
+	_triggerThresholdAlert(type, config, utilizationPct) {
+		const firestore = this._getFirestore();
+		if (!firestore || typeof firestore.runTransaction !== 'function') {
+			if (type === 'limit') {
+				if (this.limitAlertSent) return Promise.resolve();
+				this.limitAlertSent = true;
+				this.alertsSent++;
+				console.error(`[TokenCostBudget] Hard limit reached: daily token spend $${this.dailySpendUsd.toFixed(4)} reached 100% of daily budget $${config.budgetUsd.toFixed(2)}. Blocking new LLM calls.`);
+				return Promise.resolve(this._sendAdminNotification('limit', {
+					dailySpendUsd: this.dailySpendUsd,
+					budgetUsd: config.budgetUsd,
+					utilizationPct,
+				})).then((delivered) => {
+					if (delivered === false) {
+						this.limitAlertSent = false;
+						this.alertsSent = Math.max(0, this.alertsSent - 1);
+					}
+				}).catch(() => {
+					this.limitAlertSent = false;
+					this.alertsSent = Math.max(0, this.alertsSent - 1);
+				});
+			} else if (type === 'warning') {
+				if (this.warningAlertSent) return Promise.resolve();
+				this.warningAlertSent = true;
+				this.alertsSent++;
+				console.warn(`[TokenCostBudget] Warning: daily token spend $${this.dailySpendUsd.toFixed(4)} reached ${utilizationPct.toFixed(1)}% of daily budget $${config.budgetUsd.toFixed(2)} (threshold ${config.warnThresholdPct}%)`);
+				return Promise.resolve(this._sendAdminNotification('warning', {
+					dailySpendUsd: this.dailySpendUsd,
+					budgetUsd: config.budgetUsd,
+					utilizationPct,
+					warnThresholdPct: config.warnThresholdPct,
+				})).then((delivered) => {
+					if (delivered === false) {
+						this.warningAlertSent = false;
+						this.alertsSent = Math.max(0, this.alertsSent - 1);
+					}
+				}).catch(() => {
+					this.warningAlertSent = false;
+					this.alertsSent = Math.max(0, this.alertsSent - 1);
+				});
+			}
+			return Promise.resolve();
+		}
+
+		// When Firestore is available, perform atomic distributed claim
+		const fieldName = type === 'limit' ? 'limitAlertSent' : 'warningAlertSent';
+		if (this[fieldName]) return Promise.resolve();
+		this[fieldName] = true;
+
+		const docRef = firestore.collection('tokenBudgets').doc(this.currentDay);
+		const claimPromise = firestore.runTransaction(async (tx) => {
+			const snap = await tx.get(docRef);
+			const data = snap && snap.exists ? (typeof snap.data === 'function' ? snap.data() : snap) : {};
+			if (data && data[fieldName]) {
+				return false;
+			}
+			const currentAlertsSent = Number(data?.alertsSent) || 0;
+			tx.set(docRef, {
+				[fieldName]: true,
+				alertsSent: currentAlertsSent + 1,
+				updatedAt: new Date().toISOString(),
+			}, { merge: true });
+			return true;
+		}).then(async (claimed) => {
+			if (!claimed) {
+				return;
+			}
+			this.alertsSent++;
+			if (type === 'limit') {
+				console.error(`[TokenCostBudget] Hard limit reached: daily token spend $${this.dailySpendUsd.toFixed(4)} reached 100% of daily budget $${config.budgetUsd.toFixed(2)}. Blocking new LLM calls.`);
+				const delivered = await this._sendAdminNotification('limit', {
+					dailySpendUsd: this.dailySpendUsd,
+					budgetUsd: config.budgetUsd,
+					utilizationPct,
+				});
+				if (delivered === false) {
+					await this._releaseAlertClaimAtomically('limit');
+				}
+			} else {
+				console.warn(`[TokenCostBudget] Warning: daily token spend $${this.dailySpendUsd.toFixed(4)} reached ${utilizationPct.toFixed(1)}% of daily budget $${config.budgetUsd.toFixed(2)} (threshold ${config.warnThresholdPct}%)`);
+				const delivered = await this._sendAdminNotification('warning', {
+					dailySpendUsd: this.dailySpendUsd,
+					budgetUsd: config.budgetUsd,
+					utilizationPct,
+					warnThresholdPct: config.warnThresholdPct,
+				});
+				if (delivered === false) {
+					await this._releaseAlertClaimAtomically('warning');
+				}
+			}
+		}).catch(async (err) => {
+			console.warn(`[TokenCostBudget] Error in atomic alert claim transaction: ${err.message}`);
+			this.alertsSent++;
+			try {
+				const delivered = await this._sendAdminNotification(type, {
+					dailySpendUsd: this.dailySpendUsd,
+					budgetUsd: config.budgetUsd,
+					utilizationPct,
+					warnThresholdPct: config.warnThresholdPct,
+				});
+				if (delivered === false) {
+					this[fieldName] = false;
+					this.alertsSent = Math.max(0, this.alertsSent - 1);
+				}
+			} catch (_) {
+				this[fieldName] = false;
+				this.alertsSent = Math.max(0, this.alertsSent - 1);
+			}
+		});
+
+		try {
+			const { trackBackgroundTask } = require('./backgroundTaskTracker');
+			if (typeof trackBackgroundTask === 'function') {
+				trackBackgroundTask(claimPromise);
+			}
+		} catch (_) {}
 	}
 
 	async _syncSharedSpend() {
@@ -350,35 +583,24 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 					this.dailyOutputTokens = sharedOutput;
 				}
 
+				if (data?.warningAlertSent) {
+					this.warningAlertSent = true;
+				}
+				if (data?.limitAlertSent) {
+					this.limitAlertSent = true;
+				}
+				if (Number(data?.alertsSent) > this.alertsSent) {
+					this.alertsSent = Number(data.alertsSent);
+				}
+
 				// Check budget alerts based on refreshed shared spend
 				const config = this.getBudgetConfig();
 				if (config.enabled && config.budgetUsd > 0) {
 					const utilizationPct = Number(((this.dailySpendUsd / config.budgetUsd) * 100).toFixed(1));
 					if (utilizationPct >= 100 && !this.limitAlertSent) {
-						this.limitAlertSent = true;
-						this.alertsSent++;
-						console.error(`[TokenCostBudget] Hard limit reached via shared spend: daily token spend $${this.dailySpendUsd.toFixed(4)} reached 100% of daily budget $${config.budgetUsd.toFixed(2)}. Blocking new LLM calls.`);
-						Promise.resolve(this._sendAdminNotification('limit', {
-							dailySpendUsd: this.dailySpendUsd,
-							budgetUsd: config.budgetUsd,
-							utilizationPct,
-						})).catch(() => {
-							this.limitAlertSent = false;
-							this.alertsSent--;
-						});
+						this._triggerThresholdAlert('limit', config, utilizationPct).catch(() => {});
 					} else if (utilizationPct >= config.warnThresholdPct && !this.warningAlertSent) {
-						this.warningAlertSent = true;
-						this.alertsSent++;
-						console.warn(`[TokenCostBudget] Warning threshold reached via shared spend: daily token spend $${this.dailySpendUsd.toFixed(4)} reached ${utilizationPct.toFixed(1)}% of daily budget $${config.budgetUsd.toFixed(2)}.`);
-						Promise.resolve(this._sendAdminNotification('warning', {
-							dailySpendUsd: this.dailySpendUsd,
-							budgetUsd: config.budgetUsd,
-							utilizationPct,
-							warnThresholdPct: config.warnThresholdPct,
-						})).catch(() => {
-							this.warningAlertSent = false;
-							this.alertsSent--;
-						});
+						this._triggerThresholdAlert('warning', config, utilizationPct).catch(() => {});
 					}
 				}
 			}
@@ -541,43 +763,12 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 
 			// Warning threshold crossed
 			if (utilizationPct >= config.warnThresholdPct && !this.warningAlertSent) {
-				this.warningAlertSent = true;
-				this.alertsSent++;
-				console.warn(`[TokenCostBudget] Warning: daily token spend $${this.dailySpendUsd.toFixed(4)} reached ${utilizationPct.toFixed(1)}% of daily budget $${config.budgetUsd.toFixed(2)} (threshold ${config.warnThresholdPct}%)`);
-				Promise.resolve(this._sendAdminNotification('warning', {
-					dailySpendUsd: this.dailySpendUsd,
-					budgetUsd: config.budgetUsd,
-					utilizationPct,
-					warnThresholdPct: config.warnThresholdPct,
-				})).then((delivered) => {
-					if (delivered === false) {
-						this.warningAlertSent = false;
-						this.alertsSent--;
-					}
-				}).catch(() => {
-					this.warningAlertSent = false;
-					this.alertsSent--;
-				});
+				this._triggerThresholdAlert('warning', config, utilizationPct).catch(() => {});
 			}
 
 			// Hard budget limit breached
 			if (utilizationPct >= 100 && !this.limitAlertSent) {
-				this.limitAlertSent = true;
-				this.alertsSent++;
-				console.error(`[TokenCostBudget] Hard limit reached: daily token spend $${this.dailySpendUsd.toFixed(4)} reached 100% of daily budget $${config.budgetUsd.toFixed(2)}. Blocking new LLM calls.`);
-				Promise.resolve(this._sendAdminNotification('limit', {
-					dailySpendUsd: this.dailySpendUsd,
-					budgetUsd: config.budgetUsd,
-					utilizationPct,
-				})).then((delivered) => {
-					if (delivered === false) {
-						this.limitAlertSent = false;
-						this.alertsSent--;
-					}
-				}).catch(() => {
-					this.limitAlertSent = false;
-					this.alertsSent--;
-				});
+				this._triggerThresholdAlert('limit', config, utilizationPct).catch(() => {});
 			}
 		}
 	}

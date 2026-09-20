@@ -368,10 +368,15 @@ describe('Token Cost Budget Tracking', () => {
 			expect(unknownModel.inputCost).toBeGreaterThan(0);
 			expect(unknownModel.outputCost).toBeGreaterThan(0);
 
-			// Gemma is free
-			const gemma = tracker.calculateCost(1_000_000, 1_000_000, 'gemma-2-9b');
-			expect(gemma.inputCost).toBe(0);
-			expect(gemma.outputCost).toBe(0);
+			// Hosted Gemma is charged nonzero rate
+			const gemma = tracker.calculateCost(1_000_000, 1_000_000, 'google/gemma-2-9b-it');
+			expect(gemma.inputCost).toBe(0.07);
+			expect(gemma.outputCost).toBe(0.07);
+
+			// Explicit free variants are zero cost
+			const freeModel = tracker.calculateCost(1_000_000, 1_000_000, 'meta-llama/llama-3.1-8b-instruct:free');
+			expect(freeModel.inputCost).toBe(0);
+			expect(freeModel.outputCost).toBe(0);
 		});
 
 		it('does not increment alertsSent or latch flags if admin notification delivery fails', async () => {
@@ -601,6 +606,91 @@ describe('Token Cost Budget Tracking', () => {
 			// Calling with force: true should bypass throttle
 			await tracker.syncSharedSpendThrottled({ force: true });
 			expect(mockDocRef.get).toHaveBeenCalledTimes(2);
+		});
+
+		it('tracks spend increment write in backgroundTaskTracker for shutdown protection', async () => {
+			const { waitForBackgroundTasks, resetForTesting } = require('../../src/lib/backgroundTaskTracker');
+			resetForTesting();
+
+			process.env.ENABLE_TOKEN_COST_BUDGET = 'true';
+			process.env.TOKEN_COST_DAILY_BUDGET_USD = '10.00';
+
+			let resolveWrite;
+			const writePromise = new Promise((res) => { resolveWrite = res; });
+			const mockDocRef = {
+				set: jest.fn().mockReturnValue(writePromise),
+			};
+
+			const tracker = new GlobalTokenCostBudgetTracker();
+			tracker.firestore = {
+				collection: jest.fn().mockReturnValue({
+					doc: jest.fn().mockReturnValue(mockDocRef),
+				}),
+			};
+
+			tracker._persistSpendIncrement(0.05, 100, 100);
+
+			let drained = false;
+			const waitPromise = waitForBackgroundTasks().then(() => { drained = true; });
+			expect(drained).toBe(false);
+
+			resolveWrite({});
+			await waitPromise;
+			expect(drained).toBe(true);
+		});
+
+		it('claims alert threshold atomically via Firestore transaction preventing cross-replica duplicate alerts', async () => {
+			process.env.ENABLE_TOKEN_COST_BUDGET = 'true';
+			process.env.TOKEN_COST_DAILY_BUDGET_USD = '1.00';
+			process.env.TOKEN_COST_WARN_THRESHOLD_PCT = '80';
+
+			const sharedDocData = {
+				dailySpendUsd: 0.85,
+				alertsSent: 0,
+			};
+
+			const mockDocRef = {};
+			const runTransactionMock = jest.fn(async (callback) => {
+				const tx = {
+					get: jest.fn().mockResolvedValue({
+						exists: true,
+						data: () => ({ ...sharedDocData }),
+					}),
+					set: jest.fn((ref, updates) => {
+						Object.assign(sharedDocData, updates);
+					}),
+				};
+				return callback(tx);
+			});
+
+			const tracker1 = new GlobalTokenCostBudgetTracker();
+			const tracker2 = new GlobalTokenCostBudgetTracker();
+
+			tracker1.firestore = {
+				collection: jest.fn().mockReturnValue({ doc: jest.fn().mockReturnValue(mockDocRef) }),
+				runTransaction: runTransactionMock,
+			};
+			tracker2.firestore = {
+				collection: jest.fn().mockReturnValue({ doc: jest.fn().mockReturnValue(mockDocRef) }),
+				runTransaction: runTransactionMock,
+			};
+
+			const notifySpy1 = jest.spyOn(tracker1, '_sendAdminNotification').mockResolvedValue(true);
+			const notifySpy2 = jest.spyOn(tracker2, '_sendAdminNotification').mockResolvedValue(true);
+
+			const config = tracker1.getBudgetConfig();
+			// Both replicas attempt to trigger warning alert concurrently
+			tracker1._triggerThresholdAlert('warning', config, 85);
+			tracker2._triggerThresholdAlert('warning', config, 85);
+
+			const { waitForBackgroundTasks } = require('../../src/lib/backgroundTaskTracker');
+			await waitForBackgroundTasks();
+
+			// Only one replica should have successfully claimed and dispatched the notification
+			expect(notifySpy1).toHaveBeenCalledTimes(1);
+			expect(notifySpy2).toHaveBeenCalledTimes(0);
+			expect(sharedDocData.warningAlertSent).toBe(true);
+			expect(sharedDocData.alertsSent).toBe(1);
 		});
 	});
 });
