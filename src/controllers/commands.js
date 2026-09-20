@@ -7,6 +7,12 @@ const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
 const { smartEscapeMarkdownV2 } = require('../services/notification/formatters/markdownV2Formatter');
+const {
+	isMaintenanceModeEnabled,
+	telegramMaintenanceMode,
+	sendMaintenanceReply,
+	TELEGRAM_MAINTENANCE_NOTICE,
+} = require('../lib/maintenanceMode');
 
 const READINESS_ERROR_LABELS = {
 	http_5xx: 'error HTTP 5xx del servidor TradingView',
@@ -148,6 +154,10 @@ async function telegramCommandRateLimiter(context, next) {
 
 telegramCommandRateLimiter.reset = () => telegramCommandRateLimitBuckets.clear();
 const getPrice = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const text = (context.message && context.message.text) || '';
 	const messageSplited = text.trim().split(/\s+/);
@@ -222,6 +232,10 @@ function sendReadinessWarning(context, warningText, signal) {
 }
 
 const createTradingViewJobCommand = (type, command, buildPayload) => async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const args = parseCommandArgs(context);
 	const commandSpan = sentryService.startInactiveSpan({
@@ -330,6 +344,10 @@ function formatJobDetail(job) {
 }
 
 const jobsCommand = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const args = parseCommandArgs(context);
 	const commandSpan = sentryService.startInactiveSpan({
@@ -414,6 +432,10 @@ const marketScannerCmd = createTradingViewJobCommand(
 );
 
 const newsMonitorCmd = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const args = parseCommandArgs(context);
 	const commandSpan = sentryService.startInactiveSpan({
@@ -461,6 +483,10 @@ const newsMonitorCmd = async (context) => {
 };
 
 const cryptoBotCmd = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const commandSpan = sentryService.startInactiveSpan({
 		name: 'telegram.command.cryptobot',
@@ -515,6 +541,10 @@ function escapeOutcomeText(value) {
 }
 
 const outcomesCommand = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const args = parseCommandArgs(context);
 	const rawSymbol = (args.positionals[0] || '').trim();
@@ -937,6 +967,10 @@ function buildHelpMessage() {
 }
 
 const helpCmd = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const commandSpan = sentryService.startInactiveSpan({
 		name: 'telegram.command.help',
@@ -1070,5 +1104,6 @@ module.exports = {
 	formatReadinessErrorLabel,
 	sendReadinessWarning,
 	telegramCommandRateLimiter,
+	telegramMaintenanceMode,
 	setWarningReplyTimeoutMsForTest,
 };

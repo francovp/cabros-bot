@@ -559,6 +559,13 @@
       },
       "description": "Token cost budget warning alert threshold percentage (1 to 100)",
       "valueType": "NUMBER"
+    },
+    "ENABLE_MAINTENANCE_MODE": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Maintenance mode toggle to pause webhooks and commands during incidents",
+      "valueType": "BOOLEAN"
     }
   },
   "version": {

@@ -28,6 +28,7 @@ const { initializeNotificationServices } = require('./src/controllers/webhooks/h
 const { getNewsMonitor } = require('./src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
 const { getCacheInstance } = require('./src/controllers/webhooks/handlers/newsMonitor/cache');
 const { registerDebugSentryRoute } = require('./src/lib/debugSentryRoute');
+const { telegramMaintenanceMode } = require('./src/lib/maintenanceMode');
 const { createProcessLifecycle } = require('./src/lib/processLifecycle');
 const { waitForBackgroundTasks } = require('./src/lib/backgroundTaskTracker');
 const { getTelegramBootstrapConfig, sendStartupDeploymentNotification } = require('./src/lib/telegramBootstrap');
@@ -135,6 +136,7 @@ async function bootstrapApplication() {
 	if (shouldLaunchTelegramBot) {
 		console.log('Telegram Bot is enabled');
 		bot = new Telegraf(token);
+		bot.use(telegramMaintenanceMode);
 		bot.use(telegramCommandRateLimiter);
 		bot.command(['precio'], getPrice);
 		bot.command(['cryptobot'], cryptoBotCmd);

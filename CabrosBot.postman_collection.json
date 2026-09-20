@@ -463,6 +463,12 @@
                 }
               ],
               "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            },
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
             }
           ]
         },
@@ -659,7 +665,21 @@
                 "expanded-analysis-alert"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            }
+          ]
         },
         {
           "name": "POST Expanded Analysis Alert (combined mode)",
@@ -732,7 +752,21 @@
                 "market-scanner-alert"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            }
+          ]
         },
         {
           "name": "POST Market Scanner Alert (dry run)",
@@ -1072,6 +1106,18 @@
                 }
               ],
               "body": "{\n  \"success\": false,\n  \"error\": \"MCP unavailable\",\n  \"code\": \"VOLUME_CONFIRMATION_FAILED\",\n  \"requestId\": \"req-vol-502\",\n  \"processingTimeMs\": 450\n}"
+            },
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
             }
           ]
         },
@@ -1137,6 +1183,18 @@
               "status": "Gateway Timeout",
               "code": 504,
               "body": "{\n  \"success\": false,\n  \"error\": \"Symbol analysis timed out.\",\n  \"code\": \"SYMBOL_ANALYSIS_TIMEOUT\",\n  \"requestId\": \"req-sym-504\",\n  \"processingTimeMs\": 90000\n}"
+            },
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
             }
           ]
         },
@@ -1287,6 +1345,18 @@
                 }
               ],
               "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            },
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
             }
           ]
         },
@@ -2420,6 +2490,18 @@
                 }
               ],
               "body": "{\n  \"error\": \"News monitor is temporarily paused: Gemini quota exhaustion\",\n  \"code\": \"NEWS_MONITOR_PAUSED\",\n  \"paused\": true,\n  \"pausedAt\": \"2026-09-04T05:00:00.000Z\",\n  \"reason\": \"Gemini quota exhaustion\",\n  \"requestId\": \"req-paused123\"\n}"
+            },
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
             }
           ]
         },
@@ -2458,7 +2540,21 @@
                 }
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            }
+          ]
         },
         {
           "name": "POST News Monitor (dry run)",
