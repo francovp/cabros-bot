@@ -292,6 +292,67 @@ describe('Signal Outcome Confidence Calibration', () => {
 			expect(b.targetHitRate).toBe(0.6); // 12 / 20 = 0.60
 			expect(result.suggestedThreshold).toBe(0.75);
 		});
+
+		it('rejects confidence and score values outside [0, 1] (or [-1, 1]) and excludes them from totalScoredAlerts', () => {
+			const docs = [
+				{
+					id: 'doc-invalid-conf-4',
+					source: 'expanded-analysis',
+					confidenceScore: 4,
+					score: 4,
+					outcomeEvaluated: true,
+					outcomes: { '4h': { status: 'evaluated', return: 2.0, targetHit: true } },
+				},
+				{
+					id: 'doc-invalid-conf-70',
+					source: 'market-scanner',
+					confidenceScore: 70,
+					score: 70,
+					outcomeEvaluated: true,
+					outcomes: { '4h': { status: 'evaluated', return: 2.0, targetHit: true } },
+				},
+				{
+					id: 'doc-invalid-neg',
+					source: 'expanded-analysis',
+					confidenceScore: -2.5,
+					score: -2.5,
+					outcomeEvaluated: true,
+					outcomes: { '4h': { status: 'evaluated', return: 2.0, targetHit: true } },
+				},
+			];
+
+			const result = SignalOutcomeService.computeCalibration(docs);
+			expect(result.available).toBe(false);
+			expect(result.totalScoredAlerts).toBe(0);
+		});
+
+		it('requires a minimum sample size on candidate threshold population before recommending a threshold', () => {
+			const misses = Array.from({ length: 19 }, (_, i) => ({
+				id: `miss-${i}`,
+				source: 'news-monitor',
+				confidenceScore: 0.72,
+				outcomeEvaluated: true,
+				outcomes: {
+					'4h': { status: 'evaluated', return: -1.5, targetHit: false },
+				},
+			}));
+			const hit = {
+				id: 'hit-0',
+				source: 'news-monitor',
+				confidenceScore: 0.95,
+				outcomeEvaluated: true,
+				outcomes: {
+					'4h': { status: 'evaluated', return: 3.0, targetHit: true },
+				},
+			};
+
+			const result = SignalOutcomeService.computeCalibration([...misses, hit], { window: '4h' });
+
+			expect(result.available).toBe(true);
+			expect(result.totalScoredAlerts).toBe(20);
+			expect(result.suggestedThreshold).toBeNull();
+			expect(result.suggestedThresholdRationale).toBe('No confidence threshold achieved ≥50% cumulative target hit rate at 4h window');
+		});
 	});
 
 	describe('getOutcomesCalibration()', () => {
@@ -320,6 +381,75 @@ describe('Signal Outcome Confidence Calibration', () => {
 			expect(result).toBeDefined();
 			expect(typeof result.available).toBe('boolean');
 			expect(Array.isArray(result.buckets)).toBe(true);
+		});
+
+		it('scans until calibration-eligible outcomes meet targetLimit or scan cap is reached', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const AlertStorageService = require('../../src/services/storage/AlertStorageService');
+
+			const mockDocs = [
+				{
+					id: 'doc-pending-1',
+					data: () => ({
+						receivedAt: new Date(),
+						outcomeEvaluated: false,
+						confidenceScore: 0.85,
+						outcomes: { '4h': { status: 'pending' } },
+					}),
+				},
+				{
+					id: 'doc-unscored-1',
+					data: () => ({
+						receivedAt: new Date(),
+						outcomeEvaluated: true,
+						confidenceScore: null,
+						outcomes: { '4h': { status: 'evaluated', return: 1.0, targetHit: true } },
+					}),
+				},
+				{
+					id: 'doc-eligible-1',
+					data: () => ({
+						receivedAt: new Date(),
+						outcomeEvaluated: true,
+						confidenceScore: 0.85,
+						outcomes: { '4h': { status: 'evaluated', return: 2.0, targetHit: true } },
+					}),
+				},
+				{
+					id: 'doc-eligible-2',
+					data: () => ({
+						receivedAt: new Date(),
+						outcomeEvaluated: true,
+						confidenceScore: 0.75,
+						outcomes: { '4h': { status: 'evaluated', return: 1.5, targetHit: true } },
+					}),
+				},
+			];
+
+			const mockQuery = {
+				where: jest.fn().mockReturnThis(),
+				orderBy: jest.fn().mockReturnThis(),
+				limit: jest.fn().mockReturnThis(),
+				startAfter: jest.fn().mockReturnThis(),
+				get: jest.fn().mockResolvedValue({
+					empty: false,
+					docs: mockDocs,
+				}),
+			};
+
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue(mockQuery),
+			};
+
+			jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(mockFirestore);
+
+			try {
+				const result = await SignalOutcomeService.getOutcomesCalibration({ window: '4h', limit: 2 });
+				// Only eligible docs (doc-eligible-1 and doc-eligible-2) were selected, ignoring pending and unscored
+				expect(result.totalScoredAlerts).toBe(2);
+			} finally {
+				AlertStorageService.getFirestore.mockRestore();
+			}
 		});
 	});
 });

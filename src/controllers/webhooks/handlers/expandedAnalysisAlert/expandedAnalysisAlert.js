@@ -165,6 +165,9 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
 					const score = item.analysis.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
 
+					const rawConfidence = item.analysis?.confidence ?? item.confidence ?? (typeof score === 'number' && score >= 0 && score <= 1 ? score : null);
+					const validConfidence = typeof rawConfidence === 'number' && Number.isFinite(rawConfidence) && rawConfidence >= 0 && rawConfidence <= 1 ? rawConfidence : null;
+
 					signalOutcomeService.recordSignal({
 						requestId,
 						source: 'expanded-analysis',
@@ -173,7 +176,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 						timeframe: parsed.timeframe,
 						setupType: 'expanded-analysis',
 						score,
-						confidenceScore: typeof score === 'number' ? (score >= 0 && score <= 1 ? score : Math.abs(score)) : null,
+						confidenceScore: validConfidence,
 						side: itemSide,
 						price: typeof closePrice === 'number' ? closePrice : null,
 						priceSource: typeof closePrice === 'number' ? 'tradingview-mcp' : null,

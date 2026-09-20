@@ -599,6 +599,13 @@ const WINDOW_CONFIGS = {
 	'1W': { durationMs: 7 * 24 * 60 * 60 * 1000, interval: '4h' },
 };
 
+function normalizeConfidenceScore(val) {
+	if (typeof val !== 'number' || !Number.isFinite(val)) return null;
+	if (val >= 0 && val <= 1) return val;
+	if (val >= -1 && val < 0) return Math.abs(val);
+	return null;
+}
+
 /**
  * Persist signal metadata to Firestore.
  */
@@ -809,11 +816,7 @@ async function recordSignalInternal({
 			timeframe: timeframe ? String(timeframe).toLowerCase() : null,
 			setupType: setupType ? String(setupType).toLowerCase() : null,
 			score: typeof score === 'number' && Number.isFinite(score) ? score : null,
-			confidenceScore: typeof confidenceScore === 'number' && Number.isFinite(confidenceScore)
-				? (confidenceScore >= 0 && confidenceScore <= 1 ? confidenceScore : Math.abs(confidenceScore))
-				: (typeof score === 'number' && Number.isFinite(score)
-					? (score >= 0 && score <= 1 ? score : (score >= -1 && score < 0 ? Math.abs(score) : null))
-					: null),
+			confidenceScore: normalizeConfidenceScore(confidenceScore) ?? normalizeConfidenceScore(score),
 			side: normSide,
 			price: entryPrice,
 			observedPrice: entryPrice,
@@ -2440,17 +2443,10 @@ const CALIBRATION_DEFAULT_BUCKETS = [
 ];
 
 function getSignalConfidenceScore(doc) {
-	if (typeof doc.confidenceScore === 'number' && Number.isFinite(doc.confidenceScore)) {
-		return doc.confidenceScore;
-	}
-	if (typeof doc.score === 'number' && Number.isFinite(doc.score)) {
-		if (doc.score >= 0 && doc.score <= 1) {
-			return doc.score;
-		}
-		if (doc.score >= -1 && doc.score < 0) {
-			return Math.abs(doc.score);
-		}
-	}
+	const conf = normalizeConfidenceScore(doc?.confidenceScore);
+	if (conf !== null) return conf;
+	const sc = normalizeConfidenceScore(doc?.score);
+	if (sc !== null) return sc;
 	return null;
 }
 
@@ -2555,8 +2551,14 @@ function computeCalibration(docs = [], options = {}) {
 		};
 	});
 
-	// Find the lowest candidate threshold where both the individual bucket and cumulative population achieve >= 50% hit rate
-	const qualifyingIndex = candidates.findIndex(c => c.cumulativeCount > 0 && c.cumulativeHitRate >= 0.50 && c.bucket.targetHitRate >= 0.50);
+	const minCandidateSample = options.minCandidateSample !== undefined ? options.minCandidateSample : Math.min(minOutcomes, 5);
+
+	// Find the lowest candidate threshold where both the individual bucket and cumulative population achieve >= 50% hit rate with sufficient sample
+	const qualifyingIndex = candidates.findIndex(c =>
+		c.cumulativeCount >= minCandidateSample &&
+		c.cumulativeHitRate >= 0.50 &&
+		c.bucket.targetHitRate >= 0.50
+	);
 	if (qualifyingIndex === -1) {
 		return {
 			available: true,
@@ -2579,17 +2581,26 @@ function computeCalibration(docs = [], options = {}) {
 				(qualifyingCandidate.bucket._max - qualifyingCandidate.bucket._min);
 			const roundedInterpolated = parseFloat(interpolated.toFixed(2));
 
-			// Verify cumulative performance at the interpolated threshold
+			// Verify cumulative performance and sample size at the interpolated threshold
 			const atOrAboveDocs = scoredDocs.filter(d => d.score >= roundedInterpolated);
 			const atOrAboveHits = atOrAboveDocs.filter(d => isTargetHit(d.doc)).length;
 			const atOrAboveHitRate = atOrAboveDocs.length > 0 ? (atOrAboveHits / atOrAboveDocs.length) : 0;
-			if (atOrAboveHitRate >= 0.50) {
+			if (atOrAboveDocs.length >= minCandidateSample && atOrAboveHitRate >= 0.50) {
 				suggestedThreshold = roundedInterpolated;
 			}
 		}
 	}
 
 	const finalAtOrAboveDocs = scoredDocs.filter(d => d.score >= suggestedThreshold);
+	if (finalAtOrAboveDocs.length < minCandidateSample) {
+		return {
+			available: true,
+			totalScoredAlerts,
+			buckets: cleanBuckets,
+			suggestedThreshold: null,
+			suggestedThresholdRationale: `No confidence threshold achieved ≥50% cumulative target hit rate at ${targetWindowKey} window`,
+		};
+	}
 	const finalAtOrAboveHits = finalAtOrAboveDocs.filter(d => isTargetHit(d.doc)).length;
 	const finalHitRate = finalAtOrAboveDocs.length > 0 ? (finalAtOrAboveHits / finalAtOrAboveDocs.length) : qualifyingCandidate.cumulativeHitRate;
 	const hitRatePct = Math.round(finalHitRate * 100);
@@ -2640,12 +2651,15 @@ async function getOutcomesCalibration({
 	}
 	const effectiveFrom = new Date(effectiveFromMs);
 
+	const targetWindow = (window && typeof window === 'string' ? window.toLowerCase() : '4h');
+	const targetWindowKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === targetWindow) || targetWindow;
+
 	const targetLimit = limit || 1000;
 	const batchSize = Math.min(targetLimit, 100);
 	const matchedDocs = [];
 	let lastDoc = null;
 
-	const hasFilters = Boolean(symbol || exchange || window);
+	const hasFilters = Boolean(symbol || exchange);
 	const maxScannedDocs = Math.max(targetLimit * 5, 2000);
 	let totalScanned = 0;
 
@@ -2679,19 +2693,33 @@ async function getOutcomesCalibration({
 		totalScanned += snapshot.docs.length;
 
 		for (const doc of snapshot.docs) {
-			if (isRetentionExpired(doc.data() || {})) {
+			const docData = doc.data() || {};
+			if (isRetentionExpired(docData)) {
 				continue;
 			}
 			if (hasFilters) {
 				const formatted = {
-					...doc.data(),
+					...docData,
 					id: doc.id,
-					receivedAt: getDocTimestamp(doc.data()),
+					receivedAt: getDocTimestamp(docData),
 				};
-				if (!matchesOutcomeFilters(formatted, { symbol, exchange, window, from, to })) {
+				if (!matchesOutcomeFilters(formatted, { symbol, exchange, from, to })) {
 					continue;
 				}
 			}
+
+			// Apply limit after selecting calibration-eligible outcomes:
+			// 1. Requested window outcome must be present and evaluated
+			const targetOutcome = docData.outcomes && docData.outcomes[targetWindowKey];
+			if (!targetOutcome || targetOutcome.status !== 'evaluated') {
+				continue;
+			}
+
+			// 2. Must possess a valid normalized confidence score in [0, 1]
+			if (getSignalConfidenceScore(docData) === null) {
+				continue;
+			}
+
 			matchedDocs.push(doc);
 			if (matchedDocs.length >= targetLimit) {
 				break;
