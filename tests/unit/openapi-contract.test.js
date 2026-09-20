@@ -56,6 +56,18 @@ describe('OpenAPI contract', () => {
 		expect(getDocumentedApiOperations(contract)).toEqual(getMountedApiOperations());
 	});
 
+	it('documents the request-timeout response on every API operation', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const missingTimeoutResponses = Object.entries(contract.paths)
+			.filter(([routePath]) => routePath.startsWith('/api/'))
+			.flatMap(([routePath, pathItem]) => Object.entries(pathItem)
+				.filter(([method]) => ['get', 'post', 'put', 'patch', 'delete'].includes(method))
+				.filter(([, operation]) => !operation.responses || !operation.responses['408'])
+				.map(([method]) => `${method.toUpperCase()} ${routePath}`));
+
+		expect(missingTimeoutResponses).toEqual([]);
+	});
+
 	it('is a valid OpenAPI document', async () => {
 		if (!fs.existsSync(contractPath)) return;
 
@@ -81,7 +93,7 @@ describe('OpenAPI contract', () => {
 			'DELETE /api/scanner-presets/{id}', 'POST /api/scanner-presets/{id}/run',
 			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
 			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
-			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary',
+			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/outcomes/calibration',
 			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
 			'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
 			'POST /api/news-monitor/pause', 'POST /api/news-monitor/resume', 'GET /api/news-monitor/status',
@@ -104,6 +116,7 @@ describe('OpenAPI contract', () => {
 			'GET /api/status': 'admin.viewer',
 			'GET /api/outcomes': 'admin.viewer',
 			'GET /api/outcomes/summary': 'admin.viewer',
+			'GET /api/outcomes/calibration': 'admin.viewer',
 			'GET /api/symbol-analyses': 'admin.viewer',
 			'GET /api/symbol-analyses/summary': 'admin.viewer',
 			'GET /api/trading/binance/orders': 'admin.viewer',

@@ -1,7 +1,7 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	ExpandedAnalysisAlertRequestError,
 	parseExpandedAnalysisAlertRequest,
@@ -17,13 +17,13 @@ const symbolAnalysisStorageService = require('../../../../services/storage/Symbo
 
 function postSymbolAnalysis() {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 		let deadline;
 
 		try {
 			const parsed = parseSymbolAnalysisRequest(req);
-			deadline = createDeadline(getTimeoutMs());
+			deadline = createDeadline(getTimeoutMs(), req.requestDeadlineSignal);
 			const input = parsed.symbols[0];
 			const analysis = await tradingViewMcpService.analyzeSymbolIdentifier({
 				...input,
@@ -406,10 +406,13 @@ function getTimeoutMs() {
 	return Number.isFinite(value) && value > 0 ? Math.min(value, 120000) : 60000;
 }
 
-function createDeadline(timeoutMs) {
+function createDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(new Error(`Symbol analysis timeout after ${timeoutMs}ms`)), timeoutMs);
-	return { signal: controller.signal, clear: () => clearTimeout(timeoutId) };
+	return {
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
+		clear: () => clearTimeout(timeoutId),
+	};
 }
 
 function numberOrNull(value) {

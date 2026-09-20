@@ -20,6 +20,7 @@ describe('NewsMonitorHandler', () => {
 		handler.analyzer = analyzer;
 		const req = {
 			method: 'POST',
+			headers: { 'x-request-id': 'news-request-id' },
 			query: {},
 			body: { crypto: ['BTCUSDT'], stocks: ['AAPL'] },
 		};
@@ -37,6 +38,7 @@ describe('NewsMonitorHandler', () => {
 
 			expect(withActiveSpan).toHaveBeenCalledWith(analysisSpan, expect.any(Function));
 			expect(analyzer.analyzeSymbols).toHaveBeenCalledTimes(1);
+			expect(analyzer.analyzeSymbols.mock.calls[0][1]).toBe('news-request-id');
 			expect(analyzer.analyzeSymbols.mock.calls[0][4]).toEqual(expect.objectContaining({
 				assetClassBySymbol: {
 					BTCUSDT: 'crypto',

@@ -1456,11 +1456,15 @@ class NotificationRedriveService {
 				const applyDurablePendingCount = (count, snapshot = null) => {
 					const snapshotObservedAt = normalizeTimestampToDate(snapshot?.readTime);
 					const observedAtMs = snapshotObservedAt?.getTime() || pendingCountQueryStartedAtMs;
-					const localDeltaAfterSnapshot = this._pendingCountLocalMutations.reduce((delta, mutation) => (
-						mutation.sequence > localPendingCountMutationSequenceAtQueryStart && mutation.at > observedAtMs
-							? delta + mutation.delta
-							: delta
-					), 0);
+					const localDeltaAfterSnapshot = this._pendingCountLocalMutations.reduce((delta, mutation) => {
+						if (mutation.sequence <= localPendingCountMutationSequenceAtQueryStart) {
+							return delta;
+						}
+						if (snapshotObservedAt && mutation.at <= observedAtMs) {
+							return delta;
+						}
+						return delta + mutation.delta;
+					}, 0);
 					this.persistedPendingCount = Math.max(0, Math.floor(count + localDeltaAfterSnapshot));
 					this._pendingCountObservedAt = new Date(observedAtMs);
 					return Math.floor(count);

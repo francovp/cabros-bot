@@ -224,6 +224,8 @@ pnpm test:firebase
 - `RAILWAY_ENVIRONMENT_NAME` / `RAILWAY_GIT_PULL_REQUEST_NUMBER` - Railway preview markers; a PR number or environment name containing a hyphen-delimited `pr` segment disables the bot
 - `RAILWAY_GIT_COMMIT_SHA` / `RAILWAY_GIT_REPO_OWNER` / `RAILWAY_GIT_REPO_NAME` - Railway GitHub deployment metadata used for release and deployment notifications
 - `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel/Railway, and `false` for direct deployments)
+- `REQUEST_TIMEOUT_MS` - Hard request-deadline ceiling for mounted `/api` routes in milliseconds (default: `30000`, valid range: `1000`-`120000`; invalid values fall back to the default). The timeout returns `408 REQUEST_TIMEOUT` with a request ID.
+- `REQUEST_DEADLINE_EXEMPT_PATHS` - Optional comma-separated paths excluded from the deadline; `/healthcheck`, `/ready`, `/openapi.json`, and `/docs` are always exempt. Per-endpoint deadlines such as `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` and `MARKET_SCANNER_TIMEOUT_MS` remain the operation-specific soft budgets inside the global ceiling.
 - `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes; invalid values use the default)
 - `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default). Core `/api/webhook/alert` and `/api/webhook/message` ingest uses an isolated finite bucket of 1,000 requests per window so TradingView bursts do not consume the ordinary client bucket; API-key validation still applies.
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production). The logger automatically masks sensitive plain-object keys, bare-scalar secrets preceded by sensitive labels, URL query secrets, embedded JSON strings, Authorization/Bearer credentials, Telegram bot tokens, Discord webhook tokens, OpenAI keys, and dynamically registered request-scoped secrets via `registerSecretValue` / `clearSecretValue`.
@@ -243,6 +245,9 @@ pnpm test:firebase
 - `NEWS_GEMINI_CONCURRENCY` - Max concurrent Gemini-backed symbol analyses. Production policy is `3`; unset keeps legacy parallel fan-out for backward compatibility.
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` - Max per-symbol retries for Gemini `429 RESOURCE_EXHAUSTED` errors (default: `2`)
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` - Base exponential backoff when Gemini does not provide retry delay metadata (default: `1000` ms)
+- `NEWS_MAX_ALERTS_PER_BATCH` - Maximum alerts delivered per `/api/news-monitor` request (default: `10`, range: `1`-`50`; Remote Config supported)
+- `NEWS_MAX_ALERTS_PER_WINDOW` - Maximum alerts delivered by this process during the volume window (default: `20`, range: `1`-`200`; Remote Config supported)
+- `NEWS_MAX_ALERTS_PER_WINDOW_MS` - Sliding volume-window duration (default: `300000` ms / 5 minutes, range: `1000`-`3600000`; Remote Config supported)
 - `ENABLE_BINANCE_PRICE_CHECK` - Enable Binance crypto price fetching (`true` or `false`, default: `false`)
 - `BINANCE_DATA_BASE_URL` - Optional custom Binance market-data host for public data (klines, ticker, avgPrice), e.g. `https://data-api.binance.vision` (default: unset / `https://api.binance.com`)
 - `BINANCE_FETCH_TIMEOUT_MS` - Binance price request timeout (default: `5000` ms)
@@ -811,6 +816,7 @@ Dry-run response excerpt:
     "total": 2,
     "analyzed": 1,
     "cached": 1,
+    "throttled": 0,
     "timeout": 0,
     "error": 0,
     "quota_exhausted": 0,
@@ -836,6 +842,7 @@ Dry-run response excerpt:
 **Response Status Values**:
 - `analyzed` - Symbol successfully analyzed, alerts generated/filtered
 - `cached` - Result returned from cache (within TTL for same event category)
+- `throttled` - Alert delivery suppressed by alert volume throttling (exceeded batch capacity or sliding window limit)
 - `timeout` - Analysis exceeded per-symbol timeout (30s default)
 - `error` - API failure (Binance, Gemini, or other service error). Gemini quota exhaustion is reported as `error.code = "GEMINI_QUOTA_EXHAUSTED"` and counted in `summary.quota_exhausted`.
 
@@ -1738,6 +1745,68 @@ Query aggregated performance and coverage metrics for recorded signal outcomes, 
         "totalCost": 0.0035
       }
     }
+  }
+}
+```
+
+#### GET /api/outcomes/calibration
+
+Query empirical confidence calibration feedback metrics comparing news-monitor and alert confidence scores against realized signal outcomes. Groups evaluated signals into confidence buckets (`<0.70`, `0.70-0.75`, `0.75-0.80`, `0.80-0.85`, `0.85-0.90`, `0.90-1.00`), calculating count, average 1h and 4h returns, and target hit rate per bucket. Also computes a recommended confidence threshold with deterministic rationale once an empirical sample of at least 20 scored alerts is available. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
+
+**Query Parameters:**
+- `limit` - Maximum number of recent signals to evaluate for calibration (integer between `1` and `1000`, default: `1000`)
+- `symbol` - Filter by trading symbol (e.g. `BTCUSDT` or `BINANCE:BTCUSDT`)
+- `exchange` - Filter by exchange identifier (e.g. `BINANCE`, `NASDAQ`)
+- `window` - Evaluation window for hit-rate benchmark (`1h`, `4h`, `1D`, `1W`, default: `4h`)
+- `from` - Optional ISO-8601 lower bound timestamp
+- `to` - Optional ISO-8601 upper bound timestamp
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "calibration": {
+    "available": true,
+    "totalScoredAlerts": 45,
+    "buckets": [
+      {
+        "range": "0.70-0.75",
+        "count": 10,
+        "avgReturn1h": 0.45,
+        "avgReturn4h": 0.82,
+        "targetHitRate": 0.4
+      },
+      {
+        "range": "0.75-0.80",
+        "count": 15,
+        "avgReturn1h": 1.12,
+        "avgReturn4h": 1.85,
+        "targetHitRate": 0.6
+      },
+      {
+        "range": "0.80-0.85",
+        "count": 12,
+        "avgReturn1h": 1.45,
+        "avgReturn4h": 2.3,
+        "targetHitRate": 0.67
+      },
+      {
+        "range": "0.85-0.90",
+        "count": 6,
+        "avgReturn1h": 1.95,
+        "avgReturn4h": 3.1,
+        "targetHitRate": 0.83
+      },
+      {
+        "range": "0.90-1.00",
+        "count": 2,
+        "avgReturn1h": 2.4,
+        "avgReturn4h": 3.8,
+        "targetHitRate": 1.0
+      }
+    ],
+    "suggestedThreshold": 0.75,
+    "suggestedThresholdRationale": "Alerts at 0.75+ show 60%+ target hit rate at 4h window"
   }
 }
 ```
