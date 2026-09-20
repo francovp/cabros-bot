@@ -497,5 +497,21 @@ describe('maintenanceMode', () => {
 			// All 3 post-maintenance calls passed through to handler because quota was NOT consumed
 			expect(handler).toHaveBeenCalledTimes(3);
 		});
+
+		it('enforces maximum bucket capacity with LRU eviction', () => {
+			const now = 100_000;
+			// Fill up with 3 chats under maxBuckets: 3
+			maintenanceMode._isMaintenanceReplyThrottled(1, now, { maxBuckets: 3 });
+			maintenanceMode._isMaintenanceReplyThrottled(2, now + 10, { maxBuckets: 3 });
+			maintenanceMode._isMaintenanceReplyThrottled(3, now + 20, { maxBuckets: 3 });
+			expect(maintenanceMode._getMaintenanceReplyBucketsSize()).toBe(3);
+
+			// Adding a 4th chat when none have expired (< 5000ms) evicts the oldest (chat 1)
+			maintenanceMode._isMaintenanceReplyThrottled(4, now + 30, { maxBuckets: 3 });
+			expect(maintenanceMode._getMaintenanceReplyBucketsSize()).toBe(3);
+
+			// Chat 1 was evicted, so it is no longer throttled even at now + 40
+			expect(maintenanceMode._isMaintenanceReplyThrottled(1, now + 40, { maxBuckets: 3 })).toBe(false);
+		});
 	});
 });

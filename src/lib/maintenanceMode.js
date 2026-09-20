@@ -187,23 +187,33 @@ const maintenanceReplyBuckets = new Map();
 const MAINTENANCE_REPLY_COOLDOWN_MS = 5000;
 const MAX_MAINTENANCE_BUCKETS = 10_000;
 
-function isMaintenanceReplyThrottled(chatId, now = Date.now()) {
+function isMaintenanceReplyThrottled(chatId, now = Date.now(), options = {}) {
 	if (chatId === undefined || chatId === null) {
 		return false;
 	}
+	const maxBuckets = options.maxBuckets ?? MAX_MAINTENANCE_BUCKETS;
 	const lastReplyAt = maintenanceReplyBuckets.get(chatId) || 0;
 	if (now - lastReplyAt < MAINTENANCE_REPLY_COOLDOWN_MS) {
 		return true;
 	}
-	maintenanceReplyBuckets.set(chatId, now);
 
-	if (maintenanceReplyBuckets.size > MAX_MAINTENANCE_BUCKETS) {
+	// Enforce bucket capacity before inserting new entries
+	if (maintenanceReplyBuckets.size >= maxBuckets) {
 		for (const [id, timestamp] of maintenanceReplyBuckets) {
-			if (now - timestamp >= MAINTENANCE_REPLY_COOLDOWN_MS * 2) {
+			if (now - timestamp >= MAINTENANCE_REPLY_COOLDOWN_MS) {
 				maintenanceReplyBuckets.delete(id);
 			}
 		}
+		// If still at or above capacity after pruning expired entries, evict oldest entry to enforce strict cap
+		while (maintenanceReplyBuckets.size >= maxBuckets) {
+			const oldestKey = maintenanceReplyBuckets.keys().next().value;
+			if (oldestKey === undefined) break;
+			maintenanceReplyBuckets.delete(oldestKey);
+		}
 	}
+
+	maintenanceReplyBuckets.delete(chatId);
+	maintenanceReplyBuckets.set(chatId, now);
 	return false;
 }
 
@@ -325,6 +335,8 @@ module.exports = {
 	resetNotificationLatch,
 	_getLatchState: () => ({ lastNotifiedMaintenanceMode, lastNotificationFailureAt }),
 	_setLastNotificationFailureAt: (ts) => { lastNotificationFailureAt = ts; },
+	_isMaintenanceReplyThrottled: isMaintenanceReplyThrottled,
+	_getMaintenanceReplyBucketsSize: () => maintenanceReplyBuckets.size,
 	_handleRemoteConfigChange: handleRemoteConfigChange,
 	_resetForTesting: resetForTesting,
 };
