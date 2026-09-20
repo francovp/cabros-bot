@@ -539,5 +539,68 @@ describe('Token Cost Budget Tracking', () => {
 				'gemini-2.5-flash'
 			);
 		});
+
+		it('isBudgetExceededAsync synchronizes remote spend and blocks execution when limit is reached on replica', async () => {
+			process.env.ENABLE_TOKEN_COST_BUDGET = 'true';
+			process.env.TOKEN_COST_DAILY_BUDGET_USD = '5.00';
+
+			const tracker = new GlobalTokenCostBudgetTracker();
+			const mockDocRef = {
+				get: jest.fn().mockResolvedValue({
+					exists: true,
+					data: () => ({
+						dailySpendUsd: 5.50,
+						dailyInputTokens: 200_000,
+						dailyOutputTokens: 200_000,
+					}),
+				}),
+				set: jest.fn().mockResolvedValue(true),
+			};
+			tracker.firestore = {
+				collection: jest.fn().mockReturnValue({
+					doc: jest.fn().mockReturnValue(mockDocRef),
+				}),
+			};
+
+			expect(tracker.isBudgetExceeded()).toBe(false);
+			const exceeded = await tracker.isBudgetExceededAsync();
+			expect(exceeded).toBe(true);
+			expect(tracker.dailySpendUsd).toBe(5.50);
+			expect(mockDocRef.get).toHaveBeenCalled();
+		});
+
+		it('syncSharedSpendThrottled throttles subsequent reads within interval unless forced', async () => {
+			process.env.ENABLE_TOKEN_COST_BUDGET = 'true';
+			process.env.TOKEN_COST_DAILY_BUDGET_USD = '10.00';
+
+			const tracker = new GlobalTokenCostBudgetTracker();
+			const mockDocRef = {
+				get: jest.fn().mockResolvedValue({
+					exists: true,
+					data: () => ({
+						dailySpendUsd: 1.00,
+						dailyInputTokens: 10_000,
+						dailyOutputTokens: 10_000,
+					}),
+				}),
+				set: jest.fn().mockResolvedValue(true),
+			};
+			tracker.firestore = {
+				collection: jest.fn().mockReturnValue({
+					doc: jest.fn().mockReturnValue(mockDocRef),
+				}),
+			};
+
+			await tracker.syncSharedSpendThrottled();
+			expect(mockDocRef.get).toHaveBeenCalledTimes(1);
+
+			// Calling again immediately without force should throttle and not call doc.get
+			await tracker.syncSharedSpendThrottled();
+			expect(mockDocRef.get).toHaveBeenCalledTimes(1);
+
+			// Calling with force: true should bypass throttle
+			await tracker.syncSharedSpendThrottled({ force: true });
+			expect(mockDocRef.get).toHaveBeenCalledTimes(2);
+		});
 	});
 });

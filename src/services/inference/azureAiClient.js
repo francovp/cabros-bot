@@ -49,7 +49,10 @@ class AzureAIClient {
 		}
 
 		const { tokenCostBudgetService } = require('../../lib/tokenUsage');
-		if (tokenCostBudgetService?.isBudgetExceeded()) {
+		const isExceeded = tokenCostBudgetService?.isBudgetExceededAsync
+			? await tokenCostBudgetService.isBudgetExceededAsync()
+			: tokenCostBudgetService?.isBudgetExceeded();
+		if (isExceeded) {
 			const err = new Error('TOKEN_BUDGET_EXCEEDED: Daily LLM token cost budget exceeded');
 			err.status = 429;
 			throw err;

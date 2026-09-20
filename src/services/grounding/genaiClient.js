@@ -257,7 +257,7 @@ class GenaiClient {
 			throw signal.reason || new Error('Grounding timeout');
 		}
 
-		if (tokenCostBudgetService.isBudgetExceeded()) {
+		if (await tokenCostBudgetService.isBudgetExceededAsync()) {
 			console.warn('[genaiClient] Daily token cost budget exceeded. Falling back to Brave Search for grounding.');
 			return this._executeBraveSearch(query, maxResults, signal);
 		}
@@ -441,7 +441,7 @@ class GenaiClient {
          * @returns {Promise<{text: string, citations: Array}>} Response text and citations
          */
 	async llmCallv2({ systemPrompt, userPrompt, context = {}, opts = {} }) {
-		if (tokenCostBudgetService.isBudgetExceeded()) {
+		if (await tokenCostBudgetService.isBudgetExceededAsync()) {
 			const error = new Error('Daily token cost budget exceeded');
 			error.code = 'TOKEN_BUDGET_EXCEEDED';
 			error.status = 429;

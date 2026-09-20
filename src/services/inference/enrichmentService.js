@@ -91,7 +91,10 @@ class EnrichmentService {
 		}
 
 		const { tokenCostBudgetService, registerGlobalUsage, normalizeUsageMetadata: normalizeUsage } = require('../../lib/tokenUsage');
-		if (tokenCostBudgetService?.isBudgetExceeded()) {
+		const isExceeded = tokenCostBudgetService?.isBudgetExceededAsync
+			? await tokenCostBudgetService.isBudgetExceededAsync()
+			: tokenCostBudgetService?.isBudgetExceeded();
+		if (isExceeded) {
 			console.warn('[EnrichmentService] Daily token cost budget exceeded, skipping secondary LLM enrichment');
 			return null;
 		}

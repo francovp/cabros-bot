@@ -254,6 +254,8 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 		this.notificationManager = null;
 		this.notifyAdmin = null;
 		this.firestore = null;
+		this._lastSyncAt = 0;
+		this._inFlightSync = null;
 
 		// Asynchronously synchronize with shared Firestore daily spend if available
 		this._syncSharedSpend().catch(() => {});
@@ -347,16 +349,88 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 				if (sharedOutput > this.dailyOutputTokens) {
 					this.dailyOutputTokens = sharedOutput;
 				}
+
+				// Check budget alerts based on refreshed shared spend
+				const config = this.getBudgetConfig();
+				if (config.enabled && config.budgetUsd > 0) {
+					const utilizationPct = Number(((this.dailySpendUsd / config.budgetUsd) * 100).toFixed(1));
+					if (utilizationPct >= 100 && !this.limitAlertSent) {
+						this.limitAlertSent = true;
+						this.alertsSent++;
+						console.error(`[TokenCostBudget] Hard limit reached via shared spend: daily token spend $${this.dailySpendUsd.toFixed(4)} reached 100% of daily budget $${config.budgetUsd.toFixed(2)}. Blocking new LLM calls.`);
+						Promise.resolve(this._sendAdminNotification('limit', {
+							dailySpendUsd: this.dailySpendUsd,
+							budgetUsd: config.budgetUsd,
+							utilizationPct,
+						})).catch(() => {
+							this.limitAlertSent = false;
+							this.alertsSent--;
+						});
+					} else if (utilizationPct >= config.warnThresholdPct && !this.warningAlertSent) {
+						this.warningAlertSent = true;
+						this.alertsSent++;
+						console.warn(`[TokenCostBudget] Warning threshold reached via shared spend: daily token spend $${this.dailySpendUsd.toFixed(4)} reached ${utilizationPct.toFixed(1)}% of daily budget $${config.budgetUsd.toFixed(2)}.`);
+						Promise.resolve(this._sendAdminNotification('warning', {
+							dailySpendUsd: this.dailySpendUsd,
+							budgetUsd: config.budgetUsd,
+							utilizationPct,
+							warnThresholdPct: config.warnThresholdPct,
+						})).catch(() => {
+							this.warningAlertSent = false;
+							this.alertsSent--;
+						});
+					}
+				}
 			}
 		} catch (err) {
 			console.warn(`[TokenCostBudget] Failed to sync shared spend from Firestore: ${err.message}`);
 		}
 	}
 
-	async syncSharedSpend() {
+	async syncSharedSpendThrottled({ force = false } = {}) {
 		this.checkDayRollover();
-		await this._syncSharedSpend();
-		return this.getBudgetStatus();
+		const config = this.getBudgetConfig();
+		if (!config.enabled) {
+			return this.getBudgetStatus();
+		}
+
+		const firestore = this._getFirestore();
+		if (!firestore) {
+			return this.getBudgetStatus();
+		}
+
+		const now = Date.now();
+		const utilizationPct = config.budgetUsd > 0 ? (this.dailySpendUsd / config.budgetUsd) * 100 : 0;
+		const minIntervalMs = utilizationPct >= 80 ? 2000 : 10000;
+
+		if (!force && (now - this._lastSyncAt < minIntervalMs)) {
+			return this.getBudgetStatus();
+		}
+
+		if (this._inFlightSync) {
+			return this._inFlightSync;
+		}
+
+		this._inFlightSync = (async () => {
+			try {
+				await this._syncSharedSpend();
+				this._lastSyncAt = Date.now();
+			} finally {
+				this._inFlightSync = null;
+			}
+			return this.getBudgetStatus();
+		})();
+
+		return this._inFlightSync;
+	}
+
+	async syncSharedSpend() {
+		return this.syncSharedSpendThrottled({ force: true });
+	}
+
+	async isBudgetExceededAsync() {
+		await this.syncSharedSpendThrottled().catch(() => {});
+		return this.isBudgetExceeded();
 	}
 
 	checkDayRollover(now = new Date(Date.now())) {
@@ -624,6 +698,8 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 		this.notificationManager = null;
 		this.notifyAdmin = null;
 		this.firestore = null;
+		this._lastSyncAt = 0;
+		this._inFlightSync = null;
 	}
 
 	reset() {
