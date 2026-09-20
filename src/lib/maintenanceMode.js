@@ -11,26 +11,31 @@ const MAINTENANCE_ERROR_RESPONSE = Object.freeze({
 const TELEGRAM_MAINTENANCE_NOTICE = '⚠️ El bot se encuentra temporalmente en modo de mantenimiento. Por favor, intenta más tarde.';
 
 let lastNotifiedMaintenanceMode = false;
-let lastNotifiedTemplateVersion = null;
-let lastSeenTemplateVersion = null;
+let lastNotificationFailureAt = 0;
+const NOTIFICATION_FAILURE_RETRY_COOLDOWN_MS = 60_000;
 let isNotifying = false;
 let globalBotGetter = null;
 
 function resetNotificationLatch() {
 	lastNotifiedMaintenanceMode = false;
-	lastNotifiedTemplateVersion = null;
-	lastSeenTemplateVersion = null;
+	lastNotificationFailureAt = 0;
 }
 
-function handleRemoteConfigChange({ prevOverrides, nextOverrides, templateVersion }) {
-	const prevVal = prevOverrides?.ENABLE_MAINTENANCE_MODE;
-	const nextVal = nextOverrides?.ENABLE_MAINTENANCE_MODE;
+function getEffectiveMaintenanceMode(overrides) {
+	if (overrides && overrides.ENABLE_MAINTENANCE_MODE !== undefined) {
+		return overrides.ENABLE_MAINTENANCE_MODE === true;
+	}
+	return process.env.ENABLE_MAINTENANCE_MODE === 'true';
+}
 
-	if (nextVal === false || (prevVal === true && nextVal !== true) || (prevVal === false && nextVal === true)) {
-		resetNotificationLatch();
-	} else if (nextVal !== true && !isMaintenanceModeEnabled()) {
-		resetNotificationLatch();
-	} else if (templateVersion && lastNotifiedTemplateVersion && templateVersion !== lastNotifiedTemplateVersion) {
+function handleRemoteConfigChange({ prevOverrides, nextOverrides }) {
+	const prevEffective = getEffectiveMaintenanceMode(prevOverrides);
+	const nextEffective = getEffectiveMaintenanceMode(nextOverrides);
+
+	// Reset notification latch only if maintenance mode transitioned (enabled <-> disabled)
+	// or is currently disabled. Do not reset if maintenance mode remained enabled across
+	// an unrelated parameter publish.
+	if (prevEffective !== nextEffective || !nextEffective) {
 		resetNotificationLatch();
 	}
 }
@@ -46,10 +51,7 @@ if (typeof remoteConfigService.addChangeListener === 'function') {
  */
 function isMaintenanceModeEnabled() {
 	let enabled = false;
-	let currentTemplateVersion = null;
 	try {
-		const status = remoteConfigService.getStatus();
-		currentTemplateVersion = status?.templateVersion || null;
 		const runtimeConfig = remoteConfigService.getRuntimeConfig();
 		if (typeof runtimeConfig.ENABLE_MAINTENANCE_MODE === 'boolean') {
 			enabled = runtimeConfig.ENABLE_MAINTENANCE_MODE;
@@ -61,19 +63,9 @@ function isMaintenanceModeEnabled() {
 		enabled = process.env.ENABLE_MAINTENANCE_MODE === 'true';
 	}
 
-	if (currentTemplateVersion && lastSeenTemplateVersion && currentTemplateVersion !== lastSeenTemplateVersion) {
-		if (lastNotifiedTemplateVersion && currentTemplateVersion !== lastNotifiedTemplateVersion) {
-			lastNotifiedMaintenanceMode = false;
-			lastNotifiedTemplateVersion = null;
-		}
-	}
-	if (currentTemplateVersion) {
-		lastSeenTemplateVersion = currentTemplateVersion;
-	}
-
 	if (!enabled && lastNotifiedMaintenanceMode) {
 		lastNotifiedMaintenanceMode = false;
-		lastNotifiedTemplateVersion = null;
+		lastNotificationFailureAt = 0;
 	}
 	return enabled;
 }
@@ -163,27 +155,31 @@ async function notifyAdminOnToggle({
  */
 async function checkAndNotifyMaintenanceModeToggle(options = {}) {
 	const isEnabled = isMaintenanceModeEnabled();
+	const now = Date.now();
 	if (isEnabled && !lastNotifiedMaintenanceMode && !isNotifying) {
+		const failureCooldownMs = options.failureRetryCooldownMs ?? NOTIFICATION_FAILURE_RETRY_COOLDOWN_MS;
+		if (lastNotificationFailureAt > 0 && now - lastNotificationFailureAt < failureCooldownMs) {
+			return;
+		}
 		isNotifying = true;
 		try {
 			const notified = await notifyAdminOnToggle(options);
 			if (notified && isMaintenanceModeEnabled()) {
 				lastNotifiedMaintenanceMode = true;
-				try {
-					lastNotifiedTemplateVersion = remoteConfigService.getStatus()?.templateVersion || null;
-				} catch (_) {
-					lastNotifiedTemplateVersion = null;
-				}
+				lastNotificationFailureAt = 0;
 			} else if (!isMaintenanceModeEnabled()) {
 				lastNotifiedMaintenanceMode = false;
-				lastNotifiedTemplateVersion = null;
+				lastNotificationFailureAt = 0;
+			} else {
+				// Notification attempt failed while maintenance remained enabled.
+				// Apply a bounded failure cooldown before trying again.
+				lastNotificationFailureAt = Date.now();
 			}
 		} finally {
 			isNotifying = false;
 		}
 	} else if (!isEnabled && lastNotifiedMaintenanceMode) {
-		lastNotifiedMaintenanceMode = false;
-		lastNotifiedTemplateVersion = null;
+		resetNotificationLatch();
 	}
 }
 
@@ -318,6 +314,7 @@ function resetForTesting() {
 module.exports = {
 	MAINTENANCE_ERROR_RESPONSE,
 	TELEGRAM_MAINTENANCE_NOTICE,
+	NOTIFICATION_FAILURE_RETRY_COOLDOWN_MS,
 	isMaintenanceModeEnabled,
 	setBotGetter,
 	notifyAdminOnToggle,
@@ -326,6 +323,8 @@ module.exports = {
 	telegramMaintenanceMode,
 	isTelegramCommand,
 	resetNotificationLatch,
+	_getLatchState: () => ({ lastNotifiedMaintenanceMode, lastNotificationFailureAt }),
+	_setLastNotificationFailureAt: (ts) => { lastNotificationFailureAt = ts; },
 	_handleRemoteConfigChange: handleRemoteConfigChange,
 	_resetForTesting: resetForTesting,
 };

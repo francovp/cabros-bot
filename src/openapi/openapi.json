@@ -227,7 +227,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
-            "$ref": "#/components/responses/MaintenanceMode"
+            "$ref": "#/components/responses/MessageServiceUnavailable"
           }
         },
         "security": [
@@ -1888,7 +1888,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
-            "$ref": "#/components/responses/MaintenanceMode"
+            "$ref": "#/components/responses/NewsMonitorServiceUnavailable"
           }
         },
         "security": [
@@ -1931,7 +1931,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "503": {
-            "$ref": "#/components/responses/MaintenanceMode"
+            "$ref": "#/components/responses/NewsMonitorServiceUnavailable"
           }
         },
         "security": [
@@ -4147,6 +4147,76 @@
           }
         }
       },
+      "MessageServiceUnavailable": {
+        "description": "Service is temporarily unavailable due to active maintenance mode or uninitialized notification services",
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/MaintenanceModeError"
+                },
+                {
+                  "$ref": "#/components/schemas/NotificationServiceUnavailableError"
+                }
+              ]
+            },
+            "examples": {
+              "maintenanceMode": {
+                "summary": "Maintenance mode active",
+                "value": {
+                  "error": "MAINTENANCE_MODE",
+                  "message": "Service is temporarily unavailable for maintenance"
+                }
+              },
+              "servicesUninitialized": {
+                "summary": "Notification services not initialized",
+                "value": {
+                  "success": false,
+                  "error": "Notification services not initialized"
+                }
+              }
+            }
+          }
+        }
+      },
+      "NewsMonitorServiceUnavailable": {
+        "description": "Service is temporarily unavailable due to active maintenance mode or paused news monitoring",
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/MaintenanceModeError"
+                },
+                {
+                  "$ref": "#/components/schemas/NewsMonitorPausedError"
+                }
+              ]
+            },
+            "examples": {
+              "maintenanceMode": {
+                "summary": "Maintenance mode active",
+                "value": {
+                  "error": "MAINTENANCE_MODE",
+                  "message": "Service is temporarily unavailable for maintenance"
+                }
+              },
+              "newsMonitorPaused": {
+                "summary": "News monitor paused",
+                "value": {
+                  "error": "News monitor analysis is temporarily paused.",
+                  "code": "NEWS_MONITOR_PAUSED",
+                  "paused": true,
+                  "pausedAt": "2026-03-30T12:00:00.000Z",
+                  "reason": "Operator paused news monitor",
+                  "requestId": "req-123"
+                }
+              }
+            }
+          }
+        }
+      },
       "Error": {
         "description": "Request or service error",
         "content": {
@@ -5660,6 +5730,67 @@
           "message": {
             "type": "string",
             "example": "Service is temporarily unavailable for maintenance"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NotificationServiceUnavailableError": {
+        "type": "object",
+        "required": [
+          "success",
+          "error"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ],
+            "example": false
+          },
+          "error": {
+            "type": "string",
+            "example": "Notification services not initialized"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewsMonitorPausedError": {
+        "type": "object",
+        "required": [
+          "error",
+          "code",
+          "paused"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "News monitor analysis is temporarily paused."
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "NEWS_MONITOR_PAUSED"
+            ],
+            "example": "NEWS_MONITOR_PAUSED"
+          },
+          "paused": {
+            "type": "boolean",
+            "example": true
+          },
+          "pausedAt": {
+            "type": "string",
+            "nullable": true,
+            "example": "2026-03-30T12:00:00.000Z"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "example": "Operator paused news monitor"
+          },
+          "requestId": {
+            "type": "string",
+            "example": "req-123"
           }
         },
         "additionalProperties": false

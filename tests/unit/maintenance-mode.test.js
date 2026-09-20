@@ -148,7 +148,7 @@ describe('maintenanceMode', () => {
 			expect(sendMessage).toHaveBeenCalledTimes(2);
 		});
 
-		it('retries notification on subsequent check if previous notification failed', async () => {
+		it('throttles notification retries on failure and retries after cooldown', async () => {
 			process.env.ENABLE_MAINTENANCE_MODE = 'true';
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '123456789';
 
@@ -158,15 +158,19 @@ describe('maintenanceMode', () => {
 			const mockBot = { telegram: { sendMessage } };
 			maintenanceMode.setBotGetter(() => mockBot);
 
-			// First attempt fails -> should not set permanent latch
+			// First attempt fails -> should not set permanent latch, records failure timestamp
 			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
 			expect(sendMessage).toHaveBeenCalledTimes(1);
 
-			// Second attempt while still enabled -> should retry and succeed
+			// Immediate second attempt while still in failure cooldown -> throttled, no new send
 			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+
+			// Third attempt with cooldown expired (failureRetryCooldownMs: 0) -> retries and succeeds
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle({ failureRetryCooldownMs: 0 });
 			expect(sendMessage).toHaveBeenCalledTimes(2);
 
-			// Third attempt -> already latched because previous succeeded
+			// Fourth attempt -> already latched because previous succeeded
 			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
 			expect(sendMessage).toHaveBeenCalledTimes(2);
 		});
@@ -222,7 +226,7 @@ describe('maintenanceMode', () => {
 			expect(sendMessage).toHaveBeenCalledTimes(2);
 		});
 
-		it('resets latch when Remote Config template version changes across background refreshes', async () => {
+		it('does not reset latch when an unrelated Remote Config parameter is published while maintenance remains enabled', async () => {
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '12345';
 			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 			const sendMessage = jest.fn().mockResolvedValue({ message_id: 1 });
@@ -233,10 +237,10 @@ describe('maintenanceMode', () => {
 			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
 			expect(sendMessage).toHaveBeenCalledTimes(1);
 
-			// Version 2 published with maintenance mode enabled (e.g. toggled off and on between polling intervals)
-			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_MAINTENANCE_MODE: true }, Date.now(), 'v2');
+			// Version 2 published with an unrelated parameter change while maintenance remains enabled
+			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_MAINTENANCE_MODE: true, BRAVE_SEARCH_TIMEOUT_MS: 5000 }, Date.now(), 'v2');
 			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
-			expect(sendMessage).toHaveBeenCalledTimes(2);
+			expect(sendMessage).toHaveBeenCalledTimes(1);
 		});
 
 		it('allows manual latch reset via resetNotificationLatch', async () => {
@@ -256,6 +260,37 @@ describe('maintenanceMode', () => {
 			maintenanceMode.resetNotificationLatch();
 			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
 			expect(sendMessage).toHaveBeenCalledTimes(2);
+		});
+
+		it('throttles notification retries after failure to prevent hammering Telegram', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '12345';
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+			const sendMessage = jest.fn().mockRejectedValue(new Error('Telegram network error'));
+			maintenanceMode.setBotGetter(() => ({ telegram: { sendMessage } }));
+
+			// First attempt fails
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+			expect(maintenanceMode._getLatchState().lastNotificationFailureAt).toBeGreaterThan(0);
+
+			// Immediate second call should be throttled by failure cooldown
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+
+			// Simulate passage of cooldown duration
+			maintenanceMode._setLastNotificationFailureAt(Date.now() - maintenanceMode.NOTIFICATION_FAILURE_RETRY_COOLDOWN_MS - 1000);
+
+			// Subsequent call retries
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(2);
+
+			// When retry succeeds, failure cooldown is cleared and latch is set
+			sendMessage.mockResolvedValueOnce({ message_id: 2 });
+			maintenanceMode._setLastNotificationFailureAt(Date.now() - maintenanceMode.NOTIFICATION_FAILURE_RETRY_COOLDOWN_MS - 1000);
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(3);
+			expect(maintenanceMode._getLatchState().lastNotifiedMaintenanceMode).toBe(true);
+			expect(maintenanceMode._getLatchState().lastNotificationFailureAt).toBe(0);
 		});
 	});
 
