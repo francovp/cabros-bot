@@ -81,6 +81,12 @@ jest.mock('@sentry/node', () => ({
 	setTag: jest.fn(),
 	setContext: jest.fn(),
 	setExtra: jest.fn(),
+	metrics: {
+		count: jest.fn(),
+		distribution: jest.fn(),
+		gauge: jest.fn(),
+		set: jest.fn(),
+	},
 }), { virtual: true });
 
 // Mock @sentry/profiling-node to prevent loading native binary in tests

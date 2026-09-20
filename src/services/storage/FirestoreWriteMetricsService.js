@@ -1,5 +1,7 @@
 'use strict';
 
+const sentryService = require('../monitoring/SentryService');
+
 /**
  * FirestoreWriteMetricsService
  *
@@ -40,6 +42,7 @@ class FirestoreWriteMetricsService {
         return;
       }
       this._ensureDomain(domain).success += 1;
+      sentryService.captureFirestoreWriteMetric({ domain, status: 'success' });
     } catch (error) {
       console.warn('[FirestoreWriteMetricsService] recordWriteSuccess failed:', error.message);
     }
@@ -56,6 +59,7 @@ class FirestoreWriteMetricsService {
         return;
       }
       this._ensureDomain(domain).failure += 1;
+      sentryService.captureFirestoreWriteMetric({ domain, status: 'failure' });
     } catch (error) {
       console.warn('[FirestoreWriteMetricsService] recordWriteFailure failed:', error.message);
     }

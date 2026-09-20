@@ -4,6 +4,7 @@ const {
 	FirestoreWriteMetricsService,
 	firestoreWriteMetricsService,
 } = require('../../src/services/storage/FirestoreWriteMetricsService');
+const sentryService = require('../../src/services/monitoring/SentryService');
 
 describe('FirestoreWriteMetricsService', () => {
 	let service;
@@ -104,6 +105,19 @@ describe('FirestoreWriteMetricsService', () => {
 		service.recordWriteSuccess('alerts');
 		const afterResetWindow = service.getSnapshot().window.startedAt;
 		expect(afterResetWindow >= beforeResetWindow).toBe(true);
+	});
+
+	it('captures Sentry metrics for successful and failed writes', () => {
+		const spy = jest.spyOn(sentryService, 'captureFirestoreWriteMetric').mockImplementation(() => {});
+		try {
+			service.recordWriteSuccess('alerts');
+			expect(spy).toHaveBeenCalledWith({ domain: 'alerts', status: 'success' });
+
+			service.recordWriteFailure('jobs');
+			expect(spy).toHaveBeenCalledWith({ domain: 'jobs', status: 'failure' });
+		} finally {
+			spy.mockRestore();
+		}
 	});
 
 	it('exposes a module-level singleton with the same interface', () => {

@@ -44,7 +44,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/services/notification/requestRouting.js` — Shared optional channel-routing validator/dispatcher for alert-producing routes (`channels`, `telegramChatId`, `whatsappChatId`) that preserves legacy broadcast behavior when `channels` is omitted.
 - `src/controllers/alerts/alerts.js` — Stored alert read, export, analytics, and replay handlers for `GET /api/alerts`, `GET /api/alerts/export`, `GET /api/alerts/summary`, `GET /api/alerts/:alertId`, and `POST /api/alerts/:alertId/replay`.
 - `src/controllers/status.js` — Status handler that computes capabilities, feature flags, notification channels, and active dependencies status.
-- `src/services/storage/FirestoreWriteMetricsService.js` — In-memory counters tracking Firestore write attempts, successes, failures, and success rates across persistence domains (`alerts`, `alertReplays`, `jobs`), surfaced conditionally under `dependencies.firestoreWriteMetrics` in `/api/status` and `/api/capabilities`.
+- `src/services/storage/FirestoreWriteMetricsService.js` — In-memory counters tracking Firestore write attempts, successes, failures, and success rates across persistence domains (`alerts`, `alertReplays`, `jobs`), surfaced conditionally under `dependencies.firestoreWriteMetrics` in `/api/status` and `/api/capabilities`, with fail-open Sentry count metrics (`captureFirestoreWriteMetric`).
 - `src/services/storage/SignalOutcomeService.js` — Records and evaluates signal outcomes, schedules the role-gated evaluator, and persists safe worker heartbeats.
 - `src/controllers/outcomes/outcomes.js` — Signal outcome query and summary handlers for `GET /api/outcomes` and `GET /api/outcomes/summary`.
 - `src/workers/signalOutcomeWorker.js` — Dedicated Render worker bootstrap with SIGTERM drain handling.
@@ -55,7 +55,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/services/jobs/JobQueue.js` / `src/services/jobs/jobWorker.js` — BullMQ producer/worker integration for the optional Render worker execution mode.
 - `worker.js` — Dedicated Render worker entry point with graceful BullMQ shutdown.
 - `src/services/tradingview/expandedAnalysisAlertReport.js` — Parses `EXCHANGE:SYMBOL` requests and formats grouped Spanish technical-analysis reports.
-- `src/services/monitoring/SentryService.js` — Wraps `@sentry/node` for runtime error and external failure monitoring with tag enrichment (endpoint, provider, status_code, trace_id), automatic PII sanitization, and actionable 500 error grouping.
+- `src/services/monitoring/SentryService.js` — Wraps `@sentry/node` for runtime error, external failure, and custom metric monitoring (LLM tokens/duration, Firestore write counts) with tag enrichment (endpoint, provider, status_code, trace_id), automatic PII sanitization, and actionable 500 error grouping.
 - `src/lib/processLifecycle.js` — Coordinates bounded HTTP/process shutdown and cleanup of runtime resources.
 - `src/services/prompts/` — Langfuse-backed PromptService that resolves prompts with file-backed local defaults.
 - `src/controllers/helpers.js` — Small numeric helper (`round10`) used by price formatting.
