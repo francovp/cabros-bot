@@ -1,9 +1,50 @@
 const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoSymbol');
 const { jobService } = require('../services/jobs/JobService');
 const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor');
+const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
+
+const READINESS_ERROR_LABELS = {
+	http_5xx: 'error HTTP 5xx del servidor TradingView',
+	http_4xx: 'error HTTP 4xx del servidor TradingView',
+	timeout: 'timeout de TradingView',
+	invalid_response: 'respuesta inválida de TradingView',
+	request_failed: 'fallo de petición a TradingView',
+	circuit_breaker_open: 'circuit breaker abierto por fallos consecutivos',
+};
+
+function formatReadinessErrorLabel(category) {
+	if (typeof category !== 'string' || !category) return null;
+	return READINESS_ERROR_LABELS[category] || null;
+}
+
+async function getTradingViewReadinessWarning() {
+	if (!tradingViewMcpService || typeof tradingViewMcpService.getStatus !== 'function') {
+		return null;
+	}
+	try {
+		if (typeof tradingViewMcpService.syncDurableStatus === 'function') {
+			await tradingViewMcpService.syncDurableStatus();
+		}
+	} catch {
+		// Fail open: remote sync failure must never block readiness checks
+	}
+	let status;
+	try {
+		status = tradingViewMcpService.getStatus({ enabled: true });
+	} catch (error) {
+		// Fail open: a broken readiness probe must never block job creation.
+		return null;
+	}
+	if (!status || status.status !== 'degraded') {
+		return null;
+	}
+	const categoryLabel = formatReadinessErrorLabel(status.lastErrorCategory);
+	const detail = categoryLabel ? ` (último error: ${categoryLabel})` : '';
+	return `⚠️ TradingView MCP está degradado${detail}. El job se creará pero puede fallar.`;
+}
 
 const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	precio: { max: 10, windowMs: 60_000 },
@@ -90,7 +131,6 @@ async function telegramCommandRateLimiter(context, next) {
 }
 
 telegramCommandRateLimiter.reset = () => telegramCommandRateLimitBuckets.clear();
-
 const getPrice = async (context) => {
 	const chatId = getChatId(context);
 	const text = (context.message && context.message.text) || '';
@@ -140,6 +180,31 @@ const getPrice = async (context) => {
 	}
 };
 
+const DEFAULT_WARNING_REPLY_TIMEOUT_MS = 3000;
+let warningReplyTimeoutMs = DEFAULT_WARNING_REPLY_TIMEOUT_MS;
+
+function getWarningReplyTimeoutMs() {
+	return warningReplyTimeoutMs;
+}
+
+function setWarningReplyTimeoutMsForTest(timeoutMs) {
+	warningReplyTimeoutMs = typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : DEFAULT_WARNING_REPLY_TIMEOUT_MS;
+}
+
+function sendReadinessWarning(context, warningText, signal) {
+	const chatId = getChatId(context);
+	if (context?.telegram && typeof context.telegram.callApi === 'function' && chatId !== undefined && chatId !== null) {
+		return context.telegram.callApi('sendMessage', {
+			chat_id: chatId,
+			text: warningText,
+		}, { signal });
+	}
+	if (typeof context?.reply === 'function') {
+		return context.reply(warningText, { signal });
+	}
+	return Promise.resolve();
+}
+
 const createTradingViewJobCommand = (type, command, buildPayload) => async (context) => {
 	const chatId = getChatId(context);
 	const args = parseCommandArgs(context);
@@ -159,6 +224,22 @@ const createTradingViewJobCommand = (type, command, buildPayload) => async (cont
 			...buildPayload(args),
 			...(chatId !== undefined && chatId !== null ? { telegramChatId: String(chatId) } : {}),
 		};
+		if (typeof jobService.validateJobRequest === 'function') {
+			jobService.validateJobRequest(type, payload);
+		}
+		const readinessWarning = await getTradingViewReadinessWarning();
+		if (readinessWarning) {
+			try {
+				await withTimeout(
+					(signal) => sendReadinessWarning(context, readinessWarning, signal),
+					getWarningReplyTimeoutMs(),
+					'Timeout sending MCP readiness warning'
+				);
+			} catch (replyError) {
+				// A failed or timed-out warning reply must never block job creation.
+				console.error('Failed to send MCP readiness warning:', replyError.message);
+			}
+		}
 		const result = await jobService.createJob(type, payload, buildBotFromContext(context));
 		await context.reply(`Job ${result.jobId} creado para ${type}. Estado: ${result.status}.`);
 	} catch (error) {
@@ -719,5 +800,9 @@ module.exports = {
 	buildHelpMessage,
 	getTelegramCommandMenu,
 	parseCommandArgs,
+	getTradingViewReadinessWarning,
+	formatReadinessErrorLabel,
+	sendReadinessWarning,
 	telegramCommandRateLimiter,
+	setWarningReplyTimeoutMsForTest,
 };

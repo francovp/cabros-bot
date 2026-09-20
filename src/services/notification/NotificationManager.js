@@ -269,10 +269,19 @@ class NotificationManager {
 				});
 
 				return Promise.resolve()
-					.then(() => ch.send(alert, {
-						...options,
-						signal: options.signalByChannel?.[ch.name] || options.signal,
-					}))
+					.then(() => {
+						const channelSignal = options.signalByChannel?.[ch.name];
+						let signal = options.signal;
+						if (channelSignal && signal) {
+							signal = AbortSignal.any([channelSignal, signal]);
+						} else if (channelSignal) {
+							signal = channelSignal;
+						}
+						return ch.send(alert, {
+							...options,
+							signal,
+						});
+					})
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
 					});
