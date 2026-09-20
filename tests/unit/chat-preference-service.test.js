@@ -473,6 +473,57 @@ describe('ChatPreferenceService', () => {
 			expect(resultCore).toEqual({ deliver: false, reason: 'category_excluded' });
 		});
 
+		it('matches symbols bidirectionally between bare symbols and quoted pairs', async () => {
+			mockDoc.get.mockResolvedValueOnce({
+				exists: true,
+				data: () => ({
+					symbolFilter: ['BTCUSDT'],
+				}),
+			});
+
+			// Preference is BTCUSDT, alert is bare BTC
+			const bareAlert = { symbol: 'BTC' };
+			const resBare = await chatPreferenceService.shouldDeliverAlert({
+				chatId: 'chat_pref_pair',
+				channel: 'telegram',
+				alert: bareAlert,
+			});
+			expect(resBare).toEqual({ deliver: true });
+
+			mockDoc.get.mockResolvedValueOnce({
+				exists: true,
+				data: () => ({
+					symbolFilter: ['ETH'],
+				}),
+			});
+
+			// Preference is bare ETH, alert is ETHUSDT
+			const pairAlert = { symbol: 'BINANCE:ETHUSDT' };
+			const resPair = await chatPreferenceService.shouldDeliverAlert({
+				chatId: 'chat_pref_bare',
+				channel: 'telegram',
+				alert: pairAlert,
+			});
+			expect(resPair).toEqual({ deliver: true });
+		});
+
+		it('excludes symbols bidirectionally between bare symbols and quoted pairs', async () => {
+			mockDoc.get.mockResolvedValueOnce({
+				exists: true,
+				data: () => ({
+					symbolExclude: ['BTCUSDT'],
+				}),
+			});
+
+			const bareAlert = { symbol: 'BTC' };
+			const resBare = await chatPreferenceService.shouldDeliverAlert({
+				chatId: 'chat_pref_exclude',
+				channel: 'telegram',
+				alert: bareAlert,
+			});
+			expect(resBare).toEqual({ deliver: false, reason: 'symbol_excluded' });
+		});
+
 		it('fails open on any internal error during delivery evaluation', async () => {
 			mockDoc.get.mockRejectedValueOnce(new Error('Unexpected Firestore crash'));
 
@@ -482,6 +533,12 @@ describe('ChatPreferenceService', () => {
 				alert: { symbol: 'BTCUSDT' },
 			});
 			expect(result).toEqual({ deliver: true });
+		});
+
+		it('reports cachedCount matching cachedEntries in getStatus', () => {
+			const status = chatPreferenceService.getStatus();
+			expect(typeof status.cachedCount).toBe('number');
+			expect(status.cachedCount).toBe(status.cachedEntries);
 		});
 	});
 });

@@ -57,7 +57,8 @@ function matchesSymbol(candidate, target) {
 	const t = normalizeSymbol(target);
 	if (!a || !t) return false;
 	if (a === t) return true;
-	if (a === `${t}USDT` || a === `${t}USD` || a === `${t}PERP`) return true;
+	const suffixes = ['USDT', 'USD', 'PERP'];
+	if (suffixes.some((suffix) => a === `${t}${suffix}` || t === `${a}${suffix}`)) return true;
 	return false;
 }
 
@@ -171,6 +172,7 @@ class ChatPreferenceService {
 			configured,
 			ready,
 			status,
+			cachedCount: this._cache.size,
 			cachedEntries: this._cache.size,
 			retentionDays: this.getRetentionDays(),
 			cacheTtlMs: this.getCacheTtlMs(),

@@ -305,6 +305,7 @@ describe('Status endpoints', () => {
 		expect(res.status).toBe(200);
 		expect(res.body.featureFlags.firestoreChatPreferences).toBe(true);
 		expect(res.body.dependencies.chatPreferences.enabled).toBe(true);
+		expect(res.body.dependencies.chatPreferences.cachedCount).toEqual(expect.any(Number));
 	});
 
 	it('reports durable scanner preset storage from its dedicated Firestore gate', async () => {
