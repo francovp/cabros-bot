@@ -103,9 +103,10 @@ async function deriveSearchQuery(alertText, opts = {}) {
 		});
 
 		if (response && response.usage) {
-			registerGlobalUsage(response.usage, GEMINI_MODEL_NAME);
+			const effectiveModel = response.modelUsed || GEMINI_MODEL_NAME || 'gemini';
+			registerGlobalUsage(response.usage, effectiveModel);
 			if (opts.tokenUsage) {
-				opts.tokenUsage.addUsage(response.usage, GEMINI_MODEL_NAME);
+				opts.tokenUsage.addUsage(response.usage, effectiveModel);
 			}
 		}
 
@@ -199,12 +200,13 @@ async function groundAlert({ text, options = {} }) {
 			ownsSearchUsage = true;
 		}
 
-		const { results: searchResults, totalResults, searchResultText, usage: searchUsage } = searchResponse;
+		const { results: searchResults, totalResults, searchResultText, usage: searchUsage, modelUsed: searchModelUsed } = searchResponse;
 
 		if (ownsSearchUsage && searchUsage) {
-			registerGlobalUsage(searchUsage, GROUNDING_MODEL_NAME);
+			const effectiveSearchModel = searchModelUsed || GROUNDING_MODEL_NAME || 'gemini';
+			registerGlobalUsage(searchUsage, effectiveSearchModel);
 			if (tokenUsage) {
-				tokenUsage.addUsage(searchUsage, GROUNDING_MODEL_NAME);
+				tokenUsage.addUsage(searchUsage, effectiveSearchModel);
 			}
 		}
 		console.debug(`[Grounding] Retrieved ${searchResults.length}/${totalResults} search results for query: ${searchQuery}`);

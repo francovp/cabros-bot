@@ -225,6 +225,8 @@ class GenaiClient {
 			results,
 			totalResults: groundingChunks.length,
 			searchResultText: searchResultText,
+			usage: response?.usageMetadata || null,
+			modelUsed: model,
 		};
 	}
 

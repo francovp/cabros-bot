@@ -168,9 +168,10 @@ async function fetchGeminiPrice(symbol, options = {}) {
 		]);
 
 		if (priceSearchResult && priceSearchResult.usage) {
-			registerGlobalUsage(priceSearchResult.usage, GROUNDING_MODEL_NAME);
+			const searchModel = priceSearchResult.modelUsed || GROUNDING_MODEL_NAME || 'gemini';
+			registerGlobalUsage(priceSearchResult.usage, searchModel);
 			if (tokenUsage) {
-				tokenUsage.addUsage(priceSearchResult.usage, GROUNDING_MODEL_NAME);
+				tokenUsage.addUsage(priceSearchResult.usage, searchModel);
 			}
 		}
 

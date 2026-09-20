@@ -229,7 +229,7 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 	}
 
 	try {
-		const { text: summary, usage } = await genaiClient.llmCallv2({
+		const { text: summary, usage, modelUsed } = await genaiClient.llmCallv2({
 			systemPrompt,
 			userPrompt,
 			context: { citations: searchResults },
@@ -237,9 +237,10 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 		});
 
 		if (usage) {
-			registerGlobalUsage(usage, GEMINI_MODEL_NAME);
+			const effectiveModel = modelUsed || GEMINI_MODEL_NAME || 'gemini';
+			registerGlobalUsage(usage, effectiveModel);
 			if (tokenUsage) {
-				tokenUsage.addUsage(usage, GEMINI_MODEL_NAME);
+				tokenUsage.addUsage(usage, effectiveModel);
 			}
 		}
 
@@ -315,9 +316,10 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 			rethrowQuotaErrors: true,
 		});
 		if (searchResult.usage) {
-			registerGlobalUsage(searchResult.usage, GROUNDING_MODEL_NAME);
+			const searchModel = searchResult.modelUsed || GROUNDING_MODEL_NAME || 'gemini';
+			registerGlobalUsage(searchResult.usage, searchModel);
 			if (tokenUsage) {
-				tokenUsage.addUsage(searchResult.usage, GROUNDING_MODEL_NAME);
+				tokenUsage.addUsage(searchResult.usage, searchModel);
 			}
 		}
 		console.debug('[Gemini][analyzeNewsForSymbol] Grounding market news and sentiment search results:', searchResult);
@@ -346,9 +348,10 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 				opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 },
 			});
 			if (result.usage) {
-				registerGlobalUsage(result.usage, GEMINI_MODEL_NAME);
+				const effectiveModel = result.modelUsed || GEMINI_MODEL_NAME || 'gemini';
+				registerGlobalUsage(result.usage, effectiveModel);
 				if (tokenUsage) {
-					tokenUsage.addUsage(result.usage, GEMINI_MODEL_NAME);
+					tokenUsage.addUsage(result.usage, effectiveModel);
 				}
 			}
 			response = result.text;
@@ -366,9 +369,10 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 						opts: { model: GEMINI_MODEL_NAME_FALLBACK, temperature: 0.3 },
 					});
 					if (fallbackResult.usage) {
-						registerGlobalUsage(fallbackResult.usage, GEMINI_MODEL_NAME_FALLBACK);
+						const fallbackModel = fallbackResult.modelUsed || GEMINI_MODEL_NAME_FALLBACK || 'gemini';
+						registerGlobalUsage(fallbackResult.usage, fallbackModel);
 						if (tokenUsage) {
-							tokenUsage.addUsage(fallbackResult.usage, GEMINI_MODEL_NAME_FALLBACK);
+							tokenUsage.addUsage(fallbackResult.usage, fallbackModel);
 						}
 					}
 					response = fallbackResult.text;

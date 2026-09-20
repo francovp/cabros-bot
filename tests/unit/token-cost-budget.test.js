@@ -464,5 +464,80 @@ describe('Token Cost Budget Tracking', () => {
 				.rejects
 				.toThrow('Daily LLM token cost budget exceeded');
 		});
+
+		it('_executeGoogleSearch returns usageMetadata and modelUsed to enable budget accounting on grounded search', async () => {
+			const genaiClient = require('../../src/services/grounding/genaiClient');
+			genaiClient.genAI = {
+				models: {
+					generateContent: jest.fn().mockResolvedValue({
+						response: {
+							text: 'Search answer',
+							candidates: [{
+								groundingMetadata: {
+									groundingChunks: [{ web: { title: 'T1', uri: 'https://example.com' } }],
+								},
+							}],
+							usageMetadata: {
+								promptTokenCount: 150,
+								candidatesTokenCount: 50,
+								totalTokenCount: 200,
+							},
+						},
+					}),
+				},
+			};
+
+			const result = await genaiClient._executeGoogleSearch('crypto news', 'gemini-2.0-flash', 3, false);
+			expect(result.usage).toEqual({
+				promptTokenCount: 150,
+				candidatesTokenCount: 50,
+				totalTokenCount: 200,
+			});
+			expect(result.modelUsed).toBe('gemini-2.0-flash');
+		});
+
+		it('preserves response.modelUsed when accounting tokens across providers in deriveSearchQuery', async () => {
+			const recordSpy = jest.spyOn(globalTokenTracker, 'recordUsage');
+			const genaiClient = require('../../src/services/grounding/genaiClient');
+			jest.spyOn(genaiClient, 'llmCallv2').mockResolvedValue({
+				text: 'Derived Query',
+				usage: { inputTokens: 100, outputTokens: 25, totalTokens: 125 },
+				modelUsed: 'deepseek-chat',
+			});
+
+			const { deriveSearchQuery } = require('../../src/services/grounding/grounding');
+			await deriveSearchQuery('Alert raw text');
+
+			expect(recordSpy).toHaveBeenCalledWith(
+				expect.objectContaining({ inputTokens: 100, outputTokens: 25 }),
+				'deepseek-chat'
+			);
+		});
+
+		it('groundAlert registers search usage under actual modelUsed', async () => {
+			const recordSpy = jest.spyOn(globalTokenTracker, 'recordUsage');
+			const genaiClient = require('../../src/services/grounding/genaiClient');
+			jest.spyOn(genaiClient, 'search').mockResolvedValue({
+				results: [{ title: 'Doc', snippet: 'Text', url: 'https://doc.com', sourceDomain: 'doc.com' }],
+				totalResults: 1,
+				searchResultText: 'Doc text',
+				usage: { promptTokenCount: 200, candidatesTokenCount: 80, totalTokenCount: 280 },
+				modelUsed: 'gemini-2.5-flash',
+			});
+			const gemini = require('../../src/services/grounding/gemini');
+			jest.spyOn(gemini, 'generateEnrichedAlert').mockResolvedValue({
+				summary: 'summary',
+				indicators: {},
+				confidence: 0.8,
+			});
+
+			const { groundAlert } = require('../../src/services/grounding/grounding');
+			await groundAlert({ text: 'BTC pumping', options: { timeoutMs: 2000 } });
+
+			expect(recordSpy).toHaveBeenCalledWith(
+				expect.objectContaining({ promptTokenCount: 200, candidatesTokenCount: 80 }),
+				'gemini-2.5-flash'
+			);
+		});
 	});
 });
