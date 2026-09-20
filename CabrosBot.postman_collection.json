@@ -5559,6 +5559,200 @@
               "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
+        },
+        {
+          "name": "GET Signal Outcomes Confidence Calibration",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Calculates empirical target-hit rates and average returns grouped by confidence score buckets (e.g. 0.70–0.75, 0.75–0.80, 0.80–0.85, 0.85–0.90, 0.90–1.00) over evaluated signals, suggesting an optimal confidence threshold.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/calibration",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "calibration"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"calibration\": {\n    \"available\": true,\n    \"totalScoredAlerts\": 25,\n    \"buckets\": [\n      {\n        \"range\": \"0.70-0.75\",\n        \"count\": 5,\n        \"avgReturn1h\": 0.45,\n        \"avgReturn4h\": 0.82,\n        \"targetHitRate\": 0.4\n      },\n      {\n        \"range\": \"0.75-0.80\",\n        \"count\": 8,\n        \"avgReturn1h\": 1.12,\n        \"avgReturn4h\": 1.85,\n        \"targetHitRate\": 0.625\n      },\n      {\n        \"range\": \"0.80-0.85\",\n        \"count\": 6,\n        \"avgReturn1h\": 1.45,\n        \"avgReturn4h\": 2.3,\n        \"targetHitRate\": 0.667\n      },\n      {\n        \"range\": \"0.85-0.90\",\n        \"count\": 4,\n        \"avgReturn1h\": 1.95,\n        \"avgReturn4h\": 3.1,\n        \"targetHitRate\": 0.75\n      },\n      {\n        \"range\": \"0.90-1.00\",\n        \"count\": 2,\n        \"avgReturn1h\": 2.4,\n        \"avgReturn4h\": 3.8,\n        \"targetHitRate\": 1.0\n      }\n    ],\n    \"suggestedThreshold\": 0.75,\n    \"suggestedThresholdRationale\": \"Alerts at 0.75+ show 62.5%+ target hit rate at 4h window\"\n  }\n}"
+            },
+            {
+              "name": "200 Insufficient Data (<20 alerts)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"calibration\": {\n    \"available\": false,\n    \"totalScoredAlerts\": 5,\n    \"buckets\": [],\n    \"suggestedThreshold\": null,\n    \"suggestedThresholdRationale\": \"Insufficient sample size (<20 scored alerts) to recommend a confidence threshold\"\n  }\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "403 Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Confidence Calibration (filtered)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Calculates confidence calibration filtered by symbol, exchange, window, limit, and date range.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/calibration?symbol=BTCUSDT&exchange=BINANCE&window=1h&limit=500&from=2026-08-23T00:00:00.000Z&to=2026-08-23T23:59:59.000Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "calibration"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "exchange",
+                  "value": "BINANCE"
+                },
+                {
+                  "key": "window",
+                  "value": "1h"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-08-23T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-23T23:59:59.000Z"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Filtered Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"calibration\": {\n    \"available\": true,\n    \"totalScoredAlerts\": 20,\n    \"buckets\": [\n      {\n        \"range\": \"0.75-0.80\",\n        \"count\": 10,\n        \"avgReturn1h\": 1.2,\n        \"avgReturn4h\": 1.9,\n        \"targetHitRate\": 0.6\n      },\n      {\n        \"range\": \"0.80-0.85\",\n        \"count\": 10,\n        \"avgReturn1h\": 1.6,\n        \"avgReturn4h\": 2.5,\n        \"targetHitRate\": 0.7\n      }\n    ],\n    \"suggestedThreshold\": 0.75,\n    \"suggestedThresholdRationale\": \"Alerts at 0.75+ show 60%+ target hit rate at 1h window\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Confidence Calibration (Firebase bearer)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{firebaseIdToken}}",
+                "type": "text"
+              }
+            ],
+            "description": "Retrieves confidence calibration authenticated with a Firebase Admin ID token (admin.viewer role).",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/calibration?limit=1000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "calibration"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "1000"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"calibration\": {\n    \"available\": true,\n    \"totalScoredAlerts\": 30,\n    \"buckets\": [],\n    \"suggestedThreshold\": 0.75,\n    \"suggestedThresholdRationale\": \"Alerts at 0.75+ show 60%+ target hit rate at 4h window\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Confidence Calibration (invalid parameters)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing invalid limit, window, or dates to calibration.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/calibration?limit=2000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "calibration"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "2000"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Limit",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 1000.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
         }
       ]
     },

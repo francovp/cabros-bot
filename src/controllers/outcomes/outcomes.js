@@ -6,6 +6,8 @@ const { parseAlertPaginationCursor } = require('../../services/storage/alertPagi
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
+const DEFAULT_CALIBRATION_LIMIT = 1000;
+const MAX_CALIBRATION_LIMIT = 1000;
 const VALID_STATUSES = new Set(['pending', 'evaluated', 'unavailable']);
 const VALID_WINDOWS = {
 	'1h': '1h',
@@ -21,6 +23,19 @@ function parseLimit(rawLimit) {
 
 	const limit = Number.parseInt(rawLimit, 10);
 	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
+		return null;
+	}
+
+	return limit;
+}
+
+function parseCalibrationLimit(rawLimit) {
+	if (rawLimit === undefined) {
+		return DEFAULT_CALIBRATION_LIMIT;
+	}
+
+	const limit = Number.parseInt(rawLimit, 10);
+	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_CALIBRATION_LIMIT) {
 		return null;
 	}
 
@@ -236,12 +251,76 @@ function summarizeOutcomes(req, res) {
 	});
 }
 
+function getOutcomesCalibration(req, res) {
+	return handleAsync(req, res, '/api/outcomes/calibration', async () => {
+		if (!signalOutcomeService.isEnabled()) {
+			return res.status(403).json({
+				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const limit = parseCalibrationLimit(req.query.limit);
+		if (limit === null) {
+			return res.status(400).json({
+				error: `Invalid limit. Use an integer between 1 and ${MAX_CALIBRATION_LIMIT}.`,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const window = parseWindow(req.query.window);
+		if (window === null) {
+			return res.status(400).json({
+				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const from = parseOptionalTimestamp(req.query.from, 'from');
+		if (from.error) {
+			return res.status(400).json(from.error);
+		}
+
+		const to = parseOptionalTimestamp(req.query.to, 'to');
+		if (to.error) {
+			return res.status(400).json(to.error);
+		}
+
+		if (from.value && to.value && new Date(from.value) > new Date(to.value)) {
+			return res.status(400).json({
+				error: 'Invalid time window. from must be before or equal to to.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const symbol = typeof req.query.symbol === 'string' && req.query.symbol.trim()
+			? req.query.symbol.trim()
+			: undefined;
+
+		const exchange = typeof req.query.exchange === 'string' && req.query.exchange.trim()
+			? req.query.exchange.trim()
+			: undefined;
+
+		const calibration = await signalOutcomeService.getOutcomesCalibration({
+			limit,
+			symbol,
+			exchange,
+			window,
+			from: from.value,
+			to: to.value,
+		});
+
+		return res.status(200).json({
+			success: true,
+			calibration,
+		});
+	});
+}
+
 function handleAsync(req, res, endpoint, handler) {
 	return Promise.resolve(handler()).catch((error) => {
 		console.error('[OutcomesController] Request failed:', error.message);
-		const statusCode = error.code === signalOutcomeService.STORAGE_UNAVAILABLE_CODE
-			? 503
-			: (error.code === 'INVALID_REQUEST' ? 400 : 500);
+		const statusCode = error.statusCode || error.status || (error.code === signalOutcomeService.STORAGE_UNAVAILABLE_CODE ? 503 : (error.code === 'INVALID_REQUEST' ? 400 : 500));
 		sentryService.captureRuntimeError({
 			channel: 'outcomes-controller',
 			error,
@@ -251,32 +330,52 @@ function handleAsync(req, res, endpoint, handler) {
 				statusCode,
 			},
 		});
+		return handleError(error, req, res, endpoint);
+	});
+}
 
-		if (statusCode === 503) {
-			return res.status(503).json({
-				error: error.message,
-				code: signalOutcomeService.STORAGE_UNAVAILABLE_CODE,
-			});
-		}
-
-		if (statusCode === 400) {
-			return res.status(400).json({
-				error: error.message,
-				code: 'INVALID_REQUEST',
-			});
-		}
-
-		return res.status(500).json({
-			error: 'Internal server error',
-			code: 'INTERNAL_ERROR',
+function handleError(error, req, res, route) {
+	if (error.code === signalOutcomeService.STORAGE_UNAVAILABLE_CODE) {
+		return res.status(503).json({
+			error: error.message,
+			code: signalOutcomeService.STORAGE_UNAVAILABLE_CODE,
 		});
+	}
+
+	if (error.message === signalOutcomeService.INVALID_CURSOR_MESSAGE) {
+		return res.status(400).json({
+			error: error.message,
+			code: 'INVALID_REQUEST',
+		});
+	}
+
+	const statusCode = error.statusCode || error.status;
+	if (statusCode === 404) {
+		return res.status(404).json({
+			error: error.message,
+			code: 'NOT_FOUND',
+		});
+	}
+
+	if (statusCode === 400) {
+		return res.status(400).json({
+			error: error.message,
+			code: 'INVALID_REQUEST',
+		});
+	}
+
+	return res.status(500).json({
+		error: 'Internal server error',
+		code: 'INTERNAL_ERROR',
 	});
 }
 
 module.exports = {
 	listOutcomes,
 	summarizeOutcomes,
+	getOutcomesCalibration,
 	parseLimit,
+	parseCalibrationLimit,
 	parseStatus,
 	parseWindow,
 	parseOptionalTimestamp,

@@ -1323,6 +1323,7 @@ class NewsAnalyzer {
 					timeframe: null,
 					setupType: 'news-alert',
 					score: alert.confidence,
+					confidenceScore: alert.confidence,
 					side,
 					price: alert.marketContext ? alert.marketContext.price : null,
 					priceSource: alert.marketContext ? alert.marketContext.source : null,

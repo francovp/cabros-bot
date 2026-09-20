@@ -610,6 +610,7 @@ async function recordSignalInternal({
 	timeframe,
 	setupType,
 	score,
+	confidenceScore,
 	side,
 	price,
 	priceSource,
@@ -808,6 +809,9 @@ async function recordSignalInternal({
 			timeframe: timeframe ? String(timeframe).toLowerCase() : null,
 			setupType: setupType ? String(setupType).toLowerCase() : null,
 			score: typeof score === 'number' && Number.isFinite(score) ? score : null,
+			confidenceScore: typeof confidenceScore === 'number' && Number.isFinite(confidenceScore)
+				? confidenceScore
+				: (source === 'news-monitor' && typeof score === 'number' && Number.isFinite(score) ? score : null),
 			side: normSide,
 			price: entryPrice,
 			observedPrice: entryPrice,
@@ -2425,6 +2429,252 @@ async function listOutcomes({
 	};
 }
 
+const CALIBRATION_DEFAULT_BUCKETS = [
+	{ range: '0.70-0.75', min: 0.70, max: 0.75 },
+	{ range: '0.75-0.80', min: 0.75, max: 0.80 },
+	{ range: '0.80-0.85', min: 0.80, max: 0.85 },
+	{ range: '0.85-0.90', min: 0.85, max: 0.90 },
+	{ range: '0.90-1.00', min: 0.90, max: 1.00 },
+];
+
+function getSignalConfidenceScore(doc) {
+	if (typeof doc.confidenceScore === 'number' && Number.isFinite(doc.confidenceScore)) {
+		return doc.confidenceScore;
+	}
+	if (doc.source === 'news-monitor' && typeof doc.score === 'number' && Number.isFinite(doc.score)) {
+		return doc.score;
+	}
+	return null;
+}
+
+function isDocEvaluated(doc) {
+	if (doc.outcomeEvaluated === true) return true;
+	if (doc.outcomes && typeof doc.outcomes === 'object') {
+		return Object.values(doc.outcomes).some((o) => o && o.status === 'evaluated');
+	}
+	return false;
+}
+
+/**
+ * Computes confidence calibration buckets, hit rates, and threshold suggestion from evaluated signal outcome docs.
+ */
+function computeCalibration(docs = [], options = {}) {
+	const targetWindow = (options.window && typeof options.window === 'string' ? options.window.toLowerCase() : '4h');
+	const targetWindowKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === targetWindow) || targetWindow;
+	const minOutcomes = options.minOutcomes !== undefined ? options.minOutcomes : 20;
+
+	const scoredDocs = [];
+	let hasSub70 = false;
+	for (const doc of docs) {
+		if (!doc || !isDocEvaluated(doc)) continue;
+		const score = getSignalConfidenceScore(doc);
+		if (score === null) continue;
+		if (score < 0.70) hasSub70 = true;
+		scoredDocs.push({ doc, score });
+	}
+
+	const bucketDefs = hasSub70
+		? [{ range: '<0.70', min: 0.00, max: 0.70 }, ...CALIBRATION_DEFAULT_BUCKETS]
+		: CALIBRATION_DEFAULT_BUCKETS.map(b => ({ ...b }));
+
+	const buckets = bucketDefs.map(def => {
+		const matching = scoredDocs.filter(({ score }) => {
+			if (def.max === 1.00) {
+				return score >= def.min && score <= def.max;
+			}
+			return score >= def.min && score < def.max;
+		});
+
+		const bucketDocs = matching.map(m => m.doc);
+		const count = bucketDocs.length;
+
+		// 1h returns
+		const docs1h = bucketDocs.filter(d => d.outcomes && d.outcomes['1h'] && d.outcomes['1h'].status === 'evaluated' && typeof d.outcomes['1h'].return === 'number' && Number.isFinite(d.outcomes['1h'].return));
+		const avgReturn1h = docs1h.length > 0
+			? parseFloat((docs1h.reduce((acc, d) => acc + d.outcomes['1h'].return, 0) / docs1h.length).toFixed(2))
+			: null;
+
+		// 4h returns
+		const docs4h = bucketDocs.filter(d => d.outcomes && d.outcomes['4h'] && d.outcomes['4h'].status === 'evaluated' && typeof d.outcomes['4h'].return === 'number' && Number.isFinite(d.outcomes['4h'].return));
+		const avgReturn4h = docs4h.length > 0
+			? parseFloat((docs4h.reduce((acc, d) => acc + d.outcomes['4h'].return, 0) / docs4h.length).toFixed(2))
+			: null;
+
+		// Target hit rate for targetWindowKey
+		const docsTarget = bucketDocs.filter(d => d.outcomes && d.outcomes[targetWindowKey] && d.outcomes[targetWindowKey].status === 'evaluated');
+		const targetHits = docsTarget.filter(d => {
+			const outcome = d.outcomes[targetWindowKey];
+			if (outcome.targetHit === true || outcome.firstHit === 'target') return true;
+			const hasTargetBarrier = typeof d.target === 'number' && Number.isFinite(d.target) && d.target > 0;
+			if (!hasTargetBarrier && typeof outcome.return === 'number' && outcome.return > 0) return true;
+			return false;
+		}).length;
+
+		const targetHitRate = docsTarget.length > 0
+			? parseFloat((targetHits / docsTarget.length).toFixed(2))
+			: 0;
+
+		return {
+			range: def.range,
+			count,
+			avgReturn1h,
+			avgReturn4h,
+			targetHitRate,
+			_min: def.min,
+			_max: def.max,
+		};
+	});
+
+	const totalScoredAlerts = scoredDocs.length;
+	const cleanBuckets = buckets.map(({ _min, _max, ...rest }) => rest);
+
+	if (totalScoredAlerts < minOutcomes) {
+		return {
+			available: false,
+			totalScoredAlerts,
+			buckets: cleanBuckets,
+			suggestedThreshold: null,
+			suggestedThresholdRationale: `Insufficient data: fewer than ${minOutcomes} evaluated outcomes with confidence scores (found ${totalScoredAlerts})`,
+		};
+	}
+
+	// Find lowest bucket with >= 50% target hit rate and count > 0
+	const qualifyingIndex = buckets.findIndex(b => b.count > 0 && b.targetHitRate >= 0.50);
+	if (qualifyingIndex === -1) {
+		return {
+			available: true,
+			totalScoredAlerts,
+			buckets: cleanBuckets,
+			suggestedThreshold: null,
+			suggestedThresholdRationale: `No confidence bucket achieved ≥50% target hit rate at ${targetWindowKey} window`,
+		};
+	}
+
+	const qualifyingBucket = buckets[qualifyingIndex];
+	let suggestedThreshold = qualifyingBucket._min;
+
+	// Linearly interpolate if a preceding bucket with data had < 50% hit rate
+	if (qualifyingIndex > 0) {
+		const prevBucket = buckets[qualifyingIndex - 1];
+		if (prevBucket && prevBucket.count > 0 && prevBucket.targetHitRate < 0.50 && qualifyingBucket.targetHitRate > prevBucket.targetHitRate) {
+			const interpolated = qualifyingBucket._min +
+				((0.50 - prevBucket.targetHitRate) / (qualifyingBucket.targetHitRate - prevBucket.targetHitRate)) *
+				(qualifyingBucket._max - qualifyingBucket._min);
+			suggestedThreshold = parseFloat(interpolated.toFixed(2));
+		}
+	}
+
+	const hitRatePct = Math.round(qualifyingBucket.targetHitRate * 100);
+	const suggestedThresholdRationale = `Alerts at ${suggestedThreshold}+ show ${hitRatePct}%+ target hit rate at ${targetWindowKey} window`;
+
+	return {
+		available: true,
+		totalScoredAlerts,
+		buckets: cleanBuckets,
+		suggestedThreshold,
+		suggestedThresholdRationale,
+	};
+}
+
+/**
+ * Retrieve calibration data and threshold recommendation for evaluated signal outcomes.
+ */
+async function getOutcomesCalibration({
+	symbol,
+	exchange,
+	window,
+	from,
+	to,
+	limit,
+} = {}) {
+	if (!isEnabled()) {
+		const err = new Error('Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.');
+		err.code = 'FEATURE_DISABLED';
+		throw err;
+	}
+
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError(new Error('Firestore is unavailable'));
+	}
+
+	const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+	const parsedTo = to ? new Date(to) : new Date();
+
+	const retentionDays = getSignalOutcomeRetentionDays();
+	const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
+	const effectiveFromMs = from
+		? parsedFrom.getTime()
+		: Math.max(parsedFrom.getTime(), retentionCutoffMs);
+	if (effectiveFromMs > parsedTo.getTime()) {
+		return computeCalibration([], { window, minOutcomes: 20 });
+	}
+	const effectiveFrom = new Date(effectiveFromMs);
+
+	const targetLimit = limit || 1000;
+	const batchSize = Math.min(targetLimit, 100);
+	const matchedDocs = [];
+	let lastDoc = null;
+
+	const hasFilters = Boolean(symbol || exchange || window);
+
+	while (matchedDocs.length < targetLimit) {
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
+			.limit(batchSize);
+
+		if (lastDoc) {
+			query = query.startAfter(lastDoc);
+		}
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || snapshot.empty) {
+			break;
+		}
+
+		for (const doc of snapshot.docs) {
+			if (isRetentionExpired(doc.data() || {})) {
+				continue;
+			}
+			if (hasFilters) {
+				const formatted = {
+					...doc.data(),
+					id: doc.id,
+					receivedAt: getDocTimestamp(doc.data()),
+				};
+				if (!matchesOutcomeFilters(formatted, { symbol, exchange, window, from, to })) {
+					continue;
+				}
+			}
+			matchedDocs.push(doc);
+			if (matchedDocs.length >= targetLimit) {
+				break;
+			}
+		}
+
+		if (snapshot.docs.length < batchSize) {
+			break;
+		}
+		lastDoc = snapshot.docs[snapshot.docs.length - 1];
+	}
+
+	const docs = matchedDocs.map(doc => ({
+		...doc.data(),
+		id: doc.id,
+		receivedAt: getDocTimestamp(doc.data()),
+	}));
+
+	return computeCalibration(docs, { window, minOutcomes: 20 });
+}
+
 function _resetForTesting() {
 	lastRetentionWarningValue = null;
 	lastEntryPriceSourcesWarningValue = null;
@@ -2450,6 +2700,8 @@ module.exports = {
 	getMetricsSummary,
 	summarizeOutcomes,
 	listOutcomes,
+	computeCalibration,
+	getOutcomesCalibration,
 	normalizeSide,
 	normalizeSymbolAndExchange,
 	startWorker,
