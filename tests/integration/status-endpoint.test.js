@@ -868,6 +868,24 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports news monitor volume tracking status and window usage', async () => {
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitor).toEqual(
+			expect.objectContaining({
+				enabled: true,
+				paused: false,
+				alertsDelivered: 0,
+				alertsThrottled: 0,
+				windowResetsAt: expect.any(String),
+			})
+		);
+	});
+
 	it('reports the primary news monitor Gemini provider separately from Gemini search readiness', async () => {
 		process.env.ENABLE_GEMINI_GROUNDING = 'false';
 		process.env.ENABLE_NEWS_MONITOR = 'true';

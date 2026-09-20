@@ -185,6 +185,12 @@ describe('Documentation Alignment Policy', () => {
 		expect(envExample).toContain('AZURE_LLM_ENDPOINT=');
 	});
 
+	test('news-monitor documentation includes throttled status in README', () => {
+		const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+		expect(readme).toMatch(/"throttled":\s*0/);
+		expect(readme).toMatch(/- `?throttled`? -/);
+	});
+
 	test('Cloudflare documentation separates provider routing from status exposure', () => {
 		const envExample = fs.readFileSync(path.join(repoRoot, '.env.example'), 'utf8');
 		const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');

@@ -35,6 +35,27 @@
       "description": "Base delay for Gemini quota retries in milliseconds",
       "valueType": "NUMBER"
     },
+    "NEWS_MAX_ALERTS_PER_BATCH": {
+      "defaultValue": {
+        "value": "10"
+      },
+      "description": "Maximum alerts dispatched per news-monitor batch",
+      "valueType": "NUMBER"
+    },
+    "NEWS_MAX_ALERTS_PER_WINDOW": {
+      "defaultValue": {
+        "value": "20"
+      },
+      "description": "Maximum alerts dispatched across news-monitor volume window",
+      "valueType": "NUMBER"
+    },
+    "NEWS_MAX_ALERTS_PER_WINDOW_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "Sliding window duration in milliseconds for news-monitor volume throttling",
+      "valueType": "NUMBER"
+    },
     "TRADINGVIEW_MCP_TIMEOUT_MS": {
       "defaultValue": {
         "value": "12000"
