@@ -109,6 +109,7 @@ describe('NewsMonitorSchedulerService', () => {
 				configured: true,
 				ready: true,
 				status: 'ready',
+				paused: false,
 				role: 'web',
 				running: false,
 				intervalMs: 60000,
@@ -120,6 +121,14 @@ describe('NewsMonitorSchedulerService', () => {
 				lastRunErrorCount: 0,
 				lastError: null,
 			});
+		});
+
+		it('reports paused status when news monitor is paused', () => {
+			scheduler.isPausedFn = () => true;
+			const status = scheduler.getStatus();
+			expect(status.paused).toBe(true);
+			expect(status.ready).toBe(false);
+			expect(status.status).toBe('paused');
 		});
 
 		it('normalizes worker role to web, worker, or disabled', () => {
@@ -165,6 +174,17 @@ describe('NewsMonitorSchedulerService', () => {
 
 			const result = await scheduler.sweep();
 			expect(result.skipped).toBe('news-monitor-disabled');
+			expect(result.symbolCount).toBe(0);
+			expect(analyzerSpy).not.toHaveBeenCalled();
+		});
+
+		it('skips sweep when news monitor is paused', async () => {
+			scheduler.isPausedFn = () => true;
+			const analyzerSpy = jest.fn();
+			scheduler.getAnalyzerFn = analyzerSpy;
+
+			const result = await scheduler.sweep();
+			expect(result.skipped).toBe('news-monitor-paused');
 			expect(result.symbolCount).toBe(0);
 			expect(analyzerSpy).not.toHaveBeenCalled();
 		});

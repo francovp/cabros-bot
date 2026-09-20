@@ -130,8 +130,33 @@ function parseNewsCacheTtlHours(value, fallback = 6) {
 	return parsed;
 }
 
+function parsePositiveInteger(value, fallback, envVarName, maxBound) {
+	if (value === undefined || value === null) {
+		return fallback;
+	}
+	const str = String(value).trim();
+	if (str === '') {
+		return fallback;
+	}
+	if (!/^\d+$/.test(str)) {
+		console.warn(`[NewsCache] Invalid ${envVarName} configuration, using default`);
+		return fallback;
+	}
+	const parsed = Number(str);
+	if (!Number.isFinite(parsed) || parsed < 1 || (maxBound !== undefined && parsed > maxBound)) {
+		console.warn(`[NewsCache] Invalid ${envVarName} configuration, using default`);
+		return fallback;
+	}
+	return parsed;
+}
+
+const DEFAULT_NEWS_CACHE_MAX_ENTRIES = 5000;
+const MAX_NEWS_CACHE_ENTRIES = 1_000_000;
+const DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES = 1000;
+const MAX_NEWS_DELIVERY_LOCK_ENTRIES = 100_000;
+
 class NewsCache {
-	constructor(ttlHours) {
+	constructor(ttlHours, options = {}) {
 		this.cache = new Map();
 		this._explicitTtlHours = ttlHours;
 		if (ttlHours !== undefined) {
@@ -141,81 +166,14 @@ class NewsCache {
 		}
 		this.cleanupInterval = null;
 		this.deliveryLocks = new Map();
-		this.resetMetrics();
-	}
-
-	resetMetrics() {
-		this._metrics = {
-			hits: 0,
-			misses: 0,
-			evictions: 0,
-			lastHitAt: null,
-			lastMissAt: null,
-		};
-	}
-
-	_recordHit() {
-		this._metrics.hits++;
-		this._metrics.lastHitAt = new Date().toISOString();
-	}
-
-	_recordMiss() {
-		this._metrics.misses++;
-		this._metrics.lastMissAt = new Date().toISOString();
-	}
-
-	_estimateMemoryBytes() {
-		let bytes = 0;
-		for (const [key, entry] of this.cache.entries()) {
-			if (this.isExpired(entry)) continue;
-			bytes += (key.length * 2) + 80;
-			if (entry.data) {
-				try {
-					bytes += Buffer.byteLength(JSON.stringify(entry.data));
-				} catch {
-					bytes += 128;
-				}
-			}
-		}
-		return bytes;
-	}
-
-	getMetrics() {
-		const totalReads = this._metrics.hits + this._metrics.misses;
-		const hitRate = totalReads > 0
-			? parseFloat((this._metrics.hits / totalReads).toFixed(3))
-			: 0;
-
-		let totalEntries = 0;
-		for (const entry of this.cache.values()) {
-			if (!this.isExpired(entry)) {
-				totalEntries++;
-			}
-		}
-
-		return {
-			hits: this._metrics.hits,
-			misses: this._metrics.misses,
-			hitRate,
-			totalEntries,
-			evictions: this._metrics.evictions,
-			estimatedMemoryBytes: this._estimateMemoryBytes(),
-			lastHitAt: this._metrics.lastHitAt,
-			lastMissAt: this._metrics.lastMissAt,
-		};
-	}
-
-	getStatus(enabled = true) {
-		const dedup = this.dedupMode;
-		return {
-			enabled,
-			configured: true,
-			ready: true,
-			status: 'ready',
-			mode: dedup.mode,
-			backend: dedup.backend,
-			metrics: this.getMetrics(),
-		};
+		this._explicitMaxEntries = options.maxEntries !== undefined
+			? parsePositiveInteger(options.maxEntries, DEFAULT_NEWS_CACHE_MAX_ENTRIES, 'maxEntries', MAX_NEWS_CACHE_ENTRIES)
+			: undefined;
+		this._explicitDeliveryLockMaxEntries = options.deliveryLockMaxEntries !== undefined
+			? parsePositiveInteger(options.deliveryLockMaxEntries, DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES, 'deliveryLockMaxEntries', MAX_NEWS_DELIVERY_LOCK_ENTRIES)
+			: undefined;
+		this._evictionCount = 0;
+		this._deliveryLockEvictionCount = 0;
 	}
 
 	get ttlMs() {
@@ -232,6 +190,114 @@ class NewsCache {
 
 	set ttlMs(val) {
 		this._ttlMs = val;
+	}
+
+	get maxEntries() {
+		if (this._explicitMaxEntries !== undefined) {
+			return this._explicitMaxEntries;
+		}
+		const runtime = getRuntimeConfig().NEWS_CACHE_MAX_ENTRIES;
+		return parsePositiveInteger(runtime, DEFAULT_NEWS_CACHE_MAX_ENTRIES, 'NEWS_CACHE_MAX_ENTRIES', MAX_NEWS_CACHE_ENTRIES);
+	}
+
+	set maxEntries(val) {
+		this._explicitMaxEntries = val !== undefined
+			? parsePositiveInteger(val, DEFAULT_NEWS_CACHE_MAX_ENTRIES, 'maxEntries', MAX_NEWS_CACHE_ENTRIES)
+			: undefined;
+		this._evictIfOverCapacity();
+	}
+
+	get deliveryLockMaxEntries() {
+		if (this._explicitDeliveryLockMaxEntries !== undefined) {
+			return this._explicitDeliveryLockMaxEntries;
+		}
+		const runtime = getRuntimeConfig().NEWS_DELIVERY_LOCK_MAX_ENTRIES;
+		return parsePositiveInteger(runtime, DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES, 'NEWS_DELIVERY_LOCK_MAX_ENTRIES', MAX_NEWS_DELIVERY_LOCK_ENTRIES);
+	}
+
+	set deliveryLockMaxEntries(val) {
+		this._explicitDeliveryLockMaxEntries = val !== undefined
+			? parsePositiveInteger(val, DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES, 'deliveryLockMaxEntries', MAX_NEWS_DELIVERY_LOCK_ENTRIES)
+			: undefined;
+		this._evictDeliveryLocksIfOverCapacity();
+	}
+
+	/**
+	 * Insert or update a cache entry, refreshing LRU recency and enforcing maxEntries.
+	 */
+	_setCacheEntry(key, entry) {
+		this.cache.delete(key);
+		this.cache.set(key, entry);
+		this._evictIfOverCapacity();
+	}
+
+	_isActiveClaimEntry(entry) {
+		return entry?.data?.status === 'claiming' && !this.isExpired(entry);
+	}
+
+	/**
+	 * Enforce the cache size bound by evicting the oldest entry (LRU eviction).
+	 * JavaScript Map iteration order is insertion order, so the first key is
+	 * the least-recently inserted entry.
+	 */
+	_evictIfOverCapacity() {
+		const max = this.maxEntries;
+		if (this.cache.size <= max) {
+			return;
+		}
+		let evicted = 0;
+		for (const [key, entry] of this.cache.entries()) {
+			if (this.cache.size <= max) {
+				break;
+			}
+			if (!this._isActiveClaimEntry(entry)) {
+				this.cache.delete(key);
+				evicted++;
+			}
+		}
+		if (evicted > 0) {
+			this._evictionCount += evicted;
+			console.debug('[NewsCache] Evicted', evicted, 'LRU entries; cache size:', this.cache.size);
+		}
+	}
+
+	/**
+	 * Enforce the deliveryLocks size bound by evicting inactive leases.
+	 * Active leases (lease.active === true) must NEVER be evicted so concurrent
+	 * webhooks or retries cannot claim a duplicate delivery lease.
+	 */
+	_evictDeliveryLocksIfOverCapacity({ reserveSlot = false } = {}) {
+		const max = this.deliveryLockMaxEntries;
+		const targetSize = reserveSlot ? max - 1 : max;
+		if (this.deliveryLocks.size <= targetSize) {
+			return;
+		}
+		const now = Date.now();
+		let evicted = 0;
+		// First pass: evict inactive leases whose persistent lease has expired
+		for (const [key, lease] of this.deliveryLocks.entries()) {
+			if (this.deliveryLocks.size <= targetSize) {
+				break;
+			}
+			if (!lease.active && (!lease.persistentUntil || lease.persistentUntil <= now)) {
+				this.deliveryLocks.delete(key);
+				evicted++;
+			}
+		}
+		// Second pass: evict any remaining inactive leases
+		for (const [key, lease] of this.deliveryLocks.entries()) {
+			if (this.deliveryLocks.size <= targetSize) {
+				break;
+			}
+			if (!lease.active) {
+				this.deliveryLocks.delete(key);
+				evicted++;
+			}
+		}
+		if (evicted > 0) {
+			this._deliveryLockEvictionCount += evicted;
+			console.debug('[NewsCache] Evicted', evicted, 'delivery lock entries; size:', this.deliveryLocks.size);
+		}
 	}
 
 	/**
@@ -302,10 +368,16 @@ class NewsCache {
 		if (entry) {
 			if (this.isExpired(entry)) {
 				this.cache.delete(key);
-				this._metrics.evictions++;
+				this._evictIfOverCapacity();
 			} else {
+				// Refresh LRU recency on hit: move entry to the most-recently used position in the Map
+				this.cache.delete(key);
+				this.cache.set(key, entry);
+				this._evictIfOverCapacity();
 				localData = entry.data;
 			}
+		} else {
+			this._evictIfOverCapacity();
 		}
 
 		// Persistent dedup: refresh Firestore state before reusing local data so
@@ -328,8 +400,8 @@ class NewsCache {
 						this._recordHit();
 						return refreshedLocalData;
 					}
-					// Warm the local cache to avoid repeated Firestore lookups
-					this.cache.set(key, {
+					// Warm the local cache to avoid repeated Firestore lookups, enforcing LRU bounds
+					this._setCacheEntry(key, {
 						key,
 						timestamp: Date.now(),
 						expiresAt: entryRecord.expiresAtMs,
@@ -384,7 +456,8 @@ class NewsCache {
 			...existingLocalOnlyChannels.filter(channel => !locallyUpdatedChannels.has(channel)),
 		]));
 		const timestamp = existingEntry?.timestamp ?? Date.now();
-		this.cache.set(key, {
+		// _setCacheEntry handles delete-then-set for LRU recency and enforces maxEntries
+		this._setCacheEntry(key, {
 			key,
 			timestamp,
 			expiresAt: existingEntry?.expiresAt ?? timestamp + this.ttlMs,
@@ -533,6 +606,16 @@ class NewsCache {
 			return false;
 		}
 
+		// Prune inactive/expired leases before capacity check
+		this._evictDeliveryLocksIfOverCapacity({ reserveSlot: !existingLease });
+
+		// If this is a new lease and capacity is already saturated with active leases,
+		// reject the claim to preserve existing active leases from eviction.
+		if (!existingLease && this.deliveryLocks.size >= this.deliveryLockMaxEntries) {
+			console.warn('[NewsCache] Delivery lock capacity saturated with active leases; rejecting new claim');
+			return false;
+		}
+
 		const persistentLeaseActive = existingLease && existingLease.persistentUntil > now;
 		const claimToken = persistentLeaseActive && existingLease.claimToken
 			? existingLease.claimToken
@@ -612,6 +695,7 @@ class NewsCache {
 		if (lease.persistentUntil <= Date.now()) {
 			this.deliveryLocks.delete(key);
 		}
+		this._evictDeliveryLocksIfOverCapacity();
 	}
 
 	/**
@@ -625,36 +709,51 @@ class NewsCache {
 		const key = this.generateKey(symbol, eventCategory);
 		const entry = this.cache.get(key);
 
-		if (entry && !this.isExpired(entry)) {
-			return false;
+		if (entry) {
+			if (!this.isExpired(entry)) {
+				return false;
+			}
+			this.cache.delete(key);
 		}
+
+		if (this.cache.size >= this.maxEntries) {
+			let hasEvictable = false;
+			for (const cacheEntry of this.cache.values()) {
+				if (!this._isActiveClaimEntry(cacheEntry)) {
+					hasEvictable = true;
+					break;
+				}
+			}
+			if (!hasEvictable) {
+				console.warn('[NewsCache] Cache capacity saturated with active claims; rejecting new claim');
+				return false;
+			}
+		}
+
+		// Reserve a cache slot before awaiting Firestore to avoid pre-await capacity race
+		this._setCacheEntry(key, {
+			key,
+			timestamp: Date.now(),
+			data: { status: 'claiming' },
+		});
 
 		// Persistent check/write
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
 			try {
 				const claimed = await newsDedupStorageService.claimEntry(key, this.ttlMs);
 				if (claimed) {
-					// Warm local cache so we don't hit Firestore on future calls
-					this.cache.set(key, {
-						key,
-						timestamp: Date.now(),
-						data: { status: 'claiming' },
-					});
 					return true;
 				}
+				// Remote claim was denied (already claimed/exists elsewhere)
+				this.cache.delete(key);
 				return false;
 			} catch (error) {
 				console.warn('[NewsCache] Firestore claimEntry failed (fail-open):', error.message);
-				// Fail-open: continue to local check/claim
+				// Fail-open: keep reserved local claim
+				return true;
 			}
 		}
 
-		// Local claim
-		this.cache.set(key, {
-			key,
-			timestamp: Date.now(),
-			data: { status: 'claiming' },
-		});
 		return true;
 	}
 
@@ -674,11 +773,13 @@ class NewsCache {
 		if (removed > 0) {
 			console.debug('[NewsCache] Cleanup removed', removed, 'expired entries. Cache size:', this.cache.size);
 		}
+		this._evictIfOverCapacity();
 		for (const [key, lease] of this.deliveryLocks.entries()) {
 			if (!lease.active && lease.persistentUntil <= Date.now()) {
 				this.deliveryLocks.delete(key);
 			}
 		}
+		this._evictDeliveryLocksIfOverCapacity();
 	}
 
 	/**
@@ -696,6 +797,11 @@ class NewsCache {
 	getStats() {
 		return {
 			size: this.cache.size,
+			maxEntries: this.maxEntries,
+			evictionCount: this._evictionCount,
+			deliveryLocksSize: this.deliveryLocks.size,
+			deliveryLockMaxEntries: this.deliveryLockMaxEntries,
+			deliveryLockEvictionCount: this._deliveryLockEvictionCount,
 			ttlHours: this.ttlMs / 1000 / 60 / 60,
 			entries: Array.from(this.cache.keys()),
 			deduplication: this.dedupMode,
