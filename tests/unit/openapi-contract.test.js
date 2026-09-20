@@ -75,12 +75,18 @@ describe('OpenAPI contract', () => {
 		const firebaseAdminOperations = new Set([
 			'GET /api/alerts', 'GET /api/alerts/replays', 'GET /api/alerts/summary', 'GET /api/alerts/export',
 			'GET /api/alerts/{alertId}', 'POST /api/alerts/{alertId}/replay',
+			'POST /api/alerts/batch/replay', 'POST /api/alerts/batch/export', 'POST /api/alerts/batch/delete',
 			'GET /api/scanner-presets', 'POST /api/scanner-presets',
 			'GET /api/scanner-presets/{id}', 'PUT /api/scanner-presets/{id}',
 			'DELETE /api/scanner-presets/{id}', 'POST /api/scanner-presets/{id}/run',
 			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
 			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
-			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary',
+			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
+			'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'POST /api/news-monitor/pause', 'POST /api/news-monitor/resume', 'GET /api/news-monitor/status',
+			'GET /api/news-monitor/summary', 'GET /api/news-monitor/analyses',
+			'POST /api/admin/test-alert',
 		]);
 
 		for (const operation of operations) {
@@ -98,14 +104,25 @@ describe('OpenAPI contract', () => {
 			'GET /api/status': 'admin.viewer',
 			'GET /api/outcomes': 'admin.viewer',
 			'GET /api/outcomes/summary': 'admin.viewer',
+			'GET /api/symbol-analyses': 'admin.viewer',
+			'GET /api/symbol-analyses/summary': 'admin.viewer',
 			'GET /api/trading/binance/orders': 'admin.viewer',
 			'POST /api/trading/binance/orders': 'admin.operator',
 			'DELETE /api/trading/binance/orders': 'admin.operator',
 			'GET /api/alerts': 'admin.viewer',
 			'GET /api/jobs': 'admin.viewer',
 			'POST /api/alerts/{alertId}/replay': 'admin.operator',
+			'POST /api/alerts/batch/replay': 'admin.operator',
+			'POST /api/alerts/batch/export': 'admin.viewer',
+			'POST /api/alerts/batch/delete': 'admin.operator',
 			'POST /api/scanner-presets': 'admin.operator',
 			'POST /api/jobs/{jobId}/cancel': 'admin.operator',
+			'POST /api/news-monitor/pause': 'admin.operator',
+			'POST /api/news-monitor/resume': 'admin.operator',
+			'GET /api/news-monitor/status': 'admin.viewer',
+			'GET /api/news-monitor/summary': 'admin.viewer',
+			'GET /api/news-monitor/analyses': 'admin.viewer',
+			'POST /api/admin/test-alert': 'admin.operator',
 		};
 
 		for (const [key, role] of Object.entries(expectedRoles)) {
@@ -350,6 +367,84 @@ describe('OpenAPI contract', () => {
 			expect(timeoutMs.minimum).toBe(1);
 			expect(timeoutMs.maximum).toBe(600000); // 10 minutes hard cap
 			expect(timeoutMs.default).toBe(300000); // 5 minutes default
+		});
+
+		it('documents NotificationRedriveDependency schema and references it under Status dependencies', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const redriveRef = contract.components.schemas.Status.properties.dependencies.properties.notificationRedrive;
+			expect(redriveRef).toEqual({
+				$ref: '#/components/schemas/NotificationRedriveDependency',
+			});
+
+			const redriveSchema = contract.components.schemas.NotificationRedriveDependency;
+			expect(redriveSchema).toBeDefined();
+			expect(redriveSchema.type).toBe('object');
+			expect(redriveSchema.required).toEqual(
+				expect.arrayContaining([
+					'enabled',
+					'configured',
+					'ready',
+					'status',
+					'role',
+					'workerRole',
+					'running',
+					'lastSweepResult',
+				]),
+			);
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.dependencies.notificationRedrive.maxAgeMs).toBe(3600000);
+			expect(redriveSchema.properties.zeroChannelBroadcasts.description)
+				.toContain('dropped because no notification channels were enabled');
+		});
+
+		it('documents NewsMonitorDedupDependency and NewsMonitorCacheSize under Status dependencies', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const dedupRef = contract.components.schemas.Status.properties.dependencies.properties.newsMonitorDedup;
+			expect(dedupRef).toEqual({
+				$ref: '#/components/schemas/NewsMonitorDedupDependency',
+			});
+
+			const dedupSchema = contract.components.schemas.NewsMonitorDedupDependency;
+			expect(dedupSchema).toBeDefined();
+			expect(dedupSchema.type).toBe('object');
+			expect(dedupSchema.required).toEqual(
+				expect.arrayContaining([
+					'enabled',
+					'configured',
+					'ready',
+					'status',
+					'mode',
+					'backend',
+					'cacheSize',
+				]),
+			);
+
+			const cacheSizeSchema = contract.components.schemas.NewsMonitorCacheSize;
+			expect(cacheSizeSchema).toBeDefined();
+			expect(cacheSizeSchema.type).toBe('object');
+			expect(cacheSizeSchema.required).toEqual(
+				expect.arrayContaining([
+					'entries',
+					'maxEntries',
+					'evictionCount',
+					'deliveryLocks',
+					'deliveryLockMaxEntries',
+					'deliveryLockEvictionCount',
+					'urlShortenerCache',
+					'urlShortenerServiceFailures',
+				]),
+			);
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.dependencies.newsMonitorDedup).toBeDefined();
+			expect(statusExample.dependencies.newsMonitorDedup.cacheSize.maxEntries).toBe(5000);
+			expect(statusExample.dependencies.newsMonitorDedup.cacheSize.deliveryLockMaxEntries).toBe(1000);
+			expect(contract.components.schemas.Status.description).toContain('dependencies.newsMonitorDedup reports');
 		});
 	});
 });

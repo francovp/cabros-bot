@@ -6,6 +6,12 @@ const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 
+jest.mock('../../src/services/storage/AlertStorageService', () => ({
+	saveAlert: jest.fn().mockResolvedValue('stored-message-id'),
+}));
+
+const alertStorageService = require('../../src/services/storage/AlertStorageService');
+
 describe('POST /api/webhook/message - Generic message webhook', () => {
 	let savedEnv;
 	let mockBot;
@@ -70,6 +76,15 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(res.body.results[0].messageId).toBe('tg-msg-123');
 		expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
 		expect(global.fetch).not.toHaveBeenCalled();
+		expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
+			text: 'Hello from test',
+			source: 'webhook-message',
+			enriched: false,
+			enrichmentData: null,
+			tokenUsage: null,
+			channels: ['telegram'],
+			deliveryResults: res.body.results,
+		}));
 	});
 
 	it('sends a message to whatsapp only', async () => {
@@ -86,6 +101,47 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(res.body.results[0].messageId).toBe('wa-msg-456');
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 		expect(global.fetch).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps delivery successful when alert storage rejects', async () => {
+		alertStorageService.saveAlert.mockRejectedValueOnce(new Error('storage unavailable'));
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Storage failure is fail-open', channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.results[0].success).toBe(true);
+		expect(alertStorageService.saveAlert).toHaveBeenCalledTimes(1);
+	});
+
+	it('does not persist raw discordWebhookUrl to AlertStorageService to prevent credential leakage', async () => {
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ id: 'discord-msg-789' }),
+		});
+		await initializeNotificationServices(mockBot);
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({
+				message: 'Discord message test',
+				channels: ['discord'],
+				discordWebhookUrl: 'https://discord.com/api/webhooks/123456789/secret-webhook-token',
+			})
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(alertStorageService.saveAlert).toHaveBeenCalledWith(
+			expect.not.objectContaining({
+				discordWebhookUrl: expect.anything(),
+			})
+		);
 	});
 
 	it('sends a message to both channels', async () => {

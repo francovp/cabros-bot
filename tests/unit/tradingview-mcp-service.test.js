@@ -1,4 +1,8 @@
-const { TradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+const {
+	TradingViewMcpService,
+	HEARTBEAT_COLLECTION_NAME,
+	TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID,
+} = require('../../src/services/tradingview/TradingViewMcpService');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 describe('TradingViewMcpService', () => {
@@ -1229,4 +1233,150 @@ describe('TradingViewMcpService', () => {
 			expect(service.hasActiveOutagePage).toBe(false);
 		});
 	});
+
+	describe('callMultiAgentAnalysis', () => {
+		it('calls tool multi_agent_analysis with symbol, exchange, timeframe and unwraps result', async () => {
+			const service = new TradingViewMcpService();
+			const mockPayload = {
+				consensus: { decision: 'BUY', confidence: 'High', net_score: 2 },
+				agents_debate: { technical_analyst: { stance: 'Bullish' } },
+			};
+			service._callTool = jest.fn().mockResolvedValue({
+				result: mockPayload,
+			});
+
+			const result = await service.callMultiAgentAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '15m',
+			});
+
+			expect(service._callTool).toHaveBeenCalledWith('multi_agent_analysis', {
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '15m',
+			}, expect.objectContaining({ signal: undefined }));
+			expect(result).toEqual(mockPayload);
+		});
+
+		it('throws when tool response contains an error field', async () => {
+			const service = new TradingViewMcpService();
+			service._callTool = jest.fn().mockResolvedValue({
+				error: 'Symbol not supported',
+			});
+
+			await expect(service.callMultiAgentAnalysis({
+				symbol: 'INVALID',
+				exchange: 'BINANCE',
+			})).rejects.toThrow('Symbol not supported');
+		});
+
+		it('throws when tool response is not an object', async () => {
+			const service = new TradingViewMcpService();
+			service._callTool = jest.fn().mockResolvedValue('not an object');
+
+			await expect(service.callMultiAgentAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+			})).rejects.toThrow('TradingView MCP multi_agent_analysis returned invalid payload');
+		});
+	});
+
+	describe('durable status persistence and sync', () => {
+		it('persists runtime status to workerHeartbeats collection with merge: true', async () => {
+			const setMock = jest.fn().mockResolvedValue({});
+			const docMock = jest.fn(() => ({ set: setMock }));
+			const collectionMock = jest.fn(() => ({ doc: docMock }));
+			const mockFirestore = { collection: collectionMock };
+
+			const service = new TradingViewMcpService();
+			service.runtimeStatus = {
+				status: 'degraded',
+				lastCheckedAt: '2026-09-19T12:00:00.000Z',
+				lastSuccessAt: '2026-09-19T11:00:00.000Z',
+				lastFailureAt: '2026-09-19T12:00:00.000Z',
+				lastErrorCategory: 'http_5xx',
+			};
+			service.consecutiveFailures = 2;
+
+			const success = await service.persistRuntimeStatus({ firestore: mockFirestore });
+
+			expect(success).toBe(true);
+			expect(collectionMock).toHaveBeenCalledWith(HEARTBEAT_COLLECTION_NAME);
+			expect(docMock).toHaveBeenCalledWith(TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID);
+			expect(setMock).toHaveBeenCalledWith(
+				expect.objectContaining({
+					worker: 'tradingview-mcp',
+					status: 'degraded',
+					lastCheckedAt: '2026-09-19T12:00:00.000Z',
+					lastErrorCategory: 'http_5xx',
+					consecutiveFailures: 2,
+				}),
+				{ merge: true }
+			);
+		});
+
+		it('returns false fail-open when persistRuntimeStatus throws or times out', async () => {
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						set: jest.fn().mockRejectedValue(new Error('Firestore write failed')),
+					})),
+				})),
+			};
+
+			const service = new TradingViewMcpService({
+				logger: { warn: jest.fn() },
+			});
+			const success = await service.persistRuntimeStatus({ firestore: mockFirestore });
+			expect(success).toBe(false);
+		});
+
+		it('syncs durable status from workerHeartbeats when remote check is newer than local', async () => {
+			const nowIso = new Date().toISOString();
+			const mockSnapshot = {
+				exists: true,
+				data: () => ({
+					status: 'degraded',
+					lastCheckedAt: nowIso,
+					lastFailureAt: nowIso,
+					lastErrorCategory: 'timeout',
+					consecutiveFailures: 3,
+					circuitBreaker: { state: 'open', openedAt: nowIso },
+				}),
+			};
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						get: jest.fn().mockResolvedValue(mockSnapshot),
+					})),
+				})),
+			};
+
+			const service = new TradingViewMcpService();
+			expect(service.getStatus({ enabled: true }).status).toBe('unknown');
+
+			const synced = await service.syncDurableStatus({ firestore: mockFirestore });
+			expect(synced.status).toBe('degraded');
+			expect(synced.lastErrorCategory).toBe('timeout');
+			expect(service.isBreakerOpen()).toBe(true);
+		});
+
+		it('returns null fail-open when syncDurableStatus snapshot does not exist or fails', async () => {
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						get: jest.fn().mockRejectedValue(new Error('Firestore read failed')),
+					})),
+				})),
+			};
+
+			const service = new TradingViewMcpService({
+				logger: { warn: jest.fn() },
+			});
+			const synced = await service.syncDurableStatus({ firestore: mockFirestore });
+			expect(synced).toBeNull();
+		});
+	});
 });
+

@@ -29,6 +29,7 @@
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
+const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentials');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 
 const COLLECTION_NAME = 'alerts';
@@ -55,6 +56,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_PROCESSING_TIME_MS = 24 * 60 * 60 * 1000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
+const MAX_BATCH_REPLAY_LIMIT = 50;
+const MAX_BATCH_DELETE_LIMIT = 500;
 const RISK_METADATA_FIELDS = [
 	'invalidation_level',
 	'target_level',
@@ -85,7 +88,8 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true'
 		|| process.env.ENABLE_NOTIFICATION_REDRIVE === 'true'
 		|| process.env.ENABLE_NEWS_MONITOR_SCHEDULER === 'true'
-		|| process.env.ENABLE_BINANCE_ORDER_AUDIT === 'true';
+		|| process.env.ENABLE_BINANCE_ORDER_AUDIT === 'true'
+		|| process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS === 'true';
 }
 
 function getAlertStorageRetentionDays() {
@@ -153,6 +157,10 @@ function buildRetentionExpiryTimestamp() {
 }
 
 function isRetentionExpired(data) {
+	if (data && data.retentionPolicy === 'archive') {
+		return false;
+	}
+
 	const explicitExpiry = getTimestampMillis(data && data.expiresAt);
 	if (explicitExpiry !== null) {
 		return explicitExpiry <= Date.now();
@@ -205,8 +213,10 @@ function formatAlertDocument(doc, options = {}) {
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
 	}
-	if (typeof data.eventCategory === 'string') {
-		docObj.eventCategory = data.eventCategory;
+	if (typeof data.eventCategory === 'string' && data.eventCategory.trim()) {
+		docObj.eventCategory = data.eventCategory.trim();
+	} else if (data.enrichmentData && typeof (data.enrichmentData.eventCategory || data.enrichmentData.event_category) === 'string' && (data.enrichmentData.eventCategory || data.enrichmentData.event_category).trim()) {
+		docObj.eventCategory = (data.enrichmentData.eventCategory || data.enrichmentData.event_category).trim();
 	}
 	if (typeof data.confidence === 'number' && Number.isFinite(data.confidence)) {
 		docObj.confidence = data.confidence;
@@ -312,6 +322,55 @@ function stripUndefinedFieldsDeep(value) {
 			result[key] = stripUndefinedFieldsDeep(item);
 		}
 	}
+	return result;
+}
+
+const VALID_SCANNER_ERROR_CATEGORIES = new Set([
+	'mcp_unreachable',
+	'mcp_timeout',
+	'mcp_rate_limited',
+	'mcp_tool_error',
+	'mcp_suspended',
+	'symbol_invalid',
+	'symbol_unsupported',
+	'unknown',
+]);
+
+function createEmptyScannerErrorCategoryCounts() {
+	return {
+		mcp_unreachable: 0,
+		mcp_timeout: 0,
+		mcp_rate_limited: 0,
+		mcp_tool_error: 0,
+		mcp_suspended: 0,
+		symbol_invalid: 0,
+		symbol_unsupported: 0,
+		unknown: 0,
+	};
+}
+
+function sanitizeScannerErrorCategories(value) {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+
+	const seen = new Set();
+	const result = [];
+	for (const entry of value) {
+		if (typeof entry !== 'string') {
+			continue;
+		}
+		const normalized = entry.trim().toLowerCase();
+		if (!VALID_SCANNER_ERROR_CATEGORIES.has(normalized)) {
+			continue;
+		}
+		if (seen.has(normalized)) {
+			continue;
+		}
+		seen.add(normalized);
+		result.push(normalized);
+	}
+
 	return result;
 }
 
@@ -801,7 +860,9 @@ function truncateAlertText(text) {
 		: text;
 }
 
-function formatExportRecord(doc, { includeText }) {
+const formatExportEnrichmentData = formatEnrichmentSummary;
+
+function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
 	const data = doc.data() || {};
 	const record = {
 		id: doc.id,
@@ -830,6 +891,10 @@ function formatExportRecord(doc, { includeText }) {
 	}
 	if (typeof data.dedupStatus === 'string') {
 		record.dedupStatus = data.dedupStatus;
+	}
+
+	if (includeEnrichment) {
+		record.enrichmentData = formatExportEnrichmentData(data.enrichmentData, data);
 	}
 
 	if (includeText) {
@@ -948,6 +1013,47 @@ function matchesFilters(alert, filters) {
 		return false;
 	}
 
+	if (filters.symbol) {
+		const target = filters.symbol.trim().toUpperCase();
+		const [filterEx, filterSym] = target.includes(':') ? target.split(':') : [null, target];
+
+		let alertSym = alert.symbol ? String(alert.symbol).trim().toUpperCase() : null;
+		let alertEx = alert.exchange ? String(alert.exchange).trim().toUpperCase() : null;
+		if (alertSym && alertSym.includes(':')) {
+			const [ex, sym] = alertSym.split(':');
+			alertSym = sym;
+			if (!alertEx) alertEx = ex;
+		}
+
+		if (alertSym !== filterSym) {
+			return false;
+		}
+		if (filterEx && alertEx !== filterEx) {
+			return false;
+		}
+	}
+
+	if (filters.exchange) {
+		const targetExchange = filters.exchange.trim().toUpperCase();
+		let alertEx = alert.exchange ? String(alert.exchange).trim().toUpperCase() : null;
+		if (!alertEx && alert.symbol && String(alert.symbol).includes(':')) {
+			alertEx = String(alert.symbol).split(':')[0].trim().toUpperCase();
+		}
+		if (alertEx !== targetExchange) {
+			return false;
+		}
+	}
+
+	if (filters.eventCategory) {
+		const targetCategory = filters.eventCategory.trim().toLowerCase();
+		const rawCat = alert.eventCategory
+			|| (alert.enrichmentData && (alert.enrichmentData.eventCategory || alert.enrichmentData.event_category));
+		const alertCat = rawCat ? String(rawCat).trim().toLowerCase() : null;
+		if (alertCat !== targetCategory) {
+			return false;
+		}
+	}
+
 	return true;
 }
 
@@ -1015,10 +1121,10 @@ function getRawDocCursorValues(doc) {
  * Initialize Firebase Admin (idempotent) and return Firestore client.
  * Returns null when the feature is disabled or initialization fails.
  *
- * Credential resolution order (matches firebase-admin defaults):
- *   1. GOOGLE_APPLICATION_CREDENTIALS env var (path to service-account JSON file)
- *   2. FIREBASE_SERVICE_ACCOUNT_JSON env var   (inline JSON string, preferred for Render secrets)
- *   3. Application Default Credentials          (GCP / Cloud Run managed identity)
+ * Credential resolution is delegated to the shared helper at
+ * src/services/storage/firebaseAdminCredentials.js, which consolidates
+ * FIREBASE_SERVICE_ACCOUNT_JSON / GOOGLE_APPLICATION_CREDENTIALS parsing
+ * and validation that previously lived in this file and three others.
  *
  * @returns {FirebaseFirestore.Firestore | null}
  */
@@ -1032,21 +1138,13 @@ function getFirestore() {
 	}
 
 	try {
-		let credential;
-
-		// Option B: inline JSON (preferred for Render.com secret env vars)
-		if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-			const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-			credential = admin.credential.cert(serviceAccount);
-		}
-		// Option A: GOOGLE_APPLICATION_CREDENTIALS file path handled automatically by initializeApp()
-
+		const loaded = loadFirebaseAdminCredentialsOrNull();
 		const appOptions = {};
-		if (credential) {
-			appOptions.credential = credential;
+		if (loaded && loaded.credential) {
+			appOptions.credential = loaded.credential;
 		}
-		if (process.env.FIREBASE_PROJECT_ID) {
-			appOptions.projectId = process.env.FIREBASE_PROJECT_ID;
+		if (loaded && loaded.projectId) {
+			appOptions.projectId = loaded.projectId;
 		}
 
 		if (!admin.apps.length) {
@@ -1100,6 +1198,7 @@ async function saveAlertInternal({
 	sentimentScore,
 	dedupStatus,
 	requestId,
+	scannerErrorCategories,
 	telegramChatId,
 	telegramThreadId,
 	whatsappChatId,
@@ -1178,6 +1277,10 @@ async function saveAlertInternal({
 		if (typeof dedupStatus === 'string' && dedupStatus.trim()) {
 			document.dedupStatus = dedupStatus.trim();
 		}
+		const sanitizedScannerErrorCategories = sanitizeScannerErrorCategories(scannerErrorCategories);
+		if (sanitizedScannerErrorCategories.length > 0) {
+			document.scannerErrorCategories = sanitizedScannerErrorCategories;
+		}
 		if (typeof effectiveTelegramChatId === 'string' && effectiveTelegramChatId.trim()) {
 			document.telegramChatId = effectiveTelegramChatId.trim();
 		}
@@ -1215,6 +1318,9 @@ function saveAlert(params) {
  * @param {string|undefined} params.before
  * @param {string|undefined} params.source
  * @param {boolean|undefined} params.enriched
+ * @param {string|undefined} params.symbol Optional symbol filter
+ * @param {string|undefined} params.eventCategory Optional event category filter
+ * @param {string|undefined} params.exchange Optional exchange filter
  * @param {string[]|string|undefined} params.include
  * @param {boolean|undefined} params.includeEnrichmentSummary
  * @returns {Promise<{alerts: Array, hasMore: boolean, nextBefore: string|null}|null>}
@@ -1224,6 +1330,9 @@ async function listAlerts({
 	before,
 	source,
 	enriched,
+	symbol,
+	eventCategory,
+	exchange,
 	include,
 	includeEnrichmentSummary,
 } = {}) {
@@ -1287,7 +1396,7 @@ async function listAlerts({
 			}
 
 			const formatted = formatAlertDocument(doc, { include, includeEnrichmentSummary });
-			if (matchesFilters(formatted, { source, enriched })) {
+			if (matchesFilters(formatted, { source, enriched, symbol, eventCategory, exchange })) {
 				matches.push(formatted);
 				if (matches.length >= targetCount) {
 					break;
@@ -1630,6 +1739,53 @@ async function getLatestReplayForAlert(alertId) {
 }
 
 /**
+ * Retrieve a previously saved replay attempt by alert ID and raw idempotency key.
+ * Used by batch replay to reconcile and skip already-delivered alerts upon retry.
+ *
+ * @param {string} alertId
+ * @param {string} idempotencyKey
+ * @returns {Promise<Object|null>}
+ */
+async function getReplayAttemptByIdempotencyKey(alertId, idempotencyKey) {
+	if (!isEnabled() || typeof alertId !== 'string' || !alertId.trim() || typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) {
+		return null;
+	}
+
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const idempotencyKeyHash = crypto.createHash('sha256').update(idempotencyKey.trim()).digest('hex');
+
+	try {
+		const snapshot = await firestore
+			.collection(REPLAY_COLLECTION_NAME)
+			.where('alertId', '==', alertId.trim())
+			.where('idempotencyKeyHash', '==', idempotencyKeyHash)
+			.limit(1)
+			.get();
+
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			return null;
+		}
+
+		const doc = snapshot.docs[0];
+		if (!doc || !doc.exists || isRetentionExpired(doc.data() || {})) {
+			return null;
+		}
+
+		return {
+			id: doc.id,
+			...doc.data(),
+		};
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to query replay by idempotency key:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+}
+
+/**
  * Export a bounded set of stored alerts using safe, stable fields only.
  *
  * @param {Object} params
@@ -1639,9 +1795,10 @@ async function getLatestReplayForAlert(alertId) {
  * @param {string|undefined} params.source Optional exact source filter
  * @param {boolean|undefined} params.enriched Optional enriched/plain filter
  * @param {boolean|undefined} params.includeText Include truncated alert text when true
+ * @param {boolean|undefined} params.includeEnrichment Include bounded enrichmentData when true
  * @returns {Promise<{window: Object, alerts: Array}>}
  */
-async function exportAlerts({ from, to, limit, source, enriched, includeText = false } = {}) {
+async function exportAlerts({ from, to, limit, source, enriched, includeText = false, includeEnrichment = false } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -1702,12 +1859,194 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 		}
 	}
 
-	const alerts = docs.map(doc => formatExportRecord(doc, { includeText }));
+	const alerts = docs.map(doc => formatExportRecord(doc, { includeText, includeEnrichment }));
 
 	return {
 		window,
 		alerts,
 	};
+}
+
+/**
+ * Retrieve active (non-expired) stored alert documents by their IDs.
+ *
+ * @param {string[]} alertIds
+ * @returns {Promise<Array|null>}
+ */
+async function getAlertsByIds(alertIds) {
+	if (!isEnabled()) {
+		return null;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+	if (!Array.isArray(alertIds) || alertIds.length === 0) {
+		return [];
+	}
+	const uniqueIds = Array.from(new Set(alertIds.filter(id => typeof id === 'string' && id.trim())));
+	if (uniqueIds.length === 0) {
+		return [];
+	}
+
+	let snapshots;
+	try {
+		snapshots = await Promise.all(
+			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get())
+		);
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to read alert batch from Firestore:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+
+	const validDocs = [];
+	for (const snap of snapshots) {
+		if (snap && snap.exists && !isRetentionExpired(snap.data() || {})) {
+			validDocs.push(snap);
+		}
+	}
+	return validDocs;
+}
+
+/**
+ * Export specific alerts by their IDs.
+ *
+ * @param {Object} params
+ * @param {string[]} params.alertIds
+ * @param {boolean} [params.includeText=false]
+ * @param {boolean} [params.includeEnrichment=false]
+ * @returns {Promise<{ alerts: Array }|null>}
+ */
+async function exportAlertsByIds({ alertIds, includeText = false, includeEnrichment = false } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+	const docs = await getAlertsByIds(alertIds);
+	const alerts = (docs || []).map(doc => formatExportRecord(doc, { includeText, includeEnrichment }));
+	return {
+		alerts,
+	};
+}
+
+/**
+ * Delete a batch of stored alerts by their IDs using Firestore batch writes.
+ *
+ * @param {string[]} alertIds
+ * @returns {Promise<{ deleted: number }|null>}
+ */
+async function deleteAlerts(alertIds) {
+	if (!isEnabled()) {
+		return null;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+	if (!Array.isArray(alertIds) || alertIds.length === 0) {
+		return { deleted: 0 };
+	}
+	const uniqueIds = Array.from(new Set(alertIds.filter(id => typeof id === 'string' && id.trim())));
+	if (uniqueIds.length === 0) {
+		return { deleted: 0 };
+	}
+
+	let snapshots;
+	try {
+		snapshots = await Promise.all(
+			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get())
+		);
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to read alert batch before delete from Firestore:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+
+	const existingIds = [];
+	for (const snap of snapshots) {
+		if (snap && snap.exists) {
+			existingIds.push(snap.id);
+		}
+	}
+
+	if (existingIds.length === 0) {
+		return { deleted: 0 };
+	}
+
+	let totalDeleted = 0;
+	const BATCH_SIZE = 500;
+	for (let i = 0; i < existingIds.length; i += BATCH_SIZE) {
+		const chunk = existingIds.slice(i, i + BATCH_SIZE);
+		const batch = firestore.batch();
+		for (const id of chunk) {
+			const docRef = firestore.collection(COLLECTION_NAME).doc(id);
+			batch.delete(docRef);
+		}
+		try {
+			await batch.commit();
+			totalDeleted += chunk.length;
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to commit alert batch delete:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+	}
+
+	return { deleted: totalDeleted };
+}
+
+/**
+ * Persist multiple replay attempts in a batch write.
+ *
+ * @param {Array<Object>} attempts
+ * @returns {Promise<Array<string>|null>} Array of replayIds
+ */
+async function batchReplayAlerts(attempts) {
+	if (!isEnabled()) {
+		return null;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+	if (!Array.isArray(attempts) || attempts.length === 0) {
+		return [];
+	}
+
+	const replayIds = [];
+	const BATCH_SIZE = 500;
+	for (let i = 0; i < attempts.length; i += BATCH_SIZE) {
+		const chunk = attempts.slice(i, i + BATCH_SIZE);
+		const batch = firestore.batch();
+		for (const attempt of chunk) {
+			const { alertId, idempotencyKey, channels, deliveryResults } = attempt;
+			const idempotencyKeyHash = crypto.createHash('sha256').update(idempotencyKey).digest('hex');
+			const attemptId = `${Date.now()}_${crypto.randomUUID()}`;
+			const replayId = `${alertId}_${idempotencyKeyHash}_${attemptId}`;
+			const document = {
+				alertId,
+				idempotencyKeyHash,
+				attemptId,
+				channels: Array.isArray(channels) ? channels : [],
+				deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
+				replayedAt: admin.firestore.FieldValue.serverTimestamp(),
+				expiresAt: buildRetentionExpiryTimestamp(),
+				source: 'alert-replay',
+			};
+			const docRef = firestore.collection(REPLAY_COLLECTION_NAME).doc(replayId);
+			batch.set(docRef, document, { merge: false });
+			replayIds.push(replayId);
+		}
+		try {
+			await batch.commit();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to commit batch replay attempts:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+	}
+
+	return replayIds;
 }
 
 /**
@@ -1722,9 +2061,12 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
  * @param {number|undefined} params.limit Maximum matching documents aggregated, capped at 1000
  * @param {string|undefined} params.source Optional exact source filter
  * @param {boolean|undefined} params.enriched Optional enriched/plain filter
+ * @param {string|undefined} params.symbol Optional symbol filter
+ * @param {string|undefined} params.eventCategory Optional event category filter
+ * @param {string|undefined} params.exchange Optional exchange filter
  * @returns {Promise<Object|null>}
  */
-async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
+async function summarizeAlerts({ from, to, limit, source, enriched, symbol, eventCategory, exchange } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -1735,7 +2077,11 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 	}
 
 	const window = buildSummaryWindow({ from, to, limit });
-	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
+	const hasFilters = typeof source === 'string'
+		|| typeof enriched === 'boolean'
+		|| typeof symbol === 'string'
+		|| typeof eventCategory === 'string'
+		|| typeof exchange === 'string';
 	const scanLimit = Math.max(window.limit, MAX_PAGE_SIZE);
 	const docs = [];
 	let pageCursor = null;
@@ -1767,10 +2113,19 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		const matchingDocs = hasFilters
 			? activeDocs.filter((doc) => {
 				const data = doc.data() || {};
+				const extracted = extractSymbolAndExchange(data);
+				const category = typeof data.eventCategory === 'string'
+					? data.eventCategory
+					: (data.enrichmentData && typeof (data.enrichmentData.eventCategory || data.enrichmentData.event_category) === 'string'
+						? (data.enrichmentData.eventCategory || data.enrichmentData.event_category)
+						: null);
 				return matchesFilters({
 					source: typeof data.source === 'string' ? data.source : null,
 					enriched: Boolean(data.enriched),
-				}, { source, enriched });
+					symbol: extracted.symbol !== 'unknown' ? extracted.symbol : null,
+					exchange: extracted.exchange || null,
+					eventCategory: category,
+				}, { source, enriched, symbol, eventCategory, exchange });
 			})
 			: activeDocs;
 		docs.push(...matchingDocs.slice(0, window.limit - docs.length));
@@ -1820,6 +2175,10 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 			totalSuccess: 0,
 			totalFailure: 0,
 			byChannel: {},
+		},
+		scanner: {
+			totalRuns: 0,
+			errorCategoryCounts: createEmptyScannerErrorCategoryCounts(),
 		},
 		latency: {
 			averageProcessingMs: null,
@@ -1871,6 +2230,16 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		addDeliverySummary(summary.delivery, data.deliveryResults);
 		collectLatency(processingLatencySamples, data.processingTimeMs ?? data.processing_time_ms);
 
+		if (data.source === 'market-scanner') {
+			summary.scanner.totalRuns += 1;
+			const scannerErrorCategories = sanitizeScannerErrorCategories(data.scannerErrorCategories);
+			for (const category of scannerErrorCategories) {
+				if (Object.prototype.hasOwnProperty.call(summary.scanner.errorCategoryCounts, category)) {
+					summary.scanner.errorCategoryCounts[category] += 1;
+				}
+			}
+		}
+
 		if (Array.isArray(data.deliveryResults)) {
 			for (const result of data.deliveryResults) {
 				collectLatency(deliveryLatencySamples, result && (result.latencyMs || result.deliveryLatencyMs || result.durationMs));
@@ -1894,9 +2263,14 @@ module.exports = {
 	getAlertById,
 	summarizeAlerts,
 	exportAlerts,
+	exportAlertsByIds,
+	getAlertsByIds,
+	deleteAlerts,
+	batchReplayAlerts,
 	saveReplayAttempt,
 	listReplayAttempts,
 	getLatestReplayForAlert,
+	getReplayAttemptByIdempotencyKey,
 	parseSymbolFromText,
 	extractSymbolAndExchange,
 	extractAlertSymbol,
@@ -1907,6 +2281,8 @@ module.exports = {
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,
 	MAX_ALERT_TEXT_LENGTH,
+	MAX_BATCH_REPLAY_LIMIT,
+	MAX_BATCH_DELETE_LIMIT,
 	// Exported for testing
 	getFirestore,
 	COLLECTION_NAME,
