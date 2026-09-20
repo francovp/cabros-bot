@@ -451,6 +451,36 @@ let sseAbortController = null;
 let sseReconnectTimer = null;
 let sseReconnectAttempts = 0;
 const sseListeners = new Set();
+const MAX_SSE_RECONNECT_DELAY_MS = 30000;
+
+const getRetryAfterMs = (response) => {
+	const rawValue = response?.headers?.get?.('retry-after');
+	if (!rawValue) return null;
+
+	const seconds = Number(String(rawValue).trim());
+	if (Number.isFinite(seconds) && seconds >= 0) {
+		return Math.min(MAX_SSE_RECONNECT_DELAY_MS, Math.ceil(seconds * 1000));
+	}
+
+	const retryAt = Date.parse(rawValue);
+	return Number.isFinite(retryAt)
+		? Math.min(MAX_SSE_RECONNECT_DELAY_MS, Math.max(0, retryAt - Date.now()))
+		: null;
+};
+
+const scheduleSseReconnect = (retryAfterMs = null) => {
+	if (sseReconnectTimer) clearTimeout(sseReconnectTimer);
+	updateSseIndicator('connecting', 'Reconnecting…');
+	const exponentialDelay = Math.min(MAX_SSE_RECONNECT_DELAY_MS, 2000 * Math.pow(1.5, sseReconnectAttempts));
+	const delay = Number.isFinite(retryAfterMs)
+		? Math.min(MAX_SSE_RECONNECT_DELAY_MS, Math.max(0, retryAfterMs))
+		: exponentialDelay + Math.random() * 1000;
+	sseReconnectAttempts++;
+	sseReconnectTimer = setTimeout(() => {
+		sseReconnectTimer = null;
+		setupSseStream();
+	}, delay);
+};
 
 const onSseEvent = (handler) => {
 	sseListeners.add(handler);
@@ -565,7 +595,14 @@ const setupSseStream = async () => {
 		});
 
 		if (!response.ok) {
-			throw new Error(`SSE stream HTTP ${response.status}`);
+			const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+			if (!retryable) {
+				updateSseIndicator('disconnected', 'Unavailable');
+				return;
+			}
+			const error = new Error(`SSE stream HTTP ${response.status}`);
+			error.retryAfterMs = getRetryAfterMs(response);
+			throw error;
 		}
 
 		updateSseIndicator('connected', 'Live');
@@ -577,7 +614,10 @@ const setupSseStream = async () => {
 
 		while (true) {
 			const { done, value } = await reader.read();
-			if (done) break;
+			if (done) {
+				if (sseAbortController === controller) scheduleSseReconnect();
+				return;
+			}
 			buffer += decoder.decode(value, { stream: true });
 			const blocks = buffer.split('\n\n');
 			buffer = blocks.pop() || '';
@@ -630,12 +670,7 @@ const setupSseStream = async () => {
 			return;
 		}
 		console.error('SSE stream error:', error);
-		updateSseIndicator('connecting', 'Reconnecting…');
-		const delay = Math.min(30000, 2000 * Math.pow(1.5, sseReconnectAttempts)) + Math.random() * 1000;
-		sseReconnectAttempts++;
-		sseReconnectTimer = setTimeout(() => {
-			setupSseStream();
-		}, delay);
+		scheduleSseReconnect(error.retryAfterMs);
 	}
 };
 

@@ -207,6 +207,23 @@ describe('AdminSseService', () => {
 		}
 	});
 
+	it('reschedules the heartbeat when the effective interval changes', () => {
+		jest.useFakeTimers();
+		try {
+			const dynamicService = new AdminSseService();
+			dynamicService.heartbeatIntervalMs = 1000;
+			dynamicService.addClient(new MockRequest(), new MockResponse(), 'user:1');
+			const initialTimer = dynamicService.heartbeatTimer;
+
+			dynamicService.heartbeatIntervalMs = 2000;
+			jest.advanceTimersByTime(1000);
+
+			expect(dynamicService.heartbeatTimer).not.toBe(initialTimer);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
 	it('gracefully shuts down all connections on closeAll', () => {
 		const req1 = new MockRequest();
 		const res1 = new MockResponse();

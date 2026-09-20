@@ -25,6 +25,7 @@ class AdminSseService {
 		this.clients = new Map();
 		this.clientKeyCounts = new Map();
 		this.heartbeatTimer = null;
+		this.heartbeatTimerIntervalMs = null;
 	}
 
 	isEnabled() {
@@ -255,9 +256,15 @@ class AdminSseService {
 	}
 
 	_ensureHeartbeatTimer() {
-		if (this.heartbeatTimer) return;
 		const interval = this.getEffectiveHeartbeatIntervalMs();
+		if (this.heartbeatTimer && this.heartbeatTimerIntervalMs === interval) return;
+		this._stopHeartbeatTimer();
+		this.heartbeatTimerIntervalMs = interval;
 		this.heartbeatTimer = setInterval(() => {
+			if (this.getEffectiveHeartbeatIntervalMs() !== this.heartbeatTimerIntervalMs) {
+				this._ensureHeartbeatTimer();
+				return;
+			}
 			this.sendHeartbeat();
 		}, interval);
 		if (typeof this.heartbeatTimer.unref === 'function') {
@@ -270,6 +277,7 @@ class AdminSseService {
 			clearInterval(this.heartbeatTimer);
 			this.heartbeatTimer = null;
 		}
+		this.heartbeatTimerIntervalMs = null;
 	}
 
 	closeAll() {
