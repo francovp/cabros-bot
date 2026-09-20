@@ -57,6 +57,7 @@ describe('Status endpoints', () => {
 			failureCount: 0,
 		};
 		tradingViewMcpService.enrichmentEvents = [];
+		tradingViewMcpService.toolMetrics = {};
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
@@ -109,6 +110,7 @@ describe('Status endpoints', () => {
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
+		tradingViewMcpService.toolMetrics = {};
 		restoreEnv(savedEnv);
 		if (tempDir) {
 			rmSync(tempDir, { recursive: true, force: true });
@@ -203,6 +205,7 @@ describe('Status endpoints', () => {
 				invalid_response: 0,
 				request_failed: 0,
 			},
+			toolMetrics: {},
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: false,
@@ -1982,5 +1985,61 @@ describe('Status endpoints', () => {
 				discord: expect.objectContaining({ successRate: 1.0 }),
 			}),
 		}));
+	});
+
+	it('exposes per-tool metrics for TradingView MCP calls in dependencies.tradingViewMcp', async () => {
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 150);
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 250);
+		tradingViewMcpService._recordToolFailure('volume_confirmation_analysis', 500, new Error('ETIMEDOUT: request timed out'));
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.toolMetrics).toEqual({
+			coin_analysis: {
+				callCount: 2,
+				successCount: 2,
+				failureCount: 0,
+				timeoutCount: 0,
+				totalDurationMs: 400,
+				averageDurationMs: 200,
+				lastCallAt: expect.any(String),
+				lastErrorCategory: null,
+			},
+			volume_confirmation_analysis: {
+				callCount: 1,
+				successCount: 0,
+				failureCount: 1,
+				timeoutCount: 1,
+				totalDurationMs: 500,
+				averageDurationMs: 500,
+				lastCallAt: expect.any(String),
+				lastErrorCategory: 'timeout',
+			},
+		});
+	});
+
+	it('aliases /api/capabilities to expose TradingView MCP toolMetrics', async () => {
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 100);
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.toolMetrics).toEqual({
+			coin_analysis: {
+				callCount: 1,
+				successCount: 1,
+				failureCount: 0,
+				timeoutCount: 0,
+				totalDurationMs: 100,
+				averageDurationMs: 100,
+				lastCallAt: expect.any(String),
+				lastErrorCategory: null,
+			},
+		});
 	});
 });

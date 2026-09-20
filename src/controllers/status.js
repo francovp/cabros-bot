@@ -259,6 +259,11 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		...tradingViewRuntimeStatus,
 		errorCategoryCounts: tradingViewMcpService.getScannerErrorCategoryCounts(),
 	};
+	if (tradingViewMcpEnrichmentEnabled) {
+		tradingViewMcp.toolMetrics = tradingViewMcpService.getToolMetrics();
+	} else {
+		delete tradingViewMcp.toolMetrics;
+	}
 	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
 		enabled: tradingViewVolumeConfirmationEnabled,
 	});
