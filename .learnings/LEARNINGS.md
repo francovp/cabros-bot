@@ -83,3 +83,36 @@ When assigned or expected to engage on a PR/issue, post initial questions or obs
 - Last-Seen: 2026-09-20
 
 ---
+
+## [LRN-20260920-002] correction
+
+**Logged**: 2026-09-20T18:20:00Z
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+Engagement automation posts duplicate comments on every cron run.
+
+### Details
+The Virgin Trainee engagement script (engage_latest.py / post_engagement.py) runs on a cron schedule and posts the same comments repeatedly. On 2026-09-20, duplicate comments were posted on issues #1161, #1163, #1165, #1173-1184 (two identical comments per issue, ~13 hours apart). The @gigachad-senior-dev[bot] responded to both duplicates with identical "good instinct to ask" messages.
+
+Root cause: The engagement script has no deduplication logic — it posts comments unconditionally on every run without checking if the trainee already commented on that issue.
+
+### Suggested Action
+1. Add deduplication: before posting, fetch existing comments on the issue and skip if virgin-trainee-dev[bot] already posted a similar engagement comment.
+2. Track engaged issues in a persistent state file (e.g., `.trainee-engaged.json`) with issue numbers and comment timestamps.
+3. Only engage on issues/PRs created/updated since last successful run.
+4. Consider using GitHub GraphQL to check for existing trainee comments more efficiently.
+
+### Metadata
+- Source: error
+- Related Files: engage_latest.py, post_engagement.py, github_scan.py
+- Tags: automation, deduplication, github-bot, cron
+- See Also: LRN-20260920-001
+- Pattern-Key: harden.engagement_deduplication
+- Recurrence-Count: 1
+- First-Seen: 2026-09-20
+- Last-Seen: 2026-09-20
+
+---
