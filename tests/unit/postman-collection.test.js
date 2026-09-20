@@ -433,4 +433,26 @@ describe('Postman collection contract', () => {
 		expect(csvSuccess).toBeDefined();
 		expect(csvSuccess.code).toBe(200);
 	});
+
+	it('documents populated, omitted, and unauthorized response variants for firestore write metrics', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - firestore write metrics');
+
+		expect(item).toBeDefined();
+		const populated = item.response.find((res) => res.name.includes('populated'));
+		const omitted = item.response.find((res) => res.name.includes('omitted'));
+		const unauthorized = item.response.find((res) => res.code === 401);
+
+		expect(populated).toBeDefined();
+		expect(populated.code).toBe(200);
+		expect(JSON.parse(populated.body).dependencies.firestoreWriteMetrics).toBeDefined();
+
+		expect(omitted).toBeDefined();
+		expect(omitted.code).toBe(200);
+		expect(JSON.parse(omitted.body).dependencies.firestoreWriteMetrics).toBeUndefined();
+
+		expect(unauthorized).toBeDefined();
+		expect(unauthorized.code).toBe(401);
+		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
+	});
 });

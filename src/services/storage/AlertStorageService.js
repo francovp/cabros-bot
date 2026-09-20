@@ -31,7 +31,11 @@ const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentials');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
 const { adminSseService } = require('../sse/AdminSseService');
+
+const WRITE_METRICS_DOMAIN_ALERTS = 'alerts';
+const WRITE_METRICS_DOMAIN_REPLAYS = 'alertReplays';
 
 const COLLECTION_NAME = 'alerts';
 const REPLAY_COLLECTION_NAME = 'alertReplays';
@@ -1272,6 +1276,7 @@ async function saveAlertInternal(params = {}) {
 
 	const firestore = getFirestore();
 	if (!firestore) {
+		firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN_ALERTS);
 		emitAlertDeliveryEvents(params, null);
 		return null;
 	}
@@ -1370,19 +1375,20 @@ async function saveAlertInternal(params = {}) {
 			document.discordWebhookUrl = effectiveDiscordWebhookUrl.trim();
 		}
 
-		const docRef = sanitizedAlertId
-			? firestore.collection(COLLECTION_NAME).doc(sanitizedAlertId)
-			: await firestore.collection(COLLECTION_NAME).add(document);
-		if (!sanitizedAlertId) {
-			console.debug(`[AlertStorageService] Alert stored with ID: ${docRef.id}`);
-			return docRef.id;
+		let docRef;
+		if (sanitizedAlertId) {
+			docRef = firestore.collection(COLLECTION_NAME).doc(sanitizedAlertId);
+			await docRef.set(document);
+		} else {
+			docRef = await firestore.collection(COLLECTION_NAME).add(document);
 		}
-		await docRef.set(document);
 		console.debug(`[AlertStorageService] Alert stored with ID: ${docRef.id}`);
+		firestoreWriteMetricsService.recordWriteSuccess(WRITE_METRICS_DOMAIN_ALERTS);
 		emitAlertDeliveryEvents(params, docRef.id);
 		return docRef.id;
 	} catch (error) {
 		console.warn('[AlertStorageService] Failed to store alert in Firestore:', error.message);
+		firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN_ALERTS);
 		emitAlertDeliveryEvents(params, null);
 		return null;
 	}
@@ -1562,6 +1568,9 @@ async function getAlertById(alertId) {
 async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults }) {
 	const firestore = getFirestore();
 	if (!firestore) {
+		if (isEnabled()) {
+			firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN_REPLAYS);
+		}
 		throw createStorageUnavailableError();
 	}
 
@@ -1581,9 +1590,11 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 
 	try {
 		await firestore.collection(REPLAY_COLLECTION_NAME).doc(replayId).set(document, { merge: false });
+		firestoreWriteMetricsService.recordWriteSuccess(WRITE_METRICS_DOMAIN_REPLAYS);
 		return replayId;
 	} catch (error) {
 		console.warn('[AlertStorageService] Failed to store alert replay attempt:', error.message);
+		firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN_REPLAYS);
 		throw createStorageUnavailableError(error);
 	}
 }
@@ -2402,5 +2413,6 @@ module.exports = {
 	_resetForTesting() {
 		db = null;
 		lastRetentionWarningValue = null;
+		firestoreWriteMetricsService.resetForTesting();
 	},
 };

@@ -14,6 +14,7 @@ const admin = require('firebase-admin');
 const crypto = require('crypto');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
 const { parseAlertPaginationCursor } = require('../../src/services/storage/alertPaginationCursor');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 
 // ── Shorthand references to mock internals ──────────────────────────────────
 const {
@@ -194,6 +195,32 @@ describe('AlertStorageService', () => {
 				expect.stringContaining('[AlertStorageService]'),
 				expect.stringContaining('Bad credentials'),
 			);
+			warnSpy.mockRestore();
+		});
+
+		it('records a failed alert write when Firestore initialization is unavailable', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockInitializeApp.mockImplementationOnce(() => {
+				throw new Error('Bad credentials');
+			});
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			await expect(AlertStorageService.saveAlert({
+				text: 'BTC above 100k',
+				enriched: false,
+				enrichmentData: null,
+				tokenUsage: null,
+				channels: ['telegram'],
+				deliveryResults: [],
+				useTradingViewData: false,
+			})).resolves.toBeNull();
+
+			expect(firestoreWriteMetricsService.getSnapshot()).toMatchObject({
+				writesAttempted: 1,
+				writesSucceeded: 0,
+				writesFailed: 1,
+				byDomain: { alerts: { failure: 1 } },
+			});
 			warnSpy.mockRestore();
 		});
 	});
@@ -1316,6 +1343,29 @@ describe('AlertStorageService', () => {
 			})).rejects.toMatchObject({
 				code: 'STORAGE_UNAVAILABLE',
 			});
+		});
+
+		it('records a failed replay write when Firestore initialization is unavailable', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockInitializeApp.mockImplementationOnce(() => {
+				throw new Error('Bad credentials');
+			});
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			await expect(AlertStorageService.saveReplayAttempt({
+				alertId: 'alert-123',
+				idempotencyKey: 'replay-key-init-failure',
+				channels: ['telegram'],
+				deliveryResults: [],
+			})).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
+
+			expect(firestoreWriteMetricsService.getSnapshot()).toMatchObject({
+				writesAttempted: 1,
+				writesSucceeded: 0,
+				writesFailed: 1,
+				byDomain: { alertReplays: { failure: 1 } },
+			});
+			warnSpy.mockRestore();
 		});
 		});
 

@@ -44,6 +44,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/services/notification/requestRouting.js` — Shared optional channel-routing validator/dispatcher for alert-producing routes (`channels`, `telegramChatId`, `whatsappChatId`) that preserves legacy broadcast behavior when `channels` is omitted.
 - `src/controllers/alerts/alerts.js` — Stored alert read, export, analytics, and replay handlers for `GET /api/alerts`, `GET /api/alerts/export`, `GET /api/alerts/summary`, `GET /api/alerts/:alertId`, and `POST /api/alerts/:alertId/replay`.
 - `src/controllers/status.js` — Status handler that computes capabilities, feature flags, notification channels, and active dependencies status.
+- `src/services/storage/FirestoreWriteMetricsService.js` — In-memory counters tracking Firestore write attempts, successes, failures, and success rates across persistence domains (`alerts`, `alertReplays`, `jobs`), surfaced conditionally under `dependencies.firestoreWriteMetrics` in `/api/status` and `/api/capabilities`, with fail-open Sentry count metrics (`captureFirestoreWriteMetric`).
 - `src/services/storage/SignalOutcomeService.js` — Records and evaluates signal outcomes, schedules the role-gated evaluator, and persists safe worker heartbeats.
 - `src/controllers/outcomes/outcomes.js` — Signal outcome query and summary handlers for `GET /api/outcomes` and `GET /api/outcomes/summary`.
 - `src/workers/signalOutcomeWorker.js` — Dedicated Render worker bootstrap with SIGTERM drain handling.
@@ -54,7 +55,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/services/jobs/JobQueue.js` / `src/services/jobs/jobWorker.js` — BullMQ producer/worker integration for the optional Render worker execution mode.
 - `worker.js` — Dedicated Render worker entry point with graceful BullMQ shutdown.
 - `src/services/tradingview/expandedAnalysisAlertReport.js` — Parses `EXCHANGE:SYMBOL` requests and formats grouped Spanish technical-analysis reports.
-- `src/services/monitoring/SentryService.js` — Wraps `@sentry/node` for runtime error and external failure monitoring with tag enrichment (endpoint, provider, status_code, trace_id), automatic PII sanitization, and actionable 500 error grouping.
+- `src/services/monitoring/SentryService.js` — Wraps `@sentry/node` for runtime error, external failure, and custom metric monitoring (LLM tokens/duration, Firestore write counts) with tag enrichment (endpoint, provider, status_code, trace_id), automatic PII sanitization, and actionable 500 error grouping.
 - `src/lib/processLifecycle.js` — Coordinates bounded HTTP/process shutdown and cleanup of runtime resources.
 - `src/services/prompts/` — Langfuse-backed PromptService that resolves prompts with file-backed local defaults.
 - `src/controllers/helpers.js` — Small numeric helper (`round10`) used by price formatting.
@@ -566,11 +567,13 @@ The system provides status and capability querying endpoints to verify service c
 - `src/controllers/status.js` — Compiles the capabilities payload with feature flags, notification channels, and active integrations.
 - `src/routes/index.js` — Registers the routes behind the `validateApiKey` middleware.
 - `src/services/notification/DeliveryMetricsService.js` — In-memory per-channel delivery SLA counters (`success`, `failure`, `successRate`, `averageDeliveryMs`, `window`) tracked from `NotificationManager.sendToAll`/`sendToChannels` and exposed on `/api/status`/`/api/capabilities` as the optional `deliveryMetrics` section (omitted when nothing has been recorded).
+- `src/services/storage/FirestoreWriteMetricsService.js` — In-memory per-domain Firestore write attempt, success, failure, and successRate counters exposed under `dependencies.firestoreWriteMetrics` when non-null.
 
 **Failure and Edge Case Behavior**:
 - The API gates checks behind the `validateApiKey` middleware.
 - Dependency checking (like querying the TradingView MCP or testing Firestore credentials) is done safely and returns detailed state status (`ready`, `error`, `unconfigured`) in a clean JSON format.
 - `deliveryMetrics` is fail-open: malformed or missing `durationMs` values are excluded from latency averages without blocking delivery; counters reset on process restart (acceptable for operational monitoring) and never return values for channels that have not recorded any deliveries.
+- `firestoreWriteMetrics` is fail-open: increments are wrapped in try/catch and never throw; counters reset on process restart and the `dependencies.firestoreWriteMetrics` object is omitted entirely until at least one write has been attempted.
 
 ## Alert Delivery SLA & Error Budget Metrics (GH-687)
 
@@ -586,6 +589,25 @@ The system provides status and capability querying endpoints to verify service c
 **Coverage**:
 - `tests/unit/delivery-metrics-service.test.js` — Counter increment, successRate math, latency average, malformed-input rejection, and reset behavior.
 - `tests/integration/status-endpoint.test.js` — `deliveryMetrics` omitted when empty, populated per-channel after records, and surfaced on `/api/capabilities`.
+
+No new environment variable, endpoint, Remote Config key, or notification contract was added; this is a non-secret operational status addition.
+
+## Firestore Write Observability & Persistence Metrics (GH-695)
+
+`GET /api/status` and `/api/capabilities` now expose an optional `dependencies.firestoreWriteMetrics` section reporting in-memory write metrics (`window`, `writesAttempted`, `writesSucceeded`, `writesFailed`, `successRate`, and per-domain breakdowns under `byDomain`). The section is omitted entirely until at least one write has been attempted; counters reset on process restart.
+
+**Core Components**:
+- `src/services/storage/FirestoreWriteMetricsService.js` — In-memory window-based counters with fail-open `recordWriteSuccess(domain)` and `recordWriteFailure(domain)` (silently ignores invalid input, never throws).
+- `src/services/storage/AlertStorageService.js` — Records write successes and failures for `alerts` and `alertReplays` domains, including early failures when Firestore client initialization returns null while storage is enabled.
+- `src/services/jobs/JobRepository.js` — Records write successes and failures for the `jobs` domain during durable job state persistence.
+- `src/controllers/status.js` — Conditionally spreads `dependencies.firestoreWriteMetrics` when `firestoreWriteMetricsService.getSnapshot()` returns non-null.
+- `src/openapi/openapi.json` — Schemas for `FirestoreWriteMetrics` and `FirestoreWriteDomainMetrics`.
+- `CabrosBot.postman_collection.json` — Adds a "Get Status - firestore write metrics" request with populated, omitted, and 401 unauthorized response examples.
+
+**Coverage**:
+- `tests/unit/firestore-write-metrics-service.test.js` — Verifies snapshot null before writes, success/failure counting, domain breakdown, success rate calculation, fail-open error handling, and test reset.
+- `tests/integration/status-endpoint.test.js` — Verifies omission before writes, populated payload after alert/job persistence, and alias support on `/api/capabilities`.
+- `tests/unit/postman-collection.test.js` — Verifies Postman status examples for populated, omitted, and unauthorized write metrics variants.
 
 No new environment variable, endpoint, Remote Config key, or notification contract was added; this is a non-secret operational status addition.
 
