@@ -559,7 +559,7 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
     "telegram": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "whatsapp": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "gemini": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
-    "tradingViewMcp": { "enabled": true, "configured": true, "ready": false, "status": "unknown", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0, "enrichment": { "alertPath": { "windowMs": 86400000, "totalCount": 0, "appliedCount": 0, "failedCount": 0, "appliedRate24h": 0, "failureRate24h": 0 } } },
+    "tradingViewMcp": { "enabled": true, "configured": true, "ready": false, "status": "unknown", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0, "enrichment": { "alertPath": { "windowMs": 86400000, "totalCount": 0, "appliedCount": 0, "failedCount": 0, "appliedRate24h": 0, "failureRate24h": 0 } }, "toolMetrics": {} },
     "tradingViewVolumeConfirmation": { "enabled": false, "configured": true, "ready": false, "status": "disabled", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0 },
     "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "firestoreJobStorage": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
