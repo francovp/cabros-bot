@@ -48,6 +48,13 @@ class AzureAIClient {
 			throw new Error('AzureAIClient configuration incomplete');
 		}
 
+		const { tokenCostBudgetService } = require('../../lib/tokenUsage');
+		if (tokenCostBudgetService?.isBudgetExceeded()) {
+			const err = new Error('TOKEN_BUDGET_EXCEEDED: Daily LLM token cost budget exceeded');
+			err.status = 429;
+			throw err;
+		}
+
 		const client = ModelClient(
 			this.endpoint,
 			new AzureKeyCredential(this.apiKey),

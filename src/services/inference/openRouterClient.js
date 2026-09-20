@@ -43,6 +43,13 @@ class OpenRouterClient {
 			throw new Error('OpenRouterClient configuration incomplete');
 		}
 
+		const { tokenCostBudgetService } = require('../../lib/tokenUsage');
+		if (tokenCostBudgetService?.isBudgetExceeded()) {
+			const err = new Error('TOKEN_BUDGET_EXCEEDED: Daily LLM token cost budget exceeded');
+			err.status = 429;
+			throw err;
+		}
+
 		const payload = {
 			model: this.model,
 			messages: [

@@ -57,8 +57,8 @@ describe('Token Cost Budget Tracking', () => {
 			const total = tracker.getTotalUsage();
 			expect(total.inputTokens).toBe(100_000);
 			expect(total.outputTokens).toBe(50_000);
-			// Default pricing: 0.00
-			expect(total.estimatedSpendUsd).toBe(0);
+			// Default pricing: $0.15/$0.60 per 1M -> 100k*0.15 + 50k*0.60 = $0.045
+			expect(total.estimatedSpendUsd).toBe(0.045);
 		});
 
 		it('handles undefined or null usage objects gracefully', () => {
@@ -343,6 +343,126 @@ describe('Token Cost Budget Tracking', () => {
 			await expect(genaiClient.llmCallv2({ systemPrompt: 'test', userPrompt: 'test' }))
 				.rejects
 				.toThrow('Daily token cost budget exceeded');
+		});
+
+		it('resolves model pricing across provider prefixes, suffixes, and fallback', () => {
+			const tracker = new GlobalTokenCostBudgetTracker();
+
+			// Strip google/ and -001
+			const geminiFlash = tracker.calculateCost(1_000_000, 1_000_000, 'google/gemini-2.0-flash-001');
+			expect(geminiFlash.inputCost).toBeCloseTo(0.10, 4);
+			expect(geminiFlash.outputCost).toBeCloseTo(0.40, 4);
+
+			// Strip google-ai-studio/
+			const gemini25 = tracker.calculateCost(1_000_000, 1_000_000, 'google-ai-studio/gemini-2.5-flash');
+			expect(gemini25.inputCost).toBeCloseTo(0.30, 4);
+			expect(gemini25.outputCost).toBeCloseTo(2.50, 4);
+
+			// Strip azure/
+			const gpt4oMini = tracker.calculateCost(1_000_000, 1_000_000, 'azure/gpt-4o-mini');
+			expect(gpt4oMini.inputCost).toBeCloseTo(0.15, 4);
+			expect(gpt4oMini.outputCost).toBeCloseTo(0.60, 4);
+
+			// Unrecognized model falls back to default nonzero price to preserve budget limits
+			const unknownModel = tracker.calculateCost(1_000_000, 1_000_000, 'custom-vendor/new-llm');
+			expect(unknownModel.inputCost).toBeGreaterThan(0);
+			expect(unknownModel.outputCost).toBeGreaterThan(0);
+
+			// Gemma is free
+			const gemma = tracker.calculateCost(1_000_000, 1_000_000, 'gemma-2-9b');
+			expect(gemma.inputCost).toBe(0);
+			expect(gemma.outputCost).toBe(0);
+		});
+
+		it('does not increment alertsSent or latch flags if admin notification delivery fails', async () => {
+			process.env.ENABLE_TOKEN_COST_BUDGET = 'true';
+			process.env.TOKEN_COST_DAILY_BUDGET_USD = '1.00';
+			process.env.TOKEN_COST_WARN_THRESHOLD_PCT = '80';
+
+			const tracker = new GlobalTokenCostBudgetTracker();
+			// Simulate delivery failure (e.g. no admin chat or network error)
+			const notifySpy = jest.spyOn(tracker, '_sendAdminNotification').mockResolvedValue(false);
+
+			// 85% spend crossed
+			tracker.recordUsage({ inputTokens: 1_700_000, outputTokens: 1_700_000 }, 'gemini-2.0-flash');
+			await Promise.resolve();
+
+			expect(notifySpy).toHaveBeenCalledTimes(1);
+			expect(tracker.warningAlertSent).toBe(false);
+			expect(tracker.alertsSent).toBe(0);
+
+			// Now simulate successful delivery when retried
+			notifySpy.mockResolvedValue(true);
+			tracker.recordUsage({ inputTokens: 10_000, outputTokens: 10_000 }, 'gemini-2.0-flash');
+			await Promise.resolve();
+
+			expect(tracker.warningAlertSent).toBe(true);
+			expect(tracker.alertsSent).toBe(1);
+		});
+
+		it('persists spend increments and synchronizes shared spend with Firestore', async () => {
+			process.env.ENABLE_TOKEN_COST_BUDGET = 'true';
+			process.env.TOKEN_COST_DAILY_BUDGET_USD = '5.00';
+
+			const mockDocRef = {
+				set: jest.fn().mockResolvedValue({}),
+				get: jest.fn().mockResolvedValue({
+					exists: true,
+					data: () => ({
+						dailySpendUsd: 3.50,
+						dailyInputTokens: 2_000_000,
+						dailyOutputTokens: 2_000_000,
+					}),
+				}),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue({
+					doc: jest.fn().mockReturnValue(mockDocRef),
+				}),
+			};
+
+			const tracker = new GlobalTokenCostBudgetTracker();
+			tracker.firestore = mockFirestore;
+
+			// Record spend locally
+			tracker.recordUsage({ inputTokens: 100_000, outputTokens: 100_000 }, 'gemini-2.0-flash');
+			expect(mockFirestore.collection).toHaveBeenCalledWith('tokenBudgets');
+			expect(mockDocRef.set).toHaveBeenCalled();
+
+			// Sync spend from shared Firestore replica
+			await tracker.syncSharedSpend();
+			expect(tracker.dailySpendUsd).toBe(3.50);
+		});
+
+		it('enrichmentService guards against exceeded budget and registers global usage', async () => {
+			process.env.ENABLE_TOKEN_COST_BUDGET = 'true';
+			process.env.TOKEN_COST_DAILY_BUDGET_USD = '0.01';
+
+			globalTokenTracker.recordUsage({ inputTokens: 1_000_000, outputTokens: 1_000_000 }, 'gemini-2.0-flash');
+			expect(tokenCostBudgetService.isBudgetExceeded()).toBe(true);
+
+			const { getEnrichmentService } = require('../../src/services/inference/enrichmentService');
+			const service = getEnrichmentService();
+			jest.spyOn(service, 'isEnabled').mockReturnValue(true);
+
+			const result = await service.enrichAlert({ confidence: 0.8 });
+			expect(result).toBeNull();
+		});
+
+		it('azureAiClient throws 429 when budget is exceeded', async () => {
+			process.env.ENABLE_TOKEN_COST_BUDGET = 'true';
+			process.env.TOKEN_COST_DAILY_BUDGET_USD = '0.01';
+
+			globalTokenTracker.recordUsage({ inputTokens: 1_000_000, outputTokens: 1_000_000 }, 'gemini-2.0-flash');
+			expect(tokenCostBudgetService.isBudgetExceeded()).toBe(true);
+
+			const { AzureAIClient } = require('../../src/services/inference/azureAiClient');
+			const client = new AzureAIClient();
+			jest.spyOn(client, 'validate').mockReturnValue(true);
+
+			await expect(client.chatCompletion('system', 'user'))
+				.rejects
+				.toThrow('Daily LLM token cost budget exceeded');
 		});
 	});
 });
