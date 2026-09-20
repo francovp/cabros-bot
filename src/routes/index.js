@@ -36,7 +36,12 @@ const { listOutcomes, summarizeOutcomes, getOutcomesCalibration } = require('../
 const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/symbolAnalyses/symbolAnalyses');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
-const { postBinanceOrder, getBinanceOrders, deleteBinanceOrder } = require('../controllers/trading/binanceOrders');
+const {
+	postBinanceOrder,
+	getBinanceOrders,
+	deleteBinanceOrder,
+	getBinanceOrderAudit,
+} = require('../controllers/trading/binanceOrders');
 const { postTestAlert } = require('../controllers/admin/testAlert');
 const { handleSseStream } = require('../controllers/admin/sseEvents');
 const { idempotencyMiddleware } = require('../lib/idempotency');
@@ -93,6 +98,7 @@ function getRoutes(botOrGetter) {
 	router.post('/jobs/:jobId/retry', ...adminWrite, idempotencyMiddleware, postRetryJob(botOrGetter));
 	router.post('/jobs/:jobId/retry-failed', ...adminWrite, idempotencyMiddleware, postRetryFailedJob(botOrGetter));
 	router.get('/trading/binance/orders', ...binanceOrderRead, getBinanceOrders);
+	router.get('/trading/binance/orders/audit', ...binanceOrderRead, getBinanceOrderAudit);
 	router.post('/trading/binance/orders', ...binanceOrderWrite, idempotencyMiddleware, postBinanceOrder);
 	router.delete('/trading/binance/orders', ...binanceOrderWrite, deleteBinanceOrder);
 
