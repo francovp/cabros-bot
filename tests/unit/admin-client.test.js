@@ -16,6 +16,7 @@ class FakeElement {
 		this.className = '';
 		this.value = '';
 		this.disabled = false;
+		this.checked = false;
 		this._text = '';
 		this.name = '';
 	}
@@ -151,12 +152,25 @@ const response = (body, status = 200) => ({
 	text: async () => JSON.stringify(body),
 });
 
+const streamResponse = ({ status = 200, retryAfter, done = false } = {}) => ({
+	ok: status >= 200 && status < 300,
+	status,
+	headers: {
+		get: (name) => name.toLowerCase() === 'retry-after' ? retryAfter : null,
+	},
+	body: {
+		getReader: () => ({
+			read: async () => ({ done }),
+		}),
+	},
+});
+
 function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase, location = {} }) {
 	const body = new FakeElement('body');
 	const elementsById = {};
 	[
 		'legacy-connection', 'firebase-auth', 'auth-form', 'auth-email', 'auth-password', 'sign-in', 'sign-out',
-		'auth-state', 'api-key', 'key-state', 'save-key', 'clear-key', 'connection-form', 'view',
+		'auth-state', 'api-key', 'key-state', 'save-key', 'clear-key', 'connection-form', 'view', 'sse-status', 'sse-label',
 	].forEach((id) => {
 		const tag = id === 'api-key' ? 'input' : id === 'connection-form' ? 'form'
 			: id === 'view' ? 'section' : id === 'auth-form' ? 'div' : id.endsWith('key') ? 'button' : 'p';
@@ -166,7 +180,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['overview', 'status', 'alerts', 'outcomes', 'presets', 'jobs', 'analysis', 'playground'].forEach((view) => {
+	['overview', 'status', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -205,6 +219,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 			if (url === '/admin/auth-config' && !firebase) return response({ enabled: false, configured: false });
 			return fetchImpl(url, options);
 		}),
+		TextDecoder,
 		performance: { now: jest.fn().mockReturnValueOnce(10).mockReturnValue(20) },
 		sessionStorage: {
 			getItem: (key) => storage.get(key) || null,
@@ -230,6 +245,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 			},
 		},
 	};
+	context.window.fetch = context.fetch;
 	vm.runInNewContext(
 		fs.readFileSync(path.join(__dirname, '../../src/admin/admin.js'), 'utf8'),
 		context,
@@ -245,6 +261,60 @@ async function selectView(browser, name) {
 }
 
 describe('admin browser client', () => {
+	it('reconnects after the SSE stream ends cleanly', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/admin/events') return streamResponse({ done: true });
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await browser.elementsById['save-key'].dispatch('click');
+		await flush();
+		expect(browser.context.fetch.mock.calls.map(([url]) => url)).toContain('/api/admin/events');
+
+		expect(browser.elementsById['sse-label'].textContent).toBe('Reconnecting…');
+		expect(browser.timers.size).toBe(1);
+	});
+
+	it('does not reconnect on permanent SSE authorization failures', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/admin/events') return streamResponse({ status: 403 });
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await browser.elementsById['save-key'].dispatch('click');
+		await flush();
+
+		expect(browser.elementsById['sse-label'].textContent).toBe('Unavailable');
+		expect(browser.timers.size).toBe(0);
+	});
+
+	it('honors fractional Retry-After delays for retryable SSE failures', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/admin/events') return streamResponse({ status: 503, retryAfter: '2.5' });
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await browser.elementsById['save-key'].dispatch('click');
+		await flush();
+
+		expect([...browser.timerDelays.values()]).toContain(2500);
+	});
+
 	it('renders an operational overview from the status response', async () => {
 		const status = {
 			service: {
@@ -2241,6 +2311,218 @@ describe('admin browser client', () => {
 		expect(findButton(listForm, 'Copy JSON').hidden).toBe(false);
 	});
 
+	it('supports bulk alert selection, select-all toggle, and batch operations', async () => {
+		const requests = [];
+		const alertsData = {
+			alerts: [
+				{ id: 'alert-1', text: 'first alert', source: 'tradingview', enriched: false },
+				{ id: 'alert-2', text: 'second alert', source: 'tradingview', enriched: true },
+			],
+			pagination: { hasMore: false },
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				if (url.startsWith('/api/alerts') && (!options || !options.method || options.method === 'GET')) {
+					return response(alertsData);
+				}
+				if (url === '/api/alerts/batch/replay') {
+					return response({
+						success: true,
+						results: [
+							{ alertId: 'alert-1', success: true, channels: ['telegram'] },
+							{ alertId: 'alert-2', success: true, channels: ['telegram'] },
+						],
+					});
+				}
+				if (url === '/api/alerts/batch/export') {
+					return {
+						ok: true,
+						status: 200,
+						headers: { get: (name) => (name === 'content-type' ? 'application/x-ndjson' : null) },
+						blob: async () => ({ type: 'application/x-ndjson' }),
+						text: async () => 'export body',
+					};
+				}
+				if (url === '/api/alerts/batch/delete') {
+					return response({ success: true, requested: 2, deleted: 2 });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const selectAll = find(listForm, (node) => node.tagName === 'INPUT' && node.className.includes('alert-select-all'));
+		const countSpan = find(listForm, (node) => node.className && node.className.includes('batch-selection-count'));
+		const replayBtn = findButton(listForm, 'Replay selected');
+		const exportBtn = findButton(listForm, 'Export selected');
+		const deleteBtn = findButton(listForm, 'Delete selected');
+		const checkboxes = findAll(listForm, (node) => node.className && node.className.includes('alert-select-checkbox'));
+
+		expect(selectAll).toBeDefined();
+		expect(countSpan.textContent).toBe('0 selected');
+		expect(replayBtn.disabled).toBe(true);
+		expect(exportBtn.disabled).toBe(true);
+		expect(deleteBtn.disabled).toBe(true);
+		expect(checkboxes.length).toBe(2);
+
+		// Select first alert
+		checkboxes[0].checked = true;
+		await checkboxes[0].dispatch('change');
+		expect(countSpan.textContent).toBe('1 selected');
+		expect(replayBtn.disabled).toBe(false);
+		expect(exportBtn.disabled).toBe(false);
+		expect(deleteBtn.disabled).toBe(false);
+		expect(selectAll.checked).toBe(false);
+
+		// Select-all
+		selectAll.checked = true;
+		await selectAll.dispatch('change');
+		expect(countSpan.textContent).toBe('2 selected');
+		expect(checkboxes[0].checked).toBe(true);
+		expect(checkboxes[1].checked).toBe(true);
+		expect(selectAll.checked).toBe(true);
+
+		// Batch replay
+		await replayBtn.dispatch('click');
+		await flush();
+		const replayRequest = requests.find(([url]) => url === '/api/alerts/batch/replay');
+		expect(replayRequest).toBeDefined();
+		const parsedReplayBody = JSON.parse(replayRequest[1].body);
+		expect(parsedReplayBody.alertIds).toEqual(['alert-1', 'alert-2']);
+		expect(typeof parsedReplayBody.idempotencyKey).toBe('string');
+		expect(parsedReplayBody.idempotencyKey.trim().length).toBeGreaterThan(0);
+		expect(listForm.textContent).toContain('Batch replay complete: 2/2 succeeded.');
+
+		// Batch export
+		await exportBtn.dispatch('click');
+		await flush();
+		const exportRequest = requests.find(([url]) => url === '/api/alerts/batch/export');
+		expect(exportRequest).toBeDefined();
+		expect(JSON.parse(exportRequest[1].body)).toEqual({ alertIds: ['alert-1', 'alert-2'], format: 'jsonl' });
+		expect(browser.downloads.length).toBeGreaterThan(0);
+
+		// Batch delete
+		await deleteBtn.dispatch('click');
+		await flush();
+		const deleteRequest = requests.find(([url]) => url === '/api/alerts/batch/delete');
+		expect(deleteRequest).toBeDefined();
+		expect(JSON.parse(deleteRequest[1].body)).toEqual({ alertIds: ['alert-1', 'alert-2'] });
+		expect(listForm.textContent).toContain('Batch delete complete: 2 alerts deleted.');
+	});
+
+	it('disables batch replay button when more than 50 alerts are selected', async () => {
+		const alertsList = Array.from({ length: 55 }, (_, i) => ({
+			id: `alert-${i + 1}`,
+			text: `alert ${i + 1}`,
+			source: 'webhook',
+		}));
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					return response({ success: true, alerts: alertsList, pagination: { hasMore: false } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const selectAll = find(listForm, (node) => node.tagName === 'INPUT' && node.className.includes('alert-select-all'));
+		const countSpan = find(listForm, (node) => node.className && node.className.includes('batch-selection-count'));
+		const replayBtn = findButton(listForm, 'Replay selected');
+		const exportBtn = findButton(listForm, 'Export selected');
+		const deleteBtn = findButton(listForm, 'Delete selected');
+
+		// Select all 55 alerts
+		selectAll.checked = true;
+		await selectAll.dispatch('change');
+		expect(countSpan.textContent).toBe('55 selected');
+
+		// Replay button should be disabled because 55 > 50
+		expect(replayBtn.disabled).toBe(true);
+		expect(replayBtn.title).toBe('Batch replay is limited to 50 alerts at a time (55 selected)');
+
+		// Export and delete should remain enabled
+		expect(exportBtn.disabled).toBe(false);
+		expect(deleteBtn.disabled).toBe(false);
+	});
+
+	it('disables batch replay and delete for admin.viewer role', async () => {
+		const auth = {
+			onAuthStateChanged: (listener) => {
+				listener({
+					getIdToken: async () => 'viewer-token',
+					getIdTokenResult: async () => ({ claims: { role: 'admin.viewer' } }),
+				});
+				return () => {};
+			},
+			signInWithEmailAndPassword: jest.fn(),
+			signOut: jest.fn(),
+		};
+		const firebase = {
+			initializeApp: jest.fn(),
+			auth: jest.fn(() => auth),
+		};
+		const requests = [];
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: async (url, options) => {
+				requests.push([url, options]);
+				if (url === '/admin/auth-config') {
+					return response({
+						enabled: true,
+						configured: true,
+						config: { apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros' },
+					});
+				}
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					return response({
+						alerts: [{ id: 'alert-1', text: 'some alert', enriched: false }],
+						pagination: { hasMore: false },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const checkbox = find(listForm, (node) => node.className && node.className.includes('alert-select-checkbox'));
+		checkbox.checked = true;
+		await checkbox.dispatch('change');
+
+		const replayBtn = findButton(listForm, 'Replay selected');
+		const exportBtn = findButton(listForm, 'Export selected');
+		const deleteBtn = findButton(listForm, 'Delete selected');
+
+		expect(exportBtn.disabled).toBe(false);
+		expect(replayBtn.disabled).toBe(true);
+		expect(deleteBtn.disabled).toBe(true);
+
+		await exportBtn.dispatch('click');
+		await flush();
+		const exportRequest = requests.find(([url]) => url === '/api/alerts/batch/export');
+		expect(exportRequest).toBeDefined();
+		expect(listForm.textContent).not.toContain('Your admin role cannot perform this operation.');
+	});
+
 	it('paginates stored alerts backward through visited cursors', async () => {
 		const pages = [
 			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
@@ -3752,6 +4034,51 @@ describe('admin browser client', () => {
 		expect(summaryForm.textContent).toContain('66.67%');
 	});
 
+	it('renders dedicated outcomes calibration query and builds calibration dashboard', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				requests.push([url, options]);
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/outcomes/calibration')) {
+					return response({
+						success: true,
+						calibration: {
+							available: true,
+							totalScoredAlerts: 45,
+							suggestedThreshold: 0.78,
+							suggestedThresholdRationale: 'Alerts at 0.78+ show 55%+ target hit rate at 4h window',
+							buckets: [
+								{ range: '0.70-0.75', count: 15, avgReturn1h: 0.2, avgReturn4h: 0.5, targetHitRate: 0.4 },
+								{ range: '0.75-0.80', count: 30, avgReturn1h: 0.8, avgReturn4h: 1.5, targetHitRate: 0.6 },
+							],
+						},
+					});
+				}
+				return response({ success: true });
+			},
+		});
+
+		await flush();
+		await selectView(browser, 'outcomes');
+
+		const calibrationForm = findForm(browser.elementsById.view, 'GET /api/outcomes/calibration');
+		expect(calibrationForm).toBeDefined();
+		calibrationForm.elements.symbol.value = 'BTCUSDT';
+		calibrationForm.elements.window.value = '4h';
+		await calibrationForm.dispatch('submit');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/outcomes/calibration?limit=1000&symbol=BTCUSDT&window=4h');
+		expect(calibrationForm.textContent).toContain('Scored alerts');
+		expect(calibrationForm.textContent).toContain('45');
+		expect(calibrationForm.textContent).toContain('Suggested threshold');
+		expect(calibrationForm.textContent).toContain('0.78');
+		expect(calibrationForm.textContent).toContain('Calibration buckets');
+		expect(calibrationForm.textContent).toContain('0.70-0.75');
+		expect(calibrationForm.textContent).toContain('60%');
+	});
+
 	it('safely renders outcome cards with excursions, barriers, and expandable detail', async () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => {
@@ -3909,8 +4236,477 @@ describe('admin browser client', () => {
 
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
-		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(8);
+		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(9);
 		expect(shell).not.toMatch(/[⌂◈◉◇◌✦▷]/);
+	});
+
+	it('loads recent Binance orders with symbol and limit filters', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({ success: true, environment: 'testnet', orders: [] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		listForm.elements.limit.value = '5';
+		browser.elementsById['api-key'].value = 'session-secret';
+		await listForm.dispatch('submit');
+		await flush();
+
+		const last = requests.at(-1);
+		expect(last[0]).toBe('/api/trading/binance/orders?symbol=BTCUSDT&limit=5');
+		expect(last[1].headers['x-api-key']).toBe('session-secret');
+	});
+
+	it('rejects exponent notation and canonicalizes integer order limits', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push(url);
+				return response({ success: true, environment: 'testnet', orders: [] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		listForm.elements.limit.value = '1e2';
+		await listForm.dispatch('submit');
+		await flush();
+		expect(requests.at(-1)).toBe('/api/trading/binance/orders?symbol=BTCUSDT');
+
+		listForm.elements.limit.value = '005';
+		await listForm.dispatch('submit');
+		await flush();
+		expect(requests.at(-1)).toBe('/api/trading/binance/orders?symbol=BTCUSDT&limit=5');
+	});
+
+	it('renders sanitized Binance order summary fields and hides provider noise', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: true,
+					environment: 'testnet',
+					orders: [{
+						symbol: 'BTCUSDT',
+						orderId: 9007199254740993,
+						clientOrderId: 'cb-test-001',
+						price: '65000.00',
+						origQty: '0.01000000',
+						executedQty: '0.00500000',
+						cummulativeQuoteQty: '325.00000',
+						status: 'PARTIALLY_FILLED',
+						type: 'LIMIT',
+						side: 'BUY',
+						timeInForce: 'GTC',
+						transactTime: 1717000000000,
+						updateTime: 1717000060000,
+						time: 1717000000000,
+						workingTime: 1717000000000,
+						isWorking: true,
+						stopPrice: '0.00000000',
+						icebergQty: '0.00000000',
+						origQuoteOrderQty: '0.00000000',
+						orderListId: -1,
+						selfTradePreventionMode: 'NONE',
+						fills: [{
+							price: '65000.00',
+							qty: '0.00500000',
+							commission: '0.00000500',
+							commissionAsset: 'BNB',
+							tradeId: 12345,
+							hiddenField: 'hidden-noisy-data',
+						}],
+						hiddenProviderField: 'hidden-noise',
+					}],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('BTCUSDT');
+		expect(listForm.textContent).toContain('LIMIT');
+		expect(listForm.textContent).toContain('BUY');
+		expect(listForm.textContent).toContain('PARTIALLY_FILLED');
+		expect(listForm.textContent).toContain('cb-test-001');
+		expect(listForm.textContent).toContain('65000');
+		expect(listForm.textContent).toContain('0.00500000');
+		expect(listForm.textContent).not.toContain('hidden-noise');
+		expect(listForm.textContent).not.toContain('hidden-noisy-data');
+	});
+
+	it('looks up a single Binance order by orderId through the dedicated form', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({
+					success: true,
+					environment: 'testnet',
+					order: {
+						symbol: 'BTCUSDT',
+						orderId: 42,
+						clientOrderId: 'cb-order-42',
+						price: '62000.00',
+						origQty: '0.02000000',
+						executedQty: '0.02000000',
+						status: 'FILLED',
+						type: 'MARKET',
+						side: 'SELL',
+						transactTime: 1717000000000,
+						updateTime: 1717000005000,
+					},
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'BTCUSDT';
+		detailForm.elements['path-orderId'].value = '42';
+		await detailForm.dispatch('submit');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/trading/binance/orders?symbol=BTCUSDT&orderId=42');
+		expect(detailForm.textContent).toContain('FILLED');
+		expect(detailForm.textContent).toContain('MARKET');
+		expect(detailForm.textContent).toContain('SELL');
+		expect(detailForm.textContent).toContain('cb-order-42');
+	});
+
+	it('rejects exponent notation and canonicalizes order IDs', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push(url);
+				return response({ success: true, environment: 'testnet', order: { status: 'FILLED' } });
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'BTCUSDT';
+		detailForm.elements['path-orderId'].value = '1e2';
+		await detailForm.dispatch('submit');
+		await flush();
+		expect(requests).toHaveLength(0);
+		expect(detailForm.textContent).toContain('orderId must be a positive integer');
+
+		detailForm.elements['path-orderId'].value = '0042';
+		await detailForm.dispatch('submit');
+		await flush();
+		expect(requests.at(-1)).toBe('/api/trading/binance/orders?symbol=BTCUSDT&orderId=42');
+	});
+
+	it('looks up a single Binance order by origClientOrderId through the dedicated form', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push(url);
+				return response({
+					success: true,
+					environment: 'testnet',
+					order: {
+						symbol: 'ETHUSDT',
+						orderId: 7,
+						clientOrderId: 'cb-eth-7',
+						status: 'NEW',
+						type: 'LIMIT',
+						side: 'BUY',
+					},
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'ETHUSDT';
+		detailForm.elements['path-origClientOrderId'].value = 'cb-eth-7';
+		await detailForm.dispatch('submit');
+		await flush();
+
+		expect(requests.at(-1)).toBe('/api/trading/binance/orders?symbol=ETHUSDT&origClientOrderId=cb-eth-7');
+	});
+
+	it('rejects invalid origClientOrderId before dispatch', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push(url);
+				return response({ success: true, environment: 'testnet', order: {} });
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'ETHUSDT';
+		detailForm.elements['path-origClientOrderId'].value = 'invalid/client/id';
+		await detailForm.dispatch('submit');
+		await flush();
+
+		expect(requests).toHaveLength(0);
+		expect(detailForm.textContent).toContain('origClientOrderId must contain 1-36 safe characters');
+
+		detailForm.elements['path-origClientOrderId'].value = 'a'.repeat(37);
+		await detailForm.dispatch('submit');
+		await flush();
+
+		expect(requests).toHaveLength(0);
+		expect(detailForm.textContent).toContain('origClientOrderId must contain 1-36 safe characters');
+	});
+
+	it('rejects ambiguous single-order identifiers', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push(url);
+				return response({ success: true, environment: 'testnet', order: {} });
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'BTCUSDT';
+		detailForm.elements['path-orderId'].value = '42';
+		detailForm.elements['path-origClientOrderId'].value = 'cb-42';
+		await detailForm.dispatch('submit');
+		await flush();
+
+		expect(requests).toHaveLength(0);
+		expect(detailForm.textContent).toContain('Provide exactly one order identifier');
+	});
+
+	it('renders malformed Binance order timestamps without throwing', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: true,
+					environment: 'testnet',
+					orders: [{ symbol: 'BTCUSDT', orderId: 42, status: 'FILLED', type: 'MARKET', time: 'not-a-timestamp' }],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		await expect(listForm.dispatch('submit')).resolves.toBeUndefined();
+		await flush();
+
+		expect(listForm.textContent).toContain('not-a-timestamp');
+	});
+
+	it('clears stale Binance orders when filters change before the response resolves', async () => {
+		let releaseList;
+		const slow = new Promise((resolve) => { releaseList = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/trading/binance/orders')) {
+					return slow.then(() => response({
+						success: true,
+						environment: 'testnet',
+						orders: [{ symbol: 'BTCUSDT', orderId: 1, side: 'BUY', status: 'NEW', type: 'LIMIT', executedQty: '0', origQty: '1' }],
+					}));
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		const submit = listForm.dispatch('submit');
+		await flush();
+
+		listForm.elements.symbol.value = 'ETHUSDT';
+		await listForm.elements.symbol.dispatch('input');
+
+		expect(listForm.textContent).toContain('Filters changed');
+
+		releaseList();
+		await flush();
+		await submit;
+		expect(listForm.textContent).not.toContain('orderId');
+		expect(listForm.textContent).toContain('Filters changed');
+	});
+
+	it('surfaces ORDER_NOT_FOUND through the error UI on single-order lookup', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: false,
+					error: 'Binance order not found',
+					code: 'ORDER_NOT_FOUND',
+				}, 404);
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'BTCUSDT';
+		detailForm.elements['path-orderId'].value = '9999';
+		await detailForm.dispatch('submit');
+		await flush();
+
+		expect(detailForm.textContent).toContain('HTTP 404');
+		expect(detailForm.textContent).toContain('ORDER_NOT_FOUND');
+	});
+
+	it('renders an empty state when the recent-orders list has no rows', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : { success: true, environment: 'testnet', orders: [] }),
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		await listForm.dispatch('submit');
+		await flush();
+
+		const empty = find(listForm, (node) => node.className === 'empty-state');
+		expect(empty).toBeDefined();
+		expect(empty.textContent).toContain('No recent orders found.');
+	});
+
+	it('disables single-order lookup unless at least one identifier is set', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({ success: true, environment: 'testnet', order: {} });
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'BTCUSDT';
+		const button = findButton(detailForm, 'Get single order');
+		const submitPromise = detailForm.dispatch('submit');
+		await flush();
+		expect(button.disabled).toBe(false);
+		expect(detailForm.textContent).toContain('orderId or origClientOrderId');
+		await submitPromise;
+	});
+
+	it('keeps the API key out of query strings for Binance order requests', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({ success: true, environment: 'testnet', orders: [] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		browser.elementsById['api-key'].value = 'should-only-be-header';
+		await listForm.dispatch('submit');
+		await flush();
+
+		const last = requests.at(-1);
+		expect(last[0]).not.toContain('should-only-be-header');
+		expect(last[0]).not.toContain('api-key');
+		expect(last[0]).not.toContain('x-api-key');
+		expect(last[1].headers['x-api-key']).toBe('should-only-be-header');
+	});
+
+	it('renders the Binance environment badge for both list and lookup results', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.includes('orderId=42')) {
+					return response({
+						success: true,
+						environment: 'live',
+						order: { symbol: 'BTCUSDT', orderId: 42, side: 'SELL', status: 'FILLED', type: 'MARKET' },
+					});
+				}
+				return response({
+					success: true,
+					environment: 'testnet',
+					orders: [{ symbol: 'BTCUSDT', orderId: 1, side: 'BUY', status: 'NEW', type: 'LIMIT' }],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('Environment: testnet');
+		const listBadge = find(listForm, (node) => node.tagName === 'SPAN' && node.className.includes('status-badge'));
+		expect(listBadge.className).toBe('status-badge status-ready');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'BTCUSDT';
+		detailForm.elements['path-orderId'].value = '42';
+		await detailForm.dispatch('submit');
+		await flush();
+		expect(detailForm.textContent).toContain('Environment: live');
+		const detailBadge = find(detailForm, (node) => node.tagName === 'SPAN' && node.className.includes('status-badge'));
+		expect(detailBadge.className).toBe('status-badge status-danger');
+	});
+
+	it('resets the Binance environment badge when filters change', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: true,
+					environment: 'testnet',
+					orders: [{ symbol: 'BTCUSDT', orderId: 1, side: 'BUY', status: 'NEW', type: 'LIMIT' }],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('Environment: testnet');
+
+		listForm.elements.symbol.value = 'ETHUSDT';
+		await listForm.elements.symbol.dispatch('input');
+		expect(listForm.textContent).toContain('Environment: —');
 	});
 });
 
@@ -4614,4 +5410,3 @@ describe('structured analysis forms', () => {
 		});
 	});
 });
-

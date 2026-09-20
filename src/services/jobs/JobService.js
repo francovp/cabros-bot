@@ -36,6 +36,7 @@ const {
 } = require('../notification/requestRouting');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { runWithConcurrency } = require('../../lib/runWithConcurrency');
+const { adminSseService } = require('../sse/AdminSseService');
 
 const EXPIRATION_MS = 3600000; // 1 hour
 const DEFAULT_JOB_TIMEOUT_MS = 300000; // 5 minutes
@@ -584,20 +585,12 @@ class JobService {
 	}
 
 	/**
-	 * Creates a job, validates the request synchronously, and runs it in the background.
+	 * Validates a job request synchronously based on job type and payload.
 	 * @param {string} type - 'expanded-analysis' | 'market-scanner'
 	 * @param {Object} payload - request body payload
-	 * @param {Function|Object} botOrGetter - Telegraf bot instance or getter
-	 * @returns {Object} The created job metadata
+	 * @returns {{ parsed: Object, validatedTimeoutMs: number }}
 	 */
-	async createJob(type, payload, botOrGetter) {
-		await this._cleanExpiredJobs();
-		const routing = parseNotificationRouting(payload);
-		const mode = this._getExecutionMode();
-		const queueMode = this._isQueueMode();
-		const durableQueueMode = this._isDurableQueueMode();
-
-		// Synchronous validation based on job type
+	validateJobRequest(type, payload) {
 		let parsed;
 		if (type === 'expanded-analysis') {
 			parsed = parseExpandedAnalysisAlertRequest({ body: payload });
@@ -633,6 +626,27 @@ class JobService {
 			}
 			validatedTimeoutMs = Math.min(timeoutVal, MAX_JOB_TIMEOUT_MS);
 		}
+
+		return { parsed, validatedTimeoutMs };
+	}
+
+	/**
+	 * Creates a job, validates the request synchronously, and runs it in the background.
+	 *
+	 * @param {string} type - Job type: 'expanded-analysis' or 'market-scanner'
+	 * @param {Object} payload - Request payload matching the job type schema
+	 * @param {Function|Object} botOrGetter - Telegraf bot instance or getter
+	 * @returns {Object} The created job metadata
+	 */
+	async createJob(type, payload, botOrGetter) {
+		await this._cleanExpiredJobs();
+		const routing = parseNotificationRouting(payload);
+		const mode = this._getExecutionMode();
+		const queueMode = this._isQueueMode();
+		const durableQueueMode = this._isDurableQueueMode();
+
+		// Synchronous validation based on job type
+		const { parsed, validatedTimeoutMs } = this.validateJobRequest(type, payload);
 
 		let callbackUrl = null;
 		let callbackSecret = null;
@@ -778,6 +792,7 @@ class JobService {
 		try {
 			creation.persistencePromise = this.repository.save(job, { required: durableQueueMode });
 			await creation.persistencePromise;
+			this._broadcastJobProgress(job);
 
 			if (job.shutdownFinalized) {
 				return {
@@ -1567,7 +1582,38 @@ class JobService {
 			}
 			return false;
 		}
+		this._broadcastJobProgress(job);
 		return true;
+	}
+
+	_broadcastJobProgress(job) {
+		if (!job || !job.jobId) return;
+		try {
+			adminSseService.broadcast('job-progress', {
+				jobId: job.jobId,
+				type: job.type,
+				status: job.status,
+				progress: job.progress || null,
+				error: job.error || null,
+				code: job.code || null,
+				updatedAt: job.updatedAt || job.createdAt || new Date().toISOString(),
+				totalDurationMs: job.totalDurationMs || null,
+				summary: job.summary || job.result?.summary || null,
+				timestamp: new Date().toISOString(),
+			});
+
+			if (job.status === 'completed' && job.type === 'market-scanner') {
+				adminSseService.broadcast('scanner-result', {
+					jobId: job.jobId,
+					type: job.type,
+					status: job.status,
+					summary: job.summary || job.result?.summary || null,
+					timestamp: new Date().toISOString(),
+				});
+			}
+		} catch (_) {
+			// Fail-safe
+		}
 	}
 
 	_isQueuedExecution(job) {

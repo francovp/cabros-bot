@@ -18,6 +18,9 @@ const PARAMETER_SCHEMA = Object.freeze({
 	NEWS_GEMINI_CONCURRENCY: { type: 'number', defaultValue: Infinity, integer: true, min: 1, max: 50 },
 	NEWS_GEMINI_QUOTA_MAX_RETRIES: { type: 'number', defaultValue: 2, integer: true, min: 1, max: 5 },
 	NEWS_GEMINI_QUOTA_RETRY_BASE_MS: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 60000 },
+	NEWS_MAX_ALERTS_PER_BATCH: { type: 'number', defaultValue: 10, integer: true, min: 1, max: 50 },
+	NEWS_MAX_ALERTS_PER_WINDOW: { type: 'number', defaultValue: 20, integer: true, min: 1, max: 200 },
+	NEWS_MAX_ALERTS_PER_WINDOW_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 3600000 },
 	TRADINGVIEW_MCP_TIMEOUT_MS: { type: 'number', defaultValue: 12000, integer: true, min: 1000, max: 120000 },
 	TRADINGVIEW_MCP_MAX_RETRIES: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 5 },
 	TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: { type: 'number', defaultValue: 12000, integer: true, min: 1000, max: 120000 },
@@ -30,6 +33,10 @@ const PARAMETER_SCHEMA = Object.freeze({
 	GROUNDING_MAX_LENGTH: { type: 'number', defaultValue: 2000, integer: true, min: 1, max: 10000 },
 	ALERT_GROUNDING_COALESCE_MS: { type: 'number', defaultValue: 0, integer: true, min: 0, max: 60000 },
 	NEWS_CACHE_TTL_HOURS: { type: 'number', defaultValue: 6, min: 0, max: 720 },
+	NEWS_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 1000000 },
+	NEWS_DELIVERY_LOCK_MAX_ENTRIES: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 100000 },
+	URL_SHORTENER_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 100000 },
+	URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: { type: 'number', defaultValue: 32, integer: true, min: 1, max: 1024 },
 	BINANCE_FETCH_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
 	TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: {
 		type: 'string',
@@ -83,6 +90,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	REQUEST_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },
 	ENABLE_BINANCE_ORDER_AUDIT: { type: 'boolean', defaultValue: false },
 	BINANCE_ORDER_AUDIT_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
 	ENABLE_SYMBOL_ANALYSIS_STORAGE: { type: 'boolean', defaultValue: false },
@@ -93,8 +101,11 @@ const PARAMETER_SCHEMA = Object.freeze({
 	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
 	// notification destinations — must remain deployment-controlled.
 	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
-	// ENABLE_TEST_ALERT, TEST_ALERT_DAILY_LIMIT excluded:
-	// route-enablement gate and abuse rate-limiting controls must remain deployment-controlled.
+	// ENABLE_TEST_ALERT, TEST_ALERT_DAILY_LIMIT, ENABLE_ADMIN_SSE excluded:
+	// route-enablement gates and abuse rate-limiting controls must remain deployment-controlled.
+	ADMIN_SSE_MAX_CLIENT_CONNECTIONS: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 20 },
+	ADMIN_SSE_MAX_TOTAL_CONNECTIONS: { type: 'number', defaultValue: 100, integer: true, min: 10, max: 1000 },
+	ADMIN_SSE_HEARTBEAT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 5000, max: 120000 },
 });
 
 let remoteOverrides = {};
