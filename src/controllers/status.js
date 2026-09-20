@@ -34,6 +34,7 @@ const {
 	getNewsMonitorPauseState,
 } = require('./webhooks/handlers/newsMonitor/pauseState');
 const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTracker');
+const { getSelfTestService } = require('./diagnostics/selftest');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -500,6 +501,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				rateLimitState: getTestAlertRateLimitState(),
 			},
 			tokenCostBudget: tokenCostBudgetService.getBudgetStatus(),
+			selfTest: getSelfTestService().getStatus(),
 		},
 	};
 }
