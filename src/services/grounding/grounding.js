@@ -13,6 +13,7 @@ const metrics = require('./metrics');
 const sentryService = require('../monitoring/SentryService');
 const { deriveAssetContext, deriveCleanSearchQuery } = require('../tradingview/parseTradingViewSignal');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { registerGlobalUsage, tokenCostBudgetService } = require('../../lib/tokenUsage');
 
 const promptService = getPromptService();
 const coalescedSearches = new Map();
@@ -84,6 +85,11 @@ function getCoalescingStatus() {
  * @returns {Promise<string>} Optimized search query
  */
 async function deriveSearchQuery(alertText, opts = {}) {
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Grounding] Daily token cost budget exceeded, returning raw alert text as search query');
+		return alertText;
+	}
+
 	try {
 		const { systemPrompt, userPrompt } = await promptService.getChatPrompt(
 			PromptKeys.SEARCH_QUERY_DERIVATION,
@@ -96,8 +102,11 @@ async function deriveSearchQuery(alertText, opts = {}) {
 			opts: { temperature: opts.temperature, signal: opts.signal },
 		});
 
-		if (opts.tokenUsage && response.usage) {
-			opts.tokenUsage.addUsage(response.usage, GEMINI_MODEL_NAME);
+		if (response && response.usage) {
+			registerGlobalUsage(response.usage, GEMINI_MODEL_NAME);
+			if (opts.tokenUsage) {
+				opts.tokenUsage.addUsage(response.usage, GEMINI_MODEL_NAME);
+			}
 		}
 
 		if (!response || !response.text) {
@@ -123,6 +132,19 @@ function getEffectiveGroundingMaxLength() {
  * @returns {Promise<GeminiResponse>} Summary with citations
  */
 async function groundAlert({ text, options = {} }) {
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Grounding] Daily token cost budget exceeded, returning ungrounded alert fallback');
+		return {
+			text,
+			sentiment: 'NEUTRAL',
+			sentiment_score: 0,
+			insights: [],
+			sources: [],
+			confidence: 0.5,
+			budgetExceeded: true,
+		};
+	}
+
 	const runtimeConfig = getRuntimeConfig();
 	const {
 		maxSources = runtimeConfig.GROUNDING_MAX_SOURCES,
@@ -179,8 +201,11 @@ async function groundAlert({ text, options = {} }) {
 
 		const { results: searchResults, totalResults, searchResultText, usage: searchUsage } = searchResponse;
 
-		if (ownsSearchUsage && tokenUsage && searchUsage) {
-			tokenUsage.addUsage(searchUsage, GROUNDING_MODEL_NAME);
+		if (ownsSearchUsage && searchUsage) {
+			registerGlobalUsage(searchUsage, GROUNDING_MODEL_NAME);
+			if (tokenUsage) {
+				tokenUsage.addUsage(searchUsage, GROUNDING_MODEL_NAME);
+			}
 		}
 		console.debug(`[Grounding] Retrieved ${searchResults.length}/${totalResults} search results for query: ${searchQuery}`);
 

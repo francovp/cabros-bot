@@ -461,5 +461,37 @@ describe('OpenAPI contract', () => {
 			expect(statusExample.dependencies.newsMonitorDedup.cacheSize.deliveryLockMaxEntries).toBe(1000);
 			expect(contract.components.schemas.Status.description).toContain('dependencies.newsMonitorDedup reports');
 		});
+
+		it('documents TokenCostBudgetDependency schema and references it under Status dependencies', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const budgetRef = contract.components.schemas.Status.properties.dependencies.properties.tokenCostBudget;
+			expect(budgetRef).toEqual({
+				$ref: '#/components/schemas/TokenCostBudgetDependency',
+			});
+
+			const budgetSchema = contract.components.schemas.TokenCostBudgetDependency;
+			expect(budgetSchema).toBeDefined();
+			expect(budgetSchema.type).toBe('object');
+			expect(budgetSchema.required).toEqual(
+				expect.arrayContaining([
+					'enabled',
+					'configured',
+					'ready',
+					'status',
+					'dailySpendUsd',
+					'budgetUsd',
+					'utilizationPct',
+					'alertsSent',
+					'lastResetAt',
+				]),
+			);
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.dependencies.tokenCostBudget).toBeDefined();
+			expect(statusExample.dependencies.tokenCostBudget.budgetUsd).toBe(5);
+			expect(statusExample.featureFlags.tokenCostBudget).toBe(false);
+		});
 	});
 });

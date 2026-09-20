@@ -17,7 +17,7 @@ const {
 const { getAzureAIClient } = require('../inference/azureAiClient');
 const { getOpenRouterClient } = require('../inference/openRouterClient');
 const { getCloudflareAiClient } = require('../inference/cloudflareAiClient');
-const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
+const { normalizeUsageMetadata, tokenCostBudgetService } = require('../../lib/tokenUsage');
 const sentryService = require('../monitoring/SentryService');
 const geminiQuotaManager = require('./geminiQuotaManager');
 
@@ -255,6 +255,11 @@ class GenaiClient {
 			throw signal.reason || new Error('Grounding timeout');
 		}
 
+		if (tokenCostBudgetService.isBudgetExceeded()) {
+			console.warn('[genaiClient] Daily token cost budget exceeded. Falling back to Brave Search for grounding.');
+			return this._executeBraveSearch(query, maxResults, signal);
+		}
+
 		// Logic: Force Brave -> Google -> Fallback Brave
 		// Access FORCE_BRAVE_SEARCH dynamically from config object
 		if (FORCE_BRAVE_SEARCH) {
@@ -434,6 +439,13 @@ class GenaiClient {
          * @returns {Promise<{text: string, citations: Array}>} Response text and citations
          */
 	async llmCallv2({ systemPrompt, userPrompt, context = {}, opts = {} }) {
+		if (tokenCostBudgetService.isBudgetExceeded()) {
+			const error = new Error('Daily token cost budget exceeded');
+			error.code = 'TOKEN_BUDGET_EXCEEDED';
+			error.status = 429;
+			throw error;
+		}
+
 		let lastError;
 
 		// 1. Try Gemini
