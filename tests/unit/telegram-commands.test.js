@@ -3,11 +3,19 @@ jest.mock('../../src/services/jobs/JobService', () => ({
 		createJob: jest.fn(),
 		listJobs: jest.fn(),
 		getJob: jest.fn(),
+		validateJobRequest: jest.fn(),
 	},
 }));
 
 jest.mock('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor', () => ({
 	getNewsMonitor: jest.fn(),
+}));
+
+jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
+	tradingViewMcpService: {
+		getStatus: jest.fn(),
+		syncDurableStatus: jest.fn().mockResolvedValue(null),
+	},
 }));
 
 jest.mock('../../src/services/monitoring/SentryService', () => ({
@@ -25,6 +33,7 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 const { captureRuntimeError } = require('../../src/services/monitoring/SentryService');
 const { jobService } = require('../../src/services/jobs/JobService');
 const { getNewsMonitor } = require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
+const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const {
 	cryptoBotCmd,
@@ -37,11 +46,22 @@ const {
 	buildHelpMessage,
 	getTelegramCommandMenu,
 	parseCommandArgs,
+	getTradingViewReadinessWarning,
+	formatReadinessErrorLabel,
+	sendReadinessWarning,
+	telegramCommandRateLimiter,
+	setWarningReplyTimeoutMsForTest,
 } = require('../../src/controllers/commands');
 
 function buildContext(text) {
+	const commandToken = text.trim().split(/\s+/, 1)[0];
 	return {
-		message: { text },
+		message: {
+			text,
+			entities: commandToken.startsWith('/')
+				? [{ type: 'bot_command', offset: 0, length: commandToken.length }]
+				: [],
+		},
 		update: {
 			message: {
 				chat: { id: 123 },
@@ -55,6 +75,153 @@ function buildContext(text) {
 describe('Telegram TradingView commands', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		telegramCommandRateLimiter.reset();
+		delete process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING;
+		delete process.env.TELEGRAM_COMMAND_RATE_LIMITS_JSON;
+	});
+
+	it('limits expensive commands per chat and returns a cooldown reply', async () => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner'));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+
+		const otherChat = buildContext('/scanner');
+		otherChat.update.message.chat.id = 456;
+		await telegramCommandRateLimiter(otherChat, next);
+		expect(next).toHaveBeenCalledTimes(4);
+	});
+
+	it.each(['/analysis', '/news'])('applies canonical limits to the %s alias', async (command) => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext(command));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
+	it('does not charge uppercase command entities that Telegraf will not dispatch', async () => {
+		const next = jest.fn();
+		for (const context of Array.from({ length: 3 }, () => buildContext('/SCANNER'))) {
+			await telegramCommandRateLimiter(context, next);
+		}
+
+		const lowercaseCommand = buildContext('/scanner');
+		await telegramCommandRateLimiter(lowercaseCommand, next);
+
+		expect(next).toHaveBeenCalledTimes(4);
+		expect(lowercaseCommand.reply).not.toHaveBeenCalled();
+	});
+
+	it('does not charge plain text against a command bucket', async () => {
+		const next = jest.fn();
+		const plainText = buildContext('scanner');
+
+		await telegramCommandRateLimiter(plainText, next);
+		for (const context of Array.from({ length: 3 }, () => buildContext('/scanner'))) {
+			await telegramCommandRateLimiter(context, next);
+		}
+		const fourthCommand = buildContext('/scanner');
+		await telegramCommandRateLimiter(fourthCommand, next);
+
+		expect(next).toHaveBeenCalledTimes(4);
+		expect(fourthCommand.reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
+	it('uses the bot command entity when punctuation follows the command', async () => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner,'));
+		for (const context of contexts) {
+			context.message.entities = [{ type: 'bot_command', offset: 0, length: '/scanner'.length }];
+			await telegramCommandRateLimiter(context, next);
+		}
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
+	it('does not charge commands addressed to another bot', async () => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner@other_bot'));
+		for (const context of contexts) {
+			context.me = 'cabros_bot';
+			await telegramCommandRateLimiter(context, next);
+		}
+
+		expect(next).toHaveBeenCalledTimes(4);
+		expect(contexts[3].reply).not.toHaveBeenCalled();
+	});
+
+	it('falls back when a command max override exceeds the operational bound', async () => {
+		process.env.TELEGRAM_COMMAND_RATE_LIMITS_JSON = JSON.stringify({
+			scanner: { max: 1001, windowMs: 60_000 },
+		});
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner'));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
+	it('falls back when a command window override exceeds the operational bound', async () => {
+		jest.useFakeTimers({ now: 0 });
+		process.env.TELEGRAM_COMMAND_RATE_LIMITS_JSON = JSON.stringify({
+			scanner: { max: 1, windowMs: 86_400_001 },
+		});
+		const next = jest.fn();
+
+		await telegramCommandRateLimiter(buildContext('/scanner'), next);
+		jest.advanceTimersByTime(2 * 60 * 60 * 1000);
+		await telegramCommandRateLimiter(buildContext('/scanner'), next);
+
+		expect(next).toHaveBeenCalledTimes(2);
+		jest.useRealTimers();
+	});
+
+	it('falls back when command limit overrides are not JSON numbers', async () => {
+		process.env.TELEGRAM_COMMAND_RATE_LIMITS_JSON = JSON.stringify({
+			scanner: { max: '3', windowMs: true },
+		});
+		const next = jest.fn();
+		const contexts = Array.from({ length: 4 }, () => buildContext('/scanner'));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(3);
+		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
+	it('does not evict an active bucket when the chat map reaches its cap', async () => {
+		const next = jest.fn();
+		const activeChat = 0;
+
+		for (const context of Array.from({ length: 3 }, () => buildContext('/scanner'))) {
+			context.update.message.chat.id = activeChat;
+			await telegramCommandRateLimiter(context, next);
+		}
+		for (let chatId = 1; chatId <= 9999; chatId += 1) {
+			const context = buildContext('/scanner');
+			context.update.message.chat.id = chatId;
+			await telegramCommandRateLimiter(context, next);
+		}
+
+		const newChat = buildContext('/scanner');
+		newChat.update.message.chat.id = 10000;
+		await telegramCommandRateLimiter(newChat, next);
+
+		const activeChatAfterCap = buildContext('/scanner');
+		activeChatAfterCap.update.message.chat.id = activeChat;
+		await telegramCommandRateLimiter(activeChatAfterCap, next);
+
+		expect(activeChatAfterCap.reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+		expect(newChat.reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
 	});
 
 	it('parses command args into positionals and key/value options', () => {
@@ -227,6 +394,231 @@ describe('Telegram TradingView commands', () => {
 		await marketScannerCmd(context);
 
 		expect(context.reply).toHaveBeenCalledWith('Comando inválido: Market scanner is not enabled');
+	});
+
+	describe('TradingView MCP readiness check', () => {
+		it('warns but still creates the job when MCP readiness is degraded', async () => {
+			jobService.createJob.mockResolvedValue({
+				success: true,
+				jobId: 'job-degraded',
+				status: 'pending',
+			});
+			tradingViewMcpService.getStatus.mockReturnValue({
+				status: 'degraded',
+				lastErrorCategory: 'http_5xx',
+			});
+			const context = buildContext('/scanner scans=top_gainers');
+
+			await marketScannerCmd(context);
+
+			expect(context.reply).toHaveBeenCalledTimes(2);
+			expect(context.reply.mock.calls[0][0]).toContain('degradado');
+			expect(context.reply.mock.calls[0][0]).toContain('HTTP 5xx');
+			expect(context.reply.mock.calls[1][0]).toContain('Job job-degraded creado');
+			expect(jobService.createJob).toHaveBeenCalledTimes(1);
+		});
+
+		it('does not warn when MCP readiness is unknown (first call)', async () => {
+			jobService.createJob.mockResolvedValue({
+				success: true,
+				jobId: 'job-unknown',
+				status: 'pending',
+			});
+			tradingViewMcpService.getStatus.mockReturnValue({ status: 'unknown' });
+			const context = buildContext('/analisis BINANCE:BTCUSDT');
+
+			await expandedAnalysisCmd(context);
+
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			expect(context.reply.mock.calls[0][0]).toContain('Job job-unknown creado');
+		});
+
+		it('does not warn when MCP readiness is ready', async () => {
+			jobService.createJob.mockResolvedValue({
+				success: true,
+				jobId: 'job-ready',
+				status: 'pending',
+			});
+			tradingViewMcpService.getStatus.mockReturnValue({ status: 'ready' });
+			const context = buildContext('/analisis BINANCE:BTCUSDT');
+
+			await expandedAnalysisCmd(context);
+
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			expect(context.reply.mock.calls[0][0]).toContain('Job job-ready creado');
+		});
+
+		it('still creates the job when readiness probe throws (fail-open)', async () => {
+			jobService.createJob.mockResolvedValue({
+				success: true,
+				jobId: 'job-failopen',
+				status: 'pending',
+			});
+			tradingViewMcpService.getStatus.mockImplementation(() => {
+				throw new Error('readiness probe exploded');
+			});
+			const context = buildContext('/scanner scans=top_gainers');
+
+			await marketScannerCmd(context);
+
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			expect(context.reply.mock.calls[0][0]).toContain('Job job-failopen creado');
+			expect(jobService.createJob).toHaveBeenCalledTimes(1);
+		});
+
+		it('warns even when degraded readiness has no lastErrorCategory', async () => {
+			jobService.createJob.mockResolvedValue({
+				success: true,
+				jobId: 'job-nocat',
+				status: 'pending',
+			});
+			tradingViewMcpService.getStatus.mockReturnValue({ status: 'degraded' });
+			const context = buildContext('/scanner scans=top_gainers');
+
+			await marketScannerCmd(context);
+
+			expect(context.reply).toHaveBeenCalledTimes(2);
+			expect(context.reply.mock.calls[0][0]).toContain('degradado');
+			expect(context.reply.mock.calls[0][0]).not.toContain('último error');
+		});
+
+		it('still creates the job when readiness warning reply times out', async () => {
+			setWarningReplyTimeoutMsForTest(20);
+			try {
+				jobService.createJob.mockResolvedValue({
+					success: true,
+					jobId: 'job-timeout-reply',
+					status: 'pending',
+				});
+				tradingViewMcpService.getStatus.mockReturnValue({
+					status: 'degraded',
+					lastErrorCategory: 'timeout',
+				});
+				const context = buildContext('/scanner scans=top_gainers');
+				// Warning reply hangs and takes longer than 20ms
+				context.reply.mockImplementationOnce(() => new Promise((resolve) => setTimeout(resolve, 80)));
+
+				await marketScannerCmd(context);
+
+				expect(jobService.createJob).toHaveBeenCalledTimes(1);
+				expect(context.reply).toHaveBeenCalledTimes(2);
+				expect(context.reply.mock.calls[1][0]).toContain('Job job-timeout-reply creado');
+			} finally {
+				setWarningReplyTimeoutMsForTest();
+			}
+		});
+
+		it('does not send readiness warning when request validation fails', async () => {
+			const error = new Error('Market scanner is not enabled');
+			error.code = 'FEATURE_DISABLED';
+			jobService.validateJobRequest.mockImplementationOnce(() => {
+				throw error;
+			});
+			tradingViewMcpService.getStatus.mockReturnValue({
+				status: 'degraded',
+				lastErrorCategory: 'http_5xx',
+			});
+			const context = buildContext('/scanner');
+
+			await marketScannerCmd(context);
+
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			expect(context.reply).toHaveBeenCalledWith('Comando inválido: Market scanner is not enabled');
+			expect(jobService.createJob).not.toHaveBeenCalled();
+		});
+
+		it('exposes readiness warning helper for tests', async () => {
+			tradingViewMcpService.getStatus.mockReturnValue({
+				status: 'degraded',
+				lastErrorCategory: 'timeout',
+			});
+			expect(await getTradingViewReadinessWarning()).toContain('timeout');
+			tradingViewMcpService.getStatus.mockReturnValue({ status: 'ready' });
+			expect(await getTradingViewReadinessWarning()).toBeNull();
+			tradingViewMcpService.getStatus.mockReturnValue({ status: 'unknown' });
+			expect(await getTradingViewReadinessWarning()).toBeNull();
+			tradingViewMcpService.getStatus.mockImplementation(() => {
+				throw new Error('boom');
+			});
+			expect(await getTradingViewReadinessWarning()).toBeNull();
+		});
+
+		it('syncs durable status before checking readiness and handles sync failure fail-open', async () => {
+			tradingViewMcpService.syncDurableStatus.mockRejectedValueOnce(new Error('Firestore network error'));
+			tradingViewMcpService.getStatus.mockReturnValue({
+				status: 'degraded',
+				lastErrorCategory: 'circuit_breaker_open',
+			});
+			const warning = await getTradingViewReadinessWarning();
+			expect(tradingViewMcpService.syncDurableStatus).toHaveBeenCalled();
+			expect(warning).toContain('circuit breaker abierto');
+		});
+
+		it('passes signal to warning reply via callApi and aborts stalled telegram request on timeout', async () => {
+			setWarningReplyTimeoutMsForTest(20);
+			try {
+				jobService.createJob.mockResolvedValue({
+					success: true,
+					jobId: 'job-abort-callapi',
+					status: 'pending',
+				});
+				tradingViewMcpService.getStatus.mockReturnValue({
+					status: 'degraded',
+					lastErrorCategory: 'timeout',
+				});
+				const context = buildContext('/scanner scans=top_gainers');
+				let receivedSignal;
+				context.telegram.callApi = jest.fn().mockImplementation((method, payload, options) => {
+					receivedSignal = options && options.signal;
+					return new Promise((resolve) => setTimeout(resolve, 80));
+				});
+
+				await marketScannerCmd(context);
+
+				expect(context.telegram.callApi).toHaveBeenCalledTimes(1);
+				expect(context.telegram.callApi).toHaveBeenCalledWith(
+					'sendMessage',
+					expect.objectContaining({ chat_id: 123, text: expect.stringContaining('degradado') }),
+					expect.objectContaining({ signal: expect.any(Object) })
+				);
+				expect(receivedSignal).toBeDefined();
+				expect(receivedSignal.aborted).toBe(true);
+				expect(jobService.createJob).toHaveBeenCalledTimes(1);
+			} finally {
+				setWarningReplyTimeoutMsForTest();
+			}
+		});
+
+		it('sendReadinessWarning helper dispatches to context.telegram.callApi with signal or context.reply', async () => {
+			const callApiMock = jest.fn().mockResolvedValue({ message_id: 1 });
+			const contextWithCallApi = {
+				update: { message: { chat: { id: 456 } } },
+				telegram: { callApi: callApiMock },
+				reply: jest.fn(),
+			};
+			const testSignal = new AbortController().signal;
+			await sendReadinessWarning(contextWithCallApi, 'warn', testSignal);
+			expect(callApiMock).toHaveBeenCalledWith('sendMessage', { chat_id: 456, text: 'warn' }, { signal: testSignal });
+			expect(contextWithCallApi.reply).not.toHaveBeenCalled();
+
+			const replyMock = jest.fn().mockResolvedValue({ message_id: 2 });
+			const contextWithReplyOnly = {
+				reply: replyMock,
+			};
+			await sendReadinessWarning(contextWithReplyOnly, 'warn2', testSignal);
+			expect(replyMock).toHaveBeenCalledWith('warn2', { signal: testSignal });
+		});
+
+		it('maps known and unknown readiness error categories to labels', () => {
+			expect(formatReadinessErrorLabel('http_5xx')).toBe('error HTTP 5xx del servidor TradingView');
+			expect(formatReadinessErrorLabel('timeout')).toBe('timeout de TradingView');
+			expect(formatReadinessErrorLabel('circuit_breaker_open')).toBe('circuit breaker abierto por fallos consecutivos');
+			expect(formatReadinessErrorLabel('not_a_real_category')).toBeNull();
+			expect(formatReadinessErrorLabel(null)).toBeNull();
+			expect(formatReadinessErrorLabel('')).toBeNull();
+			expect(formatReadinessErrorLabel(undefined)).toBeNull();
+			expect(formatReadinessErrorLabel(42)).toBeNull();
+		});
 	});
 
 	it('runs the news monitor through its existing handler', async () => {

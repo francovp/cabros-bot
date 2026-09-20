@@ -35,6 +35,27 @@
       "description": "Base delay for Gemini quota retries in milliseconds",
       "valueType": "NUMBER"
     },
+    "NEWS_MAX_ALERTS_PER_BATCH": {
+      "defaultValue": {
+        "value": "10"
+      },
+      "description": "Maximum alerts dispatched per news-monitor batch",
+      "valueType": "NUMBER"
+    },
+    "NEWS_MAX_ALERTS_PER_WINDOW": {
+      "defaultValue": {
+        "value": "20"
+      },
+      "description": "Maximum alerts dispatched across news-monitor volume window",
+      "valueType": "NUMBER"
+    },
+    "NEWS_MAX_ALERTS_PER_WINDOW_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "Sliding window duration in milliseconds for news-monitor volume throttling",
+      "valueType": "NUMBER"
+    },
     "TRADINGVIEW_MCP_TIMEOUT_MS": {
       "defaultValue": {
         "value": "12000"
@@ -117,6 +138,34 @@
         "value": "6"
       },
       "description": "News cache retention TTL in hours",
+      "valueType": "NUMBER"
+    },
+    "NEWS_CACHE_MAX_ENTRIES": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Maximum entries held in the in-memory news cache before LRU eviction kicks in",
+      "valueType": "NUMBER"
+    },
+    "NEWS_DELIVERY_LOCK_MAX_ENTRIES": {
+      "defaultValue": {
+        "value": "1000"
+      },
+      "description": "Maximum entries held in the news cache deliveryLocks map before size-based eviction",
+      "valueType": "NUMBER"
+    },
+    "URL_SHORTENER_CACHE_MAX_ENTRIES": {
+      "defaultValue": {
+        "value": "1000"
+      },
+      "description": "Maximum entries held in the URL shortener LRU cache before eviction",
+      "valueType": "NUMBER"
+    },
+    "URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES": {
+      "defaultValue": {
+        "value": "32"
+      },
+      "description": "Maximum provider entries tracked in URL shortener failure circuit breaker before eviction",
       "valueType": "NUMBER"
     },
     "BINANCE_FETCH_TIMEOUT_MS": {
@@ -231,6 +280,13 @@
       "description": "Retention window in days for tradingSignalOutcomes documents before expiration and cleanup",
       "valueType": "NUMBER"
     },
+    "SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES": {
+      "defaultValue": {
+        "value": ""
+      },
+      "description": "Optional ordered signal outcome entry-price providers; empty preserves asset-class defaults",
+      "valueType": "STRING"
+    },
     "EQUITY_MARKET_DATA_RPM": {
       "defaultValue": {
         "value": "8"
@@ -292,6 +348,20 @@
         "value": "50"
       },
       "description": "Maximum default news-monitor symbols to process per scheduler sweep",
+      "valueType": "NUMBER"
+    },
+    "ALERT_SCHEDULER_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Background sweep interval in milliseconds for the JSON-defined alert scheduler",
+      "valueType": "NUMBER"
+    },
+    "ALERT_SCHEDULER_BATCH_LIMIT": {
+      "defaultValue": {
+        "value": "10"
+      },
+      "description": "Maximum due alert-scheduler entries to execute per sweep",
       "valueType": "NUMBER"
     },
     "ENABLE_GEMINI_GROUNDING": {
@@ -363,10 +433,115 @@
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
+    },
+    "ENABLE_FIRESTORE_NEWS_ANALYSIS": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable Firestore persistence for news-monitor analysis records",
+      "valueType": "BOOLEAN"
+    },
+    "NEWS_ANALYSIS_RETENTION_DAYS": {
+      "defaultValue": {
+        "value": "30"
+      },
+      "description": "Retention window in days for persisted news-monitor analysis records before Firestore TTL expiry",
+      "valueType": "NUMBER"
+    },
+    "REQUEST_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "30000"
+      },
+      "description": "Global request-deadline timeout ceiling in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_BINANCE_ORDER_AUDIT": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable structured Firestore audit logging for Binance order mutations",
+      "valueType": "BOOLEAN"
+    },
+    "BINANCE_ORDER_AUDIT_RETENTION_DAYS": {
+      "defaultValue": {
+        "value": "30"
+      },
+      "description": "Audit log retention in days before Firestore TTL expiry",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_SYMBOL_ANALYSIS_STORAGE": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable Firestore persistence of symbol-analysis results for decision history and accuracy trending",
+      "valueType": "BOOLEAN"
+    },
+    "SYMBOL_ANALYSIS_RETENTION_DAYS": {
+      "defaultValue": {
+        "value": "7"
+      },
+      "description": "Retention window in days for persisted symbol-analysis records before Firestore TTL expiry",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable multi-agent consensus analysis in symbol-analysis webhook",
+      "valueType": "BOOLEAN"
+    },
+    "WHATSAPP_TEMPLATE_PARAM_ORDER": {
+      "defaultValue": {
+        "value": "symbol,price,action,setup,timeframe,source"
+      },
+      "description": "Comma-separated ordered parameter names extracted from the alert for GreenAPI sendTemplate placeholders. Each maps to a field in alert.enriched or alert. Missing fields produce empty strings. WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, and WHATSAPP_TEMPLATE_NAMESPACE are excluded (notification destinations).",
+      "valueType": "STRING"
+    },
+    "ADMIN_SSE_MAX_CLIENT_CONNECTIONS": {
+      "defaultValue": {
+        "value": "5"
+      },
+      "description": "Maximum concurrent SSE event streams per client key (IP, API key, or Firebase UID)",
+      "valueType": "NUMBER"
+    },
+    "ADMIN_SSE_MAX_TOTAL_CONNECTIONS": {
+      "defaultValue": {
+        "value": "100"
+      },
+      "description": "Maximum total active SSE event streams allowed across all clients",
+      "valueType": "NUMBER"
+    },
+    "ADMIN_SSE_HEARTBEAT_MS": {
+      "defaultValue": {
+        "value": "30000"
+      },
+      "description": "Heartbeat interval in milliseconds for SSE comment keepalive frames",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_TOKEN_COST_BUDGET": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable aggregate daily token spend tracking and budget alerting ceiling",
+      "valueType": "BOOLEAN"
+    },
+    "TOKEN_COST_DAILY_BUDGET_USD": {
+      "defaultValue": {
+        "value": "5.0"
+      },
+      "description": "Daily token cost budget in USD (0.01 to 10000.00)",
+      "valueType": "NUMBER"
+    },
+    "TOKEN_COST_WARN_THRESHOLD_PCT": {
+      "defaultValue": {
+        "value": "80"
+      },
+      "description": "Token cost budget warning alert threshold percentage (1 to 100)",
+      "valueType": "NUMBER"
     }
   },
   "version": {
-    "versionNumber": "21",
+    "versionNumber": "22",
     "isLegacy": true
   }
 }

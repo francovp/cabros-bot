@@ -12,6 +12,7 @@ const { tradingViewMcpService } = require('../../src/services/tradingview/Tradin
 const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -78,11 +79,11 @@ describe('Status endpoints', () => {
 		process.env.NODE_ENV = 'test';
 		delete process.env.SENTRY_ENVIRONMENT;
 		process.env.ENABLE_TELEGRAM_BOT = 'true';
-		process.env.BOT_TOKEN = 'token';
+		process.env.BOT_TOKEN = 'secret-bot-token';
 		process.env.TELEGRAM_CHAT_ID = '123';
 		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
 		process.env.WHATSAPP_API_URL = 'https://greenapi.example/';
-		process.env.WHATSAPP_API_KEY = 'key';
+		process.env.WHATSAPP_API_KEY = 'secret-whatsapp-key';
 		process.env.WHATSAPP_CHAT_ID = 'chat';
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';
 		process.env.GEMINI_API_KEY = 'gemini-key';
@@ -106,6 +107,7 @@ describe('Status endpoints', () => {
 		geminiQuotaManager.resetForTesting();
 		groundingMetrics.resetForTesting();
 		deliveryMetricsService.resetForTesting();
+		firestoreWriteMetricsService.resetForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
@@ -194,6 +196,14 @@ describe('Status endpoints', () => {
 				lastStateChangeAt: null,
 				failureThreshold: 5,
 				cooldownMs: 600000,
+			},
+			errorCategoryCounts: {
+				circuit_breaker_open: 0,
+				http_5xx: 0,
+				http_4xx: 0,
+				timeout: 0,
+				invalid_response: 0,
+				request_failed: 0,
 			},
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
@@ -536,6 +546,11 @@ describe('Status endpoints', () => {
 			lastRunPendingCount: 0,
 			lastRunErrorCount: 0,
 			shutdownRequested: false,
+			entryPriceSources: {
+				configured: false,
+				crypto: ['mcp', 'binance', 'gemini'],
+				equity: ['twelve-data'],
+			},
 		});
 	});
 
@@ -855,6 +870,24 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports news monitor volume tracking status and window usage', async () => {
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitor).toEqual(
+			expect.objectContaining({
+				enabled: true,
+				paused: false,
+				alertsDelivered: 0,
+				alertsThrottled: 0,
+				windowResetsAt: expect.any(String),
+			})
+		);
+	});
+
 	it('reports the primary news monitor Gemini provider separately from Gemini search readiness', async () => {
 		process.env.ENABLE_GEMINI_GROUNDING = 'false';
 		process.env.ENABLE_NEWS_MONITOR = 'true';
@@ -1129,6 +1162,14 @@ describe('Status endpoints', () => {
 				lastStateChangeAt: null,
 				failureThreshold: 5,
 				cooldownMs: 600000,
+			},
+			errorCategoryCounts: {
+				circuit_breaker_open: 0,
+				http_5xx: 0,
+				http_4xx: 0,
+				timeout: 0,
+				invalid_response: 0,
+				request_failed: 0,
 			},
 		});
 	});
@@ -1588,8 +1629,8 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 		const serializedBody = JSON.stringify(response.body);
 
-		expect(serializedBody).not.toContain('token');
-		expect(serializedBody).not.toContain('key');
+		expect(serializedBody).not.toContain('secret-bot-token');
+		expect(serializedBody).not.toContain('secret-whatsapp-key');
 		expect(serializedBody).not.toContain('gemini-key');
 		expect(serializedBody).not.toContain('https://dsn.example');
 		expect(serializedBody).not.toContain('https://greenapi.example/');
@@ -1650,7 +1691,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: false,
 			configured: false,
 			ready: false,
@@ -1658,6 +1699,8 @@ describe('Status endpoints', () => {
 			mode: 'in-memory',
 			backend: null,
 		});
+		expect(response.body.dependencies.newsMonitorDedup.cacheSize).toBeDefined();
+		expect(typeof response.body.dependencies.newsMonitorDedup.cacheSize.entries).toBe('number');
 	});
 
 	it('reports news monitor deduplication as persistent (firestore) when enabled', async () => {
@@ -1668,7 +1711,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: true,
 			configured: true,
 			ready: true,
@@ -1690,7 +1733,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: true,
 			configured: true,
 			ready: true,
@@ -1712,7 +1755,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: false,
 			configured: false,
 			ready: false,
@@ -1776,8 +1819,11 @@ describe('Status endpoints', () => {
 		expect(disabledResponse.body.dependencies.notificationRedrive).toMatchObject({
 			enabled: false,
 			role: 'web',
+			workerRole: 'web',
 			running: false,
 			pendingCount: 0,
+			lastSweepAt: null,
+			lastSweepResult: null,
 		});
 
 		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
@@ -1791,8 +1837,104 @@ describe('Status endpoints', () => {
 		expect(enabledResponse.body.dependencies.notificationRedrive).toMatchObject({
 			enabled: true,
 			role: 'worker',
+			workerRole: 'worker',
 			batchLimit: 50,
 			maxAttempts: 5,
+		});
+		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepAt).toBeNull();
+		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepResult).toBeNull();
+	});
+
+	it('waits for the initial notification redrive heartbeat before serializing status', async () => {
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
+		const statusController = require('../../src/controllers/status');
+		const service = require('../../src/services/notification/NotificationRedriveService').notificationRedriveService;
+		let releaseSync;
+		let responseSettled = false;
+		const response = {
+			status: jest.fn().mockReturnThis(),
+			json: jest.fn(),
+		};
+		const getFirestoreSpy = jest.spyOn(service, 'getFirestore').mockReturnValue({});
+		const getStatusSpy = jest.spyOn(service, 'getStatus');
+		const syncSpy = jest.spyOn(service, 'syncWorkerTelemetry').mockImplementation(() => new Promise((resolve) => {
+			releaseSync = () => {
+				service.persistedPendingCount = 6;
+				service.persistedLastSweepAt = new Date('2026-09-14T08:00:00.000Z');
+				resolve(true);
+			};
+		}));
+
+		try {
+			const responsePromise = Promise.resolve(statusController.getApiStatus({}, response))
+				.then(() => {
+					responseSettled = true;
+				});
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(syncSpy).toHaveBeenCalledTimes(1);
+			expect(responseSettled).toBe(false);
+
+			releaseSync();
+			await responsePromise;
+			expect(response.status).toHaveBeenCalledWith(200);
+			expect(response.json).toHaveBeenCalledTimes(1);
+			expect(getStatusSpy).toHaveBeenCalledWith({ skipTelemetrySync: true });
+			expect(syncSpy).toHaveBeenCalledTimes(1);
+			expect(response.json.mock.calls[0][0].dependencies.notificationRedrive.pendingCount).toBe(6);
+			expect(response.json.mock.calls[0][0].dependencies.notificationRedrive.lastSweepAt).toBe('2026-09-14T08:00:00.000Z');
+		} finally {
+			releaseSync?.();
+			syncSpy.mockRestore();
+			getStatusSpy.mockRestore();
+			getFirestoreSpy.mockRestore();
+			service._resetForTesting();
+		}
+	});
+
+	it('exposes structured lastSweepResult with processed/succeeded/exhausted/errors after a sweep', async () => {
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
+		const service = require('../../src/services/notification/NotificationRedriveService').notificationRedriveService;
+		service.lastSweepAt = new Date('2026-08-30T00:00:00.000Z');
+		service.lastSweepResult = {
+			processed: 8,
+			succeeded: 3,
+			exhausted: 2,
+			errors: 1,
+		};
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.notificationRedrive.lastSweepAt).toBe('2026-08-30T00:00:00.000Z');
+		expect(response.body.dependencies.notificationRedrive.lastSweepResult).toEqual({
+			processed: 8,
+			succeeded: 3,
+			exhausted: 2,
+			errors: 1,
+		});
+		service._resetForTesting();
+	});
+
+	it('reports testAlert feature flag and dependency status', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.testAlert).toBe(true);
+		expect(response.body.dependencies.testAlert).toEqual({
+			enabled: true,
+			lastRunAt: null,
+			lastRunStatus: null,
+			rateLimitState: {
+				windowMs: 60000,
+				dailyLimit: 30,
+				dailyRunsToday: 0,
+			},
 		});
 	});
 
@@ -1861,4 +2003,69 @@ describe('Status endpoints', () => {
 			}),
 		}));
 	});
+
+	it('omits firestoreWriteMetrics when no writes have been recorded', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies).not.toHaveProperty('firestoreWriteMetrics');
+	});
+
+	it('exposes firestoreWriteMetrics counters after alert and job writes', async () => {
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+		firestoreWriteMetricsService.recordWriteFailure('alerts');
+		firestoreWriteMetricsService.recordWriteSuccess('jobs');
+		firestoreWriteMetricsService.recordWriteFailure('jobs');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const metrics = response.body.dependencies.firestoreWriteMetrics;
+		expect(metrics).toEqual(expect.objectContaining({
+			writesAttempted: 5,
+			writesSucceeded: 3,
+			writesFailed: 2,
+			successRate: 3 / 5,
+			window: expect.objectContaining({
+				startedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+				durationMs: expect.any(Number),
+			}),
+			byDomain: expect.objectContaining({
+				alerts: expect.objectContaining({ success: 2, failure: 1, total: 3, successRate: 2 / 3 }),
+				jobs: expect.objectContaining({ success: 1, failure: 1, total: 2, successRate: 0.5 }),
+			}),
+		}));
+	});
+
+	it('aliases /api/capabilities to expose firestoreWriteMetrics', async () => {
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestoreWriteMetrics).toEqual(expect.objectContaining({
+			writesSucceeded: 1,
+			writesFailed: 0,
+		}));
+	});
+
+	it('invokes tokenCostBudgetService.syncSharedSpendThrottled before returning status', async () => {
+		const { tokenCostBudgetService } = require('../../src/lib/tokenUsage');
+		const syncSpy = jest.spyOn(tokenCostBudgetService, 'syncSharedSpendThrottled').mockResolvedValue();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(syncSpy).toHaveBeenCalled();
+	});
 });
+

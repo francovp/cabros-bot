@@ -86,6 +86,24 @@ describe('JobService Unit Tests', () => {
 			expect(result.status).toBe('processing');
 		});
 
+		it('persists market-scanner scan-specific options for background execution', async () => {
+			const metadata = await jobService.createJob('market-scanner', {
+				scans: ['rating_filter', 'consecutive_candles_scan'],
+				rating: -2,
+				pattern_type: 'bearish',
+				candle_count: 4,
+				min_growth: 1.5,
+			});
+
+			const rawJob = await jobService.repository.get(metadata.jobId);
+			expect(rawJob.requestMetadata).toEqual(expect.objectContaining({
+				rating: -2,
+				pattern_type: 'bearish',
+				candle_count: 4,
+				min_growth: 1.5,
+			}));
+		});
+
 		it('correctly validates and parses timeoutMs string format like 1e3', async () => {
 			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
@@ -2180,6 +2198,34 @@ describe('JobService Unit Tests', () => {
 			} finally {
 				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
 				lookupSpy.mockRestore();
+			}
+		});
+	});
+
+	describe('_broadcastJobProgress', () => {
+		it('broadcasts job-progress and scanner-result with persisted job.summary', () => {
+			const { adminSseService } = require('../../src/services/sse/AdminSseService');
+			const broadcastSpy = jest.spyOn(adminSseService, 'broadcast').mockImplementation(() => {});
+
+			try {
+				jobService._broadcastJobProgress({
+					jobId: 'job-summary-test',
+					type: 'market-scanner',
+					status: 'completed',
+					summary: { total: 5, passed: 3 },
+				});
+
+				expect(broadcastSpy).toHaveBeenCalledWith('job-progress', expect.objectContaining({
+					jobId: 'job-summary-test',
+					summary: { total: 5, passed: 3 },
+				}));
+
+				expect(broadcastSpy).toHaveBeenCalledWith('scanner-result', expect.objectContaining({
+					jobId: 'job-summary-test',
+					summary: { total: 5, passed: 3 },
+				}));
+			} finally {
+				broadcastSpy.mockRestore();
 			}
 		});
 	});

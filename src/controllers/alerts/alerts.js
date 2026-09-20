@@ -1,9 +1,11 @@
 'use strict';
 
+const crypto = require('crypto');
 const alertStorageService = require('../../services/storage/AlertStorageService');
 const alertFeedbackStorageService = require('../../services/storage/AlertFeedbackStorageService');
 const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
+const { parseTelegramTopicRoutes, resolveTelegramThreadId } = require('../../services/notification/telegramTopicRouting');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -12,6 +14,8 @@ const DEFAULT_SUMMARY_LIMIT = 500;
 const MAX_SUMMARY_LIMIT = 1000;
 const DEFAULT_EXPORT_LIMIT = 500;
 const MAX_EXPORT_LIMIT = 1000;
+const MAX_BATCH_REPLAY_LIMIT = 50;
+const MAX_BATCH_DELETE_LIMIT = 500;
 const EXPORT_FIELDS = [
 	'id',
 	'requestId',
@@ -29,6 +33,7 @@ const EXPORT_FIELDS = [
 	'deliveryResults',
 	'suppressedRepeat',
 	'tokenUsage',
+	'enrichmentData',
 	'text',
 ];
 
@@ -59,6 +64,43 @@ function parseEnriched(rawEnriched) {
 	}
 
 	return null;
+}
+
+const ALLOWED_INCLUDE_VALUES = new Set(['enrichment_summary']);
+
+function parseInclude(rawInclude) {
+	if (rawInclude === undefined || rawInclude === null || rawInclude === '') {
+		return { success: true, values: [] };
+	}
+
+	let items = [];
+	if (Array.isArray(rawInclude)) {
+		items = rawInclude.flatMap((item) => (typeof item === 'string' ? item.split(',') : []));
+	} else if (typeof rawInclude === 'string') {
+		items = rawInclude.split(',');
+	} else {
+		return {
+			success: false,
+			error: 'Invalid include parameter. Allowed values: enrichment_summary.',
+		};
+	}
+
+	const normalized = [];
+	for (const item of items) {
+		const trimmed = item.trim();
+		if (!trimmed) {
+			continue;
+		}
+		if (!ALLOWED_INCLUDE_VALUES.has(trimmed)) {
+			return {
+				success: false,
+				error: `Invalid include parameter '${trimmed}'. Allowed values: enrichment_summary.`,
+			};
+		}
+		normalized.push(trimmed);
+	}
+
+	return { success: true, values: Array.from(new Set(normalized)) };
 }
 
 function parseSummaryLimit(rawLimit) {
@@ -125,6 +167,23 @@ function parseOptionalTimestamp(rawValue, name) {
 	return { value: new Date(rawValue).toISOString() };
 }
 
+function parseStringFilter(rawValue, filterName, maxLength = 64) {
+	if (rawValue === undefined) {
+		return { value: undefined };
+	}
+
+	if (typeof rawValue !== 'string' || !rawValue.trim() || rawValue.trim().length > maxLength) {
+		return {
+			error: {
+				error: `Invalid ${filterName} filter. Use a non-empty string up to ${maxLength} characters.`,
+				code: 'INVALID_REQUEST',
+			},
+		};
+	}
+
+	return { value: rawValue.trim() };
+}
+
 function listAlerts(req, res) {
 	return handleAsync(req, res, '/api/alerts', async () => {
 		if (!alertStorageService.isEnabled()) {
@@ -164,12 +223,50 @@ function listAlerts(req, res) {
 			? req.query.source.trim()
 			: undefined;
 
-		const result = await alertStorageService.listAlerts({
+		const symbol = parseStringFilter(req.query.symbol, 'symbol');
+		if (symbol.error) {
+			return res.status(400).json(symbol.error);
+		}
+
+		const eventCategory = parseStringFilter(req.query.eventCategory, 'eventCategory');
+		if (eventCategory.error) {
+			return res.status(400).json(eventCategory.error);
+		}
+
+		const exchange = parseStringFilter(req.query.exchange, 'exchange');
+		if (exchange.error) {
+			return res.status(400).json(exchange.error);
+		}
+
+		const parsedInclude = parseInclude(req.query.include);
+		if (!parsedInclude.success) {
+			return res.status(400).json({
+				error: parsedInclude.error,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const listParams = {
 			before,
 			enriched,
 			limit,
 			source,
-		});
+		};
+		if (symbol.value !== undefined) {
+			listParams.symbol = symbol.value;
+		}
+		if (eventCategory.value !== undefined) {
+			listParams.eventCategory = eventCategory.value;
+		}
+		if (exchange.value !== undefined) {
+			listParams.exchange = exchange.value;
+		}
+		if (parsedInclude.values.length > 0) {
+			listParams.include = parsedInclude.values;
+			listParams.includeEnrichmentSummary = parsedInclude.values.includes('enrichment_summary');
+		}
+
+		const result = await alertStorageService.listAlerts(listParams);
 
 		return res.status(200).json({
 			success: true,
@@ -222,15 +319,45 @@ function summarizeAlerts(req, res) {
 			? req.query.source.trim()
 			: undefined;
 
-		const summary = await alertStorageService.summarizeAlerts({
+		const symbol = parseStringFilter(req.query.symbol, 'symbol');
+		if (symbol.error) {
+			return res.status(400).json(symbol.error);
+		}
+
+		const eventCategory = parseStringFilter(req.query.eventCategory, 'eventCategory');
+		if (eventCategory.error) {
+			return res.status(400).json(eventCategory.error);
+		}
+
+		const exchange = parseStringFilter(req.query.exchange, 'exchange');
+		if (exchange.error) {
+			return res.status(400).json(exchange.error);
+		}
+
+		const summaryParams = {
 			from: from.value,
 			limit,
 			to: to.value,
 			source,
 			enriched,
-		});
+		};
+		if (symbol.value !== undefined) {
+			summaryParams.symbol = symbol.value;
+		}
+		if (eventCategory.value !== undefined) {
+			summaryParams.eventCategory = eventCategory.value;
+		}
+		if (exchange.value !== undefined) {
+			summaryParams.exchange = exchange.value;
+		}
 
-		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
+		const summary = await alertStorageService.summarizeAlerts(summaryParams);
+
+		const hasReportFilters = Boolean(source)
+			|| typeof enriched === 'boolean'
+			|| symbol.value !== undefined
+			|| eventCategory.value !== undefined
+			|| exchange.value !== undefined;
 		if (!hasReportFilters) {
 			let shadowModeMetrics = 'No measurements found';
 			if (signalOutcomeService.isEnabled()) {
@@ -282,10 +409,25 @@ function escapeCsvValue(value) {
 	return safeSerialized;
 }
 
-function buildCsv(alerts, includeText) {
-	const fields = includeText
-		? EXPORT_FIELDS
-		: EXPORT_FIELDS.filter(field => field !== 'text');
+function buildCsv(alerts, optionsOrIncludeText, maybeIncludeEnrichment) {
+	const options = typeof optionsOrIncludeText === 'object' && optionsOrIncludeText !== null
+		? optionsOrIncludeText
+		: {
+			includeText: Boolean(optionsOrIncludeText),
+			includeEnrichment: Boolean(maybeIncludeEnrichment),
+		};
+	const includeText = Boolean(options.includeText);
+	const includeEnrichment = Boolean(options.includeEnrichment);
+
+	const fields = EXPORT_FIELDS.filter((field) => {
+		if (field === 'text' && !includeText) {
+			return false;
+		}
+		if (field === 'enrichmentData' && !includeEnrichment) {
+			return false;
+		}
+		return true;
+	});
 	const rows = alerts.map(alert => fields.map(field => escapeCsvValue(alert[field])).join(','));
 	return [fields.join(','), ...rows].join('\n');
 }
@@ -348,6 +490,14 @@ function exportAlerts(req, res) {
 			});
 		}
 
+		const includeEnrichment = parseBooleanFlag(req.query.includeEnrichment, false);
+		if (includeEnrichment === null) {
+			return res.status(400).json({
+				error: 'Invalid includeEnrichment flag. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
 		const source = typeof req.query.source === 'string' && req.query.source.trim()
 			? req.query.source.trim()
 			: undefined;
@@ -359,6 +509,7 @@ function exportAlerts(req, res) {
 			source,
 			enriched,
 			includeText,
+			includeEnrichment,
 		});
 
 		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
@@ -379,7 +530,7 @@ function exportAlerts(req, res) {
 
 		if (format === 'csv') {
 			res.type('text/csv; charset=utf-8');
-			return res.status(200).send(`${buildCsv(result.alerts, includeText)}\n`);
+			return res.status(200).send(`${buildCsv(result.alerts, { includeText, includeEnrichment })}\n`);
 		}
 
 		res.type('application/x-ndjson; charset=utf-8');
@@ -509,6 +660,65 @@ function getIdempotencyKey(req) {
 		|| (req.query && (req.query.idempotencyKey || req.query.idempotency_key));
 }
 
+function resolveDryRun(req) {
+	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
+	const bodyFlag = req.body && typeof req.body === 'object'
+		&& (req.body.dryRun === true || req.body.dryRun === 'true');
+	return Boolean(queryFlag || bodyFlag);
+}
+
+function buildStoredChannelRouting(storedAlert, storedTelegramThreadId) {
+	return {
+		...(storedAlert.telegramChatId ? { telegramChatId: storedAlert.telegramChatId } : {}),
+		...(storedTelegramThreadId !== undefined && storedTelegramThreadId !== null
+			? { telegramThreadId: storedTelegramThreadId }
+			: {}),
+		...(storedAlert.whatsappChatId ? { whatsappChatId: storedAlert.whatsappChatId } : {}),
+		...(storedAlert.discordWebhookUrl ? { discordWebhookUrl: storedAlert.discordWebhookUrl } : {}),
+	};
+}
+
+function buildDryRunChannelRouting(storedAlert, storedTelegramThreadId, channels) {
+	const routing = buildStoredChannelRouting(storedAlert, storedTelegramThreadId);
+
+	if (Array.isArray(channels)) {
+		if (channels.includes('telegram')) {
+			if (!routing.telegramChatId && process.env.TELEGRAM_CHAT_ID) {
+				routing.telegramChatId = process.env.TELEGRAM_CHAT_ID;
+			}
+			if (routing.telegramThreadId === undefined) {
+				const isCustomChat = Boolean(
+					routing.telegramChatId
+					&& process.env.TELEGRAM_CHAT_ID
+					&& String(routing.telegramChatId) !== String(process.env.TELEGRAM_CHAT_ID)
+				);
+				const topicRoutes = isCustomChat ? {} : parseTelegramTopicRoutes(process.env.TELEGRAM_TOPIC_ROUTES);
+				const resolvedThread = resolveTelegramThreadId(
+					{ ...storedAlert, source: storedAlert.source || 'alert-replay' },
+					topicRoutes
+				);
+				if (resolvedThread !== null && resolvedThread !== undefined) {
+					routing.telegramThreadId = resolvedThread;
+				}
+			}
+		}
+
+		if (channels.includes('whatsapp')) {
+			if (!routing.whatsappChatId && process.env.WHATSAPP_CHAT_ID) {
+				routing.whatsappChatId = process.env.WHATSAPP_CHAT_ID;
+			}
+		}
+
+		if (channels.includes('discord')) {
+			if (!routing.discordWebhookUrl && process.env.DISCORD_WEBHOOK_URL) {
+				routing.discordWebhookUrl = process.env.DISCORD_WEBHOOK_URL;
+			}
+		}
+	}
+
+	return routing;
+}
+
 function replayAlert(botOrGetter) {
 	return function handleReplayAlert(req, res) {
 		return handleAsync(req, res, `/api/alerts/${req.params.alertId}/replay`, async () => {
@@ -551,19 +761,14 @@ function replayAlert(botOrGetter) {
 				});
 			}
 
+			const dryRun = resolveDryRun(req);
+
 			const storedAlert = await alertStorageService.getAlertById(alertId);
 			if (!storedAlert) {
 				return res.status(404).json({
 					error: 'Alert not found',
 					code: 'NOT_FOUND',
 				});
-			}
-
-			const { getNotificationManager, initializeNotificationServices } = require('../webhooks/handlers/alert/alert');
-			let notificationManager = getNotificationManager();
-			if (!notificationManager) {
-				const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
-				notificationManager = await initializeNotificationServices(bot);
 			}
 
 			let storedTelegramThreadId = storedAlert.telegramThreadId;
@@ -578,6 +783,37 @@ function replayAlert(botOrGetter) {
 				}
 			}
 
+			const storedChannelRouting = buildStoredChannelRouting(storedAlert, storedTelegramThreadId);
+
+			if (dryRun) {
+				console.debug('[AlertsController] Replay dry-run: skipping delivery and persistence for alert', alertId);
+				const channelRouting = buildDryRunChannelRouting(storedAlert, storedTelegramThreadId, channels);
+				const idempotencyKeyHashPrefix = crypto
+					.createHash('sha256')
+					.update(idempotencyKey.trim())
+					.digest('hex')
+					.slice(0, 12);
+				return res.status(200).json({
+					success: true,
+					dryRun: true,
+					alertId,
+					channels,
+					idempotencyKeyHashPrefix,
+					payloadPreview: {
+						text: storedAlert.text,
+						enriched: storedAlert.enrichmentData || null,
+						channelRouting,
+					},
+				});
+			}
+
+			const { getNotificationManager, initializeNotificationServices } = require('../webhooks/handlers/alert/alert');
+			let notificationManager = getNotificationManager();
+			if (!notificationManager) {
+				const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
+				notificationManager = await initializeNotificationServices(bot);
+			}
+
 			const replayPayload = {
 				text: storedAlert.text,
 				enriched: storedAlert.enrichmentData || undefined,
@@ -586,20 +822,20 @@ function replayAlert(botOrGetter) {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),
 				},
-				...(storedAlert.telegramChatId ? { telegramChatId: storedAlert.telegramChatId } : {}),
-				...(storedTelegramThreadId !== undefined && storedTelegramThreadId !== null
-					? { telegramThreadId: storedTelegramThreadId }
-					: {}),
-				...(storedAlert.whatsappChatId ? { whatsappChatId: storedAlert.whatsappChatId } : {}),
-				...(storedAlert.discordWebhookUrl ? { discordWebhookUrl: storedAlert.discordWebhookUrl } : {}),
+				...storedChannelRouting,
 			};
 			const results = await notificationManager.sendToChannels(replayPayload, channels);
-			const replayId = await alertStorageService.saveReplayAttempt({
-				alertId,
-				idempotencyKey: idempotencyKey.trim(),
-				channels,
-				deliveryResults: results,
-			});
+			let replayId = null;
+			try {
+				replayId = await alertStorageService.saveReplayAttempt({
+					alertId,
+					idempotencyKey: idempotencyKey.trim(),
+					channels,
+					deliveryResults: results,
+				});
+			} catch (storageErr) {
+				console.warn('[AlertsController] Failed to record replay attempt in Firestore for alert:', alertId, storageErr.message);
+			}
 
 			return res.status(200).json({
 				success: true,
@@ -609,6 +845,298 @@ function replayAlert(botOrGetter) {
 			});
 		});
 	};
+}
+
+function batchReplayAlerts(botOrGetter) {
+	return function handleBatchReplay(req, res) {
+		return handleAsync(req, res, '/api/alerts/batch/replay', async () => {
+			if (!alertStorageService.isEnabled()) {
+				return res.status(403).json({
+					error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+					code: 'FEATURE_DISABLED',
+				});
+			}
+
+			const alertIds = req.body && req.body.alertIds;
+			if (!Array.isArray(alertIds) || alertIds.length === 0 || alertIds.length > MAX_BATCH_REPLAY_LIMIT || alertIds.some(id => typeof id !== 'string' || !id.trim())) {
+				return res.status(400).json({
+					error: `alertIds must be a non-empty array of up to ${MAX_BATCH_REPLAY_LIMIT} alert IDs.`,
+					code: 'INVALID_REQUEST',
+				});
+			}
+
+			const channels = parseReplayChannels(req.body && req.body.channels);
+			if (channels === null) {
+				return res.status(400).json({
+					error: 'channels must be a non-empty array of channel names.',
+					code: 'INVALID_REQUEST',
+				});
+			}
+			const unknownChannels = channels.filter(channel => !VALID_CHANNELS.includes(channel));
+			if (unknownChannels.length > 0) {
+				return res.status(400).json({
+					error: `Unknown channel(s): ${unknownChannels.join(', ')}. Supported: ${VALID_CHANNELS.join(', ')}.`,
+					code: 'INVALID_REQUEST',
+				});
+			}
+
+			const idempotencyKey = getIdempotencyKey(req);
+			if (!idempotencyKey) {
+				return res.status(400).json({
+					error: 'Replay requests require an idempotency-key or x-idempotency-key header or idempotencyKey body field.',
+					code: 'INVALID_REQUEST',
+				});
+			}
+
+			const dryRun = resolveDryRun(req);
+			let notificationManager = null;
+			if (!dryRun) {
+				const { getNotificationManager, initializeNotificationServices } = require('../webhooks/handlers/alert/alert');
+				notificationManager = getNotificationManager();
+				if (!notificationManager) {
+					const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
+					notificationManager = await initializeNotificationServices(bot);
+				}
+			}
+
+			const uniqueAlertIds = Array.from(new Set(alertIds.map(id => id.trim())));
+			const alertResults = [];
+
+			for (const alertId of uniqueAlertIds) {
+				const storedAlert = await alertStorageService.getAlertById(alertId);
+				if (!storedAlert) {
+					alertResults.push({
+						alertId,
+						success: false,
+						error: 'Alert not found',
+						code: 'NOT_FOUND',
+					});
+					continue;
+				}
+
+				let storedTelegramThreadId = storedAlert.telegramThreadId;
+				if (storedTelegramThreadId === undefined && Array.isArray(storedAlert.deliveryResults)) {
+					const telegramResult = storedAlert.deliveryResults.find((r) => r && r.channel === 'telegram');
+					if (telegramResult) {
+						if (typeof telegramResult.threadId === 'number' && Number.isSafeInteger(telegramResult.threadId) && telegramResult.threadId >= 0) {
+							storedTelegramThreadId = telegramResult.threadId;
+						} else if (typeof telegramResult.message_thread_id === 'number' && Number.isSafeInteger(telegramResult.message_thread_id) && telegramResult.message_thread_id >= 0) {
+							storedTelegramThreadId = telegramResult.message_thread_id;
+						}
+					}
+				}
+				const storedChannelRouting = buildStoredChannelRouting(storedAlert, storedTelegramThreadId);
+
+				if (dryRun) {
+					const channelRouting = buildDryRunChannelRouting(storedAlert, storedTelegramThreadId, channels);
+					alertResults.push({
+						alertId,
+						success: true,
+						dryRun: true,
+						channels,
+						payloadPreview: {
+							text: storedAlert.text,
+							enriched: storedAlert.enrichmentData || null,
+							channelRouting,
+						},
+					});
+				} else {
+					const alertIdempotencyKey = `${idempotencyKey.trim()}:${alertId}`;
+
+					let existingReplay = null;
+					let reconciliationError = null;
+					try {
+						if (typeof alertStorageService.getReplayAttemptByIdempotencyKey === 'function') {
+							existingReplay = await alertStorageService.getReplayAttemptByIdempotencyKey(alertId, alertIdempotencyKey);
+						}
+					} catch (checkErr) {
+						console.warn('[AlertsController] Failed checking existing replay for alert:', alertId, checkErr.message);
+						reconciliationError = checkErr;
+					}
+
+					if (reconciliationError) {
+						alertResults.push({
+							alertId,
+							success: false,
+							error: `Failed to reconcile existing replay attempt: ${reconciliationError.message || 'Storage unavailable'}`,
+							code: 'RECONCILIATION_FAILED',
+						});
+						continue;
+					}
+
+					if (existingReplay) {
+						const hasPastSuccess = Array.isArray(existingReplay.deliveryResults)
+							&& existingReplay.deliveryResults.length > 0
+							&& existingReplay.deliveryResults.some((r) => r && r.success === true);
+						if (hasPastSuccess) {
+							alertResults.push({
+								alertId,
+								success: true,
+								replayId: existingReplay.id,
+								results: existingReplay.deliveryResults || [],
+							});
+							continue;
+						}
+					}
+
+					const replayPayload = {
+						text: storedAlert.text,
+						enriched: storedAlert.enrichmentData || undefined,
+						source: storedAlert.source || 'alert-replay',
+						replay: {
+							originalAlertId: alertId,
+							idempotencyKey: alertIdempotencyKey,
+						},
+						...storedChannelRouting,
+					};
+
+					try {
+						const results = await notificationManager.sendToChannels(replayPayload, channels);
+						const hasSuccessfulDelivery = Array.isArray(results)
+							&& results.length > 0
+							&& results.some((r) => r && r.success === true);
+
+						if (hasSuccessfulDelivery) {
+							let replayId = null;
+							try {
+								replayId = await alertStorageService.saveReplayAttempt({
+									alertId,
+									idempotencyKey: alertIdempotencyKey,
+									channels,
+									deliveryResults: results,
+								});
+							} catch (storageErr) {
+								console.warn('[AlertsController] Failed to record replay attempt in Firestore for alert:', alertId, storageErr.message);
+							}
+
+							alertResults.push({
+								alertId,
+								success: true,
+								replayId,
+								results,
+							});
+						} else {
+							alertResults.push({
+								alertId,
+								success: false,
+								error: results && results.length > 0 ? 'Channel delivery failed' : 'No notification channels delivered',
+								code: 'DELIVERY_FAILED',
+								results: results || [],
+							});
+						}
+					} catch (sendErr) {
+						console.warn('[AlertsController] Failed to send replay to channels for alert:', alertId, sendErr.message);
+						alertResults.push({
+							alertId,
+							success: false,
+							error: sendErr.message || 'Failed to send replay',
+							code: 'DELIVERY_FAILED',
+						});
+					}
+				}
+			}
+
+			if (dryRun) {
+				return res.status(200).json({
+					success: true,
+					dryRun: true,
+					results: alertResults,
+				});
+			}
+
+			return res.status(200).json({
+				success: true,
+				results: alertResults,
+			});
+		});
+	};
+}
+
+function batchExportAlerts(req, res) {
+	return handleAsync(req, res, '/api/alerts/batch/export', async () => {
+		if (!alertStorageService.isEnabled()) {
+			return res.status(403).json({
+				error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const alertIds = req.body && req.body.alertIds;
+		if (!Array.isArray(alertIds) || alertIds.length === 0 || alertIds.length > MAX_EXPORT_LIMIT || alertIds.some(id => typeof id !== 'string' || !id.trim())) {
+			return res.status(400).json({
+				error: `alertIds must be a non-empty array of up to ${MAX_EXPORT_LIMIT} alert IDs.`,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const format = parseExportFormat(req.body?.format ?? req.query?.format);
+		if (!format) {
+			return res.status(400).json({
+				error: 'Invalid export format. Use jsonl or csv.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const includeText = parseBooleanFlag(req.body?.includeText ?? req.query?.includeText, false);
+		if (includeText === null) {
+			return res.status(400).json({
+				error: 'Invalid includeText flag. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const includeEnrichment = parseBooleanFlag(req.body?.includeEnrichment ?? req.query?.includeEnrichment, false);
+		if (includeEnrichment === null) {
+			return res.status(400).json({
+				error: 'Invalid includeEnrichment flag. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const result = await alertStorageService.exportAlertsByIds({
+			alertIds,
+			includeText,
+			includeEnrichment,
+		});
+
+		const fileDate = new Date().toISOString().substring(0, 10);
+		const filename = `alerts-batch-export-${fileDate}.${format === 'csv' ? 'csv' : 'jsonl'}`;
+		res.set('Content-Disposition', `attachment; filename="${filename}"`);
+
+		if (format === 'csv') {
+			res.type('text/csv; charset=utf-8');
+			return res.status(200).send(`${buildCsv(result.alerts, { includeText, includeEnrichment })}\n`);
+		}
+
+		res.type('application/x-ndjson; charset=utf-8');
+		const body = result.alerts.map(alert => JSON.stringify(alert)).join('\n');
+		return res.status(200).send(body ? `${body}\n` : '');
+	});
+}
+
+function batchDeleteAlerts(req, res) {
+	return handleAsync(req, res, '/api/alerts/batch/delete', async () => {
+		if (!alertStorageService.isEnabled()) {
+			return res.status(403).json({
+				error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const alertIds = req.body && req.body.alertIds;
+		if (!Array.isArray(alertIds) || alertIds.length === 0 || alertIds.length > MAX_BATCH_DELETE_LIMIT || alertIds.some(id => typeof id !== 'string' || !id.trim())) {
+			return res.status(400).json({
+				error: `alertIds must be a non-empty array of up to ${MAX_BATCH_DELETE_LIMIT} alert IDs.`,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const result = await alertStorageService.deleteAlerts(alertIds);
+		return res.status(200).json({
+			success: true,
+			deleted: result.deleted,
+		});
+	});
 }
 
 function handleAsync(req, res, endpoint, handler) {
@@ -742,6 +1270,9 @@ module.exports = {
 	getAlertById,
 	listReplays,
 	replayAlert,
+	batchReplayAlerts,
+	batchExportAlerts,
+	batchDeleteAlerts,
 	summarizeAlerts,
 	exportAlerts,
 	submitFeedback,

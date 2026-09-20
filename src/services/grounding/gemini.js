@@ -11,6 +11,7 @@ const {
 const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonitor/constants');
 const { getPromptService, PromptKeys } = require('../prompts');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { registerGlobalUsage, tokenCostBudgetService } = require('../../lib/tokenUsage');
 
 const promptService = getPromptService();
 
@@ -217,16 +218,30 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 		{ systemPromptOverride },
 	);
 
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Gemini] Daily token cost budget exceeded, returning fallback summary');
+		return validateGeminiResponse({
+			summary: text.slice(0, maxLength),
+			citations: searchResults || [],
+			confidence: 0.5,
+			budgetExceeded: true,
+		});
+	}
+
 	try {
-		const { text: summary, usage } = await genaiClient.llmCallv2({
+		const { text: summary, usage, modelUsed } = await genaiClient.llmCallv2({
 			systemPrompt,
 			userPrompt,
 			context: { citations: searchResults },
 			opts: { temperature: 0.2, signal },
 		});
 
-		if (tokenUsage && usage) {
-			tokenUsage.addUsage(usage, GEMINI_MODEL_NAME);
+		if (usage) {
+			const effectiveModel = modelUsed || GEMINI_MODEL_NAME || 'gemini';
+			registerGlobalUsage(usage, effectiveModel);
+			if (tokenUsage) {
+				tokenUsage.addUsage(usage, effectiveModel);
+			}
 		}
 
 		const response = {
@@ -263,10 +278,26 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 			headline: 'Test Event: Positive Market Movement',
 			description: 'This is a test event analysis for news monitoring.',
 			confidence: 0.9,
+			promptVersion: 'test-v1',
 			sources: [
 				{ title: 'Test Source 1', snippet: 'This is a test snippet.', url: 'https://example.com/test1', sourceDomain: 'example.com' },
 				{ title: 'Test Source 2', snippet: 'This is another test snippet.', url: 'https://example.com/test2', sourceDomain: 'example.com' },
 			],
+		};
+	}
+
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Gemini][analyzeNewsForSymbol] Daily token cost budget exceeded, returning fallback analysis');
+		return {
+			event_category: EventCategory.NONE,
+			event_significance: 0,
+			sentiment_score: 0,
+			headline: 'Token cost budget ceiling reached',
+			description: 'Skipping news analysis due to daily token cost budget ceiling.',
+			confidence: 0,
+			promptVersion: 'fallback-budget',
+			sources: [],
+			budgetExceeded: true,
 		};
 	}
 
@@ -284,8 +315,12 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 			maxResults: 3,
 			rethrowQuotaErrors: true,
 		});
-		if (tokenUsage && searchResult.usage) {
-			tokenUsage.addUsage(searchResult.usage, GROUNDING_MODEL_NAME);
+		if (searchResult.usage) {
+			const searchModel = searchResult.modelUsed || GROUNDING_MODEL_NAME || 'gemini';
+			registerGlobalUsage(searchResult.usage, searchModel);
+			if (tokenUsage) {
+				tokenUsage.addUsage(searchResult.usage, searchModel);
+			}
 		}
 		console.debug('[Gemini][analyzeNewsForSymbol] Grounding market news and sentiment search results:', searchResult);
 
@@ -312,8 +347,12 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 				userPrompt: prompt.userPrompt,
 				opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 },
 			});
-			if (tokenUsage && result.usage) {
-				tokenUsage.addUsage(result.usage, GEMINI_MODEL_NAME);
+			if (result.usage) {
+				const effectiveModel = result.modelUsed || GEMINI_MODEL_NAME || 'gemini';
+				registerGlobalUsage(result.usage, effectiveModel);
+				if (tokenUsage) {
+					tokenUsage.addUsage(result.usage, effectiveModel);
+				}
 			}
 			response = result.text;
 		} catch (primaryError) {
@@ -329,8 +368,12 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 						userPrompt: prompt.userPrompt,
 						opts: { model: GEMINI_MODEL_NAME_FALLBACK, temperature: 0.3 },
 					});
-					if (tokenUsage && fallbackResult.usage) {
-						tokenUsage.addUsage(fallbackResult.usage, GEMINI_MODEL_NAME_FALLBACK);
+					if (fallbackResult.usage) {
+						const fallbackModel = fallbackResult.modelUsed || GEMINI_MODEL_NAME_FALLBACK || 'gemini';
+						registerGlobalUsage(fallbackResult.usage, fallbackModel);
+						if (tokenUsage) {
+							tokenUsage.addUsage(fallbackResult.usage, fallbackModel);
+						}
 					}
 					response = fallbackResult.text;
 				} catch (fallbackError) {
@@ -355,6 +398,11 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 		analysisResult.confidence_reason = confidence_reason;
 		if (calibration) {
 			analysisResult.calibration = calibration;
+		}
+		if (prompt && prompt.metadata && prompt.metadata.version != null) {
+			analysisResult.promptVersion = String(prompt.metadata.version);
+		} else if (prompt && prompt.version != null) {
+			analysisResult.promptVersion = String(prompt.version);
 		}
 
 		console.info('[Gemini] News analysis complete with grounding', {
@@ -696,6 +744,18 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	const { systemPrompt, userPrompt } = prompt;
 	const promptProvenance = getPromptProvenance(prompt);
 
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Gemini] Daily token cost budget exceeded, returning neutral enrichment fallback');
+		return {
+			sentiment: 'NEUTRAL',
+			sentiment_score: 0,
+			insights: [],
+			modelUsed: GEMINI_MODEL_NAME || 'unknown',
+			budgetExceeded: true,
+			...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
+		};
+	}
+
 	try {
 		const llmParams = {
 			systemPrompt,
@@ -737,8 +797,11 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 			llmResult = await genaiClient.llmCallv2(fallbackParams);
 		}
 
-		if (tokenUsage && llmResult.usage) {
-			tokenUsage.addUsage(llmResult.usage, llmResult.modelUsed || GEMINI_MODEL_NAME || 'gemini');
+		if (llmResult.usage) {
+			registerGlobalUsage(llmResult.usage, llmResult.modelUsed || GEMINI_MODEL_NAME || 'gemini');
+			if (tokenUsage) {
+				tokenUsage.addUsage(llmResult.usage, llmResult.modelUsed || GEMINI_MODEL_NAME || 'gemini');
+			}
 		}
 
 		const parsed = parseEnrichedAlertResponse(llmResult.text, searchResults);

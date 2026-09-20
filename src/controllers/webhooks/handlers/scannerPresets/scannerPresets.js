@@ -2,7 +2,6 @@
 
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
 const {
 	scannerPresetService,
 	parseIfMatchHeader,
@@ -34,6 +33,8 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const { adminSseService } = require('../../../../services/sse/AdminSseService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 
 const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 	'5', '5M', '15', '15M', '60', '1H', '240', '4H',
@@ -103,14 +104,14 @@ function getScannerTimeoutMs() {
 	return Math.min(parsedTimeout, MAX_SCANNER_TIMEOUT_MS);
 }
 
-function createScannerDeadline(timeoutMs) {
+function createScannerDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => {
 		controller.abort(new Error(`Market scanner timeout after ${timeoutMs}ms`));
 	}, timeoutMs);
 
 	return {
-		signal: controller.signal,
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
 		clear: () => clearTimeout(timeoutId),
 	};
 }
@@ -404,7 +405,7 @@ function validatePresetConfig(preset, reqBody = {}) {
 
 function postRunPreset(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 
 		try {
@@ -518,7 +519,7 @@ function postRunPreset(botOrGetter) {
 			}
 
 			const timeoutMs = getScannerTimeoutMs();
-			const deadline = createScannerDeadline(timeoutMs);
+			const deadline = createScannerDeadline(timeoutMs, req.requestDeadlineSignal);
 			let scanResults;
 
 			try {
@@ -568,6 +569,20 @@ function postRunPreset(botOrGetter) {
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(scanResults, deliveryResults);
+
+			try {
+				adminSseService.broadcast('scanner-result', {
+					presetId: preset.id,
+					name: preset.name,
+					symbolsCount: preset.symbols?.length || (scanResults ? scanResults.length : 0),
+					summary,
+					timedOut,
+					totalDurationMs: Date.now() - startTime,
+					timestamp: new Date().toISOString(),
+				});
+			} catch (_) {
+				// Fail-safe
+			}
 
 			return res.status(200).json({
 				success: true,

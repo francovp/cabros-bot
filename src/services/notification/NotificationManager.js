@@ -268,10 +268,28 @@ class NotificationManager {
 					},
 				});
 
+				const channelStartTime = Date.now();
 				return Promise.resolve()
-					.then(() => ch.send(alert, {
-						...options,
-						signal: options.signalByChannel?.[ch.name] || options.signal,
+					.then(() => {
+						const channelSignal = options.signalByChannel?.[ch.name];
+						let signal = options.signal;
+						if (channelSignal && signal) {
+							signal = AbortSignal.any([channelSignal, signal]);
+						} else if (channelSignal) {
+							signal = channelSignal;
+						}
+						return ch.send(alert, {
+							...options,
+							signal,
+						});
+					})
+					.then((value) => ({
+						value,
+						durationMs: Date.now() - channelStartTime,
+					}))
+					.catch((error) => Promise.reject({
+						error,
+						durationMs: Date.now() - channelStartTime,
 					}))
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
@@ -283,30 +301,48 @@ class NotificationManager {
 			sentryService.endSpan(dispatchSpan);
 		}
 
+		const totalDurationMs = Date.now() - startTime;
+
 		const formattedResults = results.map((r, idx) => {
 			const chName = channels[idx] ? channels[idx].name : 'unknown';
 			if (r.status === 'fulfilled') {
-				if (r.value && typeof r.value === 'object') {
-					return {
+				const val = r.value && r.value.value;
+				const fallbackDuration = (r.value && typeof r.value.durationMs === 'number')
+					? r.value.durationMs
+					: Math.max(Date.now() - startTime, 0);
+
+				if (val && typeof val === 'object') {
+					const item = {
 						channel: chName,
-						...r.value,
+						...val,
 					};
+					if (typeof item.durationMs !== 'number' || !Number.isFinite(item.durationMs) || item.durationMs < 0) {
+						item.durationMs = fallbackDuration;
+					}
+					return item;
 				}
 				return {
 					success: false,
 					channel: chName,
 					error: 'Channel returned empty response',
+					durationMs: fallbackDuration,
 				};
 			}
+
+			const reasonErr = r.reason && r.reason.error !== undefined ? r.reason.error : r.reason;
+			const fallbackDuration = (r.reason && typeof r.reason.durationMs === 'number')
+				? r.reason.durationMs
+				: Math.max(Date.now() - startTime, 0);
+
 			return {
 				success: false,
 				channel: chName,
-				error: (r.reason && (r.reason.message || String(r.reason))) || 'Unknown error',
+				error: (reasonErr && (reasonErr.message || String(reasonErr))) || 'Unknown error',
+				durationMs: fallbackDuration,
 			};
 		});
 
 		// Report external failures to Sentry
-		const totalDurationMs = Date.now() - startTime;
 		const httpContext = options.http || (options.endpoint ? {
 			endpoint: options.endpoint,
 			method: options.method || 'POST',
@@ -336,7 +372,14 @@ class NotificationManager {
 			}
 		}
 
-		if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+		const isRedriveIneligible =
+			Boolean(options.isRedrive) ||
+			options.redriveEligible === false ||
+			Boolean(options.isProbe) ||
+			Boolean(alert?.isProbe) ||
+			alert?.redriveEligible === false;
+
+		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 			const failedResults = formattedResults.filter(result => result && !result.success);
 			if (failedResults.length > 0) {
 				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
@@ -400,7 +443,14 @@ class NotificationManager {
 				http: httpContext,
 			});
 
-			if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+		const isRedriveIneligible =
+			Boolean(options.isRedrive) ||
+			options.redriveEligible === false ||
+			Boolean(options.isProbe) ||
+			Boolean(alert?.isProbe) ||
+			alert?.redriveEligible === false;
+
+		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 				const candidateChannels = Array.from(this.channels.keys());
 				const channelsToQueue = candidateChannels.length > 0 ? candidateChannels : ['telegram', 'whatsapp', 'discord'];
 				const syntheticResults = channelsToQueue.map(channelName => ({
@@ -453,10 +503,19 @@ class NotificationManager {
 					},
 				});
 
+				const channelStartTime = Date.now();
 				return Promise.resolve()
 					.then(() => ch.send(alert, {
 						...options,
 						signal: options.signalByChannel?.[ch.name] || options.signal,
+					}))
+					.then((value) => ({
+						value,
+						durationMs: Date.now() - channelStartTime,
+					}))
+					.catch((error) => Promise.reject({
+						error,
+						durationMs: Date.now() - channelStartTime,
 					}))
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
@@ -468,30 +527,48 @@ class NotificationManager {
 			sentryService.endSpan(dispatchSpan);
 		}
 
+		const totalDurationMs = Date.now() - startTime;
+
 		const formattedResults = results.map((r, idx) => {
 			const chName = enabledChannels[idx] ? enabledChannels[idx].name : 'unknown';
 			if (r.status === 'fulfilled') {
-				if (r.value && typeof r.value === 'object') {
-					return {
+				const val = r.value && r.value.value;
+				const fallbackDuration = (r.value && typeof r.value.durationMs === 'number')
+					? r.value.durationMs
+					: Math.max(Date.now() - startTime, 0);
+
+				if (val && typeof val === 'object') {
+					const item = {
 						channel: chName,
-						...r.value,
+						...val,
 					};
+					if (typeof item.durationMs !== 'number' || !Number.isFinite(item.durationMs) || item.durationMs < 0) {
+						item.durationMs = fallbackDuration;
+					}
+					return item;
 				}
 				return {
 					success: false,
 					channel: chName,
 					error: 'Channel returned empty response',
+					durationMs: fallbackDuration,
 				};
 			}
+
+			const reasonErr = r.reason && r.reason.error !== undefined ? r.reason.error : r.reason;
+			const fallbackDuration = (r.reason && typeof r.reason.durationMs === 'number')
+				? r.reason.durationMs
+				: Math.max(Date.now() - startTime, 0);
+
 			return {
 				success: false,
 				channel: chName,
-				error: (r.reason && (r.reason.message || String(r.reason))) || 'Unknown error',
+				error: (reasonErr && (reasonErr.message || String(reasonErr))) || 'Unknown error',
+				durationMs: fallbackDuration,
 			};
 		});
 
 		// Report external failures to Sentry (T014)
-		const totalDurationMs = Date.now() - startTime;
 		const httpContext = options.http || (options.endpoint ? {
 			endpoint: options.endpoint,
 			method: options.method || 'POST',
@@ -521,7 +598,14 @@ class NotificationManager {
 			}
 		}
 
-		if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+		const isRedriveIneligible =
+			Boolean(options.isRedrive) ||
+			options.redriveEligible === false ||
+			Boolean(options.isProbe) ||
+			Boolean(alert?.isProbe) ||
+			alert?.redriveEligible === false;
+
+		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 			const failedResults = formattedResults.filter(result => result && !result.success);
 			if (failedResults.length > 0) {
 				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {

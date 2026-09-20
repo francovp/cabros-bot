@@ -14,6 +14,7 @@ const {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	telegramCommandRateLimiter,
 } = require('./src/controllers/commands');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
@@ -27,13 +28,16 @@ const { waitForBackgroundTasks } = require('./src/lib/backgroundTaskTracker');
 const { getTelegramBootstrapConfig, sendStartupDeploymentNotification } = require('./src/lib/telegramBootstrap');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
 const { launchTelegramBot } = require('./src/lib/telegramCommandMenu');
-const { attachTelegramErrorBoundary, handlePollingError } = require('./src/lib/telegramErrorBoundary');
+const { attachTelegramErrorBoundary, handlePollingError, startTelegramHealthProbe, stopTelegramHealthProbe } = require('./src/lib/telegramErrorBoundary');
+const { registerAlertActionHandlers } = require('./src/lib/telegramAlertActions');
 const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
 const { whatsAppCommandBridgeService } = require('./src/services/notification/WhatsAppCommandBridgeService');
 const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
+const { alertSchedulerService } = require('./src/services/scheduler');
+const { adminSseService } = require('./src/services/sse/AdminSseService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
 const Sentry = require('@sentry/node');
@@ -82,7 +86,10 @@ const lifecycle = createProcessLifecycle({
 	stopWhatsAppCommandBridge: (options) => whatsAppCommandBridgeService.stop(options),
 	stopScannerPresetScheduler: (options) => scannerPresetSchedulerService.stopWorker(options),
 	stopNewsMonitorScheduler: (options) => newsMonitorSchedulerService.stopWorker(options),
+	stopAlertScheduler: (options) => alertSchedulerService.stopWorker(options),
 	stopRemoteConfig: () => remoteConfigService.stop(),
+	closeAllSseConnections: () => adminSseService.closeAll(),
+	stopTelegramHealthProbe: () => stopTelegramHealthProbe(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
 	flushSentry: (timeout) => sentryService.flush(timeout),
 	timeoutMs: process.env.SHUTDOWN_TIMEOUT_MS,
@@ -104,6 +111,9 @@ async function bootstrapApplication() {
 	scannerPresetSchedulerService.startWorker();
 	// Start background news-monitor scheduler if enabled
 	newsMonitorSchedulerService.startWorker({ source: 'web' });
+	// Start background alert scheduler (JSON-defined news + scanner schedules) if enabled
+	alertSchedulerService.botGetter = () => bot;
+	alertSchedulerService.startWorker({ source: 'web' });
 	// Start WhatsApp inbound command bridge if enabled
 	if (whatsAppCommandBridgeService.isEnabled()) {
 		whatsAppCommandBridgeService.start();
@@ -120,6 +130,7 @@ async function bootstrapApplication() {
 	if (shouldLaunchTelegramBot) {
 		console.log('Telegram Bot is enabled');
 		bot = new Telegraf(token);
+		bot.use(telegramCommandRateLimiter);
 		bot.command(['precio'], getPrice);
 		bot.command(['cryptobot'], cryptoBotCmd);
 		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);
@@ -128,6 +139,9 @@ async function bootstrapApplication() {
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
 		bot.command(['help', 'start'], helpCmd);
+
+		// Register inline keyboard action handlers for Telegram alerts.
+		registerAlertActionHandlers(bot);
 
 		// Attach Telegram error boundary
 		attachTelegramErrorBoundary(bot);
@@ -143,6 +157,12 @@ async function bootstrapApplication() {
 			void handlePollingError(error, { bot });
 		}, () => bootstrapReadiness.markReady('telegramBot'));
 		void botLaunchPromise.catch((error) => bootstrapReadiness.markFailed('telegramBot', error));
+
+		// Telegraf v4 has no polling-success event, so without an external
+		// signal the consecutive-failures counter is monotonic for the
+		// process lifetime. A periodic getMe probe (default 30s) lets
+		// recordPollingSuccess() reset the streak on a healthy round-trip.
+		startTelegramHealthProbe(bot);
 
 		if (!lifecycle.isShuttingDown()) {
 			await sendStartupDeploymentNotification({

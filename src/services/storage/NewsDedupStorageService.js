@@ -18,6 +18,7 @@
 
 const admin = require('firebase-admin');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentials');
 
 const COLLECTION_NAME = 'news-monitor-dedup';
 const DELIVERY_ROUTING_FIELDS = {
@@ -100,20 +101,13 @@ function getFirestore() {
 	}
 
 	try {
-		let credential;
-
-		// Inline JSON (preferred for Render.com secret env vars)
-		if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-			const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-			credential = admin.credential.cert(serviceAccount);
-		}
-
+		const loaded = loadFirebaseAdminCredentialsOrNull();
 		const appOptions = {};
-		if (credential) {
-			appOptions.credential = credential;
+		if (loaded && loaded.credential) {
+			appOptions.credential = loaded.credential;
 		}
-		if (process.env.FIREBASE_PROJECT_ID) {
-			appOptions.projectId = process.env.FIREBASE_PROJECT_ID;
+		if (loaded && loaded.projectId) {
+			appOptions.projectId = loaded.projectId;
 		}
 
 		if (!admin.apps.length) {
@@ -406,18 +400,20 @@ async function renewEntry(key, ttlMs, claimToken) {
  * Delete a dedup entry (mainly for testing / manual invalidation).
  *
  * @param {string} key - Dedup key
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>} true when the entry is deleted or storage is unavailable
  */
 async function deleteEntry(key) {
 	const firestore = getFirestore();
 	if (!firestore) {
-		return;
+		return true;
 	}
 
 	try {
 		await firestore.collection(COLLECTION_NAME).doc(key).delete();
+		return true;
 	} catch (error) {
 		console.warn('[NewsDedupStorageService] deleteEntry error:', error.message);
+		return false;
 	}
 }
 
