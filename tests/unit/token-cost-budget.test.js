@@ -692,5 +692,46 @@ describe('Token Cost Budget Tracking', () => {
 			expect(sharedDocData.warningAlertSent).toBe(true);
 			expect(sharedDocData.alertsSent).toBe(1);
 		});
+
+		it('discards stale Firestore spend sync results if day rolled over during read', async () => {
+			process.env.ENABLE_TOKEN_COST_BUDGET = 'true';
+			process.env.TOKEN_COST_DAILY_BUDGET_USD = '10.00';
+
+			let resolveGet;
+			const getPromise = new Promise((res) => { resolveGet = res; });
+			const mockDocRef = {
+				get: jest.fn().mockReturnValue(getPromise),
+			};
+
+			const tracker = new GlobalTokenCostBudgetTracker({
+				currentDay: '2026-09-19',
+				skipInitialSync: true,
+				firestore: {
+					collection: jest.fn().mockReturnValue({
+						doc: jest.fn().mockReturnValue(mockDocRef),
+					}),
+				},
+			});
+
+			const syncPromise = tracker._syncSharedSpend();
+
+			// Simulate day rollover to 2026-09-20 while Firestore read was in-flight
+			tracker.checkDayRollover = () => {
+				tracker.currentDay = '2026-09-20';
+			};
+
+			// Resolve the get with previous day's ceiling spend ($15.00)
+			resolveGet({
+				exists: true,
+				data: () => ({ dailySpendUsd: 15.00, warningAlertSent: true, limitAlertSent: true }),
+			});
+
+			await syncPromise;
+
+			// Stale previous-day spend should have been discarded and not applied to new day
+			expect(tracker.dailySpendUsd).toBe(0);
+			expect(tracker.limitAlertSent).toBe(false);
+			expect(tracker.warningAlertSent).toBe(false);
+		});
 	});
 });

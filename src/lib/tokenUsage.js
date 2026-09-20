@@ -247,24 +247,26 @@ function getUtcDay(date = new Date(Date.now())) {
 }
 
 class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
-	constructor() {
+	constructor(options = {}) {
 		super();
 		this.dailySpendUsd = 0;
 		this.dailyInputTokens = 0;
 		this.dailyOutputTokens = 0;
 		this.lastResetAt = new Date(Date.now()).toISOString();
-		this.currentDay = getUtcDay();
+		this.currentDay = options.currentDay || getUtcDay();
 		this.warningAlertSent = false;
 		this.limitAlertSent = false;
 		this.alertsSent = 0;
 		this.notificationManager = null;
 		this.notifyAdmin = null;
-		this.firestore = null;
+		this.firestore = options.firestore || null;
 		this._lastSyncAt = 0;
 		this._inFlightSync = null;
 
 		// Asynchronously synchronize with shared Firestore daily spend if available
-		this._syncSharedSpend().catch(() => {});
+		if (!options.skipInitialSync) {
+			this._syncSharedSpend().catch(() => {});
+		}
 	}
 
 	_getFirestore() {
@@ -566,8 +568,14 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 		if (!firestore) return;
 
 		try {
-			const docRef = firestore.collection('tokenBudgets').doc(this.currentDay);
+			const queriedDay = this.currentDay;
+			const docRef = firestore.collection('tokenBudgets').doc(queriedDay);
 			const doc = await docRef.get();
+			this.checkDayRollover();
+			if (this.currentDay !== queriedDay) {
+				// Day rolled over while waiting for Firestore read, discard stale result
+				return;
+			}
 			if (doc && doc.exists) {
 				const data = typeof doc.data === 'function' ? doc.data() : doc;
 				const sharedSpend = Number(data?.dailySpendUsd) || 0;

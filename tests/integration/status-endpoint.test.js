@@ -2001,4 +2001,17 @@ describe('Status endpoints', () => {
 			}),
 		}));
 	});
+
+	it('invokes tokenCostBudgetService.syncSharedSpendThrottled before returning status', async () => {
+		const { tokenCostBudgetService } = require('../../src/lib/tokenUsage');
+		const syncSpy = jest.spyOn(tokenCostBudgetService, 'syncSharedSpendThrottled').mockResolvedValue();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(syncSpy).toHaveBeenCalled();
+	});
 });
+

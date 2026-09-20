@@ -501,6 +501,13 @@ async function getApiStatus(req, res) {
 		) {
 			await notificationRedriveService.syncWorkerTelemetry();
 		}
+		if (typeof tokenCostBudgetService?.syncSharedSpendThrottled === 'function') {
+			try {
+				await tokenCostBudgetService.syncSharedSpendThrottled();
+			} catch (_) {
+				// Fail-open for status endpoint
+			}
+		}
 		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {
 		console.error('[StatusController] getStatus failed:', error);
