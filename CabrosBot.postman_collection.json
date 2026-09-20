@@ -7257,6 +7257,180 @@
           "body": "{\"error\":\"Unauthorized\",\"code\":\"ADMIN_AUTH_REQUIRED\"}"
         }
       ]
+    },
+    {
+      "name": "Strategy Research",
+      "item": [
+        {
+          "name": "GET Compare Strategies",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Compare multiple technical strategies (rsi, bollinger, macd, ema_cross, supertrend, donchian) over historical data.",
+            "url": {
+              "raw": "{{baseUrl}}/api/research/strategies?symbol=BTCUSDT&exchange=BINANCE&interval=1h&period=1y",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "research",
+                "strategies"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "exchange",
+                  "value": "BINANCE"
+                },
+                {
+                  "key": "interval",
+                  "value": "1h"
+                },
+                {
+                  "key": "period",
+                  "value": "1y"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"tool\": \"compare_strategies\",\n  \"symbol\": \"BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"interval\": \"1h\",\n  \"period\": \"1y\",\n  \"cached\": false,\n  \"result\": {\n    \"comparisons\": [\n      {\n        \"strategy\": \"rsi\",\n        \"total_return_pct\": 18.5,\n        \"max_drawdown_pct\": 7.2,\n        \"win_rate_pct\": 58.3\n      },\n      {\n        \"strategy\": \"macd\",\n        \"total_return_pct\": 12.1,\n        \"max_drawdown_pct\": 9.4,\n        \"win_rate_pct\": 52\n      }\n    ]\n  },\n  \"requestId\": \"req-postman-cmp-1\",\n  \"processingTimeMs\": 145\n}"
+            },
+            {
+              "name": "400 Missing Symbol",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"INVALID_REQUEST\",\n  \"message\": \"symbol is required\"\n}"
+            },
+            {
+              "name": "429 Rate Limited",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"error\": \"UPSTREAM_RATE_LIMITED\",\n  \"message\": \"TradingView MCP upstream rate limit exceeded\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Walk-Forward Backtest",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "postman-wf-demo-1",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"strategy\": \"rsi\",\n  \"interval\": \"1h\",\n  \"period\": \"1y\",\n  \"n_splits\": 5,\n  \"train_ratio\": 0.7\n}"
+            },
+            "description": "Execute out-of-sample walk-forward strategy validation using TradingView MCP.",
+            "url": {
+              "raw": "{{baseUrl}}/api/research/walk-forward",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "research",
+                "walk-forward"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"tool\": \"walk_forward_backtest_strategy\",\n  \"symbol\": \"BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"strategy\": \"rsi\",\n  \"interval\": \"1h\",\n  \"period\": \"1y\",\n  \"cached\": false,\n  \"result\": {\n    \"in_sample\": {\n      \"total_return_pct\": 22.4,\n      \"win_rate_pct\": 61.2\n    },\n    \"out_of_sample\": {\n      \"total_return_pct\": 14.1,\n      \"win_rate_pct\": 54.5\n    },\n    \"stability_score\": 0.78\n  },\n  \"requestId\": \"req-postman-wf-1\",\n  \"processingTimeMs\": 310\n}"
+            },
+            {
+              "name": "400 Invalid Strategy",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"INVALID_REQUEST\",\n  \"message\": \"strategy must be one of: rsi, bollinger, macd, ema_cross, supertrend, donchian\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Strategy Backtest",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "postman-bt-demo-1",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"strategy\": \"ema_cross\",\n  \"interval\": \"1h\",\n  \"period\": \"1y\"\n}"
+            },
+            "description": "Execute single technical strategy backtest over historical price data.",
+            "url": {
+              "raw": "{{baseUrl}}/api/research/backtest",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "research",
+                "backtest"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"tool\": \"backtest_strategy\",\n  \"symbol\": \"BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"strategy\": \"ema_cross\",\n  \"interval\": \"1h\",\n  \"period\": \"1y\",\n  \"cached\": false,\n  \"result\": {\n    \"total_return_pct\": 31.8,\n    \"sharpe_ratio\": 1.45,\n    \"max_drawdown_pct\": 11.2,\n    \"win_rate_pct\": 56.4,\n    \"total_trades\": 48\n  },\n  \"requestId\": \"req-postman-bt-1\",\n  \"processingTimeMs\": 220\n}"
+            },
+            {
+              "name": "400 Invalid Strategy",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"INVALID_REQUEST\",\n  \"message\": \"strategy must be one of: rsi, bollinger, macd, ema_cross, supertrend, donchian\"\n}"
+            }
+          ]
+        }
+      ]
     }
   ]
 }
