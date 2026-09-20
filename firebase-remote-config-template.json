@@ -496,6 +496,48 @@
       },
       "description": "Comma-separated ordered parameter names extracted from the alert for GreenAPI sendTemplate placeholders. Each maps to a field in alert.enriched or alert. Missing fields produce empty strings. WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, and WHATSAPP_TEMPLATE_NAMESPACE are excluded (notification destinations).",
       "valueType": "STRING"
+    },
+    "ADMIN_SSE_MAX_CLIENT_CONNECTIONS": {
+      "defaultValue": {
+        "value": "5"
+      },
+      "description": "Maximum concurrent SSE event streams per client key (IP, API key, or Firebase UID)",
+      "valueType": "NUMBER"
+    },
+    "ADMIN_SSE_MAX_TOTAL_CONNECTIONS": {
+      "defaultValue": {
+        "value": "100"
+      },
+      "description": "Maximum total active SSE event streams allowed across all clients",
+      "valueType": "NUMBER"
+    },
+    "ADMIN_SSE_HEARTBEAT_MS": {
+      "defaultValue": {
+        "value": "30000"
+      },
+      "description": "Heartbeat interval in milliseconds for SSE comment keepalive frames",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_TOKEN_COST_BUDGET": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable aggregate daily token spend tracking and budget alerting ceiling",
+      "valueType": "BOOLEAN"
+    },
+    "TOKEN_COST_DAILY_BUDGET_USD": {
+      "defaultValue": {
+        "value": "5.0"
+      },
+      "description": "Daily token cost budget in USD (0.01 to 10000.00)",
+      "valueType": "NUMBER"
+    },
+    "TOKEN_COST_WARN_THRESHOLD_PCT": {
+      "defaultValue": {
+        "value": "80"
+      },
+      "description": "Token cost budget warning alert threshold percentage (1 to 100)",
+      "valueType": "NUMBER"
     }
   },
   "version": {

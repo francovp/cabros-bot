@@ -32,6 +32,7 @@ const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./a
 const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentials');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
+const { adminSseService } = require('../sse/AdminSseService');
 
 const WRITE_METRICS_DOMAIN_ALERTS = 'alerts';
 const WRITE_METRICS_DOMAIN_REPLAYS = 'alertReplays';
@@ -85,6 +86,17 @@ function isEnabled() {
 }
 
 function canInitializeFirestore() {
+	let rcBudgetEnabled = false;
+	try {
+		const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+		const rc = typeof getRuntimeConfig === 'function' ? getRuntimeConfig() : {};
+		if (rc.ENABLE_TOKEN_COST_BUDGET !== undefined) {
+			rcBudgetEnabled = Boolean(rc.ENABLE_TOKEN_COST_BUDGET);
+		}
+	} catch {
+		rcBudgetEnabled = false;
+	}
+
 	return isEnabled()
 		|| process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true'
 		|| process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
@@ -93,7 +105,9 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_NOTIFICATION_REDRIVE === 'true'
 		|| process.env.ENABLE_NEWS_MONITOR_SCHEDULER === 'true'
 		|| process.env.ENABLE_BINANCE_ORDER_AUDIT === 'true'
-		|| process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS === 'true';
+		|| process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS === 'true'
+		|| process.env.ENABLE_TOKEN_COST_BUDGET === 'true'
+		|| rcBudgetEnabled;
 }
 
 function getAlertStorageRetentionDays() {
@@ -937,6 +951,16 @@ function averageLatency(samples) {
 	return Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length);
 }
 
+function calculatePercentileLatency(samples, percentile = 95) {
+	if (!Array.isArray(samples) || samples.length === 0) {
+		return null;
+	}
+
+	const sorted = [...samples].sort((a, b) => a - b);
+	const index = Math.min(Math.max(Math.ceil((percentile / 100) * sorted.length) - 1, 0), sorted.length - 1);
+	return Math.round(sorted[index]);
+}
+
 function buildSummaryWindow({ from, to, limit }) {
 	const now = new Date();
 	const parsedTo = to ? new Date(to) : now;
@@ -1165,57 +1189,95 @@ function getFirestore() {
 	return db;
 }
 
+function emitAlertDeliveryEvents(params, alertId = null) {
+	if (!params) return;
+	try {
+		const deliveryResults = params.deliveryResults || [];
+		const successful = deliveryResults.filter((r) => r && r.success);
+		const failed = deliveryResults.filter((r) => r && !r.success);
+
+		if (successful.length > 0) {
+			adminSseService.broadcast('alert-delivered', {
+				alertId: alertId || params.requestId || null,
+				requestId: params.requestId || null,
+				symbol: params.symbol || null,
+				exchange: params.exchange || null,
+				channels: successful.map((r) => r.channel),
+				deliveredCount: successful.length,
+				timestamp: new Date().toISOString(),
+			});
+		}
+
+		for (const failure of failed) {
+			adminSseService.broadcast('delivery-failure', {
+				alertId: alertId || params.requestId || null,
+				requestId: params.requestId || null,
+				symbol: params.symbol || null,
+				exchange: params.exchange || null,
+				channel: failure.channel,
+				error: failure.error || 'Delivery failed',
+				timestamp: new Date().toISOString(),
+			});
+		}
+	} catch (_) {
+		// Fail-safe
+	}
+}
+
 /**
- * Persist a webhook alert document to the `alerts` Firestore collection.
- *
- * This is designed to be called fire-and-forget from the alert handler.
- * All errors are caught internally — this method never throws.
+ * Persist an alert document to Firestore.
  *
  * @param {Object} params
- * @param {string}  params.text              - Original alert text
- * @param {boolean} params.enriched          - Whether enrichment ran
- * @param {Object|null} params.enrichmentData - alert.enriched object or null
- * @param {Object|null} params.tokenUsage    - tokenUsage.toJSON() result or null
+ * @param {string}  params.text              - Full original alert text
+ * @param {string|null} params.symbol        - Parsed ticker symbol
+ * @param {string|null} params.exchange      - Parsed exchange name
+ * @param {boolean} params.enriched          - Whether enrichment was attempted
+ * @param {Object|null} params.enrichmentData - Full enriched payload (null if not enriched)
+ * @param {Object|null} params.tokenUsage    - Token usage object (null if not enriched)
  * @param {Array<string>} params.channels    - Requested channels used for delivery
  * @param {Array}   params.deliveryResults   - Array of SendResult from notificationManager.sendToAll()
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
  * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
-async function saveAlertInternal({
-	text,
-	symbol,
-	exchange,
-	enriched,
-	enrichmentData,
-	tokenUsage,
-	channels,
-	deliveryResults,
-	useTradingViewData,
-	tradingViewEnrichmentApplied,
-	tradingViewEnrichmentStatus,
-	suppressedRepeat,
-	processingTimeMs,
-	source,
-	eventCategory,
-	confidence,
-	sentimentScore,
-	dedupStatus,
-	requestId,
-	scannerErrorCategories,
-	telegramChatId,
-	telegramThreadId,
-	whatsappChatId,
-	discordWebhookUrl,
-	routing,
-}) {
+async function saveAlertInternal(params = {}) {
+	const {
+		text,
+		symbol,
+		exchange,
+		enriched,
+		enrichmentData,
+		tokenUsage,
+		channels,
+		deliveryResults,
+		useTradingViewData,
+		tradingViewEnrichmentApplied,
+		tradingViewEnrichmentStatus,
+		suppressedRepeat,
+		processingTimeMs,
+		source,
+		eventCategory,
+		confidence,
+		sentimentScore,
+		dedupStatus,
+		requestId,
+		scannerErrorCategories,
+		telegramChatId,
+		telegramThreadId,
+		whatsappChatId,
+		discordWebhookUrl,
+		routing,
+		alertId: providedAlertId,
+	} = params;
 	if (!isEnabled()) {
+		emitAlertDeliveryEvents(params, null);
 		return null;
 	}
 
 	const firestore = getFirestore();
 	if (!firestore) {
 		firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN_ALERTS);
+		emitAlertDeliveryEvents(params, null);
 		return null;
 	}
 
@@ -1227,8 +1289,22 @@ async function saveAlertInternal({
 		const effectiveTelegramThreadId = telegramThreadId !== undefined
 			? telegramThreadId
 			: (routing && routing.telegramThreadId !== undefined ? routing.telegramThreadId : undefined);
+		const sanitizedAlertId = typeof providedAlertId === 'string' && providedAlertId.trim()
+			? providedAlertId.trim().slice(0, 64)
+			: null;
 		const effectiveWhatsappChatId = whatsappChatId || (routing && routing.whatsappChatId);
 		const effectiveDiscordWebhookUrl = discordWebhookUrl || (routing && routing.discordWebhookUrl);
+
+		const normalizedDeliveryResults = Array.isArray(deliveryResults)
+			? deliveryResults.map((result) => {
+				if (!result || typeof result !== 'object') return result;
+				const duration = result.durationMs ?? result.latencyMs ?? result.deliveryLatencyMs;
+				if (typeof duration === 'number' && Number.isFinite(duration) && duration >= 0 && typeof result.durationMs !== 'number') {
+					return { ...result, durationMs: Math.round(duration) };
+				}
+				return result;
+			})
+			: [];
 
 		const document = {
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1239,7 +1315,7 @@ async function saveAlertInternal({
 			tokenUsage: stripUndefinedFieldsDeep(tokenUsage ?? null),
 			channels: Array.isArray(channels) ? channels : [],
 			deliveryResults: Array.isArray(deliveryResults)
-				? stripUndefinedFieldsDeep(deliveryResults)
+				? stripUndefinedFieldsDeep(normalizedDeliveryResults)
 				: [],
 			source: typeof source === 'string' && source.trim() ? source.trim() : 'webhook',
 			useTradingViewData: Boolean(useTradingViewData),
@@ -1299,13 +1375,21 @@ async function saveAlertInternal({
 			document.discordWebhookUrl = effectiveDiscordWebhookUrl.trim();
 		}
 
-		const docRef = await firestore.collection(COLLECTION_NAME).add(document);
+		let docRef;
+		if (sanitizedAlertId) {
+			docRef = firestore.collection(COLLECTION_NAME).doc(sanitizedAlertId);
+			await docRef.set(document);
+		} else {
+			docRef = await firestore.collection(COLLECTION_NAME).add(document);
+		}
 		console.debug(`[AlertStorageService] Alert stored with ID: ${docRef.id}`);
 		firestoreWriteMetricsService.recordWriteSuccess(WRITE_METRICS_DOMAIN_ALERTS);
+		emitAlertDeliveryEvents(params, docRef.id);
 		return docRef.id;
 	} catch (error) {
 		console.warn('[AlertStorageService] Failed to store alert in Firestore:', error.message);
 		firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN_ALERTS);
+		emitAlertDeliveryEvents(params, null);
 		return null;
 	}
 }
@@ -2195,10 +2279,12 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		latency: {
 			averageProcessingMs: null,
 			averageDeliveryMs: null,
+			byChannel: {},
 		},
 	};
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
+	const channelLatencySamples = {};
 
 	for (const doc of docs) {
 		const data = doc.data() || {};
@@ -2254,7 +2340,20 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 
 		if (Array.isArray(data.deliveryResults)) {
 			for (const result of data.deliveryResults) {
-				collectLatency(deliveryLatencySamples, result && (result.latencyMs || result.deliveryLatencyMs || result.durationMs));
+				if (!result || typeof result !== 'object') {
+					continue;
+				}
+				const latencyVal = result.durationMs ?? result.latencyMs ?? result.deliveryLatencyMs;
+				collectLatency(deliveryLatencySamples, latencyVal);
+				const channel = typeof result.channel === 'string' && result.channel.trim()
+					? result.channel.trim()
+					: null;
+				if (channel) {
+					if (!channelLatencySamples[channel]) {
+						channelLatencySamples[channel] = [];
+					}
+					collectLatency(channelLatencySamples[channel], latencyVal);
+				}
 			}
 		}
 	}
@@ -2264,6 +2363,16 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
 	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
 	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);
+	summary.latency.byChannel = {};
+	for (const [channel, samples] of Object.entries(channelLatencySamples)) {
+		if (samples.length > 0) {
+			summary.latency.byChannel[channel] = {
+				averageMs: averageLatency(samples),
+				p95Ms: calculatePercentileLatency(samples, 95),
+				sampleCount: samples.length,
+			};
+		}
+	}
 
 	return summary;
 }
@@ -2274,6 +2383,7 @@ module.exports = {
 	listAlerts,
 	getAlertById,
 	summarizeAlerts,
+	calculatePercentileLatency,
 	exportAlerts,
 	exportAlertsByIds,
 	getAlertsByIds,

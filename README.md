@@ -33,6 +33,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 - `TELEGRAM_TOPIC_ROUTES` - Optional mapping of alert categories/sources to Telegram forum topic `message_thread_id` values. Format: comma-separated pairs `category:threadId` (e.g. `webhook-signal:101,market-scanner:202,news-monitor:303,default:0`) or JSON object string `{"webhook-signal":101,"market-scanner":202}`. Thread ID `0` or `null` routes alerts to the chat's General topic.
 - `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` - Dedicated Telegram chat ID for admin/error notices (optional, falls back to `TELEGRAM_CHAT_ID`)
+- `TELEGRAM_ACTION_OPERATOR_USER_IDS` - Comma-separated numeric Telegram user IDs allowed to use inline Replay. Empty or unset rejects replay callbacks; this security control is environment-only and is not published through Remote Config.
 
 #### Security
 
@@ -96,6 +97,12 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - `GROUNDING_TIMEOUT_MS` - Grounding request timeout (default: `30000` ms)
 - `GROUNDING_MAX_LENGTH` - Maximum alert text length used in grounding prompts (default: `2000` characters)
 - `ALERT_GROUNDING_COALESCE_MS` - Optional equity-alert search coalescing window in milliseconds (default: `0`, disabled; Remote Config supported)
+
+#### Token Spend Tracking & Cost Budgeting
+
+- `ENABLE_TOKEN_COST_BUDGET` - Enable daily LLM token cost tracking and budget limits (`true` or `false`, default: `false`; Remote Config supported)
+- `TOKEN_COST_DAILY_BUDGET_USD` - Maximum daily spend in USD before LLM calls fail open safely (default: `5.00`, range `0.01`-`1000.00`; Remote Config supported)
+- `TOKEN_COST_WARN_THRESHOLD_PCT` - Percentage of daily budget that triggers an admin Telegram alert (default: `80`, range `1`-`100`; Remote Config supported)
 
 #### Cloudflare AI Gateway
 
@@ -620,6 +627,9 @@ When `ENABLE_GEMINI_GROUNDING=true`:
 
 - `ENABLE_GEMINI_GROUNDING` - Enable/disable enrichment (default: `false`)
 - `GEMINI_API_KEY` - Google API key with Generative AI enabled
+- `ENABLE_TOKEN_COST_BUDGET` - Enable/disable global LLM daily token spend tracking and budget enforcement (default: `false`)
+- `TOKEN_COST_DAILY_BUDGET_USD` - Daily LLM spend ceiling in USD before calls fail open (default: `5.00`)
+- `TOKEN_COST_WARN_THRESHOLD_PCT` - Percentage of daily budget that triggers an admin Telegram alert (default: `80`)
 
 ### How Langfuse Prompt Management Works
 
@@ -1405,7 +1415,19 @@ The service caps the queried window at 31 days to keep routine operator usage ch
     },
     "latency": {
       "averageProcessingMs": 250,
-      "averageDeliveryMs": 150
+      "averageDeliveryMs": 150,
+      "byChannel": {
+        "telegram": {
+          "averageMs": 170,
+          "p95Ms": 200,
+          "sampleCount": 2
+        },
+        "whatsapp": {
+          "averageMs": 110,
+          "p95Ms": 110,
+          "sampleCount": 1
+        }
+      }
     }
   }
 }

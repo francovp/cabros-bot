@@ -494,6 +494,83 @@
         "x-admin-role": "admin.operator"
       }
     },
+    "/api/admin/events": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Stream real-time operator console events (SSE)",
+        "description": "Establishes a long-lived Server-Sent Events (SSE) stream for real-time operator updates, including job progress, scanner results, alert delivery events, and delivery failures. Supports up to 5 concurrent connections per client session with graceful oldest-connection eviction.",
+        "operationId": "getAdminEvents",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "description": "Firebase ID token query parameter for browser EventSource clients.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE event stream opened successfully.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": ":connected\nevent: connected\ndata: {\"clientId\":\"4519965b-db0d-4536-a81d-ef291f09c735\",\"timestamp\":\"2026-09-12T20:00:00.000Z\",\"activeConnections\":1}\n\n"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "503": {
+            "description": "Maximum server SSE connection capacity exceeded.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds to wait before reconnecting."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "Server has reached maximum SSE connection capacity. Please retry shortly.",
+                  "code": "SSE_CONNECTION_LIMIT_EXCEEDED"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/alerts": {
       "get": {
         "tags": [
@@ -2556,6 +2633,124 @@
         "x-admin-role": "admin.operator"
       }
     },
+    "/api/trading/binance/orders/audit": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Query Binance Spot order audit trail",
+        "description": "Queries durable audit records for Binance Spot order mutations (submissions, dry runs, rejections, cancellations, and reconciliations). Supports filtering by symbol, status, environment, orderId, and time range with cursor pagination.",
+        "operationId": "getBinanceOrderAudit",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records by symbol (e.g. BTCUSDT).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records by status (e.g. dry_run, submitted, confirmed, rejected, ambiguous, queried, canceled).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records by execution environment (e.g. testnet, live, demo).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "orderId",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records by Binance order ID or client order ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records created on or after this ISO 8601 timestamp.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records created on or before this ISO 8601 timestamp.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of audit records to return (default 50, max 100).",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "description": "Cursor for backward pagination.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BinanceOrderAuditList"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/status": {
       "get": {
         "tags": [
@@ -3639,6 +3834,16 @@
       }
     },
     "responses": {
+      "BinanceOrderAuditList": {
+        "description": "Paginated Binance order audit records.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/BinanceOrderAuditList"
+            }
+          }
+        }
+      },
       "BinanceOrdersQueryResult": {
         "description": "Binance Spot order status or recent order history query result.",
         "content": {
@@ -4023,7 +4228,8 @@
                     {
                       "channel": "telegram",
                       "success": true,
-                      "messageId": "tg-msg-123"
+                      "messageId": "tg-msg-123",
+                      "durationMs": 450
                     }
                   ]
                 }
@@ -4036,7 +4242,8 @@
                     {
                       "channel": "telegram",
                       "success": true,
-                      "messageId": "tg-msg-123"
+                      "messageId": "tg-msg-123",
+                      "durationMs": 450
                     }
                   ]
                 }
@@ -4072,7 +4279,8 @@
               "results": [
                 {
                   "channel": "telegram",
-                  "success": true
+                  "success": true,
+                  "durationMs": 180
                 }
               ]
             }
@@ -4410,7 +4618,8 @@
                 "alertScheduler": false,
                 "equityMarketData": false,
                 "firebaseRemoteConfig": false,
-                "notificationRedrive": false
+                "notificationRedrive": false,
+                "tokenCostBudget": false
               },
               "dependencies": {
                 "alertScheduler": {
@@ -4559,6 +4768,17 @@
                       "evictionCount": 0
                     }
                   }
+                },
+                "tokenCostBudget": {
+                  "enabled": false,
+                  "configured": true,
+                  "ready": false,
+                  "status": "disabled",
+                  "dailySpendUsd": 0,
+                  "budgetUsd": 5,
+                  "utilizationPct": 0,
+                  "alertsSent": 0,
+                  "lastResetAt": "2026-03-29T00:00:00.000Z"
                 }
               }
             }
@@ -6445,11 +6665,60 @@
             "$ref": "#/components/schemas/JsonObject"
           },
           "latency": {
-            "$ref": "#/components/schemas/JsonObject"
+            "$ref": "#/components/schemas/AlertSummaryLatency"
           },
           "shadowModeMetrics": {
             "description": "Aggregated shadow-mode outcome metrics. When an object, includes the full OutcomesSummary payload (coverage buckets, per-window WindowStats with hit/target/stop rates and expectancyR, drawdown proxy, latency/cost metadata, and falsePositiveCandidates). When no data is available or signal-outcome tracking is disabled, the value is the string sentinel \"No measurements found\". Equity providers remain opt-in and fail open. This field is omitted when source or enriched filters are supplied because shadow-mode metrics do not support those filters. Win-rate field semantics: hitRatePercent counts evaluated window outcomes whose return > 0; targetHitRatePercent/stopHitRatePercent count explicit target/stop hits (including firstHit fallbacks) over barrier-eligible denominators only; expectancyR averages finite rMultiple over evaluated windows.",
             "$ref": "#/components/schemas/ShadowModeMetrics"
+          }
+        }
+      },
+      "ChannelLatencyStats": {
+        "type": "object",
+        "description": "Per-channel delivery latency statistics for a summary window.",
+        "required": [
+          "averageMs",
+          "p95Ms",
+          "sampleCount"
+        ],
+        "properties": {
+          "averageMs": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Average delivery latency in milliseconds for this channel across samples."
+          },
+          "p95Ms": {
+            "type": "integer",
+            "nullable": true,
+            "description": "95th percentile delivery latency in milliseconds for this channel."
+          },
+          "sampleCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of delivery latency samples recorded for this channel."
+          }
+        }
+      },
+      "AlertSummaryLatency": {
+        "type": "object",
+        "description": "Processing and multi-channel delivery latency metrics across alerts in the summary window.",
+        "properties": {
+          "averageProcessingMs": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Average alert processing time in milliseconds."
+          },
+          "averageDeliveryMs": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Average delivery latency in milliseconds across all channels."
+          },
+          "byChannel": {
+            "type": "object",
+            "description": "Per-channel delivery latency breakdown. Only channels with recorded delivery samples in the window are included.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ChannelLatencyStats"
+            }
           }
         }
       },
@@ -7569,6 +7838,10 @@
                 },
                 "error": {
                   "type": "string"
+                },
+                "durationMs": {
+                  "type": "integer",
+                  "description": "Channel delivery duration in milliseconds."
                 }
               }
             }
@@ -7827,6 +8100,193 @@
         ],
         "additionalProperties": false
       },
+      "BinanceOrderAuditRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "orderId",
+          "action",
+          "status",
+          "timestamp"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "idempotencyKeyHash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "side": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "environment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "requestFingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ]
+          },
+          "quoteOrderQty": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ]
+          },
+          "price": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ]
+          },
+          "timeInForce": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "binanceOrderId": {
+            "type": [
+              "integer",
+              "string",
+              "null"
+            ]
+          },
+          "clientOrderId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "processingMs": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BinanceOrderAuditList": {
+        "type": "object",
+        "required": [
+          "success",
+          "records",
+          "audit",
+          "pagination"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BinanceOrderAuditRecord"
+            }
+          },
+          "audit": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BinanceOrderAuditRecord"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "required": [
+              "hasMore",
+              "limit",
+              "nextBefore"
+            ],
+            "properties": {
+              "hasMore": {
+                "type": "boolean"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "nextBefore": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "scanTruncated": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "BinanceOrdersQueryResult": {
         "type": "object",
         "required": [
@@ -7924,6 +8384,9 @@
               },
               "newsMonitorDedup": {
                 "$ref": "#/components/schemas/NewsMonitorDedupDependency"
+              },
+              "tokenCostBudget": {
+                "$ref": "#/components/schemas/TokenCostBudgetDependency"
               }
             }
           }
@@ -8345,6 +8808,66 @@
           },
           "cacheSize": {
             "$ref": "#/components/schemas/NewsMonitorCacheSize"
+          }
+        }
+      },
+      "TokenCostBudgetDependency": {
+        "type": "object",
+        "description": "Safe runtime metadata for aggregate daily token spend tracking and budget alerting ceiling without exposing sensitive keys.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "dailySpendUsd",
+          "budgetUsd",
+          "utilizationPct",
+          "alertsSent",
+          "lastResetAt"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether daily token cost budget tracking and threshold alerting are enabled."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether token cost budget tracking is configured."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "Whether token cost budget is ready and below the daily hard ceiling."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "ready",
+              "warning",
+              "exceeded"
+            ],
+            "description": "Operational budget state: disabled when feature is off, ready when spend is normal, warning when above alert threshold, exceeded when hard limit reached."
+          },
+          "dailySpendUsd": {
+            "type": "number",
+            "description": "Aggregate daily token spend in USD for the current UTC calendar day."
+          },
+          "budgetUsd": {
+            "type": "number",
+            "description": "Daily token cost budget ceiling in USD."
+          },
+          "utilizationPct": {
+            "type": "number",
+            "description": "Current percentage of daily budget utilized."
+          },
+          "alertsSent": {
+            "type": "integer",
+            "description": "Number of budget alert notifications dispatched during the current UTC day."
+          },
+          "lastResetAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO timestamp of the last daily spend rollover (00:00 UTC)."
           }
         }
       },

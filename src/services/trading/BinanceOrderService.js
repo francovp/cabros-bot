@@ -918,13 +918,17 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 				};
 			} catch (error) {
 				if (isDefinitiveBinanceRejection(error)) {
-					throw new BinanceOrderRequestError('Binance rejected the order', 'BINANCE_ORDER_REJECTED');
+					const reqError = new BinanceOrderRequestError('Binance rejected the order', 'BINANCE_ORDER_REJECTED');
+					if (clientOrderId) reqError.clientOrderId = clientOrderId;
+					throw reqError;
 				}
-				throw new BinanceOrderServiceError(
+				const svcError = new BinanceOrderServiceError(
 					'Binance accepted or may have accepted the order, but its final status is unknown; do not resubmit with a new idempotency key',
 					'BINANCE_ORDER_STATUS_UNKNOWN',
 					503,
 				);
+				if (clientOrderId) svcError.clientOrderId = clientOrderId;
+				throw svcError;
 			}
 		},
 	};
@@ -940,4 +944,5 @@ module.exports = {
 	createBinanceOrderService,
 	binanceOrderService,
 	getConfig,
+	deriveClientOrderId,
 };

@@ -43,6 +43,7 @@ const {
 	getRateLimitState: getTestAlertRateLimitState,
 	isTestAlertEnabled,
 } = require('./admin/testAlert');
+const { tokenCostBudgetService } = require('../lib/tokenUsage');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
 const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
@@ -397,6 +398,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			symbolAnalysisStorage: symbolAnalysisStorageService.isEnabled(),
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 			testAlert: isTestAlertEnabled(),
+			tokenCostBudget: tokenCostBudgetService.isEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -489,6 +491,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				lastRunStatus: getTestAlertLastRunStatus(),
 				rateLimitState: getTestAlertRateLimitState(),
 			},
+			tokenCostBudget: tokenCostBudgetService.getBudgetStatus(),
 		},
 	};
 }
@@ -501,6 +504,13 @@ async function getApiStatus(req, res) {
 			&& notificationRedriveService.hasDurableStore()
 		) {
 			await notificationRedriveService.syncWorkerTelemetry();
+		}
+		if (typeof tokenCostBudgetService?.syncSharedSpendThrottled === 'function') {
+			try {
+				await tokenCostBudgetService.syncSharedSpendThrottled();
+			} catch (_) {
+				// Fail-open for status endpoint
+			}
 		}
 		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {

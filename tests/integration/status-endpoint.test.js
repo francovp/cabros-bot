@@ -79,11 +79,11 @@ describe('Status endpoints', () => {
 		process.env.NODE_ENV = 'test';
 		delete process.env.SENTRY_ENVIRONMENT;
 		process.env.ENABLE_TELEGRAM_BOT = 'true';
-		process.env.BOT_TOKEN = 'token';
+		process.env.BOT_TOKEN = 'secret-bot-token';
 		process.env.TELEGRAM_CHAT_ID = '123';
 		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
 		process.env.WHATSAPP_API_URL = 'https://greenapi.example/';
-		process.env.WHATSAPP_API_KEY = 'key';
+		process.env.WHATSAPP_API_KEY = 'secret-whatsapp-key';
 		process.env.WHATSAPP_CHAT_ID = 'chat';
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';
 		process.env.GEMINI_API_KEY = 'gemini-key';
@@ -1629,8 +1629,8 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 		const serializedBody = JSON.stringify(response.body);
 
-		expect(serializedBody).not.toContain('token');
-		expect(serializedBody).not.toContain('key');
+		expect(serializedBody).not.toContain('secret-bot-token');
+		expect(serializedBody).not.toContain('secret-whatsapp-key');
 		expect(serializedBody).not.toContain('gemini-key');
 		expect(serializedBody).not.toContain('https://dsn.example');
 		expect(serializedBody).not.toContain('https://greenapi.example/');
@@ -2055,4 +2055,17 @@ describe('Status endpoints', () => {
 			writesFailed: 0,
 		}));
 	});
+
+	it('invokes tokenCostBudgetService.syncSharedSpendThrottled before returning status', async () => {
+		const { tokenCostBudgetService } = require('../../src/lib/tokenUsage');
+		const syncSpy = jest.spyOn(tokenCostBudgetService, 'syncSharedSpendThrottled').mockResolvedValue();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(syncSpy).toHaveBeenCalled();
+	});
 });
+
