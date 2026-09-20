@@ -2,6 +2,7 @@ require('dotenv').config();
 const crypto = require('crypto');
 const { enrichAlert } = require('./grounding');
 const { validateAlert } = require('../../../../lib/validation');
+const { v4: uuidv4 } = require('uuid');
 const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 const TelegramService = require('../../../../services/notification/TelegramService');
@@ -27,6 +28,7 @@ const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
+const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
 const {
 	buildErrorEnvelope,
 	sendError,
@@ -83,6 +85,37 @@ function resolveBot(botOrGetter) {
 	}
 
 	return botOrGetter || null;
+}
+
+function getFirstTelegramMessageId(result) {
+	const rawMessageId = Array.isArray(result?.messageIds)
+		? result.messageIds[0]
+		: (typeof result?.messageId === 'string' ? result.messageId.split(',')[0] : result?.messageId);
+	if (rawMessageId === undefined || rawMessageId === null || rawMessageId === '') return null;
+	const numericMessageId = Number(rawMessageId);
+	return Number.isSafeInteger(numericMessageId) ? numericMessageId : rawMessageId;
+}
+
+async function attachInlineKeyboardAfterPersistence({ manager, results, routing, replyMarkup }) {
+	if (!replyMarkup || !Array.isArray(results)) return;
+	const telegramResult = results.find((result) => result?.channel === 'telegram' && result.success);
+	const messageId = getFirstTelegramMessageId(telegramResult);
+	const telegramService = manager?.channels?.get?.('telegram');
+	const editMessageReplyMarkup = telegramService?.bot?.telegram?.editMessageReplyMarkup;
+	const chatId = routing?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+	if (!messageId || !chatId || typeof editMessageReplyMarkup !== 'function') return;
+
+	try {
+		await editMessageReplyMarkup.call(
+			telegramService.bot.telegram,
+			chatId,
+			messageId,
+			undefined,
+			replyMarkup,
+		);
+	} catch (error) {
+		console.warn('[Alert] Failed to attach inline keyboard after persistence:', error.message);
+	}
 }
 
 async function processEnrichment(alert, options) {
@@ -323,6 +356,35 @@ function postAlert(botOrGetter) {
 			}
 
 			let results;
+			// Inline keyboard markup is opt-in: only when alert storage is
+			// enabled (so /api/alerts/:alertId/replay can resolve the alert
+			// after the user clicks "Replay") and the Telegram channel is
+			// actually selected for delivery. The alertId is generated
+			// synchronously so it can be embedded in the markup callback_data
+			// before the message is sent.
+			let inlineAlertId = null;
+			let inlineReplyMarkup = null;
+			try {
+				const storageEnabled = typeof alertStorageService.isEnabled === 'function'
+					&& alertStorageService.isEnabled();
+				const telegramEnabled = process.env.ENABLE_TELEGRAM_BOT === 'true';
+				const telegramRequested = requestedChannels.length === 0
+					|| requestedChannels.includes('telegram');
+				if (storageEnabled && telegramEnabled && telegramRequested && !suppressedRepeat) {
+					inlineAlertId = uuidv4();
+					const replyMarkup = buildReplyMarkup({
+						alertId: inlineAlertId,
+						hasEnrichment: Boolean(alert.enriched),
+						includeReplay: true,
+					});
+					if (replyMarkup) {
+						inlineReplyMarkup = replyMarkup;
+					}
+				}
+			} catch (error) {
+				console.warn('[Alert] Failed to attach inline keyboard markup:', error.message);
+				inlineAlertId = null;
+			}
 			try {
 				results = suppressedRepeat
 					? []
@@ -442,7 +504,7 @@ function postAlert(botOrGetter) {
 
 			// Fire-and-forget: persist alert to Firestore after responding to the caller.
 			// Errors are caught inside saveAlert — delivery is never blocked by storage.
-			alertStorageService.saveAlert({
+			const saveAlertPromise = alertStorageService.saveAlert({
 				requestId,
 				text: alert.text,
 				symbol: extracted.symbol !== 'unknown' ? extracted.symbol : null,
@@ -462,10 +524,21 @@ function postAlert(botOrGetter) {
 				telegramThreadId: routing.telegramThreadId,
 				whatsappChatId: routing.whatsappChatId,
 				discordWebhookUrl: routing.discordWebhookUrl,
-			}).catch(() => {}); // errors already logged inside AlertStorageService
+				alertId: inlineAlertId || undefined,
+			});
+			Promise.resolve(saveAlertPromise)
+				.then((storedAlertId) => {
+					if (!storedAlertId) return null;
+					return attachInlineKeyboardAfterPersistence({
+						manager: notificationManager,
+						results,
+						routing,
+						replyMarkup: inlineReplyMarkup,
+					});
+				})
+				.catch(() => {}); // errors already logged inside AlertStorageService
 
 			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
-				const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
 				const parsed = parseTradingViewSignal(alert.text);
 				if (parsed) {
 					const mcpPrice = (alert.enriched && typeof alert.enriched.current_price === 'number' && Number.isFinite(alert.enriched.current_price) && alert.enriched.current_price > 0)
@@ -564,6 +637,9 @@ module.exports = {
 	postAlert,
 	resolveRequestId,
 	initializeNotificationServices,
+	__resetNotificationManagerForTesting: () => {
+		notificationManager = null;
+	},
 	getNotificationManager,
 	getCooldownChannelIdentity,
 	processEnrichment,

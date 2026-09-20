@@ -60,13 +60,14 @@ describe('NotificationManager admin failure notifications', () => {
 		const results = await manager.sendToAll({ text: 'BTC alert', requestId: 'req-103' });
 
 		expect(results).toEqual([
-			{ success: true, channel: 'telegram', messageId: 'alert-1' },
+			{ success: true, channel: 'telegram', messageId: 'alert-1', durationMs: expect.any(Number) },
 			{
 				success: false,
 				channel: 'whatsapp',
 				error: 'GreenAPI 503: unavailable',
 				statusCode: 503,
 				attemptCount: 3,
+				durationMs: expect.any(Number),
 			},
 		]);
 		expect(telegramService.send).toHaveBeenCalledTimes(2);
@@ -99,8 +100,8 @@ describe('NotificationManager admin failure notifications', () => {
 		const manager = new NotificationManager(telegramService, whatsappService);
 
 		await expect(manager.sendToAll({ text: 'BTC alert' })).resolves.toEqual([
-			{ success: false, channel: 'telegram', error: 'Telegram unavailable' },
-			{ success: true, channel: 'whatsapp', messageId: 'wa-1' },
+			{ success: false, channel: 'telegram', error: 'Telegram unavailable', durationMs: expect.any(Number) },
+			{ success: true, channel: 'whatsapp', messageId: 'wa-1', durationMs: expect.any(Number) },
 		]);
 		expect(telegramService.send).toHaveBeenCalledTimes(2);
 	});
@@ -126,13 +127,67 @@ describe('NotificationManager admin failure notifications', () => {
 		const results = await manager.sendToChannels({ text: 'BTC alert' }, ['whatsapp']);
 
 		expect(results).toEqual([
-			{ success: false, channel: 'whatsapp', error: 'GreenAPI unavailable' },
+			{ success: false, channel: 'whatsapp', error: 'GreenAPI unavailable', durationMs: expect.any(Number) },
 		]);
 		expect(telegramService.send).toHaveBeenCalledTimes(1);
 		expect(telegramService.send).toHaveBeenCalledWith(expect.objectContaining({
 			telegramChatId: '-100-admin',
 			text: expect.stringContaining('Failed channels: whatsapp'),
 		}));
+	});
+
+	it('guarantees durationMs is populated and non-negative on all formatted results', async () => {
+		const mockTelegram = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram' }),
+		};
+		const failingWhatsapp = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockRejectedValue(new Error('Network crash')),
+		};
+		const manager = new NotificationManager(mockTelegram, failingWhatsapp);
+
+		const allResults = await manager.sendToAll({ text: 'BTC alert' });
+		expect(allResults).toHaveLength(2);
+		for (const res of allResults) {
+			expect(typeof res.durationMs).toBe('number');
+			expect(res.durationMs).toBeGreaterThanOrEqual(0);
+		}
+
+		const routedResults = await manager.sendToChannels({ text: 'BTC alert' }, ['telegram', 'whatsapp']);
+		expect(routedResults).toHaveLength(2);
+		for (const res of routedResults) {
+			expect(typeof res.durationMs).toBe('number');
+			expect(res.durationMs).toBeGreaterThanOrEqual(0);
+		}
+	});
+
+	it('times each channel individually when calculating fallback durationMs', async () => {
+		const fastTelegram = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockImplementation(() => new Promise((resolve) => {
+				setTimeout(() => resolve({ success: true, channel: 'telegram' }), 10);
+			})),
+		};
+		const slowWhatsapp = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockImplementation(() => new Promise((resolve) => {
+				setTimeout(() => resolve({ success: true, channel: 'whatsapp' }), 60);
+			})),
+		};
+		const manager = new NotificationManager(fastTelegram, slowWhatsapp);
+
+		const results = await manager.sendToAll({ text: 'Timing test' });
+		const telegramResult = results.find((r) => r.channel === 'telegram');
+		const whatsappResult = results.find((r) => r.channel === 'whatsapp');
+
+		expect(telegramResult.durationMs).toBeLessThan(whatsappResult.durationMs);
+		expect(telegramResult.durationMs).toBeLessThan(50);
+		expect(whatsappResult.durationMs).toBeGreaterThanOrEqual(50);
 	});
 
 	it('returns delivery results without waiting for the admin notification', async () => {

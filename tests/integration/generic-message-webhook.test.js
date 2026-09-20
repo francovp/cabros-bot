@@ -446,6 +446,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			{
 				success: true,
 				channel: 'discord',
+				durationMs: expect.any(Number),
 				messageId: 'discord-msg-789',
 				messageIds: ['discord-msg-789'],
 				messageCount: 1,

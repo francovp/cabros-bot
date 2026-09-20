@@ -12,6 +12,7 @@ const { tradingViewMcpService } = require('../../src/services/tradingview/Tradin
 const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -78,11 +79,11 @@ describe('Status endpoints', () => {
 		process.env.NODE_ENV = 'test';
 		delete process.env.SENTRY_ENVIRONMENT;
 		process.env.ENABLE_TELEGRAM_BOT = 'true';
-		process.env.BOT_TOKEN = 'token';
+		process.env.BOT_TOKEN = 'secret-bot-token';
 		process.env.TELEGRAM_CHAT_ID = '123';
 		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
 		process.env.WHATSAPP_API_URL = 'https://greenapi.example/';
-		process.env.WHATSAPP_API_KEY = 'key';
+		process.env.WHATSAPP_API_KEY = 'secret-whatsapp-key';
 		process.env.WHATSAPP_CHAT_ID = 'chat';
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';
 		process.env.GEMINI_API_KEY = 'gemini-key';
@@ -106,6 +107,7 @@ describe('Status endpoints', () => {
 		geminiQuotaManager.resetForTesting();
 		groundingMetrics.resetForTesting();
 		deliveryMetricsService.resetForTesting();
+		firestoreWriteMetricsService.resetForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
@@ -1647,8 +1649,8 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 		const serializedBody = JSON.stringify(response.body);
 
-		expect(serializedBody).not.toContain('token');
-		expect(serializedBody).not.toContain('key');
+		expect(serializedBody).not.toContain('secret-bot-token');
+		expect(serializedBody).not.toContain('secret-whatsapp-key');
 		expect(serializedBody).not.toContain('gemini-key');
 		expect(serializedBody).not.toContain('https://dsn.example');
 		expect(serializedBody).not.toContain('https://greenapi.example/');
@@ -2021,4 +2023,69 @@ describe('Status endpoints', () => {
 			}),
 		}));
 	});
+
+	it('omits firestoreWriteMetrics when no writes have been recorded', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies).not.toHaveProperty('firestoreWriteMetrics');
+	});
+
+	it('exposes firestoreWriteMetrics counters after alert and job writes', async () => {
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+		firestoreWriteMetricsService.recordWriteFailure('alerts');
+		firestoreWriteMetricsService.recordWriteSuccess('jobs');
+		firestoreWriteMetricsService.recordWriteFailure('jobs');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const metrics = response.body.dependencies.firestoreWriteMetrics;
+		expect(metrics).toEqual(expect.objectContaining({
+			writesAttempted: 5,
+			writesSucceeded: 3,
+			writesFailed: 2,
+			successRate: 3 / 5,
+			window: expect.objectContaining({
+				startedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+				durationMs: expect.any(Number),
+			}),
+			byDomain: expect.objectContaining({
+				alerts: expect.objectContaining({ success: 2, failure: 1, total: 3, successRate: 2 / 3 }),
+				jobs: expect.objectContaining({ success: 1, failure: 1, total: 2, successRate: 0.5 }),
+			}),
+		}));
+	});
+
+	it('aliases /api/capabilities to expose firestoreWriteMetrics', async () => {
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestoreWriteMetrics).toEqual(expect.objectContaining({
+			writesSucceeded: 1,
+			writesFailed: 0,
+		}));
+	});
+
+	it('invokes tokenCostBudgetService.syncSharedSpendThrottled before returning status', async () => {
+		const { tokenCostBudgetService } = require('../../src/lib/tokenUsage');
+		const syncSpy = jest.spyOn(tokenCostBudgetService, 'syncSharedSpendThrottled').mockResolvedValue();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(syncSpy).toHaveBeenCalled();
+	});
 });
+

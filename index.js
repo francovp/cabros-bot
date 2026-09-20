@@ -34,6 +34,7 @@ const { getTelegramBootstrapConfig, sendStartupDeploymentNotification } = requir
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
 const { launchTelegramBot } = require('./src/lib/telegramCommandMenu');
 const { attachTelegramErrorBoundary, handlePollingError, startTelegramHealthProbe, stopTelegramHealthProbe } = require('./src/lib/telegramErrorBoundary');
+const { registerAlertActionHandlers } = require('./src/lib/telegramAlertActions');
 const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
@@ -41,6 +42,7 @@ const { whatsAppCommandBridgeService } = require('./src/services/notification/Wh
 const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
 const { alertSchedulerService } = require('./src/services/scheduler');
+const { adminSseService } = require('./src/services/sse/AdminSseService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
 const Sentry = require('@sentry/node');
@@ -91,6 +93,7 @@ const lifecycle = createProcessLifecycle({
 	stopNewsMonitorScheduler: (options) => newsMonitorSchedulerService.stopWorker(options),
 	stopAlertScheduler: (options) => alertSchedulerService.stopWorker(options),
 	stopRemoteConfig: () => remoteConfigService.stop(),
+	closeAllSseConnections: () => adminSseService.closeAll(),
 	stopTelegramHealthProbe: () => stopTelegramHealthProbe(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
 	flushSentry: (timeout) => sentryService.flush(timeout),
@@ -146,6 +149,9 @@ async function bootstrapApplication() {
 		bot.command(['umbral', 'threshold'], umbralCmd);
 		bot.command(['categorias', 'categories'], categoriasCmd);
 		bot.command(['help', 'start'], helpCmd);
+
+		// Register inline keyboard action handlers for Telegram alerts.
+		registerAlertActionHandlers(bot);
 
 		// Attach Telegram error boundary
 		attachTelegramErrorBoundary(bot);
