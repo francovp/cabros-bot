@@ -1123,6 +1123,7 @@ describe('Binance orders API', () => {
 				hasMore: false,
 				limit: 25,
 				nextBefore: null,
+				scanTruncated: false,
 			});
 			expect(listAuditRecordsSpy).toHaveBeenCalledWith(
 				expect.objectContaining({

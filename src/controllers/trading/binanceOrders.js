@@ -32,6 +32,7 @@ async function postBinanceOrder(req, res) {
 
 		binanceOrderAuditService.recordMutation({
 			req,
+			request: req.body,
 			action: 'PLACE',
 			symbol: result.order?.symbol || req.body?.symbol,
 			side: result.order?.side || req.body?.side || null,
@@ -64,6 +65,7 @@ async function postBinanceOrder(req, res) {
 			const status = isAmbiguous ? 'ambiguous' : 'rejected';
 			binanceOrderAuditService.recordMutation({
 				req,
+				request: req.body,
 				action: 'PLACE',
 				symbol: req.body?.symbol,
 				side: req.body?.side || null,
@@ -75,6 +77,7 @@ async function postBinanceOrder(req, res) {
 				status,
 				errorCode: error.code,
 				dryRun: Boolean(req.body?.dryRun),
+				environment: error.environment,
 				binanceOrderId: null,
 				clientOrderId: clientOrderId ?? null,
 				response: { error: error.message, code: error.code },
@@ -92,6 +95,7 @@ async function postBinanceOrder(req, res) {
 		console.error('[BinanceOrdersController] order failed', { code: 'BINANCE_ORDER_FAILED' });
 		binanceOrderAuditService.recordMutation({
 			req,
+			request: req.body,
 			action: 'PLACE',
 			symbol: req.body?.symbol,
 			side: req.body?.side || null,
@@ -134,9 +138,11 @@ async function getBinanceOrders(req, res) {
 		const processingMs = Date.now() - startTime;
 		binanceOrderAuditService.recordMutation({
 			req,
+			request: req.query,
 			action: 'RECONCILE',
 			symbol: req.query?.symbol,
 			status: result.order ? 'confirmed' : 'queried',
+			environment: result.environment,
 			binanceOrderId: result.order?.orderId ?? req.query?.orderId ?? null,
 			clientOrderId: result.order?.clientOrderId ?? req.query?.origClientOrderId ?? null,
 			response: result,
@@ -151,10 +157,12 @@ async function getBinanceOrders(req, res) {
 			console.warn('[BinanceOrdersController] order query rejected', { code: error.code });
 			binanceOrderAuditService.recordMutation({
 				req,
+				request: req.query,
 				action: 'RECONCILE',
 				symbol: req.query?.symbol,
 				status: 'rejected',
 				errorCode: error.code,
+				environment: error.environment,
 				binanceOrderId: req.query?.orderId ?? null,
 				clientOrderId: req.query?.origClientOrderId ?? null,
 				response: { error: error.message, code: error.code },
@@ -205,6 +213,7 @@ async function deleteBinanceOrder(req, res) {
 
 		binanceOrderAuditService.recordMutation({
 			req,
+			request: req.body,
 			action: 'CANCEL',
 			symbol: result.order?.symbol || req.body?.symbol,
 			side: result.order?.side || null,
@@ -212,6 +221,7 @@ async function deleteBinanceOrder(req, res) {
 			quantity: result.order?.origQty ?? result.order?.quantity ?? null,
 			price: result.order?.price ?? null,
 			status: result.order?.status || 'CANCELED',
+			environment: result.environment,
 			binanceOrderId: result.order?.orderId ?? req.body?.orderId ?? null,
 			response: result,
 			processingMs,
@@ -226,6 +236,7 @@ async function deleteBinanceOrder(req, res) {
 			console.warn('[BinanceOrdersController] order cancel rejected', { code: error.code });
 			binanceOrderAuditService.recordMutation({
 				req,
+				request: req.body,
 				action: 'CANCEL',
 				symbol: req.body?.symbol,
 				side: null,
@@ -233,6 +244,7 @@ async function deleteBinanceOrder(req, res) {
 				quantity: null,
 				price: null,
 				status: error.code || 'REJECTED',
+				environment: error.environment,
 				binanceOrderId: req.body?.orderId ?? null,
 				response: { error: error.message, code: error.code },
 				processingMs,
@@ -249,6 +261,7 @@ async function deleteBinanceOrder(req, res) {
 		console.error('[BinanceOrdersController] order cancel failed', { code: 'BINANCE_ORDER_CANCEL_FAILED' });
 		binanceOrderAuditService.recordMutation({
 			req,
+			request: req.body,
 			action: 'CANCEL',
 			symbol: req.body?.symbol,
 			side: null,
@@ -365,6 +378,7 @@ async function getBinanceOrderAudit(req, res) {
 				hasMore,
 				limit: result?.limit ?? effectiveLimit,
 				nextBefore,
+				scanTruncated: Boolean(result?.scanTruncated),
 			},
 		});
 	} catch (error) {

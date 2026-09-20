@@ -10,6 +10,8 @@ const {
 	hashOperator,
 	extractOperatorHash,
 	sanitizeFirestoreValue,
+	buildRequestFingerprint,
+	formatAuditRecord,
 	COLLECTION_NAME,
 	DEFAULT_RETENTION_DAYS,
 } = require('../../src/services/trading/BinanceOrderAuditService');
@@ -676,6 +678,172 @@ describe('BinanceOrderAuditService', () => {
 
 			const result = await service.listAuditRecords({ limit: 25 });
 			expect(result.limit).toBe(25);
+		});
+
+		it('excludes legacy records without environment when querying with environment=testnet', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			queryChain.get.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					{
+						id: 'legacy-1',
+						data: () => ({
+							orderId: 'legacy-1',
+							symbol: 'BTCUSDT',
+							status: 'confirmed',
+							timestamp: '2026-09-10T12:00:00.000Z',
+						}),
+					},
+					{
+						id: 'testnet-1',
+						data: () => ({
+							orderId: 'testnet-1',
+							symbol: 'BTCUSDT',
+							status: 'confirmed',
+							environment: 'testnet',
+							timestamp: '2026-09-10T11:00:00.000Z',
+						}),
+					},
+				],
+			});
+
+			const result = await service.listAuditRecords({ limit: 10, environment: 'testnet' });
+			expect(result.records).toHaveLength(1);
+			expect(result.records[0].id).toBe('testnet-1');
+		});
+
+		it('exposes continuation cursor and scanTruncated when bounded scan limit is reached without collection exhaustion', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			// Create a batch of 100 docs where none match the symbol filter
+			const docs = Array.from({ length: 100 }, (_, i) => ({
+				id: `doc-${i}`,
+				data: () => ({
+					orderId: `doc-${i}`,
+					symbol: 'ETHUSDT',
+					status: 'confirmed',
+					timestamp: new Date(1700000000000 - i * 1000).toISOString(),
+				}),
+			}));
+
+			// When limit is 50, scanLimit is 100.
+			// Return a full batch of 100 docs so snapshot.docs.length === scanLimit (collection not exhausted)
+			// Mock date to force scan loop to exit after one iteration simulating scan bound
+			let callCount = 0;
+			queryChain.get.mockImplementation(async () => {
+				callCount++;
+				if (callCount === 1) {
+					return { empty: false, docs };
+				}
+				return { empty: true, docs: [] };
+			});
+
+			// Spy on Date.now to simulate elapsed time >= MAX_SCAN_MS after first batch
+			const realDateNow = Date.now;
+			let nowCalls = 0;
+			jest.spyOn(Date, 'now').mockImplementation(() => {
+				nowCalls++;
+				// First call is scanStartTime, subsequent calls jump ahead
+				return nowCalls <= 2 ? 1000 : 20000;
+			});
+
+			try {
+				const result = await service.listAuditRecords({ limit: 50, symbol: 'BTCUSDT' });
+				expect(result.records).toHaveLength(0);
+				expect(result.scanTruncated).toBe(true);
+				expect(result.hasMore).toBe(true);
+				expect(result.nextBefore).toBeTruthy();
+			} finally {
+				Date.now.mockRestore();
+			}
+		});
+	});
+
+	describe('buildRequestFingerprint', () => {
+		it('returns consistent hash for numeric and string decimal quantities and prices', () => {
+			const fp1 = buildRequestFingerprint({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: 0.1,
+				price: 60000,
+				timeInForce: 'GTC',
+			});
+
+			const fp2 = buildRequestFingerprint({
+				symbol: 'btcusdt',
+				side: 'buy',
+				type: 'limit',
+				quantity: '0.10000000',
+				price: '60000',
+				timeInForce: 'gtc',
+			});
+
+			expect(fp1).toBeTruthy();
+			expect(fp1).toBe(fp2);
+		});
+
+		it('returns consistent hash when timeInForce is omitted or undefined', () => {
+			const fp1 = buildRequestFingerprint({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: 0.1,
+				price: 60000,
+			});
+
+			const fp2 = buildRequestFingerprint({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '60000',
+				timeInForce: undefined,
+			});
+
+			expect(fp1).toBeTruthy();
+			expect(fp1).toBe(fp2);
+		});
+
+		it('returns null for empty request object', () => {
+			expect(buildRequestFingerprint({})).toBeNull();
+			expect(buildRequestFingerprint(null)).toBeNull();
+		});
+	});
+
+	describe('formatAuditRecord', () => {
+		it('preserves null environment for legacy records without environment or response.environment', () => {
+			const record = formatAuditRecord({
+				id: 'legacy-doc',
+				orderId: 'legacy-doc',
+				symbol: 'BTCUSDT',
+			});
+
+			expect(record.environment).toBeNull();
+		});
+
+		it('recovers response.environment when top-level environment is missing', () => {
+			const record = formatAuditRecord({
+				id: 'legacy-doc-with-resp',
+				orderId: 'legacy-doc-with-resp',
+				symbol: 'BTCUSDT',
+				response: { environment: 'demo' },
+			});
+
+			expect(record.environment).toBe('demo');
+		});
+
+		it('returns null for quoteOrderQty when missing on legacy record', () => {
+			const record = formatAuditRecord({
+				id: 'legacy-doc',
+				orderId: 'legacy-doc',
+				symbol: 'BTCUSDT',
+			});
+
+			expect(record.quoteOrderQty).toBeNull();
 		});
 	});
 });

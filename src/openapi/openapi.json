@@ -6945,9 +6945,22 @@
               "null"
             ]
           },
+          "quoteOrderQty": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ]
+          },
           "price": {
             "type": [
               "number",
+              "string",
+              "null"
+            ]
+          },
+          "timeInForce": {
+            "type": [
               "string",
               "null"
             ]
@@ -7029,6 +7042,9 @@
                   "string",
                   "null"
                 ]
+              },
+              "scanTruncated": {
+                "type": "boolean"
               }
             }
           }

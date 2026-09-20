@@ -148,9 +148,61 @@ function buildParsedCursorTimestamp(parsedCursor) {
 	return date.toISOString();
 }
 
+function canonicalizeRequestValue(val) {
+	if (val === undefined || val === null) return '';
+	if (typeof val === 'number') {
+		return Number.isFinite(val) ? String(val) : '';
+	}
+	const str = String(val).trim();
+	if (!str) return '';
+	const num = Number(str);
+	if (Number.isFinite(num) && /^-?\d+(\.\d+)?$/.test(str)) {
+		const [whole, frac] = str.split('.');
+		if (frac !== undefined) {
+			const trimmedFrac = frac.replace(/0+$/, '');
+			return trimmedFrac.length > 0 ? `${whole}.${trimmedFrac}` : whole;
+		}
+		return whole;
+	}
+	return str;
+}
+
+function buildRequestFingerprint(orderRequest = {}) {
+	if (!orderRequest || typeof orderRequest !== 'object') {
+		return null;
+	}
+	const symbol = typeof orderRequest.symbol === 'string' ? orderRequest.symbol.trim().toUpperCase() : '';
+	const side = typeof orderRequest.side === 'string' ? orderRequest.side.trim().toUpperCase() : '';
+	const type = typeof orderRequest.type === 'string' ? orderRequest.type.trim().toUpperCase() : '';
+	const quantity = canonicalizeRequestValue(orderRequest.quantity);
+	const quoteOrderQty = canonicalizeRequestValue(orderRequest.quoteOrderQty);
+	const price = canonicalizeRequestValue(orderRequest.price);
+	const timeInForce = typeof orderRequest.timeInForce === 'string' ? orderRequest.timeInForce.trim().toUpperCase() : '';
+
+	if (!symbol && !side && !type && !quantity && !quoteOrderQty && !price && !timeInForce) {
+		return null;
+	}
+
+	const fpPayload = [
+		symbol,
+		side,
+		type,
+		quantity,
+		quoteOrderQty,
+		price,
+		timeInForce,
+	].join(':');
+
+	return crypto.createHash('sha256').update(fpPayload).digest('hex');
+}
+
 function formatAuditRecord(doc) {
 	const data = typeof doc.data === 'function' ? doc.data() : (doc || {});
 	const id = doc.id || data.orderId;
+	const environment = data.environment
+		|| data.response?.environment
+		|| null;
+
 	return {
 		id,
 		orderId: data.orderId || id,
@@ -158,7 +210,7 @@ function formatAuditRecord(doc) {
 		symbol: data.symbol || 'UNKNOWN',
 		side: data.side ?? null,
 		type: data.type ?? null,
-		environment: data.environment || 'testnet',
+		environment: environment ? String(environment) : null,
 		status: data.status || 'SUBMITTED',
 		errorCode: data.errorCode ?? null,
 		dryRun: Boolean(data.dryRun),
@@ -166,9 +218,9 @@ function formatAuditRecord(doc) {
 		timestamp: toIsoString(data.timestamp),
 		operator: data.operator || 'unknown',
 		action: data.action || 'PLACE',
-		quantity: data.quantity !== undefined && paramsValue(data.quantity),
-		quoteOrderQty: data.quoteOrderQty !== undefined && paramsValue(data.quoteOrderQty),
-		price: data.price !== undefined && paramsValue(data.price),
+		quantity: paramsValue(data.quantity),
+		quoteOrderQty: paramsValue(data.quoteOrderQty),
+		price: paramsValue(data.price),
 		timeInForce: data.timeInForce ?? null,
 		binanceOrderId: data.binanceOrderId !== undefined && data.binanceOrderId !== null
 			? String(data.binanceOrderId)
@@ -281,17 +333,17 @@ class BinanceOrderAuditService {
 			const timeInForce = params.timeInForce || params.req?.body?.timeInForce || null;
 
 			let requestFingerprint = params.requestFingerprint || null;
-			if (!requestFingerprint && (symbol !== 'UNKNOWN' || side || type)) {
-				const fpPayload = [
+			if (!requestFingerprint) {
+				const requestSource = params.request || params.req?.body || {
 					symbol,
-					side || '',
-					type || '',
-					quantity ?? '',
-					quoteOrderQty ?? '',
-					price ?? '',
-					timeInForce ?? '',
-				].join(':');
-				requestFingerprint = crypto.createHash('sha256').update(fpPayload).digest('hex');
+					side,
+					type,
+					quantity,
+					quoteOrderQty,
+					price,
+					timeInForce,
+				};
+				requestFingerprint = buildRequestFingerprint(requestSource);
 			}
 
 			const dryRun = typeof params.dryRun === 'boolean'
@@ -438,6 +490,9 @@ class BinanceOrderAuditService {
 		let totalScanned = 0;
 		const now = new Date();
 
+		let collectionExhausted = false;
+		let scanTruncated = false;
+
 		while (matches.length < targetCount && totalScanned < MAX_SCAN_DOCS && (Date.now() - scanStartTime) < MAX_SCAN_MS) {
 			if (signal && signal.aborted) {
 				const abortErr = new Error('Query was aborted');
@@ -479,6 +534,7 @@ class BinanceOrderAuditService {
 			}
 
 			if (!snapshot || snapshot.empty || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+				collectionExhausted = true;
 				break;
 			}
 
@@ -496,7 +552,7 @@ class BinanceOrderAuditService {
 
 				if (normalizedSymbol && formatted.symbol !== normalizedSymbol) continue;
 				if (normalizedStatus && !matchesStatus(formatted.status, normalizedStatus)) continue;
-				if (normalizedEnvironment && String(formatted.environment).toLowerCase() !== normalizedEnvironment) continue;
+				if (normalizedEnvironment && String(formatted.environment || '').toLowerCase() !== normalizedEnvironment) continue;
 				if (normalizedOrderId && formatted.orderId !== normalizedOrderId && formatted.binanceOrderId !== normalizedOrderId && formatted.clientOrderId !== normalizedOrderId) continue;
 				if (fromDate && recordDate && recordDate < fromDate) continue;
 				if (toDate && recordDate && recordDate > toDate) continue;
@@ -508,7 +564,10 @@ class BinanceOrderAuditService {
 			const lastDoc = snapshot.docs[snapshot.docs.length - 1];
 			const lastData = typeof lastDoc.data === 'function' ? lastDoc.data() : (lastDoc || {});
 			const lastIso = toIsoString(lastData.timestamp);
-			if (!lastIso) break;
+			if (!lastIso) {
+				collectionExhausted = true;
+				break;
+			}
 
 			pageCursor = {
 				receivedAt: lastIso,
@@ -516,23 +575,41 @@ class BinanceOrderAuditService {
 				timestamp: lastData.timestamp && lastData.timestamp.seconds ? lastData.timestamp : null,
 			};
 
-			if (snapshot.docs.length < scanLimit) break;
+			if (snapshot.docs.length < scanLimit) {
+				collectionExhausted = true;
+				break;
+			}
+		}
+
+		if (!collectionExhausted && matches.length < targetCount && (totalScanned >= MAX_SCAN_DOCS || (Date.now() - scanStartTime) >= MAX_SCAN_MS)) {
+			scanTruncated = true;
 		}
 
 		const records = matches.slice(0, pageSize);
-		const lastRecord = records.length > 0 ? records[records.length - 1] : null;
-		const nextBefore = lastRecord
-			? encodeAlertPaginationCursor({
+		let hasMore = matches.length > pageSize;
+		let nextBefore = null;
+
+		if (hasMore) {
+			const lastRecord = records[records.length - 1];
+			nextBefore = encodeAlertPaginationCursor({
 				receivedAt: lastRecord.timestamp,
 				id: lastRecord.id,
-			})
-			: null;
+			});
+		} else if (scanTruncated && pageCursor) {
+			hasMore = true;
+			nextBefore = encodeAlertPaginationCursor({
+				receivedAt: pageCursor.receivedAt,
+				id: pageCursor.documentId,
+				timestamp: pageCursor.timestamp,
+			});
+		}
 
 		return {
 			records,
-			hasMore: matches.length > pageSize,
+			hasMore,
 			nextBefore,
 			limit: pageSize,
+			scanTruncated,
 		};
 	}
 
@@ -551,6 +628,8 @@ module.exports = {
 	hashOperator,
 	extractOperatorHash,
 	sanitizeFirestoreValue,
+	buildRequestFingerprint,
+	formatAuditRecord,
 	COLLECTION_NAME,
 	DEFAULT_RETENTION_DAYS,
 };
