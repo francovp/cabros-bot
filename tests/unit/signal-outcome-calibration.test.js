@@ -131,7 +131,7 @@ describe('Signal Outcome Confidence Calibration', () => {
 
 			// Interpolated suggestion: 0.75 + ((0.50 - 0.42) / (0.55 - 0.42)) * 0.05 = 0.78
 			expect(result.suggestedThreshold).toBe(0.78);
-			expect(result.suggestedThresholdRationale).toBe('Alerts at 0.78+ show 55%+ target hit rate at 4h window');
+			expect(result.suggestedThresholdRationale).toBe('Alerts at 0.78+ show 64%+ target hit rate at 4h window');
 		});
 
 		it('falls back to doc.score when doc.confidenceScore is undefined for news-monitor source', () => {
@@ -155,6 +155,27 @@ describe('Signal Outcome Confidence Calibration', () => {
 			expect(result.suggestedThreshold).toBe(0.75);
 		});
 
+		it('extracts confidence score from doc.confidenceScore or doc.score for non-news-monitor sources', () => {
+			const docs = Array.from({ length: 20 }, (_, i) => ({
+				id: `doc-${i}`,
+				source: 'webhook-alert',
+				confidenceScore: 0.82,
+				score: -0.82,
+				outcomeEvaluated: true,
+				outcomes: {
+					'4h': { status: 'evaluated', return: 2.1, targetHit: true },
+				},
+			}));
+
+			const result = SignalOutcomeService.computeCalibration(docs);
+
+			expect(result.available).toBe(true);
+			expect(result.totalScoredAlerts).toBe(20);
+			const b = result.buckets.find((x) => x.range === '0.80-0.85');
+			expect(b.count).toBe(20);
+			expect(b.targetHitRate).toBe(1);
+		});
+
 		it('returns suggestedThreshold: null when no bucket reaches 50% target hit rate', () => {
 			const docs = Array.from({ length: 25 }, (_, i) => ({
 				id: `doc-${i}`,
@@ -170,7 +191,63 @@ describe('Signal Outcome Confidence Calibration', () => {
 
 			expect(result.available).toBe(true);
 			expect(result.suggestedThreshold).toBeNull();
-			expect(result.suggestedThresholdRationale).toBe('No confidence bucket achieved ≥50% target hit rate at 4h window');
+			expect(result.suggestedThresholdRationale).toBe('No confidence threshold achieved ≥50% cumulative target hit rate at 4h window');
+		});
+
+		it('returns suggestedThreshold: null when individual bucket hit rate is >= 50% but cumulative hit rate falls below 50%', () => {
+			// Bucket 0.70-0.75 has 12/20 (60%) hit rate
+			const bucket70 = Array.from({ length: 20 }, (_, i) => ({
+				id: `doc-70-${i}`,
+				source: 'webhook-alert',
+				confidenceScore: 0.72,
+				outcomes: {
+					'4h': { status: 'evaluated', return: i < 12 ? 2.0 : -1.0, targetHit: i < 12 },
+				},
+			}));
+			// Bucket 0.90-1.00 has 0/100 (0%) hit rate
+			const bucket90 = Array.from({ length: 100 }, (_, i) => ({
+				id: `doc-90-${i}`,
+				source: 'webhook-alert',
+				confidenceScore: 0.95,
+				outcomes: {
+					'4h': { status: 'evaluated', return: -2.0, targetHit: false },
+				},
+			}));
+
+			const result = SignalOutcomeService.computeCalibration([...bucket70, ...bucket90]);
+
+			expect(result.available).toBe(true);
+			expect(result.totalScoredAlerts).toBe(120);
+			// Cumulative hit rate at 0.70+ is 12 / 120 = 10% (< 50%), so 0.70 must not be recommended
+			expect(result.suggestedThreshold).toBeNull();
+		});
+
+		it('excludes records where the target window status is unavailable or not evaluated', () => {
+			const evaluatedDocs = Array.from({ length: 5 }, (_, i) => ({
+				id: `doc-eval-${i}`,
+				source: 'news-monitor',
+				confidenceScore: 0.85,
+				outcomeEvaluated: true,
+				outcomes: {
+					'4h': { status: 'evaluated', return: 1.0, targetHit: true },
+				},
+			}));
+			const unavailableDocs = Array.from({ length: 20 }, (_, i) => ({
+				id: `doc-unavail-${i}`,
+				source: 'news-monitor',
+				confidenceScore: 0.85,
+				outcomeEvaluated: true,
+				outcomes: {
+					'4h': { status: 'unavailable' },
+					'1h': { status: 'evaluated', return: 0.5, targetHit: true },
+				},
+			}));
+
+			const result = SignalOutcomeService.computeCalibration([...evaluatedDocs, ...unavailableDocs], { window: '4h' });
+
+			// Unavailable outcomes for 4h are excluded from 4h calibration sample
+			expect(result.totalScoredAlerts).toBe(5);
+			expect(result.available).toBe(false);
 		});
 
 		it('ignores unscored or unevaluated outcomes', () => {

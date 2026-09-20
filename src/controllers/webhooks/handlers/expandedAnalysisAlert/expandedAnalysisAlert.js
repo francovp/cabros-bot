@@ -173,6 +173,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 						timeframe: parsed.timeframe,
 						setupType: 'expanded-analysis',
 						score,
+						confidenceScore: typeof score === 'number' ? (score >= 0 && score <= 1 ? score : Math.abs(score)) : null,
 						side: itemSide,
 						price: typeof closePrice === 'number' ? closePrice : null,
 						priceSource: typeof closePrice === 'number' ? 'tradingview-mcp' : null,

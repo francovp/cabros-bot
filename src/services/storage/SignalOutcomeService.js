@@ -810,8 +810,10 @@ async function recordSignalInternal({
 			setupType: setupType ? String(setupType).toLowerCase() : null,
 			score: typeof score === 'number' && Number.isFinite(score) ? score : null,
 			confidenceScore: typeof confidenceScore === 'number' && Number.isFinite(confidenceScore)
-				? confidenceScore
-				: (source === 'news-monitor' && typeof score === 'number' && Number.isFinite(score) ? score : null),
+				? (confidenceScore >= 0 && confidenceScore <= 1 ? confidenceScore : Math.abs(confidenceScore))
+				: (typeof score === 'number' && Number.isFinite(score)
+					? (score >= 0 && score <= 1 ? score : (score >= -1 && score < 0 ? Math.abs(score) : null))
+					: null),
 			side: normSide,
 			price: entryPrice,
 			observedPrice: entryPrice,
@@ -2441,18 +2443,15 @@ function getSignalConfidenceScore(doc) {
 	if (typeof doc.confidenceScore === 'number' && Number.isFinite(doc.confidenceScore)) {
 		return doc.confidenceScore;
 	}
-	if (doc.source === 'news-monitor' && typeof doc.score === 'number' && Number.isFinite(doc.score)) {
-		return doc.score;
+	if (typeof doc.score === 'number' && Number.isFinite(doc.score)) {
+		if (doc.score >= 0 && doc.score <= 1) {
+			return doc.score;
+		}
+		if (doc.score >= -1 && doc.score < 0) {
+			return Math.abs(doc.score);
+		}
 	}
 	return null;
-}
-
-function isDocEvaluated(doc) {
-	if (doc.outcomeEvaluated === true) return true;
-	if (doc.outcomes && typeof doc.outcomes === 'object') {
-		return Object.values(doc.outcomes).some((o) => o && o.status === 'evaluated');
-	}
-	return false;
 }
 
 /**
@@ -2466,11 +2465,22 @@ function computeCalibration(docs = [], options = {}) {
 	const scoredDocs = [];
 	let hasSub70 = false;
 	for (const doc of docs) {
-		if (!doc || !isDocEvaluated(doc)) continue;
+		if (!doc) continue;
+		const targetOutcome = doc.outcomes && doc.outcomes[targetWindowKey];
+		if (!targetOutcome || targetOutcome.status !== 'evaluated') continue;
 		const score = getSignalConfidenceScore(doc);
 		if (score === null) continue;
 		if (score < 0.70) hasSub70 = true;
 		scoredDocs.push({ doc, score });
+	}
+
+	function isTargetHit(doc) {
+		const outcome = doc.outcomes && doc.outcomes[targetWindowKey];
+		if (!outcome) return false;
+		if (outcome.targetHit === true || outcome.firstHit === 'target') return true;
+		const hasTargetBarrier = typeof doc.target === 'number' && Number.isFinite(doc.target) && doc.target > 0;
+		if (!hasTargetBarrier && typeof outcome.return === 'number' && outcome.return > 0) return true;
+		return false;
 	}
 
 	const bucketDefs = hasSub70
@@ -2501,17 +2511,9 @@ function computeCalibration(docs = [], options = {}) {
 			: null;
 
 		// Target hit rate for targetWindowKey
-		const docsTarget = bucketDocs.filter(d => d.outcomes && d.outcomes[targetWindowKey] && d.outcomes[targetWindowKey].status === 'evaluated');
-		const targetHits = docsTarget.filter(d => {
-			const outcome = d.outcomes[targetWindowKey];
-			if (outcome.targetHit === true || outcome.firstHit === 'target') return true;
-			const hasTargetBarrier = typeof d.target === 'number' && Number.isFinite(d.target) && d.target > 0;
-			if (!hasTargetBarrier && typeof outcome.return === 'number' && outcome.return > 0) return true;
-			return false;
-		}).length;
-
-		const targetHitRate = docsTarget.length > 0
-			? parseFloat((targetHits / docsTarget.length).toFixed(2))
+		const targetHits = bucketDocs.filter(d => isTargetHit(d)).length;
+		const targetHitRate = bucketDocs.length > 0
+			? parseFloat((targetHits / bucketDocs.length).toFixed(2))
 			: 0;
 
 		return {
@@ -2538,33 +2540,59 @@ function computeCalibration(docs = [], options = {}) {
 		};
 	}
 
-	// Find lowest bucket with >= 50% target hit rate and count > 0
-	const qualifyingIndex = buckets.findIndex(b => b.count > 0 && b.targetHitRate >= 0.50);
+	// Evaluate candidate thresholds (bucket minimums) based on cumulative population (score >= threshold)
+	const candidates = buckets.map(b => {
+		const cumulativeDocs = scoredDocs.filter(d => d.score >= b._min);
+		const cumulativeHits = cumulativeDocs.filter(d => isTargetHit(d.doc)).length;
+		const cumulativeHitRate = cumulativeDocs.length > 0
+			? parseFloat((cumulativeHits / cumulativeDocs.length).toFixed(4))
+			: 0;
+		return {
+			bucket: b,
+			threshold: b._min,
+			cumulativeCount: cumulativeDocs.length,
+			cumulativeHitRate,
+		};
+	});
+
+	// Find the lowest candidate threshold where both the individual bucket and cumulative population achieve >= 50% hit rate
+	const qualifyingIndex = candidates.findIndex(c => c.cumulativeCount > 0 && c.cumulativeHitRate >= 0.50 && c.bucket.targetHitRate >= 0.50);
 	if (qualifyingIndex === -1) {
 		return {
 			available: true,
 			totalScoredAlerts,
 			buckets: cleanBuckets,
 			suggestedThreshold: null,
-			suggestedThresholdRationale: `No confidence bucket achieved ≥50% target hit rate at ${targetWindowKey} window`,
+			suggestedThresholdRationale: `No confidence threshold achieved ≥50% cumulative target hit rate at ${targetWindowKey} window`,
 		};
 	}
 
-	const qualifyingBucket = buckets[qualifyingIndex];
-	let suggestedThreshold = qualifyingBucket._min;
+	const qualifyingCandidate = candidates[qualifyingIndex];
+	let suggestedThreshold = qualifyingCandidate.threshold;
 
 	// Linearly interpolate if a preceding bucket with data had < 50% hit rate
 	if (qualifyingIndex > 0) {
-		const prevBucket = buckets[qualifyingIndex - 1];
-		if (prevBucket && prevBucket.count > 0 && prevBucket.targetHitRate < 0.50 && qualifyingBucket.targetHitRate > prevBucket.targetHitRate) {
-			const interpolated = qualifyingBucket._min +
-				((0.50 - prevBucket.targetHitRate) / (qualifyingBucket.targetHitRate - prevBucket.targetHitRate)) *
-				(qualifyingBucket._max - qualifyingBucket._min);
-			suggestedThreshold = parseFloat(interpolated.toFixed(2));
+		const prevCandidate = candidates[qualifyingIndex - 1];
+		if (prevCandidate && prevCandidate.bucket.count > 0 && prevCandidate.bucket.targetHitRate < 0.50 && qualifyingCandidate.bucket.targetHitRate > prevCandidate.bucket.targetHitRate) {
+			const interpolated = qualifyingCandidate.threshold +
+				((0.50 - prevCandidate.bucket.targetHitRate) / (qualifyingCandidate.bucket.targetHitRate - prevCandidate.bucket.targetHitRate)) *
+				(qualifyingCandidate.bucket._max - qualifyingCandidate.bucket._min);
+			const roundedInterpolated = parseFloat(interpolated.toFixed(2));
+
+			// Verify cumulative performance at the interpolated threshold
+			const atOrAboveDocs = scoredDocs.filter(d => d.score >= roundedInterpolated);
+			const atOrAboveHits = atOrAboveDocs.filter(d => isTargetHit(d.doc)).length;
+			const atOrAboveHitRate = atOrAboveDocs.length > 0 ? (atOrAboveHits / atOrAboveDocs.length) : 0;
+			if (atOrAboveHitRate >= 0.50) {
+				suggestedThreshold = roundedInterpolated;
+			}
 		}
 	}
 
-	const hitRatePct = Math.round(qualifyingBucket.targetHitRate * 100);
+	const finalAtOrAboveDocs = scoredDocs.filter(d => d.score >= suggestedThreshold);
+	const finalAtOrAboveHits = finalAtOrAboveDocs.filter(d => isTargetHit(d.doc)).length;
+	const finalHitRate = finalAtOrAboveDocs.length > 0 ? (finalAtOrAboveHits / finalAtOrAboveDocs.length) : qualifyingCandidate.cumulativeHitRate;
+	const hitRatePct = Math.round(finalHitRate * 100);
 	const suggestedThresholdRationale = `Alerts at ${suggestedThreshold}+ show ${hitRatePct}%+ target hit rate at ${targetWindowKey} window`;
 
 	return {
@@ -2586,6 +2614,7 @@ async function getOutcomesCalibration({
 	from,
 	to,
 	limit,
+	signal,
 } = {}) {
 	if (!isEnabled()) {
 		const err = new Error('Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.');
@@ -2617,12 +2646,19 @@ async function getOutcomesCalibration({
 	let lastDoc = null;
 
 	const hasFilters = Boolean(symbol || exchange || window);
+	const maxScannedDocs = Math.max(targetLimit * 5, 2000);
+	let totalScanned = 0;
 
 	while (matchedDocs.length < targetLimit) {
+		if (signal && signal.aborted) {
+			break;
+		}
+
 		let query = firestore
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
 			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
+			.orderBy('receivedAt', 'desc')
 			.limit(batchSize);
 
 		if (lastDoc) {
@@ -2639,6 +2675,8 @@ async function getOutcomesCalibration({
 		if (!snapshot || snapshot.empty) {
 			break;
 		}
+
+		totalScanned += snapshot.docs.length;
 
 		for (const doc of snapshot.docs) {
 			if (isRetentionExpired(doc.data() || {})) {
@@ -2660,7 +2698,7 @@ async function getOutcomesCalibration({
 			}
 		}
 
-		if (snapshot.docs.length < batchSize) {
+		if (snapshot.docs.length < batchSize || totalScanned >= maxScannedDocs) {
 			break;
 		}
 		lastDoc = snapshot.docs[snapshot.docs.length - 1];

@@ -21,7 +21,16 @@ function parseLimit(rawLimit) {
 		return DEFAULT_LIMIT;
 	}
 
-	const limit = Number.parseInt(rawLimit, 10);
+	if (typeof rawLimit !== 'string' && typeof rawLimit !== 'number') {
+		return null;
+	}
+
+	const str = String(rawLimit).trim();
+	if (!/^\d+$/.test(str)) {
+		return null;
+	}
+
+	const limit = Number.parseInt(str, 10);
 	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
 		return null;
 	}
@@ -34,7 +43,16 @@ function parseCalibrationLimit(rawLimit) {
 		return DEFAULT_CALIBRATION_LIMIT;
 	}
 
-	const limit = Number.parseInt(rawLimit, 10);
+	if (typeof rawLimit !== 'string' && typeof rawLimit !== 'number') {
+		return null;
+	}
+
+	const str = String(rawLimit).trim();
+	if (!/^\d+$/.test(str)) {
+		return null;
+	}
+
+	const limit = Number.parseInt(str, 10);
 	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_CALIBRATION_LIMIT) {
 		return null;
 	}
@@ -308,6 +326,7 @@ function getOutcomesCalibration(req, res) {
 			window,
 			from: from.value,
 			to: to.value,
+			signal: req.requestDeadlineSignal,
 		});
 
 		return res.status(200).json({

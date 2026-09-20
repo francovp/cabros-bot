@@ -498,6 +498,7 @@ function postAlert(botOrGetter) {
 						timeframe: parsed.timeframe,
 						setupType: (alert.enriched && alert.enriched.setup_type) || 'tradingview-enrichment',
 						score: alert.enriched ? alert.enriched.sentiment_score : null,
+						confidenceScore: alert.enriched?.confidence ?? (typeof alert.enriched?.sentiment_score === 'number' ? Math.abs(alert.enriched.sentiment_score) : null),
 						side: parsed.side,
 						price: mcpPrice,
 						stop: stopLevel,

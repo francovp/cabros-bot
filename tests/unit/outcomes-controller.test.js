@@ -616,13 +616,15 @@ describe('Outcomes Controller Unit Tests', () => {
 		it('returns 400 for invalid limit', async () => {
 			signalOutcomeService.isEnabled.mockReturnValue(true);
 
-			const req = httpMocks.createRequest({ method: 'GET', url: '/api/outcomes/calibration', query: { limit: '9999' } });
-			const res = httpMocks.createResponse();
+			for (const invalidLimit of ['9999', '1.9', '10junk', 'abc', '-5', '0']) {
+				const req = httpMocks.createRequest({ method: 'GET', url: '/api/outcomes/calibration', query: { limit: invalidLimit } });
+				const res = httpMocks.createResponse();
 
-			await getOutcomesCalibration(req, res);
+				await getOutcomesCalibration(req, res);
 
-			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData().code).toBe('INVALID_REQUEST');
+				expect(res.statusCode).toBe(400);
+				expect(res._getJSONData().code).toBe('INVALID_REQUEST');
+			}
 		});
 
 		it('returns 400 for invalid window', async () => {
@@ -682,6 +684,27 @@ describe('Outcomes Controller Unit Tests', () => {
 				window: '4h',
 				symbol: 'BTCUSDT',
 				exchange: 'BINANCE',
+			}));
+		});
+
+		it('forwards req.requestDeadlineSignal to getOutcomesCalibration', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomesCalibration.mockResolvedValue({ available: false, buckets: [] });
+
+			const mockSignal = { aborted: false };
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/calibration',
+				query: { window: '4h' },
+			});
+			req.requestDeadlineSignal = mockSignal;
+			const res = httpMocks.createResponse();
+
+			await getOutcomesCalibration(req, res);
+
+			expect(signalOutcomeService.getOutcomesCalibration).toHaveBeenCalledWith(expect.objectContaining({
+				window: '4h',
+				signal: mockSignal,
 			}));
 		});
 
