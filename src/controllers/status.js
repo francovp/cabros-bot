@@ -330,6 +330,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		backend: cache.dedupMode.backend,
 		cacheSize: newsMonitorCacheSize,
 	};
+	const newsMonitorCache = newsMonitorEnabled ? cache.getStatus(newsMonitorEnabled) : null;
 
 	const signalOutcomeWorkerStatus = SignalOutcomeService.getWorkerStatus();
 	const jobExecutionQueueStatus = jobQueue.getStatus();
@@ -444,6 +445,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 					&& hasValue(process.env.CF_AIG_MODEL || DEFAULT_CF_AIG_MODEL),
 			}),
 			newsMonitorDedup,
+			...(newsMonitorCache ? { newsMonitorCache } : {}),
 			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
 			firebaseRemoteConfig: remoteConfigStatus,
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
