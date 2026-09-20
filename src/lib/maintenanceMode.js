@@ -318,6 +318,12 @@ async function sendMaintenanceReply(context, chatId, options = {}) {
 		? options
 		: (options?.timeoutMs ?? DEFAULT_MAINTENANCE_REPLY_TIMEOUT_MS);
 
+	const messageThreadId = (typeof options === 'object' && options?.messageThreadId !== undefined)
+		? options.messageThreadId
+		: (context?.message?.message_thread_id
+			?? context?.update?.message?.message_thread_id
+			?? context?.callbackQuery?.message?.message_thread_id);
+
 	const controller = new AbortController();
 	let timeoutId;
 	const timeoutPromise = new Promise((_, reject) => {
@@ -328,14 +334,22 @@ async function sendMaintenanceReply(context, chatId, options = {}) {
 	});
 
 	try {
+		const payload = {
+			chat_id: targetChatId,
+			text: TELEGRAM_MAINTENANCE_NOTICE,
+			parse_mode: 'MarkdownV2',
+		};
+		if (messageThreadId !== undefined && messageThreadId !== null) {
+			payload.message_thread_id = messageThreadId;
+		}
+
 		const sendPromise = typeof context?.telegram?.callApi === 'function' && targetChatId !== undefined && targetChatId !== null
-			? context.telegram.callApi('sendMessage', {
-				chat_id: targetChatId,
-				text: TELEGRAM_MAINTENANCE_NOTICE,
-				parse_mode: 'MarkdownV2',
-			}, { signal: controller.signal })
+			? context.telegram.callApi('sendMessage', payload, { signal: controller.signal })
 			: (typeof context?.reply === 'function'
-				? context.reply(TELEGRAM_MAINTENANCE_NOTICE, { parse_mode: 'MarkdownV2' })
+				? context.reply(TELEGRAM_MAINTENANCE_NOTICE, {
+					parse_mode: 'MarkdownV2',
+					...(messageThreadId !== undefined && messageThreadId !== null ? { message_thread_id: messageThreadId } : {}),
+				})
 				: Promise.resolve());
 
 		await Promise.race([sendPromise, timeoutPromise]);

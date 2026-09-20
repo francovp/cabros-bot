@@ -612,6 +612,44 @@ describe('maintenanceMode', () => {
 			if (timerId) clearTimeout(timerId);
 		});
 
+		it('preserves message_thread_id in callApi payload and reply options when replying in a Telegram topic', async () => {
+			const callApi = jest.fn().mockResolvedValue({ message_id: 43 });
+			const contextWithCallApi = {
+				telegram: { callApi },
+				chat: { id: 777 },
+				message: { message_thread_id: 9999 },
+			};
+
+			await maintenanceMode.sendMaintenanceReply(contextWithCallApi, 777);
+
+			expect(callApi).toHaveBeenCalledTimes(1);
+			expect(callApi).toHaveBeenCalledWith(
+				'sendMessage',
+				{
+					chat_id: 777,
+					text: maintenanceMode.TELEGRAM_MAINTENANCE_NOTICE,
+					parse_mode: 'MarkdownV2',
+					message_thread_id: 9999,
+				},
+				expect.objectContaining({
+					signal: expect.any(AbortSignal),
+				})
+			);
+
+			const reply = jest.fn().mockResolvedValue(undefined);
+			const contextWithReply = {
+				chat: { id: 888 },
+				message: { message_thread_id: 8888 },
+				reply,
+			};
+
+			await maintenanceMode.sendMaintenanceReply(contextWithReply);
+			expect(reply).toHaveBeenCalledWith(maintenanceMode.TELEGRAM_MAINTENANCE_NOTICE, {
+				parse_mode: 'MarkdownV2',
+				message_thread_id: 8888,
+			});
+		});
+
 		it('extracts chatId automatically and respects per-chat throttling in sendMaintenanceReply', async () => {
 			const reply = jest.fn().mockResolvedValue(undefined);
 			const context = {
