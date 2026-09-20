@@ -116,9 +116,9 @@ function idempotencyMiddleware(req, res, next) {
 	const requestFingerprint = buildRequestFingerprint(req);
 
 	const handleReservation = (reservation) => {
-		if (req.requestDeadlineExceeded) {
+		if (requestDeadline.isTerminated ? requestDeadline.isTerminated(req) : req.requestDeadlineExceeded) {
 			if (reservation && reservation.state === 'fresh') {
-				const releaseError = new Error('Initial idempotent request exceeded its request deadline before the controller started');
+				const releaseError = new Error('Initial idempotent request exceeded its request deadline or disconnected before the controller started');
 				releaseError.code = 'IDEMPOTENCY_RELEASED';
 				releaseError.statusCode = 409;
 				idempotencyService.release(key, requestFingerprint, releaseError);
@@ -257,7 +257,7 @@ function idempotencyMiddleware(req, res, next) {
 			return reservation
 				.then(handleReservation)
 				.catch((error) => {
-					if (req.requestDeadlineExceeded) {
+					if (requestDeadline.isTerminated ? requestDeadline.isTerminated(req) : req.requestDeadlineExceeded) {
 						return requestDeadline.guard(req, res, () => {});
 					}
 					if (error.code === 'IDEMPOTENCY_CONFLICT') {
@@ -279,7 +279,7 @@ function idempotencyMiddleware(req, res, next) {
 		}
 		return handleReservation(reservation);
 	} catch (error) {
-		if (req.requestDeadlineExceeded) {
+		if (requestDeadline.isTerminated ? requestDeadline.isTerminated(req) : req.requestDeadlineExceeded) {
 			return requestDeadline.guard(req, res, () => {});
 		}
 		if (error.code === 'IDEMPOTENCY_CONFLICT') {

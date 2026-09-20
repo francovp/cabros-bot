@@ -97,6 +97,36 @@ describe('Firebase admin authorization', () => {
 		}
 	});
 
+	it('does not enter the route when client disconnects during async token verification', async () => {
+		let releaseVerification;
+		admin.auth = jest.fn(() => ({
+			verifyIdToken: jest.fn(() => new Promise((resolve) => {
+				releaseVerification = resolve;
+			})),
+		}));
+		const req = httpMocks.createRequest({
+			method: 'POST',
+			url: '/api/trading/binance/orders',
+			headers: { authorization: 'Bearer client-token' },
+		});
+		const res = httpMocks.createResponse({ eventEmitter: require('events').EventEmitter });
+		const next = jest.fn();
+
+		try {
+			requestDeadline(req, res, jest.fn());
+			const validationPromise = validateAdminAccess(req, res, next);
+			res.emit('close');
+			expect(req.requestDeadlineClientDisconnected).toBe(true);
+			expect(req.requestDeadlineSignal.aborted).toBe(true);
+			releaseVerification({ uid: 'operator-1', roles: ['admin.operator'] });
+			await validationPromise;
+
+			expect(next).not.toHaveBeenCalled();
+		} finally {
+			requestDeadline.resetForTests();
+		}
+	});
+
 	it.each(['auth/id-token-expired', 'auth/id-token-revoked', 'auth/argument-error'])
 		('fails closed without exposing a %s verification error', async (code) => {
 			const verifyIdToken = jest.fn().mockRejectedValue({ code, message: 'token must not leak' });

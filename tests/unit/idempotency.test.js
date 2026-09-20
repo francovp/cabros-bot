@@ -419,6 +419,43 @@ describe('Idempotency Service & Middleware', () => {
 			}
 		});
 
+		test('does not enter the controller when an async reservation resolves after client disconnect', async () => {
+			const key = 'disconnect-idempotency-reservation-key';
+			const payload = { value: 'disconnect-reservation-payload' };
+			const req = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/slow-disconnect',
+				headers: { 'idempotency-key': key },
+				body: payload,
+			});
+			const res = httpMocks.createResponse({ eventEmitter: require('events').EventEmitter });
+			const next = jest.fn();
+			let resolveReservation;
+			jest.spyOn(idempotencyService, 'reserve').mockReturnValue(new Promise((resolve) => {
+				resolveReservation = resolve;
+			}));
+			const release = jest.spyOn(idempotencyService, 'release');
+
+			try {
+				requestDeadline(req, res, () => idempotencyMiddleware(req, res, next));
+				res.emit('close');
+				expect(req.requestDeadlineClientDisconnected).toBe(true);
+
+				resolveReservation({ state: 'fresh' });
+				await Promise.resolve();
+				await Promise.resolve();
+
+				expect(next).not.toHaveBeenCalled();
+				expect(release).toHaveBeenCalledWith(
+					key,
+					expect.objectContaining({ body: payload }),
+					expect.objectContaining({ code: 'IDEMPOTENCY_RELEASED' }),
+				);
+			} finally {
+				requestDeadline.resetForTests();
+			}
+		});
+
 		test('should cache and replay a response on second call with same key', async () => {
 			const key = 'test-replay-key';
 			req.headers['idempotency-key'] = key;

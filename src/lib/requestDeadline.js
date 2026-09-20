@@ -264,8 +264,18 @@ function requestDeadline(req, res, next) {
 	next();
 }
 
+function isRequestTerminated(req) {
+	return Boolean(
+		req && (
+			req.requestDeadlineExceeded ||
+			req.requestDeadlineClientDisconnected ||
+			(req.requestDeadlineSignal && req.requestDeadlineSignal.aborted)
+		)
+	);
+}
+
 function rejectExpiredRequest(req, res, next) {
-	if (req.requestDeadlineExceeded) return;
+	if (isRequestTerminated(req)) return;
 	return next();
 }
 
@@ -296,3 +306,4 @@ requestDeadline.constants = Object.freeze({
 module.exports = requestDeadline;
 requestDeadline.resolveRequestId = resolveRequestId;
 requestDeadline.guard = rejectExpiredRequest;
+requestDeadline.isTerminated = isRequestTerminated;
