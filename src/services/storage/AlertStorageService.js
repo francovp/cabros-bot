@@ -107,7 +107,8 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_BINANCE_ORDER_AUDIT === 'true'
 		|| process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS === 'true'
 		|| process.env.ENABLE_TOKEN_COST_BUDGET === 'true'
-		|| rcBudgetEnabled;
+		|| rcBudgetEnabled
+		|| process.env.ENABLE_FIRESTORE_ALERT_FEEDBACK === 'true';
 }
 
 function getAlertStorageRetentionDays() {

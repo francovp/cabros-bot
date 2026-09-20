@@ -30,11 +30,26 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	getMetricsSummary: jest.fn(),
 }));
 
+jest.mock('../../src/services/storage/AlertFeedbackStorageService', () => {
+	const actual = jest.requireActual('../../src/services/storage/AlertFeedbackStorageService');
+	return {
+		...actual,
+		isEnabled: jest.fn(),
+		saveFeedback: jest.fn(),
+		listFeedbackEntries: jest.fn(),
+		getSummaryBlock: jest.fn(),
+		getStatus: jest.fn(),
+		VALID_VERDICTS: actual.VALID_VERDICTS,
+		STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
+	};
+});
+
 const crypto = require('crypto');
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const alertFeedbackStorageService = require('../../src/services/storage/AlertFeedbackStorageService');
 const alertHandler = require('../../src/controllers/webhooks/handlers/alert/alert');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const { encodeAlertPaginationCursor } = require('../../src/services/storage/alertPaginationCursor');
@@ -65,6 +80,21 @@ describe('Alerts API Integration Tests', () => {
 		alertStorageService.getLatestReplayForAlert.mockResolvedValue(null);
 		signalOutcomeService.isEnabled.mockReturnValue(false);
 		signalOutcomeService.getMetricsSummary.mockResolvedValue('No measurements found');
+		alertFeedbackStorageService.getSummaryBlock.mockResolvedValue({
+			total: 0,
+			up: 0,
+			down: 0,
+			ratio: 0,
+			bySource: {},
+			bySymbol: {},
+			byExchange: {},
+			source: 'memory',
+			window: {
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 1000,
+			},
+		});
 		const { parseAlertPaginationCursor: actualParseCursor } = jest.requireActual('../../src/services/storage/alertPaginationCursor');
 		alertStorageService.parseAlertPaginationCursor.mockImplementation(actualParseCursor);
 		app.use('/api', getRoutes(null));
@@ -449,6 +479,21 @@ describe('Alerts API Integration Tests', () => {
 					byChannel: {
 						telegram: { averageMs: 100, p95Ms: 100, sampleCount: 1 },
 						whatsapp: { averageMs: 150, p95Ms: 150, sampleCount: 1 },
+					},
+				},
+				feedback: {
+					total: 0,
+					up: 0,
+					down: 0,
+					ratio: 0,
+					bySource: {},
+					bySymbol: {},
+					byExchange: {},
+					source: 'memory',
+					window: {
+						from: '2026-06-06T00:00:00.000Z',
+						to: '2026-06-07T00:00:00.000Z',
+						limit: 1000,
 					},
 				},
 			},

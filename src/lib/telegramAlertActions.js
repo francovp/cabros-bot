@@ -15,6 +15,7 @@
 
 const { parseCallbackData, getActionCodes } = require('../services/alerts/telegramAlertKeyboard');
 const alertStorageService = require('../services/storage/AlertStorageService');
+const alertFeedbackStorageService = require('../services/storage/AlertFeedbackStorageService');
 const { idempotencyService } = require('../services/storage/IdempotencyService');
 const sentryService = require('../services/monitoring/SentryService');
 const alertModule = require('../controllers/webhooks/handlers/alert/alert');
@@ -459,7 +460,22 @@ async function handleDismiss(context) {
 
 async function handleVote(context, parsed, storeEntry) {
 	const side = parsed.action === getActionCodes().ACTION_VOTE_UP ? 'up' : 'down';
-	recordQualityFeedback(storeEntry.alertId, side, context?.update?.callbackQuery?.from?.id);
+	const senderId = context?.update?.callbackQuery?.from?.id;
+	recordQualityFeedback(storeEntry.alertId, side, senderId);
+
+	if (alertFeedbackStorageService && typeof alertFeedbackStorageService.isEnabled === 'function' && alertFeedbackStorageService.isEnabled()) {
+		try {
+			await alertFeedbackStorageService.saveFeedback({
+				alertId: storeEntry.alertId,
+				chatId: String(senderId ?? context?.update?.callbackQuery?.message?.chat?.id ?? 'unknown'),
+				verdict: side,
+				source: 'webhook-alert',
+			});
+		} catch (error) {
+			console.warn('[telegramAlertActions] Failed to persist feedback:', error.message);
+		}
+	}
+
 	await context.answerCbQuery(side === 'up' ? '👍 Gracias por tu feedback' : '👎 Gracias por tu feedback', { show_alert: false });
 }
 

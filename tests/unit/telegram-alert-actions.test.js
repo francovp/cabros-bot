@@ -9,6 +9,7 @@ const {
 } = require('../../src/lib/telegramAlertActions');
 
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const alertFeedbackStorageService = require('../../src/services/storage/AlertFeedbackStorageService');
 const alertModule = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 
@@ -433,6 +434,62 @@ describe('telegramAlertActions', () => {
 			await handleAlertAction(makeContext(`r:${alertId}`));
 
 			expect(sendToChannels.mock.calls[0][1]).toEqual(['telegram', 'whatsapp']);
+		});
+
+		it('records upvote in memory and persists to AlertFeedbackStorageService when enabled', async () => {
+			const alertId = 'alert-vote-up-1';
+			jest.spyOn(alertFeedbackStorageService, 'isEnabled').mockReturnValue(true);
+			const saveSpy = jest.spyOn(alertFeedbackStorageService, 'saveFeedback').mockResolvedValue({
+				persisted: true,
+				source: 'firestore',
+			});
+			const ctx = makeContext(`vu:${alertId}`);
+
+			await handleAlertAction(ctx);
+
+			expect(ctx.answerCbQuery).toHaveBeenCalledWith('👍 Gracias por tu feedback', { show_alert: false });
+			expect(saveSpy).toHaveBeenCalledWith({
+				alertId,
+				chatId: '42',
+				verdict: 'up',
+				source: 'webhook-alert',
+			});
+			const recorded = getRecordedQualityFeedback();
+			expect(recorded).toContainEqual(expect.objectContaining({
+				alertId,
+				side: 'up',
+				senderId: '42',
+			}));
+		});
+
+		it('records downvote in memory and persists to AlertFeedbackStorageService when enabled', async () => {
+			const alertId = 'alert-vote-down-1';
+			jest.spyOn(alertFeedbackStorageService, 'isEnabled').mockReturnValue(true);
+			const saveSpy = jest.spyOn(alertFeedbackStorageService, 'saveFeedback').mockResolvedValue({
+				persisted: true,
+				source: 'firestore',
+			});
+			const ctx = makeContext(`vd:${alertId}`);
+
+			await handleAlertAction(ctx);
+
+			expect(ctx.answerCbQuery).toHaveBeenCalledWith('👎 Gracias por tu feedback', { show_alert: false });
+			expect(saveSpy).toHaveBeenCalledWith({
+				alertId,
+				chatId: '42',
+				verdict: 'down',
+				source: 'webhook-alert',
+			});
+		});
+
+		it('fails open when AlertFeedbackStorageService throws on saveFeedback', async () => {
+			const alertId = 'alert-vote-fail';
+			jest.spyOn(alertFeedbackStorageService, 'isEnabled').mockReturnValue(true);
+			jest.spyOn(alertFeedbackStorageService, 'saveFeedback').mockRejectedValue(new Error('Firestore timeout'));
+			const ctx = makeContext(`vu:${alertId}`);
+
+			await expect(handleAlertAction(ctx)).resolves.not.toThrow();
+			expect(ctx.answerCbQuery).toHaveBeenCalledWith('👍 Gracias por tu feedback', { show_alert: false });
 		});
 	});
 });

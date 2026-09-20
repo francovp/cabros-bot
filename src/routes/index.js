@@ -31,6 +31,8 @@ const {
 	summarizeAlerts,
 	exportAlerts,
 	listReplays,
+	submitFeedback,
+	getFeedbackSummary,
 } = require('../controllers/alerts/alerts');
 const { listOutcomes, summarizeOutcomes, getOutcomesCalibration } = require('../controllers/outcomes/outcomes');
 const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/symbolAnalyses/symbolAnalyses');
@@ -76,6 +78,8 @@ function getRoutes(botOrGetter) {
 	router.post('/alerts/batch/delete', ...adminWrite, batchDeleteAlerts);
 	router.post('/alerts/:alertId/replay', ...adminWrite, idempotencyMiddleware, replayAlert(botOrGetter));
 	router.get('/alerts/:alertId', ...adminRead, getAlertById);
+	router.post('/alerts/feedback', ...adminWrite, idempotencyMiddleware, submitFeedback);
+	router.get('/alerts/feedback/summary', ...adminRead, getFeedbackSummary);
 	router.post('/admin/test-alert', ...adminWrite, idempotencyMiddleware, postTestAlert(botOrGetter));
 	router.get('/admin/events', ...sseRead, handleSseStream);
 	router.get('/outcomes', ...adminRead, listOutcomes);
