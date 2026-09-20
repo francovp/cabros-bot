@@ -160,11 +160,37 @@ describe('TradingViewMcpService toolMetrics', () => {
 		expect(service.getToolMetrics().coin_analysis.callCount).toBe(1);
 	});
 
+	it('instruments concurrent tool calls accurately without race conditions', async () => {
+		service._executeCallTool = jest.fn().mockImplementation(async (toolName) => {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			return { ok: true, tool: toolName };
+		});
+
+		await Promise.all([
+			service._callTool('coin_analysis', {}),
+			service._callTool('coin_analysis', {}),
+			service._callTool('combined_analysis', {}),
+		]);
+
+		const metrics = service.getToolMetrics();
+		expect(metrics.coin_analysis.callCount).toBe(2);
+		expect(metrics.coin_analysis.successCount).toBe(2);
+		expect(metrics.combined_analysis.callCount).toBe(1);
+		expect(metrics.combined_analysis.successCount).toBe(1);
+	});
+
 	it('includes toolMetrics in getStatus() when enabled and matching runtimeStatus', () => {
 		service._recordToolSuccess('coin_analysis', 120);
 
 		const status = service.getStatus({ enabled: true });
 		expect(status.toolMetrics).toBeDefined();
 		expect(status.toolMetrics.coin_analysis.callCount).toBe(1);
+	});
+
+	it('omits toolMetrics in getStatus() when enabled is false', () => {
+		service._recordToolSuccess('coin_analysis', 120);
+
+		const status = service.getStatus({ enabled: false });
+		expect(status.toolMetrics).toBeUndefined();
 	});
 });

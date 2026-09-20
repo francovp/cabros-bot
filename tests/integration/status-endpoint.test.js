@@ -2042,4 +2042,16 @@ describe('Status endpoints', () => {
 			},
 		});
 	});
+
+	it('omits TradingView MCP toolMetrics when ENABLE_TRADINGVIEW_MCP_ENRICHMENT is false', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 100);
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.toolMetrics).toBeUndefined();
+	});
 });
