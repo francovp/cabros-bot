@@ -44,7 +44,6 @@ describe('FallbackTradePlan', () => {
 				invalidation_level: 98.5, // 100 * (1 - 0.015)
 				target_level: 103, // 100 * (1 + 0.030)
 				risk_reward_ratio: 2,
-				setup_type: 'trend_continuation',
 				levelsSource: 'derived-quote',
 			});
 		});
@@ -56,7 +55,6 @@ describe('FallbackTradePlan', () => {
 				invalidation_level: 101.5, // 100 * (1 + 0.015)
 				target_level: 97, // 100 * (1 - 0.030)
 				risk_reward_ratio: 2,
-				setup_type: 'trend_continuation',
 				levelsSource: 'derived-quote',
 			});
 		});
@@ -68,7 +66,6 @@ describe('FallbackTradePlan', () => {
 				invalidation_level: 58500, // 60000 * (1 - 0.025)
 				target_level: 63000, // 60000 * (1 + 0.050)
 				risk_reward_ratio: 2,
-				setup_type: 'trend_continuation',
 				levelsSource: 'derived-quote',
 			});
 		});
@@ -80,7 +77,6 @@ describe('FallbackTradePlan', () => {
 				invalidation_level: 950, // 1000 * (1 - 0.050)
 				target_level: 1100, // 1000 * (1 + 0.100)
 				risk_reward_ratio: 2,
-				setup_type: 'trend_continuation',
 				levelsSource: 'derived-quote',
 			});
 		});
@@ -197,7 +193,6 @@ describe('FallbackTradePlan', () => {
 				invalidation_level: 68250,
 				target_level: 73500,
 				risk_reward_ratio: 2,
-				setup_type: 'trend_continuation',
 				levelsSource: 'derived-quote',
 				price_data: { current_price: 70000 },
 				symbol: 'BTCUSDT',
@@ -221,7 +216,6 @@ describe('FallbackTradePlan', () => {
 				invalidation_level: 2562.5, // 2500 * (1 + 0.025)
 				target_level: 2375, // 2500 * (1 - 0.050)
 				risk_reward_ratio: 2,
-				setup_type: 'trend_continuation',
 				levelsSource: 'derived-quote',
 				price_data: { current_price: 2500 },
 				symbol: 'ETHUSDT',

@@ -12,13 +12,13 @@ const { initializeNotificationServices } = require('../../src/controllers/webhoo
 const mockSearchResults = [
 	{
 		title: 'Test Result 1',
-		snippet: 'Test snippet 1',
+		snippet: 'Bitcoin breakout above key resistance level with strong volume momentum',
 		url: 'https://test1.com',
 		sourceDomain: 'test1.com',
 	},
 	{
 		title: 'Test Result 2',
-		snippet: 'Test snippet 2',
+		snippet: 'Support and resistance trend analysis for BTC',
 		url: 'https://test2.com',
 		sourceDomain: 'test2.com',
 	},
@@ -35,7 +35,7 @@ describe('Alert Grounding Integration', () => {
 	let savedEnv;
 
 	beforeEach(async () => {
-		savedEnv = { ...process.env };
+		savedEnv = saveEnv();
 		// Mock environment variables
 		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
@@ -98,7 +98,7 @@ describe('Alert Grounding Integration', () => {
 	});
 
 	afterEach(() => {
-		process.env = savedEnv;
+		restoreEnv(savedEnv);
 		delete global.fetch;
 	});
 
