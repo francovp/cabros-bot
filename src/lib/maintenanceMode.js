@@ -277,6 +277,47 @@ function maintenanceModeMiddleware(req, res, next) {
 	return next();
 }
 
+const DEFAULT_MAINTENANCE_REPLY_TIMEOUT_MS = 5000;
+
+/**
+ * Sends a bounded maintenance reply to a Telegram chat, preventing stalled connections
+ * from blocking Telegraf's polling loop.
+ *
+ * @param {Object} context Telegraf update context
+ * @param {string|number} chatId
+ * @param {number} [timeoutMs]
+ * @returns {Promise<void>}
+ */
+async function sendMaintenanceReply(context, chatId, timeoutMs = DEFAULT_MAINTENANCE_REPLY_TIMEOUT_MS) {
+	const controller = new AbortController();
+	let timeoutId;
+	const timeoutPromise = new Promise((_, reject) => {
+		timeoutId = setTimeout(() => {
+			controller.abort(new Error(`Telegram maintenance reply timed out after ${timeoutMs}ms`));
+			reject(new Error(`Telegram maintenance reply timed out after ${timeoutMs}ms`));
+		}, timeoutMs);
+	});
+
+	try {
+		const sendPromise = typeof context?.telegram?.callApi === 'function' && chatId !== undefined && chatId !== null
+			? context.telegram.callApi('sendMessage', {
+				chat_id: chatId,
+				text: TELEGRAM_MAINTENANCE_NOTICE,
+			}, { signal: controller.signal })
+			: (typeof context?.reply === 'function'
+				? context.reply(TELEGRAM_MAINTENANCE_NOTICE)
+				: Promise.resolve());
+
+		await Promise.race([sendPromise, timeoutPromise]);
+	} catch (error) {
+		console.error('[commands] Failed to send Telegram maintenance reply:', error.message);
+	} finally {
+		if (timeoutId) {
+			clearTimeout(timeoutId);
+		}
+	}
+}
+
 /**
  * Telegraf middleware to intercept incoming bot commands when maintenance mode is active.
  * Leaves non-command updates (callbacks, plain text messages) unaffected.
@@ -295,13 +336,7 @@ async function telegramMaintenanceMode(context, next) {
 
 		const chatId = context?.chat?.id ?? context?.message?.chat?.id ?? context?.update?.message?.chat?.id;
 		if (!isMaintenanceReplyThrottled(chatId)) {
-			if (context && typeof context.reply === 'function') {
-				try {
-					await context.reply(TELEGRAM_MAINTENANCE_NOTICE);
-				} catch (error) {
-					console.error('[commands] Failed to send Telegram maintenance reply:', error.message);
-				}
-			}
+			await sendMaintenanceReply(context, chatId);
 		}
 		return;
 	}
@@ -325,10 +360,12 @@ module.exports = {
 	MAINTENANCE_ERROR_RESPONSE,
 	TELEGRAM_MAINTENANCE_NOTICE,
 	NOTIFICATION_FAILURE_RETRY_COOLDOWN_MS,
+	DEFAULT_MAINTENANCE_REPLY_TIMEOUT_MS,
 	isMaintenanceModeEnabled,
 	setBotGetter,
 	notifyAdminOnToggle,
 	checkAndNotifyMaintenanceModeToggle,
+	sendMaintenanceReply,
 	maintenanceModeMiddleware,
 	telegramMaintenanceMode,
 	isTelegramCommand,

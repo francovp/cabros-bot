@@ -513,5 +513,51 @@ describe('maintenanceMode', () => {
 			// Chat 1 was evicted, so it is no longer throttled even at now + 40
 			expect(maintenanceMode._isMaintenanceReplyThrottled(1, now + 40, { maxBuckets: 3 })).toBe(false);
 		});
+
+		it('sends maintenance reply via context.telegram.callApi with AbortController signal', async () => {
+			const callApi = jest.fn().mockResolvedValue({ message_id: 42 });
+			const context = {
+				telegram: { callApi },
+				chat: { id: 777 },
+			};
+
+			await maintenanceMode.sendMaintenanceReply(context, 777);
+
+			expect(callApi).toHaveBeenCalledTimes(1);
+			expect(callApi).toHaveBeenCalledWith(
+				'sendMessage',
+				{
+					chat_id: 777,
+					text: maintenanceMode.TELEGRAM_MAINTENANCE_NOTICE,
+				},
+				expect.objectContaining({
+					signal: expect.any(AbortSignal),
+				})
+			);
+		});
+
+		it('aborts and fails open when context.telegram.callApi times out', async () => {
+			let receivedSignal;
+			let timerId;
+			const callApi = jest.fn().mockImplementation((method, payload, options) => {
+				receivedSignal = options.signal;
+				return new Promise((resolve) => {
+					timerId = setTimeout(resolve, 500);
+					options.signal?.addEventListener('abort', () => {
+						clearTimeout(timerId);
+						resolve();
+					});
+				});
+			});
+			const context = {
+				telegram: { callApi },
+				chat: { id: 888 },
+			};
+
+			// Use 10ms timeout to trigger abort quickly
+			await expect(maintenanceMode.sendMaintenanceReply(context, 888, 10)).resolves.toBeUndefined();
+			expect(receivedSignal.aborted).toBe(true);
+			if (timerId) clearTimeout(timerId);
+		});
 	});
 });
