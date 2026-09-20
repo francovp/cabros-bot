@@ -415,7 +415,7 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
 	});
 
-	it('documents notificationRedrive in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
+	it('documents notificationRedrive and zeroChannelBroadcasts in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');
 		const capabilities = findItem(collection.item, 'Get Capabilities');
@@ -427,6 +427,7 @@ describe('Postman collection contract', () => {
 			role: 'web',
 			workerRole: 'web',
 			maxAgeMs: 3600000,
+			zeroChannelBroadcasts: 0,
 			lastSweepAt: null,
 			lastSweepResult: null,
 		}));
@@ -438,6 +439,7 @@ describe('Postman collection contract', () => {
 			role: 'web',
 			workerRole: 'web',
 			maxAgeMs: 3600000,
+			zeroChannelBroadcasts: 0,
 			lastSweepAt: null,
 			lastSweepResult: null,
 		}));
