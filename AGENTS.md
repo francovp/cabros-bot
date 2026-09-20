@@ -60,7 +60,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/services/prompts/` — Langfuse-backed PromptService that resolves prompts with file-backed local defaults.
 - `src/controllers/helpers.js` — Small numeric helper (`round10`) used by price formatting.
 - `src/lib/logging.js` — Configures `console.*` levels via `LOG_LEVEL` and emits one-line structured JSON logs with multi-layer secret redaction (sensitive object keys, URL query secrets, JSON string secrets, key-value scalar patterns, Authorization headers, Bearer tokens, Telegram bot tokens, Discord webhook tokens, OpenAI keys, and request-scoped `registerSecretValue` / `clearSecretValue` registry helpers).
-- `src/lib/rateLimiter.js` — Global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`, with safe defaults for invalid values). Core alert/message webhook ingest uses a separate finite 1,000-request bucket per IP and window.
+- `src/lib/rateLimiter.js` — Global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`, with safe defaults for invalid values). Webhook/MCP ingest endpoints (`/api/webhook/alert`, `/api/webhook/message`, `/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, `/api/webhook/volume-confirmation`, `/api/webhook/symbol-analysis`, `/api/news-monitor`) use a separate finite 1,000-request bucket per IP and window.
 - `src/lib/cors.js` — Express CORS middleware configuring explicit origin allowlists (`https://cabros-bot.web.app`, `https://cabros-bot.firebaseapp.com`, `https://cabros-bot-production.up.railway.app`, `http://localhost:*`, and `CORS_ALLOWED_ORIGINS`).
 - `src/openapi/openapi.json` — Canonical OpenAPI 3.1 contract for every mounted `/api` operation.
 - `src/openapi/docs.js` — Public, read-only `/openapi.json` and self-hosted Swagger UI `/docs` routes.
@@ -110,7 +110,7 @@ Maintain these patterns and rules in all contributions:
 ### Common Failure Modes
 - **Missing BOT_TOKEN**: Throws on startup (explicit check in `index.js`).
 - **Preview Environments**: Gated bot launch disabled in Render preview PR builds or Vercel preview deployments (`RENDER==='true' && IS_PULL_REQUEST==='true'` or `VERCEL_ENV==='preview'`).
-- **HTTP 429**: Non-ingest requests are rejected if the global rate limit window is exceeded (`RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX`); core alert/message ingest has its own 1,000-request bucket.
+- **HTTP 429**: Non-ingest requests are rejected if the global rate limit window is exceeded (`RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX`); webhook/MCP ingest endpoints have their own 1,000-request bucket.
 - **JSON Error Parsing**: Webhook error responses must not crash if `error.response` is missing or shaped unexpectedly.
 
 ### Commits and Cleanups
@@ -1176,13 +1176,13 @@ This feature introduces backend runtime error monitoring using Sentry's Node SDK
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
 
-## Webhook Ingest Rate-Limit Separation (CB-239 / Issue #532)
+## Webhook Ingest Rate-Limit Separation (CB-239 / Issue #532 / Issue #866)
 
-The global rate limiter keeps its existing per-IP `RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS` bucket for ordinary routes. Core `POST /api/webhook/alert` and `POST /api/webhook/message` requests use an isolated finite 1,000-request bucket per IP and the same window, with URL normalization matching Express's case-insensitive, non-strict routing. This prevents normal TradingView bursts from consuming the ordinary bucket while preserving downstream API-key validation. No new environment variable, Remote Config parameter, endpoint, OpenAPI, or Postman contract was added; the fixed cap remains a bounded security control.
+The global rate limiter keeps its existing per-IP `RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS` bucket for ordinary routes. Automated webhook and MCP POST endpoints (`POST /api/webhook/alert`, `POST /api/webhook/message`, `POST /api/webhook/expanded-analysis-alert`, `POST /api/webhook/market-scanner-alert`, `POST /api/webhook/volume-confirmation`, `POST /api/webhook/symbol-analysis`, and `POST /api/news-monitor`) use an isolated finite 1,000-request bucket per IP and the same window, with URL normalization matching Express's case-insensitive, non-strict routing. This prevents normal TradingView and scanner bursts from consuming the ordinary client bucket while preserving downstream API-key validation. No new environment variable, Remote Config parameter, endpoint, OpenAPI, or Postman contract was added; the fixed cap remains a bounded security control.
 
 **Coverage**:
 - `src/lib/rateLimiter.js` — Selects the isolated webhook bucket by exact request path and preserves bounded cleanup/fallback behavior.
-- `tests/unit/rateLimiter.test.js` and `tests/integration/rate-limiter-webhook.test.js` — Cover webhook burst headroom, bucket isolation, and the ordinary 429 boundary.
+- `tests/unit/rateLimiter.test.js` and `tests/integration/rate-limiter-webhook.test.js` — Cover webhook burst headroom, bucket isolation, and the ordinary 429 boundary across all webhook/MCP endpoints.
 
 ## Gemini Evidence-Based Sentiment Calibration (CB-238 / Issue #530)
 

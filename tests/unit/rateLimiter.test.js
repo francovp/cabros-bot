@@ -157,7 +157,18 @@ describe('Rate Limiter Middleware', () => {
 		}
 	});
 
-	test.each(['/api/webhook/alert', '/api/webhook/alert/', '/API/WEBHOOK/MESSAGE/'])('uses a separate high-capacity bucket for %s', (url) => {
+	test.each([
+		'/api/webhook/alert',
+		'/api/webhook/alert/',
+		'/API/WEBHOOK/MESSAGE/',
+		'/api/webhook/expanded-analysis-alert',
+		'/API/WEBHOOK/EXPANDED-ANALYSIS-ALERT/',
+		'/api/webhook/market-scanner-alert',
+		'/api/webhook/volume-confirmation',
+		'/api/webhook/symbol-analysis',
+		'/api/news-monitor',
+		'/API/NEWS-MONITOR/',
+	])('uses a separate high-capacity bucket for %s', (url) => {
 		process.env.RATE_LIMIT_MAX = '2';
 		req.method = 'POST';
 		req.url = url;
@@ -168,6 +179,23 @@ describe('Rate Limiter Middleware', () => {
 		}
 
 		expect(next).toHaveBeenCalledTimes(101);
+	});
+
+	test('exports WEBHOOK_INGEST_PATHS containing all six webhook/MCP endpoints and news-monitor', () => {
+		const expectedPaths = [
+			'/api/webhook/alert',
+			'/api/webhook/message',
+			'/api/webhook/expanded-analysis-alert',
+			'/api/webhook/market-scanner-alert',
+			'/api/webhook/volume-confirmation',
+			'/api/webhook/symbol-analysis',
+			'/api/news-monitor',
+		];
+		expect(rateLimiter.WEBHOOK_INGEST_PATHS).toBeInstanceOf(Set);
+		for (const path of expectedPaths) {
+			expect(rateLimiter.WEBHOOK_INGEST_PATHS.has(path)).toBe(true);
+		}
+		expect(rateLimiter.WEBHOOK_INGEST_PATHS.size).toBe(expectedPaths.length);
 	});
 
 	test('keeps the ordinary bucket isolated and rate limited', () => {
