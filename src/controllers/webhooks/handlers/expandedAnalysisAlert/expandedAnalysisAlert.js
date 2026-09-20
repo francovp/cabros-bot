@@ -175,6 +175,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 						score,
 						side: itemSide,
 						price: typeof closePrice === 'number' ? closePrice : null,
+						priceSource: typeof closePrice === 'number' ? 'tradingview-mcp' : null,
 						stop: typeof row.stopLoss === 'number' ? row.stopLoss : null,
 						target: typeof row.takeProfit === 'number' ? row.takeProfit : null,
 						sources: [],

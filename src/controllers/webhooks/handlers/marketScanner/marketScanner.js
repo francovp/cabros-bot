@@ -228,6 +228,7 @@ function postMarketScannerAlert(botOrGetter) {
 								score: itemScore,
 								side: itemSide,
 								price: validPrice,
+								priceSource: validPrice !== null ? 'tradingview-mcp' : null,
 								stop: stopLoss,
 								target: takeProfit,
 								sources: [],
@@ -380,6 +381,14 @@ function buildScanArgs(parsed, scanType) {
 	};
 	if (scanType === 'bollinger_scan') {
 		args.bbw_threshold = parsed.bbwThreshold;
+	} else if (scanType === 'rating_filter') {
+		args.rating = parsed.rating;
+	} else if (scanType === 'consecutive_candles_scan') {
+		args.pattern_type = parsed.consecutiveCandlesPatternType;
+		args.candle_count = parsed.candleCount;
+		if (parsed.minGrowth !== undefined) {
+			args.min_growth = parsed.minGrowth;
+		}
 	}
 	return args;
 }

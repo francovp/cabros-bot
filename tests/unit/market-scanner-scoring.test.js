@@ -371,6 +371,39 @@ describe('Market Scanner Scoring', () => {
 				status: 'counter-trend',
 			}));
 		});
+
+		it('scores a rating_filter item incorporating bollinger_rating modifier and reason text', () => {
+			const item = {
+				symbol: 'BINANCE:STXUSDT',
+				changePercent: 2.72,
+				bollinger_rating: 3,
+				indicators: { close: 1.85, RSI: 68.0 },
+				volume_ratio: 1.6,
+			};
+			const result = scoreScannerItem(item, 'rating_filter');
+
+			expect(result.score).toBeGreaterThanOrEqual(50);
+			expect(result.reason).toContain('BB rating +3');
+			expect(result.reason).toContain('RSI 68.0');
+		});
+
+		it('scores a consecutive_candles_scan item with persistence strength and body ratio', () => {
+			const item = {
+				symbol: 'BINANCE:AVAXUSDT',
+				changePercent: 4.8,
+				pattern_type: 'bullish',
+				candle_count: 3,
+				pattern_strength: 85,
+				candle_body_ratio: 0.75,
+				indicators: { close: 25.4, RSI: 62.0 },
+				volume_ratio: 1.4,
+			};
+			const result = scoreScannerItem(item, 'consecutive_candles_scan');
+
+			expect(result.score).toBeGreaterThanOrEqual(50);
+			expect(result.reason).toContain('strength 85');
+			expect(result.reason).toContain('body 0.75');
+		});
 	});
 
 	describe('rankScannerItems', () => {

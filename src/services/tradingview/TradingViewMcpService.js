@@ -8,9 +8,47 @@ const {
 	getRiskRewardRatio,
 } = require('./expandedAnalysisAlertReport');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const alertStorageService = require('../storage/AlertStorageService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
 const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
+const TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID = 'tradingview-mcp';
+const DEFAULT_HEARTBEAT_TIMEOUT_MS = 2000;
+
+let adminModule = null;
+function getFirebaseAdmin() {
+	if (!adminModule) {
+		try {
+			adminModule = require('firebase-admin');
+		} catch {
+			adminModule = null;
+		}
+	}
+	return adminModule;
+}
+
+function awaitWithTimeout(promise, timeoutMs, message) {
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		const timerId = setTimeout(() => {
+			settled = true;
+			reject(new Error(message));
+		}, timeoutMs);
+
+		Promise.resolve(promise).then((value) => {
+			if (settled) return;
+			settled = true;
+			globalThis.clearTimeout?.(timerId);
+			resolve(value);
+		}, (error) => {
+			if (settled) return;
+			settled = true;
+			globalThis.clearTimeout?.(timerId);
+			reject(error);
+		});
+	});
+}
 
 function getAbortMessage(signal, fallback) {
 	const reason = signal && signal.reason;
@@ -237,6 +275,86 @@ class TradingViewMcpService {
 	getScannerErrorCategoryCounts() {
 		const counts = (this.runtimeStatus && this.runtimeStatus.errorCategoryCounts) || createEmptyErrorCategoryCounts();
 		return { ...counts };
+	}
+
+	async persistRuntimeStatus(options = {}) {
+		const firestore = options.firestore || alertStorageService.getFirestore();
+		if (!firestore) {
+			return false;
+		}
+		const timeoutMs = options.timeoutMs || DEFAULT_HEARTBEAT_TIMEOUT_MS;
+		const status = this.getStatus({ enabled: true });
+		const adminMod = getFirebaseAdmin();
+		const payload = {
+			worker: 'tradingview-mcp',
+			status: status.status,
+			lastCheckedAt: status.lastCheckedAt || null,
+			lastSuccessAt: status.lastSuccessAt || null,
+			lastFailureAt: status.lastFailureAt || null,
+			lastErrorCategory: status.lastErrorCategory || null,
+			consecutiveFailures: this.consecutiveFailures,
+			circuitBreaker: this.getCircuitBreakerStatus(),
+			updatedAt: adminMod?.firestore?.Timestamp?.fromDate
+				? adminMod.firestore.Timestamp.fromDate(new Date())
+				: new Date().toISOString(),
+		};
+		try {
+			const writePromise = firestore
+				.collection(HEARTBEAT_COLLECTION_NAME)
+				.doc(TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID)
+				.set(payload, { merge: true });
+			await awaitWithTimeout(writePromise, timeoutMs, 'TradingView MCP status persist timed out');
+			return true;
+		} catch (error) {
+			this.logger?.warn?.(`[TradingViewMcpService] Failed to persist runtime status: ${error.message}`);
+			return false;
+		}
+	}
+
+	async syncDurableStatus(options = {}) {
+		const firestore = options.firestore || alertStorageService.getFirestore();
+		if (!firestore) {
+			return null;
+		}
+		const timeoutMs = options.timeoutMs || DEFAULT_HEARTBEAT_TIMEOUT_MS;
+		try {
+			const docPromise = firestore
+				.collection(HEARTBEAT_COLLECTION_NAME)
+				.doc(TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID)
+				.get();
+			const snapshot = await awaitWithTimeout(docPromise, timeoutMs, 'TradingView MCP status fetch timed out');
+			if (!snapshot || !snapshot.exists) {
+				return null;
+			}
+			const data = (typeof snapshot.data === 'function' ? snapshot.data() : snapshot.data) || {};
+			if (data.status) {
+				const remoteCheckedAtMs = data.lastCheckedAt ? new Date(data.lastCheckedAt).getTime() : 0;
+				const localCheckedAtMs = this.runtimeStatus.lastCheckedAt ? new Date(this.runtimeStatus.lastCheckedAt).getTime() : 0;
+				if (this.runtimeStatus.status === 'unknown' || remoteCheckedAtMs >= localCheckedAtMs) {
+					this.runtimeStatus = {
+						...this.runtimeStatus,
+						status: data.status,
+						lastCheckedAt: data.lastCheckedAt || this.runtimeStatus.lastCheckedAt,
+						lastSuccessAt: data.lastSuccessAt || this.runtimeStatus.lastSuccessAt,
+						lastFailureAt: data.lastFailureAt || this.runtimeStatus.lastFailureAt,
+						lastErrorCategory: data.lastErrorCategory !== undefined ? data.lastErrorCategory : this.runtimeStatus.lastErrorCategory,
+					};
+					if (Number.isFinite(data.consecutiveFailures)) {
+						this.consecutiveFailures = Math.max(this.consecutiveFailures, data.consecutiveFailures);
+					}
+					if (data.circuitBreaker && data.circuitBreaker.state === 'open') {
+						this.breakerState = 'open';
+						if (data.circuitBreaker.openedAt) {
+							this.breakerOpenedAt = data.circuitBreaker.openedAt;
+						}
+					}
+				}
+			}
+			return this.getStatus({ enabled: true });
+		} catch (error) {
+			this.logger?.warn?.(`[TradingViewMcpService] Failed to sync durable status: ${error.message}`);
+			return null;
+		}
 	}
 
 	async enrichFromAlertText(alertText, options = {}) {
@@ -510,6 +628,27 @@ class TradingViewMcpService {
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
 				throw new Error('TradingView MCP multi_timeframe_analysis returned invalid payload');
+			}
+
+			return normalizedResult;
+		}, { signal });
+	}
+
+	async callMultiAgentAnalysis({ symbol, exchange, timeframe, signal }) {
+		return this._withRuntimeStatus(async () => {
+			const rpcResult = await this._callTool('multi_agent_analysis', {
+				symbol,
+				exchange,
+				timeframe,
+			}, { signal });
+			const normalizedResult = this._unwrapSchemaResult(rpcResult);
+
+			if (normalizedResult && normalizedResult.error) {
+				throw new Error(normalizedResult.error);
+			}
+
+			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
+				throw new Error('TradingView MCP multi_agent_analysis returned invalid payload');
 			}
 
 			return normalizedResult;
@@ -1145,6 +1284,9 @@ class TradingViewMcpService {
 					successCount: this[key].successCount + 1,
 				};
 			});
+			void this.persistRuntimeStatus().catch((err) => {
+				this.logger?.warn?.(`[TradingViewMcpService] Failed to persist runtime status: ${err.message}`);
+			});
 			return result;
 		} catch (error) {
 			if (signal && signal.aborted && getAbortMessage(signal, '') === 'Job cancelled by user') {
@@ -1171,6 +1313,9 @@ class TradingViewMcpService {
 					failureCount: this[key].failureCount + 1,
 					errorCategoryCounts: nextCounts,
 				};
+			});
+			void this.persistRuntimeStatus().catch((err) => {
+				this.logger?.warn?.(`[TradingViewMcpService] Failed to persist runtime status: ${err.message}`);
 			});
 			throw error;
 		}
@@ -1338,4 +1483,6 @@ module.exports = {
 	TradingViewMcpService,
 	tradingViewMcpService,
 	DEFAULT_TRADINGVIEW_MCP_URL,
+	HEARTBEAT_COLLECTION_NAME,
+	TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID,
 };
