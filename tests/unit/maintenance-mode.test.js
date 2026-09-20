@@ -199,6 +199,64 @@ describe('maintenanceMode', () => {
 			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
 			expect(sendMessage).toHaveBeenCalledTimes(2);
 		});
+
+		it('resets latch when Remote Config is toggled off in background without any requests', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '12345';
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			const sendMessage = jest.fn().mockResolvedValue({ message_id: 1 });
+			maintenanceMode.setBotGetter(() => ({ telegram: { sendMessage } }));
+
+			// Remote Config activates maintenance mode
+			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_MAINTENANCE_MODE: true }, Date.now(), 'v1');
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+
+			// Remote config disables maintenance mode in background - NO requests or checks made during this time
+			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_MAINTENANCE_MODE: false }, Date.now(), 'v2');
+
+			// Remote config re-enables maintenance mode in background
+			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_MAINTENANCE_MODE: true }, Date.now(), 'v3');
+
+			// First request arrives in new maintenance window -> must notify!
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(2);
+		});
+
+		it('resets latch when Remote Config template version changes across background refreshes', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '12345';
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			const sendMessage = jest.fn().mockResolvedValue({ message_id: 1 });
+			maintenanceMode.setBotGetter(() => ({ telegram: { sendMessage } }));
+
+			// Version 1 enables maintenance mode
+			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_MAINTENANCE_MODE: true }, Date.now(), 'v1');
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+
+			// Version 2 published with maintenance mode enabled (e.g. toggled off and on between polling intervals)
+			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_MAINTENANCE_MODE: true }, Date.now(), 'v2');
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(2);
+		});
+
+		it('allows manual latch reset via resetNotificationLatch', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '12345';
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+			const sendMessage = jest.fn().mockResolvedValue({ message_id: 1 });
+			maintenanceMode.setBotGetter(() => ({ telegram: { sendMessage } }));
+
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+
+			// Second check within same window does not notify
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+
+			// Manually reset latch
+			maintenanceMode.resetNotificationLatch();
+			await maintenanceMode.checkAndNotifyMaintenanceModeToggle();
+			expect(sendMessage).toHaveBeenCalledTimes(2);
+		});
 	});
 
 	describe('isTelegramCommand', () => {
@@ -277,6 +335,46 @@ describe('maintenanceMode', () => {
 
 			expect(next).toHaveBeenCalledTimes(1);
 			expect(reply).not.toHaveBeenCalled();
+		});
+
+		it('drops spam before reaching maintenance reply when rate limiter is placed ahead in pipeline', async () => {
+			const { telegramCommandRateLimiter } = require('../../src/controllers/commands');
+			telegramCommandRateLimiter.reset();
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+
+			const reply = jest.fn().mockResolvedValue(undefined);
+			function buildCmdCtx(chatId) {
+				return {
+					message: {
+						text: '/scanner',
+						entities: [{ type: 'bot_command', offset: 0, length: 8 }],
+					},
+					update: {
+						message: {
+							chat: { id: chatId },
+						},
+					},
+					reply,
+				};
+			}
+
+			const handler = jest.fn();
+			async function runPipeline(ctx) {
+				await telegramCommandRateLimiter(ctx, async () => {
+					await maintenanceMode.telegramMaintenanceMode(ctx, handler);
+				});
+			}
+
+			for (let i = 0; i < 3; i++) {
+				await runPipeline(buildCmdCtx(999));
+			}
+			expect(reply).toHaveBeenCalledTimes(3);
+			expect(reply).toHaveBeenLastCalledWith(maintenanceMode.TELEGRAM_MAINTENANCE_NOTICE);
+
+			await runPipeline(buildCmdCtx(999));
+			expect(reply).toHaveBeenCalledTimes(4);
+			expect(reply).toHaveBeenLastCalledWith(expect.stringContaining('demasiadas solicitudes'));
+			expect(handler).not.toHaveBeenCalled();
 		});
 	});
 });

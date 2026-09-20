@@ -120,6 +120,26 @@ let lastErrorCategory = null;
 let refreshTimer = null;
 let loadingPromise = null;
 let consecutiveFailures = 0;
+const changeListeners = new Set();
+
+function addChangeListener(fn) {
+	if (typeof fn === 'function') {
+		changeListeners.add(fn);
+	}
+	return () => {
+		changeListeners.delete(fn);
+	};
+}
+
+function notifyChangeListeners(prevOverrides, nextOverrides, version) {
+	for (const fn of changeListeners) {
+		try {
+			fn({ prevOverrides, nextOverrides, templateVersion: version });
+		} catch (err) {
+			console.warn('[RemoteConfigService] Change listener failed:', err?.message);
+		}
+	}
+}
 
 function isEnabled() {
 	return process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true';
@@ -419,6 +439,7 @@ async function loadNow(options = {}) {
 				}
 			});
 
+			const prevOverrides = remoteOverrides;
 			remoteOverrides = nextOverrides;
 			remoteLoadedAt = Date.now();
 			templateVersion = getTemplateVersion(template);
@@ -428,13 +449,16 @@ async function loadNow(options = {}) {
 			if (invalidValue) {
 				console.warn('[RemoteConfigService] Ignored invalid allow-listed value');
 			}
+			notifyChangeListeners(prevOverrides, remoteOverrides, templateVersion);
 			return true;
 		} catch (error) {
+			const prevOverrides = remoteOverrides;
 			remoteOverrides = {};
 			remoteLoadedAt = null;
 			lastErrorCategory = getErrorCategory(error);
 			consecutiveFailures += 1;
 			console.warn('[RemoteConfigService] Remote Config load failed:', lastErrorCategory);
+			notifyChangeListeners(prevOverrides, remoteOverrides, null);
 			return false;
 		} finally {
 			loadingPromise = null;
@@ -484,13 +508,16 @@ module.exports = {
 	loadNow,
 	start,
 	stop,
+	addChangeListener,
 	_resetForTesting: resetForTesting,
-	_setRemoteOverridesForTesting(overrides, loadedAt = Date.now()) {
+	_setRemoteOverridesForTesting(overrides, loadedAt = Date.now(), version = 'test') {
+		const prevOverrides = remoteOverrides;
 		remoteOverrides = { ...overrides };
 		remoteLoadedAt = loadedAt;
-		templateVersion = 'test';
+		templateVersion = version;
 		lastSuccessfulLoad = new Date(loadedAt).toISOString();
 		lastErrorCategory = null;
 		consecutiveFailures = 0;
+		notifyChangeListeners(prevOverrides, remoteOverrides, templateVersion);
 	},
 };

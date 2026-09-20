@@ -131,8 +131,8 @@ async function bootstrapApplication() {
 	if (shouldLaunchTelegramBot) {
 		console.log('Telegram Bot is enabled');
 		bot = new Telegraf(token);
-		bot.use(telegramMaintenanceMode);
 		bot.use(telegramCommandRateLimiter);
+		bot.use(telegramMaintenanceMode);
 		bot.command(['precio'], getPrice);
 		bot.command(['cryptobot'], cryptoBotCmd);
 		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);

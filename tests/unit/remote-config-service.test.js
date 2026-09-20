@@ -682,5 +682,22 @@ describe('RemoteConfigService', () => {
 				valueType: 'NUMBER',
 			}));
 		});
+
+		it('notifies registered change listeners when remote overrides change', () => {
+			const listener = jest.fn();
+			const unsubscribe = remoteConfigService.addChangeListener(listener);
+
+			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_MAINTENANCE_MODE: true }, Date.now(), '42');
+
+			expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+				prevOverrides: {},
+				nextOverrides: { ENABLE_MAINTENANCE_MODE: true },
+				templateVersion: '42',
+			}));
+
+			unsubscribe();
+			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_MAINTENANCE_MODE: false });
+			expect(listener).toHaveBeenCalledTimes(1);
+		});
 	});
 });

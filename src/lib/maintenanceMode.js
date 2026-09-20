@@ -11,8 +11,33 @@ const MAINTENANCE_ERROR_RESPONSE = Object.freeze({
 const TELEGRAM_MAINTENANCE_NOTICE = '⚠️ El bot se encuentra temporalmente en modo de mantenimiento. Por favor, intenta más tarde.';
 
 let lastNotifiedMaintenanceMode = false;
+let lastNotifiedTemplateVersion = null;
+let lastSeenTemplateVersion = null;
 let isNotifying = false;
 let globalBotGetter = null;
+
+function resetNotificationLatch() {
+	lastNotifiedMaintenanceMode = false;
+	lastNotifiedTemplateVersion = null;
+	lastSeenTemplateVersion = null;
+}
+
+function handleRemoteConfigChange({ prevOverrides, nextOverrides, templateVersion }) {
+	const prevVal = prevOverrides?.ENABLE_MAINTENANCE_MODE;
+	const nextVal = nextOverrides?.ENABLE_MAINTENANCE_MODE;
+
+	if (nextVal === false || (prevVal === true && nextVal !== true) || (prevVal === false && nextVal === true)) {
+		resetNotificationLatch();
+	} else if (nextVal !== true && !isMaintenanceModeEnabled()) {
+		resetNotificationLatch();
+	} else if (templateVersion && lastNotifiedTemplateVersion && templateVersion !== lastNotifiedTemplateVersion) {
+		resetNotificationLatch();
+	}
+}
+
+if (typeof remoteConfigService.addChangeListener === 'function') {
+	remoteConfigService.addChangeListener(handleRemoteConfigChange);
+}
 
 /**
  * Returns whether maintenance mode is currently enabled.
@@ -21,7 +46,10 @@ let globalBotGetter = null;
  */
 function isMaintenanceModeEnabled() {
 	let enabled = false;
+	let currentTemplateVersion = null;
 	try {
+		const status = remoteConfigService.getStatus();
+		currentTemplateVersion = status?.templateVersion || null;
 		const runtimeConfig = remoteConfigService.getRuntimeConfig();
 		if (typeof runtimeConfig.ENABLE_MAINTENANCE_MODE === 'boolean') {
 			enabled = runtimeConfig.ENABLE_MAINTENANCE_MODE;
@@ -33,8 +61,19 @@ function isMaintenanceModeEnabled() {
 		enabled = process.env.ENABLE_MAINTENANCE_MODE === 'true';
 	}
 
+	if (currentTemplateVersion && lastSeenTemplateVersion && currentTemplateVersion !== lastSeenTemplateVersion) {
+		if (lastNotifiedTemplateVersion && currentTemplateVersion !== lastNotifiedTemplateVersion) {
+			lastNotifiedMaintenanceMode = false;
+			lastNotifiedTemplateVersion = null;
+		}
+	}
+	if (currentTemplateVersion) {
+		lastSeenTemplateVersion = currentTemplateVersion;
+	}
+
 	if (!enabled && lastNotifiedMaintenanceMode) {
 		lastNotifiedMaintenanceMode = false;
+		lastNotifiedTemplateVersion = null;
 	}
 	return enabled;
 }
@@ -130,14 +169,21 @@ async function checkAndNotifyMaintenanceModeToggle(options = {}) {
 			const notified = await notifyAdminOnToggle(options);
 			if (notified && isMaintenanceModeEnabled()) {
 				lastNotifiedMaintenanceMode = true;
+				try {
+					lastNotifiedTemplateVersion = remoteConfigService.getStatus()?.templateVersion || null;
+				} catch (_) {
+					lastNotifiedTemplateVersion = null;
+				}
 			} else if (!isMaintenanceModeEnabled()) {
 				lastNotifiedMaintenanceMode = false;
+				lastNotifiedTemplateVersion = null;
 			}
 		} finally {
 			isNotifying = false;
 		}
 	} else if (!isEnabled && lastNotifiedMaintenanceMode) {
 		lastNotifiedMaintenanceMode = false;
+		lastNotifiedTemplateVersion = null;
 	}
 }
 
@@ -189,6 +235,7 @@ async function telegramMaintenanceMode(context, next) {
 	if (isMaintenanceModeEnabled()) {
 		const bot = context && (context.bot || { telegram: context.telegram });
 		checkAndNotifyMaintenanceModeToggle({ bot }).catch(() => {});
+
 		if (context && typeof context.reply === 'function') {
 			try {
 				await context.reply(TELEGRAM_MAINTENANCE_NOTICE);
@@ -205,9 +252,12 @@ async function telegramMaintenanceMode(context, next) {
  * Testing reset helper
  */
 function resetForTesting() {
-	lastNotifiedMaintenanceMode = false;
+	resetNotificationLatch();
 	isNotifying = false;
 	globalBotGetter = null;
+	if (typeof remoteConfigService.addChangeListener === 'function') {
+		remoteConfigService.addChangeListener(handleRemoteConfigChange);
+	}
 }
 
 module.exports = {
@@ -220,5 +270,7 @@ module.exports = {
 	maintenanceModeMiddleware,
 	telegramMaintenanceMode,
 	isTelegramCommand,
+	resetNotificationLatch,
+	_handleRemoteConfigChange: handleRemoteConfigChange,
 	_resetForTesting: resetForTesting,
 };
