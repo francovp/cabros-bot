@@ -804,7 +804,7 @@ function replayAlert(botOrGetter) {
 
 			const replayPayload = {
 				text: storedAlert.text,
-				enriched: storedAlert.enrichmentData || undefined,
+				enriched: (reEnriched ? newEnrichmentData : storedAlert.enrichmentData) || undefined,
 				source: storedAlert.source || 'alert-replay',
 				replay: {
 					originalAlertId: alertId,
@@ -830,6 +830,7 @@ function replayAlert(botOrGetter) {
 				alertId,
 				replayId,
 				results,
+				...(reEnriched ? { reEnriched: true } : {}),
 			});
 		});
 	};
