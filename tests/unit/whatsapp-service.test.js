@@ -271,4 +271,31 @@ describe('WhatsAppService', () => {
 			expect(secondPayload.message.endsWith('…')).toBe(false);
 		});
 	});
+
+	describe('isConfigured', () => {
+		const originalEnv = { ...process.env };
+
+		afterEach(() => {
+			process.env = { ...originalEnv };
+		});
+
+		it('returns true only when ENABLE_WHATSAPP_ALERTS, apiUrl, apiKey, and chatId are present', () => {
+			process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+			process.env.WHATSAPP_API_URL = 'https://api.green.com/';
+			process.env.WHATSAPP_API_KEY = 'test-key';
+			process.env.WHATSAPP_CHAT_ID = 'chat@g.us';
+
+			const service = new WhatsAppService();
+			expect(service.isConfigured()).toBe(true);
+
+			process.env.ENABLE_WHATSAPP_ALERTS = 'false';
+			expect(service.isConfigured()).toBe(false);
+
+			process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+			delete process.env.WHATSAPP_CHAT_ID;
+			const missingChatService = new WhatsAppService();
+			expect(missingChatService.isConfigured()).toBe(false);
+		});
+	});
 });
+

@@ -97,6 +97,20 @@ class WhatsAppService extends NotificationChannel {
 	}
 
 	/**
+	 * Check if WhatsApp is configured for alert delivery by operator intent.
+	 * Requires the ENABLE_WHATSAPP_ALERTS flag, API URL, API key, and chat ID.
+	 * @returns {boolean}
+	 */
+	isConfigured() {
+		return (
+			process.env.ENABLE_WHATSAPP_ALERTS === 'true' &&
+			Boolean(this.apiUrl || process.env.WHATSAPP_API_URL) &&
+			Boolean(this.apiKey || process.env.WHATSAPP_API_KEY) &&
+			Boolean(this.chatId || process.env.WHATSAPP_CHAT_ID || process.env.WHATSAPP_PREVIEW_CHAT_ID)
+		);
+	}
+
+	/**
 	 * Return template-mode status (non-secret) for /api/status dependency reporting.
 	 * @returns {{enabled: boolean, templateName: string|null, sent: number, fallbacks: number, lastError: string|null, lastErrorAt: string|null}}
 	 */
