@@ -584,20 +584,12 @@ class JobService {
 	}
 
 	/**
-	 * Creates a job, validates the request synchronously, and runs it in the background.
+	 * Validates a job request synchronously based on job type and payload.
 	 * @param {string} type - 'expanded-analysis' | 'market-scanner'
 	 * @param {Object} payload - request body payload
-	 * @param {Function|Object} botOrGetter - Telegraf bot instance or getter
-	 * @returns {Object} The created job metadata
+	 * @returns {{ parsed: Object, validatedTimeoutMs: number }}
 	 */
-	async createJob(type, payload, botOrGetter) {
-		await this._cleanExpiredJobs();
-		const routing = parseNotificationRouting(payload);
-		const mode = this._getExecutionMode();
-		const queueMode = this._isQueueMode();
-		const durableQueueMode = this._isDurableQueueMode();
-
-		// Synchronous validation based on job type
+	validateJobRequest(type, payload) {
 		let parsed;
 		if (type === 'expanded-analysis') {
 			parsed = parseExpandedAnalysisAlertRequest({ body: payload });
@@ -633,6 +625,27 @@ class JobService {
 			}
 			validatedTimeoutMs = Math.min(timeoutVal, MAX_JOB_TIMEOUT_MS);
 		}
+
+		return { parsed, validatedTimeoutMs };
+	}
+
+	/**
+	 * Creates a job, validates the request synchronously, and runs it in the background.
+	 *
+	 * @param {string} type - Job type: 'expanded-analysis' or 'market-scanner'
+	 * @param {Object} payload - Request payload matching the job type schema
+	 * @param {Function|Object} botOrGetter - Telegraf bot instance or getter
+	 * @returns {Object} The created job metadata
+	 */
+	async createJob(type, payload, botOrGetter) {
+		await this._cleanExpiredJobs();
+		const routing = parseNotificationRouting(payload);
+		const mode = this._getExecutionMode();
+		const queueMode = this._isQueueMode();
+		const durableQueueMode = this._isDurableQueueMode();
+
+		// Synchronous validation based on job type
+		const { parsed, validatedTimeoutMs } = this.validateJobRequest(type, payload);
 
 		let callbackUrl = null;
 		let callbackSecret = null;
@@ -719,6 +732,10 @@ class JobService {
 				scans: parsed.scans,
 				limit: parsed.limit,
 				bbwThreshold: parsed.bbwThreshold,
+				rating: parsed.rating,
+				pattern_type: parsed.consecutiveCandlesPatternType,
+				candle_count: parsed.candleCount,
+				...(parsed.minGrowth !== undefined ? { min_growth: parsed.minGrowth } : {}),
 				ranked: parsed.ranked,
 				includeMultiTimeframe: parsed.includeMultiTimeframe,
 			}),
@@ -1655,6 +1672,14 @@ class JobService {
 		};
 		if (scanType === 'bollinger_scan') {
 			args.bbw_threshold = parsed.bbwThreshold;
+		} else if (scanType === 'rating_filter') {
+			args.rating = parsed.rating;
+		} else if (scanType === 'consecutive_candles_scan') {
+			args.pattern_type = parsed.consecutiveCandlesPatternType;
+			args.candle_count = parsed.candleCount;
+			if (parsed.minGrowth !== undefined) {
+				args.min_growth = parsed.minGrowth;
+			}
 		}
 		return args;
 	}
