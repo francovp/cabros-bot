@@ -483,5 +483,63 @@ describe('Postman collection contract', () => {
 		expect(unauthorized.code).toBe(401);
 		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
 	});
+
+	it('documents distinct invalid query variants for GET Summarize Signal Outcomes', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const invalidLimit = findItem(collection.item, 'GET Summarize Signal Outcomes (invalid limit)');
+		const invalidStatus = findItem(collection.item, 'GET Summarize Signal Outcomes (invalid status)');
+		const invalidWindow = findItem(collection.item, 'GET Summarize Signal Outcomes (invalid window)');
+		const malformedFrom = findItem(collection.item, 'GET Summarize Signal Outcomes (malformed from timestamp)');
+		const malformedTo = findItem(collection.item, 'GET Summarize Signal Outcomes (malformed to timestamp)');
+		const reversedRange = findItem(collection.item, 'GET Summarize Signal Outcomes (reversed time range)');
+
+		expect(invalidLimit).toBeDefined();
+		expect(invalidLimit.request.url.raw).toContain('limit=200');
+		expect(invalidLimit.response[0].code).toBe(400);
+		expect(JSON.parse(invalidLimit.response[0].body)).toEqual({
+			error: 'Invalid limit. Use an integer between 1 and 100.',
+			code: 'INVALID_REQUEST',
+		});
+
+		expect(invalidStatus).toBeDefined();
+		expect(invalidStatus.request.url.raw).toContain('status=invalid');
+		expect(invalidStatus.response[0].code).toBe(400);
+		expect(JSON.parse(invalidStatus.response[0].body)).toEqual({
+			error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
+			code: 'INVALID_REQUEST',
+		});
+
+		expect(invalidWindow).toBeDefined();
+		expect(invalidWindow.request.url.raw).toContain('window=invalid');
+		expect(invalidWindow.response[0].code).toBe(400);
+		expect(JSON.parse(invalidWindow.response[0].body)).toEqual({
+			error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+			code: 'INVALID_REQUEST',
+		});
+
+		expect(malformedFrom).toBeDefined();
+		expect(malformedFrom.request.url.raw).toContain('from=not-a-date');
+		expect(malformedFrom.response[0].code).toBe(400);
+		expect(JSON.parse(malformedFrom.response[0].body)).toEqual({
+			error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+			code: 'INVALID_REQUEST',
+		});
+
+		expect(malformedTo).toBeDefined();
+		expect(malformedTo.request.url.raw).toContain('to=not-a-date');
+		expect(malformedTo.response[0].code).toBe(400);
+		expect(JSON.parse(malformedTo.response[0].body)).toEqual({
+			error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+			code: 'INVALID_REQUEST',
+		});
+
+		expect(reversedRange).toBeDefined();
+		expect(reversedRange.request.url.raw).toContain('from=2026-08-30T00:00:00.000Z&to=2026-08-01T00:00:00.000Z');
+		expect(reversedRange.response[0].code).toBe(400);
+		expect(JSON.parse(reversedRange.response[0].body)).toEqual({
+			error: 'Invalid time window. from must be before or equal to to.',
+			code: 'INVALID_REQUEST',
+		});
+	});
 });
 
