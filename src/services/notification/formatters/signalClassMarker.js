@@ -3,13 +3,13 @@
 const remoteConfigService = require('../../remoteConfig/RemoteConfigService');
 
 const SIGNAL_CLASS_MARKERS = Object.freeze({
-	breakout: { emoji: '🎯', label: 'breakout' },
-	mean_reversion: { emoji: '🔄', label: 'mean_reversion' },
-	trend_continuation: { emoji: '📈', label: 'trend_continuation' },
-	reversal: { emoji: '↩️', label: 'reversal' },
-	volume_spike: { emoji: '⚡', label: 'volume_spike' },
-	news_event: { emoji: '📰', label: 'news_event' },
-	manual: { emoji: '✍️', label: 'manual' },
+	breakout: { emoji: '🎯', label: 'breakout', labelMarkdownV2: 'breakout' },
+	mean_reversion: { emoji: '🔄', label: 'mean_reversion', labelMarkdownV2: 'mean\\_reversion' },
+	trend_continuation: { emoji: '📈', label: 'trend_continuation', labelMarkdownV2: 'trend\\_continuation' },
+	reversal: { emoji: '↩️', label: 'reversal', labelMarkdownV2: 'reversal' },
+	volume_spike: { emoji: '⚡', label: 'volume_spike', labelMarkdownV2: 'volume\\_spike' },
+	news_event: { emoji: '📰', label: 'news_event', labelMarkdownV2: 'news\\_event' },
+	manual: { emoji: '✍️', label: 'manual', labelMarkdownV2: 'manual' },
 });
 
 function isSignalClassMarkerEnabled() {
@@ -46,14 +46,14 @@ function formatSignalClassMarker(signalClass, options = {}) {
 		return null;
 	}
 
-	const { emoji, label } = SIGNAL_CLASS_MARKERS[normalized];
+	const marker = SIGNAL_CLASS_MARKERS[normalized];
 	if (options.markdownV2) {
-		// In Telegram MarkdownV2, escape underscores so they don't trigger italic formatting
-		const escapedLabel = label.replace(/_/g, '\\_');
-		return `${emoji} ${escapedLabel}`;
+		// In Telegram MarkdownV2, escape backslashes first, then underscores
+		const escapedLabel = marker.labelMarkdownV2 || marker.label.replace(/\\/g, '\\\\').replace(/_/g, '\\_');
+		return `${marker.emoji} ${escapedLabel}`;
 	}
 
-	return `${emoji} ${label}`;
+	return `${marker.emoji} ${marker.label}`;
 }
 
 module.exports = {
