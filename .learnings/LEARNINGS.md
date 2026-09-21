@@ -116,3 +116,31 @@ Root cause: The engagement script has no deduplication logic — it posts commen
 - Last-Seen: 2026-09-20
 
 ---
+
+## [LRN-20260921-001] correction
+
+**Logged**: 2026-09-21T18:15:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Trainee engaged on PR #1167 which was already a duplicate of PR #1176.
+
+### Details
+@francovp closed PR #1167 (fix(admin): preserve cached operation state after Playground filtering) as a duplicate of PR #1176, stating: "Closed as duplicate of PR #1176 which has the superior implementation (priority/critical, updates both src/admin/admin.js and public/admin/admin.js for Firebase Hosting parity, has Codex review, and preview deployment verified)." The trainee had posted 4 engagement comments on PR #1167 before it was closed.
+
+### Suggested Action
+Before engaging on a PR, check if it's already marked as duplicate or superseded by another PR. Use GitHub's "duplicate of" references or check for existing PRs addressing the same issue. Prioritize engaging on the canonical/primary PR.
+
+### Metadata
+- Source: user_feedback
+- Related Files: engage_latest.py, post_engagement.py
+- Tags: engagement, duplicate-detection, pr-review
+- See Also: LRN-20260920-001, LRN-20260920-002
+- Pattern-Key: harden.engagement_duplicate_check
+- Recurrence-Count: 1
+- First-Seen: 2026-09-21
+- Last-Seen: 2026-09-21
+
+---
