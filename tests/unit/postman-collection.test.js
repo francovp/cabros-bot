@@ -415,6 +415,31 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
 	});
 
+	it('documents signalClass in alert webhook and alert query/summary examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const postAlert = findItem(collection.item, 'POST Send Alert');
+		expect(postAlert).toBeDefined();
+		const body = JSON.parse(postAlert.request.body.raw);
+		expect(body.signalClass).toBe('breakout');
+
+		const dryRunAlert = findItem(collection.item, 'POST Send Alert Dry Run (risk metadata)');
+		expect(dryRunAlert).toBeDefined();
+		const dryRunBody = JSON.parse(dryRunAlert.request.body.raw);
+		expect(dryRunBody.signalClass).toBe('breakout');
+		const dryRunResp = JSON.parse(dryRunAlert.response[0].body);
+		expect(dryRunResp.signalClass).toBe('breakout');
+		expect(dryRunResp.payload.signalClass).toBe('breakout');
+
+		const listFiltered = findItem(collection.item, 'GET List Alerts (symbol, exchange, eventCategory)');
+		const listAlert = JSON.parse(listFiltered.response[0].body).alerts[0];
+		expect(listAlert.signalClass).toBe('breakout');
+
+		const summaryFiltered = findItem(collection.item, 'GET Alert Analytics Summary (symbol, exchange, eventCategory)');
+		const summary = JSON.parse(summaryFiltered.response[0].body).summary;
+		expect(summary.signalClassCounts).toBeDefined();
+		expect(summary.signalClassCounts.breakout).toBe(1);
+	});
+
 	it('documents notificationRedrive in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');

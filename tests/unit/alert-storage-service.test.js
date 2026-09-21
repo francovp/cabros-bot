@@ -288,6 +288,7 @@ describe('AlertStorageService', () => {
 				receivedAt: expect.anything(), // serverTimestamp sentinel
 				expiresAt: expect.anything(),
 				text: 'ETH breakout',
+				signalClass: 'unknown',
 				enriched: true,
 				enrichmentData: { sentiment: 'bullish', insights: ['RSI > 70'] },
 				tokenUsage: { total: 500, formattedSummary: '500 tokens' },
@@ -339,6 +340,7 @@ describe('AlertStorageService', () => {
 				confidence: 0.85,
 				sentimentScore: 0.75,
 				dedupStatus: 'fresh',
+				signalClass: 'unknown',
 				enriched: true,
 				enrichmentData: { originalText: 'BTCUSDT: Bitcoin surges on positive news', summary: 'Bullish momentum' },
 				tokenUsage: { total: 350, formattedSummary: '350 tokens' },
@@ -374,6 +376,24 @@ describe('AlertStorageService', () => {
 				telegramThreadId: 456,
 				whatsappChatId: '120363422033474991@g.us',
 				discordWebhookUrl: 'https://discord.com/api/webhooks/123/token',
+			}));
+		});
+
+		it('persists signalClass when provided and valid', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const docId = 'signal-class-doc';
+			mockAdd.mockResolvedValueOnce({ id: docId });
+
+			const params = buildParams({
+				text: 'BTCUSDT breakout confirmed',
+				signalClass: 'breakout',
+			});
+
+			const result = await AlertStorageService.saveAlert(params);
+
+			expect(result).toBe(docId);
+			expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
+				signalClass: 'breakout',
 			}));
 		});
 
@@ -736,6 +756,7 @@ describe('AlertStorageService', () => {
 					id: 'alert-1',
 					receivedAt: '2026-06-06T12:00:00.000Z',
 					text: 'BTC alert',
+					signalClass: 'unknown',
 					enriched: true,
 					enrichmentData: { sentiment: 'bullish' },
 					tokenUsage: { totalTokens: 42 },
@@ -1096,6 +1117,44 @@ describe('AlertStorageService', () => {
 			expect(combined.alerts.map(a => a.id)).toEqual(['alert-btc-binance-surge']);
 		});
 
+		it('filters alerts by signalClass individually and with comma-separated multi-values', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const sampleDocs = [
+				buildQueryDoc('alert-breakout', {
+					receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+					text: 'Breakout alert',
+					signalClass: 'breakout',
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-reversal', {
+					receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+					text: 'Reversal alert',
+					signalClass: 'reversal',
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-unknown-legacy', {
+					receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+					text: 'Legacy alert without signalClass',
+					source: 'webhook',
+				}),
+			];
+
+			// Single value
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const bySingle = await AlertStorageService.listAlerts({ limit: 10, signalClass: 'breakout' });
+			expect(bySingle.alerts.map(a => a.id)).toEqual(['alert-breakout']);
+
+			// Comma-separated multi-value
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const byMulti = await AlertStorageService.listAlerts({ limit: 10, signalClass: 'breakout,reversal' });
+			expect(byMulti.alerts.map(a => a.id)).toEqual(['alert-breakout', 'alert-reversal']);
+
+			// Legacy alert matches 'unknown'
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const byUnknown = await AlertStorageService.listAlerts({ limit: 10, signalClass: 'unknown' });
+			expect(byUnknown.alerts.map(a => a.id)).toEqual(['alert-unknown-legacy']);
+		});
+
 		it('filters list by eventCategory from nested enrichmentData.event_category and populates eventCategory on formatted output', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 
@@ -1235,6 +1294,7 @@ describe('AlertStorageService', () => {
 				id: 'alert-123',
 				receivedAt: '2026-06-06T10:30:00.000Z',
 				text: 'Stored alert',
+				signalClass: 'unknown',
 				enriched: false,
 				enrichmentData: null,
 				tokenUsage: null,
@@ -1754,6 +1814,7 @@ describe('AlertStorageService', () => {
 				id: 'alert-1',
 				receivedAt: '2026-06-06T12:00:00.000Z',
 				source: 'webhook',
+				signalClass: 'unknown',
 				enriched: true,
 				useTradingViewData: true,
 				tradingViewEnrichmentApplied: false,
@@ -2254,6 +2315,16 @@ describe('AlertStorageService', () => {
 				totalAlerts: 2,
 				bySource: { webhook: 2 },
 				bySymbol: { BTCUSDT: 1, ETHUSDT: 1 },
+				signalClassCounts: {
+					breakout: 0,
+					mean_reversion: 0,
+					trend_continuation: 0,
+					reversal: 0,
+					volume_spike: 0,
+					news_event: 0,
+					manual: 0,
+					unknown: 2,
+				},
 				byFeatureFlag: {
 					enriched: 1,
 					plain: 1,
@@ -2531,6 +2602,63 @@ describe('AlertStorageService', () => {
 			});
 			expect(combined.totalAlerts).toBe(1);
 			expect(combined.bySymbol).toEqual({ BTCUSDT: 1 });
+		});
+
+		it('applies signalClass filter before aggregating summaries and computes signalClassCounts accurately', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const sampleDocs = [
+				buildQueryDoc('alert-breakout', {
+					receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+					text: 'BINANCE:BTCUSDT breakout',
+					symbol: 'BTCUSDT',
+					signalClass: 'breakout',
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-reversal', {
+					receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+					text: 'BINANCE:ETHUSDT reversal',
+					symbol: 'ETHUSDT',
+					signalClass: 'reversal',
+					source: 'webhook',
+				}),
+				buildQueryDoc('alert-legacy', {
+					receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+					text: 'BINANCE:SOLUSDT legacy',
+					symbol: 'SOLUSDT',
+					source: 'webhook',
+				}),
+			];
+
+			// Unfiltered summary
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const unfiltered = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 10,
+			});
+			expect(unfiltered.totalAlerts).toBe(3);
+			expect(unfiltered.signalClassCounts).toEqual({
+				breakout: 1,
+				reversal: 1,
+				mean_reversion: 0,
+				trend_continuation: 0,
+				volume_spike: 0,
+				news_event: 0,
+				manual: 0,
+				unknown: 1,
+			});
+
+			// Filtered by signalClass
+			mockGet.mockResolvedValueOnce({ empty: false, docs: sampleDocs });
+			const filtered = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 10,
+				signalClass: 'breakout',
+			});
+			expect(filtered.totalAlerts).toBe(1);
+			expect(filtered.signalClassCounts.breakout).toBe(1);
+			expect(filtered.signalClassCounts.reversal).toBe(0);
 		});
 
 		it('pages through bounded alerts until filtered summaries reach the limit', async () => {

@@ -226,12 +226,13 @@ class TelegramService extends NotificationChannel {
 
 			// Format message for Telegram MarkdownV2
 			// If enriched is an object, use formatEnriched, otherwise format the text
+			const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
 			let formattedText;
 			if (alert.enriched && typeof alert.enriched === 'object') {
-				formattedText = this.formatter.formatEnriched(alert.enriched);
+				formattedText = this.formatter.formatEnriched(alert.enriched, { signalClass });
 				console.debug('Formatted enriched content for Telegram:', formattedText);
 			} else {
-				formattedText = this.formatter.format(alert.enriched || alert.text);
+				formattedText = this.formatter.format(alert.enriched || alert.text, { signalClass });
 				console.debug('Formatted text for Telegram:', formattedText);
 			}
 

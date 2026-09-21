@@ -420,6 +420,13 @@
       "description": "Enable rendering higher-timeframe trend alignment on enriched webhook alerts",
       "valueType": "BOOLEAN"
     },
+    "ENABLE_SIGNAL_CLASS_MARKER": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Enable rendering signal classification marker prefix on alert notifications",
+      "valueType": "BOOLEAN"
+    },
     "ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION": {
       "defaultValue": {
         "value": "false"
