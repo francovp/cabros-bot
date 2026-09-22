@@ -99,11 +99,14 @@ The Virgin Trainee engagement script (engage_latest.py / post_engagement.py) run
 
 Root cause: The engagement script has no deduplication logic — it posts comments unconditionally on every run without checking if the trainee already commented on that issue.
 
+**Recurrence 2026-09-22**: Manual engagement in cron run also posted duplicate comments on PRs #1191, #1192, #1193, #1194 despite existing virgin-trainee-dev[bot] comments from previous runs. The learning existed but was not applied during manual engagement.
+
 ### Suggested Action
 1. Add deduplication: before posting, fetch existing comments on the issue and skip if virgin-trainee-dev[bot] already posted a similar engagement comment.
 2. Track engaged issues in a persistent state file (e.g., `.trainee-engaged.json`) with issue numbers and comment timestamps.
 3. Only engage on issues/PRs created/updated since last successful run.
 4. Consider using GitHub GraphQL to check for existing trainee comments more efficiently.
+5. **Manual engagement must also check for existing comments** — the deduplication logic applies to both automated and manual engagement.
 
 ### Metadata
 - Source: error
@@ -111,9 +114,9 @@ Root cause: The engagement script has no deduplication logic — it posts commen
 - Tags: automation, deduplication, github-bot, cron
 - See Also: LRN-20260920-001
 - Pattern-Key: harden.engagement_deduplication
-- Recurrence-Count: 1
+- Recurrence-Count: 2
 - First-Seen: 2026-09-20
-- Last-Seen: 2026-09-20
+- Last-Seen: 2026-09-22
 
 ---
 
