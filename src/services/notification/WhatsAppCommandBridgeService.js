@@ -2,11 +2,17 @@
 
 const WhatsAppService = require('./WhatsAppService');
 const sentryService = require('../monitoring/SentryService');
+const { sendWithRetry } = require('../../lib/retryHelper');
 
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 const DEFAULT_MAX_COMMANDS_PER_MINUTE = 10;
 const DEFAULT_UNKNOWN_HINT_COOLDOWN_MS = 60000;
-const REQUEST_TIMEOUT_MS = 10000;
+const RECEIVE_TIMEOUT_MS = 10000;
+const DELETE_TIMEOUT_MS = 5000;
+const DELETE_MAX_RETRIES = 3;
+const DEFAULT_SEEN_RECEIPT_TTL_MS = 90000;
+const SEEN_RECEIPT_SWEEP_INTERVAL_MS = 30000;
+const DELETE_RETRY_BACKOFF_MAX_MS = 2000;
 
 class WhatsAppCommandBridgeService {
 	/**
@@ -45,6 +51,9 @@ class WhatsAppCommandBridgeService {
 		this.rateLimitMap = new Map(); // chatId -> timestamp[]
 		this.unknownHintMap = new Map(); // chatId -> timestamp
 		this._sleepResolvers = new Set();
+		this._seenReceipts = new Map(); // receiptId -> expiresAtMs
+		this._seenReceiptTtlMs = options.seenReceiptTtlMs || DEFAULT_SEEN_RECEIPT_TTL_MS;
+		this._lastSeenReceiptSweepAt = 0;
 	}
 
 	get apiUrl() {
@@ -152,6 +161,34 @@ class WhatsAppCommandBridgeService {
 			return false;
 		}
 		this.unknownHintMap.set(chatId, now);
+		return true;
+	}
+
+	_sweepSeenReceipts(now) {
+		if (!this._seenReceipts.size) return;
+		if (now - (this._lastSeenReceiptSweepAt || 0) < SEEN_RECEIPT_SWEEP_INTERVAL_MS) return;
+		this._lastSeenReceiptSweepAt = now;
+		for (const [receiptId, expiresAt] of this._seenReceipts.entries()) {
+			if (expiresAt <= now) {
+				this._seenReceipts.delete(receiptId);
+			}
+		}
+	}
+
+	_markReceiptSeen(receiptId, now = Date.now()) {
+		if (receiptId === undefined || receiptId === null) return;
+		this._seenReceipts.set(String(receiptId), now + this._seenReceiptTtlMs);
+	}
+
+	_isReceiptSeen(receiptId, now = Date.now()) {
+		if (receiptId === undefined || receiptId === null) return false;
+		const key = String(receiptId);
+		const expiresAt = this._seenReceipts.get(key);
+		if (expiresAt === undefined) return false;
+		if (expiresAt <= now) {
+			this._seenReceipts.delete(key);
+			return false;
+		}
 		return true;
 	}
 
@@ -270,7 +307,8 @@ class WhatsAppCommandBridgeService {
 
 	async pollOnce() {
 		const controller = new AbortController();
-		const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+		this.abortController = controller;
+		const timeoutId = setTimeout(() => controller.abort(), RECEIVE_TIMEOUT_MS);
 		this.lastPollAt = Date.now();
 
 		try {
@@ -302,6 +340,21 @@ class WhatsAppCommandBridgeService {
 			}
 
 			const receiptId = data.receiptId;
+			const receiptKey = String(receiptId);
+			const now = Date.now();
+			this._sweepSeenReceipts(now);
+			if (this._isReceiptSeen(receiptId, now)) {
+				// Redelivered receipt (delete previously failed) — skip re-execution
+				// still try to delete it so GreenAPI stops redelivering
+				await this._deleteReceipt(receiptId, controller.signal);
+				return {
+					processed: true,
+					receiptId,
+					handlingResult: { action: 'skipped_redelivery', receiptId },
+				};
+			}
+			this._markReceiptSeen(receiptId, now);
+
 			let handlingResult;
 			try {
 				handlingResult = await this.handleNotification(data);
@@ -310,25 +363,17 @@ class WhatsAppCommandBridgeService {
 				sentryService.captureRuntimeError({
 					channel: 'whatsapp',
 					error: handlerErr,
-					extra: { receiptId, type: 'command_handler_failure' },
+					extra: { receiptId: receiptKey, type: 'command_handler_failure' },
 				});
 			}
 
-			// Acknowledge notification
-			try {
-				const deleteUrl = this._getDeleteNotificationUrl(receiptId);
-				await this.fetchFn(deleteUrl, {
-					method: 'DELETE',
-					signal: controller.signal,
-				});
-			} catch (deleteErr) {
-				this.logger.warn(`[WhatsAppCommandBridge] Failed to delete notification ${receiptId}:`, deleteErr.message);
-			}
+			// Acknowledge notification with its own bounded timeout and retry budget
+			await this._deleteReceipt(receiptId);
 
 			return { processed: true, receiptId, handlingResult };
 		} catch (error) {
 			if (error.name === 'AbortError') {
-				const err = 'GreenAPI receiveNotification timeout (10s)';
+				const err = `GreenAPI receiveNotification timeout (${RECEIVE_TIMEOUT_MS}ms)`;
 				this.lastError = err;
 				this.lastErrorAt = Date.now();
 				this.logger.warn(`[WhatsAppCommandBridge] ${err}`);
@@ -341,7 +386,51 @@ class WhatsAppCommandBridgeService {
 			return { processed: false, error: err };
 		} finally {
 			clearTimeout(timeoutId);
+			if (this.abortController === controller) {
+				this.abortController = null;
+			}
 		}
+	}
+
+	async _deleteReceipt(receiptId, parentSignal) {
+		if (receiptId === undefined || receiptId === null) return { success: false, reason: 'missing_receipt_id' };
+		const deleteUrl = this._getDeleteNotificationUrl(receiptId);
+
+		const sendFn = async ({ signal }) => {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), DELETE_TIMEOUT_MS);
+			const onParentAbort = () => controller.abort();
+			if (signal) signal.addEventListener('abort', onParentAbort, { once: true });
+			try {
+				const response = await this.fetchFn(deleteUrl, {
+					method: 'DELETE',
+					signal: controller.signal,
+				});
+				if (response.ok) {
+					return { success: true, channel: 'whatsapp-delete' };
+				}
+				return { success: false, error: `HTTP ${response.status}` };
+			} catch (err) {
+				if (err && err.name === 'AbortError') {
+					return { success: false, error: 'delete_timeout' };
+				}
+				return { success: false, error: (err && err.message) || String(err) };
+			} finally {
+				clearTimeout(timer);
+				if (signal) signal.removeEventListener('abort', onParentAbort);
+			}
+		};
+
+		const result = await sendWithRetry(sendFn, DELETE_MAX_RETRIES, this.logger, {
+			signal: parentSignal,
+			maxRetryDelayMs: DELETE_RETRY_BACKOFF_MAX_MS,
+		});
+		if (!result.success) {
+			this.logger.warn(
+				`[WhatsAppCommandBridge] Failed to delete notification ${receiptId} after ${result.attemptCount} attempts: ${result.error}`,
+			);
+		}
+		return result;
 	}
 
 	async _pollLoop() {

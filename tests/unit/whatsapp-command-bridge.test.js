@@ -322,5 +322,173 @@ describe('WhatsAppCommandBridgeService', () => {
 			await service.stop();
 			expect(service.isRunning()).toBe(false);
 		});
+
+		test('uses independent timeout for slow handler so receipt is still deleted', async () => {
+			const mockFetch = jest.fn();
+			// 1st call: receiveNotification returns receipt
+			mockFetch.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				json: async () => ({
+					receiptId: 4242,
+					body: {
+						typeWebhook: 'incomingMessageReceived',
+						senderData: { chatId: '120363000000000000@g.us' },
+						messageData: { textMessageData: { textMessage: '!precio BTCUSDT' } },
+					},
+				}),
+			});
+			// 2nd call: deleteNotification must succeed even though handler is slow
+			mockFetch.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				json: async () => ({ result: true }),
+			});
+
+			// Slow price resolver that exceeds the receive budget (10s)
+			const slowPriceResolver = () => new Promise((resolve) => setTimeout(() => resolve({
+				symbol: 'BTCUSDT',
+				price: 65000,
+				message: 'Precio de BTCUSDT es 65000',
+			}), 50));
+
+			const mockWhatsApp = { send: jest.fn().mockResolvedValue({ success: true }) };
+			const service = new WhatsAppCommandBridgeService({
+				whatsAppService: mockWhatsApp,
+				fetchFn: mockFetch,
+				priceResolver: slowPriceResolver,
+			});
+
+			const result = await service.pollOnce();
+			expect(result.processed).toBe(true);
+			expect(result.receiptId).toBe(4242);
+			// delete call must run with its own timeout, distinct from receive timeout
+			expect(mockFetch).toHaveBeenCalledTimes(2);
+			expect(mockFetch.mock.calls[1][0]).toContain('/deleteNotification/');
+			expect(mockFetch.mock.calls[1][0]).toContain('/4242');
+			// delete fetch should have its own signal (independent of receive's controller)
+			const deleteSignal = mockFetch.mock.calls[1][1].signal;
+			expect(deleteSignal).toBeDefined();
+			expect(deleteSignal.aborted).toBe(false);
+		});
+
+		test('retries deleteNotification when first delete returns HTTP 500', async () => {
+			const mockFetch = jest.fn();
+			// 1st call: receiveNotification
+			mockFetch.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				json: async () => ({
+					receiptId: 5555,
+					body: {
+						typeWebhook: 'incomingMessageReceived',
+						senderData: { chatId: '120363000000000000@g.us' },
+						messageData: { textMessageData: { textMessage: '!help' } },
+					},
+				}),
+			});
+			// 2nd call: deleteNotification fails (HTTP 500) — should retry
+			mockFetch.mockResolvedValueOnce({
+				ok: false,
+				status: 500,
+				json: async () => ({ error: 'transient' }),
+			});
+			// 3rd call: deleteNotification retry succeeds
+			mockFetch.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				json: async () => ({ result: true }),
+			});
+
+			const mockWhatsApp = { send: jest.fn().mockResolvedValue({ success: true }) };
+			const service = new WhatsAppCommandBridgeService({
+				whatsAppService: mockWhatsApp,
+				fetchFn: mockFetch,
+			});
+
+			const result = await service.pollOnce();
+			expect(result.processed).toBe(true);
+			expect(mockFetch).toHaveBeenCalledTimes(3);
+			// Command reply must still be sent exactly once even after delete retry
+			expect(mockWhatsApp.send).toHaveBeenCalledTimes(1);
+		});
+
+		test('skips redelivered receiptId without re-executing command after delete failure', async () => {
+			const mockFetch = jest.fn();
+			const receiptPayload = (id) => ({
+				ok: true,
+				status: 200,
+				json: async () => ({
+					receiptId: id,
+					body: {
+						typeWebhook: 'incomingMessageReceived',
+						senderData: { chatId: '120363000000000000@g.us' },
+						messageData: { textMessageData: { textMessage: '!precio BTCUSDT' } },
+					},
+				}),
+			});
+
+			// First pollOnce: receive(7777), delete fails with AbortError, then 2 more retries (undefined response fails)
+			mockFetch.mockResolvedValueOnce(receiptPayload(7777));
+			mockFetch.mockRejectedValueOnce(new DOMException('Aborted', 'AbortError'));
+			mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+			mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+			// Second pollOnce: receive(7777 redelivered), delete succeeds
+			mockFetch.mockResolvedValueOnce(receiptPayload(7777));
+			mockFetch.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				json: async () => ({ result: true }),
+			});
+
+			const mockWhatsApp = { send: jest.fn().mockResolvedValue({ success: true }) };
+			const mockPriceResolver = jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				price: 65000,
+				message: 'Precio de BTCUSDT es 65000',
+			});
+
+			const service = new WhatsAppCommandBridgeService({
+				whatsAppService: mockWhatsApp,
+				priceResolver: mockPriceResolver,
+				fetchFn: mockFetch,
+			});
+
+			const first = await service.pollOnce();
+			expect(first.processed).toBe(true);
+			expect(first.handlingResult?.action).toBe('executed');
+
+			const second = await service.pollOnce();
+			// Same receiptId returned, must be skipped without re-running command
+			expect(second.processed).toBe(true);
+			expect(second.handlingResult?.action).toBe('skipped_redelivery');
+			expect(mockPriceResolver).toHaveBeenCalledTimes(1);
+			expect(mockWhatsApp.send).toHaveBeenCalledTimes(1);
+		});
+
+		test('stop() aborts in-flight poll fetch', async () => {
+			let abortHandler = null;
+			const mockFetch = jest.fn().mockImplementationOnce((_url, opts) => new Promise((resolve, reject) => {
+				const signal = opts && opts.signal;
+				if (signal) {
+					abortHandler = () => {
+						reject(new DOMException('Aborted', 'AbortError'));
+					};
+					signal.addEventListener('abort', abortHandler, { once: true });
+				}
+				// never resolves on its own — must be aborted
+			}));
+
+			const service = new WhatsAppCommandBridgeService({ fetchFn: mockFetch });
+			service.running = true;
+			const pollPromise = service.pollOnce();
+
+			// Immediately call stop - should abort in-flight
+			await service.stop({ timeoutMs: 200 });
+			const result = await pollPromise;
+			expect(result.processed).toBe(false);
+			expect(result.timeout).toBe(true);
+			expect(abortHandler).not.toBeNull();
+		});
 	});
 });
