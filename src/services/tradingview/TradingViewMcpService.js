@@ -101,6 +101,18 @@ function getPercentage(value, total) {
 	return total === 0 ? 0 : Number(((value / total) * 100).toFixed(2));
 }
 
+function createToolResultError(errorMessage) {
+	const message = String(errorMessage);
+	const error = new Error(message);
+	if (/^No data found\b/i.test(message)) {
+		error.category = 'not_found';
+		error.retryable = false;
+	} else {
+		error.category = 'upstream_tool_error';
+	}
+	return error;
+}
+
 const SETUP_TYPES = new Set(['breakout', 'mean_reversion', 'trend_continuation', 'reversal']);
 
 function inferSetupType(analysis, side) {
@@ -442,7 +454,7 @@ class TradingViewMcpService {
 				const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe, signal: combinedSignal });
 				return { success: true, channel: 'tradingview-mcp', analysis };
 			} catch (error) {
-				return { success: false, channel: 'tradingview-mcp', error: error.message };
+				return { success: false, channel: 'tradingview-mcp', error: error.message, ...(error.retryable === false ? { retryable: false } : {}) };
 			} finally {
 				clearTimeout(attemptTimeoutId);
 			}
@@ -476,7 +488,7 @@ class TradingViewMcpService {
 						const volConfirm = await this.callVolumeConfirmation({ symbol, exchange, timeframe, signal: combinedSignal });
 						return { success: true, channel: 'tradingview-mcp', volConfirm };
 					} catch (error) {
-						return { success: false, channel: 'tradingview-mcp', error: error.message };
+						return { success: false, channel: 'tradingview-mcp', error: error.message, ...(error.retryable === false ? { retryable: false } : {}) };
 					}
 				}, 1, this.logger, { signal: AbortSignal.any([controller.signal, budgetController.signal]) });
 
@@ -554,7 +566,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw new Error(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -577,7 +589,7 @@ class TradingViewMcpService {
 				}
 				return { success: true, channel: 'tradingview-mcp', analysis };
 			} catch (error) {
-				return { success: false, channel: 'tradingview-mcp', error: error.message };
+				return { success: false, channel: 'tradingview-mcp', error: error.message, ...(error.retryable === false ? { retryable: false } : {}) };
 			}
 		}, cfg.maxRetries, this.logger, { signal });
 
@@ -603,7 +615,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw new Error(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -623,7 +635,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw new Error(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -666,7 +678,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw new Error(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -685,14 +697,27 @@ class TradingViewMcpService {
 			const result = await sendWithRetry(async () => {
 				try {
 					const rpcResult = await this._callTool(toolName, args, { signal });
+					const normalizedResult = this._unwrapSchemaResult(rpcResult);
+					if (normalizedResult && normalizedResult.error) {
+						throw createToolResultError(normalizedResult.error);
+					}
 					return { success: true, channel: 'tradingview-mcp', data: rpcResult };
 				} catch (error) {
-					return { success: false, channel: 'tradingview-mcp', error: error.message };
+					return {
+						success: false,
+						channel: 'tradingview-mcp',
+						error: error.message,
+						...(error.category ? { category: error.category } : {}),
+						...(error.retryable === false ? { retryable: false } : {}),
+					};
 				}
 			}, cfg.maxRetries, this.logger, { signal });
 
 			if (!result.success) {
-				throw new Error(`TradingView MCP scan ${toolName} failed: ${result.error || 'unknown error'}`);
+				const error = new Error(`TradingView MCP scan ${toolName} failed: ${result.error || 'unknown error'}`);
+				if (result.category) error.category = result.category;
+				if (result.retryable === false) error.retryable = false;
+				throw error;
 			}
 
 			return this._normalizeScanResult(result.data);
@@ -772,7 +797,7 @@ class TradingViewMcpService {
 
 		if (callResult.isError) {
 			const errorMessage = this._extractContentText(callResult) || `TradingView MCP tool ${toolName} returned isError=true`;
-			throw new Error(errorMessage);
+			throw createToolResultError(errorMessage);
 		}
 
 		if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
@@ -1457,6 +1482,9 @@ class TradingViewMcpService {
 		const message = error && typeof error.message === 'string' ? error.message : '';
 		if (error && error.category === 'circuit_breaker_open') {
 			return 'circuit_breaker_open';
+		}
+		if (error && (error.category === 'upstream_tool_error' || error.category === 'not_found')) {
+			return error.category;
 		}
 		if (/circuit breaker/i.test(message)) {
 			return 'circuit_breaker_open';

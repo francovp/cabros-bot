@@ -66,6 +66,24 @@ describe('retryHelper', () => {
 			expect(mockSendFn).toHaveBeenCalledTimes(2);
 		});
 
+		it('should stop immediately for terminal failures', async () => {
+			const mockSendFn = jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'test',
+				error: 'No data found',
+				retryable: false,
+			});
+
+			const result = await sendWithRetry(mockSendFn, 3);
+
+			expect(result).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				attemptCount: 1,
+			}));
+			expect(mockSendFn).toHaveBeenCalledTimes(1);
+		});
+
 		it('should exhaust all retries and return failure', async () => {
 			const mockSendFn = jest.fn().mockResolvedValue({
 				success: false,
