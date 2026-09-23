@@ -17,6 +17,25 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - 🔄 **Graceful Degradation**: Continue operating if one channel is unavailable
 - ⏱️ **Parallel Processing**: Analyze multiple symbols concurrently with intelligent timeout management
 
+## Quickstart
+
+The fastest path to a working deployment is the first-run wizard. It walks you through Telegram essentials, mints a `WEBHOOK_API_KEY`, and writes a working `.env` — no manual copy-paste from the 600+ line `.env.example`.
+
+```bash
+# Interactive (recommended for first-time setup)
+pnpm run wizard
+
+# Non-interactive / minimal (CI, codegen, fresh container)
+pnpm run wizard -- --non-interactive --minimal
+
+# Smoke-test the resulting config
+pnpm run wizard:test
+```
+
+The wizard is **idempotent** — re-running it preserves existing `.env` values and only prompts for missing ones. The generated `WEBHOOK_API_KEY` is a 32-byte base64url key, printed once and stored locally; nothing is sent over the network except the final smoke test against `localhost:PORT`.
+
+If you prefer to configure by hand, copy `.env.example` to `.env` and edit the `Required Variables` section below.
+
 ## Environment Configuration
 
 ### Required Variables
