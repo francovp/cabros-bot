@@ -9,6 +9,7 @@ const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { notificationRedriveService } = require('./NotificationRedriveService');
 const { deliveryMetricsService } = require('./DeliveryMetricsService');
 const { chatPreferenceService } = require('../preferences/ChatPreferenceService');
+const NotificationChannel = require('./NotificationChannel');
 
 const DEFAULT_ZERO_CHANNEL_ALERT_COOLDOWN_MS = 300000;
 
@@ -97,6 +98,65 @@ class NotificationManager {
 			.map((ch) => ch.name);
 	}
 
+	/**
+	 * Check if a channel is configured for delivery by operator intent.
+	 * Subclasses of NotificationChannel report based on operator gates and credentials.
+	 * Plain mocks in unit tests without isConfigured default to true for backward compatibility.
+	 * @param {Object} channel
+	 * @returns {boolean}
+	 */
+	isChannelConfigured(channel) {
+		if (!channel) {
+			return false;
+		}
+		if (typeof channel.isConfigured === 'function') {
+			return Boolean(channel.isConfigured());
+		}
+		if (typeof channel.isConfigured === 'boolean') {
+			return channel.isConfigured;
+		}
+		if (channel instanceof NotificationChannel) {
+			return typeof channel.isEnabled === 'function' ? channel.isEnabled() : false;
+		}
+		return true;
+	}
+
+	/**
+	 * Get array of names of channels that are configured by operator intent
+	 * @returns {Array<string>}
+	 */
+	getConfiguredChannels() {
+		return Array.from(this.channels.values())
+			.filter(channel => this.isChannelConfigured(channel))
+			.map(channel => channel.name);
+	}
+
+	/**
+	 * Check if Telegram service is eligible to send admin notifications.
+	 * Allows dedicated admin paging during zero-channel outages even when
+	 * the default broadcast channel is disabled or missing its broadcast chat ID.
+	 * @param {Object} telegramService
+	 * @returns {boolean}
+	 */
+	isTelegramAdminDeliveryEligible(telegramService) {
+		if (!telegramService) {
+			return false;
+		}
+		if (typeof telegramService.isAdminDeliveryEligible === 'function') {
+			return telegramService.isAdminDeliveryEligible();
+		}
+		if (telegramService.isEnabled?.()) {
+			return true;
+		}
+		if (telegramService.bot) {
+			return true;
+		}
+		if (typeof telegramService.send === 'function' && !('bot' in telegramService)) {
+			return true;
+		}
+		return false;
+	}
+
 	async notifyAdminOfFailures(alert, results, options = {}) {
 		if (options && options.isRedrive) {
 			return;
@@ -113,8 +173,8 @@ class NotificationManager {
 			console.warn('[NotificationManager] Admin chat is not configured; delivery failure notification skipped');
 			return;
 		}
-		if (!telegramService || !telegramService.isEnabled()) {
-			console.warn('[NotificationManager] Telegram is disabled; delivery failure notification skipped');
+		if (!this.isTelegramAdminDeliveryEligible(telegramService)) {
+			console.warn('[NotificationManager] Telegram is not eligible for admin delivery; delivery failure notification skipped');
 			return;
 		}
 
@@ -174,19 +234,23 @@ class NotificationManager {
 			console.warn('[NotificationManager] Admin chat is not configured; zero-channel alert notification skipped');
 			return;
 		}
-		if (!telegramService || !telegramService.isEnabled()) {
-			console.warn('[NotificationManager] Telegram is disabled; zero-channel alert notification skipped');
+		if (!this.isTelegramAdminDeliveryEligible(telegramService)) {
+			console.warn('[NotificationManager] Telegram is not eligible for admin delivery; zero-channel alert notification skipped');
 			return;
 		}
 
 		const requestId = alert && (alert.requestId || alert.correlationId);
-		const redriveContext = notificationRedriveService.isEnabled()
+		const configuredChannels = this.getConfiguredChannels();
+		const redriveContext = notificationRedriveService.isEnabled() && configuredChannels.length > 0
 			? [`Dead-letters queued for redrive (pending: ${notificationRedriveService.getPendingCount()})`]
 			: [];
+		const droppedMessage = configuredChannels.length > 0
+			? 'Broadcast alerts are being dropped and dead-lettered.'
+			: 'Broadcast alerts are being dropped.';
 		const message = [
 			'🚨 CRITICAL: Notification delivery failure (Zero channels enabled)',
 			'All notification channels are currently disabled or failing validation.',
-			'Broadcast alerts are being dropped and dead-lettered.',
+			droppedMessage,
 			`Total zero-channel broadcasts dropped: ${this.zeroChannelBroadcastCount}`,
 			...redriveContext,
 			...(requestId ? [`Request ID: ${requestId}`] : []),
@@ -464,21 +528,22 @@ class NotificationManager {
 			alert?.redriveEligible === false;
 
 		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
-				const candidateChannels = Array.from(this.channels.keys());
-				const channelsToQueue = candidateChannels.length > 0 ? candidateChannels : ['telegram', 'whatsapp', 'discord'];
-				const syntheticResults = channelsToQueue.map(channelName => ({
-					channel: channelName,
-					success: false,
-					error: 'No notification channels enabled at broadcast time (zero-channel drop)',
-					statusCode: 0,
-					attemptCount: 1,
-				}));
+				const candidateChannels = this.getConfiguredChannels();
+				if (candidateChannels.length > 0) {
+					const syntheticResults = candidateChannels.map(channelName => ({
+						channel: channelName,
+						success: false,
+						error: 'No notification channels enabled at broadcast time (zero-channel drop)',
+						statusCode: 0,
+						attemptCount: 1,
+					}));
 
-				trackBackgroundTask(
-					notificationRedriveService.recordDeliveryResults(alert, syntheticResults, options),
-				).catch((error) => {
-					console.warn('[NotificationManager] Failed to record dead-letters for zero-channel broadcast:', error.message);
-				});
+					trackBackgroundTask(
+						notificationRedriveService.recordDeliveryResults(alert, syntheticResults, options),
+					).catch((error) => {
+						console.warn('[NotificationManager] Failed to record dead-letters for zero-channel broadcast:', error.message);
+					});
+				}
 			}
 
 			trackBackgroundTask(this.notifyAdminOfZeroChannels(alert, options)).catch((error) => {

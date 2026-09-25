@@ -423,4 +423,29 @@ describe('DiscordService', () => {
 			});
 		});
 	});
+
+	describe('isConfigured', () => {
+		const originalEnv = { ...process.env };
+
+		afterEach(() => {
+			process.env = { ...originalEnv };
+		});
+
+		it('returns true only when ENABLE_DISCORD_ALERTS and webhookUrl are present', () => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/abc';
+
+			const service = new DiscordService();
+			expect(service.isConfigured()).toBe(true);
+
+			process.env.ENABLE_DISCORD_ALERTS = 'false';
+			expect(service.isConfigured()).toBe(false);
+
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			delete process.env.DISCORD_WEBHOOK_URL;
+			const missingUrlService = new DiscordService();
+			expect(missingUrlService.isConfigured()).toBe(false);
+		});
+	});
 });
+
