@@ -1843,6 +1843,7 @@ describe('Status endpoints', () => {
 			workerRole: 'web',
 			running: false,
 			pendingCount: 0,
+			zeroChannelBroadcasts: 0,
 			lastSweepAt: null,
 			lastSweepResult: null,
 		});
@@ -1861,6 +1862,7 @@ describe('Status endpoints', () => {
 			workerRole: 'worker',
 			batchLimit: 50,
 			maxAttempts: 5,
+			zeroChannelBroadcasts: 0,
 		});
 		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepAt).toBeNull();
 		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepResult).toBeNull();
