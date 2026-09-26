@@ -7,6 +7,7 @@ const {
 const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
 const { alertSchedulerService } = require('../services/scheduler');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
+const alertFeedbackStorageService = require('../services/storage/AlertFeedbackStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 const { jobQueue } = require('../services/jobs/JobQueue');
@@ -16,9 +17,11 @@ const { tradingViewMcpService } = require('../services/tradingview/TradingViewMc
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { binanceOrderAuditService } = require('../services/trading/BinanceOrderAuditService');
 const symbolAnalysisStorageService = require('../services/storage/SymbolAnalysisStorageService');
+const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
+const { firestoreWriteMetricsService } = require('../services/storage/FirestoreWriteMetricsService');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
@@ -30,6 +33,8 @@ const {
 	isNewsMonitorPaused,
 	getNewsMonitorPauseState,
 } = require('./webhooks/handlers/newsMonitor/pauseState');
+const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTracker');
+const { getSelfTestService } = require('./diagnostics/selftest');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -41,6 +46,8 @@ const {
 	getRateLimitState: getTestAlertRateLimitState,
 	isTestAlertEnabled,
 } = require('./admin/testAlert');
+const { tokenCostBudgetService } = require('../lib/tokenUsage');
+const { isMaintenanceModeEnabled } = require('../lib/maintenanceMode');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
 const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
@@ -371,6 +378,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
 			firestoreNewsAnalysis: newsAnalysisStorageService.isEnabled(),
+			firestoreChatPreferences: chatPreferenceService.isEnabled(),
 			scannerPresetScheduler: scannerPresetSchedulerService.isEnabled(),
 			newsMonitorScheduler: newsMonitorSchedulerService.isEnabled(),
 			alertScheduler: alertSchedulerService.isEnabled(),
@@ -392,9 +400,12 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			alertFeedback: alertFeedbackStorageService.isEnabled(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.isEnabled(),
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 			testAlert: isTestAlertEnabled(),
+			tokenCostBudget: tokenCostBudgetService.isEnabled(),
+			maintenanceMode: isMaintenanceModeEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -427,12 +438,16 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			tradingViewVolumeConfirmation,
 			firestore,
 			firestoreJobStorage,
+			...(firestoreWriteMetricsService.getSnapshot()
+				? { firestoreWriteMetrics: firestoreWriteMetricsService.getSnapshot() }
+				: {}),
 			sentry,
 			langfuse,
 			braveSearch,
 			newsMonitor: {
 				enabled: newsMonitorEnabled,
 				...getNewsMonitorPauseState(),
+				...getVolumeTracker().getWindowUsage(),
 			},
 			newsMonitorLlm,
 			llmAlertEnrichment,
@@ -446,6 +461,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			newsMonitorDedup,
 			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
 			firebaseRemoteConfig: remoteConfigStatus,
+			chatPreferences: chatPreferenceService.getStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
 			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
@@ -473,6 +489,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
 			},
+			alertFeedback: alertFeedbackStorageService.getStatus(),
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
 			binanceOrderAudit: binanceOrderAuditService.getStatus(),
@@ -483,6 +500,8 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				lastRunStatus: getTestAlertLastRunStatus(),
 				rateLimitState: getTestAlertRateLimitState(),
 			},
+			tokenCostBudget: tokenCostBudgetService.getBudgetStatus(),
+			selfTest: getSelfTestService().getStatus(),
 		},
 	};
 }
@@ -495,6 +514,13 @@ async function getApiStatus(req, res) {
 			&& notificationRedriveService.hasDurableStore()
 		) {
 			await notificationRedriveService.syncWorkerTelemetry();
+		}
+		if (typeof tokenCostBudgetService?.syncSharedSpendThrottled === 'function') {
+			try {
+				await tokenCostBudgetService.syncSharedSpendThrottled();
+			} catch (_) {
+				// Fail-open for status endpoint
+			}
 		}
 		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {
