@@ -400,18 +400,20 @@ async function renewEntry(key, ttlMs, claimToken) {
  * Delete a dedup entry (mainly for testing / manual invalidation).
  *
  * @param {string} key - Dedup key
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>} true when the entry is deleted or storage is unavailable
  */
 async function deleteEntry(key) {
 	const firestore = getFirestore();
 	if (!firestore) {
-		return;
+		return true;
 	}
 
 	try {
 		await firestore.collection(COLLECTION_NAME).doc(key).delete();
+		return true;
 	} catch (error) {
 		console.warn('[NewsDedupStorageService] deleteEntry error:', error.message);
+		return false;
 	}
 }
 

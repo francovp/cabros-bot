@@ -359,6 +359,34 @@ describe('Postman collection contract', () => {
 		expect(errorBody.error).toContain('enrichment_summary');
 	});
 
+	it('documents chat preferences endpoints with request and response examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const getItem = findItem(collection.item, 'GET Get Chat Preferences');
+		const putItem = findItem(collection.item, 'PUT Update Chat Preferences');
+		const deleteItem = findItem(collection.item, 'DELETE Reset Chat Preferences');
+
+		expect(getItem).toBeDefined();
+		expect(getItem.request.url.raw).toContain('/api/preferences/telegram/');
+		expect(getItem.response).toEqual(expect.arrayContaining([
+			expect.objectContaining({ code: 200 }),
+			expect.objectContaining({ code: 400 }),
+			expect.objectContaining({ code: 401 }),
+		]));
+
+		expect(putItem).toBeDefined();
+		expect(putItem.request.method).toBe('PUT');
+		const putBody = JSON.parse(putItem.request.body.raw);
+		expect(putBody.symbolFilter).toContain('BTCUSDT');
+		expect(putItem.response).toEqual(expect.arrayContaining([
+			expect.objectContaining({ code: 200 }),
+			expect.objectContaining({ code: 400 }),
+		]));
+
+		expect(deleteItem).toBeDefined();
+		expect(deleteItem.request.method).toBe('DELETE');
+		expect(deleteItem.response[0].code).toBe(200);
+	});
+
 	it('documents symbol, exchange, and eventCategory query filters in GET List Alerts and GET Alert Analytics Summary', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const listFiltered = findItem(collection.item, 'GET List Alerts (symbol, exchange, eventCategory)');
@@ -433,4 +461,27 @@ describe('Postman collection contract', () => {
 		expect(csvSuccess).toBeDefined();
 		expect(csvSuccess.code).toBe(200);
 	});
+
+	it('documents populated, omitted, and unauthorized response variants for firestore write metrics', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - firestore write metrics');
+
+		expect(item).toBeDefined();
+		const populated = item.response.find((res) => res.name.includes('populated'));
+		const omitted = item.response.find((res) => res.name.includes('omitted'));
+		const unauthorized = item.response.find((res) => res.code === 401);
+
+		expect(populated).toBeDefined();
+		expect(populated.code).toBe(200);
+		expect(JSON.parse(populated.body).dependencies.firestoreWriteMetrics).toBeDefined();
+
+		expect(omitted).toBeDefined();
+		expect(omitted.code).toBe(200);
+		expect(JSON.parse(omitted.body).dependencies.firestoreWriteMetrics).toBeUndefined();
+
+		expect(unauthorized).toBeDefined();
+		expect(unauthorized.code).toBe(401);
+		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
+	});
 });
+

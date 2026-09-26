@@ -12,9 +12,31 @@ updates:
     # Check the npm registry for updates every day (weekdays)
     schedule:
       interval: "weekly"
-    # Suppress express major-version bumps (PR #510 stuck red) until a
-    # deliberate migration is recorded in
-    # https://github.com/francovp/cabros-bot/issues/558 (CB-259).
+    # Suppress major-version bumps for core runtime integrations until deliberate,
+    # isolated migrations are scheduled per the compatibility policy in
+    # docs/runtime-sdk-major-drift-audit.md:
+    # - express: GH-558 / CB-259 / PR #908
+    # - runtime SDKs: GH-1170 (audit & compatibility holds, revisit date: 2026-12-31)
     ignore:
       - dependency-name: "express"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@google/genai"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "firebase-admin"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "bullmq"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "ioredis"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "openai"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "binance"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "undici"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "uuid"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "helmet"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "dotenv"
         update-types: ["version-update:semver-major"]
