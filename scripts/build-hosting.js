@@ -1,5 +1,7 @@
 'use strict';
 
+/* global require, module, __dirname, console */
+
 const fs = require('fs');
 const path = require('path');
 
@@ -8,6 +10,8 @@ const publicDir = path.join(__dirname, '../public');
 const publicAdminDir = path.join(publicDir, 'admin');
 
 function buildHosting() {
+	// Pin the self-hosted runtime to the lockfile for Express and Firebase parity.
+	fs.copyFileSync(require.resolve('vue/dist/vue.runtime.global.prod.js'), path.join(srcAdminDir, 'vue.runtime.global.prod.js'));
 	if (!fs.existsSync(publicDir)) {
 		fs.mkdirSync(publicDir, { recursive: true });
 	}

@@ -39,6 +39,9 @@ describe('Firebase Hosting Configuration', () => {
 		expect(fs.existsSync(path.join(publicAdminDir, 'admin.js'))).toBe(true);
 		expect(fs.existsSync(path.join(publicAdminDir, 'admin.css'))).toBe(true);
 		expect(fs.existsSync(path.join(publicAdminDir, 'admin-request.js'))).toBe(true);
+		for (const asset of ['admin-components.js', 'vue.runtime.global.prod.js']) {
+			expect(fs.readFileSync(path.join(publicAdminDir, asset), 'utf8')).toBe(fs.readFileSync(path.join(rootDir, 'src/admin', asset), 'utf8'));
+		}
 	});
 
 	it('defines preview and live hosting deployments in GitHub Actions workflow', () => {
