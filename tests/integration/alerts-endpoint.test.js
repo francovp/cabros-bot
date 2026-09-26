@@ -288,6 +288,33 @@ describe('Alerts API Integration Tests', () => {
 		}));
 	});
 
+	it('passes signalClass filter to alertStorageService.listAlerts', async () => {
+		alertStorageService.listAlerts.mockResolvedValue({
+			alerts: [],
+			hasMore: false,
+			nextBefore: null,
+		});
+
+		await request(app)
+			.get('/api/alerts?signalClass=breakout,reversal')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listAlerts).toHaveBeenCalledWith(expect.objectContaining({
+			signalClass: 'breakout,reversal',
+		}));
+	});
+
+	it('returns 400 for invalid signalClass filter on GET /api/alerts', async () => {
+		const res = await request(app)
+			.get('/api/alerts?signalClass=invalid_class')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body.code).toBe('INVALID_REQUEST');
+		expect(res.body.error).toContain('Invalid signalClass filter');
+	});
+
 	it('returns 400 when GET /api/alerts receives invalid filter values', async () => {
 		const emptySymbol = await request(app)
 			.get('/api/alerts?symbol=')
@@ -637,6 +664,64 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	it('passes signalClass filter to alertStorageService.summarizeAlerts', async () => {
+		alertStorageService.summarizeAlerts.mockResolvedValue({
+			totalAlerts: 0,
+			signalClassCounts: {
+				breakout: 0,
+				mean_reversion: 0,
+				trend_continuation: 0,
+				reversal: 0,
+				volume_spike: 0,
+				news_event: 0,
+				manual: 0,
+				unknown: 0,
+			},
+		});
+
+		await request(app)
+			.get('/api/alerts/summary?signalClass=breakout')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.summarizeAlerts).toHaveBeenCalledWith(expect.objectContaining({
+			signalClass: 'breakout',
+		}));
+	});
+
+	it('returns 400 for invalid signalClass filter on GET /api/alerts/summary', async () => {
+		const res = await request(app)
+			.get('/api/alerts/summary?signalClass=invalid_class')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body.code).toBe('INVALID_REQUEST');
+		expect(res.body.error).toContain('Invalid signalClass filter');
+	});
+
+	it('passes signalClass filter to alertStorageService.exportAlerts', async () => {
+		alertStorageService.exportAlerts.mockResolvedValue({ alerts: [] });
+
+		await request(app)
+			.get('/api/alerts/export?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&signalClass=breakout')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.exportAlerts).toHaveBeenCalledWith(expect.objectContaining({
+			signalClass: 'breakout',
+		}));
+	});
+
+	it('returns 400 for invalid signalClass filter on GET /api/alerts/export', async () => {
+		const res = await request(app)
+			.get('/api/alerts/export?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&signalClass=invalid_class')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body.code).toBe('INVALID_REQUEST');
+		expect(res.body.error).toContain('Invalid signalClass filter');
+	});
+
 	it('exports bounded stored alerts as JSONL without raw text by default', async () => {
 		alertStorageService.exportAlerts.mockResolvedValue({
 			window: {
@@ -723,11 +808,12 @@ describe('Alerts API Integration Tests', () => {
 			limit: 1,
 			source: undefined,
 			enriched: undefined,
+			signalClass: undefined,
 			includeText: true,
 			includeEnrichment: false,
 		});
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,requestId,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
+		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
 		expect(res.text).toContain("'=alert-1,,-42,'@webhook");
 		expect(res.text).toContain('"\'=@SUM(1,1), ""quoted""\r\n+next"');
 		expect(res.text).not.toContain('=alert-1,-42,@webhook');
@@ -743,6 +829,7 @@ describe('Alerts API Integration Tests', () => {
 					requestId: 'req-news-456',
 					receivedAt: '2026-06-06T12:00:00.000Z',
 					source: 'news-monitor',
+					signalClass: 'news_event',
 					enriched: true,
 					useTradingViewData: false,
 					tradingViewEnrichmentApplied: false,
@@ -765,8 +852,8 @@ describe('Alerts API Integration Tests', () => {
 			.expect(200);
 
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,requestId,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
-		expect(res.text).toContain('news-123,req-news-456,2026-06-06T12:00:00.000Z,news-monitor,true,false,false,not_applicable,price_surge,0.85,0.75,fresh');
+		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
+		expect(res.text).toContain('news-123,req-news-456,2026-06-06T12:00:00.000Z,news-monitor,news_event,true,false,false,not_applicable,price_surge,0.85,0.75,fresh');
 		expect(res.text).toContain('BTCUSDT: Bitcoin surges past 100k');
 	});
 

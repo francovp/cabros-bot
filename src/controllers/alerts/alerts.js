@@ -6,6 +6,7 @@ const alertFeedbackStorageService = require('../../services/storage/AlertFeedbac
 const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
 const { parseTelegramTopicRoutes, resolveTelegramThreadId } = require('../../services/notification/telegramTopicRouting');
+const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -21,6 +22,7 @@ const EXPORT_FIELDS = [
 	'requestId',
 	'receivedAt',
 	'source',
+	'signalClass',
 	'enriched',
 	'useTradingViewData',
 	'tradingViewEnrichmentApplied',
@@ -184,6 +186,61 @@ function parseStringFilter(rawValue, filterName, maxLength = 64) {
 	return { value: rawValue.trim() };
 }
 
+function parseSignalClassFilter(rawValue) {
+	if (rawValue === undefined) {
+		return { value: undefined };
+	}
+
+	const tokens = Array.isArray(rawValue)
+		? rawValue
+		: typeof rawValue === 'string'
+			? rawValue.split(',')
+			: null;
+
+	if (!tokens || tokens.length === 0) {
+		return {
+			error: {
+				error: 'Invalid signalClass filter. Use a non-empty string.',
+				code: 'INVALID_REQUEST',
+			},
+		};
+	}
+
+	const parts = [];
+	for (const token of tokens) {
+		if (typeof token !== 'string') {
+			return {
+				error: {
+					error: 'Invalid signalClass filter. Must be a string.',
+					code: 'INVALID_REQUEST',
+				},
+			};
+		}
+		const subParts = token.split(',').map((p) => p.trim().toLowerCase());
+		for (const subPart of subParts) {
+			if (!subPart) {
+				return {
+					error: {
+						error: 'Invalid signalClass filter. Contains empty value.',
+						code: 'INVALID_REQUEST',
+					},
+				};
+			}
+			if (!VALID_SIGNAL_CLASSES.has(subPart)) {
+				return {
+					error: {
+						error: `Invalid signalClass filter: "${subPart}". Allowed values: ${Array.from(VALID_SIGNAL_CLASSES).join(', ')}.`,
+						code: 'INVALID_REQUEST',
+					},
+				};
+			}
+			parts.push(subPart);
+		}
+	}
+
+	return { value: parts.join(',') };
+}
+
 function listAlerts(req, res) {
 	return handleAsync(req, res, '/api/alerts', async () => {
 		if (!alertStorageService.isEnabled()) {
@@ -238,6 +295,11 @@ function listAlerts(req, res) {
 			return res.status(400).json(exchange.error);
 		}
 
+		const signalClass = parseSignalClassFilter(req.query.signalClass);
+		if (signalClass.error) {
+			return res.status(400).json(signalClass.error);
+		}
+
 		const parsedInclude = parseInclude(req.query.include);
 		if (!parsedInclude.success) {
 			return res.status(400).json({
@@ -260,6 +322,9 @@ function listAlerts(req, res) {
 		}
 		if (exchange.value !== undefined) {
 			listParams.exchange = exchange.value;
+		}
+		if (signalClass.value !== undefined) {
+			listParams.signalClass = signalClass.value;
 		}
 		if (parsedInclude.values.length > 0) {
 			listParams.include = parsedInclude.values;
@@ -334,6 +399,11 @@ function summarizeAlerts(req, res) {
 			return res.status(400).json(exchange.error);
 		}
 
+		const signalClass = parseSignalClassFilter(req.query.signalClass);
+		if (signalClass.error) {
+			return res.status(400).json(signalClass.error);
+		}
+
 		const summaryParams = {
 			from: from.value,
 			limit,
@@ -350,6 +420,9 @@ function summarizeAlerts(req, res) {
 		if (exchange.value !== undefined) {
 			summaryParams.exchange = exchange.value;
 		}
+		if (signalClass.value !== undefined) {
+			summaryParams.signalClass = signalClass.value;
+		}
 
 		const summary = await alertStorageService.summarizeAlerts(summaryParams);
 
@@ -357,7 +430,8 @@ function summarizeAlerts(req, res) {
 			|| typeof enriched === 'boolean'
 			|| symbol.value !== undefined
 			|| eventCategory.value !== undefined
-			|| exchange.value !== undefined;
+			|| exchange.value !== undefined
+			|| signalClass.value !== undefined;
 		if (!hasReportFilters) {
 			let shadowModeMetrics = 'No measurements found';
 			if (signalOutcomeService.isEnabled()) {
@@ -502,17 +576,23 @@ function exportAlerts(req, res) {
 			? req.query.source.trim()
 			: undefined;
 
+		const signalClass = parseSignalClassFilter(req.query.signalClass);
+		if (signalClass.error) {
+			return res.status(400).json(signalClass.error);
+		}
+
 		const result = await alertStorageService.exportAlerts({
 			from: from.value,
 			to: to.value,
 			limit,
 			source,
 			enriched,
+			signalClass: signalClass.value,
 			includeText,
 			includeEnrichment,
 		});
 
-		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
+		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean' || signalClass.value !== undefined;
 		if (!hasReportFilters) {
 			let shadowModeMetrics = 'No measurements found';
 			if (signalOutcomeService.isEnabled()) {

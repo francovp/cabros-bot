@@ -5,6 +5,7 @@
  */
 
 const { formatHtfAlignment } = require('./htfAlignmentFormatter');
+const { formatSignalClassMarker } = require('./signalClassMarker');
 
 /**
  * WhatsAppMarkdownFormatter - Formats text for WhatsApp markdown
@@ -36,9 +37,11 @@ class WhatsAppMarkdownFormatter {
    * Format text for WhatsApp markdown
    * Converts MarkdownV2 or plain text to WhatsApp-compatible format
    * @param {string} text - Raw or enriched alert text
+   * @param {Object} [options] - Additional formatting options
+   * @param {string} [options.signalClass] - Signal classification enum value
    * @returns {string} Formatted text with WhatsApp markdown
    */
-	format(text) {
+	format(text, options = {}) {
 		if (!text || typeof text !== 'string') {
 			return '';
 		}
@@ -51,6 +54,12 @@ class WhatsAppMarkdownFormatter {
 			this.logger.debug?.('WhatsApp formatter: Converted MarkdownV2 escape sequences');
 		}
 
+		const signalClass = options.signalClass;
+		const marker = formatSignalClassMarker(signalClass, { markdownV2: false });
+		if (marker) {
+			return `${marker}\n\n${result}`;
+		}
+
 		return result;
 	}
 
@@ -58,9 +67,11 @@ class WhatsAppMarkdownFormatter {
    * Format Feature 003 NewsAlert (News Monitor)
    * @async
    * @param {Object} enriched - NewsAlert enriched object
+   * @param {Object} [options] - Additional formatting options
+   * @param {string} [options.signalClass] - Signal classification enum value
    * @returns {Promise<string>} Formatted WhatsApp message
    */
-	async formatNewsAlert(enriched = {}) {
+	async formatNewsAlert(enriched = {}, options = {}) {
 		const {
 			originalText = '',
 			summary = '',
@@ -76,6 +87,12 @@ class WhatsAppMarkdownFormatter {
 		// Unescape MarkdownV2 sequences if present in originalText
 		const unescapedTitle = originalText.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
 		let message = `*${unescapedTitle}*`;
+
+		const signalClass = options.signalClass || enriched.signalClass;
+		const marker = formatSignalClassMarker(signalClass, { markdownV2: false });
+		if (marker) {
+			message = `${marker}\n\n${message}`;
+		}
 
 		if (summary) {
 			// Unescape MarkdownV2 sequences in summary
@@ -154,9 +171,11 @@ class WhatsAppMarkdownFormatter {
    * Format Feature 004 EnrichedAlert (Webhook)
    * @async
    * @param {Object} enriched - EnrichedAlert object
+   * @param {Object} [options] - Additional formatting options
+   * @param {string} [options.signalClass] - Signal classification enum value
    * @returns {Promise<string>} Formatted WhatsApp message
    */
-	async formatWebhookAlert(enriched = {}) {
+	async formatWebhookAlert(enriched = {}, options = {}) {
 		const {
 			original_text = '',
 			sentiment = 'NEUTRAL',
@@ -183,6 +202,12 @@ class WhatsAppMarkdownFormatter {
 
 		// Build the message
 		let message = `*${unescapedText}*`;
+
+		const signalClass = options.signalClass || enriched.signalClass;
+		const marker = formatSignalClassMarker(signalClass, { markdownV2: false });
+		if (marker) {
+			message = `${marker}\n\n${message}`;
+		}
 
 		if (truncated) {
 			message += '\n\n_(Message was truncated due to length)_';
@@ -298,17 +323,22 @@ class WhatsAppMarkdownFormatter {
    * Dispatches to specific formatter based on enriched data structure
    * @async
    * @param {Object} enriched - Enriched alert object
+   * @param {Object} [options] - Additional formatting options
+   * @param {string} [options.signalClass] - Signal classification enum value
    * @returns {Promise<string>} Formatted WhatsApp message
    */
-	async formatEnriched(enriched = {}) {
+	async formatEnriched(enriched = {}, options = {}) {
 		// Check for Feature 004 EnrichedAlert structure (has original_text or insights array)
 		if (enriched.original_text || (enriched.insights && Array.isArray(enriched.insights))) {
-			return this.formatWebhookAlert(enriched);
+			return this.formatWebhookAlert(enriched, options);
 		}
 		// Fallback to Feature 003 NewsAlert structure
-		return this.formatNewsAlert(enriched);
+		return this.formatNewsAlert(enriched, options);
 	}
 
 }
 
+WhatsAppMarkdownFormatter.formatSignalClassMarker = (signalClass, options = {}) => formatSignalClassMarker(signalClass, { markdownV2: false, ...options });
+
 module.exports = WhatsAppMarkdownFormatter;
+module.exports.formatSignalClassMarker = (signalClass, options = {}) => formatSignalClassMarker(signalClass, { markdownV2: false, ...options });

@@ -414,12 +414,13 @@ class WhatsAppService extends NotificationChannel {
 	async _formatAlert(alert) {
 		// Format message for WhatsApp.
 		// If enriched is an object, use formatEnriched (async with URL shortening), otherwise format the text.
+		const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
 		let formattedText;
 		if (alert.enriched && typeof alert.enriched === 'object') {
-			formattedText = await this.formatter.formatEnriched(alert.enriched);
+			formattedText = await this.formatter.formatEnriched(alert.enriched, { signalClass });
 			console.debug('Formatted enriched WhatsApp message length:', formattedText.length);
 		} else {
-			formattedText = this.formatter.format(alert.enriched || alert.text);
+			formattedText = this.formatter.format(alert.enriched || alert.text, { signalClass });
 			console.debug('Formatted WhatsApp message length:', formattedText.length);
 		}
 

@@ -232,6 +232,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
+	const signalClassMarkerEnabled = runtimeConfig.ENABLE_SIGNAL_CLASS_MARKER;
 	const remoteConfigStatus = remoteConfigService.getStatus();
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING);
 	const equityMarketDataStatus = equityMarketDataService.getStatus();
@@ -405,6 +406,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 			testAlert: isTestAlertEnabled(),
 			tokenCostBudget: tokenCostBudgetService.isEnabled(),
+			signalClassMarker: signalClassMarkerEnabled,
 			maintenanceMode: isMaintenanceModeEnabled(),
 		},
 		deliveryChannels: {

@@ -148,6 +148,9 @@
           },
           {
             "$ref": "#/components/parameters/XRequestIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSignalClass"
           }
         ],
         "requestBody": {
@@ -620,6 +623,9 @@
           },
           {
             "$ref": "#/components/parameters/AlertExchange"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSignalClass"
           }
         ],
         "responses": {
@@ -740,6 +746,9 @@
           },
           {
             "$ref": "#/components/parameters/AlertExchange"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSignalClass"
           }
         ],
         "responses": {
@@ -927,6 +936,9 @@
           },
           {
             "$ref": "#/components/parameters/IncludeText"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSignalClass"
           }
         ],
         "responses": {
@@ -3534,6 +3546,15 @@
         },
         "example": "BINANCE",
         "description": "Optional exchange filter (e.g. BINANCE, COINBASE). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against the extracted exchange field."
+      },
+      "AlertSignalClass": {
+        "name": "signalClass",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "example": "breakout",
+        "description": "Optional signal class filter (breakout, mean_reversion, trend_continuation, reversal, volume_spike, news_event, manual, unknown) or comma-separated list."
       },
       "IncludeText": {
         "name": "includeText",
@@ -7164,6 +7185,20 @@
               "null"
             ]
           },
+          "signalClass": {
+            "type": "string",
+            "enum": [
+              "breakout",
+              "mean_reversion",
+              "trend_continuation",
+              "reversal",
+              "volume_spike",
+              "news_event",
+              "manual",
+              "unknown"
+            ],
+            "description": "Classification category for the alert signal."
+          },
           "truncated": {
             "type": "boolean",
             "description": "True when the stored text was clipped to the 20,000-character cap; see originalLength for the pre-truncation size."
@@ -7407,6 +7442,10 @@
           "byFeatureFlag": {
             "$ref": "#/components/schemas/JsonObject",
             "description": "Includes tradingViewData for requested MCP enrichment, tradingViewDataApplied for successfully applied MCP results, and withoutTradingViewData for requests that did not opt in."
+          },
+          "signalClassCounts": {
+            "$ref": "#/components/schemas/JsonObject",
+            "description": "Aggregate count of stored alerts per signal class (breakout, mean_reversion, trend_continuation, reversal, volume_spike, news_event, manual, unknown)."
           },
           "enrichment": {
             "type": "object",
@@ -7818,6 +7857,20 @@
           "whatsappChatId": {
             "type": "string",
             "minLength": 1
+          },
+          "signalClass": {
+            "type": "string",
+            "enum": [
+              "breakout",
+              "mean_reversion",
+              "trend_continuation",
+              "reversal",
+              "volume_spike",
+              "news_event",
+              "manual",
+              "unknown"
+            ],
+            "description": "Classification category for the alert signal."
           }
         }
       },
@@ -8766,11 +8819,39 @@
           "dryRun": {
             "type": "boolean"
           },
+          "signalClass": {
+            "type": "string",
+            "enum": [
+              "breakout",
+              "mean_reversion",
+              "trend_continuation",
+              "reversal",
+              "volume_spike",
+              "news_event",
+              "manual",
+              "unknown"
+            ],
+            "description": "Classification category for the alert signal."
+          },
           "payload": {
             "type": "object",
             "properties": {
               "text": {
                 "type": "string"
+              },
+              "signalClass": {
+                "type": "string",
+                "enum": [
+                  "breakout",
+                  "mean_reversion",
+                  "trend_continuation",
+                  "reversal",
+                  "volume_spike",
+                  "news_event",
+                  "manual",
+                  "unknown"
+                ],
+                "description": "Classification category for the alert signal."
               },
               "enrichedData": {
                 "type": [

@@ -467,6 +467,26 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.messageFooterMetadata).toBe(false);
 	});
 
+	it('reports signal class marker as enabled by default', async () => {
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.signalClassMarker).toBe(true);
+	});
+
+	it('reports signal class marker as disabled when explicitly disabled', async () => {
+		process.env.ENABLE_SIGNAL_CLASS_MARKER = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.signalClassMarker).toBe(false);
+	});
+
 	it('reports alert signal repeat suppression as disabled by default', async () => {
 		delete process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION;
 

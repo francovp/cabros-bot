@@ -260,11 +260,19 @@ function postAlert(botOrGetter) {
 				alertText = body;
 			}
 
-			const { text } = validateAlert(alertText);
+			const rawSignalClass = (typeof body === 'object' && body && 'signalClass' in body)
+				? body.signalClass
+				: req.query?.signalClass;
+
+			const { text, signalClass } = validateAlert(
+				alertText,
+				typeof body === 'object' ? body.metadata : undefined,
+				rawSignalClass,
+			);
 			const source = (typeof body === 'object' && body && typeof body.source === 'string' && body.source.trim())
 				? body.source.trim()
 				: 'webhook-alert';
-			alert = { text, source };
+			alert = { text, source, signalClass };
 
 			const tokenUsage = new TokenUsageTracker();
 			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan });
@@ -281,6 +289,7 @@ function postAlert(botOrGetter) {
 					payload: {
 						text: alert.text,
 						enrichedData: alert.enriched || null,
+						signalClass: alert.signalClass,
 					},
 					tokenUsage: tokenUsageJSON,
 					requestId,
@@ -519,6 +528,7 @@ function postAlert(botOrGetter) {
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
 				suppressedRepeat,
+				signalClass: alert.signalClass,
 				source: body.source || 'webhook-alert',
 				telegramChatId: routing.telegramChatId,
 				telegramThreadId: routing.telegramThreadId,
@@ -597,33 +607,37 @@ function postAlert(botOrGetter) {
 				});
 			}
 
-			console.error('[Alert] Request failed:', error.message);
+			const status = (error.response && error.response.error_code) || error.statusCode || 500;
+			const isClientError = status >= 400 && status < 500;
 
-			// Capture runtime error to Sentry (T012)
-			sentryService.captureRuntimeError({
-				channel: 'http-alert',
-				error,
-				http: {
-					endpoint: '/api/webhook/alert',
-					method: 'POST',
-					statusCode: (error.response && error.response.error_code) || 500,
-					requestId,
-				},
-				alert: {
-					textLength: alertText ? alertText.length : 0,
-					hasEnrichment: !!(alert && alert.enriched),
-					enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
-					truncated: false,
-				},
-			});
+			if (!isClientError) {
+				console.error('[Alert] Request failed:', error.message);
 
-			const status = (error.response && error.response.error_code) || 500;
+				// Capture runtime error to Sentry (T012)
+				sentryService.captureRuntimeError({
+					channel: 'http-alert',
+					error,
+					http: {
+						endpoint: '/api/webhook/alert',
+						method: 'POST',
+						statusCode: status,
+						requestId,
+					},
+					alert: {
+						textLength: alertText ? alertText.length : 0,
+						hasEnrichment: !!(alert && alert.enriched),
+						enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
+						truncated: false,
+					},
+				});
+			}
+
 			const upstreamEnvelope = error.response && typeof error.response === 'object'
 				? error.response
 				: null;
 			const envelope = buildErrorEnvelope({
 				error: (upstreamEnvelope && upstreamEnvelope.error) || error.message || 'Internal server error',
-				code: (upstreamEnvelope && upstreamEnvelope.code) || STANDARD_ERROR_CODES.INTERNAL_ERROR,
+				code: (upstreamEnvelope && upstreamEnvelope.code) || (status < 500 ? STANDARD_ERROR_CODES.INVALID_REQUEST : STANDARD_ERROR_CODES.INTERNAL_ERROR),
 				requestId,
 				statusCode: status,
 				details: (upstreamEnvelope && upstreamEnvelope.details) || undefined,

@@ -33,6 +33,20 @@ const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentia
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
 const { adminSseService } = require('../sse/AdminSseService');
+const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
+
+function createEmptySignalClassCounts() {
+	return {
+		breakout: 0,
+		mean_reversion: 0,
+		trend_continuation: 0,
+		reversal: 0,
+		volume_spike: 0,
+		news_event: 0,
+		manual: 0,
+		unknown: 0,
+	};
+}
 
 const WRITE_METRICS_DOMAIN_ALERTS = 'alerts';
 const WRITE_METRICS_DOMAIN_REPLAYS = 'alertReplays';
@@ -199,10 +213,14 @@ function formatAlertDocument(doc, options = {}) {
 		(Array.isArray(options.include) && options.include.includes('enrichment_summary')) ||
 		options.include === 'enrichment_summary',
 	);
+	const signalClass = (typeof data.signalClass === 'string' && VALID_SIGNAL_CLASSES.has(data.signalClass.trim().toLowerCase()))
+		? data.signalClass.trim().toLowerCase()
+		: 'unknown';
 	const docObj = {
 		id: doc.id,
 		receivedAt: getDocTimestamp(data),
 		text: typeof data.text === 'string' ? data.text : '',
+		signalClass,
 		enriched: Boolean(data.enriched),
 		enrichmentData: includeEnrichmentSummary
 			? formatEnrichmentSummary(data.enrichmentData, data)
@@ -887,6 +905,9 @@ function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
 		id: doc.id,
 		receivedAt: getDocTimestamp(data),
 		source: typeof data.source === 'string' ? data.source : null,
+		signalClass: (typeof data.signalClass === 'string' && VALID_SIGNAL_CLASSES.has(data.signalClass.trim().toLowerCase()))
+			? data.signalClass.trim().toLowerCase()
+			: 'unknown',
 		enriched: Boolean(data.enriched),
 		useTradingViewData: Boolean(data.useTradingViewData),
 		tradingViewEnrichmentApplied: Boolean(data.tradingViewEnrichmentApplied),
@@ -1083,6 +1104,18 @@ function matchesFilters(alert, filters) {
 		}
 	}
 
+	if (filters.signalClass) {
+		const targetClasses = Array.isArray(filters.signalClass)
+			? filters.signalClass.map((c) => String(c).trim().toLowerCase())
+			: String(filters.signalClass).split(',').map((c) => c.trim().toLowerCase());
+		const alertClass = (typeof alert.signalClass === 'string' && VALID_SIGNAL_CLASSES.has(alert.signalClass.trim().toLowerCase()))
+			? alert.signalClass.trim().toLowerCase()
+			: 'unknown';
+		if (!targetClasses.includes(alertClass)) {
+			return false;
+		}
+	}
+
 	return true;
 }
 
@@ -1246,6 +1279,7 @@ async function saveAlertInternal(params = {}) {
 		text,
 		symbol,
 		exchange,
+		signalClass,
 		enriched,
 		enrichmentData,
 		tokenUsage,
@@ -1307,10 +1341,15 @@ async function saveAlertInternal(params = {}) {
 			})
 			: [];
 
+		const validatedSignalClass = (typeof signalClass === 'string' && VALID_SIGNAL_CLASSES.has(signalClass.trim().toLowerCase()))
+			? signalClass.trim().toLowerCase()
+			: 'unknown';
+
 		const document = {
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
 			expiresAt: buildRetentionExpiryTimestamp(),
 			text: truncated ? rawText.substring(0, MAX_ALERT_TEXT_LENGTH) : rawText,
+			signalClass: validatedSignalClass,
 			enriched: Boolean(enriched),
 			enrichmentData: stripUndefinedFieldsDeep(sanitizeEnrichmentData(enrichmentData)),
 			tokenUsage: stripUndefinedFieldsDeep(tokenUsage ?? null),
@@ -1425,6 +1464,7 @@ async function listAlerts({
 	symbol,
 	eventCategory,
 	exchange,
+	signalClass,
 	include,
 	includeEnrichmentSummary,
 } = {}) {
@@ -1488,7 +1528,7 @@ async function listAlerts({
 			}
 
 			const formatted = formatAlertDocument(doc, { include, includeEnrichmentSummary });
-			if (matchesFilters(formatted, { source, enriched, symbol, eventCategory, exchange })) {
+			if (matchesFilters(formatted, { source, enriched, symbol, eventCategory, exchange, signalClass })) {
 				matches.push(formatted);
 				if (matches.length >= targetCount) {
 					break;
@@ -1895,7 +1935,7 @@ async function getReplayAttemptByIdempotencyKey(alertId, idempotencyKey) {
  * @param {boolean|undefined} params.includeEnrichment Include bounded enrichmentData when true
  * @returns {Promise<{window: Object, alerts: Array}>}
  */
-async function exportAlerts({ from, to, limit, source, enriched, includeText = false, includeEnrichment = false } = {}) {
+async function exportAlerts({ from, to, limit, source, enriched, signalClass, includeText = false, includeEnrichment = false } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -1906,7 +1946,7 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 	}
 
 	const window = buildExportWindow({ from, to, limit });
-	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
+	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean' || Boolean(signalClass);
 	const scanLimit = Math.max(window.limit, MAX_PAGE_SIZE);
 	const docs = [];
 	let pageCursor = null;
@@ -1941,7 +1981,10 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 				return matchesFilters({
 					source: typeof data.source === 'string' ? data.source : null,
 					enriched: Boolean(data.enriched),
-				}, { source, enriched });
+					signalClass: (typeof data.signalClass === 'string' && VALID_SIGNAL_CLASSES.has(data.signalClass.trim().toLowerCase()))
+						? data.signalClass.trim().toLowerCase()
+						: 'unknown',
+				}, { source, enriched, signalClass });
 			})
 			: activeDocs;
 		docs.push(...matchingDocs.slice(0, window.limit - docs.length));
@@ -2163,7 +2206,7 @@ async function batchReplayAlerts(attempts) {
  * @param {string|undefined} params.exchange Optional exchange filter
  * @returns {Promise<Object|null>}
  */
-async function summarizeAlerts({ from, to, limit, source, enriched, symbol, eventCategory, exchange } = {}) {
+async function summarizeAlerts({ from, to, limit, source, enriched, symbol, eventCategory, exchange, signalClass } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -2178,7 +2221,8 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		|| typeof enriched === 'boolean'
 		|| typeof symbol === 'string'
 		|| typeof eventCategory === 'string'
-		|| typeof exchange === 'string';
+		|| typeof exchange === 'string'
+		|| Boolean(signalClass);
 	const scanLimit = Math.max(window.limit, MAX_PAGE_SIZE);
 	const docs = [];
 	let pageCursor = null;
@@ -2222,7 +2266,10 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 					symbol: extracted.symbol !== 'unknown' ? extracted.symbol : null,
 					exchange: extracted.exchange || null,
 					eventCategory: category,
-				}, { source, enriched, symbol, eventCategory, exchange });
+					signalClass: (typeof data.signalClass === 'string' && VALID_SIGNAL_CLASSES.has(data.signalClass.trim().toLowerCase()))
+						? data.signalClass.trim().toLowerCase()
+						: 'unknown',
+				}, { source, enriched, symbol, eventCategory, exchange, signalClass });
 			})
 			: activeDocs;
 		docs.push(...matchingDocs.slice(0, window.limit - docs.length));
@@ -2242,6 +2289,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		totalAlerts: 0,
 		bySource: {},
 		bySymbol: {},
+		signalClassCounts: createEmptySignalClassCounts(),
 		byFeatureFlag: {
 			enriched: 0,
 			plain: 0,
@@ -2297,6 +2345,11 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		summary.totalAlerts += 1;
 		incrementCounter(summary.bySource, data.source);
 		incrementCounter(summary.bySymbol, extractAlertSymbol(data));
+
+		const docSignalClass = (typeof data.signalClass === 'string' && VALID_SIGNAL_CLASSES.has(data.signalClass.trim().toLowerCase()))
+			? data.signalClass.trim().toLowerCase()
+			: 'unknown';
+		summary.signalClassCounts[docSignalClass] = (summary.signalClassCounts[docSignalClass] || 0) + 1;
 
 		if (alertEnriched) {
 			summary.byFeatureFlag.enriched += 1;

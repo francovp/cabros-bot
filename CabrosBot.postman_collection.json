@@ -547,7 +547,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101\n}"
+              "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"signalClass\": \"breakout\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert",
@@ -606,7 +606,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"Bitcoin breaks above $83,000 with strong volume\"\n}"
+              "raw": "{\n  \"text\": \"Bitcoin breaks above $83,000 with strong volume\",\n  \"signalClass\": \"breakout\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert?dryRun=true",
@@ -631,7 +631,7 @@
               "name": "Enriched payload",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"sentiment_score_raw\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"setup_evidence\":\"Price broke above resistance range with volume confirmation\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[]}},\"tokenUsage\":{}}"
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"signalClass\":\"breakout\",\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"signalClass\":\"breakout\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"sentiment_score_raw\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"setup_evidence\":\"Price broke above resistance range with volume confirmation\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[]}},\"tokenUsage\":{}}"
             }
           ]
         },
@@ -3136,7 +3136,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"alert-123\",\n      \"receivedAt\": \"2026-06-06T12:00:00.000Z\",\n      \"source\": \"webhook\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"eventCategory\": \"price_surge\",\n      \"enriched\": true,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"123\"\n        }\n      ]\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 10,\n    \"nextBefore\": null\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"alert-123\",\n      \"receivedAt\": \"2026-06-06T12:00:00.000Z\",\n      \"source\": \"webhook\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"eventCategory\": \"price_surge\",\n      \"signalClass\": \"breakout\",\n      \"enriched\": true,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"123\"\n        }\n      ]\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 10,\n    \"nextBefore\": null\n  }\n}"
             }
           ]
         },
@@ -4018,7 +4018,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500\n    },\n    \"totalAlerts\": 1,\n    \"bySource\": {\n      \"webhook\": 1\n    },\n    \"bySymbol\": {\n      \"BTCUSDT\": 1\n    },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 0,\n      \"tradingViewData\": 0,\n      \"tradingViewDataApplied\": 0,\n      \"withoutTradingViewData\": 1\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500\n    },\n    \"totalAlerts\": 1,\n    \"bySource\": {\n      \"webhook\": 1\n    },\n    \"bySymbol\": {\n      \"BTCUSDT\": 1\n    },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 0,\n      \"tradingViewData\": 0,\n      \"tradingViewDataApplied\": 0,\n      \"withoutTradingViewData\": 1\n    },\n    \"signalClassCounts\": {\n      \"breakout\": 1,\n      \"mean_reversion\": 0,\n      \"trend_continuation\": 0,\n      \"reversal\": 0,\n      \"volume_spike\": 0,\n      \"news_event\": 0,\n      \"manual\": 0,\n      \"unknown\": 0\n    }\n  }\n}"
             }
           ]
         },
