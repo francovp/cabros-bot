@@ -40,7 +40,7 @@ Per the alignment plan in GH-1170:
 | `uuid` | `11.1.1` | `14.0.2` | Request tracing, job IDs, idempotency deduplication | **Compatibility Hold** | 2026-12-31 |
 | `helmet` | `7.2.0` | `8.3.0` | Express security headers & CSP middleware | **Compatibility Hold** | 2026-12-31 |
 | `dotenv` | `16.6.1` | `18.0.1` | Application environment initialization | **Compatibility Hold** | 2026-12-31 |
-| `express` | `4.22.1` | `5.2.1` | Core HTTP application framework (GH-558 / PR #908) | **Compatibility Hold** | 2026-12-31 |
+| `express` | `4.22.1` | `5.2.1` | Core HTTP application framework (GH-558, closed by PR #908) | **Compatibility Hold** | 2026-12-31 |
 
 ---
 
@@ -127,3 +127,83 @@ To prevent noisy, failing, or dangerous automated pull requests from breaking CI
 Weekly Dependabot scans will continue to open pull requests for **patch** and **minor** updates, ensuring security fixes and non-breaking improvements are reviewed and merged promptly.
 
 Any major SDK version upgrade must be conducted via a human- or agent-led migration initiative adhering to the verification checklist outlined in Section 3.
+
+---
+
+## 5. Migration Prioritization Framework
+
+When the `2026-12-31` revisit date arrives (or a revisit trigger fires early), candidates are
+ranked against four criteria. The criteria are ordered by blast radius, not by how large the
+version gap looks — a two-major gap in a leaf utility outranks a one-major gap on the order path.
+
+| # | Criterion | Question | Why it ranks here |
+| :-- | :--- | :--- | :--- |
+| 1 | **Operational criticality** | Does a failure here stop alert delivery, order execution, or persistence? | A regression here is user-visible and revenue-affecting within minutes. |
+| 2 | **Blast radius** | How many call sites and services would need to change together? | Determines whether the migration is one PR or a coordinated series. |
+| 3 | **Breaking-change severity** | Does the release alter control flow, error semantics, or persistence formats? | Silent semantic changes are more dangerous than loud API breaks, which tests catch. |
+| 4 | **Security exposure** | Are there advisories against the currently locked version? | The one criterion that can *accelerate* a migration ahead of the normal order. |
+
+Criteria 1–3 set the default sequence. Criterion 4 is an override: a live advisory promotes a
+package immediately and out of order, ahead of anything merely queued behind it.
+
+Applying the framework yields the sequence already recorded in GH-1170:
+
+1. `@google/genai` + `openai` — provider clients. High call-site count, but failures are
+   contained by the existing fail-open enrichment path, so they are the safest place to learn
+   a new client SDK's ergonomics.
+2. `firebase-admin` — persistence, auth, and Remote Config. Isolated behind storage services,
+   but a failure here can prevent alert recording outright.
+3. `bullmq` + `ioredis` — worker queue. Treated as a matched pair because BullMQ's Redis client
+   coupling means migrating one without the other is not a coherent state.
+4. `binance` — live order execution. Sequenced late deliberately: it is the only audited package
+   whose defects can move real money, so it inherits the most mature migration practice.
+5. `undici`, `uuid`, `helmet` — leaf utilities with narrow blast radius, migrated last.
+6. `express` — already on hold via the merged Dependabot suppression in PR #908 (GH-558, CB-259).
+   Listed last for completeness; any future move to Express 5 is a first-party framework
+   decision rather than a routine SDK bump.
+
+---
+
+## 6. Migration Validation & Rollout Strategy
+
+There is no shadow-traffic or dual-write mechanism for outbound provider and queue calls, and
+this document does not propose adding one. A dual path would double the failure surface for
+exactly the components that must fail open. Instead, each migration is validated by a staged
+ladder built from controls that already exist on `master`:
+
+**Stage 1 — Isolated branch, no external effect.**
+One package per PR, branched from current `master`. Dependabot suppression for that package is
+lifted only for the duration of the migration so the diff is reviewed against a known target.
+
+**Stage 2 — Automated regression gates.**
+`pnpm test` plus the focused suite named in that package's Section 3 entry. Where persistence is
+touched, `pnpm test:firebase` against the Firestore emulator. A migration is not eligible to
+advance while `tests/unit/sync-production-env.test.js` is failing for unrelated reasons, because
+that suite gates the env-sync path these migrations depend on.
+
+**Stage 3 — Synthetic probe against a real deployment.**
+Master already exposes the probe surfaces needed here, so no new endpoint is required:
+- `POST /api/admin/test-alert` (admin-gated, idempotency-protected) exercises the real
+  notification path end to end without waiting for market conditions.
+- `GET /api/selftest` and `POST /api/selftest/run` report component-level health.
+- `GET /api/status` and `GET /api/capabilities` confirm provider and queue wiring after restart.
+
+These run against the PR preview deployment first, then against production post-merge.
+
+**Stage 4 — Staged production rollout via Remote Config.**
+Where a migration can be toggled at runtime, the new path is gated behind a Remote Config
+boolean, defaulted off, and enabled for a single channel or worker pool before wider rollout.
+Packages with no runtime flag (`helmet`, `undici`, `uuid`, `dotenv`) skip this stage because
+their effect is observable at boot via the Stage 3 probes.
+
+**Stage 5 — Rollback rehearsal before full enablement.**
+Confirm the revert path is a redeploy of the previous image and not a data migration. This is a
+hard gate for `firebase-admin` and `binance`: if a migration cannot be reverted by redeploy
+alone, it requires a dedicated migration plan and explicit human sign-off rather than an
+automated merge.
+
+**Worker queue specifics (`bullmq` + `ioredis`).** The queue is drained gracefully on
+`SIGTERM`/`SIGINT` via `src/lib/processLifecycle.js`, so queue migrations must be validated by
+observing a full drain-then-restart cycle with no dropped or double-processed jobs. Job
+reconciliation is the assertion that matters: a duplicated or lost job is a correctness bug, not
+a performance regression.

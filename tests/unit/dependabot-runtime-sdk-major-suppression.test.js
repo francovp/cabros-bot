@@ -74,4 +74,23 @@ describe('dependabot runtime SDK major suppression (GH-1170)', () => {
 	it('audit document explicitly references GH-1170', () => {
 		expect(rawAuditDoc).toMatch(/#1170/);
 	});
+
+	// A compatibility hold is only actionable if a future migration has an
+	// agreed order and a validation path, so both are pinned here.
+	it('documents the migration prioritization framework', () => {
+		expect(rawAuditDoc).toMatch(/##\s*5\.\s*Migration Prioritization Framework/);
+		for (const criterion of ['Operational criticality', 'Blast radius', 'Breaking-change severity', 'Security exposure']) {
+			expect(rawAuditDoc).toContain(criterion);
+		}
+	});
+
+	it('documents the migration validation and rollout strategy', () => {
+		expect(rawAuditDoc).toMatch(/##\s*6\.\s*Migration Validation & Rollout Strategy/);
+		// Validation must reuse probe surfaces that exist on master rather than
+		// promising an endpoint that is not implemented.
+		expect(rawAuditDoc).toContain('/api/admin/test-alert');
+		expect(rawAuditDoc).toContain('/api/selftest');
+		expect(rawAuditDoc).toMatch(/pnpm test:firebase/);
+		expect(rawAuditDoc).toMatch(/Remote Config/);
+	});
 });
