@@ -237,6 +237,9 @@ class TelegramService extends NotificationChannel {
 
 			const chatId = alert.telegramChatId || this.chatId;
 			const threadId = this.resolveThreadId(alert);
+			const replyMarkup = alert.replyMarkup && typeof alert.replyMarkup === 'object'
+				? alert.replyMarkup
+				: null;
 			this.logger?.debug?.(`Sending to Telegram chat ${chatId}${threadId ? ` (topic ${threadId})` : ''}`);
 			const messageParts = splitTelegramMessage(formattedText, this.maxMessageLength);
 			const sendMessage = (targetChatId, messagePart, extra, requestSignal) => {
@@ -254,22 +257,26 @@ class TelegramService extends NotificationChannel {
 			const messageIds = [];
 			let attemptCount = 0;
 			const retryState = { totalWaitMs: 0 };
-			for (const messagePart of messageParts) {
-				if (signal?.aborted) {
-					return buildResult({
-						success: false,
-						channel: 'telegram',
-						error: signal.reason?.message || signal.reason || 'Operation aborted',
-						category: 'TIMEOUT',
-						attemptCount,
-						messageIds,
-						messageId: messageIds.join(','),
-						messageCount: messageIds.length,
-						aborted: true,
-						threadId,
-					});
-				}
-				const result = await this.sendMessagePart(sendMessage, chatId, messagePart, !!alert.enriched, signal, retryState, threadId);
+			for (let index = 0; index < messageParts.length; index += 1) {
+			const messagePart = messageParts[index];
+			if (signal?.aborted) {
+				return buildResult({
+					success: false,
+					channel: 'telegram',
+					error: signal.reason?.message || signal.reason || 'Operation aborted',
+					category: 'TIMEOUT',
+					attemptCount,
+					messageIds,
+					messageId: messageIds.join(','),
+					messageCount: messageIds.length,
+					aborted: true,
+					threadId,
+				});
+			}
+			const result = await this.sendMessagePart(sendMessage, chatId, messagePart, !!alert.enriched, signal, retryState, threadId, {
+				replyMarkup,
+				attachReplyMarkup: index === 0,
+			});
 				attemptCount += result.attemptCount;
 				if (!result.success) {
 					if (result.aborted) {
@@ -326,7 +333,7 @@ class TelegramService extends NotificationChannel {
 		}
 	}
 
-	async sendMessagePart(sendMessage, chatId, messagePart, enriched, signal, retryState = { totalWaitMs: 0 }, threadId = null) {
+	async sendMessagePart(sendMessage, chatId, messagePart, enriched, signal, retryState = { totalWaitMs: 0 }, threadId = null, options = {}) {
 		let totalAttempts = 0;
 		let lastError = null;
 
@@ -340,7 +347,7 @@ class TelegramService extends NotificationChannel {
 				};
 			}
 
-			const result = await this.sendFormattedMessage(sendMessage, chatId, messagePart, enriched, signal, threadId);
+			const result = await this.sendFormattedMessage(sendMessage, chatId, messagePart, enriched, signal, threadId, options);
 			totalAttempts += result.attemptCount;
 			if (result.success) {
 				return { ...result, attemptCount: totalAttempts };
@@ -384,7 +391,7 @@ class TelegramService extends NotificationChannel {
 		};
 	}
 
-	async sendFormattedMessage(sendMessage, chatId, messagePart, enriched, signal, threadId = null) {
+	async sendFormattedMessage(sendMessage, chatId, messagePart, enriched, signal, threadId = null, options = {}) {
 		const getAbortError = () => new Error(signal?.reason?.message || signal?.reason || 'Operation aborted');
 		const sendAttempt = async (text, extra) => {
 			const attemptController = new AbortController();
@@ -412,11 +419,13 @@ class TelegramService extends NotificationChannel {
 			}
 		};
 		const topicExtra = threadId ? { message_thread_id: threadId } : {};
+		const replyMarkup = options.attachReplyMarkup ? options.replyMarkup : null;
 		try {
 			const response = await sendAttempt(messagePart, {
 				parse_mode: 'MarkdownV2',
 				disable_web_page_preview: enriched,
 				...topicExtra,
+				...(replyMarkup ? { reply_markup: replyMarkup } : {}),
 			});
 			return { success: true, response, attemptCount: 1 };
 		} catch (error) {
@@ -436,6 +445,7 @@ class TelegramService extends NotificationChannel {
 				const response = await sendAttempt(stripMarkdownV2Escapes(messagePart), {
 					disable_web_page_preview: enriched,
 					...topicExtra,
+					...(replyMarkup ? { reply_markup: replyMarkup } : {}),
 				});
 				return { success: true, response, attemptCount: 2 };
 			} catch (fallbackError) {
