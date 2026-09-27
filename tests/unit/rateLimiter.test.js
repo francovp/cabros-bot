@@ -451,74 +451,104 @@ describe('Rate Limiter Middleware', () => {
 			expect(resBlocked.statusCode).toBe(429);
 		});
 
-		test('honors Remote Config override of RATE_LIMIT_API_KEY_MAX', () => {
-			jest.isolateModules(() => {
-				// Re-require the limiter inside an isolated module registry so this test
-				// can patch the RemoteConfigService without leaking state to other tests.
-				const isolatedRateLimiter = require('../../src/lib/rateLimiter');
-				const isolatedHttpMocks = require('node-mocks-http');
-				const remoteConfigModule = require('../../src/services/remoteConfig/RemoteConfigService');
-				const runtimeSpy = jest
-					.spyOn(remoteConfigModule, 'getRuntimeConfig')
-					.mockReturnValue({ RATE_LIMIT_API_KEY_MAX: 1 });
+	});
+});
 
-				try {
-					process.env.WEBHOOK_API_KEY = 'super-secret';
-					delete process.env.RATE_LIMIT_API_KEY_MAX;
-					process.env.RATE_LIMIT_MAX = '5';
-					isolatedRateLimiter.enableTestMode();
-					isolatedRateLimiter.reset();
+describe('API-key bucket classification regressions (issue #692 review)', () => {
+	const originalEnv = process.env;
+	let next;
 
-					const authReq = isolatedHttpMocks.createRequest({
-						method: 'POST',
-						url: '/api/test',
-						ip: '203.0.113.10',
-						headers: { 'x-api-key': 'super-secret' },
-					});
+	beforeEach(() => {
+		process.env = { ...originalEnv };
+		next = jest.fn();
+		rateLimiter.enableTestMode();
+		rateLimiter.reset();
+	});
 
-					isolatedRateLimiter(authReq, isolatedHttpMocks.createResponse(), jest.fn());
-					const resBlocked = isolatedHttpMocks.createResponse();
-					isolatedRateLimiter(authReq, resBlocked, jest.fn());
-					expect(resBlocked.statusCode).toBe(429);
-				} finally {
-					runtimeSpy.mockRestore();
-					isolatedRateLimiter.disableTestMode();
-				}
-			});
+	afterEach(() => {
+		rateLimiter.disableTestMode();
+		rateLimiter.reset();
+		process.env = originalEnv;
+	});
+
+	test('gives the legacy ?api-key= variant its own per-key bucket instead of the anonymous one', () => {
+		process.env.WEBHOOK_API_KEY = 'super-secret';
+		const viaQuery = httpMocks.createRequest({
+			method: 'POST',
+			url: '/api/test?api-key=super-secret',
+			ip: '203.0.113.10',
+			headers: {},
+		});
+		const anonymous = httpMocks.createRequest({
+			method: 'POST',
+			url: '/api/test',
+			ip: '203.0.113.10',
+			headers: {},
 		});
 
-		test('falls back to env RATE_LIMIT_API_KEY_MAX when Remote Config returns 0', () => {
-			jest.isolateModules(() => {
-				const isolatedRateLimiter = require('../../src/lib/rateLimiter');
-				const isolatedHttpMocks = require('node-mocks-http');
-				const remoteConfigModule = require('../../src/services/remoteConfig/RemoteConfigService');
-				const runtimeSpy = jest
-					.spyOn(remoteConfigModule, 'getRuntimeConfig')
-					.mockReturnValue({ RATE_LIMIT_API_KEY_MAX: 0 });
+		const keyBucket = rateLimiter.deriveBucketKey({ req: viaQuery, ip: '203.0.113.10', isWebhookIngest: false });
+		const anonBucket = rateLimiter.deriveBucketKey({ req: anonymous, ip: '203.0.113.10', isWebhookIngest: false });
 
-				try {
-					process.env.WEBHOOK_API_KEY = 'super-secret';
-					process.env.RATE_LIMIT_API_KEY_MAX = '1';
-					process.env.RATE_LIMIT_MAX = '5';
-					isolatedRateLimiter.enableTestMode();
-					isolatedRateLimiter.reset();
+		expect(keyBucket).toMatch(/^apikey:[a-f0-9]{16}$/);
+		expect(anonBucket).toBe('203.0.113.10');
+	});
 
-					const authReq = isolatedHttpMocks.createRequest({
-						method: 'POST',
-						url: '/api/test',
-						ip: '203.0.113.10',
-						headers: { 'x-api-key': 'super-secret' },
-					});
+	test('classifies keys with the shared timing-safe matcher rather than string equality', () => {
+		process.env.WEBHOOK_API_KEY = 'super-secret';
+		const req = httpMocks.createRequest({
+			method: 'POST',
+			url: '/api/test',
+			ip: '203.0.113.10',
+			headers: { 'x-api-key': 'super-secret' },
+		});
+		// Same bucket for the same key, and no bucket for a near-miss.
+		const first = rateLimiter.deriveBucketKey({ req, ip: '203.0.113.10', isWebhookIngest: false });
+		const again = rateLimiter.deriveBucketKey({ req, ip: '203.0.113.10', isWebhookIngest: false });
+		const wrong = httpMocks.createRequest({
+			method: 'POST',
+			url: '/api/test',
+			ip: '203.0.113.10',
+			headers: { 'x-api-key': 'super-secre' },
+		});
+		expect(first).toBe(again);
+		expect(rateLimiter.deriveBucketKey({ req: wrong, ip: '203.0.113.10', isWebhookIngest: false }))
+			.toBe('203.0.113.10');
+	});
 
-					isolatedRateLimiter(authReq, isolatedHttpMocks.createResponse(), jest.fn());
-					const resBlocked = isolatedHttpMocks.createResponse();
-					isolatedRateLimiter(authReq, resBlocked, jest.fn());
-					expect(resBlocked.statusCode).toBe(429);
-				} finally {
-					runtimeSpy.mockRestore();
-					isolatedRateLimiter.disableTestMode();
-				}
-			});
+	test('ignores a Remote Config value for RATE_LIMIT_API_KEY_MAX because the budget is environment-only', () => {
+		jest.isolateModules(() => {
+			const isolated = require('../../src/lib/rateLimiter');
+			const isolatedMocks = require('node-mocks-http');
+			const remoteConfigModule = require('../../src/services/remoteConfig/RemoteConfigService');
+			const runtimeSpy = jest
+				.spyOn(remoteConfigModule, 'getRuntimeConfig')
+				.mockReturnValue({ RATE_LIMIT_API_KEY_MAX: 1 });
+
+			try {
+				process.env.WEBHOOK_API_KEY = 'super-secret';
+				delete process.env.RATE_LIMIT_API_KEY_MAX;
+				process.env.RATE_LIMIT_MAX = '5';
+				isolated.enableTestMode();
+				isolated.reset();
+
+				const req = isolatedMocks.createRequest({
+					method: 'POST',
+					url: '/api/test',
+					ip: '203.0.113.10',
+					headers: { 'x-api-key': 'super-secret' },
+				});
+				const pass = jest.fn();
+				// RATE_LIMIT_MAX=5 applies, so the 6th call is blocked -- not the
+				// 2nd, which is what a Remote Config value of 1 would have produced.
+				for (let i = 0; i < 5; i += 1) isolated(req, isolatedMocks.createResponse(), pass);
+				const blocked = isolatedMocks.createResponse();
+				isolated(req, blocked, pass);
+				expect(blocked.statusCode).toBe(429);
+				expect(pass).toHaveBeenCalledTimes(5);
+			} finally {
+				runtimeSpy.mockRestore();
+				isolated.disableTestMode();
+			}
 		});
 	});
 });

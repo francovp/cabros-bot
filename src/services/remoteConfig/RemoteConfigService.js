@@ -114,10 +114,6 @@ const PARAMETER_SCHEMA = Object.freeze({
 	TOKEN_COST_DAILY_BUDGET_USD: { type: 'number', defaultValue: 5.0, min: 0.01, max: 10000 },
 	TOKEN_COST_WARN_THRESHOLD_PCT: { type: 'number', defaultValue: 80, integer: true, min: 1, max: 100 },
 	ENABLE_MAINTENANCE_MODE: { type: 'boolean', defaultValue: false },
-	// Per-window budget for authenticated (x-api-key) callers. Default 0 falls
-	// back to RATE_LIMIT_MAX in src/lib/rateLimiter.js. Eligible for Remote
-	// Config because it is operator-tunable, non-secret, request-time tuning.
-	RATE_LIMIT_API_KEY_MAX: { type: 'number', defaultValue: 0, integer: true, min: 0, max: 100000 },
 });
 
 let remoteOverrides = {};

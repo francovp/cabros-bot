@@ -1,24 +1,7 @@
 // src/lib/rateLimiter.js
 
 const crypto = require('crypto');
-const { getValidApiKeys } = require('./auth');
-
-// Remote Config lookup is optional and loaded lazily so the rate limiter
-// can run during early request handling before Firebase Admin has finished
-// initializing. Remote Config only exposes RATE_LIMIT_API_KEY_MAX (the
-// authenticated-caller per-window budget); the bucket fingerprint secret
-// and the API-key list itself remain environment-controlled.
-let remoteConfigService = null;
-function getRemoteConfigService() {
-	if (remoteConfigService) return remoteConfigService;
-	try {
-		// eslint-disable-next-line global-require
-		remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
-	} catch (_) {
-		remoteConfigService = { getEnvironmentConfig: () => ({}) };
-	}
-	return remoteConfigService;
-}
+const { getValidApiKeys, matchesAnyApiKey } = require('./auth');
 
 const rateLimit = new Map();
 // Store: bucketKey -> { count, resetTime }
@@ -61,28 +44,6 @@ function readPositiveInteger(name, fallback) {
 // Remote Config–aware lookup for select rate-limit settings. Only
 // non-secret, request-time tuning is honored. The bucket fingerprint secret
 // and the API-key list itself are environment-only and never read here.
-function readRemoteOrPositiveInteger(name, envFallback) {
-	const remoteConfig = getRemoteConfigService();
-	let remoteValue = null;
-	try {
-		const runtime = typeof remoteConfig.getRuntimeConfig === 'function'
-			? remoteConfig.getRuntimeConfig()
-			: null;
-		if (runtime && Object.prototype.hasOwnProperty.call(runtime, name)) {
-			const candidate = runtime[name];
-			if (Number.isFinite(candidate) && Number.isSafeInteger(candidate) && candidate >= 0) {
-				remoteValue = candidate;
-			}
-		}
-	} catch (_) {
-		remoteValue = null;
-	}
-	const envValue = readPositiveInteger(name, 0);
-	if (remoteValue !== null && remoteValue > 0) return remoteValue;
-	if (envValue > 0) return envValue;
-	return envFallback;
-}
-
 // Resolve a per-process HMAC secret for API-key fingerprinting so the bucket
 // key is not derivable from a publicly available algorithm (CodeQL:
 // "password hash with insufficient computational effort"). When the operator
@@ -166,10 +127,16 @@ function isTrustProxyEnabled() {
 //   direct deployments behave byte-for-byte the same as before.
 function deriveBucketKey({ req, ip, isWebhookIngest }) {
 	const allowedKeys = getConfiguredApiKeys();
-	const headerValue = req.headers
-		? req.headers['x-api-key'] || req.headers['X-Api-Key']
-		: undefined;
-	if (headerValue && allowedKeys.includes(headerValue)) {
+	// Match with the same constant-time comparison validateApiKey uses. An
+	// ordinary `includes()` here would compare live credentials in variable time
+	// on the app-wide pre-authentication path.
+	// The legacy `?api-key=` variant is still accepted by validateApiKey, so it
+	// must be classified here too or those callers would share the anonymous
+	// bucket instead of a per-key one.
+	const suppliedKey = (req.headers && (req.headers['x-api-key'] || req.headers['X-Api-Key']))
+		|| (req.query && req.query['api-key']);
+	const headerValue = Array.isArray(suppliedKey) ? suppliedKey[0] : suppliedKey;
+	if (matchesAnyApiKey(headerValue, allowedKeys)) {
 		const fingerprint = hashApiKey(headerValue);
 		return isWebhookIngest ? `webhook:apikey:${fingerprint}` : `apikey:${fingerprint}`;
 	}
@@ -201,7 +168,7 @@ function rateLimiter(req, res, next) {
 	const maxRequests = (() => {
 		if (isWebhookIngest) return WEBHOOK_MAX_REQUESTS;
 		if (hasApiKey) {
-			const explicit = readRemoteOrPositiveInteger('RATE_LIMIT_API_KEY_MAX', 0);
+			const explicit = readPositiveInteger('RATE_LIMIT_API_KEY_MAX', 0);
 			if (explicit > 0) return explicit;
 		}
 		return readPositiveInteger('RATE_LIMIT_MAX', DEFAULT_MAX_REQUESTS);

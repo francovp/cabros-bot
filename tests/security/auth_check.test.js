@@ -200,3 +200,63 @@ describe('Security: API Key Validation', () => {
 		});
 	});
 });
+
+describe('Security: list-only WEBHOOK_API_KEYS configuration (issue #692 review)', () => {
+	let app;
+	let savedEnv;
+
+	const setProdLike = () => {
+		process.env.NODE_ENV = 'production';
+		delete process.env.RENDER;
+		delete process.env.IS_PULL_REQUEST;
+		delete process.env.VERCEL_ENV;
+		delete process.env.RAILWAY_ENVIRONMENT_NAME;
+	};
+
+	beforeEach(() => {
+		savedEnv = saveEnv();
+		app = express();
+		app.use(express.json());
+		app.post('/protected', validateApiKey, (req, res) => {
+			res.status(200).json({ success: true });
+		});
+	});
+
+	afterEach(() => {
+		restoreEnv(savedEnv);
+	});
+
+	// A production deployment may configure only WEBHOOK_API_KEYS. Deciding
+	// "is auth configured" from process.env.WEBHOOK_API_KEY alone would answer no
+	// and 503 every protected route before isValidApiKey could consult the list.
+	// This runs the real production branch: NODE_ENV=production is neither
+	// preview nor dev/test, so the insecure-mode bypass does not apply.
+	it('accepts a listed key when only WEBHOOK_API_KEYS is set in production', async () => {
+		setProdLike();
+		delete process.env.WEBHOOK_API_KEY;
+		process.env.WEBHOOK_API_KEYS = 'key-one,key-two';
+
+		const accepted = await request(app).post('/protected').set('x-api-key', 'key-two').send({});
+		expect(accepted.status).toBe(200);
+		expect(accepted.body.success).toBe(true);
+	});
+
+	it('still rejects an unlisted key when only WEBHOOK_API_KEYS is set', async () => {
+		setProdLike();
+		delete process.env.WEBHOOK_API_KEY;
+		process.env.WEBHOOK_API_KEYS = 'key-one,key-two';
+
+		const rejected = await request(app).post('/protected').set('x-api-key', 'not-a-key').send({});
+		expect(rejected.status).toBe(403);
+	});
+
+	it('still reports 503 when neither WEBHOOK_API_KEY nor WEBHOOK_API_KEYS is set', async () => {
+		setProdLike();
+		delete process.env.WEBHOOK_API_KEY;
+		delete process.env.WEBHOOK_API_KEYS;
+
+		const res = await request(app).post('/protected').set('x-api-key', 'anything').send({});
+		expect(res.status).toBe(503);
+		expect(res.body.code).toBe('WEBHOOK_API_KEY_UNSET');
+	});
+});

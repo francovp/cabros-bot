@@ -573,31 +573,10 @@
       },
       "description": "Maintenance mode toggle to pause webhooks and commands during incidents",
       "valueType": "BOOLEAN"
-    },
-    "RATE_LIMIT_API_KEY_MAX": {
-      "defaultValue": {
-        "value": "0"
-      },
-      "description": "Per-window maximum for authenticated (x-api-key) callers. Defaults to 0 which falls back to RATE_LIMIT_MAX. Allows operators to grant trusted API keys a different per-window budget than anonymous traffic (issue #692).",
-      "valueType": "NUMBER"
-    },
-    "_WEBHOOK_API_KEYS_EXCLUDED": {
-      "defaultValue": {
-        "value": "environment-only"
-      },
-      "description": "Placeholder documenting that WEBHOOK_API_KEYS is intentionally excluded from Remote Config because it carries API-key credential material that must remain deployment-controlled (issue #692).",
-      "valueType": "STRING"
-    },
-    "_RATE_LIMIT_FINGERPRINT_SECRET_EXCLUDED": {
-      "defaultValue": {
-        "value": "environment-only"
-      },
-      "description": "Placeholder documenting that RATE_LIMIT_FINGERPRINT_SECRET is intentionally excluded from Remote Config because it is secret material used as the HMAC secret for the API-key bucket fingerprint. Set via environment / Render secret store only (issue #692).",
-      "valueType": "STRING"
     }
   },
   "version": {
-    "versionNumber": "23",
+    "versionNumber": "22",
     "isLegacy": true
   }
 }

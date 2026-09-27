@@ -61,9 +61,12 @@ function warnQueryApiKeyDeprecationOnce(req) {
  * reached or passed, query-parameter auth is rejected with `401 API_KEY_QUERY_REMOVED`.
  */
 function validateApiKey(req, res, next) {
-	const validApiKey = process.env.WEBHOOK_API_KEY;
+	// A list-only configuration is valid: WEBHOOK_API_KEYS alone must not look
+	// unconfigured, or the documented multi-key deployment 503s before
+	// isValidApiKey can consult the list.
+	const validApiKey = getValidApiKeys();
 
-	if (!validApiKey) {
+	if (validApiKey.length === 0) {
 		const isProdLike = isProductionLikeEnvironment(process.env);
 		const isPreview = isPreviewEnvironment(process.env);
 		const isDevOrTest = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
@@ -131,6 +134,27 @@ function validateApiKey(req, res, next) {
 	next();
 }
 
+// Constant-time membership test shared with the rate limiter. The limiter runs
+// app-wide before any route runs validateApiKey, so it must classify an incoming
+// key with the same timing-safe comparison rather than ordinary string equality,
+// otherwise repeated x-api-key probes get a credential timing oracle on the
+// pre-authentication path.
+function matchesAnyApiKey(keyToCheck, candidates) {
+	if (typeof keyToCheck !== 'string' || !Array.isArray(candidates) || candidates.length === 0) {
+		return false;
+	}
+	const bufferApiKey = Buffer.from(keyToCheck);
+	let matched = false;
+	for (const candidate of candidates) {
+		const bufferCandidate = Buffer.from(candidate);
+		if (bufferApiKey.length !== bufferCandidate.length) continue;
+		if (crypto.timingSafeEqual(bufferApiKey, bufferCandidate)) {
+			matched = true;
+		}
+	}
+	return matched;
+}
+
 function getValidApiKeys() {
 	const keys = new Set();
 	const single = process.env.WEBHOOK_API_KEY;
@@ -158,16 +182,7 @@ function isValidApiKey(req) {
 	// accepted when it matches any of the configured keys; the constant-time
 	// comparison is performed against each candidate so the check does not
 	// leak which key matched through timing.
-	const bufferApiKey = Buffer.from(keyToCheck);
-	let matched = false;
-	for (const candidate of validApiKeys) {
-		const bufferCandidate = Buffer.from(candidate);
-		if (bufferApiKey.length !== bufferCandidate.length) continue;
-		if (crypto.timingSafeEqual(bufferApiKey, bufferCandidate)) {
-			matched = true;
-		}
-	}
-	return matched;
+	return matchesAnyApiKey(keyToCheck, validApiKeys);
 }
 
 function _resetQueryDeprecationFlagForTests() {
@@ -182,4 +197,5 @@ module.exports = {
 	isValidApiKey,
 	validateApiKey,
 	getValidApiKeys,
+	matchesAnyApiKey,
 };
