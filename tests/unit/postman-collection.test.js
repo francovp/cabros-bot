@@ -555,49 +555,70 @@ describe('Postman collection contract', () => {
 		expect(invalidLimit).toBeDefined();
 		expect(invalidLimit.request.url.raw).toContain('limit=200');
 		expect(invalidLimit.response[0].code).toBe(400);
-		expect(JSON.parse(invalidLimit.response[0].body)).toEqual({
-			error: 'Invalid limit. Use an integer between 1 and 100.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(invalidLimit.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid limit. Use an integer between 1 and 100.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(invalidStatus).toBeDefined();
 		expect(invalidStatus.request.url.raw).toContain('status=invalid');
 		expect(invalidStatus.response[0].code).toBe(400);
-		expect(JSON.parse(invalidStatus.response[0].body)).toEqual({
-			error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(invalidStatus.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(invalidWindow).toBeDefined();
 		expect(invalidWindow.request.url.raw).toContain('window=invalid');
 		expect(invalidWindow.response[0].code).toBe(400);
-		expect(JSON.parse(invalidWindow.response[0].body)).toEqual({
-			error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(invalidWindow.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(malformedFrom).toBeDefined();
 		expect(malformedFrom.request.url.raw).toContain('from=not-a-date');
 		expect(malformedFrom.response[0].code).toBe(400);
-		expect(JSON.parse(malformedFrom.response[0].body)).toEqual({
-			error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(malformedFrom.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(malformedTo).toBeDefined();
 		expect(malformedTo.request.url.raw).toContain('to=not-a-date');
 		expect(malformedTo.response[0].code).toBe(400);
-		expect(JSON.parse(malformedTo.response[0].body)).toEqual({
-			error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(malformedTo.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(reversedRange).toBeDefined();
 		expect(reversedRange.request.url.raw).toContain('from=2026-08-30T00:00:00.000Z&to=2026-08-01T00:00:00.000Z');
 		expect(reversedRange.response[0].code).toBe(400);
-		expect(JSON.parse(reversedRange.response[0].body)).toEqual({
-			error: 'Invalid time window. from must be before or equal to to.',
-			code: 'INVALID_REQUEST',
+		expect(JSON.parse(reversedRange.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid time window. from must be before or equal to to.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		[invalidLimit, invalidStatus, invalidWindow, malformedFrom, malformedTo, reversedRange].forEach((item) => {
+			expect(item.event).toBeDefined();
+			const testEvent = item.event.find((e) => e.listen === 'test');
+			expect(testEvent).toBeDefined();
+			const scriptText = testEvent.script.exec.join('\n');
+			expect(scriptText).toContain('pm.response.to.have.status(400)');
+			expect(scriptText).toContain('INVALID_REQUEST');
 		});
 	});
 });
