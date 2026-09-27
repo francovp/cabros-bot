@@ -468,6 +468,55 @@ describe('HTF Alignment Formatter (Issue #635)', () => {
 			expect(result.classification).toBe('aligned');
 			expect(result.text).toBe('📈 HTF: ALINEADO');
 		});
+
+		it('prefers a root direction over a contradictory nested alignment direction', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: {
+					direction: 'bullish',
+					alignment: { status: 'aligned', direction: 'bearish' },
+				},
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('prefers a root trend over a contradictory nested alignment direction', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: {
+					trend: 'bullish',
+					alignment: { direction: 'bearish' },
+				},
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('prefers a root bias over a contradictory nested alignment direction', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: {
+					bias: 'bullish',
+					alignment: { direction: 'bearish' },
+				},
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('still prefers a nested alignment direction over a nested trend', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { alignment: { direction: 'bearish', trend: 'bullish' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('counter-trend');
+			expect(result.text).toBe('📉 HTF: EN CONTRA');
+		});
 	});
 
 	describe('formatHtfAlignment() with RemoteConfig gating', () => {

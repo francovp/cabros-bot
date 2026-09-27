@@ -200,18 +200,26 @@ function resolveHtfAlignment(enriched = {}) {
 		// non-directional truthy values such as `recommendation.action: "HOLD"`, which
 		// would otherwise mask a directional alignment status (GH-717).
 		//
-		// Order mirrors `resolveDirectionFromRaw()` in marketScannerScoring.js so HTF
-		// rendering and scanner ranking agree: explicit direction/trend fields first,
-		// then a directional alignment status, then the recommendation token.
+		// The chain is built from the original payload fields, not from the collapsed
+		// `rawDirection`, and its order matches `resolveDirectionFromRaw()` in
+		// marketScannerScoring.js term for term — root direction/trend/bias, then nested
+		// alignment fields, then the recommendation token — so HTF rendering and scanner
+		// ranking agree on precedence rather than merely on vocabulary. (Rebuilding from
+		// `rawDirection` would invert root/nested precedence, because `rawDirection`
+		// reads `alignment.direction` before `multiTimeframe.direction`.)
 		//
 		// No rawStatus guard is needed: `normalizeTrendDirection` never matches a
 		// confluence verdict ('aligned', 'counter-trend'), so a status can only enter
 		// this chain when it is genuinely directional ('bullish' / 'bearish'), which is
 		// exactly the case that should take precedence over a recommendation action.
 		const directionalCandidates = [
-			rawDirection,
-			alignment.status,
+			multiTimeframe.direction,
+			multiTimeframe.trend,
+			multiTimeframe.bias,
+			alignment.direction,
+			alignment.trend,
 			multiTimeframe.status,
+			alignment.status,
 			...trendTokens,
 			...recommendationTokens,
 		];
