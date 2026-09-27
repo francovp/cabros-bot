@@ -1,6 +1,11 @@
 ## Multi-Agent Workflows
 - **Senior Dev Engagement**: When acting as a trainee or assistant in PRs/Issues, actively respond to direct questions or mentions from @gigachad-senior-dev. Provide technical, inquisitive, or helpful responses.
 - **Architectural Boundary (SOC)**: Separate Business Logic from Channel Presentation. Business Logic must produce stable, channel-neutral structured results. Channel Adapters handle the platform-specific formatting (Markdown, escaping, etc.).
+- **Contract & Schema Parity**: Every endpoint, feature flag, or runtime configuration change must synchronize four checked-in surfaces: `src/openapi/openapi.json`, `CabrosBot.postman_collection.json`, `README.md`, and `.env.example`. Validate query integers with strict regex `/^\d+$/`, reject explicit `null` on closed enums with HTTP 400, and strictly separate single-value ingest parameters from multi-value filter parameters.
+- **Remote Config 4-Way Parity**: Runtime configuration variables must maintain atomic 4-way parity across `.env.example`, `RemoteConfigService.js` / Firebase template (`firebase-remote-config-template.json`), `README.md` parameter tables (with exact parameter keys, descriptions, types, and fallback defaults), and `AGENTS.md`, guarding against accidental removal of keys.
+- **Postman Variant Completeness**: Every API endpoint and query parameter must include checked-in, runnable Postman examples with automated unit test assertions covering both success and invalid/negative variants (e.g. 400 `INVALID_REQUEST` validation errors for invalid limit, status, window, malformed timestamps, or reversed ranges, plus auth failures and conflict states).
+- **Standardized Error Envelopes**: All error responses must adhere to `{ success: false, error: "<msg>", code: "<CODE>", requestId, retryable }` via `src/lib/errorEnvelope.js`. Never throw plain `Error` for client validation errors; use `INVALID_REQUEST` (HTTP 400) and `MAINTENANCE_MODE` (HTTP 503).
+- **Replay Payload Preservation**: Alert and signal replay flows (`/api/alerts/:id/replay`) must preserve the full incoming payload structure and metadata without destructive filtering or schema loss, forwarding domain classification attributes (such as `signalClass`) directly into delivery payloads.
 
 ## First Run
 
@@ -215,4 +220,7 @@ The `virgin-trainee-dev` is in active training. To ensure it evolves and doesn't
 - **Mandatory Logging**: Whenever `virgin-trainee-dev` receives a correction, negative feedback, or a "No" from @francovp or @gigachad-senior-dev, it **MUST** immediately use the `self-improvement` skill.
 - **Target**: Log the event as a `correction` or `knowledge_gap` in `.learnings/LEARNINGS.md`.
 - **Goal**: Convert human feedback into durable prompt guidance to stop asking the same "trainee" questions and improve technical output.
+- **Engagement Deduplication**: Before posting comments on PRs or issues (in automated cron or manual runs), verify existing thread comments to prevent duplicate comments on the same item across runs.
+- **Canonical PR Prioritization**: Never comment on or review PRs marked as duplicates or superseded (e.g. PR #1167 superseded by #1176); direct engagement strictly to the canonical PR.
+- **Direct Senior Dev Engagement**: When @gigachad-senior-dev asks specific technical questions on PRs, answer them directly with technical precision and architectural rationale rather than generic acknowledgments or repeated question loops.
 
