@@ -541,6 +541,96 @@ describe('NotificationManager admin failure notifications', () => {
 			recordSpy.mockRestore();
 			notificationRedriveService.resetForTesting();
 		});
+
+		it('sends admin alert when telegram broadcast channel is disabled but bot is eligible for admin delivery', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+			process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+			process.env.BOT_TOKEN = 'configured-token';
+
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => false),
+				isAdminDeliveryEligible: jest.fn(() => true),
+				isConfigured: jest.fn(() => true),
+				send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram', messageId: 'admin-zero-1' }),
+			};
+
+			const manager = new NotificationManager(telegramService);
+			notificationRedriveService.resetForTesting();
+
+			await manager.sendToAll({ text: 'BTC breakout', requestId: 'req-zero-admin-test' });
+			await waitForBackgroundTasks();
+
+			expect(manager.getZeroChannelBroadcastCount()).toBe(1);
+			expect(telegramService.send).toHaveBeenCalledTimes(1);
+			expect(telegramService.send).toHaveBeenCalledWith(expect.objectContaining({
+				telegramChatId: '-100-admin',
+				text: expect.stringContaining('CRITICAL: Notification delivery failure (Zero channels enabled)'),
+			}));
+
+			notificationRedriveService.resetForTesting();
+		});
+
+		it('queues dead letters only for operator-configured channels during zero-channel broadcast drop', async () => {
+			process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+			process.env.BOT_TOKEN = 'configured-token';
+
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => false),
+				isConfigured: jest.fn(() => true),
+			};
+			const whatsappService = {
+				name: 'whatsapp',
+				isEnabled: jest.fn(() => false),
+				isConfigured: jest.fn(() => false),
+			};
+			const discordService = {
+				name: 'discord',
+				isEnabled: jest.fn(() => false),
+				isConfigured: jest.fn(() => false),
+			};
+
+			const manager = new NotificationManager(telegramService, whatsappService, discordService);
+			notificationRedriveService.resetForTesting();
+
+			await manager.sendToAll({ text: 'BTC breakout', requestId: 'req-configured-only' });
+			await waitForBackgroundTasks();
+
+			expect(manager.getZeroChannelBroadcastCount()).toBe(1);
+			expect(notificationRedriveService.getPendingCount()).toBe(1);
+			const pending = Array.from(notificationRedriveService.inMemoryStore.values());
+			expect(pending.map(r => r.channel)).toEqual(['telegram']);
+
+			notificationRedriveService.resetForTesting();
+		});
+
+		it('does not queue dead letters when zero channels are operator-configured', async () => {
+			process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+			process.env.BOT_TOKEN = 'configured-token';
+
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => false),
+				isConfigured: jest.fn(() => false),
+			};
+			const whatsappService = {
+				name: 'whatsapp',
+				isEnabled: jest.fn(() => false),
+				isConfigured: jest.fn(() => false),
+			};
+
+			const manager = new NotificationManager(telegramService, whatsappService);
+			notificationRedriveService.resetForTesting();
+
+			await manager.sendToAll({ text: 'BTC breakout', requestId: 'req-zero-configured' });
+			await waitForBackgroundTasks();
+
+			expect(manager.getZeroChannelBroadcastCount()).toBe(1);
+			expect(notificationRedriveService.getPendingCount()).toBe(0);
+
+			notificationRedriveService.resetForTesting();
+		});
 	});
 
 	describe('sendToChannels signal composition', () => {
@@ -608,6 +698,66 @@ describe('NotificationManager admin failure notifications', () => {
 
 			channelController.abort('lease lost');
 			expect(observedSignal.aborted).toBe(true);
+		});
+	});
+
+	describe('zero-channel page diagnostic context (GH-713)', () => {
+		it('includes the configured and unconfigured channel names in the zero-channel admin page', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => false),
+				isConfigured: jest.fn(() => false),
+				send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram', messageId: 'admin-ctx-1' }),
+			};
+			const whatsappService = {
+				name: 'whatsapp',
+				isEnabled: jest.fn(() => false),
+				isConfigured: jest.fn(() => true),
+				send: jest.fn(),
+			};
+			const discordService = {
+				name: 'discord',
+				isEnabled: jest.fn(() => false),
+				isConfigured: jest.fn(() => false),
+				send: jest.fn(),
+			};
+
+			const manager = new NotificationManager(telegramService, whatsappService, discordService);
+
+			await manager.sendToAll({ text: 'BTC breakout', requestId: 'req-ctx-1' });
+			await waitForBackgroundTasks();
+
+			const adminMessage = telegramService.send.mock.calls.at(-1)[0].text;
+
+			// Operators must be able to answer "why did I get this page?" from the message alone.
+			expect(adminMessage).toContain('whatsapp');
+			expect(adminMessage).toMatch(/configured/i);
+			expect(adminMessage).toMatch(/not configured|unconfigured/i);
+		});
+
+		it('reports a distinct message when no channel is configured by operator intent', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => false),
+				isConfigured: jest.fn(() => false),
+				send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram', messageId: 'admin-ctx-2' }),
+			};
+
+			const manager = new NotificationManager(telegramService);
+
+			await manager.sendToAll({ text: 'ETH breakout', requestId: 'req-ctx-2' });
+			await waitForBackgroundTasks();
+
+			const adminMessage = telegramService.send.mock.calls.at(-1)[0].text;
+
+			expect(adminMessage).toMatch(/no notification channels are configured/i);
+			// The dead-letter line must not claim dead-letters were queued when nothing was queued.
+			expect(adminMessage).not.toMatch(/dead-lettered/i);
+			expect(adminMessage).not.toMatch(/Dead-letters queued for redrive/i);
 		});
 	});
 });

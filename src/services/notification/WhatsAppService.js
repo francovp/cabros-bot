@@ -97,6 +97,20 @@ class WhatsAppService extends NotificationChannel {
 	}
 
 	/**
+	 * Check if WhatsApp is configured for alert delivery by operator intent.
+	 * Requires the ENABLE_WHATSAPP_ALERTS flag, API URL, API key, and chat ID.
+	 * @returns {boolean}
+	 */
+	isConfigured() {
+		return (
+			process.env.ENABLE_WHATSAPP_ALERTS === 'true' &&
+			Boolean(this.apiUrl || process.env.WHATSAPP_API_URL) &&
+			Boolean(this.apiKey || process.env.WHATSAPP_API_KEY) &&
+			Boolean(this.chatId || process.env.WHATSAPP_CHAT_ID || process.env.WHATSAPP_PREVIEW_CHAT_ID)
+		);
+	}
+
+	/**
 	 * Return template-mode status (non-secret) for /api/status dependency reporting.
 	 * @returns {{enabled: boolean, templateName: string|null, sent: number, fallbacks: number, lastError: string|null, lastErrorAt: string|null}}
 	 */
@@ -414,12 +428,13 @@ class WhatsAppService extends NotificationChannel {
 	async _formatAlert(alert) {
 		// Format message for WhatsApp.
 		// If enriched is an object, use formatEnriched (async with URL shortening), otherwise format the text.
+		const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
 		let formattedText;
 		if (alert.enriched && typeof alert.enriched === 'object') {
-			formattedText = await this.formatter.formatEnriched(alert.enriched);
+			formattedText = await this.formatter.formatEnriched(alert.enriched, { signalClass });
 			console.debug('Formatted enriched WhatsApp message length:', formattedText.length);
 		} else {
-			formattedText = this.formatter.format(alert.enriched || alert.text);
+			formattedText = this.formatter.format(alert.enriched || alert.text, { signalClass });
 			console.debug('Formatted WhatsApp message length:', formattedText.length);
 		}
 
