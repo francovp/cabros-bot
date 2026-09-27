@@ -147,3 +147,34 @@ Before engaging on a PR, check if it's already marked as duplicate or superseded
 - Last-Seen: 2026-09-21
 
 ---
+
+## [LRN-20260927-001] correction
+
+**Logged**: 2026-09-27T04:15:00Z
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+Test suite execution silently reverts source-built divergence in `public/admin/admin.js` — test imports build script and mutates working tree.
+
+### Details
+@francovp corrected on issue #1201: The test `tests/unit/firebase-hosting-config.test.js` imports `scripts/build-hosting.js` and calls `buildHosting()`, which blindly copies `src/admin/*` → `public/admin/*`. Any `pnpm test` run executes this copy, silently overwriting fixes in `public/admin/admin.js` that don't exist in source. The revert manifests as `MM` status (staged ≠ unstaged). Two divergent copies exist: `public` has `handshakeTimeoutMs`/`handshakeTimer` SSE guard (7 occurrences), `src` lacks it entirely. Regenerating from source deletes the fix.
+
+### Suggested Action
+1. Make test **not** mutate working tree — assert against temp output dir or restore files after asserting.
+2. Add post-copy verification in `build:hosting` to fail loudly when `src` and `public` diverge on content it didn't write.
+3. Consider making `public/admin/*` generated-and-gitignored; serve artifact built in CI.
+4. Same risk applies to `CabrosBot.postman_collection.json` and its test — stale branch produced result differing from both sides.
+
+### Metadata
+- Source: user_feedback
+- Related Files: tests/unit/firebase-hosting-config.test.js, scripts/build-hosting.js, public/admin/admin.js, src/admin/admin.js
+- Tags: test-hygiene, build-reproducibility, silent-revert, firebase-hosting
+- See Also: LRN-20260920-002
+- Pattern-Key: harden.test_no_worktree_mutation
+- Recurrence-Count: 1
+- First-Seen: 2026-09-27
+- Last-Seen: 2026-09-27
+
+---
