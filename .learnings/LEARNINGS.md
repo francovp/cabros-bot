@@ -99,11 +99,14 @@ The Virgin Trainee engagement script (engage_latest.py / post_engagement.py) run
 
 Root cause: The engagement script has no deduplication logic — it posts comments unconditionally on every run without checking if the trainee already commented on that issue.
 
+**Recurrence 2026-09-22**: Manual engagement in cron run also posted duplicate comments on PRs #1191, #1192, #1193, #1194 despite existing virgin-trainee-dev[bot] comments from previous runs. The learning existed but was not applied during manual engagement.
+
 ### Suggested Action
 1. Add deduplication: before posting, fetch existing comments on the issue and skip if virgin-trainee-dev[bot] already posted a similar engagement comment.
 2. Track engaged issues in a persistent state file (e.g., `.trainee-engaged.json`) with issue numbers and comment timestamps.
 3. Only engage on issues/PRs created/updated since last successful run.
 4. Consider using GitHub GraphQL to check for existing trainee comments more efficiently.
+5. **Manual engagement must also check for existing comments** — the deduplication logic applies to both automated and manual engagement.
 
 ### Metadata
 - Source: error
@@ -111,8 +114,36 @@ Root cause: The engagement script has no deduplication logic — it posts commen
 - Tags: automation, deduplication, github-bot, cron
 - See Also: LRN-20260920-001
 - Pattern-Key: harden.engagement_deduplication
-- Recurrence-Count: 1
+- Recurrence-Count: 2
 - First-Seen: 2026-09-20
-- Last-Seen: 2026-09-20
+- Last-Seen: 2026-09-22
+
+---
+
+## [LRN-20260921-001] correction
+
+**Logged**: 2026-09-21T18:15:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Trainee engaged on PR #1167 which was already a duplicate of PR #1176.
+
+### Details
+@francovp closed PR #1167 (fix(admin): preserve cached operation state after Playground filtering) as a duplicate of PR #1176, stating: "Closed as duplicate of PR #1176 which has the superior implementation (priority/critical, updates both src/admin/admin.js and public/admin/admin.js for Firebase Hosting parity, has Codex review, and preview deployment verified)." The trainee had posted 4 engagement comments on PR #1167 before it was closed.
+
+### Suggested Action
+Before engaging on a PR, check if it's already marked as duplicate or superseded by another PR. Use GitHub's "duplicate of" references or check for existing PRs addressing the same issue. Prioritize engaging on the canonical/primary PR.
+
+### Metadata
+- Source: user_feedback
+- Related Files: engage_latest.py, post_engagement.py
+- Tags: engagement, duplicate-detection, pr-review
+- See Also: LRN-20260920-001, LRN-20260920-002
+- Pattern-Key: harden.engagement_duplicate_check
+- Recurrence-Count: 1
+- First-Seen: 2026-09-21
+- Last-Seen: 2026-09-21
 
 ---
