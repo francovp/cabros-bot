@@ -595,5 +595,29 @@ describe('Scanner presets API integration tests', () => {
 
 		expect(response.body.code).toBe('INVALID_IF_MATCH');
 	});
+
+	it('returns 400 without invoking MCP when a requested channel is disabled (GH-854 fail-fast)', async () => {
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		process.env.ENABLE_WHATSAPP_ALERTS = 'false';
+
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Disabled-channel preset', exchange: 'binance', timeframe: '4h', scans: ['top_gainers'] })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+		tradingViewMcpService.callScanTool.mockClear();
+
+		const response = await request(app)
+			.post(`/api/scanner-presets/${presetId}/run`)
+			.set('x-api-key', 'test-key')
+			.send({ channels: ['whatsapp'] })
+			.expect(400);
+
+		expect(response.body.error).toContain('Requested channel(s) disabled or misconfigured');
+		// Fail-fast: the TradingView MCP scan must NOT have been called.
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+	});
 });
 
