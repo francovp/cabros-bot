@@ -1,0 +1,76 @@
+name: Open Issue on RUNBOOK.md Change
+
+# Opens a labelled `ops/runbook` issue whenever RUNBOOK.md changes so reviewers
+# can spot documentation drift in PR review. The workflow never auto-merges
+# anything; it only surfaces a tracking issue that the operator can close once
+# the runbook update is reviewed.
+
+on:
+  push:
+    paths:
+      - 'RUNBOOK.md'
+    branches:
+      - master
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  open-runbook-issue:
+    name: Open runbook review issue
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect RUNBOOK.md change
+        id: detect
+        run: |
+          if git diff --name-only HEAD~1 HEAD | grep -q '^RUNBOOK.md$'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            COMMIT_AUTHOR="$(git log -1 --pretty=format:'%an <%ae>')"
+            echo "commit_author=$COMMIT_AUTHOR" >> "$GITHUB_OUTPUT"
+            {
+              echo "commit_message<<EOF"
+              git log -1 --pretty=format:'%s%n%n%b'
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            SHORT_SHA="$(git rev-parse --short HEAD)"
+            echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open runbook review issue
+        if: steps.detect.outputs.changed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `Runbook review needed for ${{ steps.detect.outputs.short_sha }}`;
+            const body = [
+              '`RUNBOOK.md` changed in commit `${{ steps.detect.outputs.short_sha }}`.',
+              '',
+              'Author: ${{ steps.detect.outputs.commit_author }}',
+              '',
+              '```',
+              '${{ steps.detect.outputs.commit_message }}',
+              '```',
+              '',
+              'Please review the diff against the existing paging surfaces and Sentry tags, then close this issue once the runbook update is verified.',
+              '',
+              '- [ ] Runbook sections still cover every `TelegramService` error category',
+              '- [ ] Runbook still maps to active Sentry provider/feature tags',
+              '- [ ] Verification commands still match the current `/api/status` schema',
+              '- [ ] Admin Telegram paging footer still references the right runbook anchor',
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['ops/runbook', 'documentation'],
+            });
