@@ -1287,6 +1287,18 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "volume-confirm-demo-1",
+                "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "volume-confirm-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
               }
             ],
             "body": {
@@ -1303,7 +1315,8 @@
                 "webhook",
                 "volume-confirmation"
               ]
-            }
+            },
+            "description": "Idempotency accepts the recommended idempotency-key header, x-idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true and Idempotency-Replay: true; conflicting payload reuse returns 409."
           },
           "response": [
             {
@@ -1353,6 +1366,46 @@
                 }
               ],
               "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            },
+            {
+              "name": "Success - volume confirmed (idempotent replay)",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                },
+                {
+                  "key": "Idempotency-Replay",
+                  "value": "true"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"confirmed\": true,\n  \"decision\": \"confirm\",\n  \"volumeRatio\": 1.7,\n  \"analysis\": {\n    \"symbol\": \"BINANCE:BTCUSDT\",\n    \"volume_analysis\": {\n      \"volume_ratio\": 1.7,\n      \"volume_strength\": \"HIGH\"\n    },\n    \"confidence\": 0.91\n  },\n  \"requestId\": \"req-vol-123\",\n  \"processingTimeMs\": 310\n}"
+            },
+            {
+              "name": "400 Invalid idempotency key",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Idempotency key must be a non-empty string\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "409 Idempotency conflict",
+              "status": "Conflict",
+              "code": 409,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}"
             }
           ]
         },
@@ -1370,6 +1423,18 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "symbol-analysis-demo-1",
+                "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "symbol-analysis-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
               }
             ],
             "body": {
@@ -1386,14 +1451,21 @@
                 "webhook",
                 "symbol-analysis"
               ]
-            }
+            },
+            "description": "Idempotency accepts the recommended idempotency-key header, x-idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true and Idempotency-Replay: true; conflicting payload reuse returns 409."
           },
           "response": [
             {
               "name": "Success - decision-ready analysis",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*🔴 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  },\n  \"analysisStatus\": \"complete\",\n  \"requestId\": \"req-sym-123\",\n  \"processingTimeMs\": 850\n}"
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*🔴 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  },\n  \"analysisStatus\": \"complete\",\n  \"requestId\": \"req-sym-123\",\n  \"processingTimeMs\": 850\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ]
             },
             {
               "name": "Success - with multi-agent consensus",
@@ -1405,19 +1477,37 @@
               "name": "400 Invalid symbol",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-sym-400\",\n  \"processingTimeMs\": 15\n}"
+              "body": "{\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-sym-400\",\n  \"processingTimeMs\": 15\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ]
             },
             {
               "name": "502 TradingView failure",
               "status": "Bad Gateway",
               "code": 502,
-              "body": "{\n  \"success\": false,\n  \"error\": \"TradingView MCP unavailable\",\n  \"code\": \"SYMBOL_ANALYSIS_FAILED\",\n  \"requestId\": \"req-sym-502\",\n  \"processingTimeMs\": 420\n}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"TradingView MCP unavailable\",\n  \"code\": \"SYMBOL_ANALYSIS_FAILED\",\n  \"requestId\": \"req-sym-502\",\n  \"processingTimeMs\": 420\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ]
             },
             {
               "name": "504 Analysis timeout",
               "status": "Gateway Timeout",
               "code": 504,
-              "body": "{\n  \"success\": false,\n  \"error\": \"Symbol analysis timed out.\",\n  \"code\": \"SYMBOL_ANALYSIS_TIMEOUT\",\n  \"requestId\": \"req-sym-504\",\n  \"processingTimeMs\": 90000\n}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"Symbol analysis timed out.\",\n  \"code\": \"SYMBOL_ANALYSIS_TIMEOUT\",\n  \"requestId\": \"req-sym-504\",\n  \"processingTimeMs\": 90000\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ]
             },
             {
               "name": "Service Unavailable - Maintenance Mode (503)",
@@ -1430,6 +1520,46 @@
                 }
               ],
               "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            },
+            {
+              "name": "Success - decision-ready analysis (idempotent replay)",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                },
+                {
+                  "key": "Idempotency-Replay",
+                  "value": "true"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*🔴 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  },\n  \"analysisStatus\": \"complete\",\n  \"requestId\": \"req-sym-123\",\n  \"processingTimeMs\": 850\n}"
+            },
+            {
+              "name": "400 Invalid idempotency key",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Idempotency key must be a non-empty string\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "409 Idempotency conflict",
+              "status": "Conflict",
+              "code": 409,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}"
             }
           ]
         },
@@ -7453,6 +7583,45 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 1000.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (invalid parameters)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing invalid limit, status, window, or dates to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?limit=200",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "200"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Limit",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         }

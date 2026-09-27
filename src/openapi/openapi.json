@@ -447,6 +447,9 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
           "502": {
             "$ref": "#/components/responses/Error"
           },
@@ -486,6 +489,9 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
           },
           "502": {
             "$ref": "#/components/responses/Error"
