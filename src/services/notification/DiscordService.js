@@ -111,6 +111,18 @@ class DiscordService extends NotificationChannel {
 		return this.enabled;
 	}
 
+	/**
+	 * Check if Discord is configured for alert delivery by operator intent.
+	 * Requires the ENABLE_DISCORD_ALERTS flag and a webhook URL.
+	 * @returns {boolean}
+	 */
+	isConfigured() {
+		return (
+			process.env.ENABLE_DISCORD_ALERTS === 'true' &&
+			Boolean(this.webhookUrl || process.env.DISCORD_WEBHOOK_URL)
+		);
+	}
+
 	async send(alert = {}, options = {}) {
 		const startedAt = Date.now();
 		try {

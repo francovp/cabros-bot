@@ -1,5 +1,7 @@
 'use strict';
 
+let globalShutdownFlag = false;
+
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10000;
 const MAX_SHUTDOWN_TIMEOUT_MS = 30000;
 const DEFAULT_FORCED_FINALIZATION_TIMEOUT_MS = 2000;
@@ -104,6 +106,7 @@ function createProcessLifecycle(options = {}) {
 		}
 
 		shuttingDown = true;
+		globalShutdownFlag = true;
 		logger.info('[ProcessLifecycle] Shutdown requested', { signal });
 		shutdownPromise = (async () => {
 			const server = getServer();
@@ -248,7 +251,17 @@ function createProcessLifecycle(options = {}) {
 	};
 }
 
+function isShuttingDownForPublicStatus() {
+	return globalShutdownFlag === true;
+}
+
+function markShuttingDownForPublicStatus() {
+	globalShutdownFlag = true;
+}
+
 module.exports = {
 	createProcessLifecycle,
 	parseShutdownTimeout,
+	isShuttingDownForPublicStatus,
+	markShuttingDownForPublicStatus,
 };

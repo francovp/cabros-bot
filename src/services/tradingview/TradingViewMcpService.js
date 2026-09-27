@@ -12,6 +12,10 @@ const alertStorageService = require('../storage/AlertStorageService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
 const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+// Upper bound on distinct tool names kept in toolMetrics. MCP tools are a fixed,
+// allowlisted set today, so this only guards against a future dynamic tool name
+// growing the map without limit. Least-recently-called entries are evicted.
+const MAX_TRACKED_MCP_TOOLS = 50;
 const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
 const TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID = 'tradingview-mcp';
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = 2000;
@@ -157,6 +161,7 @@ class TradingViewMcpService {
 		this.enrichmentEvents = [];
 		this.notifyAdmin = config.notifyAdmin || null;
 		this.notificationManager = config.notificationManager || null;
+		this.toolMetrics = {};
 	}
 
 	_resetForTesting() {
@@ -169,6 +174,7 @@ class TradingViewMcpService {
 		this.lastAdminPageSentAt = null;
 		this.hasActiveOutagePage = false;
 		this.enrichmentEvents = [];
+		this.toolMetrics = {};
 	}
 
 	isEnabled() {
@@ -221,6 +227,7 @@ class TradingViewMcpService {
 			if (Date.now() - openedTime >= breakerCooldownMs) {
 				this.breakerState = 'half-open';
 				this.lastBreakerStateChangeAt = new Date().toISOString();
+				this._resetToolMetricsLastErrorCategory();
 			}
 		}
 		return this.breakerState;
@@ -264,6 +271,9 @@ class TradingViewMcpService {
 				alertPath: this._getAlertPathEnrichmentStatus(),
 			};
 		}
+		if (enabled && runtimeStatus === this.runtimeStatus) {
+			statusDetails.toolMetrics = this.getToolMetrics();
+		}
 
 		return statusDetails;
 	}
@@ -275,6 +285,95 @@ class TradingViewMcpService {
 	getScannerErrorCategoryCounts() {
 		const counts = (this.runtimeStatus && this.runtimeStatus.errorCategoryCounts) || createEmptyErrorCategoryCounts();
 		return { ...counts };
+	}
+
+	getToolMetrics() {
+		const result = {};
+		for (const [toolName, metric] of Object.entries(this.toolMetrics)) {
+			result[toolName] = { ...metric };
+		}
+		return result;
+	}
+
+	_evictToolMetricsIfAtCapacity() {
+		if (Object.keys(this.toolMetrics).length < MAX_TRACKED_MCP_TOOLS) {
+			return;
+		}
+		let oldestTool = null;
+		let oldestCallAt = null;
+		for (const [toolName, metric] of Object.entries(this.toolMetrics)) {
+			if (oldestCallAt === null || (metric.lastCallAt || '') < oldestCallAt) {
+				oldestTool = toolName;
+				oldestCallAt = metric.lastCallAt || '';
+			}
+		}
+		if (oldestTool !== null) {
+			delete this.toolMetrics[oldestTool];
+		}
+	}
+
+	_ensureToolMetric(toolName) {
+		if (!Object.prototype.hasOwnProperty.call(this.toolMetrics, toolName)) {
+			this._evictToolMetricsIfAtCapacity();
+			this.toolMetrics[toolName] = {
+				callCount: 0,
+				successCount: 0,
+				failureCount: 0,
+				timeoutCount: 0,
+				totalDurationMs: 0,
+				averageDurationMs: 0,
+				lastCallAt: null,
+				lastErrorCategory: null,
+			};
+		}
+		return this.toolMetrics[toolName];
+	}
+
+	_recordToolSuccess(toolName, durationMs) {
+		const metric = this._ensureToolMetric(toolName);
+		metric.callCount += 1;
+		metric.successCount += 1;
+		metric.totalDurationMs += durationMs;
+		metric.averageDurationMs = Math.round(metric.totalDurationMs / metric.callCount);
+		metric.lastCallAt = new Date().toISOString();
+		metric.lastErrorCategory = null;
+	}
+
+	_recordToolFailure(toolName, durationMs, error) {
+		const metric = this._ensureToolMetric(toolName);
+		const errorCategory = this._getErrorCategory(error);
+		metric.callCount += 1;
+		metric.failureCount += 1;
+		if (errorCategory === 'timeout') {
+			metric.timeoutCount += 1;
+		}
+		metric.totalDurationMs += durationMs;
+		metric.averageDurationMs = Math.round(metric.totalDurationMs / metric.callCount);
+		metric.lastCallAt = new Date().toISOString();
+		metric.lastErrorCategory = errorCategory;
+	}
+
+	_resetToolMetricsLastErrorCategory() {
+		for (const metric of Object.values(this.toolMetrics)) {
+			metric.lastErrorCategory = null;
+		}
+	}
+
+	async _instrumentToolCall(toolName, operation, { signal } = {}) {
+		const startTime = Date.now();
+		try {
+			const result = await operation();
+			const durationMs = Math.max(0, Date.now() - startTime);
+			this._recordToolSuccess(toolName, durationMs);
+			return result;
+		} catch (error) {
+			if (signal && signal.aborted && getAbortMessage(signal, '') === 'Job cancelled by user') {
+				throw error;
+			}
+			const durationMs = Math.max(0, Date.now() - startTime);
+			this._recordToolFailure(toolName, durationMs, error);
+			throw error;
+		}
 	}
 
 	async persistRuntimeStatus(options = {}) {
@@ -725,6 +824,10 @@ class TradingViewMcpService {
 	}
 
 	async _callTool(toolName, args = {}, options = {}) {
+		return this._instrumentToolCall(toolName, () => this._executeCallTool(toolName, args, options), options);
+	}
+
+	async _executeCallTool(toolName, args = {}, options = {}) {
 		const { signal } = options;
 		const initializeRequest = {
 			jsonrpc: '2.0',
@@ -1455,6 +1558,7 @@ class TradingViewMcpService {
 
 	_getErrorCategory(error) {
 		const message = error && typeof error.message === 'string' ? error.message : '';
+		const name = error && typeof error.name === 'string' ? error.name : '';
 		if (error && error.category === 'circuit_breaker_open') {
 			return 'circuit_breaker_open';
 		}
@@ -1467,7 +1571,7 @@ class TradingViewMcpService {
 		if (/HTTP 4\d\d/i.test(message)) {
 			return 'http_4xx';
 		}
-		if (/timeout|aborted/i.test(message)) {
+		if (/timeout|timed[ -]?out|aborted|ETIMEDOUT/i.test(message) || /AbortError|TimeoutError/i.test(name)) {
 			return 'timeout';
 		}
 		if (/invalid|empty|non-JSON|non-SSE|mcp-session-id|payload|RPC/i.test(message)) {
