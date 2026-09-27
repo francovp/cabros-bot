@@ -372,6 +372,34 @@ describe('Analyzer - Unit Tests', () => {
 		expect(result.alert.confidence).toBe(0.93);
 	});
 
+	it('uses classifier.dev provenance for promoted confidence', async () => {
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeClassifierDev = require('../../src/services/classifierDevClient');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		activeClassifierDev.isEnabled.mockReturnValue(true);
+		activeClassifierDev.classifyHeadline.mockResolvedValue({ label: 'price_surge', confidence: 0.93 });
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'none',
+			event_significance: 0,
+			sentiment_score: 0.7,
+			headline: 'Bitcoin surges after a major exchange approval',
+			confidence: 0.2,
+			confidence_reason: 'No market-moving catalyst detected',
+			calibration: { mode: 'gemini-grounding' },
+			sources: ['https://example.com/news'],
+		});
+		const analyzer = new NewsAnalyzer();
+		analyzer.getMarketContext = jest.fn().mockResolvedValue(null);
+		analyzer.enrichmentService.isEnabled = jest.fn().mockReturnValue(false);
+
+		const result = await analyzer.analyzeSymbolInternal('BTCUSDT', 'req-provenance', null, {}, { dryRun: true });
+
+		expect(result.alert.confidence_reason).toBe('Confidence score from classifier.dev');
+		expect(result.alert.calibration).toBeUndefined();
+		expect(result.alert.enriched.extraText).toContain('_Confidence source: classifier.dev_');
+		expect(result.alert.enriched.extraText).not.toContain('No market-moving catalyst detected');
+	});
+
 	it.each([
 		{ label: 'price_decline', sentimentScore: 0.7, expectedSentiment: -0.7 },
 		{ label: 'price_surge', sentimentScore: -0.7, expectedSentiment: 0.7 },

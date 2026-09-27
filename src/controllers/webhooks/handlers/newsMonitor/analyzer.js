@@ -1090,6 +1090,9 @@ class NewsAnalyzer {
 					&& classified.confidence >= this.alertThreshold) {
 					geminiAnalysis.event_category = classified.label;
 					geminiAnalysis.confidence = this.calculateAdjustedConfidence(classified.confidence, marketContext);
+					geminiAnalysis.confidence_reason = 'Confidence score from classifier.dev';
+					geminiAnalysis.confidence_source = 'classifier.dev';
+					delete geminiAnalysis.calibration;
 					if ([EventCategory.PRICE_SURGE, EventCategory.PRICE_DECLINE].includes(classified.label)
 						&& Number.isFinite(geminiAnalysis.sentiment_score)) {
 						geminiAnalysis.sentiment_score = Math.abs(geminiAnalysis.sentiment_score)
@@ -1846,9 +1849,12 @@ class NewsAnalyzer {
 		}
 
 		// Build enriched object for formatEnriched methods
+		const confidenceProvenance = geminiAnalysis.confidence_source
+			? `_Confidence source: ${geminiAnalysis.confidence_source}_`
+			: `_Model used: ${GROUNDING_MODEL_NAME}_`;
 		const enrichedExtraText = confidenceReason
-			? `_Model Confidence: ${confidense}%_\n_Reason: ${confidenceReason}_\n_Model used: ${GROUNDING_MODEL_NAME}_`
-			: `_Model Confidence: ${confidense}%_\n_Model used: ${GROUNDING_MODEL_NAME}_`;
+			? `_Model Confidence: ${confidense}%_\n_Reason: ${confidenceReason}_\n${confidenceProvenance}`
+			: `_Model Confidence: ${confidense}%_\n${confidenceProvenance}`;
 		const enriched = {
 			originalText: alertTitle,
 			summary: context,
