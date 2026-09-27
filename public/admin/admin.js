@@ -615,12 +615,21 @@ const setupSseStream = async () => {
 	const controller = new AbortController();
 	sseAbortController = controller;
 
+	const handshakeTimeoutMs = 15000;
+	let handshakeTimer = setTimeout(() => {
+		controller.abort();
+	}, handshakeTimeoutMs);
+
 	try {
 		const response = await fetch(streamUrl, {
 			method: 'GET',
 			headers,
 			signal: controller.signal,
 		});
+		if (handshakeTimer) {
+			clearTimeout(handshakeTimer);
+			handshakeTimer = null;
+		}
 
 		if (!response.ok) {
 			const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
@@ -694,7 +703,11 @@ const setupSseStream = async () => {
 			}
 		}
 	} catch (error) {
-		if (controller.signal.aborted) {
+		if (handshakeTimer) {
+			clearTimeout(handshakeTimer);
+			handshakeTimer = null;
+		}
+		if (controller.signal.aborted && sseAbortController !== controller) {
 			return;
 		}
 		console.error('SSE stream error:', error);
