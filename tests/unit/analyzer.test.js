@@ -11,6 +11,12 @@ jest.mock('../../src/services/grounding/genaiClient', () => ({
 	}),
 	llmCall: jest.fn(),
 }));
+jest.mock('../../src/services/classifierDevClient', () => ({
+	isEnabled: jest.fn(),
+	classifyHeadline: jest.fn(),
+}));
+
+const classifierDev = require('../../src/services/classifierDevClient');
 
 function getRemoteConfigService() {
 	return require('../../src/services/remoteConfig/RemoteConfigService');
@@ -19,6 +25,8 @@ function getRemoteConfigService() {
 describe('Analyzer - Unit Tests', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		classifierDev.isEnabled.mockReturnValue(false);
+		classifierDev.classifyHeadline.mockResolvedValue(null);
 		getRemoteConfigService()._resetForTesting();
 
 		gemini.analyzeNewsForSymbol = jest.fn().mockResolvedValue({
@@ -331,6 +339,37 @@ describe('Analyzer - Unit Tests', () => {
 		const analyzer = getAnalyzer();
 		const context = analyzer.getMarketContext('BTCUSDT');
 		expect(typeof context).toBe('object');
+	});
+
+	it('uses classifier.dev to promote a high-confidence Gemini no-event result', async () => {
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeClassifierDev = require('../../src/services/classifierDevClient');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		activeClassifierDev.isEnabled.mockReturnValue(true);
+		activeClassifierDev.classifyHeadline.mockResolvedValue({ label: 'price_surge', confidence: 0.93 });
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'none',
+			event_significance: 0,
+			sentiment_score: 0.7,
+			headline: 'Bitcoin surges after a major exchange approval',
+			confidence: 0.2,
+			sources: ['https://example.com/news'],
+		});
+		const analyzer = new NewsAnalyzer();
+		analyzer.getMarketContext = jest.fn().mockResolvedValue(null);
+		analyzer.enrichmentService.isEnabled = jest.fn().mockReturnValue(false);
+
+		const result = await analyzer.analyzeSymbolInternal('BTCUSDT', 'req-1', null, {}, { dryRun: true });
+
+		expect(activeClassifierDev.classifyHeadline).toHaveBeenCalledWith(
+			'BTCUSDT: Bitcoin surges after a major exchange approval',
+			expect.objectContaining({
+				labels: expect.arrayContaining(['price_surge', 'price_decline', 'none']),
+			}),
+		);
+		expect(result.alert).toBeDefined();
+		expect(result.alert.eventCategory).toBe('price_surge');
+		expect(result.alert.confidence).toBe(0.93);
 	});
 });
 

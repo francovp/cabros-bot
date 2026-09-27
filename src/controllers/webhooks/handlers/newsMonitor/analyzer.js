@@ -7,6 +7,7 @@
 
 const { analyzeNewsForSymbol } = require('../../../../services/grounding/gemini');
 const { getCacheInstance } = require('./cache');
+const classifierDevClient = require('../../../../services/classifierDevClient');
 const { getEnrichmentService } = require('../../../../services/inference/enrichmentService');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { AnalysisStatus, EventCategory } = require('./constants');
@@ -31,6 +32,13 @@ const {
 const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 
 const promptService = getPromptService();
+const CLASSIFIER_EVENT_INSTRUCTIONS = [
+	'Classify whether this asset headline describes a specific, material financial event.',
+	'price_surge means an event credibly associated with a significant price increase; price_decline means a significant decrease.',
+	'public_figure means a market-moving statement or action by a public figure or company leader.',
+	'regulatory means a law, regulator, or policy action affecting the asset or market.',
+	'none means the headline does not describe a material financial event.',
+].join(' ');
 
 // Placeholder for NotificationManager - will be injected
 let notificationManager = null;
@@ -1058,6 +1066,26 @@ class NewsAnalyzer {
 
 		// Adjust confidence score with volume expansion & RSI filters if marketContext contains them
 		geminiAnalysis.confidence = this.calculateAdjustedConfidence(geminiAnalysis.confidence, marketContext);
+
+		if (geminiAnalysis.event_category === EventCategory.NONE && classifierDevClient.isEnabled()) {
+			const headline = typeof geminiAnalysis.headline === 'string' ? geminiAnalysis.headline.trim() : '';
+			if (headline) {
+				const classified = await classifierDevClient.classifyHeadline(`${symbol}: ${headline}`, {
+					labels: Object.values(EventCategory),
+					instructions: CLASSIFIER_EVENT_INSTRUCTIONS,
+					signal: options.signal,
+					deadline: options.analysisDeadline ?? options.deadline,
+				});
+				if (classified
+					&& Object.values(EventCategory).includes(classified.label)
+					&& classified.label !== EventCategory.NONE
+					&& classified.confidence >= this.alertThreshold) {
+					geminiAnalysis.event_category = classified.label;
+					geminiAnalysis.confidence = this.calculateAdjustedConfidence(classified.confidence, marketContext);
+					console.info('[Analyzer] classifier.dev promoted a no-event result:', symbol, classified.label, classified.confidence);
+				}
+			}
+		}
 
 		// If no event detected, cache and return
 		if (geminiAnalysis.event_category === EventCategory.NONE) {

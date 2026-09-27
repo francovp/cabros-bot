@@ -1,3 +1,4 @@
+/* global saveEnv, restoreEnv */
 const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('fs');
 const request = require('supertest');
 const express = require('express');
@@ -448,6 +449,23 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.newsMonitorTestMode).toBe(true);
+	});
+
+	it('reports the optional news monitor classifier gate', async () => {
+		let response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.newsMonitorClassifier).toBe(false);
+
+		process.env.ENABLE_NEWS_MONITOR_CLASSIFIER = 'true';
+		response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.newsMonitorClassifier).toBe(true);
 	});
 
 	it('reports message footer metadata as enabled by default', async () => {
@@ -908,7 +926,7 @@ describe('Status endpoints', () => {
 				alertsDelivered: 0,
 				alertsThrottled: 0,
 				windowResetsAt: expect.any(String),
-			})
+			}),
 		);
 	});
 
