@@ -31,34 +31,53 @@ const {
 	summarizeAlerts,
 	exportAlerts,
 	listReplays,
+	submitFeedback,
+	getFeedbackSummary,
 } = require('../controllers/alerts/alerts');
-const { listOutcomes, summarizeOutcomes } = require('../controllers/outcomes/outcomes');
+const { listOutcomes, summarizeOutcomes, getOutcomesCalibration } = require('../controllers/outcomes/outcomes');
 const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/symbolAnalyses/symbolAnalyses');
+const { getPreferencesHandler, putPreferencesHandler, deletePreferencesHandler } = require('../controllers/preferences/preferences');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
-const { postBinanceOrder, getBinanceOrders, deleteBinanceOrder } = require('../controllers/trading/binanceOrders');
+const {
+	postBinanceOrder,
+	getBinanceOrders,
+	deleteBinanceOrder,
+	getBinanceOrderAudit,
+} = require('../controllers/trading/binanceOrders');
 const { postTestAlert } = require('../controllers/admin/testAlert');
+const { handleSseStream } = require('../controllers/admin/sseEvents');
 const { idempotencyMiddleware } = require('../lib/idempotency');
 const {
 	ADMIN_OPERATOR,
 	ADMIN_VIEWER,
 	requireAdminRole,
 	requireConfiguredAdminAccess,
+	requireConfiguredSseAccess,
 	validateAdminAccess,
 } = require('../lib/adminAuth');
+const { maintenanceModeMiddleware, setBotGetter } = require('../lib/maintenanceMode');
 
 function getRoutes(botOrGetter) {
+	setBotGetter(botOrGetter);
 	const router = express.Router();
 	const adminRead = [validateAdminAccess, requireAdminRole(ADMIN_VIEWER)];
 	const adminWrite = [validateAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
+	const sseRead = [requireConfiguredSseAccess, requireAdminRole(ADMIN_VIEWER)];
 	const binanceOrderRead = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_VIEWER)];
 	const binanceOrderWrite = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
-	router.post('/webhook/alert', validateApiKey, idempotencyMiddleware, postAlert(botOrGetter));
-	router.post('/webhook/message', validateApiKey, idempotencyMiddleware, postMessage(botOrGetter));
-	router.post('/webhook/expanded-analysis-alert', validateApiKey, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
-	router.post('/webhook/market-scanner-alert', validateApiKey, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
-	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
-	router.post('/webhook/symbol-analysis', validateApiKey, postSymbolAnalysis());
+	router.post('/webhook/alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postAlert(botOrGetter));
+	router.post('/webhook/message', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMessage(botOrGetter));
+	router.post('/webhook/expanded-analysis-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
+	router.post('/webhook/market-scanner-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
+	// Rate limited by the app-wide src/lib/rateLimiter (app.use). These two webhook
+	// ingest paths additionally have their own dedicated 1,000-request bucket via
+	// WEBHOOK_INGEST_PATHS, so they are more restricted than the global default.
+	// CodeQL's js/missing-rate-limiting cannot see the app-level middleware.
+	/* codeql[js/missing-rate-limiting] */
+	router.post('/webhook/volume-confirmation', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postVolumeConfirmation());
+	/* codeql[js/missing-rate-limiting] */
+	router.post('/webhook/symbol-analysis', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postSymbolAnalysis());
 	router.get('/alerts', ...adminRead, listAlerts);
 	router.get('/alerts/replays', ...adminRead, listReplays);
 	router.get('/alerts/summary', ...adminRead, summarizeAlerts);
@@ -68,9 +87,13 @@ function getRoutes(botOrGetter) {
 	router.post('/alerts/batch/delete', ...adminWrite, batchDeleteAlerts);
 	router.post('/alerts/:alertId/replay', ...adminWrite, idempotencyMiddleware, replayAlert(botOrGetter));
 	router.get('/alerts/:alertId', ...adminRead, getAlertById);
+	router.post('/alerts/feedback', ...adminWrite, idempotencyMiddleware, submitFeedback);
+	router.get('/alerts/feedback/summary', ...adminRead, getFeedbackSummary);
 	router.post('/admin/test-alert', ...adminWrite, idempotencyMiddleware, postTestAlert(botOrGetter));
+	router.get('/admin/events', ...sseRead, handleSseStream);
 	router.get('/outcomes', ...adminRead, listOutcomes);
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
+	router.get('/outcomes/calibration', ...adminRead, getOutcomesCalibration);
 	router.get('/symbol-analyses', ...adminRead, listSymbolAnalyses);
 	router.get('/symbol-analyses/summary', ...adminRead, summarizeSymbolAnalyses);
 	router.post('/scanner-presets', ...adminWrite, postPreset);
@@ -80,6 +103,11 @@ function getRoutes(botOrGetter) {
 	router.delete('/scanner-presets/:id', ...adminWrite, deletePreset);
 	router.post('/scanner-presets/:id/run', ...adminWrite, idempotencyMiddleware, postRunPreset(botOrGetter));
 
+	// Per-chat alert preferences endpoints
+	router.get('/preferences/:channel/:chatId', ...adminRead, getPreferencesHandler);
+	router.put('/preferences/:channel/:chatId', ...adminWrite, putPreferencesHandler);
+	router.delete('/preferences/:channel/:chatId', ...adminWrite, deletePreferencesHandler);
+
 	// Async job endpoints
 	router.post('/jobs/tradingview-analysis', ...adminWrite, idempotencyMiddleware, postCreateJob(botOrGetter));
 	router.get('/jobs', ...adminRead, getJobList);
@@ -88,6 +116,7 @@ function getRoutes(botOrGetter) {
 	router.post('/jobs/:jobId/retry', ...adminWrite, idempotencyMiddleware, postRetryJob(botOrGetter));
 	router.post('/jobs/:jobId/retry-failed', ...adminWrite, idempotencyMiddleware, postRetryFailedJob(botOrGetter));
 	router.get('/trading/binance/orders', ...binanceOrderRead, getBinanceOrders);
+	router.get('/trading/binance/orders/audit', ...binanceOrderRead, getBinanceOrderAudit);
 	router.post('/trading/binance/orders', ...binanceOrderWrite, idempotencyMiddleware, postBinanceOrder);
 	router.delete('/trading/binance/orders', ...binanceOrderWrite, deleteBinanceOrder);
 
@@ -100,14 +129,18 @@ function getRoutes(botOrGetter) {
 	const newsMonitor = getNewsMonitor();
 	router.get('/news-monitor/summary', ...adminRead, newsMonitor.handleSummary.bind(newsMonitor));
 	router.get('/news-monitor/analyses', ...adminRead, newsMonitor.handleListAnalyses.bind(newsMonitor));
-	router.post('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
-	router.get('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
+	router.post('/news-monitor', validateApiKey, maintenanceModeMiddleware, newsMonitor.handleRequest.bind(newsMonitor));
+	router.get('/news-monitor', validateApiKey, maintenanceModeMiddleware, newsMonitor.handleRequest.bind(newsMonitor));
 	router.post('/news-monitor/pause', ...adminWrite, postPauseNewsMonitor);
 	router.post('/news-monitor/resume', ...adminWrite, postResumeNewsMonitor);
 	router.get('/news-monitor/status', ...adminRead, getNewsMonitorStatus);
 
 	router.get('/status', ...adminRead, getApiStatus);
 	router.get('/capabilities', ...adminRead, getApiStatus);
+
+	const { getSelfTest, postSelfTestRun } = require('../controllers/diagnostics/selftest');
+	router.get('/selftest', ...adminRead, getSelfTest(botOrGetter));
+	router.post('/selftest/run', ...adminWrite, postSelfTestRun(botOrGetter));
 
 	return router;
 }

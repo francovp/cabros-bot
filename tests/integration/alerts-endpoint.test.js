@@ -30,11 +30,26 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	getMetricsSummary: jest.fn(),
 }));
 
+jest.mock('../../src/services/storage/AlertFeedbackStorageService', () => {
+	const actual = jest.requireActual('../../src/services/storage/AlertFeedbackStorageService');
+	return {
+		...actual,
+		isEnabled: jest.fn(),
+		saveFeedback: jest.fn(),
+		listFeedbackEntries: jest.fn(),
+		getSummaryBlock: jest.fn(),
+		getStatus: jest.fn(),
+		VALID_VERDICTS: actual.VALID_VERDICTS,
+		STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
+	};
+});
+
 const crypto = require('crypto');
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const alertFeedbackStorageService = require('../../src/services/storage/AlertFeedbackStorageService');
 const alertHandler = require('../../src/controllers/webhooks/handlers/alert/alert');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const { encodeAlertPaginationCursor } = require('../../src/services/storage/alertPaginationCursor');
@@ -65,6 +80,21 @@ describe('Alerts API Integration Tests', () => {
 		alertStorageService.getLatestReplayForAlert.mockResolvedValue(null);
 		signalOutcomeService.isEnabled.mockReturnValue(false);
 		signalOutcomeService.getMetricsSummary.mockResolvedValue('No measurements found');
+		alertFeedbackStorageService.getSummaryBlock.mockResolvedValue({
+			total: 0,
+			up: 0,
+			down: 0,
+			ratio: 0,
+			bySource: {},
+			bySymbol: {},
+			byExchange: {},
+			source: 'memory',
+			window: {
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 1000,
+			},
+		});
 		const { parseAlertPaginationCursor: actualParseCursor } = jest.requireActual('../../src/services/storage/alertPaginationCursor');
 		alertStorageService.parseAlertPaginationCursor.mockImplementation(actualParseCursor);
 		app.use('/api', getRoutes(null));
@@ -258,6 +288,33 @@ describe('Alerts API Integration Tests', () => {
 		}));
 	});
 
+	it('passes signalClass filter to alertStorageService.listAlerts', async () => {
+		alertStorageService.listAlerts.mockResolvedValue({
+			alerts: [],
+			hasMore: false,
+			nextBefore: null,
+		});
+
+		await request(app)
+			.get('/api/alerts?signalClass=breakout,reversal')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listAlerts).toHaveBeenCalledWith(expect.objectContaining({
+			signalClass: 'breakout,reversal',
+		}));
+	});
+
+	it('returns 400 for invalid signalClass filter on GET /api/alerts', async () => {
+		const res = await request(app)
+			.get('/api/alerts?signalClass=invalid_class')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body.code).toBe('INVALID_REQUEST');
+		expect(res.body.error).toContain('Invalid signalClass filter');
+	});
+
 	it('returns 400 when GET /api/alerts receives invalid filter values', async () => {
 		const emptySymbol = await request(app)
 			.get('/api/alerts?symbol=')
@@ -388,6 +445,10 @@ describe('Alerts API Integration Tests', () => {
 			latency: {
 				averageProcessingMs: null,
 				averageDeliveryMs: 125,
+				byChannel: {
+					telegram: { averageMs: 100, p95Ms: 100, sampleCount: 1 },
+					whatsapp: { averageMs: 150, p95Ms: 150, sampleCount: 1 },
+				},
 			},
 		});
 
@@ -442,6 +503,25 @@ describe('Alerts API Integration Tests', () => {
 				latency: {
 					averageProcessingMs: null,
 					averageDeliveryMs: 125,
+					byChannel: {
+						telegram: { averageMs: 100, p95Ms: 100, sampleCount: 1 },
+						whatsapp: { averageMs: 150, p95Ms: 150, sampleCount: 1 },
+					},
+				},
+				feedback: {
+					total: 0,
+					up: 0,
+					down: 0,
+					ratio: 0,
+					bySource: {},
+					bySymbol: {},
+					byExchange: {},
+					source: 'memory',
+					window: {
+						from: '2026-06-06T00:00:00.000Z',
+						to: '2026-06-07T00:00:00.000Z',
+						limit: 1000,
+					},
 				},
 			},
 		});
@@ -584,6 +664,64 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	it('passes signalClass filter to alertStorageService.summarizeAlerts', async () => {
+		alertStorageService.summarizeAlerts.mockResolvedValue({
+			totalAlerts: 0,
+			signalClassCounts: {
+				breakout: 0,
+				mean_reversion: 0,
+				trend_continuation: 0,
+				reversal: 0,
+				volume_spike: 0,
+				news_event: 0,
+				manual: 0,
+				unknown: 0,
+			},
+		});
+
+		await request(app)
+			.get('/api/alerts/summary?signalClass=breakout')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.summarizeAlerts).toHaveBeenCalledWith(expect.objectContaining({
+			signalClass: 'breakout',
+		}));
+	});
+
+	it('returns 400 for invalid signalClass filter on GET /api/alerts/summary', async () => {
+		const res = await request(app)
+			.get('/api/alerts/summary?signalClass=invalid_class')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body.code).toBe('INVALID_REQUEST');
+		expect(res.body.error).toContain('Invalid signalClass filter');
+	});
+
+	it('passes signalClass filter to alertStorageService.exportAlerts', async () => {
+		alertStorageService.exportAlerts.mockResolvedValue({ alerts: [] });
+
+		await request(app)
+			.get('/api/alerts/export?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&signalClass=breakout')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.exportAlerts).toHaveBeenCalledWith(expect.objectContaining({
+			signalClass: 'breakout',
+		}));
+	});
+
+	it('returns 400 for invalid signalClass filter on GET /api/alerts/export', async () => {
+		const res = await request(app)
+			.get('/api/alerts/export?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&signalClass=invalid_class')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body.code).toBe('INVALID_REQUEST');
+		expect(res.body.error).toContain('Invalid signalClass filter');
+	});
+
 	it('exports bounded stored alerts as JSONL without raw text by default', async () => {
 		alertStorageService.exportAlerts.mockResolvedValue({
 			window: {
@@ -670,11 +808,12 @@ describe('Alerts API Integration Tests', () => {
 			limit: 1,
 			source: undefined,
 			enriched: undefined,
+			signalClass: undefined,
 			includeText: true,
 			includeEnrichment: false,
 		});
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,requestId,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
+		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
 		expect(res.text).toContain("'=alert-1,,-42,'@webhook");
 		expect(res.text).toContain('"\'=@SUM(1,1), ""quoted""\r\n+next"');
 		expect(res.text).not.toContain('=alert-1,-42,@webhook');
@@ -690,6 +829,7 @@ describe('Alerts API Integration Tests', () => {
 					requestId: 'req-news-456',
 					receivedAt: '2026-06-06T12:00:00.000Z',
 					source: 'news-monitor',
+					signalClass: 'news_event',
 					enriched: true,
 					useTradingViewData: false,
 					tradingViewEnrichmentApplied: false,
@@ -712,8 +852,8 @@ describe('Alerts API Integration Tests', () => {
 			.expect(200);
 
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,requestId,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
-		expect(res.text).toContain('news-123,req-news-456,2026-06-06T12:00:00.000Z,news-monitor,true,false,false,not_applicable,price_surge,0.85,0.75,fresh');
+		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
+		expect(res.text).toContain('news-123,req-news-456,2026-06-06T12:00:00.000Z,news-monitor,news_event,true,false,false,not_applicable,price_surge,0.85,0.75,fresh');
 		expect(res.text).toContain('BTCUSDT: Bitcoin surges past 100k');
 	});
 
@@ -975,6 +1115,32 @@ describe('Alerts API Integration Tests', () => {
 			replayId: 'replay-1',
 			results: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
 		});
+	});
+
+	it('preserves signalClass when replaying a stored alert', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-classified',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay classified',
+			signalClass: 'breakout',
+			deliveryResults: [{ channel: 'telegram', success: false }],
+			source: 'webhook',
+		});
+
+		await request(app)
+			.post('/api/alerts/alert-classified/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-classified-key')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'Replay classified',
+				signalClass: 'breakout',
+			}),
+			['telegram'],
+		);
 	});
 
 	it('accepts x-idempotency-key when replaying a stored alert', async () => {
@@ -1552,6 +1718,29 @@ describe('Alerts API Integration Tests', () => {
 			expect(res.body.results[0].payloadPreview.text).toBe('Dry run alert');
 			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+
+		it('preserves signalClass across batch replay items', async () => {
+			alertStorageService.getAlertById.mockResolvedValueOnce({
+				id: 'alert-batch-class',
+				text: 'Batch classified',
+				signalClass: 'reversal',
+			});
+
+			await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'batch-signal-class-key')
+				.send({ alertIds: ['alert-batch-class'], channels: ['telegram'] })
+				.expect(200);
+
+			expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+				expect.objectContaining({
+					text: 'Batch classified',
+					signalClass: 'reversal',
+				}),
+				['telegram'],
+			);
 		});
 
 		it('reconciles and skips previously delivered alerts on batch retry', async () => {
