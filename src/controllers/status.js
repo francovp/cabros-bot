@@ -428,21 +428,25 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				status: discord.status,
 			},
 		},
-		// Operator intent, not runtime reachability. `configured` mirrors
-		// NotificationChannel.isConfigured() and is what the zero-channel admin
-		// page reports, so operators can reconcile "why did I get paged?" here.
-		// `configured` is a ready-or-error status; `ready` stays runtime-only.
+		// Operator intent, not runtime reachability. Mirrors
+		// NotificationChannel.isConfigured(), which is the enable flag AND the
+		// required credentials — i.e. exactly the `ready` semantics of
+		// dependencyStatus. Deriving this from `ready` (not `configured` alone)
+		// is what keeps this consistent with the zero-channel admin page, which
+		// calls the same method; using `configured` alone would report a channel
+		// with a webhook URL but a disabled flag as "configured" and contradict
+		// the page that reported it as unconfigured.
 		notificationChannelIntent: {
 			configured: [
-				{ name: 'telegram', ...telegram },
-				{ name: 'whatsapp', ...whatsapp },
-				{ name: 'discord', ...discord },
-			].filter((channel) => channel.configured).map((channel) => channel.name),
+				{ name: 'telegram', ready: telegram.ready },
+				{ name: 'whatsapp', ready: whatsapp.ready },
+				{ name: 'discord', ready: discord.ready },
+			].filter((channel) => channel.ready).map((channel) => channel.name),
 			unconfigured: [
-				{ name: 'telegram', ...telegram },
-				{ name: 'whatsapp', ...whatsapp },
-				{ name: 'discord', ...discord },
-			].filter((channel) => !channel.configured).map((channel) => channel.name),
+				{ name: 'telegram', ready: telegram.ready },
+				{ name: 'whatsapp', ready: whatsapp.ready },
+				{ name: 'discord', ready: discord.ready },
+			].filter((channel) => !channel.ready).map((channel) => channel.name),
 		},
 		...(deliveryMetricsService.getSnapshot()
 			? { deliveryMetrics: deliveryMetricsService.getSnapshot() }

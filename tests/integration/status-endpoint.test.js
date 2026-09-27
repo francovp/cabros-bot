@@ -1904,15 +1904,22 @@ describe('Status endpoints', () => {
 			unconfigured: expect.arrayContaining(['telegram', 'whatsapp']),
 		});
 
-		// Intent is deliberately independent of runtime readiness: a configured channel
-		// that is not enabled still counts as configured.
+		// Intent mirrors NotificationChannel.isConfigured() = enable flag AND
+		// credentials (dependencyStatus.ready). A channel whose webhook URL is set
+		// but whose ENABLE_DISCORD_ALERTS flag is off is therefore NOT configured
+		// by operator intent — the same verdict the zero-channel page reaches,
+		// since it calls that same method. Reporting it as configured here would
+		// contradict the page that reported it as unconfigured.
 		process.env.ENABLE_DISCORD_ALERTS = 'false';
-		const disabledResponse = await request(app)
+		const flagDisabledResponse = await request(app)
 			.get('/api/status')
 			.set('x-api-key', 'status-key');
 
-		expect(disabledResponse.body.notificationChannelIntent.configured).toEqual(['discord']);
-		expect(disabledResponse.body.dependencies.discord.ready).toBe(false);
+		expect(flagDisabledResponse.body.dependencies.discord.configured).toBe(true);
+		expect(flagDisabledResponse.body.dependencies.discord.ready).toBe(false);
+		expect(flagDisabledResponse.body.notificationChannelIntent.configured).toEqual([]);
+		expect(flagDisabledResponse.body.notificationChannelIntent.unconfigured)
+			.toEqual(expect.arrayContaining(['telegram', 'whatsapp', 'discord']));
 	});
 
 	it('waits for the initial notification redrive heartbeat before serializing status', async () => {		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
