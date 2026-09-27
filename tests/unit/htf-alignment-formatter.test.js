@@ -231,6 +231,153 @@ describe('HTF Alignment Formatter (Issue #635)', () => {
 		});
 	});
 
+	describe('resolveHtfAlignment() object-valued recommendation normalization (GH-717)', () => {
+		it('recognizes recommendation.action objects at the multiTimeframeData root for BUY', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { recommendation: { action: 'BUY' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.label).toBe('ALINEADO');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('recognizes recommendation.action objects for SELL', () => {
+			const result = resolveHtfAlignment({
+				side: 'SELL',
+				multiTimeframeData: { recommendation: { action: 'SELL' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.label).toBe('ALINEADO');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('recognizes recommendation.action objects nested under alignment', () => {
+			const buyResult = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { alignment: { recommendation: { action: 'BUY' } } },
+			});
+			expect(buyResult).not.toBeNull();
+			expect(buyResult.classification).toBe('aligned');
+			expect(buyResult.text).toBe('📈 HTF: ALINEADO');
+
+			const sellCounter = resolveHtfAlignment({
+				side: 'SELL',
+				multiTimeframeData: { alignment: { recommendation: { action: 'BUY' } } },
+			});
+			expect(sellCounter).not.toBeNull();
+			expect(sellCounter.classification).toBe('counter-trend');
+			expect(sellCounter.text).toBe('📉 HTF: EN CONTRA');
+		});
+
+		it('recognizes recommendation.direction when action is absent', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { recommendation: { direction: 'bullish' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('preserves legacy string-valued recommendation payloads', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { recommendation: 'bullish' },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('keeps net_score authoritative when a recommendation object is also present', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: {
+					net_score: -2,
+					recommendation: { action: 'BUY' },
+				},
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('counter-trend');
+			expect(result.netScore).toBe(-2);
+			expect(result.text).toBe('📉 HTF: EN CONTRA (net -2)');
+		});
+	});
+
+	describe('resolveHtfAlignment() status/direction precedence (GH-717)', () => {
+		it('honors an explicit bearish direction over a contradictory aligned status for BUY', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { alignment: { status: 'aligned', direction: 'bearish' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('counter-trend');
+			expect(result.label).toBe('EN CONTRA');
+			expect(result.text).toBe('📉 HTF: EN CONTRA');
+		});
+
+		it('honors an explicit bullish direction over a contradictory counter-trend status for SELL', () => {
+			const result = resolveHtfAlignment({
+				side: 'SELL',
+				multiTimeframeData: { alignment: { status: 'counter-trend', direction: 'bullish' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('counter-trend');
+			expect(result.text).toBe('📉 HTF: EN CONTRA');
+		});
+
+		it('honors an explicit bearish direction over a contradictory counter-trend status for SELL', () => {
+			const result = resolveHtfAlignment({
+				side: 'SELL',
+				multiTimeframeData: { alignment: { status: 'counter-trend', direction: 'bearish' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('keeps the status verdict when the explicit direction agrees with it', () => {
+			const aligned = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { alignment: { status: 'aligned', direction: 'bullish' } },
+			});
+			expect(aligned.classification).toBe('aligned');
+			expect(aligned.text).toBe('📈 HTF: ALINEADO');
+
+			const counter = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { alignment: { status: 'counter-trend', direction: 'bearish' } },
+			});
+			expect(counter.classification).toBe('counter-trend');
+			expect(counter.text).toBe('📉 HTF: EN CONTRA');
+		});
+
+		it('falls back to the status verdict when the side cannot be resolved', () => {
+			const result = resolveHtfAlignment({
+				multiTimeframeData: { alignment: { status: 'aligned', direction: 'bearish' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('keeps net_score authoritative over a contradictory status/direction pair', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: {
+					alignment: { status: 'aligned', direction: 'bearish', net_score: 3 },
+				},
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.netScore).toBe(3);
+			expect(result.text).toBe('📈 HTF: ALINEADO (net +3)');
+		});
+	});
+
 	describe('formatHtfAlignment() with RemoteConfig gating', () => {
 		let savedEnv;
 

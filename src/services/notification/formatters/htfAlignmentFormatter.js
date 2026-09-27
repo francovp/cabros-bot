@@ -49,6 +49,56 @@ function resolveSide(enriched = {}) {
 }
 
 /**
+ * Resolves a directional/recommendation token from a value that may be a plain
+ * string or an object exposing `action`, `direction`, or `trend`.
+ *
+ * TradingView MCP payloads arrive in both shapes: `{ recommendation: "BUY" }`
+ * and `{ recommendation: { action: "BUY" } }`. Both must normalize identically,
+ * otherwise a valid object payload silently drops the whole HTF line.
+ *
+ * @param {*} value
+ * @returns {string|null}
+ */
+function resolveDirectionalToken(value) {
+	if (typeof value === 'string') {
+		return value.trim() || null;
+	}
+	if (value && typeof value === 'object' && !Array.isArray(value)) {
+		for (const key of ['action', 'direction', 'trend', 'status', 'recommendation']) {
+			const candidate = value[key];
+			if (typeof candidate === 'string' && candidate.trim()) {
+				return candidate.trim();
+			}
+		}
+	}
+	return null;
+}
+
+/**
+ * Applies one precedence rule for contradictory confluence fields (GH-717).
+ *
+ * `net_score` is the strongest signal and always wins when present. Otherwise an
+ * explicit HTF direction is authoritative: a `status` that contradicts it is a
+ * provider serialization artifact, so side-aware classification is driven by the
+ * direction. When no explicit direction exists, the normalized `status` verdict
+ * stands, and finally the direction alone is classified against the alert side.
+ *
+ * @param {'bullish'|'bearish'|null} direction Normalized higher-timeframe direction.
+ * @param {'BUY'|'SELL'|null} side Resolved alert side.
+ * @returns {'aligned'|'counter-trend'|'mixed'}
+ */
+function classifyByDirection(direction, side) {
+	if (side === 'BUY') {
+		if (direction === 'bullish') return 'aligned';
+		if (direction === 'bearish') return 'counter-trend';
+	} else if (side === 'SELL') {
+		if (direction === 'bearish') return 'aligned';
+		if (direction === 'bullish') return 'counter-trend';
+	}
+	return 'mixed';
+}
+
+/**
  * Resolves higher-timeframe alignment metadata and generates a formatted status string.
  * @param {Object} enriched
  * @returns {{ classification: 'aligned'|'counter-trend'|'mixed', label: string, netScore: number|null, divergentTimeframes: string[], text: string }|null}
@@ -76,12 +126,10 @@ function resolveHtfAlignment(enriched = {}) {
 	const stringAlignment = typeof multiTimeframe.alignment === 'string' && multiTimeframe.alignment.trim()
 		? multiTimeframe.alignment.trim()
 		: null;
-	const stringRecommendation = typeof multiTimeframe.recommendation === 'string' && multiTimeframe.recommendation.trim()
-		? multiTimeframe.recommendation.trim()
-		: (typeof alignment.recommendation === 'string' && alignment.recommendation.trim() ? alignment.recommendation.trim() : null);
-	const stringTrend = typeof multiTimeframe.trend === 'string' && multiTimeframe.trend.trim()
-		? multiTimeframe.trend.trim()
-		: (typeof alignment.trend === 'string' && alignment.trend.trim() ? alignment.trend.trim() : null);
+	const stringRecommendation = resolveDirectionalToken(multiTimeframe.recommendation)
+		?? resolveDirectionalToken(alignment.recommendation);
+	const stringTrend = resolveDirectionalToken(multiTimeframe.trend)
+		?? resolveDirectionalToken(alignment.trend);
 
 	const netScore = numberOrNull(alignment.net_score ?? multiTimeframe.net_score);
 	const rawStatus = typeof alignment.status === 'string' && alignment.status.trim()
@@ -130,26 +178,27 @@ function resolveHtfAlignment(enriched = {}) {
 		}
 	} else {
 		const normalizedStatus = normalizeConfluenceStatus(rawStatus);
-		const normalizedDirection = normalizeTrendDirection(rawDirection || rawStatus);
+		// An explicit direction field is authoritative *when the side is known*, so
+		// side-aware classification can actually be compared against it. `rawDirection`
+		// falls back to `rawStatus`, so only a *dedicated* direction/trend/
+		// recommendation token may override a status verdict (GH-717). With an
+		// unknown side there is nothing to compare, so the status verdict stands.
+		const explicitDirection = normalizeTrendDirection(
+			rawDirection && rawDirection !== rawStatus ? rawDirection : null,
+		);
 
-		if (normalizedStatus === 'aligned') {
+		if (explicitDirection && side) {
+			classification = classifyByDirection(explicitDirection, side);
+		} else if (normalizedStatus === 'aligned') {
 			classification = 'aligned';
 		} else if (normalizedStatus === 'counter-trend') {
 			classification = 'counter-trend';
-		} else if (normalizedStatus === 'unknown') {
-			classification = 'mixed';
-		} else if (side === 'BUY') {
-			if (normalizedDirection === 'bullish') {
-				classification = 'aligned';
-			} else if (normalizedDirection === 'bearish') {
-				classification = 'counter-trend';
-			}
-		} else if (side === 'SELL') {
-			if (normalizedDirection === 'bearish') {
-				classification = 'aligned';
-			} else if (normalizedDirection === 'bullish') {
-				classification = 'counter-trend';
-			}
+		} else {
+			// No usable status verdict: fall back to whichever directional token exists.
+			classification = classifyByDirection(
+				normalizeTrendDirection(rawDirection || rawStatus),
+				side,
+			);
 		}
 	}
 
@@ -208,4 +257,6 @@ module.exports = {
 	formatHtfAlignment,
 	resolveHtfAlignment,
 	resolveSide,
+	resolveDirectionalToken,
+	classifyByDirection,
 };
