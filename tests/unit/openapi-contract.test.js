@@ -10,12 +10,25 @@ function normalizeExpressPath(routePath) {
 }
 
 function getMountedApiOperations() {
-	return getRoutes(null).stack
+	const routerOperations = getRoutes(null).stack
 		.filter((layer) => layer.route)
 		.flatMap((layer) => Object.keys(layer.route.methods)
 			.filter((method) => layer.route.methods[method])
-			.map((method) => `${method.toUpperCase()} ${normalizeExpressPath(layer.route.path)}`))
-		.sort();
+			.map((method) => `${method.toUpperCase()} ${normalizeExpressPath(layer.route.path)}`));
+
+	const app = require('../../app');
+	const appOperations = [];
+	for (const layer of app._router.stack) {
+		if (!layer.route) continue;
+		for (const method of Object.keys(layer.route.methods)) {
+			if (!layer.route.methods[method]) continue;
+			const routePath = layer.route.path;
+			if (!routePath.startsWith('/api/')) continue;
+			appOperations.push(`${method.toUpperCase()} ${routePath}`);
+		}
+	}
+
+	return [...routerOperations, ...appOperations].sort();
 }
 
 function getDocumentedApiOperations(contract) {
@@ -104,8 +117,16 @@ describe('OpenAPI contract', () => {
 			'GET /api/selftest', 'POST /api/selftest/run',
 		]);
 
+		const unauthenticatedOperations = new Set([
+			'GET /api/public/status',
+		]);
+
 		for (const operation of operations) {
 			const operationKey = `${operation.method || 'UNKNOWN'} ${operation.path || ''}`;
+			if (unauthenticatedOperations.has(operationKey)) {
+				expect(operation.security).toBeUndefined();
+				continue;
+			}
 			const expected = [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
 			if (firebaseAdminOperations.has(operationKey)) expected.push({ FirebaseBearerAuth: [] });
 			expect(operation.security).toEqual(expected);
