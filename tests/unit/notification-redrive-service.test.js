@@ -1301,6 +1301,34 @@ describe('NotificationRedriveService', () => {
 			releaseSpy.mockRestore();
 		});
 
+		it('sends permanent failure alert when telegram broadcast is disabled but admin delivery is eligible', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = 'admin-chat-id';
+			const mockAdminSend = jest.fn().mockResolvedValue({ success: true });
+			const mockTelegramService = {
+				name: 'telegram',
+				send: mockAdminSend,
+				isEnabled: () => false,
+				isAdminDeliveryEligible: () => true,
+			};
+			const mockNotificationManager = {
+				channels: new Map([['telegram', mockTelegramService]]),
+				isTelegramAdminDeliveryEligible: jest.fn(() => true),
+			};
+			service.setNotificationManagerGetter(() => mockNotificationManager);
+
+			const record = {
+				alertId: 'alert-admin-eligible',
+				channel: 'telegram',
+				payload: { text: 'Failed alert' },
+				lastError: 'Exhausted retries',
+			};
+
+			await service.notifyAdminPermanentFailure(record, 'Exhausted max attempts');
+			expect(mockAdminSend).toHaveBeenCalledTimes(1);
+			expect(mockAdminSend.mock.calls[0][0].telegramChatId).toBe('admin-chat-id');
+			expect(mockAdminSend.mock.calls[0][0].text).toContain('Notification Redrive Exhausted');
+		});
+
 		it('expires dead-letter records older than maxAgeMs', async () => {
 			process.env.NOTIFICATION_REDRIVE_MAX_AGE_MS = '1000';
 			const mockNotificationManager = {

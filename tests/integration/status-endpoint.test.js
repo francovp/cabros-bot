@@ -58,6 +58,7 @@ describe('Status endpoints', () => {
 			failureCount: 0,
 		};
 		tradingViewMcpService.enrichmentEvents = [];
+		tradingViewMcpService.toolMetrics = {};
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
@@ -111,6 +112,7 @@ describe('Status endpoints', () => {
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
+		tradingViewMcpService.toolMetrics = {};
 		restoreEnv(savedEnv);
 		if (tempDir) {
 			rmSync(tempDir, { recursive: true, force: true });
@@ -205,6 +207,7 @@ describe('Status endpoints', () => {
 				invalid_response: 0,
 				request_failed: 0,
 			},
+			toolMetrics: {},
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: false,
@@ -1863,6 +1866,7 @@ describe('Status endpoints', () => {
 			workerRole: 'web',
 			running: false,
 			pendingCount: 0,
+			zeroChannelBroadcasts: 0,
 			lastSweepAt: null,
 			lastSweepResult: null,
 		});
@@ -1881,13 +1885,66 @@ describe('Status endpoints', () => {
 			workerRole: 'worker',
 			batchLimit: 50,
 			maxAttempts: 5,
+			zeroChannelBroadcasts: 0,
 		});
 		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepAt).toBeNull();
 		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepResult).toBeNull();
 	});
 
-	it('waits for the initial notification redrive heartbeat before serializing status', async () => {
-		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+	it('reports operator-intent channel configuration for zero-channel triage (GH-713)', async () => {
+		// Nothing configured: every channel must be listed as unconfigured so an operator
+		// can tell "never configured" apart from "configured but failing".
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		delete process.env.BOT_TOKEN;
+		delete process.env.TELEGRAM_CHAT_ID;
+		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+		delete process.env.WHATSAPP_API_URL;
+		delete process.env.WHATSAPP_API_KEY;
+		delete process.env.WHATSAPP_CHAT_ID;
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		delete process.env.DISCORD_WEBHOOK_URL;
+
+		const unconfiguredResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(unconfiguredResponse.status).toBe(200);
+		expect(unconfiguredResponse.body.notificationChannelIntent).toEqual({
+			configured: [],
+			unconfigured: expect.arrayContaining(['telegram', 'whatsapp', 'discord']),
+		});
+
+		// Configure Discord only: intent must be Discord-configured, Telegram/WhatsApp unconfigured.
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1/abc';
+		const partialResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(partialResponse.status).toBe(200);
+		expect(partialResponse.body.notificationChannelIntent).toEqual({
+			configured: ['discord'],
+			unconfigured: expect.arrayContaining(['telegram', 'whatsapp']),
+		});
+
+		// Intent mirrors NotificationChannel.isConfigured() = enable flag AND
+		// credentials (dependencyStatus.ready). A channel whose webhook URL is set
+		// but whose ENABLE_DISCORD_ALERTS flag is off is therefore NOT configured
+		// by operator intent — the same verdict the zero-channel page reaches,
+		// since it calls that same method. Reporting it as configured here would
+		// contradict the page that reported it as unconfigured.
+		process.env.ENABLE_DISCORD_ALERTS = 'false';
+		const flagDisabledResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(flagDisabledResponse.body.dependencies.discord.configured).toBe(true);
+		expect(flagDisabledResponse.body.dependencies.discord.ready).toBe(false);
+		expect(flagDisabledResponse.body.notificationChannelIntent.configured).toEqual([]);
+		expect(flagDisabledResponse.body.notificationChannelIntent.unconfigured)
+			.toEqual(expect.arrayContaining(['telegram', 'whatsapp', 'discord']));
+	});
+
+	it('waits for the initial notification redrive heartbeat before serializing status', async () => {		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
 		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
 		const statusController = require('../../src/controllers/status');
 		const service = require('../../src/services/notification/NotificationRedriveService').notificationRedriveService;
@@ -2108,5 +2165,73 @@ describe('Status endpoints', () => {
 		expect(response.status).toBe(200);
 		expect(syncSpy).toHaveBeenCalled();
 	});
-});
 
+
+	it('exposes per-tool metrics for TradingView MCP calls in dependencies.tradingViewMcp', async () => {
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 150);
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 250);
+		tradingViewMcpService._recordToolFailure('volume_confirmation_analysis', 500, new Error('ETIMEDOUT: request timed out'));
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.toolMetrics).toEqual({
+			coin_analysis: {
+				callCount: 2,
+				successCount: 2,
+				failureCount: 0,
+				timeoutCount: 0,
+				totalDurationMs: 400,
+				averageDurationMs: 200,
+				lastCallAt: expect.any(String),
+				lastErrorCategory: null,
+			},
+			volume_confirmation_analysis: {
+				callCount: 1,
+				successCount: 0,
+				failureCount: 1,
+				timeoutCount: 1,
+				totalDurationMs: 500,
+				averageDurationMs: 500,
+				lastCallAt: expect.any(String),
+				lastErrorCategory: 'timeout',
+			},
+		});
+	});
+
+	it('aliases /api/capabilities to expose TradingView MCP toolMetrics', async () => {
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 100);
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.toolMetrics).toEqual({
+			coin_analysis: {
+				callCount: 1,
+				successCount: 1,
+				failureCount: 0,
+				timeoutCount: 0,
+				totalDurationMs: 100,
+				averageDurationMs: 100,
+				lastCallAt: expect.any(String),
+				lastErrorCategory: null,
+			},
+		});
+	});
+
+	it('omits TradingView MCP toolMetrics when ENABLE_TRADINGVIEW_MCP_ENRICHMENT is false', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 100);
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.toolMetrics).toBeUndefined();
+	});
+});

@@ -246,7 +246,7 @@ pnpm test:firebase
 - `REQUEST_TIMEOUT_MS` - Hard request-deadline ceiling for mounted `/api` routes in milliseconds (default: `30000`, valid range: `1000`-`120000`; invalid values fall back to the default). The timeout returns `408 REQUEST_TIMEOUT` with a request ID.
 - `REQUEST_DEADLINE_EXEMPT_PATHS` - Optional comma-separated paths excluded from the deadline; `/healthcheck`, `/ready`, `/openapi.json`, and `/docs` are always exempt. Per-endpoint deadlines such as `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` and `MARKET_SCANNER_TIMEOUT_MS` remain the operation-specific soft budgets inside the global ceiling.
 - `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes; invalid values use the default)
-- `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default). Webhook and MCP ingest endpoints (`/api/webhook/alert`, `/api/webhook/message`, `/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, `/api/webhook/volume-confirmation`, `/api/webhook/symbol-analysis`, and `/api/news-monitor`) use an isolated finite bucket of 1,000 requests per window so TradingView and scanner bursts do not consume the ordinary client bucket; API-key validation still applies.
+- `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default). Webhook and MCP ingest endpoints (`/api/webhook/alert`, `/api/webhook/message`, `/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, `/api/webhook/volume-confirmation`, `/api/webhook/symbol-analysis`, and `/api/news-monitor`) use an isolated finite bucket of 1,000 requests per window so TradingView and scanner bursts do not consume the ordinary client bucket; API-key validation still applies. Public documentation and admin console assets (`/openapi.json`, `/docs`, `/admin`, and associated static assets) are mounted before the rate limiter and are exempt from the global rate limit budget, mirroring `/healthcheck` and `/ready`.
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production). The logger automatically masks sensitive plain-object keys, bare-scalar secrets preceded by sensitive labels, URL query secrets, embedded JSON strings, Authorization/Bearer credentials, Telegram bot tokens, Discord webhook tokens, OpenAI keys, and dynamically registered request-scoped secrets via `registerSecretValue` / `clearSecretValue`.
 - `SERVICE_NAME` - Optional service name included in JSON logs (default: package name or `cabros-bot`)
 
@@ -326,6 +326,7 @@ The response and audit logs include only sanitized order metadata. API credentia
 - `PUT /api/scanner-presets/:id` and `DELETE /api/scanner-presets/:id` accept an optional `If-Match: "<version>"` request header for opt-in optimistic concurrency. A missing `If-Match` keeps today's behavior (the write succeeds and increments `version`).
 - A mismatched `If-Match` returns `412 PRECONDITION_FAILED` with the current preset (including `version`) so the client can rebase before retrying.
 - An update targeting a preset whose `lockedUntil` is in the future returns `409 PRESET_LOCKED` with the `lockedUntil` timestamp and the current preset, so an operator save cannot silently overwrite an in-flight sweep's lease.
+- `POST /api/scanner-presets` and `PUT /api/scanner-presets/:id` enforce case-insensitive unique names: a create/update that collides with another preset's name returns `409 NAME_CONFLICT` with the conflicting preset so the operator can rename/reuse the existing record instead of producing an ambiguous duplicate. The current preset can rename itself with a case-only change (e.g. `My Watchlist` → `my watchlist`) without tripping the conflict.
 
 #### Scanner Preset Scheduler
 
@@ -427,7 +428,7 @@ pnpm start
 
 ## API Endpoints
 
-The canonical API contract is served publicly at [`/openapi.json`](http://localhost:80/openapi.json), with interactive Swagger UI at [`/docs`](http://localhost:80/docs). Use those endpoints for request schemas, response shapes, examples, and the current route inventory. Protected `/api` operations still require `x-api-key`; the documentation endpoints never expose configured credentials.
+The canonical API contract is served publicly at [`/openapi.json`](http://localhost:80/openapi.json), with interactive Swagger UI at [`/docs`](http://localhost:80/docs), and the operator console at [`/admin`](http://localhost:80/admin). Use those endpoints for request schemas, response shapes, examples, and the current route inventory. Protected `/api` operations still require `x-api-key`; documentation and admin console assets are exempt from the global rate limit budget and never expose configured credentials.
 
 ### GET /healthcheck
 
@@ -514,6 +515,8 @@ When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, `/api/webhook/alert` suppres
 
 `featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
 
+`notificationChannelIntent` reports the operator-intent view of notification channel configuration (`telegram`, `whatsapp`, `discord`). It mirrors `NotificationChannel.isConfigured()`: a channel counts as `configured` when its enable flag is set **and** its required credentials/chat id/webhook are present — the same `ready` semantics `dependencyStatus` already uses. A channel with a webhook URL present but its enable flag off therefore reports as **not** configured, which is the same verdict the zero-channel admin page reaches because both call that one method. The view answers the question the zero-channel page exists to raise — a channel the operator never set up (`unconfigured`) versus one that is set up but currently failing. The page reports the same two sets, so an operator can reconcile an alert from the page and `/api/status` without inspecting credentials. Only channel names are exposed; never tokens, webhook URLs, or chat IDs.
+
 When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports Twelve Data readiness and the supported `BATS`/`NASDAQ`/`NYSE`/`AMEX`/`NYSE ARCA`/`FX_IDC`/`SPCFD` exchanges without exposing the API key. Signal outcome tracking uses `/quote` for missing entry prices and `/time_series` for bounded historical bars; provider, timeout, malformed-data, and quota failures mark equity outcomes unavailable without blocking alert delivery. Extended-hours data is excluded by default. Confirm current Twelve Data plan limits and licensing before production use: [pricing](https://twelvedata.com/pricing), [US equities coverage](https://support.twelvedata.com/en/articles/9935903-us-equities-market-data), and [commercial usage](https://support.twelvedata.com/en/articles/5332349-commercial-and-personal-usage).
 `dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, active entry-price chains, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
 
@@ -523,6 +526,30 @@ The dedicated worker also persists the same non-sensitive heartbeat to `workerHe
 `GET /api/capabilities` is an alias for the same payload.
 
 When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`demo`/`live` environment, allow-listed symbols, and readiness state.
+
+### GET /api/public/status
+
+Public, unauthenticated, secrets-free status snapshot for external monitoring widgets, status pages, and trader self-checks. No API key is required and the endpoint is mounted before the global rate limiter so monitoring traffic never consumes the ordinary bucket. The endpoint returns:
+
+```json
+{
+  "service": { "name": "cabros-bot", "version": "0.1.0" },
+  "status": {
+    "ok": true,
+    "uptimeSeconds": 42319,
+    "lastUpdated": "2026-08-27T19:30:00.000Z",
+    "shuttingDown": false
+  },
+  "channels": { "enabled": ["telegram"] },
+  "dependencies": {
+    "gemini":      { "ready": true },
+    "tradingview": { "ready": true },
+    "firestore":   { "ready": true }
+  }
+}
+```
+
+The snapshot is cached for 30 seconds per process. The endpoint returns HTTP `503` with `code: "SERVICE_NOT_READY"` while the process is still bootstrapping or shutting down; otherwise it returns `200`. Build commit, environment, configuration values, per-channel counters, feature flags, admin chat IDs, the `WEBHOOK_API_KEY`, Sentry DSN, Firebase project ID, and per-feature cost data are intentionally omitted.
 
 ### Browser admin authentication
 
@@ -583,7 +610,7 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
     "telegram": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "whatsapp": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "gemini": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
-    "tradingViewMcp": { "enabled": true, "configured": true, "ready": false, "status": "unknown", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0, "enrichment": { "alertPath": { "windowMs": 86400000, "totalCount": 0, "appliedCount": 0, "failedCount": 0, "appliedRate24h": 0, "failureRate24h": 0 } } },
+    "tradingViewMcp": { "enabled": true, "configured": true, "ready": false, "status": "unknown", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0, "enrichment": { "alertPath": { "windowMs": 86400000, "totalCount": 0, "appliedCount": 0, "failedCount": 0, "appliedRate24h": 0, "failureRate24h": 0 } }, "toolMetrics": {} },
     "tradingViewVolumeConfirmation": { "enabled": false, "configured": true, "ready": false, "status": "disabled", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0 },
     "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "firestoreJobStorage": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },

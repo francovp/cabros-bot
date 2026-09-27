@@ -27,6 +27,7 @@ const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsApp
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { alertModeration } = require('../services/alerts/alertModeration');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
 const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStorageService');
 const {
@@ -267,6 +268,11 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		...tradingViewRuntimeStatus,
 		errorCategoryCounts: tradingViewMcpService.getScannerErrorCategoryCounts(),
 	};
+	if (tradingViewMcpEnrichmentEnabled) {
+		tradingViewMcp.toolMetrics = tradingViewMcpService.getToolMetrics();
+	} else {
+		delete tradingViewMcp.toolMetrics;
+	}
 	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
 		enabled: tradingViewVolumeConfirmationEnabled,
 	});
@@ -400,6 +406,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
+			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
 			alertFeedback: alertFeedbackStorageService.isEnabled(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.isEnabled(),
@@ -422,6 +429,26 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				enabled: discord.ready,
 				status: discord.status,
 			},
+		},
+		// Operator intent, not runtime reachability. Mirrors
+		// NotificationChannel.isConfigured(), which is the enable flag AND the
+		// required credentials — i.e. exactly the `ready` semantics of
+		// dependencyStatus. Deriving this from `ready` (not `configured` alone)
+		// is what keeps this consistent with the zero-channel admin page, which
+		// calls the same method; using `configured` alone would report a channel
+		// with a webhook URL but a disabled flag as "configured" and contradict
+		// the page that reported it as unconfigured.
+		notificationChannelIntent: {
+			configured: [
+				{ name: 'telegram', ready: telegram.ready },
+				{ name: 'whatsapp', ready: whatsapp.ready },
+				{ name: 'discord', ready: discord.ready },
+			].filter((channel) => channel.ready).map((channel) => channel.name),
+			unconfigured: [
+				{ name: 'telegram', ready: telegram.ready },
+				{ name: 'whatsapp', ready: whatsapp.ready },
+				{ name: 'discord', ready: discord.ready },
+			].filter((channel) => !channel.ready).map((channel) => channel.name),
 		},
 		...(deliveryMetricsService.getSnapshot()
 			? { deliveryMetrics: deliveryMetricsService.getSnapshot() }
@@ -490,6 +517,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			alertSignalRepeatSuppression: {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
+			},
+			alertModeration: {
+				enabled: alertModeration.isEnabled(),
+				...alertModeration.getStats(),
 			},
 			alertFeedback: alertFeedbackStorageService.getStatus(),
 			jobExecutionQueue: jobExecutionQueueStatus,

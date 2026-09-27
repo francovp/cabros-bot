@@ -212,6 +212,23 @@ function buildPresetLocked(preset, lockedUntil) {
 	return error;
 }
 
+function buildNameConflict(conflictingPreset) {
+	const error = new MarketScannerRequestError(
+		`A scanner preset with this name already exists`,
+		'NAME_CONFLICT',
+		{ statusCode: 409, details: { preset: conflictingPreset } },
+	);
+	error.preset = clonePreset(conflictingPreset);
+	return error;
+}
+
+function normalizeNameKey(name) {
+	if (typeof name !== 'string') {
+		return '';
+	}
+	return name.trim().toLowerCase();
+}
+
 function isPresetLocked(preset, now = Date.now()) {
 	if (!preset || typeof preset.lockedUntil !== 'string' || !preset.lockedUntil) {
 		return null;
@@ -320,6 +337,10 @@ class ScannerPresetService {
 	async createPreset(params = {}) {
 		const sanitizedParams = { ...params, id: undefined, version: undefined };
 		const preset = this._buildPreset(sanitizedParams);
+		const conflict = await this._findPresetByName(preset.name);
+		if (conflict) {
+			throw buildNameConflict(conflict);
+		}
 		await this._persistPreset(preset);
 		return clonePreset(preset);
 	}
@@ -450,6 +471,19 @@ class ScannerPresetService {
 		preset.updatedAt = new Date().toISOString();
 		preset.createdAt = existing.createdAt;
 
+		// Enforce case-insensitive unique name across presets. Skipping when
+		// the new name normalizes to the existing preset's own name lets the
+		// preset rename itself with a case-only change without tripping the
+		// uniqueness check (an explicit acceptance criterion in #875).
+		const desiredKey = normalizeNameKey(preset.name);
+		const existingKey = normalizeNameKey(existing.name);
+		if (desiredKey !== existingKey) {
+			const conflict = await this._findPresetByName(preset.name);
+			if (conflict && conflict.id !== existing.id) {
+				throw buildNameConflict(conflict);
+			}
+		}
+
 		const persisted = await this._persistPreset(preset, deleteGenerationAtReadStart, {
 			expectedVersion: existing.version,
 		});
@@ -569,6 +603,7 @@ class ScannerPresetService {
 		const preset = {
 			id,
 			name,
+			nameKey: normalizeNameKey(name),
 			exchange,
 			timeframe,
 			scans,
@@ -939,6 +974,65 @@ class ScannerPresetService {
 
 	_getFirestore() {
 		return isFirestoreEnabled() ? alertStorageService.getFirestore() : null;
+	}
+
+	async _findPresetByName(name) {
+		const key = normalizeNameKey(name);
+		if (!key) {
+			return null;
+		}
+
+		// In-memory presets (canonical source for ephemeral mode and for
+		// pending writes against durable Firestore storage).
+		for (const preset of memoryPresets.values()) {
+			if (!preset || pendingFirestoreDeletes.has(preset.id)) {
+				continue;
+			}
+			if (normalizeNameKey(preset.name) === key) {
+				return preset;
+			}
+		}
+
+		for (const operation of inFlightFirestorePresets.values()) {
+			const preset = operation && operation.preset;
+			if (!preset || pendingFirestoreDeletes.has(preset.id)) {
+				continue;
+			}
+			if (normalizeNameKey(preset.name) === key) {
+				return preset;
+			}
+		}
+
+		for (const preset of pendingFirestorePresets.values()) {
+			if (!preset || pendingFirestoreDeletes.has(preset.id)) {
+				continue;
+			}
+			if (normalizeNameKey(preset.name) === key) {
+				return preset;
+			}
+		}
+
+		// Durable Firestore store: query by normalized lowercase name when the
+		// caller has opted into Firestore scanner storage. When the query
+		// fails, log + fall through so the write can succeed (fail-open).
+		const firestore = this._getFirestore();
+		if (firestore) {
+			try {
+				const snapshot = await firestore
+					.collection(COLLECTION_NAME)
+					.where('nameKey', '==', key)
+					.limit(1)
+					.get();
+				if (snapshot && Array.isArray(snapshot.docs) && snapshot.docs.length > 0) {
+					return this._formatFirestoreDoc(snapshot.docs[0]);
+				}
+			} catch (error) {
+				console.warn('[ScannerPresetService] Failed to query presets by name from Firestore:', error.message);
+				this.firestoreUnavailable = true;
+			}
+		}
+
+		return null;
 	}
 
 	_formatFirestoreDoc(doc) {

@@ -44,6 +44,61 @@
     }
   ],
   "paths": {
+"/api/public/status": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Public, unauthenticated service status snapshot",
+        "description": "Returns a redacted, secrets-free snapshot of service name/version, uptime, enabled notification channels, and dependency readiness booleans. No API key required. Cached for 30 seconds per process. Returns 503 when the process is still bootstrapping or shutting down.",
+        "operationId": "getPublicStatus",
+        "responses": {
+                "408": {
+                  "$ref": "#/components/responses/RequestTimeout"
+                },
+          "200": {
+            "description": "Public status snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicStatus"
+                },
+                "example": {
+                  "service": {
+                    "name": "cabros-bot",
+                    "version": "1.2.3"
+                  },
+                  "status": {
+                    "ok": true,
+                    "uptimeSeconds": 42319,
+                    "lastUpdated": "2026-08-27T19:30:00.000Z",
+                    "shuttingDown": false
+                  },
+                  "channels": {
+                    "enabled": ["telegram"]
+                  },
+                  "dependencies": {
+                    "gemini": { "ready": true },
+                    "tradingview": { "ready": true },
+                    "firestore": { "ready": true }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service is not yet ready (bootstrap pending or shutdown draining)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicStatusNotReady"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthcheck": {
       "get": {
         "tags": [
@@ -208,6 +263,9 @@
           },
           {
             "$ref": "#/components/parameters/IdempotencyKeyQuerySnake"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -1445,6 +1503,16 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "409": {
+            "description": "A scanner preset with the same case-insensitive name already exists. Response body includes code=NAME_CONFLICT and the conflicting preset so the client can resolve the conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
+                }
+              }
+            }
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -1548,7 +1616,7 @@
             "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
-            "description": "Preset is locked by an in-flight sweep (lockedUntil > now). Response body includes code=PRESET_LOCKED and the lockedUntil timestamp; the current preset is also returned so the client can decide whether to retry.",
+            "description": "Preset is locked by an in-flight sweep (lockedUntil > now) OR the new name matches an existing preset's name case-insensitively (code=NAME_CONFLICT, body includes the conflicting preset).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4757,7 +4825,7 @@
         }
       },
       "MessageDeliveryResult": {
-        "description": "Generic-message delivery response. A replay returns the cached body with idempotencyReplayed=true and Idempotency-Replay: true.",
+        "description": "Generic-message delivery response. A replay returns the cached body with idempotencyReplayed=true and Idempotency-Replay: true. The requestId field mirrors the inbound x-request-id header (sanitized) or a generated UUIDv4 so callers can correlate the response with logs, Sentry, and admin paging.",
         "headers": {
           "Idempotency-Replay": {
             "description": "false for the first accepted request, true for a cached replay.",
@@ -4791,6 +4859,7 @@
               "success": {
                 "value": {
                   "success": true,
+                  "requestId": "msg-correlation-001",
                   "results": [
                     {
                       "channel": "telegram",
@@ -4805,6 +4874,7 @@
                 "value": {
                   "success": true,
                   "idempotencyReplayed": true,
+                  "requestId": "msg-correlation-001",
                   "results": [
                     {
                       "channel": "telegram",
@@ -5049,9 +5119,25 @@
                       "symbol": "BTCUSDT",
                       "status": "analyzed",
                       "alert": {
+                        "symbol": "BTCUSDT",
                         "eventCategory": "price_surge",
                         "headline": "Bitcoin breaks resistance",
-                        "confidence": 0.85
+                        "sentimentScore": 0.65,
+                        "confidence": 0.85,
+                        "sources": [
+                          "https://www.coindesk.com/markets/2026/08/bitcoin-resistance"
+                        ],
+                        "formattedMessage": "BTCUSDT breakout above resistance (confidence 0.85).",
+                        "timestamp": 1724745600000,
+                        "marketContext": {
+                          "price": 68500.0,
+                          "change24h": 2.4,
+                          "volume24h": 18500000000,
+                          "source": "binance",
+                          "timestamp": 1724745599000
+                        },
+                        "stop": 67130.0,
+                        "target": 71925.0
                       },
                       "deliveryResults": [],
                       "cached": false,
@@ -5081,6 +5167,48 @@
                     "alertsThrottled": 0,
                     "windowResetsAt": "2026-09-12T10:20:00.000Z"
                   }
+                }
+              },
+              "analyzedNoBarriers": {
+                "summary": "Analyzed alert without numeric barriers",
+                "value": {
+                  "success": true,
+                  "results": [
+                    {
+                      "symbol": "ETHUSDT",
+                      "status": "analyzed",
+                      "alert": {
+                        "symbol": "ETHUSDT",
+                        "eventCategory": "public_figure",
+                        "headline": "Vitalik discusses scaling roadmap",
+                        "sentimentScore": 0.3,
+                        "confidence": 0.6,
+                        "sources": [
+                          "https://example.com/eth-news"
+                        ],
+                        "formattedMessage": "ETHUSDT public_figure event (confidence 0.6).",
+                        "timestamp": 1724745600000
+                      },
+                      "deliveryResults": [],
+                      "cached": false,
+                      "requestId": "req-nobarriers456"
+                    }
+                  ],
+                  "summary": {
+                    "total": 1,
+                    "analyzed": 1,
+                    "cached": 0,
+                    "timeout": 0,
+                    "error": 0,
+                    "quota_exhausted": 0,
+                    "alerts_sent": 0
+                  },
+                  "requestedChannels": [
+                    "telegram"
+                  ],
+                  "deliveredChannels": [],
+                  "totalDurationMs": 720,
+                  "requestId": "req-nobarriers456"
                 }
               }
             }
@@ -5254,7 +5382,8 @@
                     "lastStateChangeAt": null,
                     "failureThreshold": 5,
                     "cooldownMs": 600000
-                  }
+                  },
+                  "toolMetrics": {}
                 },
                 "equityMarketData": {
                   "provider": null,
@@ -5609,6 +5738,85 @@
       }
     },
     "schemas": {
+"PublicStatus": {
+        "type": "object",
+        "description": "Public, unauthenticated service status snapshot. Intentionally omits credentials, configuration details, per-channel counters, feature flags, and operator identifiers.",
+        "required": ["service", "status", "channels", "dependencies"],
+        "properties": {
+          "service": { "$ref": "#/components/schemas/PublicStatusService" },
+          "status": { "$ref": "#/components/schemas/PublicStatusBody" },
+          "channels": { "$ref": "#/components/schemas/PublicStatusChannels" },
+          "dependencies": { "$ref": "#/components/schemas/PublicStatusDependencies" }
+        }
+      },
+"PublicStatusBody": {
+        "type": "object",
+        "description": "Process lifecycle signal reported in the public snapshot.",
+        "required": ["ok", "uptimeSeconds", "lastUpdated", "shuttingDown"],
+        "properties": {
+          "ok": { "type": "boolean" },
+          "uptimeSeconds": { "type": "integer", "minimum": 0 },
+          "lastUpdated": { "type": "string", "format": "date-time" },
+          "shuttingDown": { "type": "boolean" }
+        }
+      },
+"PublicStatusChannels": {
+        "type": "object",
+        "description": "Notification channels currently enabled and ready. Order is not significant.",
+        "required": ["enabled"],
+        "properties": {
+          "enabled": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["telegram", "whatsapp", "discord"]
+            }
+          }
+        }
+      },
+"PublicStatusDependencies": {
+        "type": "object",
+        "description": "Subset of dependency readiness flags safe for public, unauthenticated consumption.",
+        "required": ["gemini", "tradingview", "firestore"],
+        "properties": {
+          "gemini": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" },
+          "tradingview": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" },
+          "firestore": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" }
+        }
+      },
+"PublicStatusDependencyFlag": {
+        "type": "object",
+        "description": "Boolean readiness flag for a single dependency in the public, unauthenticated status snapshot. No credentials, configuration details, or provider metadata are exposed.",
+        "required": ["ready"],
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "description": "True when the dependency is enabled, configured, and currently ready."
+          }
+        }
+      },
+"PublicStatusNotReady": {
+        "type": "object",
+        "description": "Returned with HTTP 503 when the public snapshot cannot be served because the process is still bootstrapping or shutting down.",
+        "required": ["service", "status", "channels", "dependencies", "error", "code"],
+        "properties": {
+          "service": { "$ref": "#/components/schemas/PublicStatusService" },
+          "status": { "$ref": "#/components/schemas/PublicStatusBody" },
+          "channels": { "$ref": "#/components/schemas/PublicStatusChannels" },
+          "dependencies": { "$ref": "#/components/schemas/PublicStatusDependencies" },
+          "error": { "type": "string" },
+          "code": { "type": "string", "enum": ["SERVICE_NOT_READY"] }
+        }
+      },
+"PublicStatusService": {
+        "type": "object",
+        "description": "Service identity exposed in the public snapshot. Build commit and environment are intentionally omitted.",
+        "required": ["name", "version"],
+        "properties": {
+          "name": { "type": "string" },
+          "version": { "type": ["string", "null"] }
+        }
+      },
       "JsonObject": {
         "type": "object",
         "additionalProperties": true
@@ -8773,7 +8981,7 @@
           "results": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/JsonObject"
+              "$ref": "#/components/schemas/NewsMonitorResult"
             }
           },
           "summary": {
@@ -8847,6 +9055,151 @@
                 "description": "Timestamp when the current sliding window resets."
               }
             }
+          }
+        }
+      },
+      "NewsMonitorResult": {
+        "type": "object",
+        "description": "Per-symbol news-monitor analysis result. The optional `alert` object carries the risk-barrier fields (`stop`, `target`) whenever a finite, on-side-of-entry barrier is available from market context or `deriveBarriers()`.",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "analyzed",
+              "cached",
+              "timeout",
+              "error"
+            ]
+          },
+          "alert": {
+            "$ref": "#/components/schemas/NewsAlert"
+          },
+          "deliveryResults": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryResult"
+            }
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "originalError": {
+                "type": "string"
+              }
+            }
+          },
+          "totalDurationMs": {
+            "type": "integer"
+          },
+          "cached": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        }
+      },
+      "NewsAlert": {
+        "type": "object",
+        "description": "Structured news alert payload returned by `/api/news-monitor`. Optional numeric `stop` and `target` risk barriers are present whenever a finite, on-side-of-entry value is available from market context or `deriveBarriers()`; otherwise they are omitted.",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "eventCategory": {
+            "type": "string",
+            "enum": [
+              "price_surge",
+              "price_decline",
+              "public_figure",
+              "regulatory",
+              "none"
+            ]
+          },
+          "headline": {
+            "type": "string"
+          },
+          "sentimentScore": {
+            "type": "number"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "formattedMessage": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "integer"
+          },
+          "marketContext": {
+            "type": "object",
+            "properties": {
+              "price": {
+                "type": "number"
+              },
+              "change24h": {
+                "type": "number"
+              },
+              "volume24h": {
+                "type": "number"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "binance",
+                  "gemini"
+                ]
+              },
+              "timestamp": {
+                "type": "integer"
+              }
+            }
+          },
+          "enrichmentMetadata": {
+            "type": "object",
+            "properties": {
+              "original_confidence": {
+                "type": "number"
+              },
+              "enriched_confidence": {
+                "type": "number"
+              },
+              "enrichment_applied": {
+                "type": "boolean"
+              },
+              "reasoning_excerpt": {
+                "type": "string"
+              },
+              "model_name": {
+                "type": "string"
+              },
+              "processing_time_ms": {
+                "type": "integer"
+              }
+            }
+          },
+          "stop": {
+            "type": "number",
+            "description": "Optional numeric stop barrier in the same units as `marketContext.price`. Populated when market context supplies a stop or `deriveBarriers()` produces a finite, on-side-of-entry value; omitted otherwise."
+          },
+          "target": {
+            "type": "number",
+            "description": "Optional numeric target barrier in the same units as `marketContext.price`. Populated when market context supplies a target or `deriveBarriers()` produces a finite, on-side-of-entry value; omitted otherwise."
           }
         }
       },
@@ -9510,7 +9863,7 @@
       },
       "Status": {
         "type": "object",
-       "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts.",
+       "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations.",
         "properties": {
           "readiness": {
             "$ref": "#/components/schemas/BootstrapReadiness"
@@ -9523,6 +9876,9 @@
           },
           "deliveryChannels": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "notificationChannelIntent": {
+            "$ref": "#/components/schemas/NotificationChannelIntent"
           },
           "deliveryMetrics": {
             "$ref": "#/components/schemas/DeliveryMetrics"
@@ -9649,6 +10005,23 @@
             "description": "Configured cache max age in milliseconds before values are considered stale."
           }
         }
+      },
+      "NotificationChannelIntent": {
+        "type": "object",
+        "description": "Operator-intent view of notification channel configuration, mirroring NotificationChannel.isConfigured(): a channel counts as configured when its enable flag is set AND its required credentials/chat id/webhook are present. A channel with credentials present but its enable flag off is therefore NOT configured, matching the verdict the zero-channel admin page reaches because both call the same method. This lets an operator answer 'why did I get the zero-channel page?' from the status response alone. Channel names only; no credentials or destinations are exposed.",
+        "properties": {
+          "configured": {
+            "type": "array",
+            "description": "Channel names the operator configured, regardless of runtime readiness.",
+            "items": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] }
+          },
+          "unconfigured": {
+            "type": "array",
+            "description": "Channel names the operator never configured (missing credentials, webhook URL, or chat id).",
+            "items": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] }
+          }
+        },
+        "additionalProperties": false
       },
       "NotificationRedriveDependency": {
         "type": "object",
