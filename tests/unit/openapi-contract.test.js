@@ -10,12 +10,25 @@ function normalizeExpressPath(routePath) {
 }
 
 function getMountedApiOperations() {
-	return getRoutes(null).stack
+	const routerOperations = getRoutes(null).stack
 		.filter((layer) => layer.route)
 		.flatMap((layer) => Object.keys(layer.route.methods)
 			.filter((method) => layer.route.methods[method])
-			.map((method) => `${method.toUpperCase()} ${normalizeExpressPath(layer.route.path)}`))
-		.sort();
+			.map((method) => `${method.toUpperCase()} ${normalizeExpressPath(layer.route.path)}`));
+
+	const app = require('../../app');
+	const appOperations = [];
+	for (const layer of app._router.stack) {
+		if (!layer.route) continue;
+		for (const method of Object.keys(layer.route.methods)) {
+			if (!layer.route.methods[method]) continue;
+			const routePath = layer.route.path;
+			if (!routePath.startsWith('/api/')) continue;
+			appOperations.push(`${method.toUpperCase()} ${routePath}`);
+		}
+	}
+
+	return [...routerOperations, ...appOperations].sort();
 }
 
 function getDocumentedApiOperations(contract) {
@@ -101,10 +114,19 @@ describe('OpenAPI contract', () => {
 			'GET /api/news-monitor/summary', 'GET /api/news-monitor/analyses',
 			'POST /api/admin/test-alert', 'GET /api/admin/events',
 			'GET /api/preferences/{channel}/{chatId}', 'PUT /api/preferences/{channel}/{chatId}', 'DELETE /api/preferences/{channel}/{chatId}',
+			'GET /api/selftest', 'POST /api/selftest/run',
+		]);
+
+		const unauthenticatedOperations = new Set([
+			'GET /api/public/status',
 		]);
 
 		for (const operation of operations) {
 			const operationKey = `${operation.method || 'UNKNOWN'} ${operation.path || ''}`;
+			if (unauthenticatedOperations.has(operationKey)) {
+				expect(operation.security).toBeUndefined();
+				continue;
+			}
 			const expected = [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
 			if (firebaseAdminOperations.has(operationKey)) expected.push({ FirebaseBearerAuth: [] });
 			expect(operation.security).toEqual(expected);
@@ -143,6 +165,8 @@ describe('OpenAPI contract', () => {
 			'GET /api/preferences/{channel}/{chatId}': 'admin.viewer',
 			'PUT /api/preferences/{channel}/{chatId}': 'admin.operator',
 			'DELETE /api/preferences/{channel}/{chatId}': 'admin.operator',
+			'GET /api/selftest': 'admin.viewer',
+			'POST /api/selftest/run': 'admin.operator',
 		};
 
 		for (const [key, role] of Object.entries(expectedRoles)) {
@@ -207,6 +231,7 @@ describe('OpenAPI contract', () => {
 			{ $ref: '#/components/parameters/IdempotencyKeyHeader' },
 			{ $ref: '#/components/parameters/IdempotencyKeyQueryCamel' },
 			{ $ref: '#/components/parameters/IdempotencyKeyQuerySnake' },
+			{ $ref: '#/components/parameters/XRequestIdHeader' },
 		]));
 		expect(operation.responses['200']).toEqual({
 			$ref: '#/components/responses/MessageDeliveryResult',
@@ -218,6 +243,10 @@ describe('OpenAPI contract', () => {
 		expect(contract.components.schemas.MessageRequest.properties.idempotency_key).toBeDefined();
 		expect(contract.components.responses.MessageDeliveryResult.content['application/json'].examples.replay.value)
 			.toMatchObject({ success: true, idempotencyReplayed: true });
+		expect(contract.components.responses.MessageDeliveryResult.content['application/json'].examples.replay.value.requestId)
+			.toEqual(expect.any(String));
+		expect(contract.components.responses.MessageDeliveryResult.content['application/json'].examples.success.value.requestId)
+			.toEqual(expect.any(String));
 		expect(contract.components.responses.IdempotencyConflict.description)
 			.toBe('The idempotency key was reused with a different request fingerprint');
 		expect(contract.components.responses.MessageIdempotencyConflict.content['application/json'].example).toEqual({
@@ -497,6 +526,45 @@ describe('OpenAPI contract', () => {
 			expect(statusExample.dependencies.tokenCostBudget).toBeDefined();
 			expect(statusExample.dependencies.tokenCostBudget.budgetUsd).toBe(5);
 			expect(statusExample.featureFlags.tokenCostBudget).toBe(false);
+		});
+	});
+
+	describe('news-monitor alert barrier fields (GH-712)', () => {
+		it('types results[].alert as a structured NewsAlert schema with optional stop/target', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const newsMonitorResponse = contract.components.schemas.NewsMonitorResponse;
+			const resultItemSchema = newsMonitorResponse.properties.results.items;
+			expect(resultItemSchema.$ref).toBe('#/components/schemas/NewsMonitorResult');
+
+			const resultSchema = contract.components.schemas.NewsMonitorResult;
+			expect(resultSchema.properties.alert.$ref).toBe('#/components/schemas/NewsAlert');
+
+			const newsAlert = contract.components.schemas.NewsAlert;
+			expect(newsAlert.properties.stop).toEqual(expect.objectContaining({ type: 'number' }));
+			expect(newsAlert.properties.target).toEqual(expect.objectContaining({ type: 'number' }));
+			expect(newsAlert.required).not.toEqual(expect.arrayContaining(['stop', 'target']));
+		});
+
+		it('includes a populated stop/target example and a no-barrier example for the news-monitor response', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const response = contract.components.responses.NewsMonitorAnalysisResult;
+			const examples = response.content['application/json'].examples;
+			expect(examples.dryRun).toBeDefined();
+			expect(examples.analyzedNoBarriers).toBeDefined();
+
+			const dryRunAlert = examples.dryRun.value.results[0].alert;
+			expect(typeof dryRunAlert.stop).toBe('number');
+			expect(typeof dryRunAlert.target).toBe('number');
+			expect(dryRunAlert.stop).toBeGreaterThan(0);
+			expect(dryRunAlert.target).toBeGreaterThan(dryRunAlert.stop);
+
+			const noBarriersAlert = examples.analyzedNoBarriers.value.results[0].alert;
+			expect(noBarriersAlert.stop).toBeUndefined();
+			expect(noBarriersAlert.target).toBeUndefined();
 		});
 	});
 });

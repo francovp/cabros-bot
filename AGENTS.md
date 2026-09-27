@@ -1729,3 +1729,10 @@ The `/admin` console provides a dedicated read-only **Orders** view consuming `G
 **Coverage**:
 - `tests/unit/admin-client.test.js` covers recent orders list, single order lookup, identifier validation, DOM sanitization, request invalidation, and environment badges.
 
+## 🎓 Trainee Learning Loop (virgin-trainee-dev)
+
+The `virgin-trainee-dev` is in active training. To ensure it evolves and doesn't repeat mistakes:
+
+- **Mandatory Logging**: Whenever `virgin-trainee-dev` receives a correction, negative feedback, or a "No" from @francovp or @gigachad-senior-dev, it **MUST** immediately use the `self-improvement` skill.
+- **Target**: Log the event as a `correction` or `knowledge_gap` in `.learnings/LEARNINGS.md`.
+- **Goal**: Convert human feedback into durable prompt guidance to stop asking the same "trainee" questions and improve technical output.

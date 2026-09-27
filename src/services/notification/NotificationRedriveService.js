@@ -546,7 +546,7 @@ class NotificationRedriveService {
 					const write = firestore.collection(COLLECTION_NAME).doc(recordId)
 						.set(sanitizedRecord, { merge: true });
 					const writeOutcome = write.then(() => 'persisted', (error) => {
-							console.warn(`[NotificationRedriveService] Failed to persist dead-letter ${recordId} in Firestore, kept in-memory:`, error.message);
+							console.warn('[NotificationRedriveService] Failed to persist dead-letter %s in Firestore, kept in-memory:', recordId, error.message);
 							return 'failed';
 						});
 					const persisted = await Promise.race([
@@ -576,11 +576,11 @@ class NotificationRedriveService {
 								releaseRepeatCooldown(record);
 							}
 						})).catch((error) => {
-							console.warn(`[NotificationRedriveService] Failed to terminalize late dead-letter ${recordId}:`, error.message);
+							console.warn('[NotificationRedriveService] Failed to terminalize late dead-letter %s:', recordId, error.message);
 						});
 					}
 				} catch (error) {
-					console.warn(`[NotificationRedriveService] Failed to persist dead-letter ${recordId} in Firestore, kept in-memory:`, error.message);
+					console.warn('[NotificationRedriveService] Failed to persist dead-letter %s in Firestore, kept in-memory:', recordId, error.message);
 					if (this.getWorkerRole() !== 'web') {
 						releaseRepeatCooldown(record);
 					}
@@ -708,7 +708,7 @@ class NotificationRedriveService {
 				}
 				return null;
 			} catch (error) {
-				console.warn(`[NotificationRedriveService] Transaction claim failed for ${record.id}:`, error.message);
+				console.warn('[NotificationRedriveService] Transaction claim failed for %s:', record.id, error.message);
 			}
 		}
 
@@ -757,7 +757,7 @@ class NotificationRedriveService {
 		if (firestore) {
 			try {
 				const writePromise = firestore.collection(COLLECTION_NAME).doc(recordId).set(sanitized, { merge: true }).then(() => true, (error) => {
-					console.warn(`[NotificationRedriveService] Failed to mark dead-letter ${recordId} terminal (${status}):`, error.message);
+					console.warn('[NotificationRedriveService] Failed to mark dead-letter %s terminal (%s):', recordId, status, error.message);
 					return false;
 				});
 				if (Number.isFinite(deadline)) {
@@ -773,7 +773,7 @@ class NotificationRedriveService {
 				}
 				return persisted;
 			} catch (error) {
-				console.warn(`[NotificationRedriveService] Failed to mark dead-letter ${recordId} terminal (${status}):`, error.message);
+				console.warn('[NotificationRedriveService] Failed to mark dead-letter %s terminal (%s):', recordId, status, error.message);
 				return false;
 			}
 		}
@@ -811,7 +811,7 @@ class NotificationRedriveService {
 				await firestore.collection(COLLECTION_NAME).doc(recordId).set(sanitized, { merge: true });
 				this._adjustPendingCount(previousStatus, sanitized.status);
 			} catch (error) {
-				console.warn(`[NotificationRedriveService] Failed to update retry for ${recordId}:`, error.message);
+				console.warn('[NotificationRedriveService] Failed to update retry for %s:', recordId, error.message);
 			}
 			return;
 		}
@@ -1066,7 +1066,7 @@ class NotificationRedriveService {
 				});
 				const persisted = await resolveBeforeDeadline(write, deadline);
 				if (persisted === null) {
-					console.warn(`[NotificationRedriveService] Timed out persisting repeat supersession for ${channel}`);
+					console.warn('[NotificationRedriveService] Timed out persisting repeat supersession for %s', channel);
 				}
 			}));
 		}
@@ -1365,7 +1365,7 @@ class NotificationRedriveService {
 						}
 					}
 				} catch (error) {
-					console.error(`[NotificationRedriveService] Unexpected redrive dispatch error for ${claimed.id}:`, error.message);
+					console.error('[NotificationRedriveService] Unexpected redrive dispatch error for %s:', claimed.id, error.message);
 					const nextAttempts = (claimed.attemptCount || 0) + 1;
 					if (nextAttempts >= maxAttempts) {
 						releaseRepeatCooldown(claimed);
