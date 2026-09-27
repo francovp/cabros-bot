@@ -41,7 +41,7 @@ jobs:
         distribution: temurin
         java-version: '21'
     - name: Cache Firebase emulator binaries
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.cache/firebase/emulators
         key: firebase-tools-15.25.1-${{ runner.os }}
