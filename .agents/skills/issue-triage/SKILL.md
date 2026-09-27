@@ -35,8 +35,10 @@ Choose the highest applicable category. Do not treat a speculative profit claim 
 
 When more than five eligible issues remain after the live eligibility and deduplication checks, use the repository-local `bulk-classify` skill as a recall-biased prefilter. For five or fewer issues, classify them directly.
 
+- Before sending issue text to the external service, verify the target repository's visibility with `gh repo view "$repo_name" --json visibility --jq .visibility`. Use the classifier automatically only for public repositories. For private or unknown visibility, classify locally unless the user explicitly approves sending the specific inputs; with approval, redact credentials and sensitive operational details first. Redact any secrets even when the repository is public.
 - Send one input per issue to `https://classifier.dev` with the title, body, and existing labels. Keep the issue number outside the text and zip results to the original input order. Cap each input at the API's 32,000-character limit.
 - Use the JSON POST API, `tier: "fast"`, a real `User-Agent`, and these semantic labels: `direct trading outcome`, `trader usability`, `timely delivery performance`, `security hardening`, `build and deployment tooling`, `developer experience`, `other bot improvement`, and `manual review`.
+- Set a 30-second request timeout. On timeout, rate limit, network/API error, malformed or incomplete response, or result-count/order mismatch, abandon the prefilter and manually classify every eligible issue. A provider failure must not block triage or cause an issue to be dropped.
 - Include instructions that missing evidence, unclear scope, or an uncertain category must return `manual review`; trading language alone is not ROI evidence; existing `priority/p0` through `priority/p3` labels are severity labels and must not drive this classification.
 - Treat classifier output as ordering context only. A high-confidence result can suggest a category for evidence review; `confidence: null`, confidence below `0.8`, `manual review`, or any disagreement keeps the issue in full manual review. Never drop an issue or write a GitHub label from classifier output alone.
 - Map only a manually verified result to the numbered label contract above:
@@ -52,7 +54,7 @@ When more than five eligible issues remain after the live eligibility and dedupl
   | `other bot improvement` | `priority/7-other` |
   | `manual review` | no label until evidence review |
 
-  Preserve all existing labels and apply the normal evidence, duplicate, and `agent-working` checks after classification.
+  Preserve existing labels outside the numbered portfolio namespace, including `priority/p*`. Remove any existing `priority/1-*` through `priority/7-*` label before adding the selected label, then apply the normal evidence, duplicate, and `agent-working` checks.
 
 Use the current repository unless the user explicitly supplies another one. Authenticate and identify it before writing:
 
