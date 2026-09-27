@@ -115,6 +115,8 @@ function hashApiKey(apiKey) {
 	// password-hashing guidance does not apply.
 	/* codeql[js/insufficient-password-hash] */
 	const mac = crypto.createHmac('sha256', getFingerprintSecret());
+	// The rule also anchors on the sink where the tainted argument enters the MAC.
+	/* codeql[js/insufficient-password-hash] */
 	return mac.update(String(apiKey)).digest('hex').slice(0, 16);
 }
 
