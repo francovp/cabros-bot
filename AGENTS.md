@@ -63,7 +63,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/lib/rateLimiter.js` — Global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`, with safe defaults for invalid values). Core alert/message webhook ingest uses a separate finite 1,000-request bucket per IP and window.
 - `src/lib/cors.js` — Express CORS middleware configuring explicit origin allowlists (`https://cabros-bot.web.app`, `https://cabros-bot.firebaseapp.com`, `https://cabros-bot-production.up.railway.app`, `http://localhost:*`, and `CORS_ALLOWED_ORIGINS`).
 - `src/openapi/openapi.json` — Canonical OpenAPI 3.1 contract for every mounted `/api` operation.
-- `src/openapi/docs.js` — Public, read-only `/openapi.json` and self-hosted Swagger UI `/docs` routes.
+- `src/openapi/docs.js` — Public, read-only `/openapi.json`, self-hosted Swagger UI `/docs`, and `/admin` console routes (mounted before the rate limiter to exempt documentation and operator UI assets from the global API rate limit).
 
 ### External Integrations
 - **Binance**: Uses `binance` package `MainClient` for prices and the gated Spot order workflow; order execution uses explicit Testnet/demo/live base URLs, raw decimal response values (`beautifyResponses: false`), deterministic client-order reconciliation before current exchange gates, exact request matching (including LIMIT `timeInForce`), order-test validation for dynamic and account-dependent filters, exchange-info filter validation, and one `submitNewOrder` call without automatic retry.
