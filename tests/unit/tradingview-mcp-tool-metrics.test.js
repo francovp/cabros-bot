@@ -193,4 +193,39 @@ describe('TradingViewMcpService toolMetrics', () => {
 		const status = service.getStatus({ enabled: false });
 		expect(status.toolMetrics).toBeUndefined();
 	});
+	it('does not pollute Object.prototype for inherited tool names', () => {
+		service._recordToolSuccess('toString', 100);
+		service._recordToolFailure('constructor', 50, new Error('boom'));
+
+		expect(Object.prototype.toString.callCount).toBeUndefined();
+		expect(Object.prototype.constructor.callCount).toBeUndefined();
+		expect(({}).valueOf.callCount).toBeUndefined();
+
+		const metrics = service.getToolMetrics();
+		expect(metrics.toString.callCount).toBe(1);
+		expect(metrics.toString.successCount).toBe(1);
+		expect(metrics.constructor.failureCount).toBe(1);
+	});
+
+	it('clears lastErrorCategory once the tool recovers', () => {
+		service._recordToolFailure('coin_analysis', 100, new Error('ETIMEDOUT: request timed out'));
+		expect(service.getToolMetrics().coin_analysis.lastErrorCategory).toBe('timeout');
+
+		service._recordToolSuccess('coin_analysis', 100);
+		const metric = service.getToolMetrics().coin_analysis;
+		expect(metric.lastErrorCategory).toBeNull();
+		expect(metric.successCount).toBe(1);
+	});
+
+	it('bounds the toolMetrics map and evicts the least recently called tool', () => {
+		for (let i = 0; i < 60; i += 1) {
+			service._recordToolSuccess(`tool_${i}`, 10);
+		}
+
+		const metrics = service.getToolMetrics();
+		expect(Object.keys(metrics).length).toBeLessThanOrEqual(50);
+		expect(metrics.tool_59).toBeDefined();
+		// the oldest entry is evicted first
+		expect(metrics.tool_0).toBeUndefined();
+	});
 });

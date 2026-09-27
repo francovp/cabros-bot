@@ -12,6 +12,10 @@ const alertStorageService = require('../storage/AlertStorageService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
 const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+// Upper bound on distinct tool names kept in toolMetrics. MCP tools are a fixed,
+// allowlisted set today, so this only guards against a future dynamic tool name
+// growing the map without limit. Least-recently-called entries are evicted.
+const MAX_TRACKED_MCP_TOOLS = 50;
 const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
 const TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID = 'tradingview-mcp';
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = 2000;
@@ -291,8 +295,26 @@ class TradingViewMcpService {
 		return result;
 	}
 
+	_evictToolMetricsIfAtCapacity() {
+		if (Object.keys(this.toolMetrics).length < MAX_TRACKED_MCP_TOOLS) {
+			return;
+		}
+		let oldestTool = null;
+		let oldestCallAt = null;
+		for (const [toolName, metric] of Object.entries(this.toolMetrics)) {
+			if (oldestCallAt === null || (metric.lastCallAt || '') < oldestCallAt) {
+				oldestTool = toolName;
+				oldestCallAt = metric.lastCallAt || '';
+			}
+		}
+		if (oldestTool !== null) {
+			delete this.toolMetrics[oldestTool];
+		}
+	}
+
 	_ensureToolMetric(toolName) {
-		if (!this.toolMetrics[toolName]) {
+		if (!Object.prototype.hasOwnProperty.call(this.toolMetrics, toolName)) {
+			this._evictToolMetricsIfAtCapacity();
 			this.toolMetrics[toolName] = {
 				callCount: 0,
 				successCount: 0,
@@ -314,6 +336,7 @@ class TradingViewMcpService {
 		metric.totalDurationMs += durationMs;
 		metric.averageDurationMs = Math.round(metric.totalDurationMs / metric.callCount);
 		metric.lastCallAt = new Date().toISOString();
+		metric.lastErrorCategory = null;
 	}
 
 	_recordToolFailure(toolName, durationMs, error) {
