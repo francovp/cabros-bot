@@ -127,13 +127,14 @@ A claimed issue is a **zero-work skip**: outcome `CLAIMED`, the issue number is 
 - If two sessions race on the same issue, the earliest claim comment wins; the loser skips the issue without touching it.
 - Claim comments are historical records and are not deleted on release (the label removal is the release signal).
 
-## Railway Deployment & Preview
+## Deployment & Preview
 
-Railway is the current deployment platform (Render is disabled).
+Railway is the primary deployment platform; PRs may also be deployed to other platforms (self-hosted, Tailscale, Fly.io, etc.).
 
 - **Production**: `https://cabros-bot-production.up.railway.app` (master)
-- **PR previews**: `https://cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app` (e.g. PR 359 → `https://cabros-bot-cabros-bot-pr-359.up.railway.app`)
-- Verify health with `scripts/verify-preview.sh <PR_NUMBER>` (or `scripts/verify-preview.sh production` for master). The script checks `/healthcheck` and `/openapi.json` plus any extra endpoints passed as a second argument: `scripts/verify-preview.sh 359 "/healthcheck,/openapi.json,/api/alerts"`.
+- **PR previews**: The live URL is resolved dynamically from the GitHub Deployments API via `scripts/get-pr-deployment-url.sh <PR_NUMBER>`, which returns the `environment_url` of the latest `success`/`active` deployment for the PR. If no GitHub deployment is found, it falls back to the Railway pattern `https://cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app` with a warning.
+- Verify health with `scripts/verify-preview.sh <PR_NUMBER>` (or `scripts/verify-preview.sh production` for master). The script resolves the live URL via `get-pr-deployment-url.sh`, checks `/healthcheck` and `/openapi.json`, plus any extra endpoints passed as a second argument: `scripts/verify-preview.sh 359 "/healthcheck,/openapi.json,/api/alerts"`.
+- Pass an optional `EXPECTED_SHA` as a third argument to detect stale deployments (exit 2 = SHA mismatch → triggers Step 6.5): `scripts/verify-preview.sh 359 "/healthcheck" "$(gh pr view 359 --json headRefOid --jq .headRefOid)"`.
 - If the PR introduces new endpoints, pass them explicitly and verify each returns `200` (or `401/403` for auth-gated endpoints, which proves the service is live).
 - For `GLOBAL_BLOCKED` caused by Railway bounded retry or stale deployment, see Step 6.5 recovery before labeling `need manual PR deploy`.
 - For Firebase Hosting preview `RESOURCE_EXHAUSTED` / channel quota, see Error Handling — it is not a `GLOBAL_BLOCKED` and is fixed locally via `scripts/cleanup-preview-channels.js`.
@@ -229,13 +230,14 @@ Follow these steps in strict chronological order to automate issue resolution:
 
 ### Step 5: Verification & Deploy Check
 1. Ensure the PR meets all criteria in `references/readiness-and-verification.md`.
-2. Retrieve the PR number and run `scripts/verify-preview.sh <PR_NUMBER>` to verify the Railway preview deployment is live and healthy. For PRs that add new endpoints, verify them explicitly:
+2. Retrieve the PR number and run `scripts/verify-preview.sh <PR_NUMBER>` to verify the preview deployment is live and healthy. The script resolves the live URL via `scripts/get-pr-deployment-url.sh` (GitHub Deployments API, Railway fallback). Capture the expected SHA for staleness detection and pass it as a third argument. For PRs that add new endpoints, verify them explicitly:
    ```bash
-   scripts/verify-preview.sh <PR_NUMBER> "/healthcheck,/openapi.json,/api/your-new-endpoint"
+   EXPECTED_SHA="$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)"
+   scripts/verify-preview.sh "$PR_NUMBER" "/healthcheck,/openapi.json,/api/your-new-endpoint" "$EXPECTED_SHA"
    # production:
    scripts/verify-preview.sh production "/healthcheck,/openapi.json"
    ```
-   The script checks Railway URLs `https://cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app` and production `https://cabros-bot-production.up.railway.app`. A `401/403` on auth-gated endpoints counts as live (service is up, auth is required).
+   A `401/403` on auth-gated endpoints counts as live (service is up, auth is required). Exit code `2` from `verify-preview.sh` signals a stale deploy (SHA mismatch) — route to Step 6.5 recovery.
 3. **Run the PR discussion loop after every PR creation or update**:
    - Take a baseline snapshot of paginated GraphQL `reviewThreads` (thread ID, creation time, author, resolved/outdated state, and each thread comment ID plus `createdAt`/`updatedAt`) and paginated top-level PR conversation comments (comment ID, creation time, author, and body), then record the current head SHA. Paginate thread comments as well as threads; flat comments alone are not sufficient for inline thread state, but top-level conversation comments must also be tracked.
    - Before starting the quiet window, triage every unresolved thread in the baseline snapshot, including threads already present on an existing PR. Baseline status never exempts a thread from being addressed.
@@ -292,12 +294,12 @@ Never remove the label when this session does not own the claim for this run. Th
 - **Re-check ownership immediately before every consequential write**, especially PR creation/update, `@codex review` re-trigger, handoff, and merge. Re-run `scripts/claim-issue.sh <ISSUE_NUMBER>` with the same session identity; only proceed with the write on `RESULT=CLAIMED`/`RESULT=TAKEOVER` (exit `0`). A `RESULT=SKIP` (exit `2`) means another session now owns a fresh claim — stop writing to this issue/PR and treat it as claimed-elsewhere. A `RESULT=ERROR` (exit `1`) is a tooling failure to handle per Error Handling, and must not be treated as ownership.
 - If the run is about to do no more writes, the periodic renewal also serves as the final reconfirmation before any label removal.
 
-#### Step 6.5: Railway stale-deploy / bounded-retry recovery (GLOBAL_BLOCKED with Railway cause)
+#### Step 6.5: Stale-deploy / bounded-retry recovery (GLOBAL_BLOCKED with deployment cause)
 
-If the issue/PR carries `GLOBAL_BLOCKED` **caused by a Railway bounded retry (`429`/`rate-limit`) or an outdated Railway deployment where the preview commit is not the PR head**, do NOT immediately treat it as a permanent skip:
+If the issue/PR carries `GLOBAL_BLOCKED` **caused by a bounded retry (`429`/`rate-limit`) or an outdated deployment where the preview commit is not the PR head** (detected via `verify-preview.sh` exit code `2` or manual SHA comparison), do NOT immediately treat it as a permanent skip:
 
 1. **Attempt recovery** (bounded, one try):
-   - Check if the PR branch is behind `master`: `gh pr view <N> --json baseRefName,headRefOid` and `git fetch origin master && git merge-base --is-ancestor HEAD origin/master`. If behind, update the branch: `git fetch origin master && git merge origin/master` (or `gh pr update-branch` / `gh api repos/francovp/cabros-bot/pulls/<N>/update-branch -X PUT`), push, then wait for Railway to start a new deployment.
+   - Check if the PR branch is behind `master`: `gh pr view <N> --json baseRefName,headRefOid` and `git fetch origin master && git merge-base --is-ancestor HEAD origin/master`. If behind, update the branch: `git fetch origin master && git merge origin/master` (or `gh pr update-branch` / `gh api repos/francovp/cabros-bot/pulls/<N>/update-branch -X PUT`), push, then wait for the CD platform to start a new deployment.
    - Otherwise, trigger a Railway deploy from the branch: `railway up --detach` (if `railway` CLI is authenticated via `RAILWAY_TOKEN`) or `railway redeploy` / Railway API `POST https://backboard.railway.app/graphql/v2` with the service. Poll deployment status with `railway status` or via `scripts/verify-preview.sh <PR_NUMBER>` until healthy (max 5 minutes, 30s interval).
 2. **Re-verify**: Run `scripts/verify-preview.sh <PR_NUMBER>` (and any new endpoints). If it now succeeds (HTTP 200 on `/healthcheck`), the blocker is resolved: remove `GLOBAL_BLOCKED` and `need manual PR deploy` labels from the issue and PR:
    ```bash

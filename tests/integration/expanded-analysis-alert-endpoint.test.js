@@ -87,6 +87,9 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 			.expect(200);
 
 		expect(res.body.success).toBe(true);
+		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
+		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.alertText).toContain('*🟡 NEUTROS*');
 		expect(res.body.summary).toEqual({
 			total: 1,
@@ -105,6 +108,7 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		}));
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
 		expect(mockTelegramSendMessage.mock.calls[0][1]).toContain('ANÁLISIS AMPLIADO');
+		expect(signalOutcomeService.recordSignal.mock.calls[0][0].priceSource).toBe('tradingview-mcp');
 	});
 
 	it('records SELL expanded-analysis signals with side-correct stop and target barriers', async () => {
@@ -225,6 +229,9 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 			timedOut: true,
 			timeoutMs: 5,
 		}));
+		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
+		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.results).toEqual([
 			expect.objectContaining({
 				symbol: 'NASDAQ:NVDA',
@@ -580,5 +587,36 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 			timeframe: '1D',
 			analysisMode: 'combined',
 		}));
+	});
+
+	it('supports dryRun query parameter and returns processingTimeMs without delivery', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			symbol: 'NASDAQ:NVDA',
+			price_data: {
+				current_price: 219.51,
+				change_percent: -1.8,
+				volume: 70213090,
+			},
+			technical_indicators: {
+				rsi: 57.8,
+				sma20: 214.1,
+				macd: 6.1,
+				macd_signal: 7.2,
+				atr: 7.69,
+			},
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert?dryRun=true')
+			.set('x-api-key', 'test-key')
+			.send({ symbols: ['NASDAQ:NVDA'], timeframe: '1D' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.dryRun).toBe(true);
+		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
+		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		expect(res.body).not.toHaveProperty('totalDurationMs');
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 });
