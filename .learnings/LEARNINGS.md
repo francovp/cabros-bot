@@ -166,6 +166,7 @@ Test suite execution silently reverts source-built divergence in `public/admin/a
 2. Add post-copy verification in `build:hosting` to fail loudly when `src` and `public` diverge on content it didn't write.
 3. Consider making `public/admin/*` generated-and-gitignored; serve artifact built in CI.
 4. Same risk applies to `CabrosBot.postman_collection.json` and its test — stale branch produced result differing from both sides.
+5. Codify the Clean Worktree Test Invariant in `AGENTS.md` and review rubrics so all tests are mandated to leave `git status --porcelain` completely clean.
 
 ### Metadata
 - Source: user_feedback
@@ -391,6 +392,7 @@ Root cause: Engagement scripts triggered on schedule without fetching and semant
 1. Before posting PR comments or questions, fetch full thread history and verify that the intended question or topic has not already been answered or addressed by repository maintainers.
 2. Suppress generic keyword-triggered responses; require actual technical context or remain silent (`HEARTBEAT_OK`).
 3. Adhere to the established deduplication lifecycle (updating existing learnings in place via recurrence annotations rather than generating duplicate entries).
+4. Perform automated pre-flight checks: inspect `issues/{id}/comments` and `reviewThreads` for prior bot engagement, and check for duplicate/superseded PR links to avoid commenting on redundant work.
 
 ### Metadata
 - Source: pr_review
