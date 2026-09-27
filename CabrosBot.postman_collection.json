@@ -6295,7 +6295,7 @@
           ]
         },
         {
-          "name": "GET Summarize Signal Outcomes (invalid parameters)",
+          "name": "GET Summarize Signal Outcomes (invalid limit)",
           "request": {
             "method": "GET",
             "header": [
@@ -6305,7 +6305,7 @@
                 "type": "text"
               }
             ],
-            "description": "Example of 400 INVALID_REQUEST response when passing invalid limit, status, window, or dates to summarize outcomes.",
+            "description": "Example of 400 INVALID_REQUEST response when passing invalid limit to summarize outcomes.",
             "url": {
               "raw": "{{baseUrl}}/api/outcomes/summary?limit=200",
               "host": [
@@ -6330,6 +6330,205 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (invalid status)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing an invalid status filter to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?status=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "invalid"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Status",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid status filter. Use pending, evaluated, or unavailable.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (invalid window)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing an invalid window filter to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?window=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "window",
+                  "value": "invalid"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Window",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid window filter. Use 1h, 4h, 1D, or 1W.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (malformed from timestamp)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing a malformed from timestamp to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?from=not-a-date",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "not-a-date"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid From Timestamp",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid from timestamp. Use an ISO-8601 timestamp.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (malformed to timestamp)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing a malformed to timestamp to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?to=not-a-date",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "to",
+                  "value": "not-a-date"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid To Timestamp",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid to timestamp. Use an ISO-8601 timestamp.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (reversed time range)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when from timestamp is later than to timestamp.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?from=2026-08-30T00:00:00.000Z&to=2026-08-01T00:00:00.000Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-08-30T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-01T00:00:00.000Z"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Time Window",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid time window. from must be before or equal to to.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
