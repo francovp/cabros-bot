@@ -415,7 +415,7 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
 	});
 
-	it('documents notificationRedrive in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
+	it('documents notificationRedrive and zeroChannelBroadcasts in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');
 		const capabilities = findItem(collection.item, 'Get Capabilities');
@@ -427,6 +427,7 @@ describe('Postman collection contract', () => {
 			role: 'web',
 			workerRole: 'web',
 			maxAgeMs: 3600000,
+			zeroChannelBroadcasts: 0,
 			lastSweepAt: null,
 			lastSweepResult: null,
 		}));
@@ -438,6 +439,7 @@ describe('Postman collection contract', () => {
 			role: 'web',
 			workerRole: 'web',
 			maxAgeMs: 3600000,
+			zeroChannelBroadcasts: 0,
 			lastSweepAt: null,
 			lastSweepResult: null,
 		}));
@@ -496,50 +498,62 @@ describe('Postman collection contract', () => {
 		expect(invalidLimit).toBeDefined();
 		expect(invalidLimit.request.url.raw).toContain('limit=200');
 		expect(invalidLimit.response[0].code).toBe(400);
-		expect(JSON.parse(invalidLimit.response[0].body)).toEqual({
-			error: 'Invalid limit. Use an integer between 1 and 100.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(invalidLimit.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid limit. Use an integer between 1 and 100.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(invalidStatus).toBeDefined();
 		expect(invalidStatus.request.url.raw).toContain('status=invalid');
 		expect(invalidStatus.response[0].code).toBe(400);
-		expect(JSON.parse(invalidStatus.response[0].body)).toEqual({
-			error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(invalidStatus.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(invalidWindow).toBeDefined();
 		expect(invalidWindow.request.url.raw).toContain('window=invalid');
 		expect(invalidWindow.response[0].code).toBe(400);
-		expect(JSON.parse(invalidWindow.response[0].body)).toEqual({
-			error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(invalidWindow.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(malformedFrom).toBeDefined();
 		expect(malformedFrom.request.url.raw).toContain('from=not-a-date');
 		expect(malformedFrom.response[0].code).toBe(400);
-		expect(JSON.parse(malformedFrom.response[0].body)).toEqual({
-			error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(malformedFrom.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(malformedTo).toBeDefined();
 		expect(malformedTo.request.url.raw).toContain('to=not-a-date');
 		expect(malformedTo.response[0].code).toBe(400);
-		expect(JSON.parse(malformedTo.response[0].body)).toEqual({
-			error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(malformedTo.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(reversedRange).toBeDefined();
 		expect(reversedRange.request.url.raw).toContain('from=2026-08-30T00:00:00.000Z&to=2026-08-01T00:00:00.000Z');
 		expect(reversedRange.response[0].code).toBe(400);
-		expect(JSON.parse(reversedRange.response[0].body)).toEqual({
-			error: 'Invalid time window. from must be before or equal to to.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(reversedRange.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid time window. from must be before or equal to to.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		[invalidLimit, invalidStatus, invalidWindow, malformedFrom, malformedTo, reversedRange].forEach((item) => {
 			expect(item.event).toBeDefined();
@@ -552,3 +566,44 @@ describe('Postman collection contract', () => {
 	});
 });
 
+describe('news-monitor stop/target example (GH-712)', () => {
+		it('POST News Monitor success example includes a populated stop/target alert', () => {
+			const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+			const postItem = findItem(collection.item, 'POST News Monitor');
+			expect(postItem).toBeDefined();
+
+			const successExample = postItem.response.find(
+				(response) => response.name === '200 OK - Analysis summary',
+			);
+			expect(successExample).toBeDefined();
+
+			const body = JSON.parse(successExample.body);
+			const resultsWithBarriers = body.results.filter(
+				(result) => result.alert && typeof result.alert.stop === 'number' && typeof result.alert.target === 'number',
+			);
+			expect(resultsWithBarriers.length).toBeGreaterThanOrEqual(1);
+
+			resultsWithBarriers.forEach((result) => {
+				expect(result.alert.stop).toBeGreaterThan(0);
+				expect(result.alert.target).toBeGreaterThan(result.alert.stop);
+			});
+
+			const resultsWithoutBarriers = body.results.filter(
+				(result) => result.alert && (result.alert.stop === undefined || result.alert.target === undefined),
+			);
+			expect(resultsWithoutBarriers.length).toBeGreaterThanOrEqual(1);
+		});
+
+		it('POST News Monitor (dry run) example includes a populated stop/target alert', () => {
+			const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+			const dryRunItem = findItem(collection.item, 'POST News Monitor (dry run)');
+			expect(dryRunItem).toBeDefined();
+
+			const body = JSON.parse(dryRunItem.response[0].body);
+			const alert = body.results[0].alert;
+			expect(typeof alert.stop).toBe('number');
+			expect(typeof alert.target).toBe('number');
+			expect(alert.stop).toBeGreaterThan(0);
+			expect(alert.target).toBeGreaterThan(alert.stop);
+		});
+	});

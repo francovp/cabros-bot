@@ -2,6 +2,13 @@
 
 const VALID_CHANNELS = ['telegram', 'whatsapp', 'discord'];
 
+// Strict format patterns for chat IDs. These run only when strictChatIds is
+// explicitly enabled so existing operators with ad-hoc strings can opt out.
+const TELEGRAM_CHAT_ID_NUMERIC_PATTERN = /^-?\d{5,20}$/;
+const WHATSAPP_CHAT_ID_PATTERN = /^\d{6,20}@(?:c|g)\.us$/;
+// Characters that may break Telegram MarkdownV2 parsing or carry injection risk.
+const CHAT_ID_FORBIDDEN_CHARS = /[\s<>[\]{}()~`|#^=+]|!/;
+
 class NotificationRoutingValidationError extends Error {
 	constructor(message, details = null) {
 		super(message);
@@ -87,6 +94,51 @@ function validateThreadIdOverride(field, value) {
 	});
 }
 
+function validateTelegramChatId(value) {
+	if (!TELEGRAM_CHAT_ID_NUMERIC_PATTERN.test(value)) {
+		throw new NotificationRoutingValidationError(
+			'"telegramChatId" must be a numeric chat ID (5-20 digits, optional "-" prefix)',
+			{ field: 'telegramChatId' },
+		);
+	}
+}
+
+function validateWhatsAppChatId(value) {
+	if (!WHATSAPP_CHAT_ID_PATTERN.test(value)) {
+		throw new NotificationRoutingValidationError(
+			'"whatsappChatId" must be a GreenAPI chat ID in the format <digits>@<c.us|g.us>',
+			{ field: 'whatsappChatId' },
+		);
+	}
+}
+
+function validateStrictChatOverride(field, value) {
+	if (value === undefined) {
+		return undefined;
+	}
+
+	if (typeof value !== 'string' || value.length === 0) {
+		throw new NotificationRoutingValidationError(`"${field}" must be a non-empty string if provided`, {
+			field,
+		});
+	}
+
+	if (CHAT_ID_FORBIDDEN_CHARS.test(value)) {
+		throw new NotificationRoutingValidationError(
+			`"${field}" contains disallowed characters (whitespace or MarkdownV2 escape-trigger characters)`,
+			{ field },
+		);
+	}
+
+	if (field === 'telegramChatId') {
+		validateTelegramChatId(value);
+	} else if (field === 'whatsappChatId') {
+		validateWhatsAppChatId(value);
+	}
+
+	return value;
+}
+
 function validateChatOverride(field, value) {
 	if (value === undefined) {
 		return undefined;
@@ -151,6 +203,18 @@ function parseNotificationRouting(raw = {}, options = {}) {
 		allowQueryChannels = false,
 	} = options;
 
+	// strictChatIds defaults to false (no behavior change) unless the operator
+	// explicitly opts in via ENABLE_STRICT_CHAT_ID_VALIDATION=true. Callers can
+	// still override the env-derived default with an explicit boolean.
+	let strictChatIds;
+	if (options.strictChatIds !== undefined) {
+		strictChatIds = options.strictChatIds;
+	} else if (typeof process !== 'undefined' && process.env && process.env.ENABLE_STRICT_CHAT_ID_VALIDATION !== undefined) {
+		strictChatIds = process.env.ENABLE_STRICT_CHAT_ID_VALIDATION === 'true';
+	} else {
+		strictChatIds = false;
+	}
+
 	if (!raw || typeof raw !== 'object') {
 		if (requiredChannels) {
 			throw new NotificationRoutingValidationError('Request body must be a JSON object');
@@ -172,14 +236,21 @@ function parseNotificationRouting(raw = {}, options = {}) {
 				? raw.telegram_thread_id
 				: raw.message_thread_id;
 
+	const telegramChatId = strictChatIds
+		? validateStrictChatOverride('telegramChatId', raw.telegramChatId)
+		: validateChatOverride('telegramChatId', raw.telegramChatId);
+	const whatsappChatId = strictChatIds
+		? validateStrictChatOverride('whatsappChatId', raw.whatsappChatId)
+		: validateChatOverride('whatsappChatId', raw.whatsappChatId);
+
 	return {
 		channels: normalizeChannels(raw.channels, {
 			required: requiredChannels,
 			allowCsvString: allowQueryChannels,
 		}),
-		telegramChatId: validateChatOverride('telegramChatId', raw.telegramChatId),
+		telegramChatId,
 		telegramThreadId: validateThreadIdOverride('telegramThreadId', rawThreadId),
-		whatsappChatId: validateChatOverride('whatsappChatId', raw.whatsappChatId),
+		whatsappChatId,
 		discordWebhookUrl: validateDiscordWebhookOverride('discordWebhookUrl', raw.discordWebhookUrl),
 	};
 }
@@ -194,11 +265,40 @@ async function sendWithNotificationRouting(notificationManager, alert, routing =
 	};
 
 	if (routing.channels) {
+		// Late defensive backstop: fail-fast ordering should have already
+		// validated channel availability before any expensive work ran.
+		// This guard remains so a routing change between parse and delivery
+		// (e.g. an operator toggling a feature flag) still produces a 400
+		// instead of a silent failure.
 		validateNotificationRouting(notificationManager, routing);
 		return notificationManager.sendToChannels(alertPayload, routing.channels, options);
 	}
 
 	return notificationManager.sendToAll(alertPayload, options);
+}
+
+/**
+ * Fail-fast channel availability check for callers that have already parsed
+ * routing and want to short-circuit expensive work (enrichment, MCP scans)
+ * before any provider budget is spent on a request that is guaranteed to fail.
+ *
+ * Only validates when `routing.channels` is explicitly set; legacy requests
+ * without `channels` broadcast to all enabled channels and need no
+ * availability check here.
+ *
+ * Throws `NotificationRoutingValidationError` (statusCode 400) when any
+ * requested channel is disabled or misconfigured. The caller is responsible
+ * for translating that into an HTTP 400 response.
+ *
+ * @param {Object|null} notificationManager - NotificationManager instance
+ * @param {Object} routing - Parsed routing object from parseNotificationRouting
+ * @returns {void}
+ */
+function assertChannelsAvailable(notificationManager, routing = {}) {
+	if (!routing || !routing.channels) {
+		return;
+	}
+	validateNotificationRouting(notificationManager, routing);
 }
 
 function validateNotificationRouting(notificationManager, routing = {}) {
@@ -239,6 +339,7 @@ module.exports = {
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
 	validateNotificationRouting,
+	assertChannelsAvailable,
 	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,

@@ -28,6 +28,7 @@ const sentryService = require('../../../../services/monitoring/SentryService');
 const {
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
+	assertChannelsAvailable,
 	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,
@@ -128,10 +129,17 @@ function postPreset(req, res) {
 			});
 		} catch (error) {
 			if (error instanceof MarketScannerRequestError) {
-				return res.status(400).json({
+				const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 400;
+				const body = {
 					error: error.message,
 					code: error.code || 'INVALID_REQUEST',
-				});
+					storage: getStorageMetadata(),
+				};
+				if (error.code === 'NAME_CONFLICT' && error.preset) {
+					body.preset = error.preset;
+					setPresetEtag(res, error.preset);
+				}
+				return res.status(statusCode).json(body);
 			}
 
 			console.error('[ScannerPresets] Create failed:', error.message);
@@ -324,6 +332,10 @@ function updatePreset(req, res) {
 						body.preset = error.preset;
 						setPresetEtag(res, error.preset);
 					}
+				}
+				if (error.code === 'NAME_CONFLICT' && error.preset) {
+					body.preset = error.preset;
+					setPresetEtag(res, error.preset);
 				}
 				return res.status(statusCode).json(body);
 			}
@@ -520,6 +532,20 @@ function postRunPreset(botOrGetter) {
 
 			const timeoutMs = getScannerTimeoutMs();
 			const deadline = createScannerDeadline(timeoutMs, req.requestDeadlineSignal);
+
+			// Fail-fast channel availability check (GH-854): when the caller
+			// explicitly requests channels, validate they are enabled and
+			// configured BEFORE running any MCP scan. Each scan can take up
+			// to ~120s of TradingView MCP budget; spending that on a request
+			// that is guaranteed to fail (disabled channel) wastes quota
+			// and risks 502 timeouts before the validation error surfaces.
+			if (routing.channels) {
+				let presetNotificationManager = getNotificationManager();
+				if (!presetNotificationManager) {
+					presetNotificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+				}
+				assertChannelsAvailable(presetNotificationManager, routing);
+			}
 			let scanResults;
 
 			try {

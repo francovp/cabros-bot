@@ -150,6 +150,37 @@ Before engaging on a PR, check if it's already marked as duplicate or superseded
 
 ## [LRN-20260927-001] correction
 
+**Logged**: 2026-09-27T04:15:00Z
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+Test suite execution silently reverts source-built divergence in `public/admin/admin.js` — test imports build script and mutates working tree.
+
+### Details
+@francovp corrected on issue #1201: The test `tests/unit/firebase-hosting-config.test.js` imports `scripts/build-hosting.js` and calls `buildHosting()`, which blindly copies `src/admin/*` → `public/admin/*`. Any `pnpm test` run executes this copy, silently overwriting fixes in `public/admin/admin.js` that don't exist in source. The revert manifests as `MM` status (staged ≠ unstaged). Two divergent copies exist: `public` has `handshakeTimeoutMs`/`handshakeTimer` SSE guard (7 occurrences), `src` lacks it entirely. Regenerating from source deletes the fix.
+
+### Suggested Action
+1. Make test **not** mutate working tree — assert against temp output dir or restore files after asserting.
+2. Add post-copy verification in `build:hosting` to fail loudly when `src` and `public` diverge on content it didn't write.
+3. Consider making `public/admin/*` generated-and-gitignored; serve artifact built in CI.
+4. Same risk applies to `CabrosBot.postman_collection.json` and its test — stale branch produced result differing from both sides.
+
+### Metadata
+- Source: user_feedback
+- Related Files: tests/unit/firebase-hosting-config.test.js, scripts/build-hosting.js, public/admin/admin.js, src/admin/admin.js
+- Tags: test-hygiene, build-reproducibility, silent-revert, firebase-hosting
+- See Also: LRN-20260920-002
+- Pattern-Key: harden.test_no_worktree_mutation
+- Recurrence-Count: 1
+- First-Seen: 2026-09-27
+- Last-Seen: 2026-09-27
+
+---
+
+## [LRN-20260927-002] correction
+
 **Logged**: 2026-09-27T01:00:00Z
 **Priority**: high
 **Status**: pending
@@ -180,7 +211,7 @@ Root cause: Relying on JavaScript's permissive `Number.parseInt` coercion instea
 
 ---
 
-## [LRN-20260927-002] correction
+## [LRN-20260927-003] correction
 
 **Logged**: 2026-09-27T01:05:00Z
 **Priority**: high
@@ -204,7 +235,7 @@ Root cause: Conflating `null` (explicit invalid type) with `undefined` (omitted 
 - Source: pr_review
 - Related Files: src/lib/validation.js, src/openapi/openapi.json
 - Tags: api-contract, enums, schema-validation, null-safety, defensive-deserialization
-- See Also: LRN-20260927-001
+- See Also: LRN-20260927-002
 - Pattern-Key: harden.closed_enum_null_rejection
 - Recurrence-Count: 1
 - First-Seen: 2026-09-27
@@ -212,7 +243,7 @@ Root cause: Conflating `null` (explicit invalid type) with `undefined` (omitted 
 
 ---
 
-## [LRN-20260927-003] correction
+## [LRN-20260927-004] correction
 
 **Logged**: 2026-09-27T01:10:00Z
 **Priority**: medium
@@ -220,7 +251,7 @@ Root cause: Conflating `null` (explicit invalid type) with `undefined` (omitted 
 **Area**: docs
 
 ### Summary
-Introducing or altering Remote Config toggles requires atomic 4-way documentation parity across environment templates, schema definitions, operator guides, and agent guidelines.
+Introducing or altering Remote-Config-eligible, non-secret configuration toggles requires atomic 4-way documentation parity across environment templates, schema definitions, operator guides, and agent guidelines.
 
 ### Details
 Across PR #1189 (feat(cost): aggregate token spend tracking and budget alerting), PR #1190 (feat(ops): maintenance mode toggle for incident response), and PR #1193 (feat(webhooks): classify alerts with signalClass enum), newly introduced configuration toggles (`ENABLE_TOKEN_COST_BUDGET`, `ENABLE_SIGNAL_CLASS_MARKER`, maintenance toggles) were added to code and Firebase Remote Config templates, but omitted from `README.md` allow-lists or `AGENTS.md`. Additionally, in PR #1190, editing the configuration documentation inadvertently deleted existing documented settings (`ZERO_CHANNEL_ALERT_COOLDOWN_MS`).
@@ -228,7 +259,7 @@ Across PR #1189 (feat(cost): aggregate token spend tracking and budget alerting)
 Root cause: Fragmented configuration management workflows where code, schemas, and markdown documentation are maintained across disparate files without an atomic synchronization checklist.
 
 ### Suggested Action
-1. Whenever a new dynamic toggle or configuration key is added, update all 4 target files atomically in the same commit: `.env.example`, `RemoteConfigService.js` / Firebase template, `README.md`, and `AGENTS.md`.
+1. Whenever a new Remote-Config-eligible, non-secret dynamic toggle or configuration key is added, update all 4 target files atomically in the same commit: `.env.example`, `RemoteConfigService.js` / Firebase template, `README.md`, and `AGENTS.md`. Secrets, authentication controls, delivery destinations, and startup-only gates must remain environment-only and never be added to Remote Config.
 2. Verify that existing documentation tables and adjacent configuration keys are preserved without accidental line omissions during diff updates.
 3. Include the new flags in status and capability response schemas (`/api/status`, `/api/capabilities`) and verify corresponding Postman test assertions.
 
@@ -244,7 +275,7 @@ Root cause: Fragmented configuration management workflows where code, schemas, a
 
 ---
 
-## [LRN-20260927-004] correction
+## [LRN-20260927-005] correction
 
 **Logged**: 2026-09-27T01:15:00Z
 **Priority**: high
@@ -277,7 +308,7 @@ Root cause: Replay handlers reconstructed delivery payloads by cherry-picking pa
 
 ---
 
-## [LRN-20260927-005] correction
+## [LRN-20260927-006] correction
 
 **Logged**: 2026-09-27T01:20:00Z
 **Priority**: medium
@@ -294,14 +325,14 @@ Root cause: Treating API collection documentation as illustrative rather than an
 
 ### Suggested Action
 1. Include separate, runnable requests in `CabrosBot.postman_collection.json` for each invalid input variant (out-of-bounds numbers, invalid enum members, malformed timestamps, inverted ranges).
-2. Attach Postman test scripts asserting HTTP 400 status codes and structured `{ error: 'INVALID_REQUEST' }` payload schemas.
+2. Attach Postman test scripts asserting HTTP 400 status codes and structured payload schemas containing machine-readable `code: 'INVALID_REQUEST'` alongside specific human-readable `error` messages.
 3. Back collection contracts with automated regression suites in `tests/unit/postman-collection.test.js`.
 
 ### Metadata
 - Source: pr_review
 - Related Files: CabrosBot.postman_collection.json, tests/unit/postman-collection.test.js
 - Tags: postman, negative-testing, contract-testing, error-envelopes, api-validation
-- See Also: LRN-20260927-001, LRN-20260927-002
+- See Also: LRN-20260927-002, LRN-20260927-003
 - Pattern-Key: harden.postman_negative_variant_coverage
 - Recurrence-Count: 1
 - First-Seen: 2026-09-27
@@ -309,7 +340,7 @@ Root cause: Treating API collection documentation as illustrative rather than an
 
 ---
 
-## [LRN-20260927-006] correction
+## [LRN-20260927-007] correction
 
 **Logged**: 2026-09-27T01:25:00Z
 **Priority**: critical
@@ -325,7 +356,7 @@ In PR #1190 (feat(ops): maintenance mode toggle for incident response), the main
 Root cause: Applying operational availability gates globally before verifying client authenticity in the Express middleware chain.
 
 ### Suggested Action
-1. Ensure `validateApiKey` (and any required bearer authentication) executes before maintenance mode, rate limiting, or feature flag middlewares.
+1. Keep rate limiting as an outer defense ahead of authentication to protect against unauthenticated volumetric floods or credential brute-forcing, while ensuring `validateApiKey` (and any required bearer authentication) executes before maintenance mode or dynamic feature flag gates.
 2. For bot command integrations (e.g. Telegram), filter updates so maintenance mode applies only to user commands (`isTelegramCommand`) and evaluate per-chat maintenance reply cooldowns without consuming expensive user rate quotas.
 3. Ensure all gated operations return structured 503 envelopes (`{ error: 'MAINTENANCE_MODE', message: '...' }`) only to authenticated callers.
 
@@ -341,7 +372,7 @@ Root cause: Applying operational availability gates globally before verifying cl
 
 ---
 
-## [LRN-20260927-007] correction
+## [LRN-20260927-008] correction
 
 **Logged**: 2026-09-27T01:30:00Z
 **Priority**: high
@@ -370,5 +401,6 @@ Root cause: Engagement scripts triggered on schedule without fetching and semant
 - Recurrence-Count: 1
 - First-Seen: 2026-09-27
 - Last-Seen: 2026-09-27
+
 
 ---
