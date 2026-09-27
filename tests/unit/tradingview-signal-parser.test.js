@@ -110,6 +110,41 @@ describe('TradingView signal parser', () => {
 		}));
 	});
 
+	it('keeps explicit stock exchanges as stock even when the symbol ends in a crypto suffix', () => {
+		// Explicit exchange classification must win over suffix-based inference (#835)
+		expect(deriveAssetContext('BATS:TSMUSDT(D)')).toEqual(expect.objectContaining({
+			exchange: 'BATS',
+			assetClass: 'stock',
+		}));
+		expect(deriveAssetContext('BATS:INTCUSDC(D)')).toEqual(expect.objectContaining({
+			exchange: 'BATS',
+			assetClass: 'stock',
+		}));
+		expect(deriveAssetContext('BATS:ETHBUSD(D)')).toEqual(expect.objectContaining({
+			exchange: 'BATS',
+			assetClass: 'stock',
+		}));
+		expect(deriveAssetContext('NASDAQ:NVDAUSDT(D)')).toEqual(expect.objectContaining({
+			exchange: 'NASDAQ',
+			assetClass: 'stock',
+		}));
+	});
+
+	it('still classifies explicit crypto exchanges as crypto', () => {
+		expect(deriveAssetContext('BINANCE:BTCUSDT(D)')).toEqual(expect.objectContaining({
+			exchange: 'BINANCE',
+			assetClass: 'crypto',
+		}));
+	});
+
+	it('infers crypto only for unknown exchanges carrying a crypto suffix', () => {
+		const context = deriveAssetContext('SOMENEWEXCHANGE:PAIRUSDT(D)');
+		expect(context).toEqual(expect.objectContaining({
+			exchange: 'SOMENEWEXCHANGE',
+			assetClass: 'crypto',
+		}));
+	});
+
 	it('returns null asset context for generic prose alerts without explicit symbols', () => {
 		expect(deriveAssetContext('The SEC approved a new filing for a listed company')).toBeNull();
 		expect(deriveAssetContext('Bitcoin ETF inflows accelerated after the market opened')).toBeNull();
