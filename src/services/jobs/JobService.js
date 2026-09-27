@@ -35,6 +35,8 @@ const {
 	getDeliveredChannels,
 } = require('../notification/requestRouting');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { runWithConcurrency } = require('../../lib/runWithConcurrency');
+const { adminSseService } = require('../sse/AdminSseService');
 
 const EXPIRATION_MS = 3600000; // 1 hour
 const DEFAULT_JOB_TIMEOUT_MS = 300000; // 5 minutes
@@ -43,6 +45,11 @@ const JOB_STATUSES = new Set(['pending', 'processing', 'completed', 'failed', 'c
 const JOB_TYPES = new Set(['expanded-analysis', 'market-scanner']);
 const DEFAULT_JOB_LIST_LIMIT = 50;
 const MAX_JOB_LIST_LIMIT = 100;
+
+// Allowlist: definitive rejections only stop after one attempt; all other
+// statuses (including transient 408/421/425/429 and 5xx) keep retrying.
+const NON_RETRYABLE_CALLBACK_STATUSES = new Set([400, 401, 403, 404, 422]);
+
 const nativeFetch = globalThis.fetch;
 
 function getCallbackFetch() {
@@ -407,9 +414,10 @@ class JobService {
 	/**
 	 * Cleans up terminal jobs older than 1 hour.
 	 */
-	async _cleanExpiredJobs() {
+	async _cleanExpiredJobs(signal) {
 		const now = Date.now();
 		for (const [id, job] of this.repository.entries()) {
+			if (signal?.aborted) throw signal.reason || new Error('Job read aborted');
 			if (this._isExpiredTerminalJob(job, now)) {
 				await this.repository.delete(id);
 			}
@@ -424,8 +432,8 @@ class JobService {
 		);
 	}
 
-	async _getUnexpiredJob(jobId) {
-		const job = await this.repository.get(jobId);
+	async _getUnexpiredJob(jobId, signal) {
+		const job = await this.repository.get(jobId, { signal });
 		if (!job) {
 			return null;
 		}
@@ -443,10 +451,12 @@ class JobService {
 	 * @param {string} jobId
 	 * @returns {Object|null}
 	 */
-	async getJob(jobId) {
-		await this._cleanExpiredJobs();
-		const job = await this._getUnexpiredJob(jobId);
-		if (!job) {
+	async getJob(jobId, { telegramChatId, signal } = {}) {
+		if (signal?.aborted) throw signal.reason || new Error('Job read aborted');
+		await this._cleanExpiredJobs(signal);
+		const job = await this._getUnexpiredJob(jobId, signal);
+		if (signal?.aborted) throw signal.reason || new Error('Job read aborted');
+		if (!job || (telegramChatId !== undefined && String(job.requestMetadata?.telegramChatId) !== String(telegramChatId))) {
 			return null;
 		}
 
@@ -509,12 +519,20 @@ class JobService {
 		return formatted;
 	}
 
-	async listJobs({ status, type, limit = DEFAULT_JOB_LIST_LIMIT } = {}) {
-		await this._cleanExpiredJobs();
+	async listJobs({ status, type, telegramChatId, signal, limit = DEFAULT_JOB_LIST_LIMIT } = {}) {
+		if (signal?.aborted) throw signal.reason || new Error('Job read aborted');
+		await this._cleanExpiredJobs(signal);
 		const safeLimit = Number.isInteger(limit) && limit > 0
 			? Math.min(limit, MAX_JOB_LIST_LIMIT)
 			: DEFAULT_JOB_LIST_LIMIT;
-		const jobs = await this.repository.list({ status, type, limit: safeLimit });
+		const jobs = await this.repository.list({
+			status,
+			type,
+			telegramChatId,
+			signal,
+			limit: safeLimit,
+		});
+		if (signal?.aborted) throw signal.reason || new Error('Job read aborted');
 		const activeJobs = [];
 
 		for (const job of jobs) {
@@ -523,7 +541,11 @@ class JobService {
 				continue;
 			}
 
-			if ((!status || job.status === status) && (!type || job.type === type)) {
+			if (
+				(!status || job.status === status)
+				&& (!type || job.type === type)
+				&& (telegramChatId === undefined || String(job.requestMetadata?.telegramChatId) === String(telegramChatId))
+			) {
 				activeJobs.push(job);
 			}
 		}
@@ -563,18 +585,12 @@ class JobService {
 	}
 
 	/**
-	 * Creates a job, validates the request synchronously, and runs it in the background.
+	 * Validates a job request synchronously based on job type and payload.
 	 * @param {string} type - 'expanded-analysis' | 'market-scanner'
 	 * @param {Object} payload - request body payload
-	 * @param {Function|Object} botOrGetter - Telegraf bot instance or getter
-	 * @returns {Object} The created job metadata
+	 * @returns {{ parsed: Object, validatedTimeoutMs: number }}
 	 */
-	async createJob(type, payload, botOrGetter) {
-		await this._cleanExpiredJobs();
-		const routing = parseNotificationRouting(payload);
-		const queueMode = this._isQueueMode();
-
-		// Synchronous validation based on job type
+	validateJobRequest(type, payload) {
 		let parsed;
 		if (type === 'expanded-analysis') {
 			parsed = parseExpandedAnalysisAlertRequest({ body: payload });
@@ -610,6 +626,27 @@ class JobService {
 			}
 			validatedTimeoutMs = Math.min(timeoutVal, MAX_JOB_TIMEOUT_MS);
 		}
+
+		return { parsed, validatedTimeoutMs };
+	}
+
+	/**
+	 * Creates a job, validates the request synchronously, and runs it in the background.
+	 *
+	 * @param {string} type - Job type: 'expanded-analysis' or 'market-scanner'
+	 * @param {Object} payload - Request payload matching the job type schema
+	 * @param {Function|Object} botOrGetter - Telegraf bot instance or getter
+	 * @returns {Object} The created job metadata
+	 */
+	async createJob(type, payload, botOrGetter) {
+		await this._cleanExpiredJobs();
+		const routing = parseNotificationRouting(payload);
+		const mode = this._getExecutionMode();
+		const queueMode = this._isQueueMode();
+		const durableQueueMode = this._isDurableQueueMode();
+
+		// Synchronous validation based on job type
+		const { parsed, validatedTimeoutMs } = this.validateJobRequest(type, payload);
 
 		let callbackUrl = null;
 		let callbackSecret = null;
@@ -670,8 +707,8 @@ class JobService {
 			}
 		}
 
-		if (queueMode && typeof this.repository.isDurable === 'function' && !this.repository.isDurable()) {
-			throw new JobQueueUnavailableError('Render-worker mode requires durable Firestore job storage.');
+		if (durableQueueMode && typeof this.repository.isDurable === 'function' && !this.repository.isDurable()) {
+			throw new JobQueueUnavailableError(`${mode === 'firestore-poller' ? 'Firestore-poller' : 'Render-worker'} mode requires durable Firestore job storage.`);
 		}
 
 		const requestMetadata = {
@@ -682,7 +719,9 @@ class JobService {
 			callbackEvents,
 			...(routing.channels ? { channels: routing.channels } : {}),
 			...(routing.telegramChatId ? { telegramChatId: routing.telegramChatId } : {}),
+			...(routing.telegramThreadId !== undefined ? { telegramThreadId: routing.telegramThreadId } : {}),
 			...(routing.whatsappChatId ? { whatsappChatId: routing.whatsappChatId } : {}),
+			...(routing.discordWebhookUrl ? { discordWebhookUrl: routing.discordWebhookUrl } : {}),
 			...(type === 'expanded-analysis' ? {
 				symbols: parsed.symbols.map((s) => s.raw),
 				timeframe: parsed.timeframe,
@@ -694,6 +733,10 @@ class JobService {
 				scans: parsed.scans,
 				limit: parsed.limit,
 				bbwThreshold: parsed.bbwThreshold,
+				rating: parsed.rating,
+				pattern_type: parsed.consecutiveCandlesPatternType,
+				candle_count: parsed.candleCount,
+				...(parsed.minGrowth !== undefined ? { min_growth: parsed.minGrowth } : {}),
 				ranked: parsed.ranked,
 				includeMultiTimeframe: parsed.includeMultiTimeframe,
 			}),
@@ -721,9 +764,9 @@ class JobService {
 			updatedAt: new Date().toISOString(),
 			totalDurationMs: 0,
 			timeoutMs: validatedTimeoutMs,
-			...(queueMode ? {
+			...(durableQueueMode ? {
 				execution: {
-					mode: 'render-worker',
+					mode,
 					status: 'queued',
 					attempt: 0,
 				},
@@ -747,8 +790,9 @@ class JobService {
 		this.activeCreations.set(jobId, creation);
 
 		try {
-			creation.persistencePromise = this.repository.save(job, { required: queueMode });
+			creation.persistencePromise = this.repository.save(job, { required: durableQueueMode });
 			await creation.persistencePromise;
+			this._broadcastJobProgress(job);
 
 			if (job.shutdownFinalized) {
 				return {
@@ -819,7 +863,7 @@ class JobService {
 				};
 			}
 
-			if (!queueMode) {
+			if (!durableQueueMode) {
 				// Execute background job while retaining its promise for graceful shutdown.
 				const runPromise = this._runBackgroundJob(jobId, parsed, payload, botOrGetter);
 				this.activeJobs.set(jobId, runPromise);
@@ -841,7 +885,7 @@ class JobService {
 				createdAt: job.createdAt,
 			};
 		} catch (error) {
-			if (queueMode) {
+			if (durableQueueMode) {
 				if (error instanceof JobQueueUnavailableError || error.code === 'JOB_QUEUE_UNAVAILABLE' || error.code === 'JOB_STORAGE_UNAVAILABLE' || error.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN') {
 					throw error;
 				}
@@ -905,10 +949,22 @@ class JobService {
 		return reconciled;
 	}
 
+	_getExecutionMode() {
+		if (this._isQueueMode()) {
+			return 'render-worker';
+		}
+		return process.env.JOB_EXECUTION_MODE || 'local';
+	}
+
 	_isQueueMode() {
 		return typeof this.queue?.isEnabled === 'function'
 			? this.queue.isEnabled()
 			: isQueueExecutionEnabled();
+	}
+
+	_isDurableQueueMode() {
+		const mode = this._getExecutionMode();
+		return mode === 'render-worker' || mode === 'firestore-poller';
 	}
 
 	_getWorkerId() {
@@ -1027,13 +1083,16 @@ class JobService {
 		const startTime = Date.now();
 		const job = await this.repository.get(jobId);
 		if (!job) return;
-		const claimAttempt = job.execution && job.execution.mode === 'render-worker'
+		const isQueuedMode = Boolean(
+			job.execution
+			&& (job.execution.mode === 'render-worker' || job.execution.mode === 'firestore-poller'),
+		);
+		const claimAttempt = isQueuedMode
 			? job.execution.attempt
 			: null;
 		const queuedExecution = Boolean(
 			workerId
-			&& job.execution
-			&& job.execution.mode === 'render-worker',
+			&& isQueuedMode,
 		);
 		if (queuedExecution) {
 			job._workerId = workerId;
@@ -1047,7 +1106,7 @@ class JobService {
 		}
 
 		job.status = 'processing';
-		if (job.execution && job.execution.mode === 'render-worker') {
+		if (isQueuedMode) {
 			job.execution.status = 'running';
 		}
 		job.updatedAt = new Date().toISOString();
@@ -1068,8 +1127,7 @@ class JobService {
 		};
 		if (
 			workerId
-			&& job.execution
-			&& job.execution.mode === 'render-worker'
+			&& isQueuedMode
 			&& typeof this.repository.renewClaim === 'function'
 		) {
 			const configuredLeaseMs = Number(process.env.JOB_QUEUE_CLAIM_LEASE_MS);
@@ -1203,88 +1261,80 @@ class JobService {
 
 	async _executeExpandedAnalysis(job, parsed, signal, botOrGetter) {
 		const { symbols, timeframe, includeMultiTimeframe } = parsed;
-
-		for (let index = 0; index < symbols.length; index++) {
-			const input = symbols[index];
-			if (this._isClaimLost(signal)) {
-				return;
-			}
-
-			const currentJob = await this.repository.get(job.jobId);
-			if (currentJob && currentJob.status === 'cancelled') {
-				break;
-			}
-
-			job.progress.current = index;
-			job.progress.status = `Analyzing symbol ${input.raw} (${index + 1}/${symbols.length})`;
-			job.updatedAt = new Date().toISOString();
-			await this._persistJob(job);
-
-			if (signal && signal.aborted) {
-				this._appendTimeoutResults(job.fullResults, symbols.slice(index), this._getAbortMessage(signal));
-				break;
-			}
-
-			try {
-				const analysisRequest = {
-					...input,
-					timeframe,
-				};
-				if (signal) {
-					analysisRequest.signal = signal;
+		let completedCount = 0;
+		const orderedResults = new Array(symbols.length);
+		let progressSave = Promise.resolve();
+		const recordProgress = (result, index) => {
+			orderedResults[index] = result;
+			job.fullResults = orderedResults.filter(Boolean);
+			completedCount++;
+			const current = completedCount;
+			progressSave = progressSave.then(async () => {
+				if (this._isClaimLost(signal) || (signal && signal.aborted)) {
+					return;
 				}
+				const currentJob = await this.repository.get(job.jobId);
+				if (currentJob && (currentJob.status === 'cancelled' || TERMINAL_JOB_STATUSES.has(currentJob.status))) {
+					return;
+				}
+				job.progress.current = current;
+				job.progress.status = `Completed ${current}/${symbols.length}`;
+				job.updatedAt = new Date().toISOString();
+				await this._persistJob(job);
+			});
+			return progressSave;
+		};
 
-				const analysis = await tradingViewMcpService.analyzeSymbolIdentifier(analysisRequest);
+		const { results } = await runWithConcurrency(
+			symbols,
+			getRuntimeConfig().EXPANDED_ANALYSIS_ALERT_CONCURRENCY,
+			async (input, index) => {
+				let result;
+				try {
+					const analysisRequest = { ...input, timeframe };
+					if (signal) analysisRequest.signal = signal;
 
-				let multiTimeframe = null;
-				if (includeMultiTimeframe) {
-					try {
-						multiTimeframe = await tradingViewMcpService.callMultiTimeframeAnalysis({
-							symbol: input.symbol,
-							exchange: input.exchange,
-							signal,
-						});
-					} catch (mErr) {
-						console.warn(
-							'[JobService] Multi-timeframe analysis failed for',
-							input.raw,
-							mErr.message,
-						);
+					const analysis = await tradingViewMcpService.analyzeSymbolIdentifier(analysisRequest);
+					let multiTimeframe = null;
+					if (includeMultiTimeframe) {
+						try {
+							multiTimeframe = await tradingViewMcpService.callMultiTimeframeAnalysis({
+								symbol: input.symbol,
+								exchange: input.exchange,
+								signal,
+							});
+						} catch (mErr) {
+							console.warn('[JobService] Multi-timeframe analysis failed for', input.raw, mErr.message);
+						}
+					}
+
+					result = { symbol: input.raw, status: 'analyzed', input, analysis, multiTimeframe };
+				} catch (error) {
+					if (this._isClaimLost(signal)) return null;
+					if (this._isAbortTriggered(signal, error)) {
+						result = {
+							symbol: input.raw,
+							status: 'timeout',
+							input,
+							error: this._getAbortMessage(signal, error.message),
+						};
+					} else {
+						console.warn('[JobService] Symbol analysis failed:', input.raw, error.message);
+						result = { symbol: input.raw, status: 'error', input, error: error.message };
 					}
 				}
 
-				job.fullResults.push({
-					symbol: input.raw,
-					status: 'analyzed',
-					input,
-					analysis,
-					multiTimeframe,
-				});
-			} catch (error) {
-				if (this._isClaimLost(signal)) {
-					return;
-				}
-				if (this._isAbortTriggered(signal, error)) {
-					const timeoutMessage = this._getAbortMessage(signal, error.message);
-					job.fullResults.push({
-						symbol: input.raw,
-						status: 'timeout',
-						input,
-						error: timeoutMessage,
-					});
-					this._appendTimeoutResults(job.fullResults, symbols.slice(index + 1), timeoutMessage);
-					break;
-				}
-
-				console.warn('[JobService] Symbol analysis failed:', input.raw, error.message);
-				job.fullResults.push({
-					symbol: input.raw,
-					status: 'error',
-					input,
-					error: error.message,
-				});
-			}
-		}
+				await recordProgress(result, index);
+				return result;
+			},
+			{
+				shouldContinue: async () => {
+					if (this._isClaimLost(signal) || (signal && signal.aborted)) return false;
+					const currentJob = await this.repository.get(job.jobId);
+					return !(currentJob && currentJob.status === 'cancelled');
+				},
+			},
+		);
 
 		const currentJob = await this.repository.get(job.jobId);
 		if (this._isClaimLost(signal)) {
@@ -1293,6 +1343,14 @@ class JobService {
 		if (currentJob && currentJob.status === 'cancelled') {
 			return;
 		}
+		job.fullResults = signal && signal.aborted
+			? symbols.map((input, index) => results[index] || {
+				symbol: input.raw,
+				status: 'timeout',
+				input,
+				error: this._getAbortMessage(signal),
+			})
+			: results;
 
 		job.progress.current = symbols.length;
 		job.progress.status = 'Completed analysis';
@@ -1330,7 +1388,7 @@ class JobService {
 		const deliveryResults = await this._sendQueuedNotification(
 			job,
 			notificationManager,
-			{ text: alertText },
+			{ text: alertText, source: 'tradingview-analysis' },
 			routing,
 		);
 		if (this._isClaimLost(signal)) {
@@ -1345,6 +1403,7 @@ class JobService {
 
 	async _executeMarketScanner(job, parsed, signal, botOrGetter) {
 		const { exchange, timeframe, scans } = parsed;
+		const symbolCache = new Map();
 
 		for (let index = 0; index < scans.length; index++) {
 			const scanType = scans[index];
@@ -1380,7 +1439,7 @@ class JobService {
 				let enrichedItems = items;
 				if (parsed.includeMultiTimeframe === true) {
 					try {
-						enrichedItems = await enrichScannerItemsWithTrendConfluence(items, { ...parsed, scanType }, signal);
+						enrichedItems = await enrichScannerItemsWithTrendConfluence(items, { ...parsed, scanType }, signal, { symbolCache });
 					} catch (error) {
 						if (this._isAbortTriggered(signal, error)) {
 							const timeoutMessage = this._getAbortMessage(signal, error.message);
@@ -1470,7 +1529,7 @@ class JobService {
 		const deliveryResults = await this._sendQueuedNotification(
 			job,
 			notificationManager,
-			{ text: alertText },
+			{ text: alertText, source: 'tradingview-analysis', category: 'scanner' },
 			routing,
 		);
 		if (this._isClaimLost(signal)) {
@@ -1501,7 +1560,11 @@ class JobService {
 				job.callbackStatus = mergeCallbackStatus(current.callbackStatus, job.callbackStatus);
 			}
 		}
-		if (job.execution && job.execution.mode === 'render-worker') {
+		const isQueuedMode = Boolean(
+			job.execution
+			&& (job.execution.mode === 'render-worker' || job.execution.mode === 'firestore-poller'),
+		);
+		if (isQueuedMode) {
 			const leaseMs = Number(process.env.JOB_QUEUE_CLAIM_LEASE_MS);
 			const effectiveLeaseMs = Number.isInteger(leaseMs) && leaseMs > 0 ? leaseMs : 60000;
 			if (job.execution.status === 'claimed' || job.execution.status === 'running') {
@@ -1509,7 +1572,7 @@ class JobService {
 			}
 		}
 		const saved = await this.repository.save(job, {
-			required: job.execution && job.execution.mode === 'render-worker',
+			required: isQueuedMode,
 		});
 		if (saved === null || saved === false) {
 			if (job._workerId) {
@@ -1519,7 +1582,38 @@ class JobService {
 			}
 			return false;
 		}
+		this._broadcastJobProgress(job);
 		return true;
+	}
+
+	_broadcastJobProgress(job) {
+		if (!job || !job.jobId) return;
+		try {
+			adminSseService.broadcast('job-progress', {
+				jobId: job.jobId,
+				type: job.type,
+				status: job.status,
+				progress: job.progress || null,
+				error: job.error || null,
+				code: job.code || null,
+				updatedAt: job.updatedAt || job.createdAt || new Date().toISOString(),
+				totalDurationMs: job.totalDurationMs || null,
+				summary: job.summary || job.result?.summary || null,
+				timestamp: new Date().toISOString(),
+			});
+
+			if (job.status === 'completed' && job.type === 'market-scanner') {
+				adminSseService.broadcast('scanner-result', {
+					jobId: job.jobId,
+					type: job.type,
+					status: job.status,
+					summary: job.summary || job.result?.summary || null,
+					timestamp: new Date().toISOString(),
+				});
+			}
+		} catch (_) {
+			// Fail-safe
+		}
 	}
 
 	_isQueuedExecution(job) {
@@ -1527,7 +1621,7 @@ class JobService {
 			job
 			&& job._workerId
 			&& job.execution
-			&& job.execution.mode === 'render-worker',
+			&& (job.execution.mode === 'render-worker' || job.execution.mode === 'firestore-poller'),
 		);
 	}
 
@@ -1580,7 +1674,10 @@ class JobService {
 	}
 
 	_finishQueuedExecution(job) {
-		if (!job.execution || job.execution.mode !== 'render-worker') {
+		if (
+			!job.execution
+			|| (job.execution.mode !== 'render-worker' && job.execution.mode !== 'firestore-poller')
+		) {
 			return;
 		}
 
@@ -1594,7 +1691,9 @@ class JobService {
 		return {
 			channels: metadata.channels,
 			telegramChatId: metadata.telegramChatId,
+			telegramThreadId: metadata.telegramThreadId,
 			whatsappChatId: metadata.whatsappChatId,
+			discordWebhookUrl: metadata.discordWebhookUrl,
 		};
 	}
 
@@ -1606,6 +1705,14 @@ class JobService {
 		};
 		if (scanType === 'bollinger_scan') {
 			args.bbw_threshold = parsed.bbwThreshold;
+		} else if (scanType === 'rating_filter') {
+			args.rating = parsed.rating;
+		} else if (scanType === 'consecutive_candles_scan') {
+			args.pattern_type = parsed.consecutiveCandlesPatternType;
+			args.candle_count = parsed.candleCount;
+			if (parsed.minGrowth !== undefined) {
+				args.min_growth = parsed.minGrowth;
+			}
 		}
 		return args;
 	}
@@ -1688,17 +1795,6 @@ class JobService {
 			totalItems: scanResults.reduce((sum, r) => sum + r.items.length, 0),
 			delivered: deliveryResults.filter((r) => r.success).length,
 		};
-	}
-
-	_appendTimeoutResults(results, symbols, error) {
-		symbols.forEach((input) => {
-			results.push({
-				symbol: input.raw,
-				status: 'timeout',
-				input,
-				error,
-			});
-		});
 	}
 
 	_appendScannerTimeoutResults(results, scans, error) {
@@ -2101,6 +2197,10 @@ class JobService {
 				} else {
 					attemptInfo.error = `HTTP ${response.status} ${response.statusText}`;
 					attempts.push(attemptInfo);
+
+					if (NON_RETRYABLE_CALLBACK_STATUSES.has(response.status)) {
+						break;
+					}
 				}
 			} catch (err) {
 				attempts.push({

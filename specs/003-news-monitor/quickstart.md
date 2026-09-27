@@ -535,6 +535,7 @@ name: News Monitor Cron
 on:
   schedule:
     - cron: '*/30 * * * *'  # Every 30 minutes
+  workflow_dispatch:
 
 jobs:
   monitor:
@@ -542,17 +543,14 @@ jobs:
     steps:
       - name: Trigger news monitoring
         run: |
-          curl -X POST https://cabros-bot.onrender.com/api/news-monitor \
+          curl -f -sS -X POST "${{ secrets.NEWS_MONITOR_BASE_URL }}/api/news-monitor" \
             -H "Content-Type: application/json" \
-            -d '{
-              "crypto": ["BTCUSDT", "ETHUSD", "BNBUSDT"],
-              "stocks": ["NVDA", "MSFT", "TSLA"]
-            }'
+            -H "x-api-key: ${{ secrets.WEBHOOK_API_KEY }}" \
+            -d '{}'
 ```
 
-### Render Cron Job (Alternative)
+### Render / Local Cron Job (Alternative)
 
-In `render.yaml`:
 ```yaml
 services:
   - type: cron
@@ -560,8 +558,9 @@ services:
     env: docker
     schedule: "*/30 * * * *"  # Every 30 minutes
     dockerCommand: |
-      curl -X POST http://localhost:3000/api/news-monitor \
+      curl -f -sS -X POST http://localhost:3000/api/news-monitor \
         -H "Content-Type: application/json" \
+        -H "x-api-key: $WEBHOOK_API_KEY" \
         -d '{}'
 ```
 

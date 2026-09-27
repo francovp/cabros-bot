@@ -37,22 +37,33 @@ class CloudflareAiClient {
 	 * Send chat completion request via Cloudflare AI Gateway
 	 * @param {string} systemPrompt - System prompt
 	 * @param {string} userMessage - User message
+	 * @param {object} [options] - Additional options (e.g. signal, timeout)
 	 * @returns {Promise<{text: string, usage: object}>} Model response
 	 */
-	async chatCompletion(systemPrompt, userMessage) {
+	async chatCompletion(systemPrompt, userMessage, options = {}) {
 		if (!this.validate()) {
 			throw new Error('CloudflareAiClient configuration incomplete');
+		}
+
+		const { tokenCostBudgetService } = require('../../lib/tokenUsage');
+		const isExceeded = tokenCostBudgetService?.isBudgetExceededAsync
+			? await tokenCostBudgetService.isBudgetExceededAsync()
+			: tokenCostBudgetService?.isBudgetExceeded();
+		if (isExceeded) {
+			const err = new Error('TOKEN_BUDGET_EXCEEDED: Daily LLM token cost budget exceeded');
+			err.status = 429;
+			throw err;
 		}
 
 		const client = new OpenAI({
 			apiKey: this.apiKey,
 			baseURL: this.baseURL,
-			timeout: this.timeout,
+			timeout: options?.timeout || this.timeout,
 			maxRetries: 0,
 		});
 
 		try {
-			const response = await client.chat.completions.create({
+			const body = {
 				model: this.model,
 				messages: [
 					{ role: 'system', content: systemPrompt },
@@ -60,7 +71,11 @@ class CloudflareAiClient {
 				],
 				temperature: 0.7,
 				top_p: 1.0,
-			});
+			};
+
+			const response = options?.signal
+				? await client.chat.completions.create(body, { signal: options.signal })
+				: await client.chat.completions.create(body);
 
 			return {
 				text: response.choices[0]?.message?.content || '',

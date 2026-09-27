@@ -86,6 +86,24 @@ describe('JobService Unit Tests', () => {
 			expect(result.status).toBe('processing');
 		});
 
+		it('persists market-scanner scan-specific options for background execution', async () => {
+			const metadata = await jobService.createJob('market-scanner', {
+				scans: ['rating_filter', 'consecutive_candles_scan'],
+				rating: -2,
+				pattern_type: 'bearish',
+				candle_count: 4,
+				min_growth: 1.5,
+			});
+
+			const rawJob = await jobService.repository.get(metadata.jobId);
+			expect(rawJob.requestMetadata).toEqual(expect.objectContaining({
+				rating: -2,
+				pattern_type: 'bearish',
+				candle_count: 4,
+				min_growth: 1.5,
+			}));
+		});
+
 		it('correctly validates and parses timeoutMs string format like 1e3', async () => {
 			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
@@ -94,6 +112,40 @@ describe('JobService Unit Tests', () => {
 
 			const rawJob = await jobService.repository.get(metadata.jobId);
 			expect(rawJob.timeoutMs).toBe(1000);
+		});
+	});
+
+	describe('Telegram job visibility', () => {
+		it('filters job reads by the originating Telegram chat', async () => {
+			const createdAt = new Date().toISOString();
+			await jobService.repository.save({
+				jobId: 'telegram-chat-a',
+				type: 'expanded-analysis',
+				status: 'processing',
+				progress: { current: 0, total: 1 },
+				createdAt,
+				updatedAt: createdAt,
+				requestMetadata: { telegramChatId: '123' },
+				fullResults: [],
+				fullScanResults: [],
+			});
+			await jobService.repository.save({
+				jobId: 'telegram-chat-b',
+				type: 'expanded-analysis',
+				status: 'processing',
+				progress: { current: 0, total: 1 },
+				createdAt,
+				updatedAt: createdAt,
+				requestMetadata: { telegramChatId: '456' },
+				fullResults: [],
+				fullScanResults: [],
+			});
+
+			expect((await jobService.listJobs({ limit: 10, telegramChatId: '123' })).map((job) => job.jobId))
+				.toEqual(['telegram-chat-a']);
+			expect(await jobService.getJob('telegram-chat-b', { telegramChatId: '123' })).toBeNull();
+			expect((await jobService.getJob('telegram-chat-a', { telegramChatId: '123' })).jobId)
+				.toBe('telegram-chat-a');
 		});
 	});
 
@@ -2066,6 +2118,114 @@ describe('JobService Unit Tests', () => {
 				expect(freshJob.callbackStatus.attempts).toHaveLength(2);
 			} finally {
 				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
+			}
+		});
+
+		it.each([400, 401, 403, 404, 422])('stops after one attempt on non-retryable HTTP %s callback', async (statusCode) => {
+			const prevDelay = process.env.JOB_CALLBACK_RETRY_DELAY_MS;
+			process.env.JOB_CALLBACK_RETRY_DELAY_MS = '1';
+			const dns = require('dns');
+			const lookupSpy = jest.spyOn(dns.promises, 'lookup')
+				.mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
+
+			fetchMock.mockResolvedValue({ ok: false, status: statusCode, statusText: 'Client Error' });
+
+			const job = {
+				jobId: `job-callback-4xx-${statusCode}`,
+				type: 'expanded-analysis',
+				status: 'completed',
+				callbackUrl: 'https://client-error.example.com/callback',
+				callbackStatus: { status: 'pending', attempts: [] },
+				fullResults: [],
+				fullScanResults: [],
+				deliveryResults: [],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			};
+			await jobService.repository.save(job);
+
+			try {
+				await jobService._sendCallbackWithRetry(job);
+
+				expect(fetchMock).toHaveBeenCalledTimes(1);
+				const freshJob = await jobService.repository.get(job.jobId);
+				expect(freshJob.callbackStatus.status).toBe('failed');
+				expect(freshJob.callbackStatus.attempts).toHaveLength(1);
+				expect(freshJob.callbackStatus.attempts[0].statusCode).toBe(statusCode);
+				expect(freshJob.callbackStatus.attempts[0].error).toBe(`HTTP ${statusCode} Client Error`);
+			} finally {
+				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
+				lookupSpy.mockRestore();
+			}
+		});
+
+		it('keeps retrying transient 4xx callbacks (408, 421, 425, 429) up to maxAttempts', async () => {
+			const prevDelay = process.env.JOB_CALLBACK_RETRY_DELAY_MS;
+			process.env.JOB_CALLBACK_RETRY_DELAY_MS = '1';
+			const dns = require('dns');
+			const lookupSpy = jest.spyOn(dns.promises, 'lookup')
+				.mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
+
+			fetchMock
+				.mockResolvedValueOnce({ ok: false, status: 408, statusText: 'Request Timeout' })
+				.mockResolvedValueOnce({ ok: false, status: 421, statusText: 'Misdirected Request' })
+				.mockResolvedValueOnce({ ok: false, status: 425, statusText: 'Too Early' })
+				.mockResolvedValue({ ok: false, status: 429, statusText: 'Too Many Requests' });
+
+			const job = {
+				jobId: 'job-callback-retryable-4xx',
+				type: 'expanded-analysis',
+				status: 'completed',
+				callbackUrl: 'https://rate-limited.example.com/callback',
+				callbackStatus: { status: 'pending', attempts: [] },
+				fullResults: [],
+				fullScanResults: [],
+				deliveryResults: [],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			};
+			await jobService.repository.save(job);
+
+			try {
+				await jobService._sendCallbackWithRetry(job);
+
+				expect(fetchMock).toHaveBeenCalledTimes(4);
+				const freshJob = await jobService.repository.get(job.jobId);
+				expect(freshJob.callbackStatus.status).toBe('failed');
+				expect(freshJob.callbackStatus.attempts).toHaveLength(4);
+				const retriedStatuses = freshJob.callbackStatus.attempts.map((attempt) => attempt.statusCode);
+				expect(retriedStatuses).toEqual([408, 421, 425, 429]);
+			} finally {
+				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
+				lookupSpy.mockRestore();
+			}
+		});
+	});
+
+	describe('_broadcastJobProgress', () => {
+		it('broadcasts job-progress and scanner-result with persisted job.summary', () => {
+			const { adminSseService } = require('../../src/services/sse/AdminSseService');
+			const broadcastSpy = jest.spyOn(adminSseService, 'broadcast').mockImplementation(() => {});
+
+			try {
+				jobService._broadcastJobProgress({
+					jobId: 'job-summary-test',
+					type: 'market-scanner',
+					status: 'completed',
+					summary: { total: 5, passed: 3 },
+				});
+
+				expect(broadcastSpy).toHaveBeenCalledWith('job-progress', expect.objectContaining({
+					jobId: 'job-summary-test',
+					summary: { total: 5, passed: 3 },
+				}));
+
+				expect(broadcastSpy).toHaveBeenCalledWith('scanner-result', expect.objectContaining({
+					jobId: 'job-summary-test',
+					summary: { total: 5, passed: 3 },
+				}));
+			} finally {
+				broadcastSpy.mockRestore();
 			}
 		});
 	});

@@ -3,6 +3,7 @@ const {
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
 const { rankScannerItems, resolveTrendConfluence } = require('./marketScannerScoring');
+const { SCANNER_ERROR_CATEGORY_DISPLAY, isScannerErrorCategory } = require('./marketScannerErrorCategories');
 
 const SUPPORTED_SCAN_TYPES = new Set([
 	'top_gainers',
@@ -10,6 +11,8 @@ const SUPPORTED_SCAN_TYPES = new Set([
 	'bollinger_scan',
 	'volume_breakout_scanner',
 	'smart_volume_scanner',
+	'rating_filter',
+	'consecutive_candles_scan',
 ]);
 
 const DEFAULT_SCAN_LIMIT = 5;
@@ -22,6 +25,8 @@ const SCAN_SECTIONS = {
 	volume_breakout_scanner: { emoji: '💥', title: 'BREAKOUT DE VOLUMEN' },
 	smart_volume_scanner: { emoji: '🔎', title: 'VOLUMEN INTELIGENTE' },
 	bollinger_scan: { emoji: '🔥', title: 'SQUEEZE BOLLINGER' },
+	rating_filter: { emoji: '📊', title: 'RATING BOLLINGER' },
+	consecutive_candles_scan: { emoji: '🕯️', title: 'VELAS CONSECUTIVAS' },
 };
 
 const DEFAULT_SCANS = ['top_gainers', 'top_losers', 'volume_breakout_scanner'];
@@ -47,10 +52,16 @@ const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 ]);
 
 class MarketScannerRequestError extends Error {
-	constructor(message, code = 'INVALID_REQUEST') {
+	constructor(message, code = 'INVALID_REQUEST', options = {}) {
 		super(message);
 		this.name = 'MarketScannerRequestError';
 		this.code = code;
+		if (options && Number.isInteger(options.statusCode)) {
+			this.statusCode = options.statusCode;
+		}
+		if (options && options.details !== undefined) {
+			this.details = options.details;
+		}
 	}
 }
 
@@ -61,10 +72,26 @@ function parseMarketScannerRequest(req = {}) {
 	const scans = parseScans(body);
 	const limit = parseLimit(body);
 	const bbwThreshold = parseBbwThreshold(body);
+	const rating = parseRating(body);
+	const consecutiveCandlesPatternType = parseConsecutiveCandlesPatternType(body);
+	const candleCount = parseCandleCount(body);
+	const minGrowth = parseMinGrowth(body);
 	const ranked = parseRanked(body);
 	const includeMultiTimeframe = parseIncludeMultiTimeframe(body);
 
-	return { exchange, timeframe, scans, limit, bbwThreshold, ranked, includeMultiTimeframe };
+	return {
+		exchange,
+		timeframe,
+		scans,
+		limit,
+		bbwThreshold,
+		rating,
+		consecutiveCandlesPatternType,
+		candleCount,
+		minGrowth,
+		ranked,
+		includeMultiTimeframe,
+	};
 }
 
 function getRequestBody(req = {}) {
@@ -216,6 +243,68 @@ function parseIncludeMultiTimeframe(body = {}) {
 	throw new MarketScannerRequestError('includeMultiTimeframe must be a boolean');
 }
 
+function parseRating(body = {}) {
+	const raw = body.rating !== undefined ? body.rating : body.rating_filter_rating;
+	if (raw === undefined || raw === null || raw === '') {
+		return 3;
+	}
+	if (typeof raw === 'boolean') {
+		throw new MarketScannerRequestError('rating must be an integer between -3 and 3');
+	}
+	const num = Number(raw);
+	if (!Number.isInteger(num) || num < -3 || num > 3) {
+		throw new MarketScannerRequestError('rating must be an integer between -3 and 3');
+	}
+	return num;
+}
+
+function parseConsecutiveCandlesPatternType(body = {}) {
+	const raw = body.pattern_type !== undefined
+		? body.pattern_type
+		: (body.patternType !== undefined ? body.patternType : body.consecutive_candles_pattern_type);
+	if (raw === undefined || raw === null || raw === '') {
+		return 'bullish';
+	}
+	if (typeof raw !== 'string') {
+		throw new MarketScannerRequestError('pattern_type must be either "bullish" or "bearish"');
+	}
+	const lower = raw.trim().toLowerCase();
+	if (lower !== 'bullish' && lower !== 'bearish') {
+		throw new MarketScannerRequestError('pattern_type must be either "bullish" or "bearish"');
+	}
+	return lower;
+}
+
+function parseCandleCount(body = {}) {
+	const raw = body.candle_count !== undefined ? body.candle_count : body.candleCount;
+	if (raw === undefined || raw === null || raw === '') {
+		return 3;
+	}
+	if (typeof raw === 'boolean') {
+		throw new MarketScannerRequestError('candle_count must be an integer between 2 and 5');
+	}
+	const num = Number(raw);
+	if (!Number.isInteger(num) || num < 2 || num > 5) {
+		throw new MarketScannerRequestError('candle_count must be an integer between 2 and 5');
+	}
+	return num;
+}
+
+function parseMinGrowth(body = {}) {
+	const raw = body.min_growth !== undefined ? body.min_growth : body.minGrowth;
+	if (raw === undefined || raw === null || raw === '') {
+		return undefined;
+	}
+	if (typeof raw === 'boolean') {
+		throw new MarketScannerRequestError('min_growth must be a non-negative number');
+	}
+	const num = Number(raw);
+	if (!Number.isFinite(num) || num < 0) {
+		throw new MarketScannerRequestError('min_growth must be a non-negative number');
+	}
+	return num;
+}
+
 function buildMarketScannerReport(scanResults = [], options = {}) {
 	const now = options.now || new Date();
 	const exchange = options.exchange || DEFAULT_EXCHANGE;
@@ -237,7 +326,8 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 		lines.push(`*${section.emoji} ${section.title}*`);
 
 		if (scanResult.error) {
-			lines.push(`⚠️ Error: ${scanResult.error}`);
+			const errorLabel = formatScannerErrorLine(scanResult);
+			lines.push(`⚠️ Error: ${errorLabel}`);
 			return;
 		}
 
@@ -334,6 +424,30 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 	} else if (scanType === 'bollinger_scan') {
 		const bbw = numberOrNull(item.bbw ?? null);
 		suffix = ` | BBW ${formatNumber(bbw, 2)}`;
+	} else if (scanType === 'rating_filter') {
+		const bbRating = item.bollinger_rating !== undefined && item.bollinger_rating !== null
+			? item.bollinger_rating
+			: item.rating;
+		if (bbRating !== undefined && bbRating !== null) {
+			const sign = Number(bbRating) > 0 ? '+' : '';
+			suffix = ` | BB Rating ${sign}${bbRating}`;
+		}
+		const rsi = numberOrNull(item.indicators?.RSI ?? null);
+		if (rsi !== null) {
+			suffix += ` | RSI ${formatNumber(rsi, 1)}`;
+		}
+	} else if (scanType === 'consecutive_candles_scan') {
+		const count = item.candle_count ? `${item.candle_count} velas` : '';
+		const patternType = typeof item.pattern_type === 'string'
+			? (item.pattern_type.toLowerCase() === 'bullish' ? '🟢 Bullish' : '🔴 Bearish')
+			: '';
+		const patternDetails = [count, patternType].filter(Boolean).join(' ');
+		if (patternDetails) {
+			suffix = ` | ${patternDetails}`;
+		}
+		if (item.pattern_strength !== undefined && item.pattern_strength !== null) {
+			suffix += ` | Fuerza ${item.pattern_strength}`;
+		}
 	}
 
 	if (ranked && item._score !== undefined) {
@@ -351,11 +465,23 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 	let itemLine = `${rank}. ${symbol} ${price} (${change})${suffix}`;
 
 	if (priceVal !== null) {
-		const atr = numberOrNull(item.indicators?.atr ?? item.indicators?.ATR ?? item.atr ?? null);
-		const bbLower = numberOrNull(item.indicators?.bb_lower ?? item.indicators?.bollinger_lower ?? item.indicators?.lower ?? item.bollinger?.lower ?? item.bollinger_lower ?? null);
-		const bbUpper = numberOrNull(item.indicators?.bb_upper ?? item.indicators?.bollinger_upper ?? item.indicators?.upper ?? item.bollinger?.upper ?? item.bollinger_upper ?? null);
-			const support = numberOrNull(item.indicators?.support ?? item.indicators?.nearest_support ?? item.support ?? item.support_resistance?.nearest_support ?? item.support_resistance?.support_1 ?? null);
-			const resistance = numberOrNull(item.indicators?.resistance ?? item.indicators?.nearest_resistance ?? item.resistance ?? item.support_resistance?.nearest_resistance ?? item.support_resistance?.resistance_1 ?? null);
+		const atr = pickLevel([item.indicators?.atr, item.indicators?.ATR, item.atr]);
+		const bbLower = pickLevel([item.indicators?.bb_lower, item.indicators?.bollinger_lower, item.indicators?.lower, item.bollinger?.lower, item.bollinger_lower]);
+		const bbUpper = pickLevel([item.indicators?.bb_upper, item.indicators?.bollinger_upper, item.indicators?.upper, item.bollinger?.upper, item.bollinger_upper]);
+		const support = pickLevel([
+			item.indicators?.support,
+			item.indicators?.nearest_support,
+			item.support,
+			item.support_resistance?.nearest_support,
+			item.support_resistance?.support_1,
+		]);
+		const resistance = pickLevel([
+			item.indicators?.resistance,
+			item.indicators?.nearest_resistance,
+			item.resistance,
+			item.support_resistance?.nearest_resistance,
+			item.support_resistance?.resistance_1,
+		]);
 
 		const { stopLoss, takeProfit } = getRiskLevelsForSide({
 			side,
@@ -403,21 +529,61 @@ function formatTrendConfluence(trendConfluence = {}) {
 	return '🧭 HTF UNKNOWN';
 }
 
+function getCandidateDirection(item = {}) {
+	// Bullish evidence is checked before bearish within each field, mirroring
+	// marketScannerScoring.normalizeTrendDirection(), so time-horizon phrases
+	// like "SHORT_TERM_BUY" resolve bullish instead of matching `short`.
+	if (typeof item.breakout_type === 'string') {
+		if (/(bull|buy|long|alcist|compra)/i.test(item.breakout_type)) {
+			return 'bullish';
+		}
+		if (/(bear|sell|short|bajist|venta)/i.test(item.breakout_type)) {
+			return 'bearish';
+		}
+	}
+
+	if (typeof item.trading_recommendation === 'string') {
+		if (/(bull|buy|long|alcist|compra)/i.test(item.trading_recommendation)) {
+			return 'bullish';
+		}
+		if (/(bear|sell|short|bajist|venta)/i.test(item.trading_recommendation)) {
+			return 'bearish';
+		}
+	}
+
+	if (typeof item.pattern_type === 'string') {
+		if (/(bull|buy|long|alcist|compra)/i.test(item.pattern_type)) {
+			return 'bullish';
+		}
+		if (/(bear|sell|short|bajist|venta)/i.test(item.pattern_type)) {
+			return 'bearish';
+		}
+	}
+
+	return null;
+}
+
 function getScanItemSide(scanType, item = {}) {
 	if (scanType === 'top_losers') {
 		return 'SELL';
 	}
 
-	if (typeof item.breakout_type === 'string') {
-		const breakoutType = item.breakout_type.trim().toLowerCase();
-		if (breakoutType === 'bearish' || breakoutType === 'sell') {
+	if (scanType === 'rating_filter') {
+		const bbRating = numberOrNull(item.bollinger_rating ?? item.rating);
+		if (bbRating !== null && bbRating < 0) {
 			return 'SELL';
 		}
+		return 'BUY';
 	}
 
-	if (typeof item.trading_recommendation === 'string') {
-		const recommendation = item.trading_recommendation.trim().toLowerCase();
-		if (/\bsell\b/.test(recommendation)) {
+	const candidateDirection = getCandidateDirection(item);
+	if (candidateDirection === 'bearish') {
+		return 'SELL';
+	}
+
+	if (scanType === 'bollinger_scan') {
+		const trendConfluence = item._trendConfluence || item.trendConfluence || item.multiTimeframeData;
+		if (trendConfluence?.direction === 'bearish' && !candidateDirection) {
 			return 'SELL';
 		}
 	}
@@ -449,25 +615,39 @@ function getLongRiskLevels({
 	support,
 	resistance,
 }) {
+	const validPrice = typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : null;
+	if (validPrice === null) {
+		return { stopLoss: null, takeProfit: null };
+	}
+
+	const validAtr = typeof atr === 'number' && Number.isFinite(atr) && atr > 0 ? atr : null;
+	const validBbLower = typeof bbLower === 'number' && Number.isFinite(bbLower) && bbLower > 0 ? bbLower : null;
+	const validBbUpper = typeof bbUpper === 'number' && Number.isFinite(bbUpper) && bbUpper > 0 ? bbUpper : null;
+	const validSupport = typeof support === 'number' && Number.isFinite(support) && support > 0 ? support : null;
+	const validResistance = typeof resistance === 'number' && Number.isFinite(resistance) && resistance > 0 ? resistance : null;
+
 	let stopLoss = null;
-	if (atr !== null) {
-		stopLoss = price - (atr * 1.5);
-	} else if (bbLower !== null && bbLower < price) {
-		stopLoss = bbLower;
-	} else if (support !== null && support < price) {
-		stopLoss = support;
+	if (validAtr !== null) {
+		stopLoss = validPrice - (validAtr * 1.5);
+	} else if (validBbLower !== null && validBbLower < validPrice) {
+		stopLoss = validBbLower;
+	} else if (validSupport !== null && validSupport < validPrice) {
+		stopLoss = validSupport;
 	}
 
 	let takeProfit = null;
-	if (resistance !== null && resistance > price) {
-		takeProfit = resistance;
-	} else if (bbUpper !== null && bbUpper > price) {
-		takeProfit = bbUpper;
-	} else if (atr !== null) {
-		takeProfit = price + (atr * 3);
+	if (validResistance !== null && validResistance > validPrice) {
+		takeProfit = validResistance;
+	} else if (validBbUpper !== null && validBbUpper > validPrice) {
+		takeProfit = validBbUpper;
+	} else if (validAtr !== null) {
+		takeProfit = validPrice + (validAtr * 3);
 	}
 
-	return { stopLoss, takeProfit };
+	return {
+		stopLoss: typeof stopLoss === 'number' && Number.isFinite(stopLoss) && stopLoss > 0 && stopLoss < validPrice ? stopLoss : null,
+		takeProfit: typeof takeProfit === 'number' && Number.isFinite(takeProfit) && takeProfit > 0 && takeProfit > validPrice ? takeProfit : null,
+	};
 }
 
 function getShortRiskLevels({
@@ -478,25 +658,39 @@ function getShortRiskLevels({
 	support,
 	resistance,
 }) {
+	const validPrice = typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : null;
+	if (validPrice === null) {
+		return { stopLoss: null, takeProfit: null };
+	}
+
+	const validAtr = typeof atr === 'number' && Number.isFinite(atr) && atr > 0 ? atr : null;
+	const validBbLower = typeof bbLower === 'number' && Number.isFinite(bbLower) && bbLower > 0 ? bbLower : null;
+	const validBbUpper = typeof bbUpper === 'number' && Number.isFinite(bbUpper) && bbUpper > 0 ? bbUpper : null;
+	const validSupport = typeof support === 'number' && Number.isFinite(support) && support > 0 ? support : null;
+	const validResistance = typeof resistance === 'number' && Number.isFinite(resistance) && resistance > 0 ? resistance : null;
+
 	let stopLoss = null;
-	if (atr !== null) {
-		stopLoss = price + (atr * 1.5);
-	} else if (bbUpper !== null && bbUpper > price) {
-		stopLoss = bbUpper;
-	} else if (resistance !== null && resistance > price) {
-		stopLoss = resistance;
+	if (validAtr !== null) {
+		stopLoss = validPrice + (validAtr * 1.5);
+	} else if (validBbUpper !== null && validBbUpper > validPrice) {
+		stopLoss = validBbUpper;
+	} else if (validResistance !== null && validResistance > validPrice) {
+		stopLoss = validResistance;
 	}
 
 	let takeProfit = null;
-	if (support !== null && support < price) {
-		takeProfit = support;
-	} else if (bbLower !== null && bbLower < price) {
-		takeProfit = bbLower;
-	} else if (atr !== null) {
-		takeProfit = price - (atr * 3);
+	if (validSupport !== null && validSupport < validPrice) {
+		takeProfit = validSupport;
+	} else if (validBbLower !== null && validBbLower < validPrice) {
+		takeProfit = validBbLower;
+	} else if (validAtr !== null) {
+		takeProfit = validPrice - (validAtr * 3);
 	}
 
-	return { stopLoss, takeProfit };
+	return {
+		stopLoss: typeof stopLoss === 'number' && Number.isFinite(stopLoss) && stopLoss > 0 && stopLoss > validPrice ? stopLoss : null,
+		takeProfit: typeof takeProfit === 'number' && Number.isFinite(takeProfit) && takeProfit > 0 && takeProfit < validPrice ? takeProfit : null,
+	};
 }
 
 function getBreakoutEmoji(breakoutType) {
@@ -578,10 +772,40 @@ function numberOrNull(value) {
 	return Number.isFinite(number) ? number : null;
 }
 
+function formatScannerErrorLine(scanResult = {}) {
+	const baseMessage = typeof scanResult.error === 'string' ? scanResult.error : 'Unknown error';
+	if (!isScannerErrorCategory(scanResult.errorCategory)) {
+		return baseMessage;
+	}
+	const display = SCANNER_ERROR_CATEGORY_DISPLAY[scanResult.errorCategory] || scanResult.errorCategory;
+	return `${baseMessage} (${display})`;
+}
+
+// Shared candidate-selection for optional numeric level fields. Skips
+// null/undefined/empty/nonnumeric candidates (including Number(null)=0
+// fabrications from explicit nulls and 'N/A' placeholders) and non-positive
+// numbers (<= 0) so the report renderer and the outcome-persistence path
+// resolve identical positive levels.
+function pickLevel(candidates) {
+	if (!Array.isArray(candidates)) {
+		return null;
+	}
+	for (const candidate of candidates) {
+		const level = numberOrNull(candidate);
+		if (level !== null && level > 0 && candidate !== null && candidate !== undefined && candidate !== '') {
+			return level;
+		}
+	}
+	return null;
+}
+
 module.exports = {
 	MarketScannerRequestError,
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
+	getRiskLevelsForSide,
+	getScanItemSide,
+	pickLevel,
 	SUPPORTED_SCAN_TYPES,
 };

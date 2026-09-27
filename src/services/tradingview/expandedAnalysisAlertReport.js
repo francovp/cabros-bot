@@ -193,7 +193,7 @@ function buildExpandedAnalysisAlertReport(items = [], options = {}) {
 	return lines.join('\n');
 }
 
-function buildReportRow({ input = {}, analysis = {}, multiTimeframe }) {
+function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY' }) {
 	const techData = analysis.technical || analysis || {};
 	const priceData = techData.price_data || {};
 	const indicators = techData.technical_indicators || {};
@@ -201,22 +201,24 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe }) {
 	const currentBollinger = techData.bollinger_bands || {};
 	const price = numberOrNull(priceData.current_price ?? priceData.close);
 	const changePercent = numberOrNull(priceData.change_percent);
-	const rsi = numberOrNull(indicators.rsi ?? techData.rsi?.value);
-	const sma20 = numberOrNull(indicators.sma20 ?? bollinger.bb_middle ?? techData.sma?.sma20 ?? currentBollinger.middle);
-	const macd = numberOrNull(indicators.macd ?? techData.macd?.macd_line);
-	const macdSignal = numberOrNull(indicators.macd_signal ?? techData.macd?.signal_line);
-	const atr = numberOrNull(indicators.atr ?? techData.atr?.value ?? techData.atr ?? techData.volatility?.atr);
+	const rsi = numberOrNull(indicators.RSI ?? indicators.rsi ?? techData.rsi?.value);
+	const sma20 = numberOrNull(indicators.SMA20 ?? indicators.sma20 ?? bollinger.bb_middle ?? techData.sma?.sma20 ?? currentBollinger.middle);
+	const macd = numberOrNull(indicators.MACD ?? indicators.macd ?? techData.macd?.macd_line);
+	const macdSignal = numberOrNull(indicators.MACD_signal ?? indicators.macd_signal ?? techData.macd?.signal_line);
+	const atr = numberOrNull(indicators.ATR ?? indicators.atr ?? techData.atr?.value ?? techData.atr ?? techData.volatility?.atr);
 	const trend = getTrend(price, sma20);
 	const macdDirection = getMacdDirection(macd, macdSignal);
 	const volume = getVolumeLabel(techData);
-	const stopLossMeta = getStopLossMeta(price, atr, bollinger, currentBollinger);
+	const stopLossMeta = side ? getStopLossMeta(price, atr, bollinger, currentBollinger, side) : { value: null, source: 'missing' };
 	const stopLoss = stopLossMeta.value;
 	const isOverbought = rsi !== null && rsi > 70;
-	const takeProfit = isOverbought
+	const takeProfit = !side
 		? null
-		: getTakeProfitTarget(price, atr, bollinger, currentBollinger, techData);
-	const invalidationDistance = getInvalidationDistance(price, stopLoss, stopLossMeta.source);
-	const riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit);
+		: isOverbought && side !== 'SELL'
+			? null
+			: getTakeProfitTarget(price, atr, bollinger, currentBollinger, techData, side);
+	const invalidationDistance = getInvalidationDistance(price, stopLoss, stopLossMeta.source, side);
+	const riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit, side);
 
 	const sentiment = analysis.sentiment || null;
 	const confluence = analysis.confluence || null;
@@ -235,6 +237,7 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe }) {
 		takeProfit,
 		invalidationDistance,
 		riskRewardRatio,
+		side,
 		suggestion: getSuggestion({ rsi, trend, macdDirection }),
 		multiTimeframe,
 		sentiment,
@@ -253,7 +256,7 @@ function formatGroupRows(rows) {
 			`${row.symbol} ${formatCurrency(row.price)} (${formatPercent(row.changePercent)}) | RSI ${formatNumber(row.rsi, 1)}`,
 			`- *Tendencia (SMA20):* ${row.trend} | *MACD:* ${row.macdDirection}`,
 			formatVolumeAtrLine(row),
-			`- *Stop Loss sugerido:* ${formatCurrency(row.stopLoss)}`,
+			formatStopLossLine(row),
 			formatTargetLine(row),
 			formatRiskRewardLine(row),
 			formatInvalidationLine(row),
@@ -418,6 +421,14 @@ function formatVolumeAtrLine(row) {
 	return `${base} | *ATR:* ${formatCurrency(row.atr)}`;
 }
 
+function formatStopLossLine(row) {
+	if (row.stopLoss === null) {
+		return null;
+	}
+
+	return `- *Stop Loss sugerido:* ${formatCurrency(row.stopLoss)}`;
+}
+
 function categorizeRsi(rsi) {
 	if (rsi !== null && rsi < 25) {
 		return 'extremeOversold';
@@ -503,64 +514,79 @@ function getVolumeLabel(analysis) {
 	return 'Normal';
 }
 
-function getStopLossMeta(price, atr, bollinger, currentBollinger = {}) {
+function getStopLossMeta(price, atr, bollinger, currentBollinger = {}, side = 'BUY') {
 	if (price === null) {
 		return { value: null, source: 'missing' };
 	}
 
+	const isShort = side === 'SELL';
 	if (atr !== null) {
-		return { value: price - (atr * 1.5), source: 'atr' };
+		return { value: isShort ? price + (atr * 1.5) : price - (atr * 1.5), source: 'atr' };
 	}
 
-	const bbLower = numberOrNull(bollinger.bb_lower ?? currentBollinger.lower);
-	if (bbLower !== null) {
-		return { value: bbLower, source: 'bollinger' };
+	const bollingerStop = numberOrNull(isShort
+		? bollinger.bb_upper ?? currentBollinger.upper
+		: bollinger.bb_lower ?? currentBollinger.lower);
+	if (bollingerStop !== null) {
+		return { value: bollingerStop, source: 'bollinger' };
 	}
 
-	return { value: price * 0.95, source: 'fallback' };
+	return { value: price * (isShort ? 1.05 : 0.95), source: 'fallback' };
 }
 
-function getTakeProfitTarget(price, atr, bollinger, currentBollinger = {}, techData = {}) {
+function getTakeProfitTarget(price, atr, bollinger, currentBollinger = {}, techData = {}, side = 'BUY') {
 	if (price === null) {
 		return null;
 	}
 
-	const nearestResistance = numberOrNull(
-		techData.support_resistance?.nearest_resistance
-		?? techData.support_resistance?.resistance_1
-		?? techData.resistance?.nearest,
+	const isShort = side === 'SELL';
+	const nearestTarget = numberOrNull(
+		isShort
+			? techData.support_resistance?.nearest_support
+				?? techData.support_resistance?.support_1
+				?? techData.support?.nearest
+			: techData.support_resistance?.nearest_resistance
+				?? techData.support_resistance?.resistance_1
+				?? techData.resistance?.nearest,
 	);
-	if (nearestResistance !== null && nearestResistance > price) {
-		return nearestResistance;
+	if (nearestTarget !== null && (isShort ? nearestTarget < price : nearestTarget > price)) {
+		return nearestTarget;
 	}
 
-	const bbUpper = numberOrNull(bollinger.bb_upper ?? currentBollinger.upper);
-	if (bbUpper !== null && bbUpper > price) {
-		return bbUpper;
+	const bollingerTarget = numberOrNull(isShort
+		? bollinger.bb_lower ?? currentBollinger.lower
+		: bollinger.bb_upper ?? currentBollinger.upper);
+	if (bollingerTarget !== null && (isShort ? bollingerTarget < price : bollingerTarget > price)) {
+		return bollingerTarget;
 	}
 
 	if (atr !== null) {
-		return price + (atr * 3);
+		return isShort ? price - (atr * 3) : price + (atr * 3);
 	}
 
 	return null;
 }
 
-function getInvalidationDistance(price, stopLoss, stopLossSource) {
-	if (price === null || stopLoss === null || stopLossSource === 'fallback' || stopLoss >= price) {
+function getInvalidationDistance(price, stopLoss, stopLossSource, side = 'BUY') {
+	if (price === null || stopLoss === null || stopLossSource === 'fallback') {
 		return null;
 	}
 
-	return Math.max(price - stopLoss, 0);
+	if (side === 'SELL') {
+		return stopLoss > price ? stopLoss - price : null;
+	}
+
+	return stopLoss < price ? price - stopLoss : null;
 }
 
-function getRiskRewardRatio(price, stopLoss, takeProfit) {
+function getRiskRewardRatio(price, stopLoss, takeProfit, side = 'BUY') {
 	if (price === null || stopLoss === null || takeProfit === null) {
 		return null;
 	}
 
-	const risk = price - stopLoss;
-	const reward = takeProfit - price;
+	const isShort = side === 'SELL';
+	const risk = isShort ? stopLoss - price : price - stopLoss;
+	const reward = isShort ? price - takeProfit : takeProfit - price;
 
 	if (risk <= 0 || reward <= 0) {
 		return null;
@@ -590,7 +616,8 @@ function formatInvalidationLine(row) {
 		return null;
 	}
 
-	return `- *Invalidación:* ${formatCurrency(row.invalidationDistance)} por debajo del precio actual`;
+	const direction = row.side === 'SELL' ? 'por encima' : 'por debajo';
+	return `- *Invalidación:* ${formatCurrency(row.invalidationDistance)} ${direction} del precio actual`;
 }
 
 function classifyRiskReward(ratio) {
@@ -681,4 +708,8 @@ module.exports = {
 	parseExpandedAnalysisAlertRequest,
 	parseSymbolIdentifier,
 	buildExpandedAnalysisAlertReport,
+	buildReportRow,
+	getStopLossMeta,
+	getTakeProfitTarget,
+	getRiskRewardRatio,
 };

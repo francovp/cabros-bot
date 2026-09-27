@@ -17,7 +17,7 @@ const {
 const { getAzureAIClient } = require('../inference/azureAiClient');
 const { getOpenRouterClient } = require('../inference/openRouterClient');
 const { getCloudflareAiClient } = require('../inference/cloudflareAiClient');
-const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
+const { normalizeUsageMetadata, tokenCostBudgetService } = require('../../lib/tokenUsage');
 const sentryService = require('../monitoring/SentryService');
 const geminiQuotaManager = require('./geminiQuotaManager');
 
@@ -148,6 +148,7 @@ class GenaiClient {
 		const toolConfig = {
 			tools: [groundingTool],
 			temperature: 0.2,
+			...(signal ? { abortSignal: signal } : {}),
 		};
 
 		if (signal?.aborted) {
@@ -224,6 +225,8 @@ class GenaiClient {
 			results,
 			totalResults: groundingChunks.length,
 			searchResultText: searchResultText,
+			usage: response?.usageMetadata || null,
+			modelUsed: model,
 		};
 	}
 
@@ -254,6 +257,11 @@ class GenaiClient {
 			throw signal.reason || new Error('Grounding timeout');
 		}
 
+		if (await tokenCostBudgetService.isBudgetExceededAsync()) {
+			console.warn('[genaiClient] Daily token cost budget exceeded. Falling back to Brave Search for grounding.');
+			return this._executeBraveSearch(query, maxResults, signal);
+		}
+
 		// Logic: Force Brave -> Google -> Fallback Brave
 		// Access FORCE_BRAVE_SEARCH dynamically from config object
 		if (FORCE_BRAVE_SEARCH) {
@@ -269,6 +277,7 @@ class GenaiClient {
 				error.retryDelay = remainingMs;
 				throw error;
 			}
+			geminiQuotaManager.recordBraveFallbackDuringCooldown();
 			console.warn('[genaiClient] Gemini process quota cooldown active. Falling back immediately to Brave Search.');
 			return this._executeBraveSearch(query, maxResults, signal);
 		}
@@ -347,6 +356,7 @@ class GenaiClient {
 			config: {
 				maxOutputTokens: opts.maxTokens !== undefined ? opts.maxTokens : null,
 				temperature,
+				...(signal ? { abortSignal: signal } : {}),
 			},
 			context,
 		});
@@ -431,6 +441,13 @@ class GenaiClient {
          * @returns {Promise<{text: string, citations: Array}>} Response text and citations
          */
 	async llmCallv2({ systemPrompt, userPrompt, context = {}, opts = {} }) {
+		if (await tokenCostBudgetService.isBudgetExceededAsync()) {
+			const error = new Error('Daily token cost budget exceeded');
+			error.code = 'TOKEN_BUDGET_EXCEEDED';
+			error.status = 429;
+			throw error;
+		}
+
 		let lastError;
 
 		// 1. Try Gemini
@@ -477,7 +494,7 @@ class GenaiClient {
 				if (azureClient.validate()) {
 					const startTime = Date.now();
 					console.debug('[GenaiClient] Attempting Azure AI Client');
-					const { text, usage } = await azureClient.chatCompletion(systemPrompt, userPrompt);
+					const { text, usage } = await azureClient.chatCompletion(systemPrompt, userPrompt, opts);
 					const durationMs = Date.now() - startTime;
 					const usageNorm = normalizeUsageMetadata(usage);
 					sentryService.captureLlmMetric({ model: AZURE_LLM_MODEL || 'azure-llm', inputTokens: usageNorm?.inputTokens || 0, outputTokens: usageNorm?.outputTokens || 0, durationMs });
@@ -491,6 +508,9 @@ class GenaiClient {
 					console.debug('[GenaiClient] Azure AI Client not configured, skipping');
 				}
 			} catch (error) {
+				if (opts.signal?.aborted || error.name === 'AbortError' || error.name === 'AbortSignalError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+					throw error;
+				}
 				console.warn('[GenaiClient] Azure call failed, attempting failover:', error.message);
 				lastError = error;
 			}
@@ -503,7 +523,7 @@ class GenaiClient {
 				if (openRouterClient.validate()) {
 					const startTime = Date.now();
 					console.debug('[GenaiClient] Attempting OpenRouter Client');
-					const { text, usage } = await openRouterClient.chatCompletion(systemPrompt, userPrompt);
+					const { text, usage } = await openRouterClient.chatCompletion(systemPrompt, userPrompt, opts);
 					const durationMs = Date.now() - startTime;
 					const usageNorm = normalizeUsageMetadata(usage);
 					sentryService.captureLlmMetric({ model: OPENROUTER_MODEL || 'openrouter-model', inputTokens: usageNorm?.inputTokens || 0, outputTokens: usageNorm?.outputTokens || 0, durationMs });
@@ -517,6 +537,9 @@ class GenaiClient {
 					console.debug('[GenaiClient] OpenRouter Client not configured, skipping');
 				}
 			} catch (error) {
+				if (opts.signal?.aborted || error.name === 'AbortError' || error.name === 'AbortSignalError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+					throw error;
+				}
 				console.warn('[GenaiClient] OpenRouter call failed:', error.message);
 				lastError = error;
 			}
@@ -529,7 +552,7 @@ class GenaiClient {
 				if (cfClient.validate()) {
 					const startTime = Date.now();
 					console.debug('[GenaiClient] Attempting Cloudflare AI Gateway Client');
-					const { text, usage } = await cfClient.chatCompletion(systemPrompt, userPrompt);
+					const { text, usage } = await cfClient.chatCompletion(systemPrompt, userPrompt, opts);
 					const durationMs = Date.now() - startTime;
 					const usageNorm = normalizeUsageMetadata(usage);
 					sentryService.captureLlmMetric({ model: CF_AIG_MODEL || 'cloudflare-aig', inputTokens: usageNorm?.inputTokens || 0, outputTokens: usageNorm?.outputTokens || 0, durationMs });
@@ -543,6 +566,9 @@ class GenaiClient {
 					console.debug('[GenaiClient] Cloudflare AI Gateway not configured, skipping');
 				}
 			} catch (error) {
+				if (opts.signal?.aborted || error.name === 'AbortError' || error.name === 'AbortSignalError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+					throw error;
+				}
 				console.warn('[GenaiClient] Cloudflare AI Gateway call failed:', error.message);
 				lastError = error;
 			}

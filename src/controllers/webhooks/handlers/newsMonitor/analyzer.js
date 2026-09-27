@@ -10,16 +10,25 @@ const { getCacheInstance } = require('./cache');
 const { getEnrichmentService } = require('../../../../services/inference/enrichmentService');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { AnalysisStatus, EventCategory } = require('./constants');
+const {
+	getVolumeTracker,
+	parseNewsMaxAlertsPerBatch,
+	parseNewsMaxAlertsPerWindow,
+	parseNewsMaxAlertsPerWindowMs,
+} = require('./volumeTracker');
 const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
 const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
+const geminiPriceService = require('../../../../services/grounding/geminiPriceService');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
 const { MainClient } = require('binance');
 const { createHash } = require('node:crypto');
+const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
 const {
 	sendWithNotificationRouting,
 	getRequestedChannels,
 	validateNotificationRouting,
 } = require('../../../../services/notification/requestRouting');
+const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 
 const promptService = getPromptService();
 
@@ -29,11 +38,30 @@ let notificationManager = null;
 // Binance client singleton
 let binanceClient = null;
 
+function resolveBinanceBaseUrl() {
+	const configured = process.env.BINANCE_DATA_BASE_URL;
+	if (typeof configured === 'string' && configured.trim() !== '') {
+		const trimmed = configured.trim();
+		if (/^https?:\/\//i.test(trimmed)) {
+			return trimmed;
+		}
+		console.warn(
+			`[newsMonitor/analyzer] Ignoring BINANCE_DATA_BASE_URL="${configured}" — must be an http(s) URL. Falling back to https://api.binance.com.`,
+		);
+	}
+	return 'https://api.binance.com';
+}
+
 function getBinanceClient() {
 	if (!binanceClient) {
-		binanceClient = new MainClient({
+		const clientOptions = {
 			beautifyResponses: true,
-		});
+		};
+		const baseUrl = resolveBinanceBaseUrl();
+		if (baseUrl) {
+			clientOptions.baseUrl = baseUrl;
+		}
+		binanceClient = new MainClient(clientOptions);
 	}
 	return binanceClient;
 }
@@ -73,6 +101,17 @@ function getRoutingDestination(notificationMgr, routing = {}, channel) {
 		return hashDiscordWebhook(routing.discordWebhookUrl || getChannelDefaultDestination(notificationMgr, channel));
 	}
 
+	if (channel === 'telegram') {
+		const chatId = (typeof routing.telegramChatId === 'string' && routing.telegramChatId)
+			? routing.telegramChatId
+			: getChannelDefaultDestination(notificationMgr, channel);
+		if (!chatId) return undefined;
+		const threadId = (typeof routing.telegramThreadId === 'number' && Number.isSafeInteger(routing.telegramThreadId))
+			? routing.telegramThreadId
+			: undefined;
+		return threadId !== undefined ? `${chatId}:${threadId}` : String(chatId);
+	}
+
 	const field = ROUTING_IDENTITY_FIELDS[channel];
 	if (field && typeof routing[field] === 'string') return routing[field];
 	return getChannelDefaultDestination(notificationMgr, channel);
@@ -81,6 +120,14 @@ function getRoutingDestination(notificationMgr, routing = {}, channel) {
 function getStoredRoutingIdentity(routing = {}, channel) {
 	if (channel === 'discord') {
 		return routing.discordWebhookFingerprint || hashDiscordWebhook(routing.discordWebhookUrl);
+	}
+	if (channel === 'telegram') {
+		const chatId = routing.telegramChatId;
+		if (!chatId) return undefined;
+		const threadId = (typeof routing.telegramThreadId === 'number' && Number.isSafeInteger(routing.telegramThreadId))
+			? routing.telegramThreadId
+			: undefined;
+		return threadId !== undefined ? `${chatId}:${threadId}` : String(chatId);
 	}
 	return routing[ROUTING_IDENTITY_FIELDS[channel]];
 }
@@ -99,6 +146,12 @@ function getCachedRoutingMetadata(routing = {}, previousRouting = {}, notificati
 		if (identity !== undefined) {
 			metadata[field] = identity;
 		}
+	}
+	const threadId = typeof routing.telegramThreadId === 'number'
+		? routing.telegramThreadId
+		: (typeof previousRouting.telegramThreadId === 'number' ? previousRouting.telegramThreadId : undefined);
+	if (threadId !== undefined) {
+		metadata.telegramThreadId = threadId;
 	}
 	return metadata;
 }
@@ -219,6 +272,16 @@ function getKlineClose(kline) {
 		return parseFloat(kline[4]);
 	}
 	return 0;
+}
+
+function getKlineCloseTime(kline) {
+	if (typeof kline === 'object' && kline !== null && !Array.isArray(kline)) {
+		return Number(kline.closeTime);
+	}
+	if (Array.isArray(kline)) {
+		return Number(kline[6]);
+	}
+	return NaN;
 }
 
 function getKlineVolume(kline) {
@@ -345,9 +408,10 @@ function calculateRSI(closes, period = 14) {
 }
 
 class NewsAnalyzer {
-	constructor() {
+	constructor(options = {}) {
 		this.cache = getCacheInstance();
 		this.enrichmentService = getEnrichmentService();
+		this.volumeTracker = options.volumeTracker || getVolumeTracker();
 		// Do NOT store notificationManager in constructor - get it dynamically
 		// to handle delayed initialization in tests and app startup
 
@@ -423,45 +487,266 @@ class NewsAnalyzer {
 		let nextIndex = 0;
 		const batchStartedAt = Date.now();
 
+		// Preserve the configured analysis budget; delivery gets a separate bounded deadline.
+		const totalTimeout = options.timeout ?? this.timeout;
+		const deliveryBudgetMs = options.deliveryBudgetMs ?? Math.floor(totalTimeout / 3);
+		const configuredAnalysisDeadline = batchStartedAt + totalTimeout;
+		const overallDeadline = Number.isFinite(options.deadline) ? options.deadline : null;
+		const scheduledAnalysisDeadline = options.scheduledSweep && overallDeadline !== null
+			? Math.max(batchStartedAt + 1, overallDeadline - deliveryBudgetMs)
+			: null;
+		const analysisDeadline = scheduledAnalysisDeadline !== null
+			? Math.min(configuredAnalysisDeadline, scheduledAnalysisDeadline)
+			: overallDeadline !== null
+				? Math.min(configuredAnalysisDeadline, overallDeadline)
+				: configuredAnalysisDeadline;
+		const defaultDeliveryDeadline = overallDeadline !== null
+			? Math.min(overallDeadline, analysisDeadline + deliveryBudgetMs)
+			: analysisDeadline + deliveryBudgetMs;
+		const deliveryDeadline = Number.isFinite(options.deliveryDeadline)
+			? options.deliveryDeadline
+			: defaultDeliveryDeadline;
+
+		const symbolOptions = {
+			...options,
+			deferDelivery: true,
+			analysisDeadline,
+			deadline: options.deadline,
+		};
+
 		const runNext = async () => {
 			while (nextIndex < symbols.length) {
 				const currentIndex = nextIndex;
 				nextIndex += 1;
 				const symbol = symbols[currentIndex];
-				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, tokenUsage, routing, batchStartedAt, options).catch(error => ({
-					symbol,
-					status: AnalysisStatus.ERROR,
-					error: {
-						code: isGeminiQuotaError(error) ? 'GEMINI_QUOTA_EXHAUSTED' : 'ANALYSIS_ERROR',
-						message: error.message,
-					},
-					totalDurationMs: 0,
-					cached: false,
-					requestId,
-				}));
+				const symbolTokenUsage = new TokenUsageTracker();
+				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, symbolTokenUsage, routing, batchStartedAt, symbolOptions)
+					.then((result) => {
+						if (tokenUsage) {
+							tokenUsage.merge(symbolTokenUsage);
+						}
+						return result;
+					})
+					.catch(error => {
+						if (tokenUsage) {
+							tokenUsage.merge(symbolTokenUsage);
+						}
+						return {
+							symbol,
+							status: AnalysisStatus.ERROR,
+							error: {
+								code: isGeminiQuotaError(error) ? 'GEMINI_QUOTA_EXHAUSTED' : 'ANALYSIS_ERROR',
+								message: error.message,
+							},
+							totalDurationMs: 0,
+							cached: false,
+							requestId,
+						};
+					});
 			}
 		};
 
 		await Promise.all(Array.from({ length: limit }, runNext));
 
+		await this.applyVolumeThrottling(results, requestId, routing, {
+			...options,
+			deliveryDeadline,
+		});
+
 		return results;
+	}
+
+	async applyVolumeThrottling(results, requestId, routing = {}, options = {}) {
+		if (!Array.isArray(results) || results.length === 0) {
+			return;
+		}
+
+		const candidates = [];
+		for (let i = 0; i < results.length; i++) {
+			const res = results[i];
+			if (!res || !res.alert) {
+				continue;
+			}
+			const isNewAlert = res.status === AnalysisStatus.ANALYZED && !res.cached;
+			const isCachedRetry = res._pendingDelivery?.type === 'cached_retry';
+			if (isNewAlert || isCachedRetry) {
+				const conf = typeof res.alert.confidence === 'number' ? res.alert.confidence : 0;
+				candidates.push({
+					result: res,
+					index: i,
+					confidence: conf,
+					type: isCachedRetry ? 'cached_retry' : 'new',
+				});
+			}
+		}
+
+		if (candidates.length === 0) {
+			return;
+		}
+
+		// Prioritize candidate alerts by confidence score descending
+		candidates.sort((a, b) => {
+			if (b.confidence !== a.confidence) {
+				return b.confidence - a.confidence;
+			}
+			return a.index - b.index;
+		});
+
+		const tracker = this.volumeTracker || getVolumeTracker();
+		const effectiveCap = tracker.getEffectiveBatchCapacity();
+
+		if (options.dryRun) {
+			const allowed = candidates.slice(0, effectiveCap);
+			const throttled = candidates.slice(effectiveCap);
+			for (const item of throttled) {
+				const res = item.result;
+				if (item.type === 'new') {
+					res.status = AnalysisStatus.THROTTLED;
+					res.reason = 'alert_volume_cap';
+					res.deliveryResults = [];
+				} else {
+					res.status = AnalysisStatus.CACHED;
+					res.deliveryResults = res._pendingDelivery?.activeCachedDeliveryResults || [];
+				}
+				delete res._pendingDelivery;
+			}
+			for (const item of allowed) {
+				const res = item.result;
+				res.deliveryResults = [];
+				delete res._pendingDelivery;
+			}
+			return;
+		}
+
+		// Synchronously reserve window quota before starting asynchronous deliveries
+		const reservationTtl = typeof options.deadline === 'number'
+			? Math.max(options.deadline - Date.now() + 60000, 600000)
+			: 600000;
+		const targetReservation = Math.min(effectiveCap, candidates.length);
+		const reservation = tracker.reserveCapacity(targetReservation, Date.now(), reservationTtl);
+		const maxDeliveriesAllowed = reservation ? reservation.count : 0;
+
+		if (maxDeliveriesAllowed === 0) {
+			for (const item of candidates) {
+				const res = item.result;
+				if (item.type === 'new') {
+					res.status = AnalysisStatus.THROTTLED;
+					res.reason = 'alert_volume_cap';
+					res.deliveryResults = [];
+				} else {
+					res.status = AnalysisStatus.CACHED;
+					res.deliveryResults = res._pendingDelivery?.activeCachedDeliveryResults || [];
+				}
+				delete res._pendingDelivery;
+			}
+			tracker.recordThrottled(candidates.length);
+			if (reservation) {
+				tracker.commitReservation(reservation, 0);
+			}
+			return;
+		}
+
+		let deliveredCount = 0;
+		let throttledCount = 0;
+		const deliveryDeadline = options.deliveryDeadline
+			?? (typeof options.deadline === 'number'
+				? options.deadline
+				: Date.now() + (options.deliveryTimeoutMs ?? this.timeout));
+		const deliverySignals = [];
+		if (options.signal) {
+			deliverySignals.push(options.signal);
+		}
+		if (Number.isFinite(deliveryDeadline)) {
+			deliverySignals.push(AbortSignal.timeout(Math.max(0, deliveryDeadline - Date.now())));
+		}
+		const deliverySignal = deliverySignals.length === 0
+			? undefined
+			: deliverySignals.length === 1
+				? deliverySignals[0]
+				: AbortSignal.any(deliverySignals);
+		const deliveryCallOptions = {
+			...options,
+			deadline: deliveryDeadline,
+			signal: deliverySignal,
+		};
+
+		try {
+			const signal = deliverySignal;
+
+			for (let i = 0; i < candidates.length; i++) {
+				const item = candidates[i];
+				const res = item.result;
+
+				if (deliveredCount < maxDeliveriesAllowed) {
+					if (signal?.aborted) {
+						console.warn('[Analyzer] Volume delivery aborted by signal');
+						for (let j = i; j < candidates.length; j++) {
+							delete candidates[j].result._pendingDelivery;
+						}
+						break;
+					}
+					if (typeof deliveryDeadline === 'number' && Date.now() >= deliveryDeadline) {
+						console.warn('[Analyzer] Volume delivery aborted: deadline exceeded');
+						for (let j = i; j < candidates.length; j++) {
+							delete candidates[j].result._pendingDelivery;
+						}
+						break;
+					}
+
+					if (reservation && typeof tracker.renewReservation === 'function') {
+						tracker.renewReservation(reservation, Date.now(), reservationTtl);
+					}
+
+					if (res._pendingDelivery) {
+						await this.executePendingDelivery(res, requestId, deliveryCallOptions);
+					}
+
+					const alertDelivered = item.type === 'cached_retry'
+						? (res._redelivered === true || (Array.isArray(res.attemptedDeliveryResults) && res.attemptedDeliveryResults.some((d) => d && d.success === true)))
+						: (res._alertSent === true || (!res.cached && Array.isArray(res.deliveryResults) && res.deliveryResults.some((d) => d && d.success === true)));
+
+					if (alertDelivered) {
+						deliveredCount++;
+					}
+				} else {
+					// Cap reached: throttle remaining candidates
+					if (item.type === 'new') {
+						res.status = AnalysisStatus.THROTTLED;
+						res.reason = 'alert_volume_cap';
+						res.deliveryResults = [];
+					} else {
+						res.status = AnalysisStatus.CACHED;
+						res.deliveryResults = res._pendingDelivery?.activeCachedDeliveryResults || [];
+					}
+					delete res._pendingDelivery;
+					throttledCount++;
+				}
+			}
+		} finally {
+			if (throttledCount > 0) {
+				tracker.recordThrottled(throttledCount);
+			}
+			if (reservation) {
+				tracker.commitReservation(reservation, deliveredCount);
+			}
+		}
 	}
 
 	async runSymbolAnalysisWithRetry(symbol, requestId, tokenUsage, routing, startedAt, options = {}) {
 		let attempt = 0;
 		let lastQuotaError = null;
+		const analysisDeadline = options.analysisDeadline ?? (options.deadline ?? (startedAt + this.timeout));
 
 		while (attempt <= this.geminiQuotaMaxRetries) {
 			let timeoutHandle;
-			const elapsedMs = Date.now() - startedAt;
-			const remainingMs = this.timeout - elapsedMs;
+			const remainingMs = analysisDeadline - Date.now();
 			if (remainingMs <= 0) {
 				throw new Error('TIMEOUT');
 			}
 
 			await geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: remainingMs, throwOnExceeded: true });
 
-			const remainingAfterWaitMs = this.timeout - (Date.now() - startedAt);
+			const remainingAfterWaitMs = analysisDeadline - Date.now();
 			if (remainingAfterWaitMs <= 0) {
 				throw new Error('TIMEOUT');
 			}
@@ -471,7 +756,7 @@ class NewsAnalyzer {
 					timeoutHandle = setTimeout(() => reject(new Error('TIMEOUT')), remainingAfterWaitMs);
 				});
 				return await Promise.race([
-					this.analyzeSymbolInternal(symbol, requestId, tokenUsage, routing, options),
+					this.analyzeSymbolInternal(symbol, requestId, tokenUsage, routing, { ...options, deadline: options.deadline }),
 					timeoutPromise,
 				]);
 			} catch (error) {
@@ -482,7 +767,7 @@ class NewsAnalyzer {
 				lastQuotaError = error;
 				attempt += 1;
 				const delayMs = geminiQuotaManager.triggerQuotaCooldown(error, attempt, this.geminiQuotaRetryBaseMs);
-				const remainingAfterAttemptMs = this.timeout - (Date.now() - startedAt);
+				const remainingAfterAttemptMs = analysisDeadline - Date.now();
 				if (delayMs >= remainingAfterAttemptMs) {
 					console.warn('[Analyzer] Gemini quota retry skipped; delay exceeds remaining budget:', symbol);
 					throw lastQuotaError;
@@ -562,18 +847,14 @@ class NewsAnalyzer {
 				if (cached) {
 					console.debug('[Analyzer] Returning cached result:', symbol, category);
 					let deliveryResults = cached.deliveryResults;
+					let redelivered = false;
+					let attemptedDeliveryResults = [];
 					if (cached.alert) {
 						const notificationMgr = getNotificationManager();
 						if (notificationMgr) {
 							validateNotificationRouting(notificationMgr, routing);
 							const requestedChannels = getRequestedChannels(notificationMgr, routing);
 							const retryChannels = getCachedRedeliveryChannels(notificationMgr, cached, routing);
-							const claimedRetryChannels = [];
-							for (const channel of retryChannels) {
-								if (await this.cache.claimDelivery(symbol, category, channel)) {
-									claimedRetryChannels.push(channel);
-								}
-							}
 							const activeCachedDeliveryResults = getActiveCachedDeliveryResults(
 								cached,
 								requestedChannels,
@@ -581,6 +862,44 @@ class NewsAnalyzer {
 								routing,
 								notificationMgr,
 							);
+							if (retryChannels.length > 0 && options.deferDelivery) {
+								return {
+									symbol,
+									status: AnalysisStatus.CACHED,
+									alert: cached.alert,
+									deliveryResults: activeCachedDeliveryResults,
+									cached: true,
+									_pendingDelivery: {
+										type: 'cached_retry',
+										symbol,
+										category,
+										cached,
+										routing,
+										notificationMgr,
+										requestedChannels,
+										retryChannels,
+										activeCachedDeliveryResults,
+										options,
+									},
+									analysisRecord: {
+										symbol,
+										eventCategory: category,
+										sentiment: cached.alert?.sentimentScore ?? 0,
+										confidence: cached.alert?.confidence ?? 0,
+										headline: cached.alert?.headline || '',
+										alertSent: false,
+										promptVersion: cached.alert?.promptVersion,
+										tokens: null,
+									},
+									originalPersistedState: cached.originalPersistedState,
+								};
+							}
+							const claimedRetryChannels = [];
+							for (const channel of retryChannels) {
+								if (await this.cache.claimDelivery(symbol, category, channel, options)) {
+									claimedRetryChannels.push(channel);
+								}
+							}
 							if (claimedRetryChannels.length > 0) {
 								const leaseAbortControllers = new Map(
 									claimedRetryChannels.map((channel) => [channel, new AbortController()]),
@@ -588,37 +907,101 @@ class NewsAnalyzer {
 								const leaseOwnership = new Map(
 									claimedRetryChannels.map((channel) => [channel, true]),
 								);
+								const persistenceOwnership = new Map(
+									claimedRetryChannels.map((channel) => [channel, true]),
+								);
 								const markLeaseOwnershipLost = (channel) => {
 									if (leaseOwnership.get(channel)) {
 										leaseOwnership.set(channel, false);
+										persistenceOwnership.set(channel, false);
 										leaseAbortControllers.get(channel)?.abort('Cached delivery lease ownership lost');
 									}
 								};
+								const markPersistenceOwnershipLost = (channel) => {
+									persistenceOwnership.set(channel, false);
+								};
 								const renewLease = async (channel) => {
 									try {
-										if (await this.cache.renewDelivery(symbol, category, channel) === false) {
+										const renewed = await this.cache.renewDelivery(symbol, category, channel);
+										if (renewed === false) {
 											markLeaseOwnershipLost(channel);
+										} else if (renewed !== true) {
+											markPersistenceOwnershipLost(channel);
 										}
 									} catch (error) {
+										markPersistenceOwnershipLost(channel);
 										console.warn('[Analyzer] Cached delivery lease renewal indeterminate:', error.message);
 									}
 								};
+								const leaseDeadline = options.deadline ?? Date.now() + this.timeout;
+								const waitForLeaseRenewals = async (renewalEntries) => {
+									const pending = renewalEntries
+										.filter(([, renewal]) => renewal)
+										.map(([channel, renewal]) => {
+											const state = { channel, settled: false };
+											state.promise = Promise.resolve(renewal).finally(() => { state.settled = true; });
+											return state;
+										});
+									if (pending.length === 0) return [];
+									const remainingMs = leaseDeadline - Date.now();
+									if (remainingMs <= 0) return pending.map(({ channel }) => channel);
+									let timeoutHandle;
+									try {
+										const completed = await Promise.race([
+											Promise.all(pending.map(({ promise }) => promise)).then(() => true),
+											new Promise(resolve => {
+												timeoutHandle = setTimeout(() => resolve(false), remainingMs);
+											}),
+										]);
+										return completed ? [] : pending.filter(({ settled }) => !settled).map(({ channel }) => channel);
+									} finally {
+										clearTimeout(timeoutHandle);
+									}
+								};
+								const pendingLeaseRenewals = new Map(
+									claimedRetryChannels.map((channel) => [channel, null]),
+								);
+								const queueLeaseRenewal = (channel) => {
+									if (pendingLeaseRenewals.get(channel)) {
+										return;
+									}
+									const renewal = renewLease(channel).finally(() => pendingLeaseRenewals.set(channel, null));
+									pendingLeaseRenewals.set(channel, renewal);
+								};
 								const leaseRenewalIntervals = claimedRetryChannels.map((channel) => setInterval(
-									() => renewLease(channel),
+									() => queueLeaseRenewal(channel),
 									this.cache.getDeliveryLeaseRenewIntervalMs(),
 								));
 								try {
 									const signalByChannel = Object.fromEntries(
-										claimedRetryChannels.map((channel) => [channel, leaseAbortControllers.get(channel).signal]),
+										claimedRetryChannels.map((channel) => {
+											const leaseSignal = leaseAbortControllers.get(channel).signal;
+											const signals = [leaseSignal, options.signal].filter(Boolean);
+											return [channel, signals.length > 1 ? AbortSignal.any(signals) : leaseSignal];
+										}),
 									);
 									const retryResults = await sendWithNotificationRouting(
 										notificationMgr,
 										cached.alert,
 										{ ...routing, channels: claimedRetryChannels },
-										{ signalByChannel },
+										{ signalByChannel, signal: options.signal },
 									);
-									await Promise.all(claimedRetryChannels.map(renewLease));
+									leaseRenewalIntervals.forEach(clearInterval);
+									const timedOutPendingChannels = await waitForLeaseRenewals([...pendingLeaseRenewals.entries()],
+									);
+									timedOutPendingChannels.forEach(markPersistenceOwnershipLost);
+									const finalRenewals = claimedRetryChannels
+										.filter(channel => !pendingLeaseRenewals.get(channel))
+										.map(channel => [channel, renewLease(channel)]);
+									const timedOutFinalChannels = await waitForLeaseRenewals(finalRenewals);
+									timedOutFinalChannels.forEach(markPersistenceOwnershipLost);
 									const ownedRetryChannels = claimedRetryChannels.filter((channel) => leaseOwnership.get(channel));
+									const persistenceRetryChannels = claimedRetryChannels.filter((channel) => persistenceOwnership.get(channel));
+									const successfulRetryChannels = new Set(
+										retryResults.filter(result => result.success).map(result => result.channel),
+									);
+									attemptedDeliveryResults = retryResults.filter((result) => ownedRetryChannels.includes(result.channel));
+									redelivered = attemptedDeliveryResults.some((result) => result && result.success);
 									deliveryResults = mergeDeliveryResults(
 										activeCachedDeliveryResults,
 										retryResults.filter((result) => ownedRetryChannels.includes(result.channel)),
@@ -631,8 +1014,13 @@ class NewsAnalyzer {
 											deliveryResults,
 										}, {
 											preserveTtl: true,
-											deliveryChannels: ownedRetryChannels,
-											awaitPersistence: true,
+											deliveryChannels: persistenceRetryChannels,
+											localDeliveryChannels: ownedRetryChannels,
+											localOnlyChannels: ownedRetryChannels.filter(
+												channel => successfulRetryChannels.has(channel) && !persistenceRetryChannels.includes(channel),
+											),
+											awaitPersistence: persistenceRetryChannels.length > 0,
+											skipPersistence: persistenceRetryChannels.length === 0,
 										});
 									}
 								} finally {
@@ -651,6 +1039,9 @@ class NewsAnalyzer {
 						alert: cached.alert,
 						deliveryResults,
 						cached: true,
+						redelivered,
+						attemptedDeliveryResults,
+						originalPersistedState: cached.originalPersistedState,
 					};
 				}
 			}
@@ -685,6 +1076,16 @@ class NewsAnalyzer {
 				status: AnalysisStatus.ANALYZED,
 				alert: null,
 				cached: false,
+				analysisRecord: {
+					symbol,
+					eventCategory: EventCategory.NONE,
+					sentiment: geminiAnalysis.sentiment_score ?? 0,
+					confidence: geminiAnalysis.confidence ?? 0,
+					headline: geminiAnalysis.headline || '',
+					alertSent: false,
+					promptVersion: geminiAnalysis.promptVersion,
+					tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+				},
 			};
 		}
 
@@ -706,6 +1107,16 @@ class NewsAnalyzer {
 				status: AnalysisStatus.ANALYZED,
 				alert: null,
 				cached: false,
+				analysisRecord: {
+					symbol,
+					eventCategory: geminiAnalysis.event_category,
+					sentiment: geminiAnalysis.sentiment_score ?? 0,
+					confidence: geminiAnalysis.confidence ?? 0,
+					headline: geminiAnalysis.headline || '',
+					alertSent: false,
+					promptVersion: geminiAnalysis.promptVersion,
+					tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+				},
 			};
 		}
 
@@ -719,6 +1130,16 @@ class NewsAnalyzer {
 					status: AnalysisStatus.ANALYZED,
 					alert: null,
 					cached: false,
+					analysisRecord: {
+						symbol,
+						eventCategory: geminiAnalysis.event_category,
+						sentiment: geminiAnalysis.sentiment_score ?? 0,
+						confidence: enrichmentMetadata.enriched_confidence,
+						headline: geminiAnalysis.headline || '',
+						alertSent: false,
+						promptVersion: geminiAnalysis.promptVersion,
+						tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+					},
 				};
 			}
 		}
@@ -734,56 +1155,184 @@ class NewsAnalyzer {
 				alert,
 				deliveryResults: [],
 				cached: false,
+				analysisRecord: {
+					symbol,
+					eventCategory: alert.eventCategory,
+					sentiment: alert.sentimentScore ?? 0,
+					confidence: alert.confidence,
+					headline: alert.headline || geminiAnalysis.headline || '',
+					alertSent: false,
+					promptVersion: alert.promptVersion || geminiAnalysis.promptVersion,
+					tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+				},
 			};
 		}
 
-		// Claim the cache key atomically before delivering the alert to prevent race conditions
-		const claimed = await this.cache.claim(symbol, geminiAnalysis.event_category);
-		if (!claimed) {
-			console.info('[Analyzer] Duplicate alert detected during claim, suppressing delivery for:', symbol, geminiAnalysis.event_category);
-			const cached = await this.cache.get(symbol, geminiAnalysis.event_category);
+		if (options.deferDelivery) {
 			return {
-				status: AnalysisStatus.CACHED,
-				alert: cached ? cached.alert : alert,
-				deliveryResults: cached ? cached.deliveryResults : [],
-				cached: true,
-			};
-		}
-
-		// Send to all notification channels
-		console.info('[Analyzer] Sending alert:', symbol, 'confidence:', alert.confidence.toFixed(2), 'event:', alert.eventCategory);
-		const notificationMgr = getNotificationManager();
-		if (!notificationMgr) {
-			console.warn('[Analyzer] NotificationManager not initialized - skipping alert delivery');
-			return {
+				symbol,
 				status: AnalysisStatus.ANALYZED,
 				alert,
 				deliveryResults: [],
 				cached: false,
+				_pendingDelivery: {
+					notificationMgr: getNotificationManager(),
+					alert,
+					routing,
+					geminiAnalysis,
+					options,
+					tokenUsage,
+				},
+				analysisRecord: {
+					symbol,
+					eventCategory: alert.eventCategory,
+					sentiment: alert.sentimentScore ?? 0,
+					confidence: alert.confidence,
+					headline: alert.headline || geminiAnalysis.headline || '',
+					alertSent: false,
+					promptVersion: alert.promptVersion || geminiAnalysis.promptVersion,
+					tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+				},
 			};
 		}
-		const deliveryResults = await sendWithNotificationRouting(notificationMgr, alert, routing);
+
+		const candidate = {
+			symbol,
+			status: AnalysisStatus.ANALYZED,
+			alert,
+			deliveryResults: [],
+			cached: false,
+			_pendingDelivery: {
+				notificationMgr: getNotificationManager(),
+				alert,
+				routing,
+				geminiAnalysis,
+				options,
+				tokenUsage,
+			},
+			analysisRecord: {
+				symbol,
+				eventCategory: alert.eventCategory,
+				sentiment: alert.sentimentScore ?? 0,
+				confidence: alert.confidence,
+				headline: alert.headline || geminiAnalysis.headline || '',
+				alertSent: false,
+				promptVersion: alert.promptVersion || geminiAnalysis.promptVersion,
+				tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+			},
+		};
+
+		await this.executePendingDelivery(candidate, requestId);
+		return candidate;
+	}
+
+	async executePendingDelivery(candidate, requestId, callOptions = {}) {
+		if (!candidate || !candidate._pendingDelivery) {
+			return;
+		}
+
+		if (candidate._pendingDelivery.type === 'cached_retry') {
+			await this.executePendingCachedRedelivery(candidate, requestId, callOptions);
+			return;
+		}
+
+		const {
+			notificationMgr,
+			alert,
+			routing,
+			geminiAnalysis,
+			options = {},
+			tokenUsage,
+		} = candidate._pendingDelivery;
+		const symbol = candidate.symbol;
+		const mergedOptions = { ...options, ...callOptions };
+
+		if (mergedOptions.signal?.aborted) {
+			console.warn('[Analyzer] Pending delivery aborted by signal for:', symbol);
+			delete candidate._pendingDelivery;
+			return;
+		}
+		if (typeof mergedOptions.deadline === 'number' && Date.now() >= mergedOptions.deadline) {
+			console.warn('[Analyzer] Pending delivery aborted: deadline exceeded for:', symbol);
+			delete candidate._pendingDelivery;
+			return;
+		}
+
+		// Claim the cache key atomically before delivering the alert to prevent race conditions
+		const claimed = await this.cache.claim(symbol, geminiAnalysis.event_category, mergedOptions);
+		if (!claimed) {
+			console.info('[Analyzer] Duplicate alert detected during claim, suppressing delivery for:', symbol, geminiAnalysis.event_category);
+			const cached = await this.cache.get(symbol, geminiAnalysis.event_category);
+			candidate.status = AnalysisStatus.CACHED;
+			candidate.alert = cached ? cached.alert : alert;
+			candidate.deliveryResults = cached ? cached.deliveryResults : [];
+			candidate.cached = true;
+			delete candidate._pendingDelivery;
+			return;
+		}
+
+		if (!notificationMgr) {
+			console.warn('[Analyzer] NotificationManager not initialized - skipping alert delivery');
+			await this.cache.releaseClaim(symbol, geminiAnalysis.event_category);
+			candidate.deliveryResults = [];
+			delete candidate._pendingDelivery;
+			return;
+		}
+
+		if (mergedOptions.signal?.aborted) {
+			console.warn('[Analyzer] Pending delivery aborted by signal before notification dispatch for:', symbol);
+			await this.cache.releaseClaim(symbol, geminiAnalysis.event_category);
+			delete candidate._pendingDelivery;
+			return;
+		}
+		if (typeof mergedOptions.deadline === 'number' && Date.now() >= mergedOptions.deadline) {
+			console.warn('[Analyzer] Pending delivery aborted: deadline exceeded before notification dispatch for:', symbol);
+			await this.cache.releaseClaim(symbol, geminiAnalysis.event_category);
+			delete candidate._pendingDelivery;
+			return;
+		}
+
+		console.info('[Analyzer] Sending alert:', symbol, 'confidence:', typeof alert?.confidence === 'number' ? alert.confidence.toFixed(2) : 'N/A', 'event:', alert?.eventCategory || geminiAnalysis?.event_category);
+		const deliveryResults = await sendWithNotificationRouting(notificationMgr, alert, routing, { signal: mergedOptions.signal });
 		console.info('[Analyzer] Alert delivery results for', symbol, ':', deliveryResults);
+		candidate.deliveryResults = deliveryResults;
 
 		const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 		if (signalOutcomeService.isEnabled()) {
-			const side = (alert.sentimentScore > 0) ? 'BUY' : 'SELL';
-			signalOutcomeService.recordSignal({
-				requestId,
-				source: 'news-monitor',
-				symbol: alert.symbol,
-				assetClass: options.assetClassBySymbol
-					? options.assetClassBySymbol[String(alert.symbol).trim().toUpperCase()]
-					: null,
-				exchange: alert.marketContext && alert.marketContext.source === 'binance' ? 'BINANCE' : 'UNKNOWN',
-				timeframe: null,
-				setupType: 'news-alert',
-				score: alert.confidence,
-				side,
-				price: alert.marketContext ? alert.marketContext.price : null,
-				sources: alert.sources || [],
-				tokenUsage: alert.enriched ? alert.enriched.tokenUsage : null,
-			}).catch(() => {});
+			const sentimentScore = typeof alert.sentimentScore === 'number' ? alert.sentimentScore : 0;
+			const hasUncertainty = typeof alert.uncertainty_reason === 'string' && alert.uncertainty_reason.trim().length > 0;
+			const meetsConviction = Math.abs(sentimentScore) >= 0.15 && !hasUncertainty;
+
+			if (meetsConviction) {
+				const side = (sentimentScore > 0) ? 'BUY' : 'SELL';
+				const stop = (alert.marketContext && typeof alert.marketContext.stop === 'number')
+					? alert.marketContext.stop
+					: (typeof alert.stop === 'number' ? alert.stop : null);
+				const target = (alert.marketContext && typeof alert.marketContext.target === 'number')
+					? alert.marketContext.target
+					: (typeof alert.target === 'number' ? alert.target : null);
+
+				signalOutcomeService.recordSignal({
+					requestId,
+					source: 'news-monitor',
+					symbol: alert.symbol,
+					assetClass: mergedOptions.assetClassBySymbol
+						? mergedOptions.assetClassBySymbol[String(alert.symbol).trim().toUpperCase()]
+						: null,
+					exchange: alert.marketContext && alert.marketContext.source === 'binance' ? 'BINANCE' : 'UNKNOWN',
+					timeframe: null,
+					setupType: 'news-alert',
+					score: alert.confidence,
+					confidenceScore: alert.confidence,
+					side,
+					price: alert.marketContext ? alert.marketContext.price : null,
+					priceSource: alert.marketContext ? alert.marketContext.source : null,
+					stop,
+					target,
+					sources: alert.sources || [],
+					tokenUsage: alert.enriched ? alert.enriched.tokenUsage : null,
+				}).catch(() => {});
+			}
 		}
 
 		// Cache the final results (updates the claimed cache entry with final metadata/results)
@@ -799,12 +1348,199 @@ class NewsAnalyzer {
 			deliveryResults,
 		});
 
-		return {
-			status: AnalysisStatus.ANALYZED,
-			alert,
-			deliveryResults,
-			cached: false,
+		const alertSent = Array.isArray(deliveryResults) && deliveryResults.some((d) => d && d.success === true);
+		if (candidate.analysisRecord) {
+			candidate.analysisRecord.alertSent = alertSent;
+		}
+		candidate._alertSent = alertSent;
+		delete candidate._pendingDelivery;
+	}
+
+	async executePendingCachedRedelivery(candidate, requestId, callOptions = {}) {
+		const {
+			symbol,
+			category,
+			cached,
+			routing,
+			notificationMgr,
+			requestedChannels,
+			retryChannels,
+			activeCachedDeliveryResults,
+			options = {},
+		} = candidate._pendingDelivery;
+		const mergedOptions = { ...options, ...callOptions };
+		const activeCachedResults = Array.isArray(activeCachedDeliveryResults)
+			? activeCachedDeliveryResults
+			: (Array.isArray(cached?.deliveryResults) ? cached.deliveryResults : []);
+		const resolvedRetryChannels = Array.isArray(retryChannels)
+			? retryChannels
+			: (() => {
+				const successfulChannels = new Set(
+					activeCachedResults.filter((r) => r.success).map((r) => r.channel),
+				);
+				const targetChannels = Array.isArray(requestedChannels)
+					? requestedChannels
+					: (routing?.channels && routing.channels.length > 0
+						? routing.channels
+						: (notificationMgr?.getAllChannelNames?.() || []));
+				return targetChannels.filter((c) => !successfulChannels.has(c));
+			})();
+
+		if (mergedOptions.signal?.aborted || (typeof mergedOptions.deadline === 'number' && Date.now() >= mergedOptions.deadline)) {
+			console.warn('[Analyzer] Cached redelivery aborted by signal/deadline for:', symbol);
+			candidate.deliveryResults = activeCachedResults;
+			delete candidate._pendingDelivery;
+			return;
+		}
+
+		const claimedRetryChannels = [];
+		for (const channel of resolvedRetryChannels) {
+			if (mergedOptions.signal?.aborted || (typeof mergedOptions.deadline === 'number' && Date.now() >= mergedOptions.deadline)) {
+				break;
+			}
+			if (await this.cache.claimDelivery(symbol, category, channel, mergedOptions)) {
+				claimedRetryChannels.push(channel);
+			}
+		}
+
+		if (claimedRetryChannels.length === 0) {
+			candidate.deliveryResults = activeCachedResults;
+			delete candidate._pendingDelivery;
+			return;
+		}
+
+		const leaseAbortControllers = new Map(
+			claimedRetryChannels.map((channel) => [channel, new AbortController()]),
+		);
+		const leaseOwnership = new Map(
+			claimedRetryChannels.map((channel) => [channel, true]),
+		);
+		const persistenceOwnership = new Map(
+			claimedRetryChannels.map((channel) => [channel, true]),
+		);
+		const markLeaseOwnershipLost = (channel) => {
+			if (leaseOwnership.get(channel)) {
+				leaseOwnership.set(channel, false);
+				persistenceOwnership.set(channel, false);
+				leaseAbortControllers.get(channel)?.abort('Cached delivery lease ownership lost');
+			}
 		};
+		const markPersistenceOwnershipLost = (channel) => {
+			persistenceOwnership.set(channel, false);
+		};
+		const renewLease = async (channel) => {
+			try {
+				const renewed = await this.cache.renewDelivery(symbol, category, channel);
+				if (renewed === false) {
+					markLeaseOwnershipLost(channel);
+				} else if (renewed !== true) {
+					markPersistenceOwnershipLost(channel);
+				}
+			} catch (error) {
+				markPersistenceOwnershipLost(channel);
+				console.warn('[Analyzer] Cached delivery lease renewal indeterminate:', error.message);
+			}
+		};
+		const leaseDeadline = mergedOptions.deadline ?? Date.now() + this.timeout;
+		const waitForLeaseRenewals = async (renewalEntries) => {
+			const pending = renewalEntries
+				.filter(([, renewal]) => renewal)
+				.map(([channel, renewal]) => {
+					const state = { channel, settled: false };
+					state.promise = Promise.resolve(renewal).finally(() => { state.settled = true; });
+					return state;
+				});
+			if (pending.length === 0) return [];
+			const remainingMs = leaseDeadline - Date.now();
+			if (remainingMs <= 0) return pending.map(({ channel }) => channel);
+			let timeoutHandle;
+			try {
+				const completed = await Promise.race([
+					Promise.all(pending.map(({ promise }) => promise)).then(() => true),
+					new Promise((resolve) => {
+						timeoutHandle = setTimeout(() => resolve(false), remainingMs);
+					}),
+				]);
+				return completed ? [] : pending.filter(({ settled }) => !settled).map(({ channel }) => channel);
+			} finally {
+				clearTimeout(timeoutHandle);
+			}
+		};
+
+		const pendingLeaseRenewals = new Map(
+			claimedRetryChannels.map((channel) => [channel, null]),
+		);
+		const queueLeaseRenewal = (channel) => {
+			if (pendingLeaseRenewals.get(channel)) {
+				return;
+			}
+			const renewal = renewLease(channel).finally(() => pendingLeaseRenewals.set(channel, null));
+			pendingLeaseRenewals.set(channel, renewal);
+		};
+		const leaseRenewalIntervals = claimedRetryChannels.map((channel) => setInterval(
+			() => queueLeaseRenewal(channel),
+			this.cache.getDeliveryLeaseRenewIntervalMs(),
+		));
+
+		try {
+			const signalByChannel = Object.fromEntries(
+				claimedRetryChannels.map((channel) => {
+					const leaseSignal = leaseAbortControllers.get(channel).signal;
+					const signals = [leaseSignal, mergedOptions.signal].filter(Boolean);
+					return [channel, signals.length > 1 ? AbortSignal.any(signals) : leaseSignal];
+				}),
+			);
+			const retryResults = await sendWithNotificationRouting(
+				notificationMgr,
+				cached.alert,
+				{ ...routing, channels: claimedRetryChannels },
+				{ signalByChannel, signal: mergedOptions.signal },
+			);
+			leaseRenewalIntervals.forEach(clearInterval);
+			const timedOutPendingChannels = await waitForLeaseRenewals([...pendingLeaseRenewals.entries()]);
+			timedOutPendingChannels.forEach(markPersistenceOwnershipLost);
+			const finalRenewals = claimedRetryChannels
+				.filter((channel) => !pendingLeaseRenewals.get(channel))
+				.map((channel) => [channel, renewLease(channel)]);
+			const timedOutFinalChannels = await waitForLeaseRenewals(finalRenewals);
+			timedOutFinalChannels.forEach(markPersistenceOwnershipLost);
+			const ownedRetryChannels = claimedRetryChannels.filter((channel) => leaseOwnership.get(channel));
+			const persistenceRetryChannels = claimedRetryChannels.filter((channel) => persistenceOwnership.get(channel));
+			const successfulRetryChannels = new Set(
+				retryResults.filter((result) => result.success).map((result) => result.channel),
+			);
+			const attemptedDeliveryResults = retryResults.filter((result) => ownedRetryChannels.includes(result.channel));
+			const redelivered = attemptedDeliveryResults.some((result) => result && result.success);
+			candidate.deliveryResults = mergeDeliveryResults(
+				activeCachedDeliveryResults,
+				retryResults.filter((result) => ownedRetryChannels.includes(result.channel)),
+				requestedChannels,
+			);
+			candidate.attemptedDeliveryResults = attemptedDeliveryResults;
+			if (redelivered) {
+				candidate._redelivered = true;
+			}
+			if (ownedRetryChannels.length > 0) {
+				await this.cache.set(symbol, category, {
+					...cached,
+					routing: getCachedRoutingMetadata(routing, cached.routing, notificationMgr),
+					deliveryResults: candidate.deliveryResults,
+				}, {
+					preserveTtl: true,
+					deliveryChannels: persistenceRetryChannels,
+					localDeliveryChannels: ownedRetryChannels,
+					localOnlyChannels: ownedRetryChannels.filter(
+						(channel) => successfulRetryChannels.has(channel) && !persistenceRetryChannels.includes(channel),
+					),
+					awaitPersistence: persistenceRetryChannels.length > 0,
+					skipPersistence: persistenceRetryChannels.length === 0,
+				});
+			}
+		} finally {
+			leaseRenewalIntervals.forEach(clearInterval);
+			claimedRetryChannels.forEach((channel) => this.cache.releaseDelivery(symbol, category, channel));
+			delete candidate._pendingDelivery;
+		}
 	}
 
 	/**
@@ -883,6 +1619,30 @@ class NewsAnalyzer {
 			const [data, klines] = await Promise.all([pricePromise, klinesPromise]);
 
 			console.debug(`[Analyzer] Binance price for ${symbol}: $${data.price}`);
+			const price = parseFloat(data.price);
+			const priceCloseTime = Number(data.closeTime);
+			const targetCloseTime = (Number.isFinite(priceCloseTime) && priceCloseTime > 0
+				? priceCloseTime
+				: Date.now()) - 24 * 60 * 60 * 1000;
+			const referenceKline = Array.isArray(klines)
+				? klines.reduce((closest, kline) => {
+					const closeTime = getKlineCloseTime(kline);
+					const closestCloseTime = getKlineCloseTime(closest);
+					return Number.isFinite(closeTime)
+						&& (!Number.isFinite(closestCloseTime)
+							|| Math.abs(closeTime - targetCloseTime) < Math.abs(closestCloseTime - targetCloseTime))
+						? kline
+						: closest;
+				}, null)
+				: null;
+			const referenceCloseTime = getKlineCloseTime(referenceKline);
+			const price24hAgo = Number.isFinite(referenceCloseTime)
+				&& Math.abs(referenceCloseTime - targetCloseTime) <= 60 * 60 * 1000
+				? getKlineClose(referenceKline)
+				: null;
+			const change24h = Number.isFinite(price24hAgo) && price24hAgo > 0 && Number.isFinite(price)
+				? Math.round(((price - price24hAgo) / price24hAgo) * 10000) / 100
+				: null;
 
 			let volumeRatio = null;
 			let rsi = null;
@@ -894,8 +1654,8 @@ class NewsAnalyzer {
 			}
 
 			return {
-				price: parseFloat(data.price),
-				change24h: null, // Binance getAvgPrice doesn't return 24h change, would need additional call
+				price,
+				change24h,
 				volumeRatio,
 				rsi,
 				source: 'binance',
@@ -911,99 +1671,15 @@ class NewsAnalyzer {
 	 * Fetch price via Gemini GoogleSearch
 	 * Extracts numeric price data from grounded search snippets
 	 * @param {string} symbol - Financial symbol
+	 * @param {TokenUsageTracker} [tokenUsage] - Optional token usage tracker
 	 * @returns {Promise<Object>} MarketContext with parsed price/change or null
 	 */
 	async fetchGeminiPrice(symbol, tokenUsage) {
-
-		if (ENABLE_NEWS_MONITOR_TEST_MODE) {
-			console.debug(`[Analyzer] Test mode enabled - returning mock Gemini price for ${symbol}`);
-			return {
-				price: 123.45,
-				change24h: 1.23,
-				source: 'gemini-grounding-test-mode',
-				timestamp: Date.now(),
-				context: 'Mocked price data for testing purposes.',
-				sources: ['https://example.com/mock-price'],
-			};
-		}
-
-		const genaiClient = require('../../../../services/grounding/genaiClient');
-		let { price, change24h } = { price: null, change24h: null };
-		let timeoutHandle;
-
-		try {
-			// Timeout wrapper (~20s for Gemini)
-			const timeoutMs = 30000;
-			const timeoutPromise = new Promise((_, reject) => {
-				timeoutHandle = setTimeout(() => reject(new Error('Gemini fetch timeout')), timeoutMs);
-			});
-
-			const { text: priceQuery } = await promptService.getTextPrompt(
-				PromptKeys.MARKET_PRICE_FETCH,
-				{ symbol },
-			);
-
-			// Use Gemini GoogleSearch to fetch current price
-			const priceSearchPromise = genaiClient.search({
-				query: priceQuery,
-				maxResults: 3,
-				rethrowQuotaErrors: true,
-			});
-
-			const priceSearchResult = await Promise.race([priceSearchPromise, timeoutPromise]);
-			clearTimeout(timeoutHandle);
-
-			if (tokenUsage && priceSearchResult && priceSearchResult.usage) {
-				tokenUsage.addUsage(priceSearchResult.usage, GROUNDING_MODEL_NAME);
-			}
-
-			// Extract JSON from response - try to find valid JSON
-			let priceSearchResultParsed = null;
-			if (priceSearchResult.searchResultText) {
-				// Try multiple patterns to extract JSON
-				const jsonPatterns = [
-					/{[^{}]*"price"[^{}]*}/, // Look for object with "price" property first
-					/{[\s\S]*}/, // Fallback to any JSON-like structure
-				];
-
-				for (const pattern of jsonPatterns) {
-					const jsonMatch = priceSearchResult.searchResultText.match(pattern);
-					if (jsonMatch) {
-						try {
-							priceSearchResultParsed = JSON.parse(jsonMatch[0]);
-							break;
-						} catch (parseErr) {
-							// Continue to next pattern if this one fails
-							continue;
-						}
-					}
-				}
-			}
-
-			if (!priceSearchResultParsed) {
-				throw new Error('No valid JSON found in price search response');
-			}
-			price = parseFloat(priceSearchResultParsed.price);
-			change24h = parseFloat(priceSearchResultParsed.change_24h);
-
-			console.debug(`[Analyzer] Gemini GoogleSearch market context fetched for ${symbol}: price=$${price}, change24h=${change24h}%`);
-			return {
-				price,
-				change24h,
-				source: 'gemini-grounding',
-				timestamp: Date.now(),
-				context: priceSearchResultParsed.context || '',
-				sources: priceSearchResultParsed.sources || [],
-			};
-		} catch (error) {
-			if (isGeminiQuotaError(error)) {
-				throw error;
-			}
-			console.warn(`[Analyzer] Gemini price fetch failed for ${symbol}: ${error.message}`);
-			return null;
-		} finally {
-			clearTimeout(timeoutHandle);
-		}
+		return geminiPriceService.fetchGeminiPrice(symbol, {
+			tokenUsage,
+			timeoutMs: 30000,
+			rethrowQuotaErrors: true,
+		});
 	}
 
 	/**
@@ -1090,6 +1766,24 @@ class NewsAnalyzer {
 			}
 		}
 
+		if (geminiAnalysis.time_horizon && typeof geminiAnalysis.time_horizon === 'string' && geminiAnalysis.time_horizon.trim()) {
+			const horizonLabel = this.timeHorizonLabel(geminiAnalysis.time_horizon);
+			if (horizonLabel) {
+				context += `\n*Horizonte:* ${horizonLabel}`;
+			}
+		}
+
+		if (geminiAnalysis.invalidation_hint && typeof geminiAnalysis.invalidation_hint === 'string' && geminiAnalysis.invalidation_hint.trim()) {
+			const escapedInvalidationHint = new MarkdownV2Formatter().format(geminiAnalysis.invalidation_hint.trim());
+			context += `\n*Invalidación:* ${escapedInvalidationHint}`;
+		}
+
+		// Derive outcome barriers when marketContext has a valid numeric price
+		let derivedBarriers = null;
+		if (marketContext && typeof marketContext.price === 'number' && Number.isFinite(marketContext.price) && marketContext.price > 0) {
+			derivedBarriers = this.deriveBarriers(marketContext.price, geminiAnalysis.sentiment_score, geminiAnalysis.time_horizon);
+		}
+
 		// Build citations from sources
 		const citations = [];
 		if (geminiAnalysis.sources && Array.isArray(geminiAnalysis.sources)) {
@@ -1119,10 +1813,13 @@ class NewsAnalyzer {
 			citations,
 			extraText: enrichedExtraText,
 			tokenUsage: tokenUsageSummary || undefined,
+			time_horizon: geminiAnalysis.time_horizon,
+			invalidation_hint: geminiAnalysis.invalidation_hint,
 		};
 
 		return {
 			symbol,
+			source: 'news-monitor',
 			eventCategory: geminiAnalysis.event_category,
 			headline: geminiAnalysis.headline,
 			sentimentScore: geminiAnalysis.sentiment_score,
@@ -1142,9 +1839,16 @@ class NewsAnalyzer {
 			uncertainty_reason: geminiAnalysis.uncertainty_reason,
 			invalidation_hint: geminiAnalysis.invalidation_hint,
 			calibration: geminiAnalysis.calibration || undefined,
+			promptVersion: geminiAnalysis.promptVersion || undefined,
 			timestamp: Date.now(),
 			marketContext: marketContext || undefined,
 			enrichmentMetadata: enrichmentMetadata || undefined,
+			stop: (marketContext && typeof marketContext.stop === 'number')
+				? marketContext.stop
+				: (derivedBarriers ? derivedBarriers.stop : undefined),
+			target: (marketContext && typeof marketContext.target === 'number')
+				? marketContext.target
+				: (derivedBarriers ? derivedBarriers.target : undefined),
 		};
 	}
 
@@ -1191,6 +1895,17 @@ class NewsAnalyzer {
 			if (typeof marketContext.rsi === 'number') {
 				message += `RSI (14): ${marketContext.rsi.toFixed(1)}\n`;
 			}
+		}
+
+		if (analysis.time_horizon && typeof analysis.time_horizon === 'string' && analysis.time_horizon.trim()) {
+			const horizonLabel = this.timeHorizonLabel(analysis.time_horizon);
+			if (horizonLabel) {
+				message += `Horizonte: ${horizonLabel}\n`;
+			}
+		}
+
+		if (analysis.invalidation_hint && typeof analysis.invalidation_hint === 'string' && analysis.invalidation_hint.trim()) {
+			message += `Invalidación: ${analysis.invalidation_hint.trim()}\n`;
 		}
 
 		if (analysis.sources && Array.isArray(analysis.sources) && analysis.sources.length > 0) {
@@ -1243,6 +1958,84 @@ class NewsAnalyzer {
 	}
 
 	/**
+	 * Get human-friendly label for time horizon
+	 * @param {string} horizon - Time horizon
+	 * @returns {string} Label
+	 */
+	timeHorizonLabel(horizon) {
+		if (!horizon || typeof horizon !== 'string') return '';
+		const labels = {
+			very_short_term: 'Muy corto plazo',
+			short_term: 'Corto plazo',
+			medium_term: 'Medio plazo',
+			long_term: 'Largo plazo',
+		};
+		return labels[horizon.toLowerCase()] || horizon;
+	}
+
+	/**
+	 * Derive conservative barriers (stop and target) from price, sentiment, and time horizon.
+	 * @param {number} price - Entry price
+	 * @param {number} sentimentScore - Sentiment score [-1, 1]
+	 * @param {string} [timeHorizon='short_term'] - Time horizon string
+	 * @param {Object} [options] - Optional overrides for minConviction and rewardMultiplier
+	 * @returns {Object|null} { stop, target, side, stopPct, rewardMultiplier } or null if invalid/low conviction
+	 */
+	deriveBarriers(price, sentimentScore, timeHorizon, options = {}) {
+		if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) {
+			return null;
+		}
+		if (typeof sentimentScore !== 'number' || !Number.isFinite(sentimentScore)) {
+			return null;
+		}
+
+		const minConviction = typeof options.minConviction === 'number' ? options.minConviction : 0.15;
+		if (Math.abs(sentimentScore) < minConviction) {
+			return null;
+		}
+
+		const side = sentimentScore > 0 ? 'BUY' : 'SELL';
+		const TIME_HORIZON_STOP_PCT = {
+			very_short_term: 0.01,
+			short_term: 0.02,
+			medium_term: 0.035,
+			long_term: 0.05,
+		};
+		const normalizedHorizon = typeof timeHorizon === 'string' ? timeHorizon.toLowerCase() : 'short_term';
+		const stopPct = TIME_HORIZON_STOP_PCT[normalizedHorizon] || 0.02;
+		const rewardMultiplier = typeof options.rewardMultiplier === 'number' ? options.rewardMultiplier : 1.5;
+		const riskDistance = price * stopPct;
+
+		if (side === 'BUY') {
+			const stop = price - riskDistance;
+			const target = price + (rewardMultiplier * riskDistance);
+			if (stop > 0 && stop < price && target > price) {
+				return {
+					stop: parseFloat(stop.toFixed(8)),
+					target: parseFloat(target.toFixed(8)),
+					side,
+					stopPct,
+					rewardMultiplier,
+				};
+			}
+		} else {
+			const stop = price + riskDistance;
+			const target = price - (rewardMultiplier * riskDistance);
+			if (target > 0 && stop > price && target < price) {
+				return {
+					stop: parseFloat(stop.toFixed(8)),
+					target: parseFloat(target.toFixed(8)),
+					side,
+					stopPct,
+					rewardMultiplier,
+				};
+			}
+		}
+
+		return null;
+	}
+
+	/**
    * Helper for timeout promise
    * @param {number} ms - Timeout milliseconds
    * @returns {Promise} Promise that rejects after timeout
@@ -1273,6 +2066,9 @@ module.exports = {
 	isKlineOpen,
 	parseNewsTimeoutMs,
 	parseNewsAlertThreshold,
+	parseNewsMaxAlertsPerBatch,
+	parseNewsMaxAlertsPerWindow,
+	parseNewsMaxAlertsPerWindowMs,
 	getCachedRoutingMetadata,
 	hashDiscordWebhook,
 };

@@ -7,6 +7,7 @@ const {
 	parseNotificationRouting,
 	sendWithNotificationRouting,
 } = require('../../../../services/notification/requestRouting');
+const alertStorageService = require('../../../../services/storage/AlertStorageService');
 const MAX_MESSAGE_LENGTH = 4000;
 
 function validateMessageRequest(body) {
@@ -32,9 +33,17 @@ function validateMessageRequest(body) {
 
 function postMessage(botOrGetter) {
 	return async (req, res) => {
+		const startTime = Date.now();
 		try {
-			const { text, channels, telegramChatId, whatsappChatId, discordWebhookUrl } = validateMessageRequest(req.body);
-			const alert = { text, telegramChatId, whatsappChatId, discordWebhookUrl };
+			const routing = validateMessageRequest(req.body);
+			const alert = {
+				text: routing.text,
+				source: 'generic-message',
+				telegramChatId: routing.telegramChatId,
+				telegramThreadId: routing.telegramThreadId,
+				whatsappChatId: routing.whatsappChatId,
+				discordWebhookUrl: routing.discordWebhookUrl,
+			};
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
@@ -62,11 +71,27 @@ function postMessage(botOrGetter) {
 			const results = await sendWithNotificationRouting(
 				notificationManager,
 				alert,
-				{ channels, telegramChatId, whatsappChatId, discordWebhookUrl },
+				routing,
 				{ http: httpContext },
 			);
 
 			res.json({ success: true, results });
+
+			// Fire-and-forget: persist after responding so storage never blocks delivery.
+			// Do not persist raw discordWebhookUrl to avoid storing sensitive webhook credentials.
+			alertStorageService.saveAlert({
+				text: alert.text,
+				enriched: false,
+				enrichmentData: null,
+				tokenUsage: null,
+				deliveryResults: results,
+				channels: routing.channels || results.map((result) => result.channel).filter(Boolean),
+				source: 'webhook-message',
+				processingTimeMs: Math.max(0, Date.now() - startTime),
+				telegramChatId: routing.telegramChatId,
+				telegramThreadId: routing.telegramThreadId,
+				whatsappChatId: routing.whatsappChatId,
+			}).catch(() => {});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
 				return res.status(error.statusCode).json({

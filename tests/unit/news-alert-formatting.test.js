@@ -69,6 +69,17 @@ describe('News Alert Source Formatting', () => {
 			expect(message).not.toContain('*Technical Levels*');
 		});
 
+		it('escapes raw markdown delimiters in untrusted level strings', () => {
+			const alert = {
+				...mockEnrichedAlert,
+				technical_levels: { supports: ['80_000', '79*500'], resistances: [] },
+			};
+			const message = formatter.formatEnriched(alert);
+
+			expect(message).toContain('Supports: 80\\_000, 79\\*500');
+			expect(message).not.toContain('80_000,');
+		});
+
 		it('should handle missing sources', () => {
 			const alert = { ...mockEnrichedAlert, sources: [] };
 			const message = formatter.formatEnriched(alert);
@@ -361,5 +372,109 @@ describe('News Alert Source Formatting', () => {
 			expect(message).toContain('Market News \\(Updated\\)');
 			expect(message).toContain('https://example.com/news');
 		});
+
+		it('should include Horizonte and Invalidación lines when time_horizon and invalidation_hint are present', () => {
+			const analysis = {
+				event_category: 'price_surge',
+				headline: 'BTC breaks major resistance',
+				sentiment_score: 0.75,
+				confidence: 0.85,
+				time_horizon: 'short_term',
+				invalidation_hint: 'Reversal below 80,000 support',
+			};
+
+			const message = analyzer.formatAlertMessage('BTCUSDT', analysis, { price: 83500 });
+			expect(message).toContain('Horizonte: Corto plazo');
+			expect(message).toContain('Invalidación: Reversal below 80,000 support');
+		});
+
+		it('should omit Horizonte and Invalidación lines when empty or absent', () => {
+			const analysis = {
+				event_category: 'price_surge',
+				headline: 'BTC breaks major resistance',
+				sentiment_score: 0.75,
+				confidence: 0.85,
+				time_horizon: '',
+				invalidation_hint: '',
+			};
+
+			const message = analyzer.formatAlertMessage('BTCUSDT', analysis, null);
+			expect(message).not.toContain('Horizonte:');
+			expect(message).not.toContain('Invalidación:');
+		});
+	});
+
+	describe('WhatsApp and MarkdownV2 news alert formatting with invalidation and horizon', () => {
+		const WhatsAppMarkdownFormatter = require('../../src/services/notification/formatters/whatsappMarkdownFormatter');
+		const whatsappFormatter = new WhatsAppMarkdownFormatter();
+
+		it('should render Horizonte and Invalidación in MarkdownV2Formatter when provided in enriched summary or fields', () => {
+			const enrichedAlert = {
+				originalText: 'BTCUSDT: Big surge',
+				summary: '*Sentiment:* Bullish 🚀 (0.80)\n*Price:* $85000\n*Horizonte:* Corto plazo\n*Invalidación:* Reversal below $82,000',
+				citations: [],
+			};
+
+			const formatted = formatter.formatEnriched(enrichedAlert);
+			expect(formatted).toContain('*Horizonte:* Corto plazo');
+			expect(formatted).toContain('*Invalidación:* Reversal below $82,000');
+		});
+
+		it('should render Horizonte and Invalidación in WhatsAppMarkdownFormatter when provided', async () => {
+			const enrichedAlert = {
+				originalText: 'BTCUSDT: Big surge',
+				summary: '*Sentiment:* Bullish 🚀 (0.80)\n*Price:* $85000\n*Horizonte:* Corto plazo\n*Invalidación:* Reversal below $82,000',
+				citations: [],
+			};
+
+			const formatted = await whatsappFormatter.formatEnriched(enrichedAlert);
+			expect(formatted).toContain('*Horizonte:* Corto plazo');
+			expect(formatted).toContain('*Invalidación:* Reversal below $82,000');
+		});
+
+		it('should render Entry, Invalidation, Target, and Risk/Reward in webhook alert for MarkdownV2Formatter', () => {
+			const enrichedAlert = {
+				original_text: 'BTCUSDT(60) pasó a señal de COMPRA',
+				sentiment: 'BULLISH',
+				sentiment_score: 0.75,
+				insights: ['Breakout confirmation'],
+				current_price: 85200.5,
+				setup_type: 'breakout',
+				invalidation_level: 83070.49,
+				target_level: 89460.52,
+				risk_reward_ratio: 2,
+			};
+
+			const formatted = formatter.formatWebhookAlert(enrichedAlert);
+			expect(formatted).toContain('*Risk Parameters*');
+			expect(formatted).toContain('Setup: breakout');
+			expect(formatted).toContain('Entry: 85200\\.5');
+			expect(formatted).toContain('Invalidation: 83070\\.49');
+			expect(formatted).toContain('Target: 89460\\.52');
+			expect(formatted).toContain('Risk/Reward: 2');
+		});
+
+		it('should render Entry, Invalidation, Target, and Risk/Reward in webhook alert for WhatsAppMarkdownFormatter', async () => {
+			const enrichedAlert = {
+				original_text: 'BTCUSDT(60) pasó a señal de COMPRA',
+				sentiment: 'BULLISH',
+				sentiment_score: 0.75,
+				insights: ['Breakout confirmation'],
+				current_price: 85200.5,
+				setup_type: 'breakout',
+				invalidation_level: 83070.49,
+				target_level: 89460.52,
+				risk_reward_ratio: 2,
+			};
+
+			const formatted = await whatsappFormatter.formatWebhookAlert(enrichedAlert);
+			expect(formatted).toContain('*Risk Parameters*');
+			expect(formatted).toContain('Setup: breakout');
+			expect(formatted).toContain('Entry: 85200.5');
+			expect(formatted).toContain('Invalidation: 83070.49');
+			expect(formatted).toContain('Target: 89460.52');
+			expect(formatted).toContain('Risk/Reward: 2');
+		});
 	});
 });
+

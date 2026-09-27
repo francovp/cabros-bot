@@ -109,6 +109,7 @@ const { nodeProfilingIntegration } = require('@sentry/profiling-node');
 const FEATURE_NAMES = {
 	'http-alert': 'alerts',
 	'news-monitor': 'news-monitor',
+	'market-scanner': 'market-scanner',
 	'telegram': 'telegram-alerts',
 	'whatsapp': 'whatsapp-alerts',
 	'discord': 'discord-alerts',
@@ -651,10 +652,12 @@ class SentryService {
 				error_type: event.type,
 				is_process_level: String(event.isProcessLevel),
 				...(event.http && {
-					endpoint: event.http.endpoint,
-					http_method: event.http.method,
-					status_code: String(event.http.statusCode),
-					http_category: `${Math.floor(event.http.statusCode / 100)}xx`,
+					...(event.http.endpoint && { endpoint: event.http.endpoint }),
+					...(event.http.method && { http_method: event.http.method }),
+					...(event.http.statusCode !== undefined && event.http.statusCode !== null && !isNaN(event.http.statusCode) && {
+						status_code: String(event.http.statusCode),
+						http_category: `${Math.floor(Number(event.http.statusCode) / 100)}xx`,
+					}),
 				}),
 				...(event.external && {
 					provider: event.external.provider,
@@ -691,6 +694,14 @@ class SentryService {
 				tags,
 				contexts,
 				extra,
+				...(event.type === 'external_failure' && event.external && {
+					fingerprint: [
+						event.type,
+						event.channel,
+						event.external.provider,
+						String(event.external.lastErrorCode || 'error'),
+					],
+				}),
 			});
 
 			console.debug(`[SentryService] Event captured: ${eventId} (channel=${event.channel}, type=${event.type})`);
@@ -877,6 +888,29 @@ class SentryService {
 			console.warn(`[SentryService] Failed to capture LLM metrics: ${error.message}`);
 		}
 	}
+
+	/**
+	 * Capture Firestore write metric
+	 * @param {Object} params
+	 * @param {string} params.domain
+	 * @param {'success' | 'failure'} params.status
+	 */
+	captureFirestoreWriteMetric({ domain, status }) {
+		if (!this.state.enabled) return;
+		try {
+			const tags = {
+				domain: domain || 'unknown',
+				status: status === 'success' ? 'success' : 'failure',
+			};
+			if (Sentry.metrics && typeof Sentry.metrics.count === 'function') {
+				Sentry.metrics.count('firestore_writes', 1, { tags });
+			}
+		} catch (error) {
+			// Never throw - monitoring failures should not affect application behavior
+			console.warn(`[SentryService] Failed to capture Firestore write metric: ${error.message}`);
+		}
+	}
+
 
 	/**
 	 * Flush pending events (for graceful shutdown)

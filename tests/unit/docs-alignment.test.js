@@ -185,6 +185,12 @@ describe('Documentation Alignment Policy', () => {
 		expect(envExample).toContain('AZURE_LLM_ENDPOINT=');
 	});
 
+	test('news-monitor documentation includes throttled status in README', () => {
+		const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+		expect(readme).toMatch(/"throttled":\s*0/);
+		expect(readme).toMatch(/- `?throttled`? -/);
+	});
+
 	test('Cloudflare documentation separates provider routing from status exposure', () => {
 		const envExample = fs.readFileSync(path.join(repoRoot, '.env.example'), 'utf8');
 		const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
@@ -209,6 +215,24 @@ describe('Documentation Alignment Policy', () => {
 			.sort();
 
 		expect(undocumentedKeys).toEqual([]);
+	});
+
+	test('multi-channel notification documentation matches runtime behavior', () => {
+		const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+		const staleDeliveryPatterns = [
+			/Retry:\s*Single request per delivery/i,
+			/Automatically truncated to 20,000 characters with ["']?…["']? suffix/i,
+			/WhatsApp automatically truncates messages\s*>\s*20,000/i,
+			/WhatsApp auto-truncates/i,
+		];
+
+		for (const pattern of staleDeliveryPatterns) {
+			expect(readme).not.toMatch(pattern);
+		}
+
+		expect(readme).toContain('DISCORD_MAX_RETRIES');
+		expect(readme).toContain('DISCORD_MAX_TOTAL_RETRY_WAIT_MS');
+		expect(readme).toMatch(/split(?:s|ting)? into (?:ordered|sequential) chunks/i);
 	});
 });
 

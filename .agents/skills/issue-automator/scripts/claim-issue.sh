@@ -298,13 +298,18 @@ newest_claim() {
 }
 
 # claim_comment_by_id <comment_id> -> single line "id<TAB>agent<TAB>session<TAB>created_at<TAB>freshness_ts<TAB>body"
-# for the specified comment_id, or empty if not found.
+# for the specified comment_id, or empty if not found. Returns 1 on read failure.
 claim_comment_by_id() {
   local target_id="$1"
   if [ -z "$target_id" ]; then return 0; fi
+  local all_claims rc=0
+  all_claims="$(claim_comments_rest)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    return 1
+  fi
   local line
-  line="$(claim_comments_rest | awk -F '\t' -v tid="$target_id" '$1+0 == tid+0 { print $0 }')" || READ_FAILED="1"
-  if [ "$READ_FAILED" == "1" ] || [ -z "$line" ]; then return 0; fi
+  line="$(printf '%s\n' "$all_claims" | awk -F '\t' -v tid="$target_id" '$1+0 == tid+0 { print $0 }')"
+  if [ -z "$line" ]; then return 0; fi
   local created_at rest agent session body_ts freshness_ts raw_body
   created_at="$(echo "$line" | cut -f2)"
   raw_body="$(echo "$line" | cut -f3)"
@@ -331,14 +336,18 @@ claim_comment_by_id() {
 # target_claim_renewed <target_comment_id> <takeover_comment_id>
 # -> returns 0 (true) if target comment was renewed by its owner and is now fresh (age <= TTL_MINUTES).
 # -> returns 1 (false) if target comment is still stale or missing.
+# -> returns 2 (error) if re-reading the claim comments fails (fail-closed).
 target_claim_renewed() {
   local target_id="$1" takeover_id="$2"
   if [ -z "$target_id" ] || [ "$target_id" -eq 0 ]; then
     return 1
   fi
-  local target_info
-  target_info="$(claim_comment_by_id "$target_id")" || READ_FAILED="1"
-  if [ "$READ_FAILED" == "1" ] || [ -z "$target_info" ]; then
+  local target_info rc=0
+  target_info="$(claim_comment_by_id "$target_id")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    return 2
+  fi
+  if [ -z "$target_info" ]; then
     return 1
   fi
 
@@ -638,7 +647,14 @@ if [ "$LABELED" == "true" ]; then
     if [ "$WINNER" != "$OUR_TAKEOVER_ID" ]; then
       lose_race "$OUR_TAKEOVER_ID" "Issue #${ISSUE_NUMBER}: takeover raced by another session (comment ${WINNER} won). Skipping — zero-work, no budget consumed."
     fi
-    if target_claim_renewed "$NEWEST_ID" "$OUR_TAKEOVER_ID"; then
+    renew_status=0
+    target_claim_renewed "$NEWEST_ID" "$OUR_TAKEOVER_ID" || renew_status=$?
+    if [ "$renew_status" -eq 2 ]; then
+      rollback_abandoned_claim "$OUR_TAKEOVER_ID" "false" "$NEWEST_ID" "takeover"
+      echo "RESULT=ERROR"
+      echo "Error: could not re-read claim comments to verify target claim renewal; our takeover comment was rolled back (fail-closed)." >&2
+      exit 1
+    elif [ "$renew_status" -eq 0 ]; then
       lose_race "$OUR_TAKEOVER_ID" "Issue #${ISSUE_NUMBER}: target claim comment ${NEWEST_ID} was renewed during takeover. Skipping — zero-work, no budget consumed."
     fi
     echo "RESULT=TAKEOVER"

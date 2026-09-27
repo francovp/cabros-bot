@@ -91,6 +91,36 @@ describe('Jobs API Integration Tests', () => {
 		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
 	});
 
+	it('accepts and persists job in firestore-poller mode without Redis', async () => {
+		process.env.JOB_EXECUTION_MODE = 'firestore-poller';
+		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+		delete process.env.REDIS_URL;
+
+		const response = await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] })
+			.expect(201);
+
+		expect(response.body).toMatchObject({
+			success: true,
+			jobId: expect.any(String),
+			status: 'processing',
+		});
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
+
+		const persisted = await jobRepository.get(response.body.jobId);
+		expect(persisted).toMatchObject({
+			jobId: response.body.jobId,
+			status: 'processing',
+			execution: {
+				mode: 'firestore-poller',
+				status: 'queued',
+				attempt: 0,
+			},
+		});
+	});
+
 	it('deduplicates concurrent job creation with one idempotency key', async () => {
 		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(async () => {
 			await new Promise((resolve) => setTimeout(resolve, 50));
@@ -440,6 +470,91 @@ describe('Jobs API Integration Tests', () => {
 		expect(statusRes.body.deliveryResults).toEqual([
 			expect.objectContaining({ success: true, channel: 'telegram', messageId: 'job-msg-id' }),
 		]);
+	});
+
+	it('runs expanded-analysis symbols with bounded concurrency and stable result order', async () => {
+		process.env.EXPANDED_ANALYSIS_ALERT_CONCURRENCY = '2';
+		let activeCalls = 0;
+		let maxActiveCalls = 0;
+		const callOrder = [];
+		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(async ({ raw }) => {
+			activeCalls++;
+			maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
+			callOrder.push(`start:${raw}`);
+			await new Promise((resolve) => setTimeout(resolve, raw.endsWith('BTCUSDT') ? 15 : 1));
+			activeCalls--;
+			callOrder.push(`end:${raw}`);
+			return {
+				price_data: { close: 65000 },
+				rsi: { value: 45 },
+			};
+		});
+
+		const createRes = await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.send({
+				type: 'expanded-analysis',
+				symbols: ['BINANCE:BTCUSDT', 'BINANCE:ETHUSDT', 'BINANCE:SOLUSDT'],
+			})
+			.expect(201);
+
+		let statusRes = await request(app)
+			.get(`/api/jobs/${createRes.body.jobId}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+		let attempts = 0;
+		while (statusRes.body.status !== 'completed' && attempts < 20) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			statusRes = await request(app)
+				.get(`/api/jobs/${createRes.body.jobId}`)
+				.set('x-api-key', 'test-key')
+				.expect(200);
+			attempts++;
+		}
+
+		expect(statusRes.body.status).toBe('completed');
+		expect(maxActiveCalls).toBe(2);
+		expect(statusRes.body.results.map((result) => result.symbol)).toEqual([
+			'BINANCE:BTCUSDT',
+			'BINANCE:ETHUSDT',
+			'BINANCE:SOLUSDT',
+		]);
+		expect(callOrder.indexOf('end:BINANCE:ETHUSDT')).toBeLessThan(callOrder.indexOf('start:BINANCE:SOLUSDT'));
+	});
+
+	it('stops launching queued expanded-analysis symbols after cancellation', async () => {
+		process.env.EXPANDED_ANALYSIS_ALERT_CONCURRENCY = '2';
+		let activeCalls = 0;
+		let resolveStarted;
+		const started = new Promise((resolve) => { resolveStarted = resolve; });
+		const releases = [];
+		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(async () => {
+			activeCalls++;
+			if (activeCalls === 2) resolveStarted();
+			await new Promise((resolve) => releases.push(resolve));
+			activeCalls--;
+			return { price_data: { close: 65000 }, rsi: { value: 45 } };
+		});
+
+		const createRes = await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.send({
+				type: 'expanded-analysis',
+				symbols: ['BINANCE:BTCUSDT', 'BINANCE:ETHUSDT', 'BINANCE:SOLUSDT'],
+			})
+			.expect(201);
+
+		await started;
+		await request(app)
+			.post(`/api/jobs/${createRes.body.jobId}/cancel`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+		releases.splice(0).forEach((release) => release());
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).toHaveBeenCalledTimes(2);
 	});
 
 	it('runs market-scanner higher-timeframe enrichment in the background job path', async () => {

@@ -423,7 +423,7 @@ describe('GenaiClient robustness', () => {
 	describe('llmCallv2 metrics', () => {
 		it('captures Gemini metrics with the resolved model name', async () => {
 			const captureSpy = jest.spyOn(sentryService, 'captureLlmMetric').mockImplementation(() => {});
-			genaiClient.llmCall = jest.fn().mockResolvedValue({
+			const llmSpy = jest.spyOn(genaiClient, 'llmCall').mockResolvedValue({
 				text: 'llm response',
 				citations: [],
 				usage: {
@@ -445,6 +445,7 @@ describe('GenaiClient robustness', () => {
 				durationMs: expect.any(Number),
 			}));
 			captureSpy.mockRestore();
+			llmSpy.mockRestore();
 		});
 	});
 });

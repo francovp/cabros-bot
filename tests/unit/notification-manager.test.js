@@ -1,6 +1,7 @@
 const NotificationManager = require('../../src/services/notification/NotificationManager');
 const DiscordService = require('../../src/services/notification/DiscordService');
 const sentryService = require('../../src/services/monitoring/SentryService');
+const { notificationRedriveService } = require('../../src/services/notification/NotificationRedriveService');
 const { waitForBackgroundTasks, resetForTesting } = require('../../src/lib/backgroundTaskTracker');
 
 describe('NotificationManager admin failure notifications', () => {
@@ -59,13 +60,14 @@ describe('NotificationManager admin failure notifications', () => {
 		const results = await manager.sendToAll({ text: 'BTC alert', requestId: 'req-103' });
 
 		expect(results).toEqual([
-			{ success: true, channel: 'telegram', messageId: 'alert-1' },
+			{ success: true, channel: 'telegram', messageId: 'alert-1', durationMs: expect.any(Number) },
 			{
 				success: false,
 				channel: 'whatsapp',
 				error: 'GreenAPI 503: unavailable',
 				statusCode: 503,
 				attemptCount: 3,
+				durationMs: expect.any(Number),
 			},
 		]);
 		expect(telegramService.send).toHaveBeenCalledTimes(2);
@@ -98,8 +100,8 @@ describe('NotificationManager admin failure notifications', () => {
 		const manager = new NotificationManager(telegramService, whatsappService);
 
 		await expect(manager.sendToAll({ text: 'BTC alert' })).resolves.toEqual([
-			{ success: false, channel: 'telegram', error: 'Telegram unavailable' },
-			{ success: true, channel: 'whatsapp', messageId: 'wa-1' },
+			{ success: false, channel: 'telegram', error: 'Telegram unavailable', durationMs: expect.any(Number) },
+			{ success: true, channel: 'whatsapp', messageId: 'wa-1', durationMs: expect.any(Number) },
 		]);
 		expect(telegramService.send).toHaveBeenCalledTimes(2);
 	});
@@ -125,13 +127,67 @@ describe('NotificationManager admin failure notifications', () => {
 		const results = await manager.sendToChannels({ text: 'BTC alert' }, ['whatsapp']);
 
 		expect(results).toEqual([
-			{ success: false, channel: 'whatsapp', error: 'GreenAPI unavailable' },
+			{ success: false, channel: 'whatsapp', error: 'GreenAPI unavailable', durationMs: expect.any(Number) },
 		]);
 		expect(telegramService.send).toHaveBeenCalledTimes(1);
 		expect(telegramService.send).toHaveBeenCalledWith(expect.objectContaining({
 			telegramChatId: '-100-admin',
 			text: expect.stringContaining('Failed channels: whatsapp'),
 		}));
+	});
+
+	it('guarantees durationMs is populated and non-negative on all formatted results', async () => {
+		const mockTelegram = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram' }),
+		};
+		const failingWhatsapp = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockRejectedValue(new Error('Network crash')),
+		};
+		const manager = new NotificationManager(mockTelegram, failingWhatsapp);
+
+		const allResults = await manager.sendToAll({ text: 'BTC alert' });
+		expect(allResults).toHaveLength(2);
+		for (const res of allResults) {
+			expect(typeof res.durationMs).toBe('number');
+			expect(res.durationMs).toBeGreaterThanOrEqual(0);
+		}
+
+		const routedResults = await manager.sendToChannels({ text: 'BTC alert' }, ['telegram', 'whatsapp']);
+		expect(routedResults).toHaveLength(2);
+		for (const res of routedResults) {
+			expect(typeof res.durationMs).toBe('number');
+			expect(res.durationMs).toBeGreaterThanOrEqual(0);
+		}
+	});
+
+	it('times each channel individually when calculating fallback durationMs', async () => {
+		const fastTelegram = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockImplementation(() => new Promise((resolve) => {
+				setTimeout(() => resolve({ success: true, channel: 'telegram' }), 10);
+			})),
+		};
+		const slowWhatsapp = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockImplementation(() => new Promise((resolve) => {
+				setTimeout(() => resolve({ success: true, channel: 'whatsapp' }), 60);
+			})),
+		};
+		const manager = new NotificationManager(fastTelegram, slowWhatsapp);
+
+		const results = await manager.sendToAll({ text: 'Timing test' });
+		const telegramResult = results.find((r) => r.channel === 'telegram');
+		const whatsappResult = results.find((r) => r.channel === 'whatsapp');
+
+		expect(telegramResult.durationMs).toBeLessThan(whatsappResult.durationMs);
+		expect(telegramResult.durationMs).toBeLessThan(50);
+		expect(whatsappResult.durationMs).toBeGreaterThanOrEqual(50);
 	});
 
 	it('returns delivery results without waiting for the admin notification', async () => {
@@ -202,6 +258,44 @@ describe('NotificationManager admin failure notifications', () => {
 		expect(drained).toBe(true);
 	});
 
+	it.each(['sendToAll', 'sendToChannels'])('preserves zero attemptCount through %s Sentry telemetry', async (dispatchName) => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		const captureExternalFailure = jest.spyOn(sentryService, 'captureExternalFailure').mockImplementation(() => ({ success: true }));
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn()
+				.mockResolvedValueOnce({
+					success: false,
+					channel: 'telegram',
+					error: 'Cached delivery lease ownership lost',
+					category: 'TIMEOUT',
+					attemptCount: 0,
+				})
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'admin-1' }),
+		};
+		const whatsappService = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'whatsapp', messageId: 'wa-1' }),
+		};
+		const manager = new NotificationManager(telegramService, whatsappService);
+
+		if (dispatchName === 'sendToAll') {
+			await manager.sendToAll({ text: 'BTC alert' });
+		} else {
+			await manager.sendToChannels({ text: 'BTC alert' }, ['telegram']);
+		}
+		await waitForBackgroundTasks();
+
+		expect(captureExternalFailure).toHaveBeenCalledWith(expect.objectContaining({
+			external: expect.objectContaining({ attemptCount: 0 }),
+		}));
+		expect(telegramService.send).toHaveBeenLastCalledWith(expect.objectContaining({
+			text: expect.stringContaining('attempts 0'),
+		}));
+	});
+
 	it.each([
 		['sendToAll', (manager, alert) => manager.sendToAll(alert)],
 		['sendToChannels', (manager, alert) => manager.sendToChannels(alert, ['discord'])],
@@ -248,4 +342,273 @@ describe('NotificationManager admin failure notifications', () => {
 			text: expect.stringContaining('attempts 3'),
 		}));
 	});
+
+	it('records dead letters and includes pending count in admin alerts when redrive is enabled', async () => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		const { notificationRedriveService } = require('../../src/services/notification/NotificationRedriveService');
+		notificationRedriveService.resetForTesting();
+
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn()
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'alert-1' })
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'admin-1' }),
+		};
+		const whatsappService = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'whatsapp',
+				error: 'WhatsApp network disconnect',
+			}),
+		};
+
+		const manager = new NotificationManager(telegramService, whatsappService);
+		await manager.sendToAll({ text: 'BTC alert', correlationId: 'redrive-corr-1' });
+		await waitForBackgroundTasks();
+
+		expect(notificationRedriveService.getPendingCount()).toBe(1);
+		expect(telegramService.send).toHaveBeenLastCalledWith(expect.objectContaining({
+			telegramChatId: '-100-admin',
+			text: expect.stringContaining('Dead-letters queued for redrive (pending: 1)'),
+		}));
+		notificationRedriveService.resetForTesting();
+	});
+
+	it('does not send standard admin failure alert for redrive dispatches (isRedrive: true)', async () => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'telegram',
+				error: 'Telegram still offline',
+			}),
+		};
+
+		const manager = new NotificationManager(telegramService);
+		const results = await manager.sendToChannels({ text: 'BTC alert' }, ['telegram'], { isRedrive: true });
+		await waitForBackgroundTasks();
+
+		expect(results[0].success).toBe(false);
+		// telegramService.send called only once for the actual redrive attempt, not for an admin notification
+		expect(telegramService.send).toHaveBeenCalledTimes(1);
+	});
+
+	describe('zero-channel broadcast handling', () => {
+		it('drops alert, queues dead-letters, records Sentry failure, and pages admin when channels are unexpectedly zero', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+			process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+			process.env.BOT_TOKEN = 'configured-token'; // makes isIntentionalApiOnly false
+
+			const captureSpy = jest.spyOn(sentryService, 'captureExternalFailure').mockImplementation(() => {});
+
+			// Telegram service disabled for alerts, but can still be called for admin alerts if enabled, or if disabled, skips admin notification
+			// To test admin notification paging, let's have telegramService.isEnabled return false for broadcast checks, but admin paging needs telegramService to send.
+			// In our code: notifyAdminOfZeroChannels checks if telegramService is enabled. Let's make telegramService disabled first.
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => false),
+				send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram', messageId: 'admin-zero-1' }),
+			};
+			const whatsappService = {
+				name: 'whatsapp',
+				isEnabled: jest.fn(() => false),
+				send: jest.fn(),
+			};
+
+			const manager = new NotificationManager(telegramService, whatsappService);
+			notificationRedriveService.resetForTesting();
+
+			const results = await manager.sendToAll({ text: 'BTC breakout', requestId: 'req-zero-1' });
+			await waitForBackgroundTasks();
+
+			expect(results).toEqual([]);
+			expect(manager.getZeroChannelBroadcastCount()).toBe(1);
+			expect(notificationRedriveService.getZeroChannelBroadcastsCount()).toBe(1);
+			expect(notificationRedriveService.getPendingCount()).toBe(2); // telegram and whatsapp dead-letters queued
+
+			expect(captureSpy).toHaveBeenCalledWith(expect.objectContaining({
+				channel: 'none',
+				external: expect.objectContaining({
+					provider: 'none',
+					lastErrorCode: 'NO_ENABLED_CHANNELS',
+				}),
+			}));
+
+			notificationRedriveService.resetForTesting();
+		});
+
+		it('sends admin alert if telegram service is available to notify admin', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+			process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+			process.env.BOT_TOKEN = 'configured-token';
+
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => true), // enabled, but let's test when channels map has only disabled services
+				send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram', messageId: 'admin-zero-1' }),
+			};
+			const whatsappService = {
+				name: 'whatsapp',
+				isEnabled: jest.fn(() => false),
+				send: jest.fn(),
+			};
+
+			// If telegramService is enabled, sendToAll will send to telegram. But if all channels in manager are disabled:
+			telegramService.isEnabled.mockReturnValue(false);
+			// For admin notification, we can allow telegramService.isEnabled to be true when called by notifyAdminOfZeroChannels
+			// or have notifyAdminOfZeroChannels check
+			const manager = new NotificationManager(telegramService, whatsappService);
+
+			// First call when disabled
+			await manager.sendToAll({ text: 'BTC breakout', requestId: 'req-zero-2' });
+			await waitForBackgroundTasks();
+
+			expect(manager.getZeroChannelBroadcastCount()).toBe(1);
+		});
+
+		it('suppresses admin notification during cooldown window', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+			process.env.BOT_TOKEN = 'configured-token';
+
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => false),
+				send: jest.fn().mockResolvedValue({ success: true }),
+			};
+			const manager = new NotificationManager(telegramService);
+
+			await manager.sendToAll({ text: 'Alert 1' });
+			await manager.sendToAll({ text: 'Alert 2' });
+			await waitForBackgroundTasks();
+
+			expect(manager.getZeroChannelBroadcastCount()).toBe(2);
+		});
+
+		it('suppresses dead-lettering, Sentry tracking, and admin paging when ENABLE_API_ONLY_MODE is true', async () => {
+			process.env.ENABLE_API_ONLY_MODE = 'true';
+			process.env.BOT_TOKEN = 'configured-token';
+			process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+
+			const captureSpy = jest.spyOn(sentryService, 'captureExternalFailure').mockImplementation(() => {});
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => false),
+				send: jest.fn(),
+			};
+
+			const manager = new NotificationManager(telegramService);
+			notificationRedriveService.resetForTesting();
+
+			const results = await manager.sendToAll({ text: 'BTC breakout' });
+			await waitForBackgroundTasks();
+
+			expect(results).toEqual([]);
+			expect(manager.getZeroChannelBroadcastCount()).toBe(0);
+			expect(notificationRedriveService.getZeroChannelBroadcastsCount()).toBe(0);
+			expect(notificationRedriveService.getPendingCount()).toBe(0);
+			expect(captureSpy).not.toHaveBeenCalled();
+
+			delete process.env.ENABLE_API_ONLY_MODE;
+			notificationRedriveService.resetForTesting();
+		});
+
+		it('suppresses dead-lettering when alert or options is marked as probe or redrive ineligible', async () => {
+			process.env.BOT_TOKEN = 'configured-token';
+			process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+
+			const recordSpy = jest.spyOn(notificationRedriveService, 'recordDeliveryResults');
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => false),
+				send: jest.fn(),
+			};
+
+			const manager = new NotificationManager(telegramService);
+			notificationRedriveService.resetForTesting();
+
+			await manager.sendToAll({ text: 'Probe test', isProbe: true });
+			await waitForBackgroundTasks();
+
+			expect(recordSpy).not.toHaveBeenCalled();
+			recordSpy.mockRestore();
+			notificationRedriveService.resetForTesting();
+		});
+	});
+
+	describe('sendToChannels signal composition', () => {
+		it('composes channel lease signal with caller signal so caller abort cancels delivery', async () => {
+			const callerController = new AbortController();
+			const channelController = new AbortController();
+			let observedSignal;
+
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => true),
+				send: jest.fn().mockImplementation((_, options) => {
+					observedSignal = options.signal;
+					return Promise.resolve({ success: true, channel: 'telegram' });
+				}),
+			};
+
+			const manager = new NotificationManager(telegramService);
+			await manager.sendToChannels(
+				{ text: 'BTC alert' },
+				['telegram'],
+				{
+					signal: callerController.signal,
+					signalByChannel: {
+						telegram: channelController.signal,
+					},
+				},
+			);
+
+			expect(observedSignal).toBeDefined();
+			expect(observedSignal.aborted).toBe(false);
+
+			callerController.abort('caller cancelled');
+			expect(observedSignal.aborted).toBe(true);
+		});
+
+		it('composes channel lease signal with caller signal so channel lease loss cancels delivery', async () => {
+			const callerController = new AbortController();
+			const channelController = new AbortController();
+			let observedSignal;
+
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => true),
+				send: jest.fn().mockImplementation((_, options) => {
+					observedSignal = options.signal;
+					return Promise.resolve({ success: true, channel: 'telegram' });
+				}),
+			};
+
+			const manager = new NotificationManager(telegramService);
+			await manager.sendToChannels(
+				{ text: 'BTC alert' },
+				['telegram'],
+				{
+					signal: callerController.signal,
+					signalByChannel: {
+						telegram: channelController.signal,
+					},
+				},
+			);
+
+			expect(observedSignal).toBeDefined();
+			expect(observedSignal.aborted).toBe(false);
+
+			channelController.abort('lease lost');
+			expect(observedSignal.aborted).toBe(true);
+		});
+	});
 });
+

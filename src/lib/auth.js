@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const sentryService = require('../services/monitoring/SentryService');
+const { isProductionLikeEnvironment, isPreviewEnvironment } = require('./deploymentEnvironment');
 
 /**
  * Middleware to validate API key for webhook endpoints.
@@ -8,6 +10,40 @@ function validateApiKey(req, res, next) {
 	const validApiKey = process.env.WEBHOOK_API_KEY;
 
 	if (!validApiKey) {
+		const isProdLike = isProductionLikeEnvironment(process.env);
+		const isPreview = isPreviewEnvironment(process.env);
+		const isDevOrTest = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
+
+		if (isProdLike && !isPreview && !isDevOrTest) {
+			console.error('ERROR: WEBHOOK_API_KEY is not set in production environment. Webhook endpoints are disabled.');
+			try {
+				if (sentryService && typeof sentryService.captureRuntimeError === 'function') {
+					sentryService.captureRuntimeError({
+						channel: 'api',
+						feature: 'auth',
+						error: new Error('WEBHOOK_API_KEY is unset in production environment'),
+						http: {
+							method: req.method,
+							url: req.originalUrl || req.url,
+							statusCode: 503,
+						},
+						extra: {
+							route: req.originalUrl || req.url,
+							method: req.method,
+							environment: process.env.NODE_ENV || 'production',
+							type: 'auth-fail-open',
+						},
+					});
+				}
+			} catch (_) {
+				// Fail-safe
+			}
+			return res.status(503).json({
+				error: 'Service Misconfigured: WEBHOOK_API_KEY is not set in production',
+				code: 'WEBHOOK_API_KEY_UNSET',
+			});
+		}
+
 		console.warn('WARNING: WEBHOOK_API_KEY is not set. Webhook endpoints are insecure.');
 		return next();
 	}

@@ -145,14 +145,14 @@ describe('Graceful Degradation & Fallback', () => {
 			process.env.WHATSAPP_API_KEY = 'test-key';
 			process.env.WHATSAPP_CHAT_ID = '120363xxxxx@g.us';
 
-			mockBot.telegram.sendMessage.mockRejectedValueOnce(new Error('Bot token invalid'));
+			mockBot.telegram.sendMessage.mockRejectedValue(new Error('Bot token invalid'));
 
 			global.fetch = jest.fn().mockResolvedValue({
 				ok: true,
 				json: async () => ({ success: true, idMessage: 'wa-msg-1' }),
 			});
 
-			const telegramService = new TelegramService({ bot: mockBot });
+			const telegramService = new TelegramService({ bot: mockBot, maxRetries: 0 });
 			const whatsappService = new WhatsAppService();
 			const notificationManager = new NotificationManager(telegramService, whatsappService);
 

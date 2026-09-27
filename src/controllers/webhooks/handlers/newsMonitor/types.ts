@@ -131,6 +131,7 @@ export interface NewsMonitorRequest {
   channels?: Array<'telegram' | 'whatsapp' | 'discord'>;
   telegramChatId?: string;
   whatsappChatId?: string;
+  discordWebhookUrl?: string;
 }
 
 /**

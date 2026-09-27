@@ -81,6 +81,9 @@ describe('Market Scanner Alert endpoint', () => {
 			.expect(200);
 
 		expect(res.body.success).toBe(true);
+		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
+		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.alertText).toContain('SCANNER DE MERCADO');
 		expect(res.body.alertText).toContain('GMTUSDT');
 		expect(res.body.summary).toEqual({
@@ -90,6 +93,16 @@ describe('Market Scanner Alert endpoint', () => {
 			timeout: 0,
 			totalItems: 1,
 			delivered: 1,
+			errorCategoryCounts: {
+				mcp_unreachable: 0,
+				mcp_timeout: 0,
+				mcp_rate_limited: 0,
+				mcp_tool_error: 0,
+				mcp_suspended: 0,
+				symbol_invalid: 0,
+				symbol_unsupported: 0,
+				unknown: 0,
+			},
 		});
 		expect(res.body.deliveryResults).toEqual([
 			expect.objectContaining({ success: true, channel: 'telegram', messageId: 'scan-msg-id' }),
@@ -140,6 +153,250 @@ describe('Market Scanner Alert endpoint', () => {
 		expect(mockFetch).not.toHaveBeenCalled();
 	});
 
+	it('persists outcome side consistent with the rendered side for bollinger_scan items', async () => {
+		const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		// Capture the params the controller passes without requiring Firestore persistence
+		const recordedCalls = [];
+		const recordSignalSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockImplementation(async (params) => {
+			recordedCalls.push(params);
+			return {};
+		});
+
+		tradingViewMcpService.callScanTool.mockImplementation(async (scanType) => {
+			if (scanType === 'bollinger_scan') {
+				return [
+					{
+						symbol: 'BINANCE:BTCUSDT',
+						breakout_type: 'bajista',
+						trading_recommendation: 'STRONG_BUY',
+						indicators: { close: 60000, atr: 500, bb_lower: 58000, bb_upper: 62000 },
+					},
+				];
+			}
+			return [];
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['bollinger_scan'], timeframe: '4h', exchange: 'BINANCE' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(recordedCalls).toHaveLength(1);
+		const recorded = recordedCalls[0];
+		// Report renders SELL (breakout precedence) → persisted side must be SELL
+		expect(recorded.side).toBe('SELL');
+		expect(recorded.stop).toBe(60750); // price + atr*1.5
+		expect(recorded.target).toBe(58000); // bb_lower
+		expect(recorded.priceSource).toBe('tradingview-mcp');
+
+		recordSignalSpy.mockRestore();
+		signalOutcomeService.isEnabled.mockRestore();
+	});
+
+	it('skips explicit null support and falls through to the valid item-level fallback', async () => {
+		const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		const recordedCalls = [];
+		const recordSignalSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockImplementation(async (params) => {
+			recordedCalls.push(params);
+			return {};
+		});
+
+		tradingViewMcpService.callScanTool.mockImplementation(async (scanType) => {
+			if (scanType === 'bollinger_scan') {
+				return [
+					{
+						symbol: 'BINANCE:BNBUSDT',
+						breakout_type: 'bearish',
+						indicators: { close: 3000, atr: 100, bb_lower: 2900, bb_upper: 3100, support: null },
+						support: 2800,
+					},
+				];
+			}
+			return [];
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['bollinger_scan'], timeframe: '4h', exchange: 'BINANCE' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		const recorded = recordedCalls[0];
+		expect(recorded.side).toBe('SELL');
+		// takeProfit must be the valid fallback (support=2800), not a fabricated 0
+		expect(recorded.target).toBe(2800);
+
+		recordSignalSpy.mockRestore();
+		signalOutcomeService.isEnabled.mockRestore();
+	});
+
+	it('renders and persists identical levels when an earlier support field is a nonnumeric placeholder', async () => {
+		const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		const recordedCalls = [];
+		const recordSignalSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockImplementation(async (params) => {
+			recordedCalls.push(params);
+			return {};
+		});
+
+		tradingViewMcpService.callScanTool.mockImplementation(async (scanType) => {
+			if (scanType === 'bollinger_scan') {
+				return [
+					{
+						symbol: 'BINANCE:LINKUSDT',
+						breakout_type: 'bearish',
+						indicators: { close: 100, atr: 10, bb_lower: 90, bb_upper: 110, support: 'N/A' },
+						support: 85,
+					},
+				];
+			}
+			return [];
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['bollinger_scan'], timeframe: '4h', exchange: 'BINANCE' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		// The rendered report must include the fallback level in the target
+		expect(res.body.alertText).toContain('*Target:* $85.00');
+		// The persisted outcome must carry the same level — not a missing one
+		const recorded = recordedCalls[0];
+		expect(recorded.side).toBe('SELL');
+		expect(recorded.target).toBe(85);
+
+		recordSignalSpy.mockRestore();
+		signalOutcomeService.isEnabled.mockRestore();
+	});
+
+	it('resolves the persisted side from the rank-normalized item so raw HTF shapes match the rendered report', async () => {
+		const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		const recordedCalls = [];
+		const recordSignalSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockImplementation(async (params) => {
+			recordedCalls.push(params);
+			return {};
+		});
+
+		tradingViewMcpService.callScanTool.mockImplementation(async (scanType) => {
+			if (scanType === 'bollinger_scan') {
+				return [
+					{
+						symbol: 'BINANCE:BTCUSDT',
+						indicators: { close: 60000, bb_lower: 58000, bb_upper: 62000 },
+						trendConfluence: { trend: 'bearish', confidence: 85 },
+					},
+				];
+			}
+			return [];
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['bollinger_scan'], timeframe: '4h', exchange: 'BINANCE', ranked: true })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		// Report renders SELL levels from the normalized confluence direction
+		expect(res.body.alertText).toContain('*Stop Loss:* $62,000.00');
+		const recorded = recordedCalls[0];
+		expect(recorded.side).toBe('SELL');
+		expect(recorded.stop).toBe(62000);
+		expect(recorded.target).toBe(58000);
+
+		recordSignalSpy.mockRestore();
+		signalOutcomeService.isEnabled.mockRestore();
+	});
+
+	it('renders and persists identical ATR fallback when an earlier ATR field is a nonnumeric placeholder', async () => {
+		const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		const recordedCalls = [];
+		const recordSignalSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockImplementation(async (params) => {
+			recordedCalls.push(params);
+			return {};
+		});
+
+		tradingViewMcpService.callScanTool.mockImplementation(async (scanType) => {
+			if (scanType === 'bollinger_scan') {
+				return [
+					{
+						symbol: 'BINANCE:ETHUSDT',
+						breakout_type: 'bearish',
+						indicators: { close: 3000, atr: 'N/A', bb_lower: 2900, bb_upper: 3100 },
+						atr: 100,
+					},
+				];
+			}
+			return [];
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['bollinger_scan'], timeframe: '4h', exchange: 'BINANCE' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		// Report renders SELL with stop = price + atr*1.5 using the fallback ATR
+		expect(res.body.alertText).toContain('*Stop Loss:* $3,150.00');
+		// Persisted outcome must carry the same ATR-derived stop
+		const recorded = recordedCalls[0];
+		expect(recorded.side).toBe('SELL');
+		expect(recorded.stop).toBe(3150);
+
+		recordSignalSpy.mockRestore();
+		signalOutcomeService.isEnabled.mockRestore();
+	});
+
+	it('persists stop: null and target: null without setting entry price barriers when risk indicators are zero or missing', async () => {
+		const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+		const recordedCalls = [];
+		const recordSignalSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockImplementation(async (params) => {
+			recordedCalls.push(params);
+			return {};
+		});
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+
+		tradingViewMcpService.callScanTool.mockImplementation(async (scanType) => {
+			if (scanType === 'top_gainers') {
+				return [
+					{
+						symbol: 'BINANCE:ZEROATR',
+						changePercent: 5.0,
+						indicators: { close: 100, atr: 0, support: 0, resistance: 0 },
+					},
+				];
+			}
+			return [];
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['top_gainers'], timeframe: '4h', exchange: 'BINANCE' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(recordedCalls).toHaveLength(1);
+		const recorded = recordedCalls[0];
+		expect(recorded.symbol).toBe('BINANCE:ZEROATR');
+		expect(recorded.price).toBe(100);
+		expect(recorded.stop).toBeNull();
+		expect(recorded.target).toBeNull();
+
+		recordSignalSpy.mockRestore();
+		signalOutcomeService.isEnabled.mockRestore();
+	});
+
 	it('returns 502 when all scanner calls fail', async () => {
 		tradingViewMcpService.callScanTool.mockRejectedValue(new Error('Connection failure'));
 
@@ -152,7 +409,7 @@ describe('Market Scanner Alert endpoint', () => {
 		expect(res.body.success).toBe(false);
 		expect(res.body.code).toBe('ALL_SCANS_FAILED');
 		expect(res.body.scanResults).toEqual([
-			{ scan: 'top_gainers', status: 'error', error: 'Connection failure' },
+			{ scan: 'top_gainers', status: 'error', error: 'Connection failure', errorCategory: 'unknown' },
 		]);
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
@@ -183,6 +440,9 @@ describe('Market Scanner Alert endpoint', () => {
 		expect(res.body.success).toBe(false);
 		expect(res.body.code).toBe('MARKET_SCANNER_TIMEOUT');
 		expect(res.body.timedOut).toBe(true);
+		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
+		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
@@ -212,6 +472,9 @@ describe('Market Scanner Alert endpoint', () => {
 
 		expect(res.body.ranked).toBe(true);
 		expect(res.body.dryRun).toBe(true);
+		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
+		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.payload.alertText).toContain('BTCUSDT');
 		expect(res.body.payload.alertText).toContain('SOLUSDT');
 		// Scores should be visible in alert text
@@ -275,5 +538,80 @@ describe('Market Scanner Alert endpoint', () => {
 		expect(res.body.scanResults[0].scores[0]).toEqual(expect.objectContaining({
 			trendConfluence: expect.objectContaining({ status: 'aligned', confidence: 82 }),
 		}));
+	});
+
+	it('triggers rating_filter scan with rating parameter and formats report', async () => {
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:STXUSDT',
+				changePercent: 2.72,
+				bollinger_rating: 3,
+				indicators: { close: 1.85, RSI: 70.2 },
+			},
+		]);
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.query({ dryRun: 'true' })
+			.send({
+				scans: ['rating_filter'],
+				rating: 3,
+				timeframe: '4h',
+				exchange: 'BINANCE',
+			})
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.payload.alertText).toContain('RATING BOLLINGER');
+		expect(res.body.payload.alertText).toContain('BB Rating +3');
+		expect(tradingViewMcpService.callScanTool).toHaveBeenCalledWith(
+			'rating_filter',
+			{ exchange: 'BINANCE', timeframe: '4h', limit: 5, rating: 3 },
+			expect.any(Object),
+		);
+	});
+
+	it('triggers consecutive_candles_scan with pattern_type, candle_count, and min_growth', async () => {
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:AVAXUSDT',
+				changePercent: 4.8,
+				pattern_type: 'bullish',
+				candle_count: 3,
+				pattern_strength: 85,
+				indicators: { close: 25.4 },
+			},
+		]);
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.query({ dryRun: 'true' })
+			.send({
+				scans: ['consecutive_candles_scan'],
+				pattern_type: 'bullish',
+				candle_count: 3,
+				min_growth: 1.2,
+				timeframe: '4h',
+				exchange: 'BINANCE',
+			})
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.payload.alertText).toContain('VELAS CONSECUTIVAS');
+		expect(res.body.payload.alertText).toContain('3 velas 🟢 Bullish');
+		expect(tradingViewMcpService.callScanTool).toHaveBeenCalledWith(
+			'consecutive_candles_scan',
+			{
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				limit: 5,
+				pattern_type: 'bullish',
+				candle_count: 3,
+				min_growth: 1.2,
+			},
+			expect.any(Object),
+		);
 	});
 });

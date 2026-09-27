@@ -1,5 +1,6 @@
 const admin = require('firebase-admin');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const { isFirestoreConfigured } = require('../../src/services/storage/firestoreConfig');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 jest.mock('firebase-admin', () => ({
@@ -8,6 +9,10 @@ jest.mock('firebase-admin', () => ({
 
 jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	getFirestore: jest.fn(),
+}));
+
+jest.mock('../../src/services/storage/firestoreConfig', () => ({
+	isFirestoreConfigured: jest.fn(() => true),
 }));
 
 describe('RemoteConfigService', () => {
@@ -20,6 +25,7 @@ describe('RemoteConfigService', () => {
 		process.env.NEWS_ALERT_THRESHOLD = '0.7';
 		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = '12000';
 		jest.clearAllMocks();
+		isFirestoreConfigured.mockReturnValue(true);
 		remoteConfigService._resetForTesting();
 	});
 
@@ -60,9 +66,19 @@ describe('RemoteConfigService', () => {
 			['TRADINGVIEW_MCP_TIMEOUT_MS', 'not-a-number', 12000],
 			['TRADINGVIEW_MCP_MAX_RETRIES', '0', 3],
 			['TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS', 'Infinity', 12000],
+			['EXPANDED_ANALYSIS_ALERT_CONCURRENCY', '0', 3],
+			['EXPANDED_ANALYSIS_ALERT_CONCURRENCY', '11', 3],
 			['TRADINGVIEW_MCP_TIMEOUT_MS', '999', 12000],
 			['TRADINGVIEW_MCP_MAX_RETRIES', '6', 3],
 			['TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS', '-1', 12000],
+			['REQUEST_TIMEOUT_MS', 'not-a-number', 30000],
+			['REQUEST_TIMEOUT_MS', '999', 30000],
+			['REQUEST_TIMEOUT_MS', '120001', 30000],
+			['ALERT_SCHEDULER_INTERVAL_MS', 'not-a-number', 60000],
+			['ALERT_SCHEDULER_INTERVAL_MS', '500', 60000],
+			['ALERT_SCHEDULER_INTERVAL_MS', '4000000', 60000],
+			['ALERT_SCHEDULER_BATCH_LIMIT', '0', 10],
+			['ALERT_SCHEDULER_BATCH_LIMIT', '101', 10],
 		].forEach(([key, value, expected]) => {
 			process.env[key] = value;
 			expect(remoteConfigService.getRuntimeConfig()[key]).toBe(expected);
@@ -76,6 +92,8 @@ describe('RemoteConfigService', () => {
 		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = '15000';
 		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '4';
 		process.env.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS = '20000';
+		process.env.EXPANDED_ANALYSIS_ALERT_CONCURRENCY = '2';
+		process.env.REQUEST_TIMEOUT_MS = '45000';
 
 		await remoteConfigService.start();
 
@@ -86,6 +104,8 @@ describe('RemoteConfigService', () => {
 			TRADINGVIEW_MCP_TIMEOUT_MS: 15000,
 			TRADINGVIEW_MCP_MAX_RETRIES: 4,
 			TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: 20000,
+			EXPANDED_ANALYSIS_ALERT_CONCURRENCY: 2,
+			REQUEST_TIMEOUT_MS: 45000,
 		}));
 	});
 
@@ -99,6 +119,42 @@ describe('RemoteConfigService', () => {
 			TRADINGVIEW_MCP_MAX_RETRIES: 5,
 			TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: 120000,
 		}));
+	});
+
+	it('preserves environment values above Remote Config override bounds', () => {
+		process.env.WEBHOOK_IDEMPOTENCY_TTL_MS = '604800000';
+
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			WEBHOOK_IDEMPOTENCY_TTL_MS: 604800000,
+		}));
+	});
+
+	it('rejects out-of-range remote overrides without discarding environment values', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.WEBHOOK_IDEMPOTENCY_TTL_MS = '604800000';
+		mockTemplate({
+			WEBHOOK_IDEMPOTENCY_TTL_MS: 604800001,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			WEBHOOK_IDEMPOTENCY_TTL_MS: 604800000,
+		}));
+		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
+	});
+
+	it('rejects invalid remote entry-price chains and preserves the environment chain', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'binance';
+		mockTemplate({ SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES: 'wat' });
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getRuntimeConfig().SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES).toBe('binance');
+		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
 	});
 
 	it('applies validated allow-listed values and records safe template metadata', async () => {
@@ -254,39 +310,69 @@ describe('RemoteConfigService', () => {
 			GROUNDING_MAX_SOURCES: 5,
 			GROUNDING_TIMEOUT_MS: 45000,
 			GROUNDING_MAX_LENGTH: 3000,
+			ALERT_GROUNDING_COALESCE_MS: 2500,
 			NEWS_CACHE_TTL_HOURS: 12,
 			BINANCE_FETCH_TIMEOUT_MS: 8000,
 			EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS: 90000,
+			EXPANDED_ANALYSIS_ALERT_CONCURRENCY: 4,
 			DISCORD_MAX_RETRIES: 5,
 			DISCORD_FALLBACK_RETRY_DELAY_MS: 1000,
 			DISCORD_MAX_RETRY_DELAY_MS: 8000,
 			DISCORD_MAX_TOTAL_RETRY_WAIT_MS: 20000,
 			WEBHOOK_IDEMPOTENCY_TTL_MS: 600000,
 			JOB_CALLBACK_RETRY_DELAY_MS: 2500,
-			SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS: 600000,
+			JOB_POLL_INTERVAL_MS: 20000,
 			SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT: 100,
 			SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS: 60000,
+			SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS: 5,
+			SIGNAL_OUTCOME_MAX_RETRY_AGE_MS: 1209600000,
+			EQUITY_MARKET_DATA_RPM: 12,
+			NOTIFICATION_REDRIVE_INTERVAL_MS: 120000,
+			NOTIFICATION_REDRIVE_BATCH_LIMIT: 75,
+			NOTIFICATION_REDRIVE_MAX_ATTEMPTS: 8,
+			NOTIFICATION_REDRIVE_MAX_AGE_MS: 7200000,
+			TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD: 10,
+			TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS: 300000,
+			TRADINGVIEW_MCP_PAGE_COOLDOWN_MS: 1800000,
+			NEWS_MAX_ALERTS_PER_BATCH: 15,
+			NEWS_MAX_ALERTS_PER_WINDOW: 30,
+			NEWS_MAX_ALERTS_PER_WINDOW_MS: 600000,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
 		await remoteConfigService.loadNow();
 
 		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.NEWS_MAX_ALERTS_PER_BATCH).toBe(15);
+		expect(config.NEWS_MAX_ALERTS_PER_WINDOW).toBe(30);
+		expect(config.NEWS_MAX_ALERTS_PER_WINDOW_MS).toBe(600000);
 		expect(config.GROUNDING_MAX_SOURCES).toBe(5);
 		expect(config.GROUNDING_TIMEOUT_MS).toBe(45000);
 		expect(config.GROUNDING_MAX_LENGTH).toBe(3000);
+		expect(config.ALERT_GROUNDING_COALESCE_MS).toBe(2500);
 		expect(config.NEWS_CACHE_TTL_HOURS).toBe(12);
 		expect(config.BINANCE_FETCH_TIMEOUT_MS).toBe(8000);
 		expect(config.EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS).toBe(90000);
+		expect(config.EXPANDED_ANALYSIS_ALERT_CONCURRENCY).toBe(4);
 		expect(config.DISCORD_MAX_RETRIES).toBe(5);
 		expect(config.DISCORD_FALLBACK_RETRY_DELAY_MS).toBe(1000);
 		expect(config.DISCORD_MAX_RETRY_DELAY_MS).toBe(8000);
 		expect(config.DISCORD_MAX_TOTAL_RETRY_WAIT_MS).toBe(20000);
 		expect(config.WEBHOOK_IDEMPOTENCY_TTL_MS).toBe(600000);
 		expect(config.JOB_CALLBACK_RETRY_DELAY_MS).toBe(2500);
-		expect(config.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS).toBe(600000);
+		expect(config.JOB_POLL_INTERVAL_MS).toBe(20000);
 		expect(config.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT).toBe(100);
 		expect(config.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS).toBe(60000);
+		expect(config.SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS).toBe(5);
+		expect(config.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS).toBe(1209600000);
+		expect(config.EQUITY_MARKET_DATA_RPM).toBe(12);
+		expect(config.NOTIFICATION_REDRIVE_INTERVAL_MS).toBe(120000);
+		expect(config.NOTIFICATION_REDRIVE_BATCH_LIMIT).toBe(75);
+		expect(config.NOTIFICATION_REDRIVE_MAX_ATTEMPTS).toBe(8);
+		expect(config.NOTIFICATION_REDRIVE_MAX_AGE_MS).toBe(7200000);
+		expect(config.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD).toBe(10);
+		expect(config.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS).toBe(300000);
+		expect(config.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS).toBe(1800000);
 	});
 
 	it('validates and applies safe request-time feature flags from remote config', async () => {
@@ -297,6 +383,11 @@ describe('RemoteConfigService', () => {
 			ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION: true,
 			ENABLE_MARKET_SCANNER: true,
 			ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: true,
+			ENABLE_ALERT_HTF_RENDER: false,
+			ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT: true,
+			ENABLE_FIRESTORE_CHAT_PREFERENCES: true,
+			CHAT_PREFERENCES_RETENTION_DAYS: 45,
+			CHAT_PREFERENCES_CACHE_TTL_MS: 30000,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -308,6 +399,48 @@ describe('RemoteConfigService', () => {
 		expect(config.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION).toBe(true);
 		expect(config.ENABLE_MARKET_SCANNER).toBe(true);
 		expect(config.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP).toBe(true);
+		expect(config.ENABLE_ALERT_HTF_RENDER).toBe(false);
+		expect(config.ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT).toBe(true);
+		expect(config.ENABLE_FIRESTORE_CHAT_PREFERENCES).toBe(true);
+		expect(config.CHAT_PREFERENCES_RETENTION_DAYS).toBe(45);
+		expect(config.CHAT_PREFERENCES_CACHE_TTL_MS).toBe(30000);
+	});
+
+	it('keeps the startup-only signal outcome cadence out of Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '60000';
+		mockTemplate({ SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS: 120000 });
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS');
+	});
+
+	it('keeps test-alert security controls and enablement gate out of Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.ENABLE_TEST_ALERT = 'true';
+		process.env.TEST_ALERT_DAILY_LIMIT = '30';
+		mockTemplate({ ENABLE_TEST_ALERT: false, TEST_ALERT_DAILY_LIMIT: 50 });
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('ENABLE_TEST_ALERT');
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('TEST_ALERT_DAILY_LIMIT');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('ENABLE_TEST_ALERT');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('TEST_ALERT_DAILY_LIMIT');
+	});
+
+	it('keeps the request-time signal outcome entry-price chain eligible for Remote Config', () => {
+		process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'mcp,binance,gemini';
+
+		expect(remoteConfigService.PARAMETER_SCHEMA.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES).toEqual(expect.objectContaining({
+			type: 'string',
+			defaultValue: '',
+		}));
+		expect(remoteConfigService.getRuntimeConfig().SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES).toBe('mcp,binance,gemini');
 	});
 
 	it('enforces bounds on new operational parameters in env parsing', () => {
@@ -316,6 +449,15 @@ describe('RemoteConfigService', () => {
 		process.env.BINANCE_FETCH_TIMEOUT_MS = '100000'; // max 60000
 		process.env.DISCORD_MAX_RETRIES = '-1'; // min 0
 		process.env.TRADINGVIEW_MCP_DEFAULT_TIMEFRAME = 'unknown'; // invalid enum
+		process.env.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD = '0'; // min 1
+		process.env.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS = '500'; // min 1000
+		process.env.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS = '999999999'; // max 86400000
+		process.env.SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS = '25'; // max 20
+		process.env.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS = '3000000000'; // max 2592000000
+		process.env.SIGNAL_OUTCOME_RETENTION_DAYS = '5000'; // max 3650
+		process.env.EQUITY_MARKET_DATA_RPM = '2000'; // max 1200
+		process.env.URL_SHORTENER_CACHE_MAX_ENTRIES = '500000'; // max 100000
+		process.env.URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES = '2000'; // max 1024
 
 		const config = remoteConfigService.getRuntimeConfig();
 		expect(config.GROUNDING_MAX_SOURCES).toBe(3); // fallback to default
@@ -323,5 +465,245 @@ describe('RemoteConfigService', () => {
 		expect(config.BINANCE_FETCH_TIMEOUT_MS).toBe(5000); // fallback to default
 		expect(config.DISCORD_MAX_RETRIES).toBe(2); // fallback to default
 		expect(config.TRADINGVIEW_MCP_DEFAULT_TIMEFRAME).toBe('1h'); // fallback to default
+		expect(config.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD).toBe(5); // fallback to default
+		expect(config.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS).toBe(600000); // fallback to default
+		expect(config.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS).toBe(3600000); // fallback to default
+		expect(config.SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS).toBe(3); // fallback to default
+		expect(config.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS).toBe(604800000); // fallback to default
+		expect(config.SIGNAL_OUTCOME_RETENTION_DAYS).toBe(365); // fallback to default
+		expect(config.EQUITY_MARKET_DATA_RPM).toBe(8); // fallback to default
+		expect(config.URL_SHORTENER_CACHE_MAX_ENTRIES).toBe(1000); // fallback to default
+		expect(config.URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES).toBe(32); // fallback to default
+	});
+
+	it('supports ZERO_CHANNEL_ALERT_COOLDOWN_MS and ENABLE_API_ONLY_MODE via Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({
+			ZERO_CHANNEL_ALERT_COOLDOWN_MS: 600000,
+			ENABLE_API_ONLY_MODE: true,
+			SIGNAL_OUTCOME_RETENTION_DAYS: 180,
+			URL_SHORTENER_CACHE_MAX_ENTRIES: 2000,
+			URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: 64,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.ZERO_CHANNEL_ALERT_COOLDOWN_MS).toBe(600000);
+		expect(config.ENABLE_API_ONLY_MODE).toBe(true);
+		expect(config.SIGNAL_OUTCOME_RETENTION_DAYS).toBe(180);
+		expect(config.URL_SHORTENER_CACHE_MAX_ENTRIES).toBe(2000);
+		expect(config.URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES).toBe(64);
+	});
+
+	it('validates and applies Admin SSE operational parameters and keeps enablement gate out', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.ADMIN_SSE_MAX_CLIENT_CONNECTIONS = '3';
+		process.env.ADMIN_SSE_MAX_TOTAL_CONNECTIONS = '50';
+		process.env.ADMIN_SSE_HEARTBEAT_MS = '20000';
+		mockTemplate({
+			ADMIN_SSE_MAX_CLIENT_CONNECTIONS: 8,
+			ADMIN_SSE_MAX_TOTAL_CONNECTIONS: 200,
+			ADMIN_SSE_HEARTBEAT_MS: 15000,
+			ENABLE_ADMIN_SSE: true,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.ADMIN_SSE_MAX_CLIENT_CONNECTIONS).toBe(8);
+		expect(config.ADMIN_SSE_MAX_TOTAL_CONNECTIONS).toBe(200);
+		expect(config.ADMIN_SSE_HEARTBEAT_MS).toBe(15000);
+
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('ENABLE_ADMIN_SSE');
+		expect(config).not.toHaveProperty('ENABLE_ADMIN_SSE');
+	});
+
+	describe('getStatus readiness and lifecycle states', () => {
+		it('reports disabled readiness status when Remote Config is disabled', () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'false';
+			alertStorageService.getFirestore.mockReturnValue({});
+
+			const status = remoteConfigService.getStatus();
+			expect(status).toEqual(expect.objectContaining({
+				enabled: false,
+				configured: true,
+				ready: false,
+				status: 'disabled',
+				source: 'disabled',
+				lastSuccessfulLoad: null,
+				lastErrorCategory: null,
+				consecutiveFailures: 0,
+			}));
+		});
+
+		it('reports misconfigured status when Remote Config is enabled but Firestore is not configured', () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			isFirestoreConfigured.mockReturnValue(false);
+			alertStorageService.getFirestore.mockReturnValue(null);
+
+			const status = remoteConfigService.getStatus();
+			expect(status).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: false,
+				ready: false,
+				status: 'misconfigured',
+				lastSuccessfulLoad: null,
+				lastErrorCategory: null,
+				consecutiveFailures: 0,
+			}));
+		});
+
+		it('reports unknown status and ready: false when enabled and configured before initial load attempt', () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			alertStorageService.getFirestore.mockReturnValue({});
+
+			const status = remoteConfigService.getStatus();
+			expect(status).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'unknown',
+				lastSuccessfulLoad: null,
+				lastErrorCategory: null,
+				consecutiveFailures: 0,
+			}));
+		});
+
+		it('reports degraded status and increments consecutiveFailures on load failure', async () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			const load = jest.fn().mockRejectedValue(new Error('Firebase Remote Config template not published'));
+			mockTemplate({}, { load });
+			alertStorageService.getFirestore.mockReturnValue({});
+
+			await expect(remoteConfigService.loadNow()).resolves.toBe(false);
+
+			const status1 = remoteConfigService.getStatus();
+			expect(status1).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'degraded',
+				lastSuccessfulLoad: null,
+				lastErrorCategory: 'load_failed',
+				consecutiveFailures: 1,
+			}));
+
+			// Subsequent failure increments consecutiveFailures
+			await expect(remoteConfigService.loadNow()).resolves.toBe(false);
+			const status2 = remoteConfigService.getStatus();
+			expect(status2.consecutiveFailures).toBe(2);
+			expect(status2.ready).toBe(false);
+			expect(status2.status).toBe('degraded');
+		});
+
+		it('reports ready: true on success, resets consecutiveFailures, and degrades on subsequent failure', async () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			alertStorageService.getFirestore.mockReturnValue({});
+
+			// First, successful load
+			const { template } = mockTemplate({ NEWS_ALERT_THRESHOLD: 0.85 }, { versionNumber: '12' });
+			await expect(remoteConfigService.loadNow()).resolves.toBe(true);
+
+			const readyStatus = remoteConfigService.getStatus();
+			expect(readyStatus).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: true,
+				status: 'ready',
+				source: 'remote',
+				templateVersion: '12',
+				lastErrorCategory: null,
+				consecutiveFailures: 0,
+				lastSuccessfulLoad: expect.any(String),
+			}));
+			const previousSuccessfulLoad = readyStatus.lastSuccessfulLoad;
+
+			// Next, refresh fails
+			template.load.mockRejectedValueOnce(new Error('Network error during refresh'));
+			await expect(remoteConfigService.loadNow()).resolves.toBe(false);
+
+			const degradedStatus = remoteConfigService.getStatus();
+			expect(degradedStatus).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'degraded',
+				lastSuccessfulLoad: previousSuccessfulLoad,
+				lastErrorCategory: 'load_failed',
+				consecutiveFailures: 1,
+			}));
+
+			// Next, refresh recovers
+			template.load.mockResolvedValueOnce(undefined);
+			await expect(remoteConfigService.loadNow()).resolves.toBe(true);
+
+			const recoveredStatus = remoteConfigService.getStatus();
+			expect(recoveredStatus.ready).toBe(true);
+			expect(recoveredStatus.status).toBe('ready');
+			expect(recoveredStatus.consecutiveFailures).toBe(0);
+		});
+
+		it('reports degraded status and stale category when cache max age expires', () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			alertStorageService.getFirestore.mockReturnValue({});
+
+			const loadedAt = Date.now() - 3700000; // 3700s ago (> 3600s maxAgeMs)
+			remoteConfigService._setRemoteOverridesForTesting({ NEWS_ALERT_THRESHOLD: 0.85 }, loadedAt);
+
+			const status = remoteConfigService.getStatus();
+			expect(status).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'degraded',
+				lastErrorCategory: 'stale',
+				lastSuccessfulLoad: new Date(loadedAt).toISOString(),
+			}));
+		});
+
+		it('applies REQUEST_TIMEOUT_MS remote override within bounds', () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			remoteConfigService._setRemoteOverridesForTesting({ REQUEST_TIMEOUT_MS: 50000 });
+
+			expect(remoteConfigService.getRuntimeConfig().REQUEST_TIMEOUT_MS).toBe(50000);
+		});
+
+		it('maintains parity between PARAMETER_SCHEMA and firebase-remote-config-template.json', () => {
+			const fs = require('fs');
+			const path = require('path');
+			const templatePath = path.join(__dirname, '../../firebase-remote-config-template.json');
+			const template = JSON.parse(fs.readFileSync(templatePath, 'utf8'));
+
+			const schemaKeys = Object.keys(remoteConfigService.PARAMETER_SCHEMA);
+			const templateKeys = Object.keys(template.parameters || {});
+
+			for (const key of schemaKeys) {
+				expect(templateKeys).toContain(key);
+			}
+			expect(template.parameters.REQUEST_TIMEOUT_MS).toEqual(expect.objectContaining({
+				defaultValue: { value: '30000' },
+				valueType: 'NUMBER',
+			}));
+		});
+
+		it('notifies registered change listeners when remote overrides change', () => {
+			const listener = jest.fn();
+			const unsubscribe = remoteConfigService.addChangeListener(listener);
+
+			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_MAINTENANCE_MODE: true }, Date.now(), '42');
+
+			expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+				prevOverrides: {},
+				nextOverrides: { ENABLE_MAINTENANCE_MODE: true },
+				templateVersion: '42',
+			}));
+
+			unsubscribe();
+			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_MAINTENANCE_MODE: false });
+			expect(listener).toHaveBeenCalledTimes(1);
+		});
 	});
 });

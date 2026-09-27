@@ -132,6 +132,36 @@ describe('Alert TradingView MCP Integration', () => {
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
+	it('returns current_price and price_data in TradingView dry-run responses without delivery', async () => {
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			original_text: 'BTCUSDT(240) pasó a señal de COMPRA',
+			sentiment: 'BULLISH',
+			sentiment_score: 0.8,
+			current_price: 64863.03,
+			price_data: { current_price: 64863.03, high: 65000, low: 64000 },
+			insights: ['Señal detectada'],
+			sources: [],
+			truncated: false,
+			tradingViewEnrichmentApplied: true,
+			tradingViewEnrichmentStatus: 'full',
+			extraText: '*Model used*: `tradingview-mcp`',
+		});
+
+		const response = await request(app)
+			.post('/api/webhook/alert?useTradingViewData=true&dryRun=true')
+			.set('x-api-key', 'test-key')
+			.send({ text: 'BTCUSDT(240) pasó a señal de COMPRA' })
+			.expect(200);
+
+		expect(response.body.success).toBe(true);
+		expect(response.body.dryRun).toBe(true);
+		expect(response.body.enriched).toBe(true);
+		expect(response.body.payload.enrichedData.tradingViewEnrichmentApplied).toBe(true);
+		expect(response.body.payload.enrichedData.current_price).toBe(64863.03);
+		expect(response.body.payload.enrichedData.price_data).toEqual({ current_price: 64863.03, high: 65000, low: 64000 });
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
 	it('does not use TradingView MCP when query param is missing', async () => {
 		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
 			original_text: 'BTCUSDT(240) pasó a señal de VENTA',

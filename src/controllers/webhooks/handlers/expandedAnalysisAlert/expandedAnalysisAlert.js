@@ -1,11 +1,12 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	ExpandedAnalysisAlertRequestError,
 	parseExpandedAnalysisAlertRequest,
 	buildExpandedAnalysisAlertReport,
+	buildReportRow,
 } = require('../../../../services/tradingview/expandedAnalysisAlertReport');
 const {
 	getNotificationManager,
@@ -20,6 +21,8 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const { runWithConcurrency } = require('../../../../lib/runWithConcurrency');
+const alertStorageService = require('../../../../services/storage/AlertStorageService');
 
 const DEFAULT_ALERT_TIMEOUT_MS = 60000;
 const MAX_ALERT_TIMEOUT_MS = 120000;
@@ -38,9 +41,18 @@ function resolveDryRun(req) {
 	return queryFlag || bodyFlag;
 }
 
+function deriveItemSide(analysis = {}) {
+	const sentiment = String(analysis.sentiment || analysis.market_sentiment?.overall_sentiment || '').toUpperCase();
+	const confluence = String(analysis.confluence?.recommendation || analysis.confluence?.action || '').toUpperCase();
+	if (confluence.includes('SELL') || sentiment.includes('BEARISH') || sentiment.includes('BAJISTA')) {
+		return 'SELL';
+	}
+	return 'BUY';
+}
+
 function postExpandedAnalysisAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 
 		try {
@@ -48,7 +60,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseExpandedAnalysisAlertRequest(req);
 			const timeoutMs = getAlertTimeoutMs();
-			const deadline = createAlertDeadline(timeoutMs);
+			const deadline = createAlertDeadline(timeoutMs, req.requestDeadlineSignal);
 			let results;
 
 			try {
@@ -64,6 +76,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					input: result.input,
 					analysis: result.analysis,
 					multiTimeframe: result.multiTimeframe,
+					side: deriveItemSide(result.analysis),
 				}));
 
 			if (analyzedItems.length === 0) {
@@ -79,7 +92,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -96,7 +109,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -105,24 +118,55 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
 			}
 
-			const deliveryResults = await sendWithNotificationRouting(notificationManager, { text: alertText }, routing, { parentSpan: requestSpan });
+			const deliveryResults = await sendWithNotificationRouting(
+				notificationManager,
+				{ text: alertText, source: 'expanded-analysis' },
+				routing,
+				{ parentSpan: requestSpan },
+			);
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(results, deliveryResults);
 
+			// Fire-and-forget: persist delivered expanded-analysis report to AlertStorageService.
+			// Storage failures never block delivery (handled inside saveAlert).
+			if (alertStorageService.isEnabled() && deliveredChannels.length > 0 && analyzedItems.length > 0) {
+				const firstSymbol = analyzedItems[0].input && analyzedItems[0].input.symbol
+					? analyzedItems[0].input.symbol
+					: (analyzedItems[0].input && analyzedItems[0].input.raw) || null;
+				const firstExchange = analyzedItems[0].input && analyzedItems[0].input.exchange
+					? analyzedItems[0].input.exchange
+					: null;
+				alertStorageService.saveAlert({
+					requestId,
+					text: alertText,
+					symbol: firstSymbol,
+					exchange: firstExchange,
+					enriched: false,
+					enrichmentData: null,
+					tokenUsage: null,
+					channels: requestedChannels,
+					deliveryResults,
+					source: 'expanded-analysis',
+					telegramChatId: routing.telegramChatId,
+					telegramThreadId: routing.telegramThreadId,
+					whatsappChatId: routing.whatsappChatId,
+					discordWebhookUrl: routing.discordWebhookUrl,
+					processingTimeMs: Date.now() - startTime,
+				}).catch(() => {});
+			}
+
 			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 			if (signalOutcomeService.isEnabled()) {
 				for (const item of analyzedItems) {
-					const sentiment = String(item.analysis.sentiment || item.analysis.market_sentiment?.overall_sentiment || '').toUpperCase();
-					const confluence = String(item.analysis.confluence?.recommendation || item.analysis.confluence?.action || '').toUpperCase();
-					let itemSide = 'BUY';
-					if (confluence.includes('SELL') || sentiment.includes('BEARISH') || sentiment.includes('BAJISTA')) {
-						itemSide = 'SELL';
-					}
-
+					const itemSide = item.side;
+					const row = buildReportRow(item);
 					const tech = item.analysis.technical || item.analysis || {};
-					const closePrice = tech.price_data?.current_price ?? tech.price_data?.close ?? null;
+					const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
 					const score = item.analysis.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
+
+					const rawConfidence = item.analysis?.confidence ?? item.confidence ?? (typeof score === 'number' && score >= 0 && score <= 1 ? score : null);
+					const validConfidence = typeof rawConfidence === 'number' && Number.isFinite(rawConfidence) && rawConfidence >= 0 && rawConfidence <= 1 ? rawConfidence : null;
 
 					signalOutcomeService.recordSignal({
 						requestId,
@@ -132,8 +176,12 @@ function postExpandedAnalysisAlert(botOrGetter) {
 						timeframe: parsed.timeframe,
 						setupType: 'expanded-analysis',
 						score,
+						confidenceScore: validConfidence,
 						side: itemSide,
 						price: typeof closePrice === 'number' ? closePrice : null,
+						priceSource: typeof closePrice === 'number' ? 'tradingview-mcp' : null,
+						stop: typeof row.stopLoss === 'number' ? row.stopLoss : null,
+						target: typeof row.takeProfit === 'number' ? row.takeProfit : null,
 						sources: [],
 						tokenUsage: null,
 						processingTimeMs: Date.now() - startTime,
@@ -152,7 +200,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				timedOut,
 				timeoutMs,
 				requestId,
-				totalDurationMs: Date.now() - startTime,
+				processingTimeMs: Math.max(0, Date.now() - startTime),
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
@@ -194,74 +242,43 @@ function postExpandedAnalysisAlert(botOrGetter) {
 
 async function analyzeSymbols({ symbols, timeframe, includeMultiTimeframe, analysisMode }, options = {}) {
 	const { signal } = options;
-	const results = [];
+	const { results } = await runWithConcurrency(
+		symbols,
+		getRuntimeConfig().EXPANDED_ANALYSIS_ALERT_CONCURRENCY,
+		async (input) => {
+			try {
+				const analysisRequest = { ...input, timeframe, analysisMode };
+				if (signal) analysisRequest.signal = signal;
 
-	for (let index = 0; index < symbols.length; index++) {
-		const input = symbols[index];
-		if (signal && signal.aborted) {
-			appendTimeoutResults(results, symbols.slice(index), getAbortMessage(signal));
-			break;
-		}
-
-		try {
-			const analysisRequest = {
-				...input,
-				timeframe,
-				analysisMode,
-			};
-			if (signal) {
-				analysisRequest.signal = signal;
-			}
-
-			const analysis = await tradingViewMcpService.analyzeSymbolIdentifier({
-				...analysisRequest,
-			});
-
-			let multiTimeframe = null;
-			if (includeMultiTimeframe) {
-				try {
-					multiTimeframe = await tradingViewMcpService.callMultiTimeframeAnalysis({
-						symbol: input.symbol,
-						exchange: input.exchange,
-						signal,
-					});
-				} catch (mErr) {
-					console.warn(
-						'[ExpandedAnalysisAlert] Multi-timeframe analysis failed for',
-						input.raw,
-						mErr.message,
-					);
+				const analysis = await tradingViewMcpService.analyzeSymbolIdentifier(analysisRequest);
+				let multiTimeframe = null;
+				if (includeMultiTimeframe) {
+					try {
+						multiTimeframe = await tradingViewMcpService.callMultiTimeframeAnalysis({
+							symbol: input.symbol,
+							exchange: input.exchange,
+							signal,
+						});
+					} catch (mErr) {
+						console.warn('[ExpandedAnalysisAlert] Multi-timeframe analysis failed for', input.raw, mErr.message);
+					}
 				}
-			}
 
-			results.push({
-				symbol: input.raw,
-				status: 'analyzed',
-				input,
-				analysis,
-				multiTimeframe,
-			});
-		} catch (error) {
-			if (isAbortTriggered(signal, error)) {
-				const timeoutMessage = getAbortMessage(signal, error.message);
-				results.push({
-					symbol: input.raw,
-					status: 'timeout',
-					input,
-					error: timeoutMessage,
-				});
-				appendTimeoutResults(results, symbols.slice(index + 1), timeoutMessage);
-				break;
-			}
+				return { symbol: input.raw, status: 'analyzed', input, analysis, multiTimeframe };
+			} catch (error) {
+				if (isAbortTriggered(signal, error)) {
+					return { symbol: input.raw, status: 'timeout', input, error: getAbortMessage(signal, error.message) };
+				}
 
-			console.warn('[ExpandedAnalysisAlert] Symbol analysis failed:', input.raw, error.message);
-			results.push({
-				symbol: input.raw,
-				status: 'error',
-				input,
-				error: error.message,
-			});
-		}
+				console.warn('[ExpandedAnalysisAlert] Symbol analysis failed:', input.raw, error.message);
+				return { symbol: input.raw, status: 'error', input, error: error.message };
+			}
+		},
+		{ shouldContinue: () => !(signal && signal.aborted) },
+	);
+
+	if (signal && signal.aborted) {
+		fillTimeoutResults(results, symbols, getAbortMessage(signal));
 	}
 
 	return results;
@@ -319,26 +336,28 @@ function getAlertTimeoutMs() {
 	return Math.min(parsedTimeout, MAX_ALERT_TIMEOUT_MS);
 }
 
-function createAlertDeadline(timeoutMs) {
+function createAlertDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => {
 		controller.abort(new Error(`Expanded analysis alert timeout after ${timeoutMs}ms`));
 	}, timeoutMs);
 
 	return {
-		signal: controller.signal,
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
 		clear: () => clearTimeout(timeoutId),
 	};
 }
 
-function appendTimeoutResults(results, symbols, error) {
-	symbols.forEach((input) => {
-		results.push({
-			symbol: input.raw,
-			status: 'timeout',
-			input,
-			error,
-		});
+function fillTimeoutResults(results, symbols, error) {
+	symbols.forEach((input, index) => {
+		if (!results[index]) {
+			results[index] = {
+				symbol: input.raw,
+				status: 'timeout',
+				input,
+				error,
+			};
+		}
 	});
 }
 

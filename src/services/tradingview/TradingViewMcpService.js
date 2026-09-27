@@ -2,9 +2,53 @@
 
 const { sendWithRetry } = require('../../lib/retryHelper');
 const { parseTradingViewSignal, normalizeTradingViewTimeframe } = require('./parseTradingViewSignal');
+const {
+	getStopLossMeta,
+	getTakeProfitTarget,
+	getRiskRewardRatio,
+} = require('./expandedAnalysisAlertReport');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const alertStorageService = require('../storage/AlertStorageService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
+const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
+const TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID = 'tradingview-mcp';
+const DEFAULT_HEARTBEAT_TIMEOUT_MS = 2000;
+
+let adminModule = null;
+function getFirebaseAdmin() {
+	if (!adminModule) {
+		try {
+			adminModule = require('firebase-admin');
+		} catch {
+			adminModule = null;
+		}
+	}
+	return adminModule;
+}
+
+function awaitWithTimeout(promise, timeoutMs, message) {
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		const timerId = setTimeout(() => {
+			settled = true;
+			reject(new Error(message));
+		}, timeoutMs);
+
+		Promise.resolve(promise).then((value) => {
+			if (settled) return;
+			settled = true;
+			globalThis.clearTimeout?.(timerId);
+			resolve(value);
+		}, (error) => {
+			if (settled) return;
+			settled = true;
+			globalThis.clearTimeout?.(timerId);
+			reject(error);
+		});
+	});
+}
 
 function getAbortMessage(signal, fallback) {
 	const reason = signal && signal.reason;
@@ -19,8 +63,8 @@ function getAbortMessage(signal, fallback) {
 	return fallback;
 }
 
-function createRuntimeStatus() {
-	return {
+function createRuntimeStatus({ includeEnrichment = true } = {}) {
+	const status = {
 		status: 'unknown',
 		lastCheckedAt: null,
 		lastSuccessAt: null,
@@ -28,7 +72,73 @@ function createRuntimeStatus() {
 		lastErrorCategory: null,
 		successCount: 0,
 		failureCount: 0,
+		errorCategoryCounts: createEmptyErrorCategoryCounts(),
 	};
+	if (includeEnrichment) {
+		status.enrichment = {
+			lastStatus: null,
+			fullCount: 0,
+			partialCount: 0,
+			failedCount: 0,
+		};
+	}
+
+	return status;
+}
+
+function createEmptyErrorCategoryCounts() {
+	return {
+		circuit_breaker_open: 0,
+		http_5xx: 0,
+		http_4xx: 0,
+		timeout: 0,
+		invalid_response: 0,
+		request_failed: 0,
+	};
+}
+
+function getPercentage(value, total) {
+	return total === 0 ? 0 : Number(((value / total) * 100).toFixed(2));
+}
+
+const SETUP_TYPES = new Set(['breakout', 'mean_reversion', 'trend_continuation', 'reversal']);
+
+function inferSetupType(analysis, side) {
+	const explicit = typeof analysis.setup_type === 'string' ? analysis.setup_type.trim().toLowerCase() : '';
+	if (SETUP_TYPES.has(explicit)) {
+		return explicit;
+	}
+
+	const trend = String(analysis.market_structure?.trend || '').toLowerCase();
+	const aligned = side === 'SELL'
+		? /bearish|downtrend|bajista/.test(trend)
+		: /bullish|uptrend|alcista/.test(trend);
+	if (aligned) {
+		return 'trend_continuation';
+	}
+
+	const bollingerPosition = String(
+		analysis.bollinger_bands?.position || analysis.bollinger_analysis?.position || '',
+	).toLowerCase();
+	const meanReversionAligned = side === 'SELL'
+		? /upper|overbought/.test(bollingerPosition)
+		: /lower|oversold/.test(bollingerPosition);
+	if (meanReversionAligned) {
+		return 'mean_reversion';
+	}
+
+	return null;
+}
+
+function isValidRiskLevel(value, price, side, role) {
+	if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(price) || price <= 0) {
+		return false;
+	}
+
+	const isShort = side === 'SELL';
+	return role === 'stop'
+		? (isShort ? value > price : value < price)
+		: (isShort ? value < price : value > price);
 }
 
 class TradingViewMcpService {
@@ -37,7 +147,28 @@ class TradingViewMcpService {
 		this.logger = config.logger || console;
 		this.requestCounter = 0;
 		this.runtimeStatus = createRuntimeStatus();
-		this.volumeRuntimeStatus = createRuntimeStatus();
+		this.volumeRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
+		this.consecutiveFailures = 0;
+		this.breakerState = 'closed';
+		this.breakerOpenedAt = null;
+		this.lastBreakerStateChangeAt = null;
+		this.lastAdminPageSentAt = null;
+		this.hasActiveOutagePage = false;
+		this.enrichmentEvents = [];
+		this.notifyAdmin = config.notifyAdmin || null;
+		this.notificationManager = config.notificationManager || null;
+	}
+
+	_resetForTesting() {
+		this.runtimeStatus = createRuntimeStatus();
+		this.volumeRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
+		this.consecutiveFailures = 0;
+		this.breakerState = 'closed';
+		this.breakerOpenedAt = null;
+		this.lastBreakerStateChangeAt = null;
+		this.lastAdminPageSentAt = null;
+		this.hasActiveOutagePage = false;
+		this.enrichmentEvents = [];
 	}
 
 	isEnabled() {
@@ -57,33 +188,173 @@ class TradingViewMcpService {
 			this.config.enrichmentBudgetMs || runtimeConfig.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS,
 			10,
 		);
+		const breakerThreshold = parseInt(
+			this.config.breakerThreshold || runtimeConfig.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD,
+			10,
+		);
+		const breakerCooldownMs = parseInt(
+			this.config.breakerCooldownMs || runtimeConfig.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS,
+			10,
+		);
+		const pageCooldownMs = parseInt(
+			this.config.pageCooldownMs || runtimeConfig.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS,
+			10,
+		);
 
 		return {
 			url: this.config.url || process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL,
-			timeoutMs,
-			maxRetries,
+			timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 12000,
+			maxRetries: Number.isFinite(maxRetries) && maxRetries >= 0 ? maxRetries : 3,
 			defaultExchange,
 			defaultTimeframe,
-			enrichmentBudgetMs,
+			enrichmentBudgetMs: Number.isFinite(enrichmentBudgetMs) && enrichmentBudgetMs > 0 ? enrichmentBudgetMs : 12000,
+			breakerThreshold: Number.isFinite(breakerThreshold) && breakerThreshold > 0 ? breakerThreshold : 5,
+			breakerCooldownMs: Number.isFinite(breakerCooldownMs) && breakerCooldownMs > 0 ? breakerCooldownMs : 600000,
+			pageCooldownMs: Number.isFinite(pageCooldownMs) && pageCooldownMs > 0 ? pageCooldownMs : 3600000,
+		};
+	}
+
+	getBreakerState() {
+		if (this.breakerState === 'open') {
+			const { breakerCooldownMs } = this.getConfig();
+			const openedTime = this.breakerOpenedAt ? new Date(this.breakerOpenedAt).getTime() : 0;
+			if (Date.now() - openedTime >= breakerCooldownMs) {
+				this.breakerState = 'half-open';
+				this.lastBreakerStateChangeAt = new Date().toISOString();
+			}
+		}
+		return this.breakerState;
+	}
+
+	isBreakerOpen() {
+		return this.getBreakerState() === 'open';
+	}
+
+	getCircuitBreakerStatus() {
+		const state = this.getBreakerState();
+		const { breakerThreshold, breakerCooldownMs } = this.getConfig();
+		return {
+			state,
+			consecutiveFailures: this.consecutiveFailures,
+			openedAt: this.breakerOpenedAt,
+			lastStateChangeAt: this.lastBreakerStateChangeAt,
+			failureThreshold: breakerThreshold,
+			cooldownMs: breakerCooldownMs,
 		};
 	}
 
 	getStatus({ enabled = this.isEnabled(), runtimeStatus = this.runtimeStatus } = {}) {
 		const { url } = this.getConfig();
 		const configured = typeof url === 'string' && url.trim().length > 0;
-		const status = !enabled ? 'disabled' : !configured ? 'misconfigured' : runtimeStatus.status;
+		const circuitBreaker = this.getCircuitBreakerStatus();
+		const baseStatus = !enabled ? 'disabled' : !configured ? 'misconfigured' : runtimeStatus.status;
+		const status = baseStatus === 'ready' && circuitBreaker.state === 'open' ? 'degraded' : baseStatus;
 
-		return {
+		const statusDetails = {
 			enabled,
 			configured,
 			...runtimeStatus,
-			ready: enabled && configured && status === 'ready',
+			circuitBreaker,
+			ready: enabled && configured && status === 'ready' && circuitBreaker.state !== 'open',
 			status,
 		};
+		if (statusDetails.enrichment && runtimeStatus === this.runtimeStatus) {
+			statusDetails.enrichment = {
+				...statusDetails.enrichment,
+				alertPath: this._getAlertPathEnrichmentStatus(),
+			};
+		}
+
+		return statusDetails;
 	}
 
 	getVolumeConfirmationStatus({ enabled = this.isEnabled() } = {}) {
 		return this.getStatus({ enabled, runtimeStatus: this.volumeRuntimeStatus });
+	}
+
+	getScannerErrorCategoryCounts() {
+		const counts = (this.runtimeStatus && this.runtimeStatus.errorCategoryCounts) || createEmptyErrorCategoryCounts();
+		return { ...counts };
+	}
+
+	async persistRuntimeStatus(options = {}) {
+		const firestore = options.firestore || alertStorageService.getFirestore();
+		if (!firestore) {
+			return false;
+		}
+		const timeoutMs = options.timeoutMs || DEFAULT_HEARTBEAT_TIMEOUT_MS;
+		const status = this.getStatus({ enabled: true });
+		const adminMod = getFirebaseAdmin();
+		const payload = {
+			worker: 'tradingview-mcp',
+			status: status.status,
+			lastCheckedAt: status.lastCheckedAt || null,
+			lastSuccessAt: status.lastSuccessAt || null,
+			lastFailureAt: status.lastFailureAt || null,
+			lastErrorCategory: status.lastErrorCategory || null,
+			consecutiveFailures: this.consecutiveFailures,
+			circuitBreaker: this.getCircuitBreakerStatus(),
+			updatedAt: adminMod?.firestore?.Timestamp?.fromDate
+				? adminMod.firestore.Timestamp.fromDate(new Date())
+				: new Date().toISOString(),
+		};
+		try {
+			const writePromise = firestore
+				.collection(HEARTBEAT_COLLECTION_NAME)
+				.doc(TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID)
+				.set(payload, { merge: true });
+			await awaitWithTimeout(writePromise, timeoutMs, 'TradingView MCP status persist timed out');
+			return true;
+		} catch (error) {
+			this.logger?.warn?.(`[TradingViewMcpService] Failed to persist runtime status: ${error.message}`);
+			return false;
+		}
+	}
+
+	async syncDurableStatus(options = {}) {
+		const firestore = options.firestore || alertStorageService.getFirestore();
+		if (!firestore) {
+			return null;
+		}
+		const timeoutMs = options.timeoutMs || DEFAULT_HEARTBEAT_TIMEOUT_MS;
+		try {
+			const docPromise = firestore
+				.collection(HEARTBEAT_COLLECTION_NAME)
+				.doc(TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID)
+				.get();
+			const snapshot = await awaitWithTimeout(docPromise, timeoutMs, 'TradingView MCP status fetch timed out');
+			if (!snapshot || !snapshot.exists) {
+				return null;
+			}
+			const data = (typeof snapshot.data === 'function' ? snapshot.data() : snapshot.data) || {};
+			if (data.status) {
+				const remoteCheckedAtMs = data.lastCheckedAt ? new Date(data.lastCheckedAt).getTime() : 0;
+				const localCheckedAtMs = this.runtimeStatus.lastCheckedAt ? new Date(this.runtimeStatus.lastCheckedAt).getTime() : 0;
+				if (this.runtimeStatus.status === 'unknown' || remoteCheckedAtMs >= localCheckedAtMs) {
+					this.runtimeStatus = {
+						...this.runtimeStatus,
+						status: data.status,
+						lastCheckedAt: data.lastCheckedAt || this.runtimeStatus.lastCheckedAt,
+						lastSuccessAt: data.lastSuccessAt || this.runtimeStatus.lastSuccessAt,
+						lastFailureAt: data.lastFailureAt || this.runtimeStatus.lastFailureAt,
+						lastErrorCategory: data.lastErrorCategory !== undefined ? data.lastErrorCategory : this.runtimeStatus.lastErrorCategory,
+					};
+					if (Number.isFinite(data.consecutiveFailures)) {
+						this.consecutiveFailures = Math.max(this.consecutiveFailures, data.consecutiveFailures);
+					}
+					if (data.circuitBreaker && data.circuitBreaker.state === 'open') {
+						this.breakerState = 'open';
+						if (data.circuitBreaker.openedAt) {
+							this.breakerOpenedAt = data.circuitBreaker.openedAt;
+						}
+					}
+				}
+			}
+			return this.getStatus({ enabled: true });
+		} catch (error) {
+			this.logger?.warn?.(`[TradingViewMcpService] Failed to sync durable status: ${error.message}`);
+			return null;
+		}
 	}
 
 	async enrichFromAlertText(alertText, options = {}) {
@@ -97,8 +368,24 @@ class TradingViewMcpService {
 	}
 
 	async enrichFromSignal(parsedSignal, options = {}) {
+		if (this.isBreakerOpen()) {
+			this.logger?.info?.(`[TradingViewMcpService] Circuit breaker is OPEN (${this.consecutiveFailures} consecutive failures); skipping enrichment to fail open immediately.`);
+			this._recordEnrichmentStatus('failed');
+			return null;
+		}
+
 		const cfg = this.getConfig();
 		const budgetMs = options.budgetMs || cfg.enrichmentBudgetMs;
+		const budgetStartedAt = Date.now();
+		const budgetDeadlineAt = budgetMs > 0 ? budgetStartedAt + budgetMs : null;
+		const volumeConfirmationEnabled = getRuntimeConfig().ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
+		const confluenceEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true';
+		const multiTimeframeEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME === 'true';
+		const optionalEnrichmentEnabled = volumeConfirmationEnabled || confluenceEnabled;
+		const baseBudgetMs = budgetDeadlineAt
+			? Math.max(1, Math.floor(budgetMs * (optionalEnrichmentEnabled ? 0.75 : 1)))
+			: null;
+		const baseDeadlineAt = budgetDeadlineAt ? Math.min(budgetDeadlineAt, budgetStartedAt + baseBudgetMs) : null;
 		const symbol = parsedSignal.symbol.toUpperCase();
 		const exchange = (parsedSignal.exchange || cfg.defaultExchange).toUpperCase();
 		const timeframe = normalizeTradingViewTimeframe(parsedSignal.timeframe || parsedSignal.rawTimeframe, cfg.defaultTimeframe);
@@ -112,6 +399,14 @@ class TradingViewMcpService {
 				budgetController.abort(new Error(`TradingView MCP enrichment budget exceeded (${budgetMs}ms)`));
 			}, budgetMs);
 		}
+		const baseBudgetController = new AbortController();
+		const retryDelayCapMs = baseBudgetMs ? Math.max(1, Math.floor(baseBudgetMs / Math.max(1, cfg.maxRetries))) : null;
+		const baseBudgetTimer = baseDeadlineAt
+			? setTimeout(() => {
+				baseBudgetController.abort(new Error(`TradingView MCP base analysis budget exceeded (${baseBudgetMs}ms)`));
+			}, Math.max(1, baseDeadlineAt - Date.now()))
+			: null;
+		const baseSignal = AbortSignal.any([budgetController.signal, baseBudgetController.signal]);
 
 		const cleanBudget = () => {
 			if (budgetTimer) {
@@ -119,48 +414,80 @@ class TradingViewMcpService {
 				budgetTimer = null;
 			}
 		};
+		const cleanBaseBudget = () => {
+			if (baseBudgetTimer) {
+				clearTimeout(baseBudgetTimer);
+			}
+		};
 
-		const result = await sendWithRetry(async ({ signal: retrySignal }) => {
+		const result = await sendWithRetry(async ({ signal: retrySignal, attempt }) => {
+			const remainingBaseMs = baseDeadlineAt ? baseDeadlineAt - Date.now() : cfg.timeoutMs;
+			if (remainingBaseMs <= 0) {
+				return { success: false, channel: 'tradingview-mcp', error: 'TradingView MCP base analysis budget exhausted' };
+			}
+			const attemptController = new AbortController();
+			// Reserve every remaining exponential backoff, then split the time left across attempts.
+			const remainingAttempts = Math.max(1, cfg.maxRetries - attempt + 1);
+			let retryReserveMs = 0;
+			for (let retryAttempt = attempt; retryAttempt < cfg.maxRetries; retryAttempt += 1) {
+				retryReserveMs += Math.min(Math.pow(2, retryAttempt - 1) * 1100, retryDelayCapMs || Number.POSITIVE_INFINITY);
+			}
+			const attemptBudgetMs = Math.max(1, remainingBaseMs - retryReserveMs);
+			const attemptTimeoutMs = Math.min(cfg.timeoutMs, Math.max(1, Math.floor(attemptBudgetMs / remainingAttempts)));
+			const attemptTimeoutId = setTimeout(() => {
+				attemptController.abort(new Error(`TradingView MCP base analysis attempt timeout after ${attemptTimeoutMs}ms`));
+			}, attemptTimeoutMs);
 			try {
-				const combinedSignal = retrySignal || budgetController.signal;
+				const combinedSignal = AbortSignal.any([retrySignal || baseSignal, attemptController.signal]);
 				const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe, signal: combinedSignal });
 				return { success: true, channel: 'tradingview-mcp', analysis };
 			} catch (error) {
 				return { success: false, channel: 'tradingview-mcp', error: error.message };
+			} finally {
+				clearTimeout(attemptTimeoutId);
 			}
-		}, cfg.maxRetries, this.logger, { signal: budgetController.signal });
+		}, cfg.maxRetries, this.logger, { signal: baseSignal, maxRetryDelayMs: retryDelayCapMs });
+		cleanBaseBudget();
 
 		// Budget still applies for volume confirmation, but the budget timer
 		// is stopped after the entire enrichment (coin + volume) completes.
 		if (!result.success) {
+			this._recordEnrichmentStatus('failed');
 			cleanBudget();
 			throw new Error(`TradingView MCP call failed: ${result.error || 'unknown error'}`);
 		}
 
 		let volumeAnalysis = null;
-		if (getRuntimeConfig().ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION) {
-			const volumeTimeoutMs = Math.min(5000, Math.max(1000, (budgetMs || 12000) / 4));
-			const controller = new AbortController();
-			const timeoutId = setTimeout(() => {
-				controller.abort(new Error(`TradingView MCP volume confirmation timeout after ${volumeTimeoutMs}ms`));
-			}, volumeTimeoutMs);
-
-			const vResult = await sendWithRetry(async ({ signal: retrySignal }) => {
-				try {
-					const combinedSignal = retrySignal || controller.signal;
-					const volConfirm = await this.callVolumeConfirmation({ symbol, exchange, timeframe, signal: combinedSignal });
-					return { success: true, channel: 'tradingview-mcp', volConfirm };
-				} catch (error) {
-					return { success: false, channel: 'tradingview-mcp', error: error.message };
-				}
-			}, 1, this.logger, { signal: controller.signal });
-
-			clearTimeout(timeoutId);
-
-			if (vResult.success) {
-				volumeAnalysis = vResult.volConfirm;
+		let optionalEnrichmentPartial = false;
+		if (volumeConfirmationEnabled) {
+			const remainingBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
+			if (remainingBudgetMs <= 0) {
+				optionalEnrichmentPartial = true;
 			} else {
-				this.logger.warn(`[TradingViewMcpService] Volume confirmation failed for ${symbol}: ${vResult.error || 'unknown error'}`);
+				const volumeTimeoutMs = Math.min(5000, Math.max(1, remainingBudgetMs));
+				const controller = new AbortController();
+				const timeoutId = setTimeout(() => {
+					controller.abort(new Error(`TradingView MCP volume confirmation timeout after ${volumeTimeoutMs}ms`));
+				}, volumeTimeoutMs);
+
+				const vResult = await sendWithRetry(async ({ signal: retrySignal }) => {
+					try {
+						const combinedSignal = AbortSignal.any([retrySignal || controller.signal, controller.signal, budgetController.signal]);
+						const volConfirm = await this.callVolumeConfirmation({ symbol, exchange, timeframe, signal: combinedSignal });
+						return { success: true, channel: 'tradingview-mcp', volConfirm };
+					} catch (error) {
+						return { success: false, channel: 'tradingview-mcp', error: error.message };
+					}
+				}, 1, this.logger, { signal: AbortSignal.any([controller.signal, budgetController.signal]) });
+
+				clearTimeout(timeoutId);
+
+				if (vResult.success) {
+					volumeAnalysis = vResult.volConfirm;
+				} else {
+					optionalEnrichmentPartial = true;
+					this.logger.warn(`[TradingViewMcpService] Volume confirmation failed for ${symbol}: ${vResult.error || 'unknown error'}`);
+				}
 			}
 		}
 
@@ -170,8 +497,9 @@ class TradingViewMcpService {
 		// (via AbortSignal.any) so an exhausted enrichment budget cancels it immediately.
 		let confluenceAnalysis = null;
 		let multiTimeframeAnalysis = null;
-		if (process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true' && !budgetController.signal.aborted) {
-			const confluenceTimeoutMs = Math.min(8000, Math.max(2000, (budgetMs || 12000) / 2));
+		if (confluenceEnabled && !budgetController.signal.aborted) {
+			const remainingBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
+			const confluenceTimeoutMs = Math.min(8000, Math.max(1, remainingBudgetMs));
 			const confluenceController = new AbortController();
 			const confluenceTimeoutId = setTimeout(() => {
 				confluenceController.abort(new Error(`TradingView MCP confluence timeout after ${confluenceTimeoutMs}ms`));
@@ -188,23 +516,32 @@ class TradingViewMcpService {
 					signal: combinedSignal,
 				});
 				console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
-				if (process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME === 'true' && !budgetController.signal.aborted) {
-					multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
-						symbol,
-						exchange,
-						signal: combinedSignal,
-					});
-					console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
+				if (multiTimeframeEnabled) {
+					if (budgetController.signal.aborted) {
+						optionalEnrichmentPartial = true;
+					} else {
+						multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
+							symbol,
+							exchange,
+							signal: combinedSignal,
+						});
+						console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
+					}
 				}
 			} catch (error) {
+				optionalEnrichmentPartial = true;
 				this.logger.warn(`[TradingViewMcpService] Confluence enrichment failed for ${symbol} (fail-open): ${error.message}`);
 			} finally {
 				clearTimeout(confluenceTimeoutId);
 			}
+		} else if (confluenceEnabled) {
+			optionalEnrichmentPartial = true;
 		}
 
 		cleanBudget();
-		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis, confluenceAnalysis, multiTimeframeAnalysis);
+		const enrichmentStatus = optionalEnrichmentPartial ? 'partial' : 'full';
+		this._recordEnrichmentStatus(enrichmentStatus);
+		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis, confluenceAnalysis, multiTimeframeAnalysis, enrichmentStatus);
 	}
 
 	async callCoinAnalysis({ symbol, exchange, timeframe, signal }) {
@@ -291,6 +628,27 @@ class TradingViewMcpService {
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
 				throw new Error('TradingView MCP multi_timeframe_analysis returned invalid payload');
+			}
+
+			return normalizedResult;
+		}, { signal });
+	}
+
+	async callMultiAgentAnalysis({ symbol, exchange, timeframe, signal }) {
+		return this._withRuntimeStatus(async () => {
+			const rpcResult = await this._callTool('multi_agent_analysis', {
+				symbol,
+				exchange,
+				timeframe,
+			}, { signal });
+			const normalizedResult = this._unwrapSchemaResult(rpcResult);
+
+			if (normalizedResult && normalizedResult.error) {
+				throw new Error(normalizedResult.error);
+			}
+
+			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
+				throw new Error('TradingView MCP multi_agent_analysis returned invalid payload');
 			}
 
 			return normalizedResult;
@@ -580,11 +938,20 @@ class TradingViewMcpService {
 		return parsedPayloads[0];
 	}
 
-	_toEnrichedAlert(originalText, signal, analysis = {}, volumeAnalysis = null, confluenceAnalysis = null, multiTimeframeAnalysis = null) {
+	_toEnrichedAlert(originalText, signal, analysis = {}, volumeAnalysis = null, confluenceAnalysis = null, multiTimeframeAnalysis = null, tradingViewEnrichmentStatus = 'full') {
 		const { side, symbol, exchange, timeframe } = signal;
 		const sideLabel = side === 'SELL' ? 'VENTA' : 'COMPRA';
 		const sideSentiment = side === 'SELL' ? -0.55 : 0.55;
-		const priceData = (analysis && analysis.price_data) || {};
+		const rawPriceData = (analysis && (analysis.price_data || analysis.price)) || {};
+		const validCurrentPrice = typeof rawPriceData.current_price === 'number'
+			&& Number.isFinite(rawPriceData.current_price)
+			&& rawPriceData.current_price > 0
+			? rawPriceData.current_price
+			: null;
+		const priceData = {
+			...rawPriceData,
+			current_price: validCurrentPrice,
+		};
 		const indicators = (analysis && analysis.technical_indicators) || {};
 		const rsiData = (analysis && analysis.rsi) || {};
 		const adxData = (analysis && analysis.adx) || {};
@@ -594,6 +961,40 @@ class TradingViewMcpService {
 		const marketSentiment = (analysis && analysis.market_sentiment) || {};
 		const marketStructure = (analysis && analysis.market_structure) || {};
 		const timeframeContext = (analysis && analysis.timeframe_context) || {};
+		const atrCandidates = [
+			indicators.atr,
+			analysis && analysis.atr && typeof analysis.atr === 'object' ? analysis.atr.value : analysis && analysis.atr,
+			analysis && analysis.volatility && analysis.volatility.atr,
+		];
+		const atr = this._firstNumber(atrCandidates.map(value => (
+			typeof value === 'string' && value.trim() ? Number(value) : value
+		)), null);
+		const atrWasProvided = atrCandidates.some(value => value !== null && value !== undefined && value !== '');
+		const atrStop = validCurrentPrice === null ? null : side === 'SELL' ? validCurrentPrice + (atr * 1.5) : validCurrentPrice - (atr * 1.5);
+		const atrTarget = validCurrentPrice === null ? null : side === 'SELL' ? validCurrentPrice - (atr * 3) : validCurrentPrice + (atr * 3);
+		const usableAtr = Number.isFinite(atr)
+			&& atr > 0
+			&& isValidRiskLevel(atrStop, validCurrentPrice, side, 'stop')
+			&& isValidRiskLevel(atrTarget, validCurrentPrice, side, 'target')
+			? atr
+			: null;
+		const stopLossMeta = getStopLossMeta(validCurrentPrice, usableAtr, legacyBollinger, bollingerBands, side);
+		const targetLevel = getTakeProfitTarget(validCurrentPrice, usableAtr, legacyBollinger, bollingerBands, analysis, side);
+		const riskRewardRatio = getRiskRewardRatio(validCurrentPrice, stopLossMeta.value, targetLevel, side);
+		const setupType = inferSetupType(analysis, side);
+		const hasValidRiskMetadata = isValidRiskLevel(stopLossMeta.value, validCurrentPrice, side, 'stop')
+			&& isValidRiskLevel(targetLevel, validCurrentPrice, side, 'target')
+			&& Number.isFinite(riskRewardRatio)
+			&& riskRewardRatio > 0
+			&& !(atrWasProvided && usableAtr === null);
+		const riskMetadata = {
+			...(hasValidRiskMetadata ? {
+				invalidation_level: stopLossMeta.value,
+				target_level: targetLevel,
+				risk_reward_ratio: riskRewardRatio,
+			} : {}),
+			...(setupType ? { setup_type: setupType } : {}),
+		};
 
 		const rating = this._firstNumber([
 			marketSentiment.overall_rating,
@@ -686,8 +1087,11 @@ class TradingViewMcpService {
 		return {
 			original_text: originalText,
 			tradingViewEnrichmentApplied: true,
+			tradingViewEnrichmentStatus,
 			sentiment,
 			sentiment_score: sentimentScore,
+			current_price: validCurrentPrice,
+			price_data: priceData,
 			insights,
 			technical_levels: {
 				supports,
@@ -698,6 +1102,7 @@ class TradingViewMcpService {
 			extraText,
 			confluenceData: confluenceAnalysis || null,
 			multiTimeframeData: multiTimeframeAnalysis || null,
+			...riskMetadata,
 		};
 	}
 
@@ -811,12 +1216,64 @@ class TradingViewMcpService {
 		return `${prefix}-${Date.now()}-${this.requestCounter}`;
 	}
 
+	_recordEnrichmentStatus(status) {
+		if (!['full', 'partial', 'failed'].includes(status)) {
+			return;
+		}
+
+		const now = Date.now();
+		this.enrichmentEvents = this.enrichmentEvents
+			.filter(event => event.timestamp > now - ENRICHMENT_WINDOW_MS);
+		this.enrichmentEvents.push({ status, timestamp: now });
+
+		const countKey = `${status}Count`;
+		const enrichment = this.runtimeStatus.enrichment || {
+			lastStatus: null,
+			fullCount: 0,
+			partialCount: 0,
+			failedCount: 0,
+		};
+		this.runtimeStatus = {
+			...this.runtimeStatus,
+			enrichment: {
+				...enrichment,
+				lastStatus: status,
+				[countKey]: enrichment[countKey] + 1,
+			},
+		};
+	}
+
+	_getAlertPathEnrichmentStatus() {
+		const cutoff = Date.now() - ENRICHMENT_WINDOW_MS;
+		const events = this.enrichmentEvents.filter(event => event.timestamp > cutoff);
+		const fullCount = events.filter(event => event.status === 'full').length;
+		const partialCount = events.filter(event => event.status === 'partial').length;
+		const failedCount = events.filter(event => event.status === 'failed').length;
+		const totalCount = events.length;
+
+		return {
+			windowMs: ENRICHMENT_WINDOW_MS,
+			totalCount,
+			appliedCount: fullCount + partialCount,
+			failedCount,
+			appliedRate24h: getPercentage(fullCount + partialCount, totalCount),
+			failureRate24h: getPercentage(failedCount, totalCount),
+		};
+	}
+
 	async _withRuntimeStatus(operation, { signal, runtimeStatusKey } = {}) {
 		const runtimeStatusKeys = runtimeStatusKey ? ['runtimeStatus', runtimeStatusKey] : ['runtimeStatus'];
+
+		if (this.isBreakerOpen()) {
+			const error = new Error('TradingView MCP circuit breaker is OPEN');
+			error.category = 'circuit_breaker_open';
+			throw error;
+		}
 
 		try {
 			const result = await operation();
 			const timestamp = new Date().toISOString();
+			this._recordSuccess();
 			runtimeStatusKeys.forEach((key) => {
 				this[key] = {
 					...this[key],
@@ -827,6 +1284,9 @@ class TradingViewMcpService {
 					successCount: this[key].successCount + 1,
 				};
 			});
+			void this.persistRuntimeStatus().catch((err) => {
+				this.logger?.warn?.(`[TradingViewMcpService] Failed to persist runtime status: ${err.message}`);
+			});
 			return result;
 		} catch (error) {
 			if (signal && signal.aborted && getAbortMessage(signal, '') === 'Job cancelled by user') {
@@ -834,22 +1294,173 @@ class TradingViewMcpService {
 			}
 
 			const timestamp = new Date().toISOString();
+			this._recordFailure(error);
+			const errorCategory = this._getErrorCategory(error);
 			runtimeStatusKeys.forEach((key) => {
+				const prevCounts = (this[key] && this[key].errorCategoryCounts) || createEmptyErrorCategoryCounts();
+				const nextCounts = { ...prevCounts };
+				if (Object.prototype.hasOwnProperty.call(nextCounts, errorCategory)) {
+					nextCounts[errorCategory] += 1;
+				} else {
+					nextCounts.request_failed = (nextCounts.request_failed || 0) + 1;
+				}
 				this[key] = {
 					...this[key],
 					status: 'degraded',
 					lastCheckedAt: timestamp,
 					lastFailureAt: timestamp,
-					lastErrorCategory: this._getErrorCategory(error),
+					lastErrorCategory: errorCategory,
 					failureCount: this[key].failureCount + 1,
+					errorCategoryCounts: nextCounts,
 				};
+			});
+			void this.persistRuntimeStatus().catch((err) => {
+				this.logger?.warn?.(`[TradingViewMcpService] Failed to persist runtime status: ${err.message}`);
 			});
 			throw error;
 		}
 	}
 
+	_recordSuccess() {
+		this.consecutiveFailures = 0;
+		if (this.breakerState !== 'closed') {
+			this.breakerState = 'closed';
+			this.breakerOpenedAt = null;
+			this.lastBreakerStateChangeAt = new Date().toISOString();
+		}
+		if (this.hasActiveOutagePage) {
+			this.hasActiveOutagePage = false;
+			void this._notifyAdminRecovery().catch((err) => {
+				this.logger?.warn?.(`[TradingViewMcpService] Failed to send admin recovery page: ${err.message}`);
+			});
+		}
+	}
+
+	_recordFailure(error) {
+		if (error && error.category === 'circuit_breaker_open') {
+			return;
+		}
+		this.consecutiveFailures += 1;
+		const { breakerThreshold, pageCooldownMs } = this.getConfig();
+		if (this.consecutiveFailures >= breakerThreshold) {
+			if (this.breakerState !== 'open') {
+				this.breakerState = 'open';
+				this.breakerOpenedAt = new Date().toISOString();
+				this.lastBreakerStateChangeAt = this.breakerOpenedAt;
+			}
+			const now = Date.now();
+			if (!this.lastAdminPageSentAt || (now - this.lastAdminPageSentAt >= pageCooldownMs)) {
+				this.lastAdminPageSentAt = now;
+				this.hasActiveOutagePage = true;
+				void this._notifyAdminDegradation(error).catch((err) => {
+					this.logger?.warn?.(`[TradingViewMcpService] Failed to send admin degradation page: ${err.message}`);
+				});
+			}
+		}
+	}
+
+	async _notifyAdminDegradation(error) {
+		const adminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
+		const { breakerCooldownMs } = this.getConfig();
+		const cooldownSeconds = Math.round(breakerCooldownMs / 1000);
+		const errorCategory = this._getErrorCategory(error);
+		const errorMessage = error && error.message ? error.message : 'Unknown error';
+		const message = [
+			'⚠️ TradingView MCP Sustained Outage Alert',
+			`Consecutive failures: ${this.consecutiveFailures}`,
+			`Error category: ${errorCategory}`,
+			`Error details: ${errorMessage}`,
+			`Circuit breaker: OPEN (skipping outbound calls for ${cooldownSeconds}s)`,
+		].join('\n');
+
+		if (typeof this.notifyAdmin === 'function') {
+			try {
+				await this.notifyAdmin({
+					type: 'degradation',
+					message,
+					consecutiveFailures: this.consecutiveFailures,
+					errorCategory,
+					error,
+				});
+			} catch (err) {
+				this.logger?.warn?.(`[TradingViewMcpService] notifyAdmin callback failed: ${err.message}`);
+			}
+			return;
+		}
+
+		if (!adminChatId) {
+			return;
+		}
+
+		try {
+			const manager = this.notificationManager || this._getNotificationManager();
+			const telegramService = manager && manager.channels && manager.channels.get('telegram');
+			if (telegramService && telegramService.isEnabled()) {
+				await telegramService.send({
+					text: message,
+					telegramChatId: adminChatId,
+				});
+			}
+		} catch (err) {
+			this.logger?.warn?.(`[TradingViewMcpService] Failed to send admin degradation page: ${err.message}`);
+		}
+	}
+
+	async _notifyAdminRecovery() {
+		const adminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
+		const message = [
+			'✅ TradingView MCP Service Recovered',
+			'TradingView MCP connection restored successfully.',
+			'Circuit breaker: CLOSED (resuming normal enrichment).',
+		].join('\n');
+
+		if (typeof this.notifyAdmin === 'function') {
+			try {
+				await this.notifyAdmin({
+					type: 'recovery',
+					message,
+				});
+			} catch (err) {
+				this.logger?.warn?.(`[TradingViewMcpService] notifyAdmin callback failed: ${err.message}`);
+			}
+			return;
+		}
+
+		if (!adminChatId) {
+			return;
+		}
+
+		try {
+			const manager = this.notificationManager || this._getNotificationManager();
+			const telegramService = manager && manager.channels && manager.channels.get('telegram');
+			if (telegramService && telegramService.isEnabled()) {
+				await telegramService.send({
+					text: message,
+					telegramChatId: adminChatId,
+				});
+			}
+		} catch (err) {
+			this.logger?.warn?.(`[TradingViewMcpService] Failed to send admin recovery page: ${err.message}`);
+		}
+	}
+
+	_getNotificationManager() {
+		try {
+			const { getNotificationManager } = require('../../controllers/webhooks/handlers/alert/alert');
+			return typeof getNotificationManager === 'function' ? getNotificationManager() : null;
+		} catch {
+			return null;
+		}
+	}
+
 	_getErrorCategory(error) {
 		const message = error && typeof error.message === 'string' ? error.message : '';
+		if (error && error.category === 'circuit_breaker_open') {
+			return 'circuit_breaker_open';
+		}
+		if (/circuit breaker/i.test(message)) {
+			return 'circuit_breaker_open';
+		}
 		if (/HTTP 5\d\d/i.test(message)) {
 			return 'http_5xx';
 		}
@@ -872,4 +1483,6 @@ module.exports = {
 	TradingViewMcpService,
 	tradingViewMcpService,
 	DEFAULT_TRADINGVIEW_MCP_URL,
+	HEARTBEAT_COLLECTION_NAME,
+	TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID,
 };

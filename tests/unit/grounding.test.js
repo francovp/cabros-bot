@@ -1,6 +1,6 @@
 /* global describe, it, expect, jest */
 
-const { groundAlert } = require('../../src/services/grounding/grounding');
+const { groundAlert, _resetForTesting } = require('../../src/services/grounding/grounding');
 const { generateEnrichedAlert } = require('../../src/services/grounding/gemini');
 const genaiClient = require('../../src/services/grounding/genaiClient');
 const sentryService = require('../../src/services/monitoring/SentryService');
@@ -50,6 +50,104 @@ describe('Grounding Service', () => {
 			// Verify search and LLM were called
 			expect(genaiClient.search).toHaveBeenCalled();
 			expect(generateEnrichedAlert).toHaveBeenCalled();
+		});
+
+		it('should coalesce concurrent equity alert searches for the same symbol while generating each alert separately', async () => {
+			process.env.ALERT_GROUNDING_COALESCE_MS = '1000';
+			genaiClient.search.mockClear();
+			generateEnrichedAlert.mockClear();
+			const firstUsage = { addUsage: jest.fn() };
+			const secondUsage = { addUsage: jest.fn() };
+			let resolveSearch;
+			genaiClient.search.mockImplementation(() => new Promise((resolve) => {
+				resolveSearch = resolve;
+			}));
+			generateEnrichedAlert.mockImplementation(({ text }) => Promise.resolve({
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.5,
+				insights: [text],
+				sources: [],
+			}));
+
+			const first = groundAlert({
+				text: 'NASDAQ:NVDA(D) cambió a señal de COMPRA',
+				options: { tokenUsage: firstUsage },
+			});
+			const second = groundAlert({
+				text: 'NASDAQ:NVDA(60) cambió a señal de COMPRA',
+				options: { tokenUsage: secondUsage },
+			});
+			await Promise.resolve();
+
+			expect(genaiClient.search).toHaveBeenCalledTimes(1);
+			resolveSearch({
+				results: [],
+				totalResults: 0,
+				searchResultText: '',
+				usage: { inputTokens: 10, outputTokens: 0 },
+			});
+			await Promise.all([first, second]);
+			delete process.env.ALERT_GROUNDING_COALESCE_MS;
+			_resetForTesting();
+
+			expect(generateEnrichedAlert).toHaveBeenCalledTimes(2);
+			expect(firstUsage.addUsage).toHaveBeenCalledTimes(1);
+			expect(secondUsage.addUsage).not.toHaveBeenCalled();
+		});
+
+		it('does not coalesce equity alerts for different symbols', async () => {
+			process.env.ALERT_GROUNDING_COALESCE_MS = '1000';
+			genaiClient.search.mockClear();
+			generateEnrichedAlert.mockClear();
+			genaiClient.search.mockResolvedValue({
+				results: [],
+				totalResults: 0,
+				searchResultText: '',
+				usage: { inputTokens: 10, outputTokens: 0 },
+			});
+			generateEnrichedAlert.mockImplementation(({ text }) => Promise.resolve({
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.5,
+				insights: [text],
+				sources: [],
+			}));
+
+			const first = groundAlert({
+				text: 'NASDAQ:NVDA(D) cambió a señal de COMPRA',
+			});
+			const second = groundAlert({
+				text: 'NYSE:AMD(D) cambió a señal de COMPRA',
+			});
+			await Promise.all([first, second]);
+			delete process.env.ALERT_GROUNDING_COALESCE_MS;
+			_resetForTesting();
+
+			expect(genaiClient.search).toHaveBeenCalledTimes(2);
+		});
+
+		it('falls back to an independent search when shared equity search fails', async () => {
+			process.env.ALERT_GROUNDING_COALESCE_MS = '1000';
+			genaiClient.search.mockClear();
+			generateEnrichedAlert.mockResolvedValue({
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.5,
+				insights: [],
+				sources: [],
+			});
+			genaiClient.search
+				.mockRejectedValueOnce(new Error('shared search failed'))
+				.mockResolvedValueOnce({ results: [], totalResults: 0, searchResultText: '' });
+
+			const first = groundAlert({ text: 'NASDAQ:NVDA(D) cambió a señal de COMPRA' });
+			const second = groundAlert({ text: 'NASDAQ:NVDA(60) cambió a señal de COMPRA' });
+
+			await expect(first).rejects.toThrow('Grounding failed: shared search failed');
+			await expect(second).resolves.toEqual(expect.objectContaining({
+				assetClass: 'stock',
+			}));
+			expect(genaiClient.search).toHaveBeenCalledTimes(2);
+			delete process.env.ALERT_GROUNDING_COALESCE_MS;
+			_resetForTesting();
 		});
 
 		it('should handle long text by truncating', async () => {

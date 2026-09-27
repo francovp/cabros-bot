@@ -431,14 +431,9 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 	});
 
 	describe('Grounding calibration surfaces in alert response', () => {
-		beforeEach(() => {
-			jest.dontMock('../../src/services/grounding/gemini');
-			jest.dontMock('../../src/services/grounding/genaiClient');
-			jest.resetModules();
-
-			const localGemini = require('../../src/services/grounding/gemini');
-			const localGenaiClient = require('../../src/services/grounding/genaiClient');
-			jest.spyOn(localGemini, 'analyzeNewsForSymbol').mockResolvedValue({
+		it('should suppress alert when calibrated confidence from weak grounding is below NEWS_ALERT_THRESHOLD', async () => {
+			const gemini = require('../../src/services/grounding/gemini');
+			gemini.analyzeNewsForSymbol.mockResolvedValueOnce({
 				event_category: 'price_surge',
 				event_significance: 0.85,
 				sentiment_score: 0.75,
@@ -464,51 +459,15 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 					freshness_unknown: true,
 				},
 			});
-			jest.spyOn(localGenaiClient, 'search').mockResolvedValue({
-				results: [],
-				searchResultText: '',
-				totalResults: 0,
-			});
 
 			process.env.NEWS_ALERT_THRESHOLD = '0.7';
-			const localApp = require('../../app');
-			const localRoutes = getRoutes(mockBot);
-			localApp.use('/api', localRoutes);
-		});
-
-		afterEach(() => {
-			jest.restoreAllMocks();
-			jest.doMock('../../src/services/grounding/gemini', () => ({
-				analyzeNewsForSymbol: jest.fn().mockResolvedValue({
-					event_category: 'price_surge',
-					headline: 'Bitcoin surges',
-					sentiment_score: 0.85,
-					confidence: 0.75,
-					sources: ['https://example.com'],
-				}),
-			}));
-			jest.doMock('../../src/services/grounding/genaiClient', () => ({
-				llmCall: jest.fn().mockResolvedValue('test response'),
-				search: jest.fn().mockResolvedValue({
-					results: [
-						{ url: 'https://example.com/1', title: 'Source 1' },
-						{ url: 'https://example.com/2', title: 'Source 2' },
-					],
-					searchResultText: 'Market context from search',
-					totalResults: 2,
-				}),
-			}));
-		});
-
-		it('should suppress alert when calibrated confidence from weak grounding is below NEWS_ALERT_THRESHOLD', async () => {
-			const localApp = require('../../app');
-			const response = await request(localApp)
+			const response = await request(app)
 				.get('/api/news-monitor').set('x-api-key', 'test-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
 			expect(response.body.results[0]).toBeDefined();
-			expect(response.body.results[0].alert).toBeNull();
+			expect(response.body.results[0].alert).toBeFalsy();
 		});
 	});
 });

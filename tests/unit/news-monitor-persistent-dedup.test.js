@@ -52,6 +52,7 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 		mockSetEntry.mockResolvedValue(undefined);
 		mockUpdateEntry.mockResolvedValue(true);
 		mockRenewEntry.mockResolvedValue(true);
+		mockDeleteEntry.mockResolvedValue(true);
 		cache = new NewsCache();
 		cache.ttlMs = 1000; // 1 second for fast tests
 	});
@@ -144,6 +145,119 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			// Fail-open allows the local claim to succeed
 			expect(result).toBe(true);
 		});
+
+		it('bounds Firestore claimEntry by deadline and fails open when Firestore stalls', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			// Firestore stalls indefinitely
+			mockClaimEntry.mockReturnValue(new Promise(() => {}));
+
+			const start = Date.now();
+			const result = await cache.claim('BTCUSDT', EventCategory.PRICE_SURGE, {
+				deadline: Date.now() + 40,
+			});
+			const elapsed = Date.now() - start;
+
+			expect(result).toBe(true);
+			expect(elapsed).toBeGreaterThanOrEqual(30);
+			expect(elapsed).toBeLessThan(500);
+			// Local reservation is preserved
+			expect(cache.cache.has('BTCUSDT:price_surge')).toBe(true);
+		});
+
+		it('bounds Firestore claimEntry by options.signal and fails open immediately', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			mockClaimEntry.mockReturnValue(new Promise(() => {}));
+
+			const controller = new AbortController();
+			const claimPromise = cache.claim('BTCUSDT', EventCategory.PRICE_SURGE, {
+				signal: controller.signal,
+			});
+			controller.abort('caller timeout');
+
+			const result = await claimPromise;
+			expect(result).toBe(true);
+			expect(cache.cache.has('BTCUSDT:price_surge')).toBe(true);
+		});
+
+		it('retains an abandoned marker and retries durable deletion before reclaiming', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			mockDeleteEntry.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+			await expect(cache.claim('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBe(true);
+			await cache.releaseClaim('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual({ status: 'claiming-abandoned' });
+			mockGetEntryRecord.mockResolvedValue({
+				data: { status: 'claiming' },
+				expiresAtMs: Date.now() + cache.ttlMs,
+			});
+			await expect(cache.get('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBeNull();
+
+			await expect(cache.claim('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBe(true);
+			expect(mockDeleteEntry).toHaveBeenCalledTimes(2);
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual({ status: 'claiming' });
+		});
+
+		it('fails open and allows local reclaim when retrying abandoned claim deletion fails', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			mockDeleteEntry.mockResolvedValue(false);
+			mockClaimEntry.mockResolvedValue(true);
+
+			await expect(cache.claim('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBe(true);
+			await cache.releaseClaim('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual({ status: 'claiming-abandoned' });
+
+			await expect(cache.claim('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBe(true);
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual({ status: 'claiming' });
+		});
+
+		it('removes the reserved local slot when Firestore claim returns false', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			mockClaimEntry.mockResolvedValue(false);
+
+			const result = await cache.claim('BTCUSDT', EventCategory.PRICE_SURGE);
+			expect(result).toBe(false);
+			expect(cache.cache.has('BTCUSDT:price_surge')).toBe(false);
+		});
+
+		it('prevents concurrent claims from exceeding maxEntries while awaiting Firestore', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			const tinyCache = new NewsCache(undefined, { maxEntries: 1 });
+
+			let resolveFirstClaim;
+			const firstClaimPromise = new Promise(resolve => {
+				resolveFirstClaim = resolve;
+			});
+			mockClaimEntry.mockImplementationOnce(() => firstClaimPromise);
+
+			// First claim starts and awaits Firestore
+			const p1 = tinyCache.claim('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			// Verify that the first claim reserved the slot locally
+			expect(tinyCache.cache.size).toBe(1);
+
+			// Second claim for another symbol arrives while first is in-flight
+			const p2 = tinyCache.claim('ETHUSDT', EventCategory.PRICE_SURGE);
+
+			// Second claim should be rejected immediately because capacity is 1 and already reserved with active claim
+			const result2 = await p2;
+			expect(result2).toBe(false);
+
+			// First claim completes
+			resolveFirstClaim(true);
+			const result1 = await p1;
+			expect(result1).toBe(true);
+			expect(tinyCache.cache.size).toBe(1);
+			expect(tinyCache.cache.has('BTCUSDT:price_surge')).toBe(true);
+			tinyCache.shutdown();
+		});
 	});
 
 	// ─────────────────────────────────────────
@@ -202,6 +316,182 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			// Firestore write should have been called (fire-and-forget)
 			await new Promise(resolve => setImmediate(resolve));
 			expect(mockSetEntry).toHaveBeenCalledWith('BTCUSDT:price_surge', cache.ttlMs, data);
+		});
+
+		it('preserves a local-only finalized result when Firestore refresh is stale', async () => {
+			const failedData = {
+				alert: { symbol: 'BTCUSDT' },
+				deliveryResults: [{ channel: 'telegram', success: false }],
+			};
+			const recoveredData = {
+				...failedData,
+				deliveryResults: [{ channel: 'telegram', success: true, messageId: 'telegram-recovered' }],
+			};
+
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, failedData);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, recoveredData, {
+				preserveTtl: true,
+				deliveryChannels: [],
+				localDeliveryChannels: ['telegram'],
+				skipPersistence: true,
+			});
+			mockGetEntryRecord.mockResolvedValue({
+				data: failedData,
+				expiresAtMs: Date.now() + cache.ttlMs,
+			});
+
+			const result = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			expect(result.deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-recovered' }),
+			]);
+			expect(cache.cache.get('BTCUSDT:price_surge').localOnlyChannels).toEqual(['telegram']);
+		});
+
+		it('preserves only the non-durable channel across a mixed persistent refresh', async () => {
+			const failedData = {
+				alert: { symbol: 'BTCUSDT' },
+				deliveryResults: [
+					{ channel: 'telegram', success: false },
+					{ channel: 'whatsapp', success: false },
+				],
+			};
+			const recoveredData = {
+				...failedData,
+				deliveryResults: [
+					{ channel: 'telegram', success: true, messageId: 'telegram-recovered' },
+					{ channel: 'whatsapp', success: true, messageId: 'whatsapp-recovered' },
+				],
+			};
+
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, failedData);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, recoveredData, {
+				preserveTtl: true,
+				deliveryChannels: ['telegram'],
+				localDeliveryChannels: ['telegram', 'whatsapp'],
+				localOnlyChannels: ['whatsapp'],
+			});
+			mockGetEntryRecord.mockResolvedValue({
+				data: {
+					...failedData,
+					deliveryResults: [{ channel: 'telegram', success: true, messageId: 'telegram-recovered' }],
+				},
+				expiresAtMs: Date.now() + cache.ttlMs,
+			});
+
+			const result = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			expect(result.deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-recovered' }),
+				expect.objectContaining({ channel: 'whatsapp', success: true, messageId: 'whatsapp-recovered' }),
+			]);
+			expect(cache.cache.get('BTCUSDT:price_surge').localOnlyChannels).toEqual(['whatsapp']);
+		});
+
+		it('clears a local-only marker when a later retry replaces that channel with failure', async () => {
+			const failedData = {
+				alert: { symbol: 'BTCUSDT' },
+				deliveryResults: [{ channel: 'telegram', success: false }],
+			};
+			const recoveredData = {
+				...failedData,
+				deliveryResults: [{ channel: 'telegram', success: true, messageId: 'telegram-recovered' }],
+			};
+
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, failedData);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, recoveredData, {
+				preserveTtl: true,
+				deliveryChannels: [],
+				localDeliveryChannels: ['telegram'],
+				localOnlyChannels: ['telegram'],
+				skipPersistence: true,
+			});
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, failedData, {
+				preserveTtl: true,
+				deliveryChannels: [],
+				localDeliveryChannels: ['telegram'],
+				localOnlyChannels: [],
+				skipPersistence: true,
+			});
+			mockGetEntryRecord.mockResolvedValue({
+				data: recoveredData,
+				expiresAtMs: Date.now() + cache.ttlMs,
+			});
+
+			const result = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			expect(result.deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-recovered' }),
+			]);
+			expect(cache.cache.get('BTCUSDT:price_surge').localOnlyChannels).toEqual([]);
+		});
+
+		it('prefers a persistent successful channel state over an older local-only success', async () => {
+			const failedData = {
+				alert: { symbol: 'BTCUSDT' },
+				routing: { channels: ['telegram'], telegramChatId: 'destination-a' },
+				deliveryResults: [{ channel: 'telegram', success: false }],
+			};
+			const localData = {
+				...failedData,
+				deliveryResults: [{ channel: 'telegram', success: true, messageId: 'telegram-local' }],
+			};
+			const persistentData = {
+				...failedData,
+				routing: { channels: ['telegram'], telegramChatId: 'destination-b' },
+				deliveryResults: [{ channel: 'telegram', success: true, messageId: 'telegram-persistent' }],
+			};
+
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, failedData);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, localData, {
+				preserveTtl: true,
+				deliveryChannels: [],
+				localDeliveryChannels: ['telegram'],
+				localOnlyChannels: ['telegram'],
+				skipPersistence: true,
+			});
+			mockGetEntryRecord.mockResolvedValue({
+				data: persistentData,
+				expiresAtMs: Date.now() + cache.ttlMs,
+			});
+
+			const result = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			expect(result.deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-persistent' }),
+			]);
+			expect(cache.cache.get('BTCUSDT:price_surge').localOnlyChannels).toEqual([]);
+		});
+
+		it('rechecks local state after a concurrent persistent refresh await', async () => {
+			const failedData = {
+				alert: { symbol: 'BTCUSDT' },
+				deliveryResults: [{ channel: 'telegram', success: false }],
+			};
+			const recoveredData = {
+				...failedData,
+				deliveryResults: [{ channel: 'telegram', success: true, messageId: 'telegram-concurrent' }],
+			};
+			let releaseRefresh;
+			mockGetEntryRecord.mockReturnValue(new Promise(resolve => { releaseRefresh = resolve; }));
+
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, failedData);
+			const refreshPromise = cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			await Promise.resolve();
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, recoveredData, {
+				preserveTtl: true,
+				deliveryChannels: [],
+				localDeliveryChannels: ['telegram'],
+				localOnlyChannels: ['telegram'],
+				skipPersistence: true,
+			});
+			releaseRefresh({ data: failedData, expiresAtMs: Date.now() + cache.ttlMs });
+
+			const result = await refreshPromise;
+
+			expect(result.deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-concurrent' }),
+			]);
 		});
 
 		it('preserves the cache TTL when updating cached delivery results', async () => {
@@ -370,6 +660,35 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			cache.releaseDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp');
 			await expect(cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp')).resolves.toBe(true);
 			expect(mockClaimEntry).toHaveBeenCalledTimes(1);
+		});
+
+		it('bounds persistent channel lease claim by deadline and fails open when Firestore stalls', async () => {
+			mockClaimEntry.mockReturnValue(new Promise(() => {}));
+
+			const start = Date.now();
+			const result = await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp', {
+				deadline: Date.now() + 40,
+			});
+			const elapsed = Date.now() - start;
+
+			expect(result).toBe(true);
+			expect(elapsed).toBeGreaterThanOrEqual(30);
+			expect(elapsed).toBeLessThan(500);
+			expect(cache.deliveryLocks.has('BTCUSDT:price_surge:delivery:whatsapp')).toBe(true);
+		});
+
+		it('bounds persistent channel lease claim by options.signal and fails open immediately', async () => {
+			mockClaimEntry.mockReturnValue(new Promise(() => {}));
+
+			const controller = new AbortController();
+			const claimPromise = cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp', {
+				signal: controller.signal,
+			});
+			controller.abort('sweep shutdown');
+
+			const result = await claimPromise;
+			expect(result).toBe(true);
+			expect(cache.deliveryLocks.has('BTCUSDT:price_surge:delivery:whatsapp')).toBe(true);
 		});
 
 		it('renews an active persistent channel lease', async () => {

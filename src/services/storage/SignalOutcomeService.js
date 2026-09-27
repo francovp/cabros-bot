@@ -3,9 +3,16 @@
 const admin = require('firebase-admin');
 const AlertStorageService = require('./AlertStorageService');
 const equityMarketDataService = require('./EquityMarketDataService');
+const geminiPriceService = require('../grounding/geminiPriceService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { MainClient } = require('binance');
+const {
+	parseEntryPriceSources,
+	getEntryPriceSourceChains: buildEntryPriceSourceChains,
+} = require('../../lib/signalOutcomeEntryPriceSources');
+
+const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
 const COLLECTION_NAME = 'tradingSignalOutcomes';
 const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
@@ -13,7 +20,29 @@ const HEARTBEAT_DOCUMENT_ID = 'signal-outcome';
 const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
 const MAX_WORKER_DRAIN_TIMEOUT_MS = 30000;
 const MAX_TIMER_DELAY_MS = 2147483647;
+const MAX_CONFIGURED_INTERVAL_MS = 3600000;
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 100;
+const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
+const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
+const DEFAULT_BINANCE_DATA_BASE_URL = 'https://api.binance.com';
+const REASON_BINANCE_UNAVAILABLE = 'binance_unavailable';
+const REASON_BINANCE_REGION_BLOCKED = 'binance_region_blocked';
+const REASON_GEMINI_UNAVAILABLE = 'gemini_unavailable';
+const REASON_MARKET_DATA_REGION_BLOCKED = 'market_data_region_blocked';
+const REGION_BLOCK_MESSAGE_PATTERNS = [
+	'restricted location',
+	'service unavailable from restricted',
+	'451',
+];
+const DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS = 365;
+const MAX_SIGNAL_OUTCOME_RETENTION_DAYS = 3650;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SESSION_TIME_ZONE = 'America/New_York';
+const SESSION_ANCHOR_VERSION = 'v1';
+const REGULAR_EQUITY_EXCHANGES = new Set(['AMEX', 'BATS', 'NASDAQ', 'NYSE', 'NYSE ARCA']);
+
 let binanceClient = null;
 let isEvaluating = false;
 let workerTimer = null;
@@ -26,7 +55,324 @@ let lastRunScannedCount = 0;
 let lastRunEvaluatedCount = 0;
 let lastRunPendingCount = 0;
 let lastRunErrorCount = 0;
+let lastRunRegionBlockedCount = 0;
 let lastEvaluatedDoc = null;
+let lastRetentionWarningValue = null;
+let lastEntryPriceSourcesWarningValue = null;
+
+function getEntryPriceSourceChains() {
+	const rawValue = getRuntimeConfig?.().SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES;
+	try {
+		const chains = buildEntryPriceSourceChains(rawValue);
+		lastEntryPriceSourcesWarningValue = null;
+		return chains;
+	} catch (error) {
+		if (lastEntryPriceSourcesWarningValue !== rawValue) {
+			console.warn('[SignalOutcomeService] Invalid SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES configuration, using existing fallback chains');
+			lastEntryPriceSourcesWarningValue = rawValue;
+		}
+		return buildEntryPriceSourceChains();
+	}
+}
+
+function getEntryPriceSourceChain(exchange, assetClass) {
+	const chains = getEntryPriceSourceChains();
+	return exchange === 'BINANCE' || assetClass === 'crypto' ? chains.crypto : chains.equity;
+}
+
+function getSignalOutcomeRetentionDays() {
+	const rawValue = process.env.SIGNAL_OUTCOME_RETENTION_DAYS;
+	if (rawValue !== undefined && rawValue !== null) {
+		const normalizedValue = String(rawValue).trim();
+		const parsedValue = Number(normalizedValue);
+		if (!/^\d+$/.test(normalizedValue)
+			|| !Number.isSafeInteger(parsedValue)
+			|| parsedValue < 1
+			|| parsedValue > MAX_SIGNAL_OUTCOME_RETENTION_DAYS) {
+			if (lastRetentionWarningValue !== rawValue) {
+				console.warn('[SignalOutcomeService] Invalid SIGNAL_OUTCOME_RETENTION_DAYS configuration, using default');
+				lastRetentionWarningValue = rawValue;
+			}
+			const runtimeDays = getRuntimeConfig?.().SIGNAL_OUTCOME_RETENTION_DAYS;
+			if (typeof runtimeDays === 'number' && Number.isSafeInteger(runtimeDays) && runtimeDays >= 1 && runtimeDays <= MAX_SIGNAL_OUTCOME_RETENTION_DAYS) {
+				return runtimeDays;
+			}
+			return DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS;
+		}
+		lastRetentionWarningValue = null;
+	}
+
+	const runtimeDays = getRuntimeConfig?.().SIGNAL_OUTCOME_RETENTION_DAYS;
+	if (typeof runtimeDays === 'number' && Number.isSafeInteger(runtimeDays) && runtimeDays >= 1 && runtimeDays <= MAX_SIGNAL_OUTCOME_RETENTION_DAYS) {
+		return runtimeDays;
+	}
+
+	return DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS;
+}
+
+function getTimestampMillis(value) {
+	if (value && typeof value.toMillis === 'function') {
+		const millis = value.toMillis();
+		return Number.isFinite(millis) ? millis : null;
+	}
+
+	if (value && typeof value.toDate === 'function') {
+		const millis = value.toDate().getTime();
+		return Number.isFinite(millis) ? millis : null;
+	}
+
+	if (value instanceof Date) {
+		const millis = value.getTime();
+		return Number.isFinite(millis) ? millis : null;
+	}
+
+	if (typeof value === 'string' && !Number.isNaN(Date.parse(value))) {
+		const millis = new Date(value).getTime();
+		return Number.isFinite(millis) ? millis : null;
+	}
+
+	return null;
+}
+
+function buildRetentionExpiryTimestamp(baseDate = new Date()) {
+	const baseTime = baseDate instanceof Date ? baseDate.getTime() : Date.now();
+	return admin.firestore.Timestamp.fromDate(
+		new Date(baseTime + (getSignalOutcomeRetentionDays() * DAY_MS)),
+	);
+}
+
+function isRetentionExpired(data) {
+	if (data && data.retentionPolicy === 'archive') {
+		return false;
+	}
+
+	const now = Date.now();
+	const explicitExpiry = getTimestampMillis(data && data.expiresAt);
+	if (explicitExpiry !== null && explicitExpiry <= now) {
+		return true;
+	}
+
+	const receivedAtMs = getTimestampMillis(data && data.receivedAt);
+	if (receivedAtMs !== null && receivedAtMs + (getSignalOutcomeRetentionDays() * DAY_MS) <= now) {
+		return true;
+	}
+
+	return false;
+}
+
+function getLocalDateParts(date) {
+	const parts = new Intl.DateTimeFormat('en-US', {
+		timeZone: SESSION_TIME_ZONE,
+		calendar: 'gregory',
+		weekday: 'short',
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit',
+		hour: '2-digit',
+		minute: '2-digit',
+		hourCycle: 'h23',
+	}).formatToParts(date).reduce((result, part) => {
+		if (part.type !== 'literal') result[part.type] = part.value;
+		return result;
+	}, {});
+
+	return {
+		year: Number(parts.year),
+		month: Number(parts.month),
+		day: Number(parts.day),
+		weekday: parts.weekday,
+		hour: Number(parts.hour),
+		minute: Number(parts.minute),
+	};
+}
+
+function localDateKey({ year, month, day }) {
+	return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function addLocalDays(dateKey, days) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	const date = new Date(Date.UTC(year, month - 1, day + days));
+	return localDateKey({ year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate() });
+}
+
+function getWeekday(dateKey) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+}
+
+function getNthWeekday(year, month, weekday, occurrence) {
+	const first = new Date(Date.UTC(year, month - 1, 1));
+	const day = 1 + ((weekday - first.getUTCDay() + 7) % 7) + ((occurrence - 1) * 7);
+	return localDateKey({ year, month, day });
+}
+
+function getLastWeekday(year, month, weekday) {
+	const last = new Date(Date.UTC(year, month, 0));
+	const day = last.getUTCDate() - ((last.getUTCDay() - weekday + 7) % 7);
+	return localDateKey({ year, month, day });
+}
+
+function getEasterSunday(year) {
+	const a = year % 19;
+	const b = Math.floor(year / 100);
+	const c = year % 100;
+	const d = Math.floor(b / 4);
+	const e = b % 4;
+	const f = Math.floor((b + 8) / 25);
+	const g = Math.floor((b - f + 1) / 3);
+	const h = (19 * a + b - d - g + 15) % 30;
+	const i = Math.floor(c / 4);
+	const k = c % 4;
+	const l = (32 + 2 * e + 2 * i - h - k) % 7;
+	const m = Math.floor((a + 11 * h + 22 * l) / 451);
+	const month = Math.floor((h + l - 7 * m + 114) / 31);
+	const day = ((h + l - 7 * m + 114) % 31) + 1;
+	return localDateKey({ year, month, day });
+}
+
+function getObservedFixedHoliday(year, month, day) {
+	const dateKey = localDateKey({ year, month, day });
+	const weekday = getWeekday(dateKey);
+	if (weekday === 6) return addLocalDays(dateKey, -1);
+	if (weekday === 0) return addLocalDays(dateKey, 1);
+	return dateKey;
+}
+
+function isUsMarketHoliday(dateKey) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	const fixed = new Set([
+		getObservedFixedHoliday(year, 1, 1),
+		getObservedFixedHoliday(year + 1, 1, 1),
+		getObservedFixedHoliday(year, 6, 19),
+		getObservedFixedHoliday(year, 7, 4),
+		getObservedFixedHoliday(year, 12, 25),
+	]);
+	const movable = new Set([
+		getNthWeekday(year, 1, 1, 3),
+		getNthWeekday(year, 2, 1, 3),
+		addLocalDays(getEasterSunday(year), -2),
+		getLastWeekday(year, 5, 1),
+		getNthWeekday(year, 9, 1, 1),
+		getNthWeekday(year, 11, 4, 4),
+	]);
+	return fixed.has(dateKey) || movable.has(dateKey) || getWeekday(dateKey) === 0 || getWeekday(dateKey) === 6;
+}
+
+function isUsMarketHalfDay(dateKey) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	const thanksgiving = getNthWeekday(year, 11, 4, 4);
+	const julyFourth = localDateKey({ year, month: 7, day: 4 });
+	const julyFourthWeekday = getWeekday(julyFourth);
+	const isJulyEarlyClose = (julyFourthWeekday === 6 || julyFourthWeekday === 0)
+		? dateKey === localDateKey({ year, month: 7, day: 2 })
+		: (julyFourthWeekday >= 2 && julyFourthWeekday <= 5 && dateKey === localDateKey({ year, month: 7, day: 3 }));
+	return dateKey === addLocalDays(thanksgiving, 1)
+		|| isJulyEarlyClose
+		|| (dateKey === localDateKey({ year, month: 12, day: 24 }) && getWeekday(localDateKey({ year, month: 12, day: 25 })) >= 1 && getWeekday(localDateKey({ year, month: 12, day: 25 })) <= 5);
+}
+
+function localTimeToDate(dateKey, hour, minute) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	let utcMillis = Date.UTC(year, month - 1, day, hour, minute);
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const local = getLocalDateParts(new Date(utcMillis));
+		const localAsUtc = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute);
+		const wantedAsUtc = Date.UTC(year, month - 1, day, hour, minute);
+		utcMillis += wantedAsUtc - localAsUtc;
+	}
+	return new Date(utcMillis);
+}
+
+function getSessionSchedule(dateKey) {
+	if (isUsMarketHoliday(dateKey)) return null;
+	const closeHour = isUsMarketHalfDay(dateKey) ? 13 : 16;
+	return {
+		openAt: localTimeToDate(dateKey, 9, 30),
+		closeAt: localTimeToDate(dateKey, closeHour, 0),
+	};
+}
+
+function getNextSessionOpen(dateKey) {
+	for (let offset = 1; offset <= 14; offset++) {
+		const candidate = addLocalDays(dateKey, offset);
+		const schedule = getSessionSchedule(candidate);
+		if (schedule) return schedule.openAt;
+	}
+	return null;
+}
+
+function getSessionContext({ exchange, assetClass, receivedAt = new Date() } = {}) {
+	const observedDate = receivedAt instanceof Date ? receivedAt : new Date(receivedAt);
+	const observedAt = Number.isNaN(observedDate.getTime()) ? new Date() : observedDate;
+	const base = {
+		observedAt: observedAt.toISOString(),
+		decisionBarClosedAt: null,
+		tradableAt: observedAt.toISOString(),
+		anchorMode: 'raw_received_at',
+		anchorVersion: SESSION_ANCHOR_VERSION,
+		calendarId: null,
+		calendarTimeZone: null,
+		measurementCohort: 'raw_received_at',
+	};
+
+	if (String(assetClass || '').toLowerCase() === 'crypto' || String(exchange || '').toUpperCase() === 'BINANCE') {
+		return { ...base, sessionContext: 'crypto_24_7' };
+	}
+
+	const normalizedExchange = equityMarketDataService.normalizeExchange(exchange)
+		|| String(exchange || '').trim().toUpperCase().replace(/_DLY$/, '');
+	if (!REGULAR_EQUITY_EXCHANGES.has(normalizedExchange)) {
+		return { ...base, sessionContext: 'non_regular_market' };
+	}
+
+	const local = getLocalDateParts(observedAt);
+	const dateKey = localDateKey(local);
+	const nextSessionOpen = getNextSessionOpen(dateKey);
+	const calendarFields = {
+		calendarId: 'nyse',
+		calendarTimeZone: SESSION_TIME_ZONE,
+	};
+	const schedule = getSessionSchedule(dateKey);
+	if (!schedule) {
+		return {
+			...base,
+			...calendarFields,
+			sessionContext: 'market_holiday',
+			tradableAt: nextSessionOpen ? nextSessionOpen.toISOString() : null,
+			measurementCohort: 'raw_market_closed',
+		};
+	}
+
+	const observedMillis = observedAt.getTime();
+	if (observedMillis < schedule.openAt.getTime()) {
+		return {
+			...base,
+			...calendarFields,
+			sessionContext: 'pre_open',
+			tradableAt: schedule.openAt.toISOString(),
+			measurementCohort: 'raw_pre_open',
+		};
+	}
+	if (observedMillis >= schedule.closeAt.getTime()) {
+		return {
+			...base,
+			...calendarFields,
+			sessionContext: 'after_hours',
+			decisionBarClosedAt: schedule.closeAt.toISOString(),
+			tradableAt: nextSessionOpen ? nextSessionOpen.toISOString() : null,
+			measurementCohort: 'raw_received_at_after_hours',
+		};
+	}
+
+	return {
+		...base,
+		...calendarFields,
+		sessionContext: 'regular',
+		tradableAt: observedAt.toISOString(),
+		measurementCohort: 'raw_received_at',
+	};
+}
 
 function awaitWithTimeout(promise, timeoutMs, message) {
 	return new Promise((resolve, reject) => {
@@ -51,17 +397,51 @@ function awaitWithTimeout(promise, timeoutMs, message) {
 }
 
 function getBinanceClient(requestOptions = {}) {
+	const baseUrl = resolveBinanceBaseUrl();
+	const clientOptions = {
+		beautifyResponses: true,
+	};
+	if (baseUrl) {
+		clientOptions.baseUrl = baseUrl;
+	}
 	if (!binanceClient || (requestOptions && Object.keys(requestOptions).length > 0)) {
-		return new MainClient({
-			beautifyResponses: true,
-		}, requestOptions);
+		return new MainClient(clientOptions, requestOptions);
 	}
 	return binanceClient;
 }
 
+function resolveBinanceBaseUrl() {
+	const configured = process.env.BINANCE_DATA_BASE_URL;
+	if (typeof configured === 'string' && configured.trim() !== '') {
+		const trimmed = configured.trim();
+		if (/^https?:\/\//i.test(trimmed)) {
+			return trimmed;
+		}
+		console.warn(
+			`[SignalOutcomeService] Ignoring BINANCE_DATA_BASE_URL="${configured}" — must be an http(s) URL. Falling back to ${DEFAULT_BINANCE_DATA_BASE_URL}.`,
+		);
+	}
+	return DEFAULT_BINANCE_DATA_BASE_URL;
+}
+
+function isRegionBlockedError(err) {
+	if (!err) {
+ return false;
+}
+	const message = typeof err.message === 'string' ? err.message : '';
+	const code = err.code;
+	if (code === 451) {
+ return true;
+}
+	if (typeof code === 'string' && code.trim() === '451') {
+ return true;
+}
+	const lower = message.toLowerCase();
+	return REGION_BLOCK_MESSAGE_PATTERNS.some((pattern) => lower.includes(pattern));
+}
+
 function isEnabled() {
-	return process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
-		|| process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING === 'true';
+	return process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true';
 }
 
 function getWorkerRole() {
@@ -122,6 +502,14 @@ function parseTimerInterval(val, defaultVal) {
 	return parsed <= MAX_TIMER_DELAY_MS ? parsed : defaultVal;
 }
 
+function getConfiguredInterval(defaultVal) {
+	const intervalMs = parseTimerInterval(
+		process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS || process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS,
+		defaultVal,
+	);
+	return intervalMs <= MAX_CONFIGURED_INTERVAL_MS ? intervalMs : defaultVal;
+}
+
 function normalizeSide(side) {
 	if (!side || typeof side !== 'string') {
 		return 'BUY';
@@ -139,16 +527,21 @@ function normalizeSymbolAndExchange(rawSymbol, rawExchange) {
 	}
 	const parts = rawSymbol.trim().toUpperCase().split(':');
 	if (parts.length === 2) {
-		return { exchange: parts[0], symbol: parts[1] };
+		const symbol = parts[1].replace(/\s*\([A-Za-z0-9]+\)$/, '');
+		return { exchange: parts[0], symbol };
 	}
 	const exchange = rawExchange ? String(rawExchange).trim().toUpperCase() : 'BINANCE';
-	return { exchange, symbol: parts[0] };
+	const symbol = parts[0].replace(/\s*\([A-Za-z0-9]+\)$/, '');
+	return { exchange, symbol };
 }
 
 function normalizeAssetClass(rawAssetClass) {
 	const assetClass = String(rawAssetClass || '').trim().toLowerCase();
-	return ['crypto', 'stock'].includes(assetClass) ? assetClass : null;
+	return ['crypto', 'stock', 'forex', 'index'].includes(assetClass) ? assetClass : null;
 }
+
+const DEFAULT_MAX_RETRY_ATTEMPTS = 3;
+const DEFAULT_MAX_RETRY_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProviderName = null, entryPriceReason = null) {
 	const isClassifiedBareStock = normSymbolInfo.exchange === 'UNKNOWN' && assetClass === 'stock';
@@ -173,6 +566,19 @@ function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProv
 		};
 	}
 	if (entryPrice === null || entryPrice === undefined) {
+		const isTransient = equityMarketDataService.isTransientReason(entryPriceReason)
+			|| entryPriceReason === REASON_BINANCE_UNAVAILABLE
+			|| entryPriceReason === REASON_BINANCE_REGION_BLOCKED
+			|| entryPriceReason === REASON_GEMINI_UNAVAILABLE
+			|| entryPriceReason === 'twelve_data_unavailable'
+			|| entryPriceReason === 'twelve_data_rate_limited'
+			|| entryPriceReason === 'twelve_data_timeout';
+		if (isTransient) {
+			return {
+				state: 'pending_entry_price',
+				reason: entryPriceReason || 'Entry price temporarily unavailable; will resolve on sweep',
+			};
+		}
 		return {
 			state: equityProviderName ? 'equity_provider_unavailable' : 'missing_entry_price',
 			reason: entryPriceReason || (equityProviderName
@@ -193,6 +599,13 @@ const WINDOW_CONFIGS = {
 	'1W': { durationMs: 7 * 24 * 60 * 60 * 1000, interval: '4h' },
 };
 
+function normalizeConfidenceScore(val) {
+	if (typeof val !== 'number' || !Number.isFinite(val)) return null;
+	if (val >= 0 && val <= 1) return val;
+	if (val >= -1 && val < 0) return Math.abs(val);
+	return null;
+}
+
 /**
  * Persist signal metadata to Firestore.
  */
@@ -204,8 +617,10 @@ async function recordSignalInternal({
 	timeframe,
 	setupType,
 	score,
+	confidenceScore,
 	side,
 	price,
+	priceSource,
 	stop,
 	target,
 	sources,
@@ -227,41 +642,149 @@ async function recordSignalInternal({
 		const normAssetClass = normalizeAssetClass(assetClass);
 		const normSide = normalizeSide(side);
 		const now = new Date();
+		const sessionContext = getSessionContext({
+			exchange: normSymbolInfo.exchange,
+			assetClass: normAssetClass,
+			timeframe,
+			receivedAt: now,
+		});
 		const equityProviderName = equityMarketDataService.getProviderName(normSymbolInfo.exchange, normAssetClass);
+		const entryPriceSourceChains = getEntryPriceSourceChains();
+		const entryPriceSourceChain = normSymbolInfo.exchange === 'BINANCE' || normAssetClass === 'crypto'
+			? entryPriceSourceChains.crypto
+			: entryPriceSourceChains.equity;
 
-		let entryPrice = typeof price === 'number' ? price : null;
+		let entryPrice = typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : null;
+		let entryPriceSource = entryPrice !== null
+			? (priceSource || (normSymbolInfo.exchange === 'BINANCE' ? 'tradingview-mcp' : (equityProviderName || 'direct')))
+			: null;
 		let entryPriceReason = null;
-		if (entryPrice === null && normSymbolInfo.exchange === 'BINANCE') {
-			try {
-				const client = getBinanceClient();
-				const avgPriceResult = await client.getAvgPrice({ symbol: normSymbolInfo.symbol });
-				if (avgPriceResult && avgPriceResult.price) {
-					entryPrice = parseFloat(avgPriceResult.price);
-				}
-			} catch (err) {
-				console.warn('[SignalOutcomeService] Failed to fetch entry price from Binance:', err.message);
-			}
-		} else if (entryPrice === null && equityProviderName) {
-			try {
-				entryPrice = await equityMarketDataService.getEntryPrice({
-					symbol: normSymbolInfo.symbol,
-					exchange: normSymbolInfo.exchange === 'UNKNOWN' ? undefined : normSymbolInfo.exchange,
-				});
-			} catch (err) {
-				entryPriceReason = err.reason || equityMarketDataService.REASONS.UNAVAILABLE;
-				console.warn('[SignalOutcomeService] Failed to fetch equity entry price:', entryPriceReason);
+		let suppliedEntryPrice = null;
+		let suppliedEntryPriceSource = null;
+		let entryPriceProvidersToTry = entryPriceSourceChain;
+		if (entryPrice !== null && entryPriceSourceChains.configured) {
+			const incomingProvider = {
+				'tradingview-mcp': 'mcp',
+				'gemini-grounding': 'gemini',
+				'twelve-data': 'twelve-data',
+				binance: 'binance',
+			}[entryPriceSource] || entryPriceSource;
+			const incomingProviderIndex = entryPriceSourceChain.indexOf(incomingProvider);
+			if (incomingProviderIndex === -1) {
+				entryPrice = null;
+				entryPriceSource = null;
+			} else if (incomingProviderIndex > 0) {
+				suppliedEntryPrice = entryPrice;
+				suppliedEntryPriceSource = entryPriceSource;
+				entryPrice = null;
+				entryPriceSource = null;
+				entryPriceProvidersToTry = entryPriceSourceChain.slice(0, incomingProviderIndex);
+			} else {
+				entryPriceProvidersToTry = [];
 			}
 		}
 
+		for (const provider of entryPriceProvidersToTry) {
+			if (entryPrice !== null) break;
+			if (provider === 'mcp') continue;
+
+			if (provider === 'binance' && normSymbolInfo.exchange === 'BINANCE') {
+				let abortController = null;
+				let timerId = null;
+				try {
+					abortController = new AbortController();
+					const requestOptions = {
+						timeout: 5000,
+						signal: abortController.signal,
+					};
+					const client = getBinanceClient(requestOptions);
+					const timeoutPromise = new Promise((_, reject) => {
+						timerId = setTimeout(() => {
+							abortController.abort();
+							reject(new Error('Binance getAvgPrice timeout (5000ms)'));
+						}, 5000);
+					});
+					const avgPriceResult = await Promise.race([client.getAvgPrice({ symbol: normSymbolInfo.symbol }), timeoutPromise]);
+					if (avgPriceResult && avgPriceResult.price) {
+						const parsedAvg = parseFloat(avgPriceResult.price);
+						if (Number.isFinite(parsedAvg) && parsedAvg > 0) {
+							entryPrice = parsedAvg;
+							entryPriceSource = 'binance';
+						}
+					}
+				} catch (err) {
+					const isRegionBlocked = isRegionBlockedError(err);
+					const isInvalidSymbol = err.message
+						&& (err.message.includes('400')
+							|| err.message.includes('UNKNOWN_SYMBOL')
+							|| err.message.includes('Invalid symbol'));
+					if (isRegionBlocked) {
+						entryPriceReason = REASON_BINANCE_REGION_BLOCKED;
+					} else if (isInvalidSymbol) {
+						entryPriceReason = 'binance_invalid_symbol';
+					} else {
+						entryPriceReason = REASON_BINANCE_UNAVAILABLE;
+					}
+					console.warn('[SignalOutcomeService] Failed to fetch entry price from Binance:', err.message);
+					if (isInvalidSymbol) break;
+				} finally {
+					if (timerId) clearTimeout(timerId);
+				}
+				continue;
+			}
+
+			if (provider === 'gemini' && normSymbolInfo.exchange === 'BINANCE'
+				&& geminiPriceService.isGeminiGroundingEnabled({ requireGroundingFlag: true })) {
+				try {
+					const geminiResult = await geminiPriceService.fetchGeminiPrice(normSymbolInfo.symbol, {
+						timeoutMs: 5000,
+						tokenUsage,
+						requireGroundingFlag: true,
+					});
+					if (geminiResult && typeof geminiResult.price === 'number' && Number.isFinite(geminiResult.price) && geminiResult.price > 0) {
+						entryPrice = geminiResult.price;
+						entryPriceSource = 'gemini-grounding';
+						entryPriceReason = null;
+					}
+					if (entryPrice === null && !entryPriceReason) entryPriceReason = REASON_GEMINI_UNAVAILABLE;
+				} catch (geminiErr) {
+					if (!entryPriceReason) entryPriceReason = geminiErr.reason || REASON_GEMINI_UNAVAILABLE;
+					console.warn('[SignalOutcomeService] Failed to fetch entry price from Gemini:', geminiErr.message);
+				}
+				continue;
+			}
+
+			if (provider === 'twelve-data' && normSymbolInfo.exchange !== 'BINANCE' && equityProviderName) {
+				try {
+					entryPrice = await equityMarketDataService.getEntryPrice({
+						symbol: normSymbolInfo.symbol,
+						exchange: normSymbolInfo.exchange === 'UNKNOWN' ? undefined : normSymbolInfo.exchange,
+					});
+					if (entryPrice !== null) entryPriceSource = equityProviderName;
+				} catch (err) {
+					entryPriceReason = err.reason || equityMarketDataService.REASONS.UNAVAILABLE;
+					console.warn('[SignalOutcomeService] Failed to fetch equity entry price:', entryPriceReason);
+				}
+			}
+		}
+		if (entryPrice === null && suppliedEntryPrice !== null) {
+			entryPrice = suppliedEntryPrice;
+			entryPriceSource = suppliedEntryPriceSource;
+			entryPriceReason = null;
+		}
+
 		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason);
-		const isEligible = eligibility.state === 'supported_provider';
+		const isEligible = eligibility.state === 'supported_provider' || eligibility.state === 'pending_entry_price';
 
 		const outcomes = {};
 		for (const [winKey, config] of Object.entries(WINDOW_CONFIGS)) {
 			outcomes[winKey] = {
 				status: isEligible ? 'pending' : 'unavailable',
-				reason: isEligible ? undefined : eligibility.state,
+				reason: isEligible ? null : eligibility.state,
 				targetTime: new Date(now.getTime() + config.durationMs).toISOString(),
+				anchorMode: sessionContext.anchorMode,
+				anchorVersion: sessionContext.anchorVersion,
+				measurementCohort: sessionContext.measurementCohort,
 				price: null,
 				return: null,
 				maxFavorableExcursion: null,
@@ -271,24 +794,44 @@ async function recordSignalInternal({
 
 		const document = {
 			receivedAt: admin.firestore.Timestamp.fromDate(now),
+			observedAt: admin.firestore.Timestamp.fromDate(now),
+			decisionBarClosedAt: sessionContext.decisionBarClosedAt
+				? admin.firestore.Timestamp.fromDate(new Date(sessionContext.decisionBarClosedAt))
+				: null,
+			tradableAt: sessionContext.tradableAt
+				? admin.firestore.Timestamp.fromDate(new Date(sessionContext.tradableAt))
+				: null,
+			anchorMode: sessionContext.anchorMode,
+			anchorVersion: sessionContext.anchorVersion,
+			calendarId: sessionContext.calendarId,
+			calendarTimeZone: sessionContext.calendarTimeZone,
+			sessionContext: sessionContext.sessionContext,
+			measurementCohort: sessionContext.measurementCohort,
+			expiresAt: buildRetentionExpiryTimestamp(now),
 			requestId: typeof requestId === 'string' ? requestId : 'unknown',
 			source: typeof source === 'string' ? source : 'unknown',
 			symbol: normSymbolInfo.symbol,
 			exchange: normSymbolInfo.exchange,
-			assetClass: normAssetClass,
+			assetClass: normAssetClass || null,
 			timeframe: timeframe ? String(timeframe).toLowerCase() : null,
 			setupType: setupType ? String(setupType).toLowerCase() : null,
-			score: typeof score === 'number' ? score : null,
+			score: typeof score === 'number' && Number.isFinite(score) ? score : null,
+			confidenceScore: normalizeConfidenceScore(confidenceScore) ?? normalizeConfidenceScore(score),
 			side: normSide,
 			price: entryPrice,
-			stop: typeof stop === 'number' ? stop : null,
-			target: typeof target === 'number' ? target : null,
+			observedPrice: entryPrice,
+			tradablePrice: sessionContext.sessionContext === 'crypto_24_7' || sessionContext.sessionContext === 'regular'
+				? entryPrice
+				: null,
+			entryPriceSource: entryPriceSource || null,
+			stop: typeof stop === 'number' && Number.isFinite(stop) ? stop : null,
+			target: typeof target === 'number' && Number.isFinite(target) ? target : null,
 			sources: Array.isArray(sources) ? sources : [],
 			tokenUsage: tokenUsage || null,
-			processingTimeMs: typeof processingTimeMs === 'number' ? processingTimeMs : null,
-			marketDataProvider: normSymbolInfo.exchange === 'BINANCE' ? 'binance' : equityProviderName,
+			processingTimeMs: typeof processingTimeMs === 'number' && Number.isFinite(processingTimeMs) ? processingTimeMs : null,
+			marketDataProvider: normSymbolInfo.exchange === 'BINANCE' ? 'binance' : (equityProviderName || null),
 			eligibilityState: eligibility.state,
-			eligibilityReason: eligibility.reason,
+			eligibilityReason: eligibility.reason || null,
 			outcomeEvaluated: !isEligible,
 			outcomes,
 		};
@@ -325,6 +868,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 	let evaluatedCount = 0;
 	let pendingCount = 0;
 	let errorCount = 0;
+	let regionBlockedCount = 0;
 
 	try {
 		const firestore = AlertStorageService.getFirestore();
@@ -340,6 +884,16 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		const effectiveMaxDurationMs = parseTimerInterval(
 			options.maxDurationMs !== undefined ? options.maxDurationMs : getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS,
 			30000
+		);
+
+		const maxRetryAttempts = parsePositiveInteger(
+			options.maxRetryAttempts !== undefined ? options.maxRetryAttempts : getRuntimeConfig().SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS,
+			DEFAULT_MAX_RETRY_ATTEMPTS
+		);
+
+		const maxRetryAgeMs = parsePositiveInteger(
+			options.maxRetryAgeMs !== undefined ? options.maxRetryAgeMs : getRuntimeConfig().SIGNAL_OUTCOME_MAX_RETRY_AGE_MS,
+			DEFAULT_MAX_RETRY_AGE_MS
 		);
 
 		let query = firestore.collection(COLLECTION_NAME).where('outcomeEvaluated', '==', false);
@@ -375,66 +929,233 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 			}
 
 			scannedCount++;
-			const data = doc.data();
-			const entryPrice = data.price;
+			const data = doc.data() || {};
+			if (isRetentionExpired(data)) {
+				lastEvaluatedDoc = doc;
+				continue;
+			}
+			let entryPrice = data.price;
 			const side = data.side;
-			const receivedAtMs = data.receivedAt.toDate().getTime();
+			const receivedAtMs = data.receivedAt ? (typeof data.receivedAt.toDate === 'function' ? data.receivedAt.toDate().getTime() : new Date(data.receivedAt).getTime()) : Date.now();
 			const equityProviderName = data.exchange === 'BINANCE'
 				? null
 				: equityMarketDataService.getProviderName(data.exchange, data.assetClass);
 
-			if (!entryPrice || typeof entryPrice !== 'number') {
-				// Mark evaluated if entry price is invalid/missing
-				const outcomes = { ...data.outcomes };
-				for (const winKey of Object.keys(outcomes)) {
-					if (outcomes[winKey].status === 'pending') {
-						outcomes[winKey].status = 'unavailable';
-						outcomes[winKey].reason = 'missing_entry_price';
-					}
-				}
-				await doc.ref.update({
-					outcomeEvaluated: true,
-					eligibilityState: 'missing_entry_price',
-					eligibilityReason: 'Entry price unavailable for symbol',
-					outcomes,
-				});
-				evaluatedCount++;
-				lastEvaluatedDoc = doc;
-				continue;
-			}
-
-			if (data.exchange !== 'BINANCE' && !equityProviderName) {
-				const isClassifiedBareStock = data.exchange === 'UNKNOWN' && data.assetClass === 'stock';
-				const state = (data.symbol === 'UNKNOWN' || (data.exchange === 'UNKNOWN' && !isClassifiedBareStock))
-					? 'unparseable_symbol'
-					: ((equityMarketDataService.isSupportedExchange(data.exchange) || isClassifiedBareStock) && !equityProviderName
-						? equityMarketDataService.REASONS.NOT_CONFIGURED
-						: 'unsupported_exchange');
-				const outcomes = { ...data.outcomes };
-				for (const winKey of Object.keys(outcomes)) {
-					if (outcomes[winKey].status === 'pending') {
-						outcomes[winKey].status = 'unavailable';
-						outcomes[winKey].reason = state;
-					}
-				}
-				await doc.ref.update({
-					outcomeEvaluated: true,
-					eligibilityState: state,
-					eligibilityReason: state === 'unparseable_symbol'
-						? 'Symbol or exchange unparseable or unknown'
-						: state === equityMarketDataService.REASONS.NOT_CONFIGURED
-							? 'Twelve Data equity market-data provider is not configured'
-							: `Exchange ${data.exchange} not supported by Binance market-data evaluator`,
-					marketDataProvider: data.marketDataProvider || equityProviderName,
-					outcomes,
-				});
-				evaluatedCount++;
-				lastEvaluatedDoc = doc;
-				continue;
-			}
-
 			let docUpdated = false;
 			let allResolved = true;
+
+			if (!entryPrice || typeof entryPrice !== 'number') {
+				// Check structural eligibility first
+				if (data.exchange !== 'BINANCE' && !equityProviderName) {
+					const isClassifiedBareStock = data.exchange === 'UNKNOWN' && data.assetClass === 'stock';
+					const state = (data.symbol === 'UNKNOWN' || (data.exchange === 'UNKNOWN' && !isClassifiedBareStock))
+						? 'unparseable_symbol'
+						: ((equityMarketDataService.isSupportedExchange(data.exchange) || isClassifiedBareStock) && !equityProviderName
+							? equityMarketDataService.REASONS.NOT_CONFIGURED
+							: 'unsupported_exchange');
+					const outcomes = { ...data.outcomes };
+					for (const winKey of Object.keys(outcomes)) {
+						if (outcomes[winKey].status === 'pending') {
+							outcomes[winKey].status = 'unavailable';
+							outcomes[winKey].reason = state;
+						}
+					}
+					await doc.ref.update({
+						outcomeEvaluated: true,
+						eligibilityState: state,
+						eligibilityReason: state === 'unparseable_symbol'
+							? 'Symbol or exchange unparseable or unknown'
+							: state === equityMarketDataService.REASONS.NOT_CONFIGURED
+								? 'Twelve Data equity market-data provider is not configured'
+								: `Exchange ${data.exchange} not supported by Binance market-data evaluator`,
+						marketDataProvider: data.marketDataProvider || equityProviderName,
+						outcomes,
+					});
+					evaluatedCount++;
+					lastEvaluatedDoc = doc;
+					continue;
+				}
+
+				// Attempt to resolve entry price
+				let resolvedPrice = null;
+				let resolvedPriceSource = null;
+				let entryPriceError = null;
+
+				const remainingMs = effectiveMaxDurationMs - (Date.now() - startTime);
+				if (remainingMs <= 0) {
+					allResolved = false;
+					sweepDeadlineExceeded = true;
+					break;
+				}
+
+				for (const source of getEntryPriceSourceChain(data.exchange, data.assetClass)) {
+					if (resolvedPrice !== null) break;
+					if (source === 'mcp') continue;
+					const sourceRemainingMs = effectiveMaxDurationMs - (Date.now() - startTime);
+					if (sourceRemainingMs <= 0) {
+						allResolved = false;
+						sweepDeadlineExceeded = true;
+						break;
+					}
+
+					if (source === 'binance' && data.exchange === 'BINANCE') {
+						let abortController = null;
+						let timerId = null;
+						try {
+							abortController = new AbortController();
+							const sweepClient = getBinanceClient({
+								timeout: Math.max(1, sourceRemainingMs),
+								signal: abortController.signal,
+							});
+							const timeoutPromise = new Promise((_, reject) => {
+								timerId = setTimeout(() => {
+									abortController.abort();
+									reject(new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`));
+								}, sourceRemainingMs);
+							});
+							const klines = await Promise.race([sweepClient.getKlines({
+								symbol: data.symbol,
+								interval: '5m',
+								startTime: receivedAtMs,
+								limit: 1,
+							}), timeoutPromise]);
+							if (Array.isArray(klines) && klines.length > 0 && klines[0][1]) {
+								const parsed = parseFloat(klines[0][1]);
+								if (Number.isFinite(parsed) && parsed > 0) {
+									resolvedPrice = parsed;
+									resolvedPriceSource = 'binance';
+								}
+							}
+							if (!resolvedPrice) {
+								const remainingAfterKlines = effectiveMaxDurationMs - (Date.now() - startTime);
+								if (remainingAfterKlines <= 0) throw new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`);
+								const avgRes = await Promise.race([sweepClient.getAvgPrice({ symbol: data.symbol }), timeoutPromise]);
+								if (avgRes && avgRes.price) {
+									const parsed = parseFloat(avgRes.price);
+									if (Number.isFinite(parsed) && parsed > 0) {
+										resolvedPrice = parsed;
+										resolvedPriceSource = 'binance';
+									}
+								}
+							}
+						} catch (err) {
+							entryPriceError = err;
+						} finally {
+							if (timerId) clearTimeout(timerId);
+						}
+						continue;
+					}
+
+					if (source === 'gemini' && data.exchange === 'BINANCE'
+						&& geminiPriceService.isGeminiGroundingEnabled({ requireGroundingFlag: true })) {
+						try {
+							const geminiResult = await geminiPriceService.fetchGeminiPrice(data.symbol, {
+								timeoutMs: sourceRemainingMs,
+								tokenUsage: data.tokenUsage,
+								requireGroundingFlag: true,
+							});
+							if (geminiResult && typeof geminiResult.price === 'number'
+								&& Number.isFinite(geminiResult.price) && geminiResult.price > 0) {
+								resolvedPrice = geminiResult.price;
+								resolvedPriceSource = 'gemini-grounding';
+							}
+							if (resolvedPrice === null) entryPriceError = new Error(REASON_GEMINI_UNAVAILABLE);
+						} catch (err) {
+							entryPriceError = err;
+						}
+						continue;
+					}
+
+					if (source === 'twelve-data' && data.exchange !== 'BINANCE' && equityProviderName) {
+						try {
+							const bars = await equityMarketDataService.getHistoricalBars({
+								symbol: data.symbol,
+								exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
+								interval: '5m',
+								startTime: receivedAtMs,
+								endTime: receivedAtMs + 2 * 60 * 60 * 1000,
+								timeoutMs: sourceRemainingMs,
+							});
+							if (Array.isArray(bars) && bars.length > 0 && bars[0][1]) {
+								const parsed = parseFloat(bars[0][1]);
+								if (Number.isFinite(parsed) && parsed > 0) {
+									resolvedPrice = parsed;
+									resolvedPriceSource = equityProviderName;
+								}
+							}
+						} catch (err) {
+							entryPriceError = err;
+						}
+						if (!resolvedPrice) {
+							try {
+								const quotePrice = await equityMarketDataService.getEntryPrice({
+									symbol: data.symbol,
+									exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
+									timeoutMs: Math.max(1, effectiveMaxDurationMs - (Date.now() - startTime)),
+								});
+								if (typeof quotePrice === 'number' && Number.isFinite(quotePrice) && quotePrice > 0) {
+									resolvedPrice = quotePrice;
+									resolvedPriceSource = equityProviderName;
+									entryPriceError = null;
+								}
+							} catch (err) {
+								if (!entryPriceError) entryPriceError = err;
+							}
+						}
+					}
+				}
+
+				if (resolvedPrice !== null) {
+					entryPrice = resolvedPrice;
+					data.price = resolvedPrice;
+					data.entryPriceSource = resolvedPriceSource;
+					data.eligibilityState = 'supported_provider';
+					data.eligibilityReason = data.exchange === 'BINANCE' ? 'Binance market data supported' : 'Twelve Data market data supported';
+					docUpdated = true;
+				} else {
+					const isStructural = entryPriceError && (
+						(entryPriceError instanceof equityMarketDataService.EquityMarketDataError && equityMarketDataService.isStructuralReason(entryPriceError.reason))
+						|| (entryPriceError.message && (entryPriceError.message.includes('400') || entryPriceError.message.includes('Invalid symbol') || entryPriceError.message.includes('UNKNOWN_SYMBOL')))
+					);
+
+					const entryAttempts = (data.entryPriceAttempts || 0) + 1;
+					const lastAttemptAt = new Date().toISOString();
+					const isExpired = (now - receivedAtMs) > maxRetryAgeMs || entryAttempts >= maxRetryAttempts;
+
+					if (isStructural || isExpired) {
+						const outcomes = { ...data.outcomes };
+						for (const winKey of Object.keys(outcomes)) {
+							if (outcomes[winKey].status === 'pending') {
+								outcomes[winKey].status = 'unavailable';
+								outcomes[winKey].reason = (entryPriceError && entryPriceError.reason) || 'missing_entry_price';
+								if (isExpired && !isStructural) {
+									outcomes[winKey].retryExhausted = true;
+								}
+							}
+						}
+						await doc.ref.update({
+							outcomeEvaluated: true,
+							eligibilityState: isStructural && entryPriceError ? (entryPriceError.reason || 'missing_entry_price') : 'missing_entry_price',
+							eligibilityReason: 'Entry price unavailable for symbol',
+							entryPriceAttempts: entryAttempts,
+							lastEntryPriceAttemptAt: lastAttemptAt,
+							outcomes,
+						});
+						evaluatedCount++;
+						lastEvaluatedDoc = doc;
+						continue;
+					} else {
+						await doc.ref.update({
+							entryPriceAttempts: entryAttempts,
+							lastEntryPriceAttemptAt: lastAttemptAt,
+						});
+						pendingCount++;
+						lastEvaluatedDoc = doc;
+						continue;
+					}
+				}
+			}
+
 			const outcomes = { ...data.outcomes };
 
 			for (const [winKey, outcome] of Object.entries(outcomes)) {
@@ -496,22 +1217,93 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 					}
 
 					if (!Array.isArray(klines) || klines.length === 0) {
-						outcome.status = 'unavailable';
-						outcome.reason = 'market_data_unavailable';
-						docUpdated = true;
+						const attempts = (outcome.attempts || 0) + 1;
+						outcome.attempts = attempts;
+						outcome.lastAttemptAt = new Date().toISOString();
+						outcome.lastError = 'no_data';
+						const isExpired = (now - targetTimeMs) > maxRetryAgeMs || attempts >= maxRetryAttempts;
+						if (isExpired) {
+							outcome.status = 'unavailable';
+							outcome.reason = 'market_data_unavailable';
+							outcome.retryExhausted = true;
+							docUpdated = true;
+						} else {
+							allResolved = false;
+							docUpdated = true;
+						}
 						continue;
 					}
 
-					const lastKline = klines[klines.length - 1];
-					const exitPrice = parseFloat(lastKline[4]); // close price of last kline
+					const sortedKlines = [...klines].sort((a, b) => (Number(a[0]) || 0) - (Number(b[0]) || 0));
+					const lastKline = sortedKlines[sortedKlines.length - 1];
+					let exitPrice = parseFloat(lastKline[4]); // close price of last kline
+
+					const stop = typeof data.stop === 'number' && Number.isFinite(data.stop) && data.stop > 0 ? data.stop : null;
+					const target = typeof data.target === 'number' && Number.isFinite(data.target) && data.target > 0 ? data.target : null;
 
 					let highestHigh = -Infinity;
 					let lowestLow = Infinity;
-					for (const kline of klines) {
+					let firstHit = null;
+					let firstHitTime = null;
+					let targetHit = false;
+					let stopHit = false;
+
+					for (let i = 0; i < sortedKlines.length; i++) {
+						const kline = sortedKlines[i];
+						const barTimestamp = typeof kline[0] === 'number' ? kline[0] : parseInt(kline[0], 10);
 						const high = parseFloat(kline[2]);
 						const low = parseFloat(kline[3]);
 						if (high > highestHigh) highestHigh = high;
 						if (low < lowestLow) lowestLow = low;
+
+						if (side === 'BUY') {
+							const isStopHit = stop !== null && low <= stop;
+							const isTargetHit = target !== null && high >= target;
+
+							if (isStopHit && isTargetHit) {
+								// Both hit on same candle: conservative assumption is stop hit
+								firstHit = 'stop';
+								stopHit = true;
+								exitPrice = stop;
+								firstHitTime = Number.isFinite(barTimestamp) ? new Date(barTimestamp).toISOString() : null;
+								break;
+							} else if (isStopHit) {
+								firstHit = 'stop';
+								stopHit = true;
+								exitPrice = stop;
+								firstHitTime = Number.isFinite(barTimestamp) ? new Date(barTimestamp).toISOString() : null;
+								break;
+							} else if (isTargetHit) {
+								firstHit = 'target';
+								targetHit = true;
+								exitPrice = target;
+								firstHitTime = Number.isFinite(barTimestamp) ? new Date(barTimestamp).toISOString() : null;
+								break;
+							}
+						} else { // SELL
+							const isStopHit = stop !== null && high >= stop;
+							const isTargetHit = target !== null && low <= target;
+
+							if (isStopHit && isTargetHit) {
+								firstHit = 'stop';
+								stopHit = true;
+								exitPrice = stop;
+								firstHitTime = Number.isFinite(barTimestamp) ? new Date(barTimestamp).toISOString() : null;
+								break;
+							} else if (isStopHit) {
+								firstHit = 'stop';
+								stopHit = true;
+								exitPrice = stop;
+								firstHitTime = Number.isFinite(barTimestamp) ? new Date(barTimestamp).toISOString() : null;
+								break;
+							} else if (isTargetHit) {
+								firstHit = 'target';
+								targetHit = true;
+								exitPrice = target;
+								firstHitTime = Number.isFinite(barTimestamp) ? new Date(barTimestamp).toISOString() : null;
+								break;
+							}
+						}
 					}
 
 					let returnVal = 0;
@@ -528,11 +1320,27 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 						mae = ((entryPrice - highestHigh) / entryPrice) * 100;
 					}
 
+					let rMultiple = null;
+					if (stop !== null) {
+						const initialRisk = side === 'BUY' ? (entryPrice - stop) : (stop - entryPrice);
+						if (initialRisk > 0) {
+							const realizedGain = side === 'BUY' ? (exitPrice - entryPrice) : (entryPrice - exitPrice);
+							rMultiple = parseFloat((realizedGain / initialRisk).toFixed(4));
+						}
+					}
+
 					outcome.status = 'evaluated';
 					outcome.price = exitPrice;
 					outcome.return = parseFloat(returnVal.toFixed(4));
 					outcome.maxFavorableExcursion = parseFloat(Math.max(0, mfe).toFixed(4));
 					outcome.maxAdverseExcursion = parseFloat(Math.min(0, mae).toFixed(4));
+					outcome.firstHit = firstHit;
+					outcome.targetHit = targetHit;
+					outcome.stopHit = stopHit;
+					outcome.firstHitTime = firstHitTime;
+					if (rMultiple !== null) {
+						outcome.rMultiple = rMultiple;
+					}
 					docUpdated = true;
 				} catch (error) {
 					if (abortController) {
@@ -540,20 +1348,75 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 					}
 					errorCount++;
 					console.warn(`[SignalOutcomeService] Error evaluating window ${winKey} for ${data.symbol}:`, error.message);
-					if (error instanceof equityMarketDataService.EquityMarketDataError) {
-						outcome.status = 'unavailable';
-						outcome.reason = error.reason;
-						docUpdated = true;
-					} else if (error.message.includes('deadline exceeded') || error.name === 'AbortError') {
+
+					if (error.message && (error.message.includes('deadline exceeded') || error.name === 'AbortError')) {
 						allResolved = false;
 						sweepDeadlineExceeded = true;
 						break;
-					} else if (error.message.includes('400') || error.message.includes('Invalid symbol') || error.message.includes('UNKNOWN_SYMBOL')) {
+					}
+
+					let isStructural = false;
+					let reason = 'market_data_unavailable';
+					let errorIdentifier = error.message;
+
+					if (error instanceof equityMarketDataService.EquityMarketDataError) {
+						isStructural = equityMarketDataService.isStructuralReason(error.reason);
+						reason = error.reason;
+						errorIdentifier = error.reason;
+					} else if (data.exchange === 'BINANCE') {
+						const isBinanceRegionBlocked = isRegionBlockedError(error);
+						const isBinanceStructural = !isBinanceRegionBlocked && Boolean(error.message && (
+							error.message.includes('400') ||
+							error.message.includes('Invalid symbol') ||
+							error.message.includes('UNKNOWN_SYMBOL')
+						));
+						if (isBinanceRegionBlocked) {
+							isStructural = false;
+							reason = REASON_MARKET_DATA_REGION_BLOCKED;
+							errorIdentifier = REASON_MARKET_DATA_REGION_BLOCKED;
+							regionBlockedCount++;
+						} else {
+							isStructural = isBinanceStructural;
+							reason = isBinanceStructural ? 'binance_invalid_symbol' : REASON_BINANCE_UNAVAILABLE;
+							errorIdentifier = reason;
+						}
+					} else {
+						isStructural = Boolean(error.message && (
+							error.message.includes('400') ||
+							error.message.includes('Invalid symbol') ||
+							error.message.includes('UNKNOWN_SYMBOL')
+						));
+						reason = 'market_data_unavailable';
+						errorIdentifier = error.message;
+					}
+
+					if (isStructural) {
 						outcome.status = 'unavailable';
-						outcome.reason = 'market_data_unavailable';
+						outcome.reason = reason;
 						docUpdated = true;
 					} else {
-						allResolved = false; // retry on network/rate-limit error
+						const attempts = (outcome.attempts || 0) + 1;
+						outcome.attempts = attempts;
+						outcome.lastAttemptAt = new Date().toISOString();
+						outcome.lastError = errorIdentifier;
+
+						const isExpired = (now - targetTimeMs) > maxRetryAgeMs || attempts >= maxRetryAttempts;
+						if (isExpired) {
+							outcome.status = 'unavailable';
+							outcome.reason = reason;
+							outcome.retryExhausted = true;
+							docUpdated = true;
+						} else {
+							outcome.status = 'pending';
+							// Surface the region-blocked classification to operators without
+							// forcing a terminal unavailable state. Replaced on the next
+							// transient attempt if the host becomes reachable.
+							if (reason) {
+								outcome.reason = reason;
+							}
+							allResolved = false;
+							docUpdated = true;
+						}
 					}
 				} finally {
 					if (timerId) {
@@ -564,6 +1427,28 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 
 			if (docUpdated) {
 				const updateFields = { outcomes };
+				if (data.price !== undefined && data.price !== null) {
+					updateFields.price = data.price;
+					const tradableAtMs = getTimestampMillis(data.tradableAt);
+					const isRegularOrCrypto = data.sessionContext === 'crypto_24_7' || data.sessionContext === 'regular';
+					if (isRegularOrCrypto) {
+						updateFields.observedPrice = data.price;
+						updateFields.tradablePrice = data.price;
+					} else if (tradableAtMs !== null && Date.now() >= tradableAtMs) {
+						updateFields.tradablePrice = data.price;
+					} else {
+						updateFields.observedPrice = data.price;
+					}
+				}
+				if (data.entryPriceSource) {
+					updateFields.entryPriceSource = data.entryPriceSource;
+				}
+				if (data.eligibilityState) {
+					updateFields.eligibilityState = data.eligibilityState;
+				}
+				if (data.eligibilityReason) {
+					updateFields.eligibilityReason = data.eligibilityReason;
+				}
 				if (allResolved) {
 					updateFields.outcomeEvaluated = true;
 				}
@@ -597,6 +1482,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		lastRunEvaluatedCount = evaluatedCount;
 		lastRunPendingCount = pendingCount;
 		lastRunErrorCount = errorCount;
+		lastRunRegionBlockedCount = regionBlockedCount;
 	}
 }
 
@@ -651,7 +1537,7 @@ function startWorker(options = {}) {
 	if (options.intervalMs !== undefined && options.intervalMs !== null) {
 		intervalMs = parseTimerInterval(options.intervalMs, DEFAULT_INTERVAL_MS);
 	} else {
-		intervalMs = parseTimerInterval(getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, DEFAULT_INTERVAL_MS);
+		intervalMs = getConfiguredInterval(DEFAULT_INTERVAL_MS);
 	}
 
 	activeIntervalMs = intervalMs;
@@ -709,11 +1595,13 @@ function stopWorker(options = {}) {
 function getWorkerStatus() {
 	const DEFAULT_INTERVAL_MS = 300000;
 	const runtimeConfig = getRuntimeConfig();
-	const intervalMs = activeIntervalMs || parseTimerInterval(runtimeConfig.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, DEFAULT_INTERVAL_MS);
+	const intervalMs = activeIntervalMs || getConfiguredInterval(DEFAULT_INTERVAL_MS);
 
 	const batchLimit = parsePositiveInteger(runtimeConfig.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 50);
 
 	const maxDurationMs = parseTimerInterval(runtimeConfig.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 30000);
+	const maxRetryAttempts = parsePositiveInteger(runtimeConfig.SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS, DEFAULT_MAX_RETRY_ATTEMPTS);
+	const maxRetryAgeMs = parsePositiveInteger(runtimeConfig.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS, DEFAULT_MAX_RETRY_AGE_MS);
 
 	return {
 		enabled: isEnabled(),
@@ -723,6 +1611,9 @@ function getWorkerStatus() {
 		intervalMs,
 		batchLimit,
 		maxDurationMs,
+		maxRetryAttempts,
+		maxRetryAgeMs,
+		entryPriceSources: getEntryPriceSourceChains(),
 		isEvaluating,
 		lastRunAt,
 		lastRunDurationMs,
@@ -730,6 +1621,7 @@ function getWorkerStatus() {
 		lastRunEvaluatedCount,
 		lastRunPendingCount,
 		lastRunErrorCount,
+		lastRunRegionBlockedCount,
 		timerId: workerTimer ? true : null,
 	};
 }
@@ -744,258 +1636,1149 @@ function createCoverageBucket() {
 	};
 }
 
+function createEmptyMetricsSummary() {
+	return {
+		available: false,
+		totalSignalsReceived: 0,
+		totalSignalsEligible: 0,
+		totalSignalsEvaluated: 0,
+		totalSignalsPending: 0,
+		totalSignalsUnavailable: 0,
+		coveragePercent: 0,
+		isCoverageComplete: true,
+		targetHitRatePercent: 0,
+		stopHitRatePercent: 0,
+		expectancyR: null,
+		populationNote: 'No outcome measurements found for the requested criteria.',
+		exchangeBreakdown: {},
+		providerBreakdown: {},
+		entryPriceSourceBreakdown: {},
+		eligibilityBreakdown: {},
+		windows: {},
+		drawdownProxy: {
+			averageMaxAdverseExcursionPercent: 0,
+			absoluteMaxAdverseExcursionPercent: 0,
+		},
+		falsePositiveCandidatesCount: 0,
+		falsePositiveCandidates: [],
+		latencyCostMetadata: {
+			averageProcessingTimeMs: null,
+			tokenUsage: {
+				inputTokens: 0,
+				outputTokens: 0,
+				totalCost: 0,
+			},
+		},
+	};
+}
+
+function createWindowAccumulator() {
+	return {
+		ALL: createWindowBucket(),
+		BUY: createWindowBucket(),
+		SELL: createWindowBucket(),
+	};
+}
+
+function createWindowBucket() {
+	return {
+		totalWinsEvaluated: 0,
+		hits: 0,
+		targetHits: 0,
+		stopHits: 0,
+		targetEligibleWindows: 0,
+		stopEligibleWindows: 0,
+		totalReturn: 0,
+		totalMfe: 0,
+		totalMae: 0,
+		maxMae: 0,
+		totalR: 0,
+		rCount: 0,
+	};
+}
+
+function accumulateWindowBucket(accumulator, signal, outcome, key) {
+	if (!accumulator[key]) {
+		accumulator[key] = createWindowBucket();
+	}
+	const bucket = accumulator[key];
+	bucket.totalWinsEvaluated++;
+	if (outcome.return > 0) {
+		bucket.hits++;
+	}
+	const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
+	const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
+	if (hasTargetBarrier) {
+		bucket.targetEligibleWindows++;
+	}
+	if (hasStopBarrier) {
+		bucket.stopEligibleWindows++;
+	}
+	if (outcome.targetHit === true || outcome.firstHit === 'target') {
+		bucket.targetHits++;
+	}
+	if (outcome.stopHit === true || outcome.firstHit === 'stop') {
+		bucket.stopHits++;
+	}
+	if (typeof outcome.rMultiple === 'number' && Number.isFinite(outcome.rMultiple)) {
+		bucket.totalR += outcome.rMultiple;
+		bucket.rCount++;
+	}
+	bucket.totalReturn += outcome.return;
+	bucket.totalMfe += outcome.maxFavorableExcursion;
+	bucket.totalMae += outcome.maxAdverseExcursion;
+	if (outcome.maxAdverseExcursion < bucket.maxMae) {
+		bucket.maxMae = outcome.maxAdverseExcursion;
+	}
+}
+
+function buildWindowStatsShape(bucket) {
+	const total = bucket.totalWinsEvaluated;
+	return {
+		totalSignals: total,
+		hitRatePercent: parseFloat(((bucket.hits / total) * 100).toFixed(2)),
+		targetEligibleWindows: bucket.targetEligibleWindows,
+		stopEligibleWindows: bucket.stopEligibleWindows,
+		targetHitRatePercent: bucket.targetEligibleWindows > 0
+			? parseFloat(((bucket.targetHits / bucket.targetEligibleWindows) * 100).toFixed(2))
+			: 0,
+		stopHitRatePercent: bucket.stopEligibleWindows > 0
+			? parseFloat(((bucket.stopHits / bucket.stopEligibleWindows) * 100).toFixed(2))
+			: 0,
+		expectancyR: bucket.rCount > 0 ? parseFloat((bucket.totalR / bucket.rCount).toFixed(4)) : null,
+		averageReturnPercent: parseFloat((bucket.totalReturn / total).toFixed(4)),
+		averageMfePercent: parseFloat((bucket.totalMfe / total).toFixed(4)),
+		averageMaePercent: parseFloat((bucket.totalMae / total).toFixed(4)),
+		maxAdverseExcursionPercent: parseFloat(bucket.maxMae.toFixed(4)),
+	};
+}
+
 /**
  * Compute aggregated metrics.
  */
+async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, window } = {}) {
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+	const parsedTo = to ? new Date(to) : new Date();
+
+	const retentionDays = getSignalOutcomeRetentionDays();
+	const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
+	const effectiveFromMs = from
+		? parsedFrom.getTime()
+		: Math.max(parsedFrom.getTime(), retentionCutoffMs);
+	if (effectiveFromMs > parsedTo.getTime()) {
+		return createEmptyMetricsSummary();
+	}
+	const effectiveFrom = new Date(effectiveFromMs);
+
+	const targetLimit = limit || 1000;
+	const batchSize = Math.min(targetLimit, 100);
+	const matchedDocs = [];
+	let lastDoc = null;
+
+	const hasFilters = Boolean(symbol || exchange || status || window);
+
+	while (matchedDocs.length < targetLimit) {
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
+			.limit(batchSize);
+
+		if (lastDoc) {
+			query = query.startAfter(lastDoc);
+		}
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || snapshot.empty) {
+			break;
+		}
+
+		for (const doc of snapshot.docs) {
+			if (isRetentionExpired(doc.data() || {})) {
+				continue;
+			}
+			if (hasFilters) {
+				const formatted = {
+					...doc.data(),
+					id: doc.id,
+					receivedAt: getDocTimestamp(doc.data()),
+				};
+				if (!matchesOutcomeFilters(formatted, { symbol, exchange, status, window, from, to })) {
+					continue;
+				}
+			}
+			matchedDocs.push(doc);
+			if (matchedDocs.length >= targetLimit) {
+				break;
+			}
+		}
+
+		if (snapshot.docs.length < batchSize) {
+			break;
+		}
+		lastDoc = snapshot.docs[snapshot.docs.length - 1];
+	}
+
+	if (matchedDocs.length === 0) {
+		return createEmptyMetricsSummary();
+	}
+
+	const docs = matchedDocs.map(doc => ({
+		...doc.data(),
+		id: doc.id,
+		receivedAt: getDocTimestamp(doc.data()),
+	}));
+
+	if (docs.length === 0) {
+		return createEmptyMetricsSummary();
+	}
+
+	let totalSignalsReceived = docs.length;
+	let totalSignalsEligible = 0;
+	let totalSignalsEvaluated = 0;
+	let totalSignalsPending = 0;
+	let totalSignalsUnavailable = 0;
+
+	const exchangeBreakdown = {};
+	const providerBreakdown = {};
+	const entryPriceSourceBreakdown = {};
+	const eligibilityBreakdown = {};
+
+	const evaluatedSignals = [];
+
+	for (const doc of docs) {
+		const docExchange = doc.exchange || 'UNKNOWN';
+		const docSymbol = doc.symbol || 'UNKNOWN';
+		const marketDataProvider = doc.marketDataProvider || (docExchange === 'BINANCE' ? 'binance' : 'none');
+		const entryPriceSource = doc.entryPriceSource || (doc.price !== null && doc.price !== undefined ? (doc.marketDataProvider || 'unknown') : 'none');
+
+		let eligibilityState = doc.eligibilityState;
+		if (!eligibilityState) {
+			if (docSymbol === 'UNKNOWN' || docExchange === 'UNKNOWN') {
+				eligibilityState = 'unparseable_symbol';
+			} else if (docExchange !== 'BINANCE' && !equityMarketDataService.isSupportedExchange(docExchange)) {
+				eligibilityState = 'unsupported_exchange';
+			} else if (doc.price === null || doc.price === undefined) {
+				eligibilityState = 'missing_entry_price';
+			} else {
+				eligibilityState = 'supported_provider';
+			}
+		}
+
+		const isEligible = eligibilityState === 'supported_provider';
+		if (isEligible) {
+			totalSignalsEligible++;
+		}
+
+		eligibilityBreakdown[eligibilityState] = (eligibilityBreakdown[eligibilityState] || 0) + 1;
+		entryPriceSourceBreakdown[entryPriceSource] = (entryPriceSourceBreakdown[entryPriceSource] || 0) + 1;
+
+		if (!exchangeBreakdown[docExchange]) {
+			exchangeBreakdown[docExchange] = createCoverageBucket();
+		}
+		if (!providerBreakdown[marketDataProvider]) {
+			providerBreakdown[marketDataProvider] = createCoverageBucket();
+		}
+		exchangeBreakdown[docExchange].received++;
+		providerBreakdown[marketDataProvider].received++;
+		if (isEligible) {
+			exchangeBreakdown[docExchange].eligible++;
+			providerBreakdown[marketDataProvider].eligible++;
+		}
+
+		const outcomesValues = doc.outcomes ? Object.values(doc.outcomes) : [];
+		// When a window filter is set, "evaluated" only counts windows that match the requested filter
+		const winOutcomeKeys = window
+			? [Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window]
+			: Object.keys(doc.outcomes || {});
+		const winOutcomeValues = winOutcomeKeys.map(k => doc.outcomes ? doc.outcomes[k] : null).filter(Boolean);
+		const hasEvaluated = winOutcomeValues.length > 0 && winOutcomeValues.some(o => o.status === 'evaluated');
+		const hasPending = doc.outcomeEvaluated === false && winOutcomeValues.some(o => o.status === 'pending');
+
+		if (hasEvaluated) {
+			totalSignalsEvaluated++;
+			exchangeBreakdown[docExchange].evaluated++;
+			providerBreakdown[marketDataProvider].evaluated++;
+			evaluatedSignals.push(doc);
+		} else if (hasPending) {
+			totalSignalsPending++;
+			exchangeBreakdown[docExchange].pending++;
+			providerBreakdown[marketDataProvider].pending++;
+		} else {
+			totalSignalsUnavailable++;
+			exchangeBreakdown[docExchange].unavailable++;
+			providerBreakdown[marketDataProvider].unavailable++;
+		}
+	}
+
+	const windowStats = {};
+	const windowKeysToAggregate = window
+		? [Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window]
+		: Object.keys(WINDOW_CONFIGS);
+	if (evaluatedSignals.length > 0) {
+		for (const winKey of windowKeysToAggregate) {
+			const accumulator = createWindowAccumulator();
+
+			for (const signal of evaluatedSignals) {
+				const outcome = signal.outcomes ? signal.outcomes[winKey] : null;
+				if (outcome && outcome.status === 'evaluated') {
+					accumulateWindowBucket(accumulator, signal, outcome, 'ALL');
+					const side = signal.side === 'SELL' ? 'SELL' : 'BUY';
+					accumulateWindowBucket(accumulator, signal, outcome, side);
+					const setupKey = typeof signal.setupType === 'string' && signal.setupType.trim()
+						? signal.setupType.trim().toLowerCase()
+						: null;
+					if (setupKey) {
+						accumulateWindowBucket(accumulator, signal, outcome, setupKey);
+					}
+				}
+			}
+
+			if (accumulator.ALL.totalWinsEvaluated > 0) {
+				const built = buildWindowStatsShape(accumulator.ALL);
+				const bySide = {};
+				if (accumulator.BUY.totalWinsEvaluated > 0) {
+					bySide.BUY = buildWindowStatsShape(accumulator.BUY);
+				}
+				if (accumulator.SELL.totalWinsEvaluated > 0) {
+					bySide.SELL = buildWindowStatsShape(accumulator.SELL);
+				}
+				const bySetupType = {};
+				for (const [setupKey, bucket] of Object.entries(accumulator)) {
+					if (setupKey === 'ALL' || setupKey === 'BUY' || setupKey === 'SELL') continue;
+					if (bucket.totalWinsEvaluated > 0) {
+						bySetupType[setupKey] = buildWindowStatsShape(bucket);
+					}
+				}
+				windowStats[winKey] = {
+					...built,
+					...(Object.keys(bySide).length > 0 ? { bySide } : {}),
+					...(Object.keys(bySetupType).length > 0 ? { bySetupType } : {}),
+				};
+			}
+		}
+	}
+
+	let totalAllMae = 0;
+	let maeCount = 0;
+	let absoluteMaxMae = 0;
+	let totalTokenCost = 0;
+	let totalInputTokens = 0;
+	let totalOutputTokens = 0;
+	let totalProcessingTime = 0;
+	let processingTimeCount = 0;
+
+	const falsePositiveCandidates = [];
+
+	for (const signal of evaluatedSignals) {
+		if (signal.tokenUsage) {
+			totalTokenCost += signal.tokenUsage.totalCost || 0;
+			totalInputTokens += signal.tokenUsage.inputTokens || signal.tokenUsage.promptTokens || 0;
+			totalOutputTokens += signal.tokenUsage.outputTokens || signal.tokenUsage.completionTokens || 0;
+		}
+		if (typeof signal.processingTimeMs === 'number') {
+			totalProcessingTime += signal.processingTimeMs;
+			processingTimeCount++;
+		}
+
+		let worstMae = 0;
+		let bestReturn = -Infinity;
+		let resolvedReturn = null;
+
+		for (const winKey of windowKeysToAggregate) {
+			const outcome = signal.outcomes ? signal.outcomes[winKey] : null;
+			if (outcome && outcome.status === 'evaluated') {
+				if (outcome.maxAdverseExcursion < worstMae) {
+					worstMae = outcome.maxAdverseExcursion;
+				}
+				if (outcome.return > bestReturn) {
+					bestReturn = outcome.return;
+				}
+				resolvedReturn = outcome.return;
+			}
+		}
+
+		totalAllMae += worstMae;
+		maeCount++;
+		if (worstMae < absoluteMaxMae) {
+			absoluteMaxMae = worstMae;
+		}
+
+		const isHighConfidence = (Math.abs(signal.score) >= 0.75 || (signal.source === 'news-monitor' && Math.abs(signal.score) >= 0.7));
+		if (isHighConfidence && (resolvedReturn < -1 || worstMae < -3)) {
+			falsePositiveCandidates.push({
+				symbol: signal.symbol,
+				source: signal.source,
+				side: signal.side,
+				score: signal.score,
+				price: signal.price,
+				worstReturn: resolvedReturn,
+				worstMae,
+			});
+		}
+	}
+
+	const averageWorstMae = maeCount > 0 ? parseFloat((totalAllMae / maeCount).toFixed(4)) : 0;
+	const averageProcessingTimeMs = processingTimeCount > 0 ? Math.round(totalProcessingTime / processingTimeCount) : null;
+	const coveragePercent = totalSignalsReceived > 0 ? parseFloat(((totalSignalsEvaluated / totalSignalsReceived) * 100).toFixed(2)) : 0;
+	const isCoverageComplete = totalSignalsEvaluated === totalSignalsReceived;
+
+	let allTargetHits = 0;
+	let allStopHits = 0;
+	let allEvaluatedWindows = 0;
+	let allTargetEligible = 0;
+	let allStopEligible = 0;
+	let allTotalR = 0;
+	let allRCount = 0;
+
+	for (const signal of evaluatedSignals) {
+		const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
+		const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
+		for (const winKey of windowKeysToAggregate) {
+			const outcome = signal.outcomes ? signal.outcomes[winKey] : null;
+			if (outcome && outcome.status === 'evaluated') {
+				allEvaluatedWindows++;
+				if (hasTargetBarrier) {
+					allTargetEligible++;
+				}
+				if (hasStopBarrier) {
+					allStopEligible++;
+				}
+				if (outcome.targetHit === true || outcome.firstHit === 'target') {
+					allTargetHits++;
+				}
+				if (outcome.stopHit === true || outcome.firstHit === 'stop') {
+					allStopHits++;
+				}
+				if (typeof outcome.rMultiple === 'number' && Number.isFinite(outcome.rMultiple)) {
+					allTotalR += outcome.rMultiple;
+					allRCount++;
+				}
+			}
+		}
+	}
+
+	const overallTargetHitRatePercent = allTargetEligible > 0
+		? parseFloat(((allTargetHits / allTargetEligible) * 100).toFixed(2))
+		: 0;
+	const overallStopHitRatePercent = allStopEligible > 0
+		? parseFloat(((allStopHits / allStopEligible) * 100).toFixed(2))
+		: 0;
+	const overallExpectancyR = allRCount > 0
+		? parseFloat((allTotalR / allRCount).toFixed(4))
+		: null;
+
+	return {
+		available: true,
+		totalSignalsReceived,
+		totalSignalsEligible,
+		totalSignalsEvaluated,
+		totalSignalsPending,
+		totalSignalsUnavailable,
+		coveragePercent,
+		isCoverageComplete,
+		targetHitRatePercent: overallTargetHitRatePercent,
+		stopHitRatePercent: overallStopHitRatePercent,
+		expectancyR: overallExpectancyR,
+		populationNote: !isCoverageComplete
+			? `Metrics represent ${totalSignalsEvaluated} evaluated signals out of ${totalSignalsReceived} total received signals (${coveragePercent}% coverage).`
+			: 'Metrics represent 100% of received signals.',
+		exchangeBreakdown,
+		providerBreakdown,
+		entryPriceSourceBreakdown,
+		eligibilityBreakdown,
+		windows: windowStats,
+		drawdownProxy: {
+			averageMaxAdverseExcursionPercent: averageWorstMae,
+			absoluteMaxAdverseExcursionPercent: parseFloat(absoluteMaxMae.toFixed(4)),
+		},
+		falsePositiveCandidatesCount: falsePositiveCandidates.length,
+		falsePositiveCandidates: falsePositiveCandidates.slice(0, 5),
+		latencyCostMetadata: {
+			averageProcessingTimeMs,
+			tokenUsage: {
+				inputTokens: totalInputTokens,
+				outputTokens: totalOutputTokens,
+				totalCost: parseFloat(totalTokenCost.toFixed(6)),
+			},
+		},
+	};
+}
+
 async function getMetricsSummary({ from, to, limit } = {}) {
 	if (!isEnabled()) {
 		return 'No measurements found';
 	}
 
-	const firestore = AlertStorageService.getFirestore();
-	if (!firestore) {
-		return 'No measurements found';
-	}
-
 	try {
-		const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-		const parsedTo = to ? new Date(to) : new Date();
-
-		const snapshot = await firestore
-			.collection(COLLECTION_NAME)
-			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(parsedFrom))
-			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
-			.limit(limit || 1000)
-			.get();
-
-		if (snapshot.empty) {
+		const summary = await summarizeOutcomes({ from, to, limit });
+		if (!summary || !summary.available || summary.totalSignalsReceived === 0) {
 			return 'No measurements found';
 		}
-
-		const docs = snapshot.docs.map(doc => doc.data());
-
-		let totalSignalsReceived = docs.length;
-		let totalSignalsEligible = 0;
-		let totalSignalsEvaluated = 0;
-		let totalSignalsPending = 0;
-		let totalSignalsUnavailable = 0;
-
-		const exchangeBreakdown = {};
-		const providerBreakdown = {};
-		const eligibilityBreakdown = {};
-
-		const evaluatedSignals = [];
-
-		for (const doc of docs) {
-			const exchange = doc.exchange || 'UNKNOWN';
-			const symbol = doc.symbol || 'UNKNOWN';
-			const marketDataProvider = doc.marketDataProvider || (exchange === 'BINANCE' ? 'binance' : 'none');
-
-			let eligibilityState = doc.eligibilityState;
-			if (!eligibilityState) {
-				if (symbol === 'UNKNOWN' || exchange === 'UNKNOWN') {
-					eligibilityState = 'unparseable_symbol';
-				} else if (exchange !== 'BINANCE') {
-					eligibilityState = 'unsupported_exchange';
-				} else if (doc.price === null || doc.price === undefined) {
-					eligibilityState = 'missing_entry_price';
-				} else {
-					eligibilityState = 'supported_provider';
-				}
-			}
-
-			const isEligible = eligibilityState === 'supported_provider';
-			if (isEligible) {
-				totalSignalsEligible++;
-			}
-
-			eligibilityBreakdown[eligibilityState] = (eligibilityBreakdown[eligibilityState] || 0) + 1;
-
-			if (!exchangeBreakdown[exchange]) {
-				exchangeBreakdown[exchange] = createCoverageBucket();
-			}
-			if (!providerBreakdown[marketDataProvider]) {
-				providerBreakdown[marketDataProvider] = createCoverageBucket();
-			}
-			exchangeBreakdown[exchange].received++;
-			providerBreakdown[marketDataProvider].received++;
-			if (isEligible) {
-				exchangeBreakdown[exchange].eligible++;
-				providerBreakdown[marketDataProvider].eligible++;
-			}
-
-			const outcomesValues = doc.outcomes ? Object.values(doc.outcomes) : [];
-			const hasEvaluated = outcomesValues.some(o => o.status === 'evaluated');
-			const hasPending = doc.outcomeEvaluated === false && outcomesValues.some(o => o.status === 'pending');
-
-			if (hasEvaluated) {
-				totalSignalsEvaluated++;
-				exchangeBreakdown[exchange].evaluated++;
-				providerBreakdown[marketDataProvider].evaluated++;
-				evaluatedSignals.push(doc);
-			} else if (hasPending) {
-				totalSignalsPending++;
-				exchangeBreakdown[exchange].pending++;
-				providerBreakdown[marketDataProvider].pending++;
-			} else {
-				totalSignalsUnavailable++;
-				exchangeBreakdown[exchange].unavailable++;
-				providerBreakdown[marketDataProvider].unavailable++;
-			}
-		}
-
-		const windowStats = {};
-		if (evaluatedSignals.length > 0) {
-			for (const winKey of Object.keys(WINDOW_CONFIGS)) {
-				let totalWinsEvaluated = 0;
-				let hits = 0;
-				let totalReturn = 0;
-				let totalMfe = 0;
-				let totalMae = 0;
-				let maxMae = 0; // absolute maximum drawdown seen
-
-				for (const signal of evaluatedSignals) {
-					const outcome = signal.outcomes[winKey];
-					if (outcome && outcome.status === 'evaluated') {
-						totalWinsEvaluated++;
-						if (outcome.return > 0) {
-							hits++;
-						}
-						totalReturn += outcome.return;
-						totalMfe += outcome.maxFavorableExcursion;
-						totalMae += outcome.maxAdverseExcursion;
-						if (outcome.maxAdverseExcursion < maxMae) {
-							maxMae = outcome.maxAdverseExcursion;
-						}
-					}
-				}
-
-				if (totalWinsEvaluated > 0) {
-					windowStats[winKey] = {
-						totalSignals: totalWinsEvaluated,
-						hitRatePercent: parseFloat(((hits / totalWinsEvaluated) * 100).toFixed(2)),
-						averageReturnPercent: parseFloat((totalReturn / totalWinsEvaluated).toFixed(4)),
-						averageMfePercent: parseFloat((totalMfe / totalWinsEvaluated).toFixed(4)),
-						averageMaePercent: parseFloat((totalMae / totalWinsEvaluated).toFixed(4)),
-						maxAdverseExcursionPercent: parseFloat(maxMae.toFixed(4)), // drawdown proxy
-					};
-				}
-			}
-		}
-
-		// Drawdown proxy across all evaluated windows
-		let totalAllMae = 0;
-		let maeCount = 0;
-		let absoluteMaxMae = 0;
-		let totalTokenCost = 0;
-		let totalInputTokens = 0;
-		let totalOutputTokens = 0;
-		let totalProcessingTime = 0;
-		let processingTimeCount = 0;
-
-		const falsePositiveCandidates = [];
-
-		for (const signal of evaluatedSignals) {
-			if (signal.tokenUsage) {
-				totalTokenCost += signal.tokenUsage.totalCost || 0;
-				totalInputTokens += signal.tokenUsage.inputTokens || signal.tokenUsage.promptTokens || 0;
-				totalOutputTokens += signal.tokenUsage.outputTokens || signal.tokenUsage.completionTokens || 0;
-			}
-			if (typeof signal.processingTimeMs === 'number') {
-				totalProcessingTime += signal.processingTimeMs;
-				processingTimeCount++;
-			}
-
-			// Gather excursions for drawdown proxy and detect false positive candidates
-			let worstMae = 0;
-			let bestReturn = -Infinity;
-			let resolvedReturn = null;
-
-			for (const outcome of Object.values(signal.outcomes)) {
-				if (outcome.status === 'evaluated') {
-					if (outcome.maxAdverseExcursion < worstMae) {
-						worstMae = outcome.maxAdverseExcursion;
-					}
-					if (outcome.return > bestReturn) {
-						bestReturn = outcome.return;
-					}
-					resolvedReturn = outcome.return; // last resolved window return
-				}
-			}
-
-			totalAllMae += worstMae;
-			maeCount++;
-			if (worstMae < absoluteMaxMae) {
-				absoluteMaxMae = worstMae;
-			}
-
-			// False positive candidate: high confidence/score but poor performance (e.g. return < -2% or worstMae < -5%)
-			const isHighConfidence = (signal.score >= 0.75 || (signal.source === 'news-monitor' && signal.score >= 0.7));
-			if (isHighConfidence && (resolvedReturn < -1 || worstMae < -3)) {
-				falsePositiveCandidates.push({
-					symbol: signal.symbol,
-					source: signal.source,
-					side: signal.side,
-					score: signal.score,
-					price: signal.price,
-					worstReturn: resolvedReturn,
-					worstMae,
-				});
-			}
-		}
-
-		const averageWorstMae = maeCount > 0 ? parseFloat((totalAllMae / maeCount).toFixed(4)) : 0;
-		const averageProcessingTimeMs = processingTimeCount > 0 ? Math.round(totalProcessingTime / processingTimeCount) : null;
-		const coveragePercent = totalSignalsReceived > 0 ? parseFloat(((totalSignalsEvaluated / totalSignalsReceived) * 100).toFixed(2)) : 0;
-		const isCoverageComplete = totalSignalsEvaluated === totalSignalsReceived;
-
-		return {
-			totalSignalsReceived,
-			totalSignalsEligible,
-			totalSignalsEvaluated,
-			totalSignalsPending,
-			totalSignalsUnavailable,
-			coveragePercent,
-			isCoverageComplete,
-			populationNote: !isCoverageComplete
-				? `Metrics represent ${totalSignalsEvaluated} evaluated signals out of ${totalSignalsReceived} total received signals (${coveragePercent}% coverage).`
-				: 'Metrics represent 100% of received signals.',
-			exchangeBreakdown,
-			providerBreakdown,
-			eligibilityBreakdown,
-			windows: windowStats,
-			drawdownProxy: {
-				averageMaxAdverseExcursionPercent: averageWorstMae,
-				absoluteMaxAdverseExcursionPercent: parseFloat(absoluteMaxMae.toFixed(4)),
-			},
-			falsePositiveCandidatesCount: falsePositiveCandidates.length,
-			falsePositiveCandidates: falsePositiveCandidates.slice(0, 5), // top 5 examples
-			latencyCostMetadata: {
-				averageProcessingTimeMs,
-				tokenUsage: {
-					inputTokens: totalInputTokens,
-					outputTokens: totalOutputTokens,
-					totalCost: parseFloat(totalTokenCost.toFixed(6)),
-				},
-			},
-		};
+		const { available, ...rest } = summary;
+		return rest;
 	} catch (error) {
 		console.warn('[SignalOutcomeService] Failed to compute metrics summary:', error.message);
 		return 'No measurements found';
 	}
 }
 
+function createStorageUnavailableError(cause) {
+	const error = new Error('Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.');
+	error.code = STORAGE_UNAVAILABLE_CODE;
+	if (cause) {
+		error.cause = cause;
+	}
+	return error;
+}
+
+function clampOutcomeLimit(limit) {
+	if (!Number.isInteger(limit) || limit < 1) {
+		return DEFAULT_LIMIT;
+	}
+	return Math.min(limit, MAX_LIMIT);
+}
+
+function getNumericValue(value) {
+	return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function summarizeTokenUsage(tokenUsage) {
+	if (!tokenUsage || typeof tokenUsage !== 'object') {
+		return null;
+	}
+
+	return {
+		inputTokens: getNumericValue(tokenUsage.inputTokens || tokenUsage.promptTokens),
+		outputTokens: getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens),
+		totalTokens: getNumericValue(tokenUsage.totalTokens || tokenUsage.total),
+		totalCost: getNumericValue(tokenUsage.totalCost),
+	};
+}
+
+function getDocTimestamp(data) {
+	if (!data || typeof data !== 'object') {
+		return null;
+	}
+
+	return getTimestampIso(data.receivedAt);
+}
+
+function getTimestampIso(value) {
+	if (value && typeof value.toDate === 'function') {
+		return value.toDate().toISOString();
+	}
+
+	if (value instanceof Date) {
+		return value.toISOString();
+	}
+
+	if (typeof value === 'string' && !Number.isNaN(Date.parse(value))) {
+		return new Date(value).toISOString();
+	}
+
+	return null;
+}
+
+function getDocCursorValues(doc) {
+	if (!doc || typeof doc.data !== 'function') {
+		return null;
+	}
+
+	const data = doc.data() || {};
+	const receivedAt = getDocTimestamp(data);
+	if (!receivedAt || typeof doc.id !== 'string' || !doc.id) {
+		return null;
+	}
+
+	return {
+		receivedAt,
+		documentId: doc.id,
+	};
+}
+
+function buildParsedCursorTimestamp(parsedCursor) {
+	return admin.firestore.Timestamp.fromDate(new Date(parsedCursor.receivedAt));
+}
+
+function formatOutcomeDocument(doc) {
+	const data = doc.data() || {};
+	const receivedAt = getDocTimestamp(data);
+
+	const formatted = {
+		id: doc.id,
+		receivedAt,
+		requestId: typeof data.requestId === 'string' ? data.requestId : 'unknown',
+		source: typeof data.source === 'string' ? data.source : 'unknown',
+		symbol: typeof data.symbol === 'string' ? data.symbol : 'UNKNOWN',
+		exchange: typeof data.exchange === 'string' ? data.exchange : 'UNKNOWN',
+		assetClass: typeof data.assetClass === 'string' ? data.assetClass : null,
+		timeframe: typeof data.timeframe === 'string' ? data.timeframe : null,
+		setupType: typeof data.setupType === 'string' ? data.setupType : null,
+		score: typeof data.score === 'number' && Number.isFinite(data.score) ? data.score : null,
+		side: data.side === 'SELL' ? 'SELL' : 'BUY',
+		price: typeof data.price === 'number' && Number.isFinite(data.price) ? data.price : null,
+		entryPriceSource: typeof data.entryPriceSource === 'string' ? data.entryPriceSource : null,
+		stop: typeof data.stop === 'number' && Number.isFinite(data.stop) ? data.stop : null,
+		target: typeof data.target === 'number' && Number.isFinite(data.target) ? data.target : null,
+		marketDataProvider: typeof data.marketDataProvider === 'string' ? data.marketDataProvider : null,
+		eligibilityState: typeof data.eligibilityState === 'string' ? data.eligibilityState : null,
+		eligibilityReason: typeof data.eligibilityReason === 'string' ? data.eligibilityReason : null,
+		outcomeEvaluated: Boolean(data.outcomeEvaluated),
+		outcomes: data.outcomes && typeof data.outcomes === 'object' ? data.outcomes : {},
+		sources: Array.isArray(data.sources) ? data.sources : [],
+		tokenUsage: summarizeTokenUsage(data.tokenUsage),
+		processingTimeMs: typeof data.processingTimeMs === 'number' && Number.isFinite(data.processingTimeMs) ? data.processingTimeMs : null,
+	};
+
+	if (Object.prototype.hasOwnProperty.call(data, 'sessionContext')) {
+		Object.assign(formatted, {
+			observedAt: getTimestampIso(data.observedAt),
+			decisionBarClosedAt: getTimestampIso(data.decisionBarClosedAt),
+			tradableAt: getTimestampIso(data.tradableAt),
+			anchorMode: typeof data.anchorMode === 'string' ? data.anchorMode : null,
+			anchorVersion: typeof data.anchorVersion === 'string' ? data.anchorVersion : null,
+			calendarId: typeof data.calendarId === 'string' ? data.calendarId : null,
+			calendarTimeZone: typeof data.calendarTimeZone === 'string' ? data.calendarTimeZone : null,
+			sessionContext: typeof data.sessionContext === 'string' ? data.sessionContext : null,
+			measurementCohort: typeof data.measurementCohort === 'string' ? data.measurementCohort : null,
+			observedPrice: typeof data.observedPrice === 'number' && Number.isFinite(data.observedPrice) ? data.observedPrice : null,
+			tradablePrice: typeof data.tradablePrice === 'number' && Number.isFinite(data.tradablePrice) ? data.tradablePrice : null,
+		});
+	}
+
+	return formatted;
+}
+
+function matchesOutcomeFilters(outcome, { symbol, exchange, status, window, from, to }) {
+	if (from && outcome.receivedAt && new Date(outcome.receivedAt) < new Date(from)) {
+		return false;
+	}
+	if (to && outcome.receivedAt && new Date(outcome.receivedAt) > new Date(to)) {
+		return false;
+	}
+	if (symbol) {
+		const targetSymbol = symbol.includes(':') ? symbol.split(':')[1].toUpperCase() : symbol.toUpperCase();
+		if ((outcome.symbol || '').toUpperCase() !== targetSymbol) {
+			return false;
+		}
+		if (symbol.includes(':') && !exchange) {
+			const inferredExchange = symbol.split(':')[0].toUpperCase();
+			if ((outcome.exchange || '').toUpperCase() !== inferredExchange) {
+				return false;
+			}
+		}
+	}
+	if (exchange) {
+		if ((outcome.exchange || '').toUpperCase() !== exchange.toUpperCase()) {
+			return false;
+		}
+	}
+	if (window && status) {
+		const winKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window;
+		const winOutcome = outcome.outcomes && outcome.outcomes[winKey];
+		if (!winOutcome || winOutcome.status !== status) {
+			return false;
+		}
+	} else if (window) {
+		const winKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window;
+		if (!outcome.outcomes || !outcome.outcomes[winKey]) {
+			return false;
+		}
+	} else if (status) {
+		const outcomesList = Object.values(outcome.outcomes || {});
+		if (status === 'evaluated') {
+			const hasEvaluated = outcomesList.some(o => o.status === 'evaluated');
+			if (!hasEvaluated) return false;
+		} else if (status === 'pending') {
+			const hasPending = outcome.outcomeEvaluated === false && outcomesList.some(o => o.status === 'pending');
+			if (!hasPending) return false;
+		} else if (status === 'unavailable') {
+			const hasEvaluated = outcomesList.some(o => o.status === 'evaluated');
+			const hasPending = outcome.outcomeEvaluated === false && outcomesList.some(o => o.status === 'pending');
+			if (hasEvaluated || hasPending) return false;
+		}
+	}
+	return true;
+}
+
+async function listOutcomes({
+	before,
+	limit = DEFAULT_LIMIT,
+	symbol,
+	exchange,
+	status,
+	window,
+	from,
+	to,
+	signal,
+	maxScanDocs,
+} = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const pageSize = clampOutcomeLimit(limit);
+	const targetCount = pageSize + 1;
+	const scanLimit = Math.max(targetCount, MAX_LIMIT);
+	const matches = [];
+	const parsedBeforeCursor = before
+		? parseAlertPaginationCursor(before)
+		: null;
+	if (before && !parsedBeforeCursor) {
+		const error = new Error(INVALID_CURSOR_MESSAGE);
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+
+	let pageCursor = parsedBeforeCursor
+		? {
+			receivedAt: parsedBeforeCursor.receivedAt,
+			documentId: parsedBeforeCursor.documentId,
+		}
+		: null;
+
+	let totalScanned = 0;
+
+	while (matches.length < targetCount) {
+		if (signal && signal.aborted) {
+			const abortErr = new Error('Signal outcome listing query was aborted');
+			abortErr.name = 'AbortError';
+			abortErr.code = 'ABORTED';
+			throw abortErr;
+		}
+
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.orderBy('receivedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+			.limit(scanLimit);
+
+		if (pageCursor) {
+			const cursorTimestamp = buildParsedCursorTimestamp(pageCursor);
+			if (pageCursor.documentId) {
+				query = query.startAfter(cursorTimestamp, pageCursor.documentId);
+			} else {
+				query = query.where('receivedAt', '<', cursorTimestamp);
+			}
+		}
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[SignalOutcomeService] Failed to read signal outcomes from Firestore:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
+		if (signal && signal.aborted) {
+			const abortErr = new Error('Signal outcome listing query was aborted');
+			abortErr.name = 'AbortError';
+			abortErr.code = 'ABORTED';
+			throw abortErr;
+		}
+
+		if (!snapshot || snapshot.empty || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+
+		totalScanned += snapshot.docs.length;
+
+		for (const doc of snapshot.docs) {
+			if (isRetentionExpired(doc.data() || {})) {
+				continue;
+			}
+			const formatted = formatOutcomeDocument(doc);
+			if (matchesOutcomeFilters(formatted, { symbol, exchange, status, window, from, to })) {
+				matches.push(formatted);
+				if (matches.length >= targetCount) {
+					break;
+				}
+			}
+		}
+
+		const lastDocCursor = getDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!lastDocCursor) {
+			break;
+		}
+
+		pageCursor = lastDocCursor;
+		if (snapshot.docs.length < scanLimit || (maxScanDocs && totalScanned >= maxScanDocs)) {
+			break;
+		}
+	}
+
+	const outcomes = matches.slice(0, pageSize);
+	return {
+		outcomes,
+		hasMore: matches.length > pageSize,
+		nextBefore: outcomes.length > 0
+			? encodeAlertPaginationCursor(outcomes[outcomes.length - 1])
+			: null,
+	};
+}
+
+const CALIBRATION_DEFAULT_BUCKETS = [
+	{ range: '0.70-0.75', min: 0.70, max: 0.75 },
+	{ range: '0.75-0.80', min: 0.75, max: 0.80 },
+	{ range: '0.80-0.85', min: 0.80, max: 0.85 },
+	{ range: '0.85-0.90', min: 0.85, max: 0.90 },
+	{ range: '0.90-1.00', min: 0.90, max: 1.00 },
+];
+
+function getSignalConfidenceScore(doc) {
+	const conf = normalizeConfidenceScore(doc?.confidenceScore);
+	if (conf !== null) return conf;
+	const sc = normalizeConfidenceScore(doc?.score);
+	if (sc !== null) return sc;
+	return null;
+}
+
+/**
+ * Computes confidence calibration buckets, hit rates, and threshold suggestion from evaluated signal outcome docs.
+ */
+function computeCalibration(docs = [], options = {}) {
+	const targetWindow = (options.window && typeof options.window === 'string' ? options.window.toLowerCase() : '4h');
+	const targetWindowKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === targetWindow) || targetWindow;
+	const minOutcomes = options.minOutcomes !== undefined ? options.minOutcomes : 20;
+
+	const scoredDocs = [];
+	let hasSub70 = false;
+	for (const doc of docs) {
+		if (!doc) continue;
+		const targetOutcome = doc.outcomes && doc.outcomes[targetWindowKey];
+		if (!targetOutcome || targetOutcome.status !== 'evaluated') continue;
+		const score = getSignalConfidenceScore(doc);
+		if (score === null) continue;
+		if (score < 0.70) hasSub70 = true;
+		scoredDocs.push({ doc, score });
+	}
+
+	function isTargetHit(doc) {
+		const outcome = doc.outcomes && doc.outcomes[targetWindowKey];
+		if (!outcome) return false;
+		if (outcome.targetHit === true || outcome.firstHit === 'target') return true;
+		const hasTargetBarrier = typeof doc.target === 'number' && Number.isFinite(doc.target) && doc.target > 0;
+		if (!hasTargetBarrier && typeof outcome.return === 'number' && outcome.return > 0) return true;
+		return false;
+	}
+
+	const bucketDefs = hasSub70
+		? [{ range: '<0.70', min: 0.00, max: 0.70 }, ...CALIBRATION_DEFAULT_BUCKETS]
+		: CALIBRATION_DEFAULT_BUCKETS.map(b => ({ ...b }));
+
+	const buckets = bucketDefs.map(def => {
+		const matching = scoredDocs.filter(({ score }) => {
+			if (def.max === 1.00) {
+				return score >= def.min && score <= def.max;
+			}
+			return score >= def.min && score < def.max;
+		});
+
+		const bucketDocs = matching.map(m => m.doc);
+		const count = bucketDocs.length;
+
+		// 1h returns
+		const docs1h = bucketDocs.filter(d => d.outcomes && d.outcomes['1h'] && d.outcomes['1h'].status === 'evaluated' && typeof d.outcomes['1h'].return === 'number' && Number.isFinite(d.outcomes['1h'].return));
+		const avgReturn1h = docs1h.length > 0
+			? parseFloat((docs1h.reduce((acc, d) => acc + d.outcomes['1h'].return, 0) / docs1h.length).toFixed(2))
+			: null;
+
+		// 4h returns
+		const docs4h = bucketDocs.filter(d => d.outcomes && d.outcomes['4h'] && d.outcomes['4h'].status === 'evaluated' && typeof d.outcomes['4h'].return === 'number' && Number.isFinite(d.outcomes['4h'].return));
+		const avgReturn4h = docs4h.length > 0
+			? parseFloat((docs4h.reduce((acc, d) => acc + d.outcomes['4h'].return, 0) / docs4h.length).toFixed(2))
+			: null;
+
+		// Target hit rate for targetWindowKey
+		const targetHits = bucketDocs.filter(d => isTargetHit(d)).length;
+		const targetHitRate = bucketDocs.length > 0
+			? parseFloat((targetHits / bucketDocs.length).toFixed(2))
+			: 0;
+
+		return {
+			range: def.range,
+			count,
+			avgReturn1h,
+			avgReturn4h,
+			targetHitRate,
+			_min: def.min,
+			_max: def.max,
+		};
+	});
+
+	const totalScoredAlerts = scoredDocs.length;
+	const cleanBuckets = buckets.map(({ _min, _max, ...rest }) => rest);
+
+	if (totalScoredAlerts < minOutcomes) {
+		return {
+			available: false,
+			totalScoredAlerts,
+			buckets: cleanBuckets,
+			suggestedThreshold: null,
+			suggestedThresholdRationale: `Insufficient data: fewer than ${minOutcomes} evaluated outcomes with confidence scores (found ${totalScoredAlerts})`,
+		};
+	}
+
+	// Evaluate candidate thresholds (bucket minimums) based on cumulative population (score >= threshold)
+	const candidates = buckets.map(b => {
+		const cumulativeDocs = scoredDocs.filter(d => d.score >= b._min);
+		const cumulativeHits = cumulativeDocs.filter(d => isTargetHit(d.doc)).length;
+		const cumulativeHitRate = cumulativeDocs.length > 0
+			? parseFloat((cumulativeHits / cumulativeDocs.length).toFixed(4))
+			: 0;
+		return {
+			bucket: b,
+			threshold: b._min,
+			cumulativeCount: cumulativeDocs.length,
+			cumulativeHitRate,
+		};
+	});
+
+	const minCandidateSample = options.minCandidateSample !== undefined ? options.minCandidateSample : Math.min(minOutcomes, 5);
+
+	// Find the lowest candidate threshold where both the individual bucket and cumulative population achieve >= 50% hit rate with sufficient sample
+	const qualifyingIndex = candidates.findIndex(c =>
+		c.cumulativeCount >= minCandidateSample &&
+		c.cumulativeHitRate >= 0.50 &&
+		c.bucket.targetHitRate >= 0.50
+	);
+	if (qualifyingIndex === -1) {
+		return {
+			available: true,
+			totalScoredAlerts,
+			buckets: cleanBuckets,
+			suggestedThreshold: null,
+			suggestedThresholdRationale: `No confidence threshold achieved ≥50% cumulative target hit rate at ${targetWindowKey} window`,
+		};
+	}
+
+	const qualifyingCandidate = candidates[qualifyingIndex];
+	let suggestedThreshold = qualifyingCandidate.threshold;
+
+	// Linearly interpolate if a preceding bucket with data had < 50% hit rate
+	if (qualifyingIndex > 0) {
+		const prevCandidate = candidates[qualifyingIndex - 1];
+		if (prevCandidate && prevCandidate.bucket.count > 0 && prevCandidate.bucket.targetHitRate < 0.50 && qualifyingCandidate.bucket.targetHitRate > prevCandidate.bucket.targetHitRate) {
+			const interpolated = qualifyingCandidate.threshold +
+				((0.50 - prevCandidate.bucket.targetHitRate) / (qualifyingCandidate.bucket.targetHitRate - prevCandidate.bucket.targetHitRate)) *
+				(qualifyingCandidate.bucket._max - qualifyingCandidate.bucket._min);
+			const roundedInterpolated = parseFloat(interpolated.toFixed(2));
+
+			// Verify cumulative performance and sample size at the interpolated threshold
+			const atOrAboveDocs = scoredDocs.filter(d => d.score >= roundedInterpolated);
+			const atOrAboveHits = atOrAboveDocs.filter(d => isTargetHit(d.doc)).length;
+			const atOrAboveHitRate = atOrAboveDocs.length > 0 ? (atOrAboveHits / atOrAboveDocs.length) : 0;
+			if (atOrAboveDocs.length >= minCandidateSample && atOrAboveHitRate >= 0.50) {
+				suggestedThreshold = roundedInterpolated;
+			}
+		}
+	}
+
+	const finalAtOrAboveDocs = scoredDocs.filter(d => d.score >= suggestedThreshold);
+	if (finalAtOrAboveDocs.length < minCandidateSample) {
+		return {
+			available: true,
+			totalScoredAlerts,
+			buckets: cleanBuckets,
+			suggestedThreshold: null,
+			suggestedThresholdRationale: `No confidence threshold achieved ≥50% cumulative target hit rate at ${targetWindowKey} window`,
+		};
+	}
+	const finalAtOrAboveHits = finalAtOrAboveDocs.filter(d => isTargetHit(d.doc)).length;
+	const finalHitRate = finalAtOrAboveDocs.length > 0 ? (finalAtOrAboveHits / finalAtOrAboveDocs.length) : qualifyingCandidate.cumulativeHitRate;
+	const hitRatePct = Math.round(finalHitRate * 100);
+	const suggestedThresholdRationale = `Alerts at ${suggestedThreshold}+ show ${hitRatePct}%+ target hit rate at ${targetWindowKey} window`;
+
+	return {
+		available: true,
+		totalScoredAlerts,
+		buckets: cleanBuckets,
+		suggestedThreshold,
+		suggestedThresholdRationale,
+	};
+}
+
+/**
+ * Retrieve calibration data and threshold recommendation for evaluated signal outcomes.
+ */
+async function getOutcomesCalibration({
+	symbol,
+	exchange,
+	window,
+	from,
+	to,
+	limit,
+	signal,
+} = {}) {
+	if (!isEnabled()) {
+		const err = new Error('Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.');
+		err.code = 'FEATURE_DISABLED';
+		throw err;
+	}
+
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError(new Error('Firestore is unavailable'));
+	}
+
+	const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+	const parsedTo = to ? new Date(to) : new Date();
+
+	const retentionDays = getSignalOutcomeRetentionDays();
+	const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
+	const effectiveFromMs = from
+		? parsedFrom.getTime()
+		: Math.max(parsedFrom.getTime(), retentionCutoffMs);
+	if (effectiveFromMs > parsedTo.getTime()) {
+		return computeCalibration([], { window, minOutcomes: 20 });
+	}
+	const effectiveFrom = new Date(effectiveFromMs);
+
+	const targetWindow = (window && typeof window === 'string' ? window.toLowerCase() : '4h');
+	const targetWindowKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === targetWindow) || targetWindow;
+
+	const targetLimit = limit || 1000;
+	const batchSize = Math.min(targetLimit, 100);
+	const matchedDocs = [];
+	let lastDoc = null;
+
+	const hasFilters = Boolean(symbol || exchange);
+	const maxScannedDocs = Math.max(targetLimit * 5, 2000);
+	let totalScanned = 0;
+
+	while (matchedDocs.length < targetLimit) {
+		if (signal && signal.aborted) {
+			break;
+		}
+
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
+			.orderBy('receivedAt', 'desc')
+			.limit(batchSize);
+
+		if (lastDoc) {
+			query = query.startAfter(lastDoc);
+		}
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || snapshot.empty) {
+			break;
+		}
+
+		totalScanned += snapshot.docs.length;
+
+		for (const doc of snapshot.docs) {
+			const docData = doc.data() || {};
+			if (isRetentionExpired(docData)) {
+				continue;
+			}
+			if (hasFilters) {
+				const formatted = {
+					...docData,
+					id: doc.id,
+					receivedAt: getDocTimestamp(docData),
+				};
+				if (!matchesOutcomeFilters(formatted, { symbol, exchange, from, to })) {
+					continue;
+				}
+			}
+
+			// Apply limit after selecting calibration-eligible outcomes:
+			// 1. Requested window outcome must be present and evaluated
+			const targetOutcome = docData.outcomes && docData.outcomes[targetWindowKey];
+			if (!targetOutcome || targetOutcome.status !== 'evaluated') {
+				continue;
+			}
+
+			// 2. Must possess a valid normalized confidence score in [0, 1]
+			if (getSignalConfidenceScore(docData) === null) {
+				continue;
+			}
+
+			matchedDocs.push(doc);
+			if (matchedDocs.length >= targetLimit) {
+				break;
+			}
+		}
+
+		if (snapshot.docs.length < batchSize || totalScanned >= maxScannedDocs) {
+			break;
+		}
+		lastDoc = snapshot.docs[snapshot.docs.length - 1];
+	}
+
+	const docs = matchedDocs.map(doc => ({
+		...doc.data(),
+		id: doc.id,
+		receivedAt: getDocTimestamp(doc.data()),
+	}));
+
+	return computeCalibration(docs, { window, minOutcomes: 20 });
+}
+
+function _resetForTesting() {
+	lastRetentionWarningValue = null;
+	lastEntryPriceSourcesWarningValue = null;
+	binanceClient = null;
+	lastEvaluatedDoc = null;
+	isEvaluating = false;
+	shutdownRequested = false;
+	activeIntervalMs = null;
+	lastRunAt = null;
+	lastRunDurationMs = null;
+	lastRunScannedCount = 0;
+	lastRunEvaluatedCount = 0;
+	lastRunPendingCount = 0;
+	lastRunErrorCount = 0;
+	lastRunRegionBlockedCount = 0;
+}
+
 module.exports = {
 	isEnabled,
 	recordSignal,
+	getSessionContext,
 	evaluatePendingOutcomes,
 	getMetricsSummary,
+	summarizeOutcomes,
+	listOutcomes,
+	computeCalibration,
+	getOutcomesCalibration,
 	normalizeSide,
 	normalizeSymbolAndExchange,
 	startWorker,
 	stopWorker,
 	getWorkerStatus,
 	getWorkerRole,
+	parseEntryPriceSources,
+	getEntryPriceSourceChains,
 	COLLECTION_NAME,
 	HEARTBEAT_COLLECTION_NAME,
+	STORAGE_UNAVAILABLE_CODE,
+	INVALID_CURSOR_MESSAGE,
+	_resetForTesting,
 };

@@ -13,8 +13,70 @@ const metrics = require('./metrics');
 const sentryService = require('../monitoring/SentryService');
 const { deriveAssetContext, deriveCleanSearchQuery } = require('../tradingview/parseTradingViewSignal');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { registerGlobalUsage, tokenCostBudgetService } = require('../../lib/tokenUsage');
 
 const promptService = getPromptService();
+const coalescedSearches = new Map();
+
+function startSearch({ searchQuery, maxSources, signal, timeoutMs }) {
+	return genaiClient.search({
+		query: searchQuery,
+		model: GROUNDING_MODEL_NAME,
+		maxResults: maxSources,
+		signal,
+		timeoutMs,
+	});
+}
+
+function getCoalescedSearch({ assetContext, searchQuery, maxSources, signal, timeoutMs, promptType, coalesceWindowMs }) {
+	const canCoalesce = promptType === 'ALERT_ENRICHMENT'
+		&& assetContext?.assetClass === 'stock'
+		&& coalesceWindowMs > 0;
+	if (!canCoalesce) {
+		return { promise: startSearch({ searchQuery, maxSources, signal, timeoutMs }), shared: false };
+	}
+
+	const normalizedQuery = (searchQuery || '').trim().toLowerCase();
+	const symbol = (assetContext?.symbol || '').trim().toUpperCase();
+	const key = `${GROUNDING_MODEL_NAME}:${maxSources}:stock:${symbol || 'query'}:${normalizedQuery}`;
+	const now = Date.now();
+	const existing = coalescedSearches.get(key);
+	if (existing && now - existing.createdAt <= coalesceWindowMs) {
+		metrics.recordCoalescingHit();
+		return { promise: existing.promise, shared: true };
+	}
+
+	const entry = {
+		createdAt: now,
+		promise: startSearch({ searchQuery, maxSources, signal, timeoutMs }),
+	};
+	coalescedSearches.set(key, entry);
+	metrics.recordCoalescingMiss();
+	entry.promise.catch(() => {
+		if (coalescedSearches.get(key) === entry) {
+			coalescedSearches.delete(key);
+			metrics.recordCoalescingFailure();
+		}
+	});
+	return { promise: entry.promise, shared: false };
+}
+
+function getCoalescingStatus() {
+	const windowMs = getRuntimeConfig().ALERT_GROUNDING_COALESCE_MS;
+	if (!(windowMs > 0)) {
+		coalescedSearches.clear();
+	}
+	const now = Date.now();
+	for (const [key, entry] of coalescedSearches) {
+		if (now - entry.createdAt > windowMs) coalescedSearches.delete(key);
+	}
+	return {
+		enabled: windowMs > 0,
+		windowMs,
+		activeEntries: coalescedSearches.size,
+		...metrics.getCoalescingSnapshot(),
+	};
+}
 
 /**
  * Derives a search query from alert text using an LLM
@@ -23,6 +85,11 @@ const promptService = getPromptService();
  * @returns {Promise<string>} Optimized search query
  */
 async function deriveSearchQuery(alertText, opts = {}) {
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Grounding] Daily token cost budget exceeded, returning raw alert text as search query');
+		return alertText;
+	}
+
 	try {
 		const { systemPrompt, userPrompt } = await promptService.getChatPrompt(
 			PromptKeys.SEARCH_QUERY_DERIVATION,
@@ -35,8 +102,12 @@ async function deriveSearchQuery(alertText, opts = {}) {
 			opts: { temperature: opts.temperature, signal: opts.signal },
 		});
 
-		if (opts.tokenUsage && response.usage) {
-			opts.tokenUsage.addUsage(response.usage, GEMINI_MODEL_NAME);
+		if (response && response.usage) {
+			const effectiveModel = response.modelUsed || GEMINI_MODEL_NAME || 'gemini';
+			registerGlobalUsage(response.usage, effectiveModel);
+			if (opts.tokenUsage) {
+				opts.tokenUsage.addUsage(response.usage, effectiveModel);
+			}
 		}
 
 		if (!response || !response.text) {
@@ -62,6 +133,19 @@ function getEffectiveGroundingMaxLength() {
  * @returns {Promise<GeminiResponse>} Summary with citations
  */
 async function groundAlert({ text, options = {} }) {
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Grounding] Daily token cost budget exceeded, returning ungrounded alert fallback');
+		return {
+			text,
+			sentiment: 'NEUTRAL',
+			sentiment_score: 0,
+			insights: [],
+			sources: [],
+			confidence: 0.5,
+			budgetExceeded: true,
+		};
+	}
+
 	const runtimeConfig = getRuntimeConfig();
 	const {
 		maxSources = runtimeConfig.GROUNDING_MAX_SOURCES,
@@ -94,21 +178,36 @@ async function groundAlert({ text, options = {} }) {
 		const searchQuery = deriveCleanSearchQuery(text) || text;
 
 		// 1. Search for evidence using clean query with bounded timeout & signal
-		const searchPromise = genaiClient.search({
-			query: searchQuery,
-			model: GROUNDING_MODEL_NAME,
-			maxResults: maxSources,
+		const coalescedSearch = getCoalescedSearch({
+			assetContext,
+			searchQuery,
+			maxSources,
 			signal,
 			timeoutMs,
+			promptType,
+			coalesceWindowMs: runtimeConfig.ALERT_GROUNDING_COALESCE_MS,
 		});
+		let searchResponse;
+		let ownsSearchUsage = !coalescedSearch.shared;
+		try {
+			searchResponse = await Promise.race([coalescedSearch.promise, timeoutPromise]);
+		} catch (searchError) {
+			if (!coalescedSearch.shared || signal.aborted) throw searchError;
+			searchResponse = await Promise.race([
+				startSearch({ searchQuery, maxSources, signal, timeoutMs }),
+				timeoutPromise,
+			]);
+			ownsSearchUsage = true;
+		}
 
-		const { results: searchResults, totalResults, searchResultText, usage: searchUsage } = await Promise.race([
-			searchPromise,
-			timeoutPromise,
-		]);
+		const { results: searchResults, totalResults, searchResultText, usage: searchUsage, modelUsed: searchModelUsed } = searchResponse;
 
-		if (tokenUsage && searchUsage) {
-			tokenUsage.addUsage(searchUsage, GROUNDING_MODEL_NAME);
+		if (ownsSearchUsage && searchUsage) {
+			const effectiveSearchModel = searchModelUsed || GROUNDING_MODEL_NAME || 'gemini';
+			registerGlobalUsage(searchUsage, effectiveSearchModel);
+			if (tokenUsage) {
+				tokenUsage.addUsage(searchUsage, effectiveSearchModel);
+			}
 		}
 		console.debug(`[Grounding] Retrieved ${searchResults.length}/${totalResults} search results for query: ${searchQuery}`);
 
@@ -178,4 +277,6 @@ async function groundAlert({ text, options = {} }) {
 module.exports = {
 	groundAlert,
 	deriveSearchQuery,
+	getCoalescingStatus,
+	_resetForTesting: () => coalescedSearches.clear(),
 };

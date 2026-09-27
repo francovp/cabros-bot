@@ -74,6 +74,17 @@ while [ "$page" -lt "$MAX_PAGES" ]; do
 
   cursor=$(echo "$batch" | jq -r 'map(.createdAt) | max')
 
+  # Always exclude issues carrying `need manual PR deploy` or `brainstorming` —
+  # operator has marked them as requiring human intervention or as
+  # idea-stage without implementation intent. These are zero-work skips.
+  batch=$(echo "$batch" | jq -c '
+    map(select(
+      (.labels | map(.name | ascii_downcase) | index("need manual pr deploy") | not)
+      and (.labels | map(.name | ascii_downcase) | index("brainstorming") | not)
+      and (.labels | map(.name | ascii_downcase) | index("brainstorm") | not)
+    ))
+  ')
+
   if [ -n "$SKIP_LIST" ]; then
     batch=$(echo "$batch" | jq -c "map(select(.number as \$n | [$SKIP_LIST] | index(\$n) | not))")
   fi

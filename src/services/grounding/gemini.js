@@ -11,6 +11,7 @@ const {
 const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonitor/constants');
 const { getPromptService, PromptKeys } = require('../prompts');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { registerGlobalUsage, tokenCostBudgetService } = require('../../lib/tokenUsage');
 
 const promptService = getPromptService();
 
@@ -67,6 +68,70 @@ function parseOptionalSetupType(value) {
 	return SETUP_TYPES.has(normalized) ? normalized : undefined;
 }
 
+const MAX_TECHNICAL_LEVELS_PER_SIDE = 6;
+const ZERO_SOURCE_SENTIMENT_SCORE_CAP = 0.55;
+
+// Validates one raw level entry: finite numbers and non-empty strings are kept as-is,
+// everything else (objects, arrays, blanks, NaN) is dropped so no fabricated structure persists.
+function parseTechnicalLevelEntry(value) {
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return value;
+	}
+
+	if (typeof value === 'string') {
+		const trimmed = value.trim();
+		return trimmed ? trimmed : undefined;
+	}
+
+	return undefined;
+}
+
+const NUMERIC_LEVEL_STRING_OPTIONS = { useGrouping: false, maximumFractionDigits: 20 };
+
+// Formatters expect string levels (smartEscapeMarkdownV2 only accepts strings), so
+// numeric entries are normalized to their exact decimal representation here.
+// String() preserves full double precision (e.g. 1e-21 stays "1e-21") where
+// toLocaleString with a 20-digit cap would round tiny values to "0".
+function formatTechnicalLevelEntry(entry) {
+	if (typeof entry === 'number') {
+		return Number.isInteger(entry)
+			? entry.toLocaleString('en-US', NUMERIC_LEVEL_STRING_OPTIONS)
+			: String(entry);
+	}
+
+	return entry;
+}
+
+// Re-introduced by GH-509 / CB-226: the alert-enrichment prompt asks the model for a
+// technical_levels object, but PR #34 stopped parsing it. Levels are only surfaced
+// downstream when TradingView MCP data is absent/failed (see alert handler merge),
+// and are provenance-tagged there so consumers can distinguish provider quality.
+function parseOptionalTechnicalLevels(value) {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return undefined;
+	}
+
+	// Validate/normalize every entry first, deduplicate, then cap — malformed or
+	// duplicated early entries must not consume the per-side quota.
+	const parseLevelSide = side => (Array.isArray(value[side])
+		? [...new Set(
+			value[side]
+				.map(parseTechnicalLevelEntry)
+				.filter(entry => entry !== undefined)
+				.map(formatTechnicalLevelEntry),
+		)].slice(0, MAX_TECHNICAL_LEVELS_PER_SIDE)
+		: []);
+
+	const supports = parseLevelSide('supports');
+	const resistances = parseLevelSide('resistances');
+
+	if (supports.length === 0 && resistances.length === 0) {
+		return undefined;
+	}
+
+	return { supports, resistances };
+}
+
 function getPromptProvenance(prompt) {
 	const name = typeof prompt?.name === 'string' && prompt.name.trim()
 		? prompt.name.trim()
@@ -84,6 +149,7 @@ function getPromptProvenance(prompt) {
 		source,
 		label: typeof prompt.label === 'string' && prompt.label.trim() ? prompt.label.trim() : null,
 		version: Number.isInteger(prompt.version) ? prompt.version : null,
+		schemaDriftDetected: Boolean(prompt && prompt.schemaDriftDetected),
 	};
 }
 
@@ -152,16 +218,30 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 		{ systemPromptOverride },
 	);
 
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Gemini] Daily token cost budget exceeded, returning fallback summary');
+		return validateGeminiResponse({
+			summary: text.slice(0, maxLength),
+			citations: searchResults || [],
+			confidence: 0.5,
+			budgetExceeded: true,
+		});
+	}
+
 	try {
-		const { text: summary, usage } = await genaiClient.llmCallv2({
+		const { text: summary, usage, modelUsed } = await genaiClient.llmCallv2({
 			systemPrompt,
 			userPrompt,
 			context: { citations: searchResults },
 			opts: { temperature: 0.2, signal },
 		});
 
-		if (tokenUsage && usage) {
-			tokenUsage.addUsage(usage, GEMINI_MODEL_NAME);
+		if (usage) {
+			const effectiveModel = modelUsed || GEMINI_MODEL_NAME || 'gemini';
+			registerGlobalUsage(usage, effectiveModel);
+			if (tokenUsage) {
+				tokenUsage.addUsage(usage, effectiveModel);
+			}
 		}
 
 		const response = {
@@ -198,10 +278,26 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 			headline: 'Test Event: Positive Market Movement',
 			description: 'This is a test event analysis for news monitoring.',
 			confidence: 0.9,
+			promptVersion: 'test-v1',
 			sources: [
 				{ title: 'Test Source 1', snippet: 'This is a test snippet.', url: 'https://example.com/test1', sourceDomain: 'example.com' },
 				{ title: 'Test Source 2', snippet: 'This is another test snippet.', url: 'https://example.com/test2', sourceDomain: 'example.com' },
 			],
+		};
+	}
+
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Gemini][analyzeNewsForSymbol] Daily token cost budget exceeded, returning fallback analysis');
+		return {
+			event_category: EventCategory.NONE,
+			event_significance: 0,
+			sentiment_score: 0,
+			headline: 'Token cost budget ceiling reached',
+			description: 'Skipping news analysis due to daily token cost budget ceiling.',
+			confidence: 0,
+			promptVersion: 'fallback-budget',
+			sources: [],
+			budgetExceeded: true,
 		};
 	}
 
@@ -219,8 +315,12 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 			maxResults: 3,
 			rethrowQuotaErrors: true,
 		});
-		if (tokenUsage && searchResult.usage) {
-			tokenUsage.addUsage(searchResult.usage, GROUNDING_MODEL_NAME);
+		if (searchResult.usage) {
+			const searchModel = searchResult.modelUsed || GROUNDING_MODEL_NAME || 'gemini';
+			registerGlobalUsage(searchResult.usage, searchModel);
+			if (tokenUsage) {
+				tokenUsage.addUsage(searchResult.usage, searchModel);
+			}
 		}
 		console.debug('[Gemini][analyzeNewsForSymbol] Grounding market news and sentiment search results:', searchResult);
 
@@ -247,8 +347,12 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 				userPrompt: prompt.userPrompt,
 				opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 },
 			});
-			if (tokenUsage && result.usage) {
-				tokenUsage.addUsage(result.usage, GEMINI_MODEL_NAME);
+			if (result.usage) {
+				const effectiveModel = result.modelUsed || GEMINI_MODEL_NAME || 'gemini';
+				registerGlobalUsage(result.usage, effectiveModel);
+				if (tokenUsage) {
+					tokenUsage.addUsage(result.usage, effectiveModel);
+				}
 			}
 			response = result.text;
 		} catch (primaryError) {
@@ -264,8 +368,12 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 						userPrompt: prompt.userPrompt,
 						opts: { model: GEMINI_MODEL_NAME_FALLBACK, temperature: 0.3 },
 					});
-					if (tokenUsage && fallbackResult.usage) {
-						tokenUsage.addUsage(fallbackResult.usage, GEMINI_MODEL_NAME_FALLBACK);
+					if (fallbackResult.usage) {
+						const fallbackModel = fallbackResult.modelUsed || GEMINI_MODEL_NAME_FALLBACK || 'gemini';
+						registerGlobalUsage(fallbackResult.usage, fallbackModel);
+						if (tokenUsage) {
+							tokenUsage.addUsage(fallbackResult.usage, fallbackModel);
+						}
 					}
 					response = fallbackResult.text;
 				} catch (fallbackError) {
@@ -290,6 +398,11 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 		analysisResult.confidence_reason = confidence_reason;
 		if (calibration) {
 			analysisResult.calibration = calibration;
+		}
+		if (prompt && prompt.metadata && prompt.metadata.version != null) {
+			analysisResult.promptVersion = String(prompt.metadata.version);
+		} else if (prompt && prompt.version != null) {
+			analysisResult.promptVersion = String(prompt.version);
 		}
 
 		console.info('[Gemini] News analysis complete with grounding', {
@@ -607,7 +720,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	if (text.length < 15 || text.split(/\s+/).length < 2) {
 		return {
 			sentiment: 'NEUTRAL',
-			sentiment_score: 0.5,
+			sentiment_score: 0,
 			insights: [],
 		};
 	}
@@ -631,6 +744,18 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	const { systemPrompt, userPrompt } = prompt;
 	const promptProvenance = getPromptProvenance(prompt);
 
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Gemini] Daily token cost budget exceeded, returning neutral enrichment fallback');
+		return {
+			sentiment: 'NEUTRAL',
+			sentiment_score: 0,
+			insights: [],
+			modelUsed: GEMINI_MODEL_NAME || 'unknown',
+			budgetExceeded: true,
+			...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
+		};
+	}
+
 	try {
 		const llmParams = {
 			systemPrompt,
@@ -650,7 +775,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 				console.warn('[Gemini] Non-retryable provider error, returning neutral enrichment:', error.message);
 				return {
 					sentiment: 'NEUTRAL',
-					sentiment_score: 0.5,
+					sentiment_score: 0,
 					insights: [],
 					modelUsed: GEMINI_MODEL_NAME || 'unknown',
 					...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
@@ -662,41 +787,41 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 			}
 
 			console.warn('[Gemini] Primary enrichment model failed, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
-			llmResult = await genaiClient.llmCallv2({
+			const fallbackParams = {
 				...llmParams,
 				opts: {
 					...llmParams.opts,
 					model: GEMINI_MODEL_NAME_FALLBACK,
 				},
-			});
+			};
+			llmResult = await genaiClient.llmCallv2(fallbackParams);
 		}
 
-		const { text: responseText, usage, modelUsed } = llmResult;
-
-		if (tokenUsage && usage) {
-			const modelName = modelUsed || GEMINI_MODEL_NAME;
-			tokenUsage.addUsage(usage, modelName);
+		if (llmResult.usage) {
+			registerGlobalUsage(llmResult.usage, llmResult.modelUsed || GEMINI_MODEL_NAME || 'gemini');
+			if (tokenUsage) {
+				tokenUsage.addUsage(llmResult.usage, llmResult.modelUsed || GEMINI_MODEL_NAME || 'gemini');
+			}
 		}
 
+		const parsed = parseEnrichedAlertResponse(llmResult.text, searchResults);
 		return {
-			...parseEnrichedAlertResponse(responseText),
-			modelUsed: modelUsed || GEMINI_MODEL_NAME,
+			...parsed,
+			modelUsed: llmResult.modelUsed || GEMINI_MODEL_NAME || 'unknown',
 			...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
 		};
 	} catch (error) {
-		if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
-			throw error;
-		}
-		throw new Error(`Enriched alert generation failed: ${error.message}`);
+		console.error('[Gemini] Alert enrichment failed:', error.message);
+		throw error;
 	}
 }
 
 /**
- * Parse and validate Gemini enriched alert response
- * @param {string} response - Raw Gemini response
- * @returns {object} Validated enriched alert data
+ * Parse structured enriched alert response from Gemini
+ * @param {string} response - Raw JSON string from Gemini
+ * @returns {object} Parsed enriched alert data with safe defaults
  */
-function parseEnrichedAlertResponse(response) {
+function parseEnrichedAlertResponse(response, sources) {
 	try {
 		const jsonMatch = response.match(/\{[\s\S]*\}/);
 		if (!jsonMatch) {
@@ -710,17 +835,51 @@ function parseEnrichedAlertResponse(response) {
 			parsed.sentiment = 'NEUTRAL';
 		}
 
+		let sentimentScore = 0;
+		if (parsed.sentiment === 'BULLISH') {
+			const raw = typeof parsed.sentiment_score === 'number' && Number.isFinite(parsed.sentiment_score)
+				? parsed.sentiment_score
+				: 0.5;
+			const clamped = Math.max(-1, Math.min(1, raw));
+			sentimentScore = Math.abs(clamped) || 0.5;
+		} else if (parsed.sentiment === 'BEARISH') {
+			const raw = typeof parsed.sentiment_score === 'number' && Number.isFinite(parsed.sentiment_score)
+				? parsed.sentiment_score
+				: -0.5;
+			const clamped = Math.max(-1, Math.min(1, raw));
+			const absVal = Math.abs(clamped);
+			sentimentScore = absVal === 0 ? -0.5 : -absVal;
+		} else {
+			sentimentScore = 0;
+		}
+		const shouldCalibrate = Array.isArray(sources)
+			&& sources.length === 0
+			&& Math.abs(sentimentScore) > ZERO_SOURCE_SENTIMENT_SCORE_CAP;
+		const calibratedSentimentScore = shouldCalibrate
+			? Math.sign(sentimentScore) * ZERO_SOURCE_SENTIMENT_SCORE_CAP
+			: sentimentScore;
+
+		const parsedSetupType = parseOptionalSetupType(parsed.setup_type);
+		const parsedSetupEvidence = parsedSetupType && typeof parsed.setup_evidence === 'string' && parsed.setup_evidence.trim()
+			? parsed.setup_evidence.trim()
+			: undefined;
+
 		const optionalRiskMetadata = {
 			invalidation_level: parseOptionalRiskValue(parsed.invalidation_level),
 			target_level: parseOptionalRiskValue(parsed.target_level),
-			setup_type: parseOptionalSetupType(parsed.setup_type),
+			setup_type: parsedSetupType,
+			setup_evidence: parsedSetupEvidence,
 			risk_reward_ratio: parseOptionalRiskValue(parsed.risk_reward_ratio),
 		};
 
+		const technicalLevels = parseOptionalTechnicalLevels(parsed.technical_levels);
+
 		return {
 			sentiment: parsed.sentiment,
-			sentiment_score: Math.max(0, Math.min(1, parsed.sentiment_score || 0.5)),
+			sentiment_score: calibratedSentimentScore,
+			...(shouldCalibrate ? { sentiment_score_raw: sentimentScore } : {}),
 			insights: Array.isArray(parsed.insights) ? parsed.insights : [],
+			...(technicalLevels ? { technical_levels: technicalLevels } : {}),
 			...Object.fromEntries(
 				Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
 			),
@@ -729,7 +888,7 @@ function parseEnrichedAlertResponse(response) {
 		console.warn(`[Gemini] Response parsing failed, using safe defaults: ${error.message}`);
 		return {
 			sentiment: 'NEUTRAL',
-			sentiment_score: 0.5,
+			sentiment_score: 0,
 			insights: [],
 		};
 	}

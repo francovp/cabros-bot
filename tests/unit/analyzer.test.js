@@ -19,6 +19,7 @@ function getRemoteConfigService() {
 describe('Analyzer - Unit Tests', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		getRemoteConfigService()._resetForTesting();
 
 		gemini.analyzeNewsForSymbol = jest.fn().mockResolvedValue({
 			event_category: 'price_surge',
@@ -126,19 +127,26 @@ describe('Analyzer - Unit Tests', () => {
 	});
 
 	it('should not give queued symbols a fresh timeout beyond the batch budget', async () => {
-		process.env.NEWS_GEMINI_CONCURRENCY = '1';
-		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
-		const analyzer = new NewsAnalyzer();
-		analyzer.timeout = 25;
-		analyzer.analyzeSymbolInternal = jest.fn(() => new Promise(() => {}));
+		jest.useFakeTimers();
+		try {
+			process.env.NEWS_GEMINI_CONCURRENCY = '1';
+			const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+			const analyzer = new NewsAnalyzer();
+			analyzer.timeout = 25;
+			analyzer.analyzeSymbolInternal = jest.fn(() => new Promise(() => {}));
 
-		const results = await analyzer.analyzeSymbols(['BTCUSDT', 'ETHUSDT'], 'req-batch-timeout');
+			const run = analyzer.analyzeSymbols(['BTCUSDT', 'ETHUSDT'], 'req-batch-timeout');
+			await jest.advanceTimersByTimeAsync(30);
+			const results = await run;
 
-		expect(analyzer.analyzeSymbolInternal).toHaveBeenCalledTimes(1);
-		expect(results).toEqual([
-			expect.objectContaining({ symbol: 'BTCUSDT', status: 'timeout' }),
-			expect.objectContaining({ symbol: 'ETHUSDT', status: 'timeout' }),
-		]);
+			expect(analyzer.analyzeSymbolInternal).toHaveBeenCalledTimes(1);
+			expect(results).toEqual([
+				expect.objectContaining({ symbol: 'BTCUSDT', status: 'timeout' }),
+				expect.objectContaining({ symbol: 'ETHUSDT', status: 'timeout' }),
+			]);
+		} finally {
+			jest.useRealTimers();
+		}
 	});
 
 	it('should retry Gemini quota exhaustion within the symbol timeout budget', async () => {
@@ -157,6 +165,33 @@ describe('Analyzer - Unit Tests', () => {
 		expect(analyzer.analyzeSymbolInternal).toHaveBeenCalledTimes(2);
 		expect(result.status).toBe('analyzed');
 		expect(result.error).toBeUndefined();
+	});
+
+	it('uses the analysis deadline when bounding a Gemini quota retry', async () => {
+		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
+		geminiQuotaManager.resetForTesting();
+
+		const analyzer = new NewsAnalyzer();
+		analyzer.timeout = 1000;
+		const quotaError = new Error('429 RESOURCE_EXHAUSTED: RetryDelay: 100ms');
+		analyzer.analyzeSymbolInternal = jest.fn()
+			.mockRejectedValueOnce(quotaError)
+			.mockResolvedValueOnce({ status: 'analyzed', alert: null, cached: false });
+
+		const startedAt = Date.now();
+		await expect(analyzer.runSymbolAnalysisWithRetry(
+			'BTCUSDT',
+			'req-analysis-deadline-retry',
+			null,
+			{},
+			startedAt,
+			{ analysisDeadline: startedAt + 20 },
+		)).rejects.toThrow(quotaError.message);
+
+		expect(analyzer.analyzeSymbolInternal).toHaveBeenCalledTimes(1);
+		geminiQuotaManager.resetForTesting();
 	});
 
 	it('should honor quoted Gemini retryDelay values from RetryInfo JSON', async () => {
@@ -198,11 +233,16 @@ describe('Analyzer - Unit Tests', () => {
 	});
 
 	it('should derive provider timeout from remaining budget after cooldown waiting', async () => {
-		const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
+		jest.resetModules();
+		let geminiQuotaManager;
+		let NewsAnalyzer;
+		jest.isolateModules(() => {
+			geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
+			({ NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer'));
+		});
 		geminiQuotaManager.resetForTesting();
 		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 200 });
 
-		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
 		const analyzer = new NewsAnalyzer();
 		analyzer.timeout = 350;
 

@@ -5,10 +5,10 @@
  * 003-news-monitor: User Story 1 (endpoint & analysis), User Story 2 (alert delivery)
  */
 
-const { v4: uuidv4 } = require('uuid');
 const { getAnalyzer, setNotificationManager } = require('./analyzer');
 const { getCacheInstance } = require('./cache');
 const { AnalysisStatus } = require('./constants');
+const { getVolumeTracker } = require('./volumeTracker');
 const { getNotificationManager } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
@@ -19,6 +19,10 @@ const {
 	getRequestedChannels,
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
+const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const newsAnalysisStorageService = require('../../../../services/storage/NewsAnalysisStorageService');
+const { isNewsMonitorPaused, getNewsMonitorPauseState } = require('./pauseState');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 
 function resolveDryRun(req) {
 	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
@@ -30,6 +34,7 @@ class NewsMonitorHandler {
 	constructor() {
 		this.analyzer = getAnalyzer();
 		this.cache = getCacheInstance();
+		this.volumeTracker = getVolumeTracker();
 		this.maxSymbols = 100;
 	}
 
@@ -48,7 +53,7 @@ class NewsMonitorHandler {
    * @returns {void}
    */
 	async handleRequest(req, res) {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 		const tokenUsage = new TokenUsageTracker();
 
@@ -67,6 +72,20 @@ class NewsMonitorHandler {
 				return res.status(403).json({
 					error: 'News monitor feature is disabled. Set ENABLE_NEWS_MONITOR=true to enable.',
 					code: 'FEATURE_DISABLED',
+					requestId,
+				});
+			}
+
+			if (isNewsMonitorPaused()) {
+				const pauseState = getNewsMonitorPauseState();
+				return res.status(503).json({
+					error: pauseState.reason
+						? `News monitor analysis is temporarily paused: ${pauseState.reason}`
+						: 'News monitor analysis is temporarily paused.',
+					code: 'NEWS_MONITOR_PAUSED',
+					paused: true,
+					pausedAt: pauseState.pausedAt,
+					reason: pauseState.reason,
 					requestId,
 				});
 			}
@@ -127,22 +146,32 @@ class NewsMonitorHandler {
 				if (analysisSpan && typeof analysisSpan.setAttribute === 'function') {
 					analysisSpan.setAttribute('news.quota_exhausted', summary.quota_exhausted);
 					analysisSpan.setAttribute('news.error_count', summary.error);
+					analysisSpan.setAttribute('news.throttled_count', summary.throttled);
 				}
 			} finally {
 				sentryService.endSpan(analysisSpan);
 			}
 
 			const notificationManagerForResponse = getNotificationManager();
+			// attemptedDeliveryResults and originalPersistedState are storage-only
+			// bookkeeping for the post-response persistence pass; keep them out of
+			// the public contract.
+			const analysisResults = results;
+			const responseResults = (results || []).map(
+				({ attemptedDeliveryResults, originalPersistedState, analysisRecord, ...publicResult }) => publicResult,
+			);
+			const tracker = this.volumeTracker || getVolumeTracker();
 			const response = {
-				success: summary.analyzed > 0 || summary.cached > 0,
+				success: summary.analyzed > 0 || summary.cached > 0 || summary.throttled > 0,
 				partial_success: summary.timeout > 0 || summary.error > 0,
-				results,
+				results: responseResults,
 				summary,
 				requestedChannels: getRequestedChannels(notificationManagerForResponse, routing),
 				deliveredChannels: getDeliveredChannels(results.flatMap((result) => result.deliveryResults || [])),
 				totalDurationMs: Date.now() - startTime,
 				requestId,
 				tokenUsage: tokenUsage.toJSON(),
+				windowUsage: tracker.getWindowUsage(),
 			};
 
 			if (dryRun) {
@@ -159,7 +188,108 @@ class NewsMonitorHandler {
 				summary,
 			});
 
-			return res.status(200).json(response);
+			res.status(200).json(response);
+
+			// Fire-and-forget: persist delivered alerts to Firestore after responding to the caller.
+			// Failures are caught and logged — delivery is never blocked by storage.
+			if (!dryRun && alertStorageService.isEnabled()) {
+				const requestedChannels = response.requestedChannels || [];
+				for (const result of analysisResults || []) {
+					if (!result || !result.alert) {
+						continue;
+					}
+
+					const isCachedRedelivery = result.status === AnalysisStatus.CACHED
+						&& Array.isArray(result.attemptedDeliveryResults)
+						&& result.attemptedDeliveryResults.some((delivery) => delivery && delivery.success === true);
+					const currentDeliveryResults = isCachedRedelivery
+						? result.attemptedDeliveryResults
+						: (result.deliveryResults || []);
+					if (result.status !== AnalysisStatus.ANALYZED && !isCachedRedelivery) {
+						continue;
+					}
+					if (!currentDeliveryResults.some((delivery) => delivery && delivery.success === true)) {
+						continue;
+					}
+
+					const persistSymbol = result.alert.symbol || result.symbol;
+					const persistCategory = result.alert.eventCategory;
+					if (!isCachedRedelivery) {
+						// 'pending' closes the double-count window while the write is in
+						// flight; a failed outcome ('none') lets the next redelivery own it.
+						this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'pending')
+							.catch(err => console.warn('[NewsMonitor] Failed to record pending storage state:', err.message));
+					}
+					// Fallback redeliveries embed usage only when they win the ownership
+					// claim (process-local and cross-replica atomic), so concurrent
+					// channel expansions cannot duplicate it.
+					const usageClaimed = !isCachedRedelivery
+						|| await this.cache.claimUsageOwnership(persistSymbol, persistCategory);
+					const includeUsage = !isCachedRedelivery || usageClaimed;
+					alertStorageService.saveAlert({
+						text: result.alert.text || '',
+						symbol: result.alert.symbol || result.symbol,
+						exchange: result.alert.marketContext && result.alert.marketContext.source === 'binance' ? 'BINANCE' : undefined,
+						enriched: Boolean(result.alert.enriched),
+						enrichmentData: result.alert.enriched || null,
+						tokenUsage: includeUsage ? ((result.alert.enriched && result.alert.enriched.tokenUsage) || null) : null,
+						channels: requestedChannels,
+						deliveryResults: currentDeliveryResults,
+						source: 'news-monitor',
+						eventCategory: persistCategory,
+						confidence: result.alert.confidence,
+						sentimentScore: result.alert.sentimentScore,
+						dedupStatus: isCachedRedelivery ? 'cached' : 'fresh',
+						telegramChatId: routing.telegramChatId,
+						telegramThreadId: routing.telegramThreadId,
+						whatsappChatId: routing.whatsappChatId,
+						discordWebhookUrl: routing.discordWebhookUrl,
+						processingTimeMs: result.totalDurationMs,
+					}).then((savedId) => {
+						if (isCachedRedelivery) {
+							if (usageClaimed) {
+								return this.cache.markOriginalPersistState(
+									persistSymbol,
+									persistCategory,
+									savedId ? 'owned' : 'none',
+								);
+							}
+							return undefined;
+						}
+						return this.cache.markOriginalPersistState(persistSymbol, persistCategory, savedId ? 'owned' : 'none');
+					}).catch((err) => {
+						if (isCachedRedelivery) {
+							if (usageClaimed) {
+								this.cache.releaseUsageOwnershipClaim(persistSymbol, persistCategory)
+									.catch(markErr => console.warn('[NewsMonitor] Failed to release usage claim:', markErr.message));
+							}
+						} else {
+							this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'none')
+								.catch(markErr => console.warn('[NewsMonitor] Failed to record failed storage state:', markErr.message));
+						}
+						console.warn('[NewsMonitor] Failed to persist alert to storage:', err.message);
+					});
+				}
+			}
+
+			// Fire-and-forget: persist analysis results to Firestore
+			if (!dryRun && newsAnalysisStorageService.isEnabled()) {
+				const recordsToPersist = [];
+				for (const result of analysisResults || []) {
+					if (!result || result.status !== AnalysisStatus.ANALYZED) {
+						continue;
+					}
+					if (result.analysisRecord) {
+						recordsToPersist.push(result.analysisRecord);
+					}
+				}
+				if (recordsToPersist.length > 0) {
+					newsAnalysisStorageService.recordAnalyses(recordsToPersist)
+						.catch((err) => console.warn('[NewsMonitor] Failed to persist news analysis to storage:', err.message));
+				}
+			}
+
+			return;
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
 				return res.status(400).json({
@@ -303,6 +433,7 @@ class NewsMonitorHandler {
 			total: results.length,
 			analyzed: 0,
 			cached: 0,
+			throttled: 0,
 			timeout: 0,
 			error: 0,
 			quota_exhausted: 0,
@@ -320,6 +451,8 @@ class NewsMonitorHandler {
 				if (result.alert) {
 					summary.alerts_sent++;
 				}
+			} else if (result.status === AnalysisStatus.THROTTLED) {
+				summary.throttled++;
 			} else if (result.status === AnalysisStatus.TIMEOUT) {
 				summary.timeout++;
 			} else if (result.status === AnalysisStatus.ERROR) {
@@ -331,6 +464,181 @@ class NewsMonitorHandler {
 		}
 
 		return summary;
+	}
+
+	/**
+	 * Handle GET /api/news-monitor/summary
+	 */
+	async handleSummary(req, res) {
+		try {
+			if (!newsAnalysisStorageService.isEnabled()) {
+				return res.status(403).json({
+					error: 'News analysis storage feature is disabled. Set ENABLE_FIRESTORE_NEWS_ANALYSIS=true to enable.',
+					code: 'FEATURE_DISABLED',
+				});
+			}
+
+			const { from, to, limit, symbol, threshold } = req.query || {};
+
+			let parsedFrom;
+			if (from !== undefined) {
+				if (typeof from !== 'string' || !from.trim() || Number.isNaN(Date.parse(from))) {
+					return res.status(400).json({
+						error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedFrom = new Date(from).toISOString();
+			}
+
+			let parsedTo;
+			if (to !== undefined) {
+				if (typeof to !== 'string' || !to.trim() || Number.isNaN(Date.parse(to))) {
+					return res.status(400).json({
+						error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedTo = new Date(to).toISOString();
+			}
+
+			let parsedLimit = 500;
+			if (limit !== undefined) {
+				const n = Number(limit);
+				if (!Number.isInteger(n) || n < 1 || n > 1000) {
+					return res.status(400).json({
+						error: 'Invalid limit. Use an integer between 1 and 1000.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedLimit = n;
+			}
+
+			let parsedThreshold = 0.7;
+			if (threshold !== undefined) {
+				const th = Number(threshold);
+				if (!Number.isFinite(th) || th < 0 || th > 1) {
+					return res.status(400).json({
+						error: 'Invalid threshold. Use a number between 0 and 1.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedThreshold = th;
+			}
+
+			const parsedSymbol = typeof symbol === 'string' && symbol.trim() ? symbol.trim().toUpperCase() : undefined;
+
+			const summary = await newsAnalysisStorageService.summarizeAnalyses({
+				from: parsedFrom,
+				to: parsedTo,
+				limit: parsedLimit,
+				symbol: parsedSymbol,
+				threshold: parsedThreshold,
+			});
+
+			return res.status(200).json(summary);
+		} catch (error) {
+			if (error && error.code === 'FEATURE_DISABLED') {
+				return res.status(403).json({
+					error: error.message,
+					code: 'FEATURE_DISABLED',
+				});
+			}
+			if (error && error.code === 'STORAGE_UNAVAILABLE') {
+				return res.status(503).json({
+					error: error.message,
+					code: 'STORAGE_UNAVAILABLE',
+				});
+			}
+			console.error('[NewsMonitor] Error in handleSummary:', error);
+			return res.status(500).json({
+				error: 'Internal server error while summarizing news analyses.',
+				code: 'INTERNAL_ERROR',
+			});
+		}
+	}
+
+	/**
+	 * Handle GET /api/news-monitor/analyses
+	 */
+	async handleListAnalyses(req, res) {
+		try {
+			if (!newsAnalysisStorageService.isEnabled()) {
+				return res.status(403).json({
+					error: 'News analysis storage feature is disabled. Set ENABLE_FIRESTORE_NEWS_ANALYSIS=true to enable.',
+					code: 'FEATURE_DISABLED',
+				});
+			}
+
+			const { from, to, limit, symbol, eventCategory, beforeCursor } = req.query || {};
+
+			let parsedFrom;
+			if (from !== undefined) {
+				if (typeof from !== 'string' || !from.trim() || Number.isNaN(Date.parse(from))) {
+					return res.status(400).json({
+						error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedFrom = new Date(from).toISOString();
+			}
+
+			let parsedTo;
+			if (to !== undefined) {
+				if (typeof to !== 'string' || !to.trim() || Number.isNaN(Date.parse(to))) {
+					return res.status(400).json({
+						error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedTo = new Date(to).toISOString();
+			}
+
+			let parsedLimit = 50;
+			if (limit !== undefined) {
+				const n = Number(limit);
+				if (!Number.isInteger(n) || n < 1 || n > 100) {
+					return res.status(400).json({
+						error: 'Invalid limit. Use an integer between 1 and 100.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedLimit = n;
+			}
+
+			const parsedSymbol = typeof symbol === 'string' && symbol.trim() ? symbol.trim().toUpperCase() : undefined;
+			const parsedCategory = typeof eventCategory === 'string' && eventCategory.trim() ? eventCategory.trim().toLowerCase() : undefined;
+			const parsedCursor = typeof beforeCursor === 'string' && beforeCursor.trim() ? beforeCursor.trim() : undefined;
+
+			const result = await newsAnalysisStorageService.listAnalyses({
+				from: parsedFrom,
+				to: parsedTo,
+				limit: parsedLimit,
+				symbol: parsedSymbol,
+				eventCategory: parsedCategory,
+				beforeCursor: parsedCursor,
+			});
+
+			return res.status(200).json(result);
+		} catch (error) {
+			if (error && error.code === 'FEATURE_DISABLED') {
+				return res.status(403).json({
+					error: error.message,
+					code: 'FEATURE_DISABLED',
+				});
+			}
+			if (error && error.code === 'STORAGE_UNAVAILABLE') {
+				return res.status(503).json({
+					error: error.message,
+					code: 'STORAGE_UNAVAILABLE',
+				});
+			}
+			console.error('[NewsMonitor] Error in handleListAnalyses:', error);
+			return res.status(500).json({
+				error: 'Internal server error while listing news analyses.',
+				code: 'INTERNAL_ERROR',
+			});
+		}
 	}
 }
 

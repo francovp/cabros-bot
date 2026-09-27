@@ -190,7 +190,7 @@ describe('Market Scanner Scoring', () => {
 				trendConfluence: {
 					alignment: { status: 'bullish', confidence: 65 },
 				},
-			}, 'bollinger_scan');
+			}, 'smart_volume_scanner');
 
 			expect(result.score).toBeGreaterThanOrEqual(0);
 			expect(result.trendConfluence).toEqual({
@@ -230,6 +230,44 @@ describe('Market Scanner Scoring', () => {
 				status: 'unknown',
 				direction: null,
 				confidence: 82,
+			});
+		});
+
+		it('preserves alignment bonus for bollinger_scan with bullish HTF trend', () => {
+			const result = scoreScannerItem({
+				symbol: 'BINANCE:SOLUSDT',
+				bbw: 0.05,
+				trendConfluence: {
+					direction: 'bullish',
+					confidence: 85,
+				},
+			}, 'bollinger_scan');
+
+			expect(result.reason).toContain('HTF aligned +10');
+			expect(result.trendConfluence).toEqual({
+				status: 'aligned',
+				direction: 'bullish',
+				confidence: 85,
+				adjustment: 10,
+			});
+		});
+
+		it('preserves alignment bonus for bollinger_scan with bearish HTF trend', () => {
+			const result = scoreScannerItem({
+				symbol: 'BINANCE:ETHUSDT',
+				bbw: 0.06,
+				trendConfluence: {
+					trend: 'bearish',
+					confidence: 78,
+				},
+			}, 'bollinger_scan');
+
+			expect(result.reason).toContain('HTF aligned +10');
+			expect(result.trendConfluence).toEqual({
+				status: 'aligned',
+				direction: 'bearish',
+				confidence: 78,
+				adjustment: 10,
 			});
 		});
 
@@ -332,6 +370,39 @@ describe('Market Scanner Scoring', () => {
 			expect(result.trendConfluence).toEqual(expect.objectContaining({
 				status: 'counter-trend',
 			}));
+		});
+
+		it('scores a rating_filter item incorporating bollinger_rating modifier and reason text', () => {
+			const item = {
+				symbol: 'BINANCE:STXUSDT',
+				changePercent: 2.72,
+				bollinger_rating: 3,
+				indicators: { close: 1.85, RSI: 68.0 },
+				volume_ratio: 1.6,
+			};
+			const result = scoreScannerItem(item, 'rating_filter');
+
+			expect(result.score).toBeGreaterThanOrEqual(50);
+			expect(result.reason).toContain('BB rating +3');
+			expect(result.reason).toContain('RSI 68.0');
+		});
+
+		it('scores a consecutive_candles_scan item with persistence strength and body ratio', () => {
+			const item = {
+				symbol: 'BINANCE:AVAXUSDT',
+				changePercent: 4.8,
+				pattern_type: 'bullish',
+				candle_count: 3,
+				pattern_strength: 85,
+				candle_body_ratio: 0.75,
+				indicators: { close: 25.4, RSI: 62.0 },
+				volume_ratio: 1.4,
+			};
+			const result = scoreScannerItem(item, 'consecutive_candles_scan');
+
+			expect(result.score).toBeGreaterThanOrEqual(50);
+			expect(result.reason).toContain('strength 85');
+			expect(result.reason).toContain('body 0.75');
 		});
 	});
 

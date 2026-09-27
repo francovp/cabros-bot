@@ -28,6 +28,23 @@ function getDocumentedApiOperations(contract) {
 }
 
 describe('OpenAPI contract', () => {
+	it('documents the concrete alert detail response including lastReplay', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const operation = contract.paths['/api/alerts/{alertId}'].get;
+
+		expect(operation.responses['200'].$ref).toBe('#/components/responses/AlertDetailResult');
+		expect(contract.components.responses.AlertDetailResult.content['application/json'].schema.$ref)
+			.toBe('#/components/schemas/AlertDetail');
+		expect(contract.components.schemas.AlertDetail.required).toEqual(
+			expect.arrayContaining(['success', 'alert', 'lastReplay']),
+		);
+		expect(contract.components.schemas.AlertDetail.properties.alert.$ref).toBe('#/components/schemas/StoredAlert');
+		expect(contract.components.schemas.AlertDetail.properties.lastReplay.oneOf).toEqual(expect.arrayContaining([
+			{ $ref: '#/components/schemas/ReplayAttempt' },
+			{ type: 'null' },
+		]));
+	});
+
 	it('exists as the canonical JSON source', () => {
 		expect(fs.existsSync(contractPath)).toBe(true);
 	});
@@ -37,6 +54,18 @@ describe('OpenAPI contract', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 
 		expect(getDocumentedApiOperations(contract)).toEqual(getMountedApiOperations());
+	});
+
+	it('documents the request-timeout response on every API operation', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const missingTimeoutResponses = Object.entries(contract.paths)
+			.filter(([routePath]) => routePath.startsWith('/api/'))
+			.flatMap(([routePath, pathItem]) => Object.entries(pathItem)
+				.filter(([method]) => ['get', 'post', 'put', 'patch', 'delete'].includes(method))
+				.filter(([, operation]) => !operation.responses || !operation.responses['408'])
+				.map(([method]) => `${method.toUpperCase()} ${routePath}`));
+
+		expect(missingTimeoutResponses).toEqual([]);
 	});
 
 	it('is a valid OpenAPI document', async () => {
@@ -56,14 +85,23 @@ describe('OpenAPI contract', () => {
 			.filter((operation) => operation && operation.responses);
 
 		const firebaseAdminOperations = new Set([
-			'GET /api/alerts', 'GET /api/alerts/summary', 'GET /api/alerts/export',
+			'GET /api/alerts', 'GET /api/alerts/replays', 'GET /api/alerts/summary', 'GET /api/alerts/export',
 			'GET /api/alerts/{alertId}', 'POST /api/alerts/{alertId}/replay',
+			'POST /api/alerts/feedback', 'GET /api/alerts/feedback/summary',
+			'POST /api/alerts/batch/replay', 'POST /api/alerts/batch/export', 'POST /api/alerts/batch/delete',
 			'GET /api/scanner-presets', 'POST /api/scanner-presets',
 			'GET /api/scanner-presets/{id}', 'PUT /api/scanner-presets/{id}',
 			'DELETE /api/scanner-presets/{id}', 'POST /api/scanner-presets/{id}/run',
 			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
 			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
-			'POST /api/jobs/{jobId}/retry-failed', 'POST /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/outcomes/calibration',
+			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
+			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'POST /api/news-monitor/pause', 'POST /api/news-monitor/resume', 'GET /api/news-monitor/status',
+			'GET /api/news-monitor/summary', 'GET /api/news-monitor/analyses',
+			'POST /api/admin/test-alert', 'GET /api/admin/events',
+			'GET /api/preferences/{channel}/{chatId}', 'PUT /api/preferences/{channel}/{chatId}', 'DELETE /api/preferences/{channel}/{chatId}',
+			'GET /api/selftest', 'POST /api/selftest/run',
 		]);
 
 		for (const operation of operations) {
@@ -79,12 +117,35 @@ describe('OpenAPI contract', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const expectedRoles = {
 			'GET /api/status': 'admin.viewer',
+			'GET /api/outcomes': 'admin.viewer',
+			'GET /api/outcomes/summary': 'admin.viewer',
+			'GET /api/outcomes/calibration': 'admin.viewer',
+			'GET /api/symbol-analyses': 'admin.viewer',
+			'GET /api/symbol-analyses/summary': 'admin.viewer',
+			'GET /api/trading/binance/orders': 'admin.viewer',
+			'GET /api/trading/binance/orders/audit': 'admin.viewer',
 			'POST /api/trading/binance/orders': 'admin.operator',
+			'DELETE /api/trading/binance/orders': 'admin.operator',
 			'GET /api/alerts': 'admin.viewer',
 			'GET /api/jobs': 'admin.viewer',
 			'POST /api/alerts/{alertId}/replay': 'admin.operator',
+			'POST /api/alerts/batch/replay': 'admin.operator',
+			'POST /api/alerts/batch/export': 'admin.viewer',
+			'POST /api/alerts/batch/delete': 'admin.operator',
 			'POST /api/scanner-presets': 'admin.operator',
 			'POST /api/jobs/{jobId}/cancel': 'admin.operator',
+			'POST /api/news-monitor/pause': 'admin.operator',
+			'POST /api/news-monitor/resume': 'admin.operator',
+			'GET /api/news-monitor/status': 'admin.viewer',
+			'GET /api/news-monitor/summary': 'admin.viewer',
+			'GET /api/news-monitor/analyses': 'admin.viewer',
+			'POST /api/admin/test-alert': 'admin.operator',
+			'GET /api/admin/events': 'admin.viewer',
+			'GET /api/preferences/{channel}/{chatId}': 'admin.viewer',
+			'PUT /api/preferences/{channel}/{chatId}': 'admin.operator',
+			'DELETE /api/preferences/{channel}/{chatId}': 'admin.operator',
+			'GET /api/selftest': 'admin.viewer',
+			'POST /api/selftest/run': 'admin.operator',
 		};
 
 		for (const [key, role] of Object.entries(expectedRoles)) {
@@ -113,10 +174,31 @@ describe('OpenAPI contract', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const shadowModeMetrics = contract.components.schemas.AlertSummary.properties.shadowModeMetrics;
 
-		expect(shadowModeMetrics.oneOf).toEqual(expect.arrayContaining([
-			{ type: 'string' },
-			{ $ref: '#/components/schemas/JsonObject' },
+		expect(shadowModeMetrics.$ref).toBe('#/components/schemas/ShadowModeMetrics');
+		expect(shadowModeMetrics.description).toContain('hitRatePercent');
+		expect(shadowModeMetrics.description).toContain('targetHitRatePercent');
+		expect(shadowModeMetrics.description).toContain('expectancyR');
+
+		const shadowModeMetricsSchema = contract.components.schemas.ShadowModeMetrics;
+		expect(shadowModeMetricsSchema.oneOf).toEqual(expect.arrayContaining([
+			{
+				type: 'string',
+				enum: ['No measurements found'],
+			},
+			{ $ref: '#/components/schemas/OutcomesSummary' },
 		]));
+	});
+
+	it('documents the X-Shadow-Mode-Metrics header on GET /api/alerts/export', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const exportResponse = contract.paths['/api/alerts/export'].get.responses['200'];
+
+		expect(exportResponse.headers).toBeDefined();
+		expect(exportResponse.headers['X-Shadow-Mode-Metrics']).toEqual({
+			description: expect.stringContaining('SignalOutcomeService.getMetricsSummary'),
+			schema: { type: 'string' },
+		});
 	});
 
 	it('documents generic-message idempotency key locations and replay conflicts', () => {
@@ -147,6 +229,19 @@ describe('OpenAPI contract', () => {
 		});
 	});
 
+	it('aligns symbol analysis schema with runtime normalization', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const schema = contract.components.schemas.SymbolAnalysisRequest;
+
+		expect(schema.properties.symbol.pattern).toBe('^[A-Za-z0-9_]+:[A-Za-z0-9._-]+$');
+		expect(schema.properties.timeframe).not.toHaveProperty('default');
+		expect(schema.description).toContain('TRADINGVIEW_MCP_DEFAULT_TIMEFRAME');
+		expect(schema.properties.timeframe.enum).toEqual(expect.arrayContaining(['60', '240', 'D', 'W', 'M']));
+		expect(schema.properties).toHaveProperty('analysis_mode');
+		expect(schema.properties).toHaveProperty('include_multi_timeframe');
+	});
+
 	it('documents idempotency conflicts for header-backed alert operations', () => {
 		if (!fs.existsSync(contractPath)) return;
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
@@ -162,6 +257,27 @@ describe('OpenAPI contract', () => {
 				$ref: `#/components/responses/${responseName}`,
 			});
 		}
+	});
+
+	it('documents current_price and price_data in the enrichedData schema', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const enrichedData = contract.components.schemas.DeliveryResult.properties.payload.properties.enrichedData;
+
+		expect(enrichedData.properties.current_price.type).toEqual(['number', 'null']);
+		expect(enrichedData.properties.price_data).toMatchObject({
+			type: ['object', 'null'],
+			additionalProperties: true,
+		});
+	});
+
+	it('declares suppressedRepeat in the alert delivery response schema', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		expect(contract.components.schemas.DeliveryResult.properties.suppressedRepeat).toEqual({
+			type: 'boolean',
+			description: 'True when this alert was persisted without channel delivery because it repeated a recent signal.',
+		});
 	});
 
 	describe('Job schema alignment with JobService runtime', () => {
@@ -274,6 +390,116 @@ describe('OpenAPI contract', () => {
 			expect(timeoutMs.minimum).toBe(1);
 			expect(timeoutMs.maximum).toBe(600000); // 10 minutes hard cap
 			expect(timeoutMs.default).toBe(300000); // 5 minutes default
+		});
+
+		it('documents NotificationRedriveDependency schema and references it under Status dependencies', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const redriveRef = contract.components.schemas.Status.properties.dependencies.properties.notificationRedrive;
+			expect(redriveRef).toEqual({
+				$ref: '#/components/schemas/NotificationRedriveDependency',
+			});
+
+			const redriveSchema = contract.components.schemas.NotificationRedriveDependency;
+			expect(redriveSchema).toBeDefined();
+			expect(redriveSchema.type).toBe('object');
+			expect(redriveSchema.required).toEqual(
+				expect.arrayContaining([
+					'enabled',
+					'configured',
+					'ready',
+					'status',
+					'role',
+					'workerRole',
+					'running',
+					'lastSweepResult',
+				]),
+			);
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.dependencies.notificationRedrive.maxAgeMs).toBe(3600000);
+			expect(redriveSchema.properties.zeroChannelBroadcasts.description)
+				.toContain('dropped because no notification channels were enabled');
+		});
+
+		it('documents NewsMonitorDedupDependency and NewsMonitorCacheSize under Status dependencies', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const dedupRef = contract.components.schemas.Status.properties.dependencies.properties.newsMonitorDedup;
+			expect(dedupRef).toEqual({
+				$ref: '#/components/schemas/NewsMonitorDedupDependency',
+			});
+
+			const dedupSchema = contract.components.schemas.NewsMonitorDedupDependency;
+			expect(dedupSchema).toBeDefined();
+			expect(dedupSchema.type).toBe('object');
+			expect(dedupSchema.required).toEqual(
+				expect.arrayContaining([
+					'enabled',
+					'configured',
+					'ready',
+					'status',
+					'mode',
+					'backend',
+					'cacheSize',
+				]),
+			);
+
+			const cacheSizeSchema = contract.components.schemas.NewsMonitorCacheSize;
+			expect(cacheSizeSchema).toBeDefined();
+			expect(cacheSizeSchema.type).toBe('object');
+			expect(cacheSizeSchema.required).toEqual(
+				expect.arrayContaining([
+					'entries',
+					'maxEntries',
+					'evictionCount',
+					'deliveryLocks',
+					'deliveryLockMaxEntries',
+					'deliveryLockEvictionCount',
+					'urlShortenerCache',
+					'urlShortenerServiceFailures',
+				]),
+			);
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.dependencies.newsMonitorDedup).toBeDefined();
+			expect(statusExample.dependencies.newsMonitorDedup.cacheSize.maxEntries).toBe(5000);
+			expect(statusExample.dependencies.newsMonitorDedup.cacheSize.deliveryLockMaxEntries).toBe(1000);
+			expect(contract.components.schemas.Status.description).toContain('dependencies.newsMonitorDedup reports');
+		});
+
+		it('documents TokenCostBudgetDependency schema and references it under Status dependencies', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const budgetRef = contract.components.schemas.Status.properties.dependencies.properties.tokenCostBudget;
+			expect(budgetRef).toEqual({
+				$ref: '#/components/schemas/TokenCostBudgetDependency',
+			});
+
+			const budgetSchema = contract.components.schemas.TokenCostBudgetDependency;
+			expect(budgetSchema).toBeDefined();
+			expect(budgetSchema.type).toBe('object');
+			expect(budgetSchema.required).toEqual(
+				expect.arrayContaining([
+					'enabled',
+					'configured',
+					'ready',
+					'status',
+					'dailySpendUsd',
+					'budgetUsd',
+					'utilizationPct',
+					'alertsSent',
+					'lastResetAt',
+				]),
+			);
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.dependencies.tokenCostBudget).toBeDefined();
+			expect(statusExample.dependencies.tokenCostBudget.budgetUsd).toBe(5);
+			expect(statusExample.featureFlags.tokenCostBudget).toBe(false);
 		});
 	});
 });

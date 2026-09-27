@@ -40,11 +40,22 @@ class AzureAIClient {
    * Send chat completion request to Azure AI
    * @param {string} systemPrompt - System prompt
    * @param {string} userMessage - User message
-   * @returns {Promise<string>} Model response
+   * @param {object} [options] - Additional options (e.g. signal, timeout)
+   * @returns {Promise<{text: string, usage: object}>} Model response
    */
-	async chatCompletion(systemPrompt, userMessage) {
+	async chatCompletion(systemPrompt, userMessage, options = {}) {
 		if (!this.validate()) {
 			throw new Error('AzureAIClient configuration incomplete');
+		}
+
+		const { tokenCostBudgetService } = require('../../lib/tokenUsage');
+		const isExceeded = tokenCostBudgetService?.isBudgetExceededAsync
+			? await tokenCostBudgetService.isBudgetExceededAsync()
+			: tokenCostBudgetService?.isBudgetExceeded();
+		if (isExceeded) {
+			const err = new Error('TOKEN_BUDGET_EXCEEDED: Daily LLM token cost budget exceeded');
+			err.status = 429;
+			throw err;
 		}
 
 		const client = ModelClient(
@@ -52,7 +63,7 @@ class AzureAIClient {
 			new AzureKeyCredential(this.apiKey),
 		);
 
-		const payload = {
+		const requestOptions = {
 			body: {
 				messages: [
 					{ role: 'system', content: systemPrompt },
@@ -62,10 +73,16 @@ class AzureAIClient {
 				temperature: 0.7,
 				top_p: 1.0,
 			},
+			timeout: options?.timeout || this.timeout,
 		};
 
+		const signal = options?.signal || options?.abortSignal;
+		if (signal) {
+			requestOptions.abortSignal = signal;
+		}
+
 		try {
-			const response = await client.path('/chat/completions').post(payload);
+			const response = await client.path('/chat/completions').post(requestOptions);
 
 			if (isUnexpected(response)) {
 				throw new Error(JSON.stringify(response.body.error));

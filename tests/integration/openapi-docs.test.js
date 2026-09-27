@@ -70,7 +70,8 @@ describe('public OpenAPI documentation', () => {
 		const client = await request(app).get('/admin/admin.js');
 
 		expect(client.status).toBe(200);
-		expect(client.text).toContain('fetch(\'/openapi.json\')');
+		expect(client.text).toContain('fetchWithTimeout(`${prefix}/openapi.json`');
+		expect(client.text).toContain('CONTRACT_TIMEOUT_MS');
 		expect(client.text).not.toContain(process.env.WEBHOOK_API_KEY);
 	});
 });

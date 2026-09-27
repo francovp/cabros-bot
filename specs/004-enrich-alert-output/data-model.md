@@ -10,7 +10,7 @@ Represents the structured data extracted from an alert.
 |---|---|---|
 | `original_text` | `string` | The raw text of the alert as received by `/api/webhook/alert`. |
 | `sentiment` | `string` | Sentiment of the alert: `BULLISH`, `BEARISH`, `NEUTRAL`. |
-| `sentiment_score` | `number` | Confidence score between 0.0 and 1.0 for the sentiment classification. |
+| `sentiment_score` | `number` | Score between -1.0 and 1.0 (-1.0 = bearish, 1.0 = bullish, 0.0 = neutral). |
 | `insights` | `string[]` | List of 1-3 key insights or summary points. |
 | `technical_levels` | `object` | Object containing `supports` and `resistances` arrays. |
 | `invalidation_level` | `string \| number` (optional) | Price level where the setup is invalidated. |
@@ -43,7 +43,7 @@ Represents a citation source.
     },
     "sentiment_score": {
       "type": "number",
-      "minimum": 0.0,
+      "minimum": -1.0,
       "maximum": 1.0
     },
     "insights": {

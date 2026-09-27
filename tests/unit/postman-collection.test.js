@@ -18,6 +18,14 @@ function findHeader(item, key) {
 	return item.request.header.find((header) => header.key === key);
 }
 
+function collectRequestItems(items, result = []) {
+	for (const item of items) {
+		if (item.request) result.push(item);
+		if (Array.isArray(item.item)) collectRequestItems(item.item, result);
+	}
+	return result;
+}
+
 describe('Postman collection contract', () => {
 	it('documents Firebase admin configuration and bearer-auth status access', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
@@ -37,6 +45,56 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('documents groundingCoalescing dependency in the Get Status response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+
+		expect(status).toBeDefined();
+		const responseBody = JSON.parse(status.response[0].body);
+		expect(responseBody.dependencies.groundingCoalescing).toEqual({
+			enabled: false,
+			windowMs: 0,
+			activeEntries: 0,
+			hits: 0,
+			misses: 0,
+			failures: 0,
+		});
+	});
+
+	it('documents alertScheduler feature flag and dependency in the Get Status response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+
+		expect(status).toBeDefined();
+		const responseBody = JSON.parse(status.response[0].body);
+		expect(responseBody.featureFlags.alertScheduler).toBe(false);
+		expect(responseBody.dependencies.alertScheduler).toEqual(expect.objectContaining({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+			role: 'web',
+			running: false,
+		}));
+	});
+
+	it('documents entry price source chains in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).dependencies.signalOutcomeWorker.entryPriceSources).toEqual({
+			configured: false,
+			crypto: ['mcp', 'binance', 'gemini'],
+			equity: ['twelve-data'],
+		});
+		expect(JSON.parse(capabilities.response[0].body).dependencies.signalOutcomeWorker.entryPriceSources).toEqual({
+			configured: true,
+			crypto: ['mcp', 'binance', 'gemini'],
+			equity: ['mcp', 'binance', 'gemini'],
+		});
+	});
+
 	it('documents x-idempotency-key on the alert webhook request', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const sendAlert = findItem(collection.item, 'POST Send Alert');
@@ -48,6 +106,20 @@ describe('Postman collection contract', () => {
 				disabled: true,
 			}),
 		]));
+	});
+
+	it('makes the oversized webhook example generate padding in Postman', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const oversized = findItem(collection.item, 'POST Send Message (oversized body)');
+
+		expect(oversized).toBeDefined();
+		const preRequest = oversized.event?.find((event) => event.listen === 'prerequest');
+		const script = preRequest?.script?.exec?.join('\n') || '';
+
+		expect(preRequest).toBeDefined();
+		expect(script).toContain('pm.variables.set(\'oversizedWebhookPadding\'');
+		expect(oversized.request.body.raw).toContain('{{oversizedWebhookPadding}}');
+		expect(oversized.request.body.raw).not.toContain('{{$padString}}');
 	});
 
 	it('uses distinct demo keys for middleware-backed scanner requests', () => {
@@ -106,6 +178,29 @@ describe('Postman collection contract', () => {
 		}));
 	});
 
+	it('documents lastReplay in the stored alert detail response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const detail = findItem(collection.item, 'GET Get Alert by ID');
+
+		expect(detail.response).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				code: 200,
+				body: expect.stringContaining('"lastReplay"'),
+			}),
+		]));
+	});
+
+	it('includes runnable replay cursor and invalid-input variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const cursor = findItem(collection.item, 'GET List Replay Attempts (before cursor)');
+		const invalid = findItem(collection.item, 'GET List Replay Attempts (invalid input)');
+
+		expect(cursor.request.url.query).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'before', value: '{{replayBefore}}' }),
+		]));
+		expect(invalid.request.url.raw).toContain('limit=999&before=not-a-cursor');
+	});
+
 	it('includes createdAt in both x-header job success examples', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const job = findItem(collection.item, 'POST Create TradingView Analysis Job (x-idempotency-key header)');
@@ -127,4 +222,324 @@ describe('Postman collection contract', () => {
 			durationMs: 450,
 		}));
 	});
+
+	it('documents current_price and price_data in the TradingView dry-run example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const sendAlert = findItem(collection.item, 'POST Send Alert Dry Run (TradingView confluence)');
+		const full = sendAlert.response.find((response) => response.name === 'Dry run - full TradingView enrichment');
+		const enrichedData = JSON.parse(full.body).payload.enrichedData;
+
+		expect(enrichedData.current_price).toBe(64863.03);
+		expect(enrichedData.price_data).toEqual({ current_price: 64863.03, high: 65000, low: 64000 });
+	});
+
+	it('aligns Binance MARKET quantity dry-run example with request and runtime response', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const marketSell = findItem(collection.item, 'POST Binance order (valid MARKET quantity dry-run)');
+		expect(marketSell).toBeDefined();
+
+		const requestBody = JSON.parse(marketSell.request.body.raw);
+		const responseBody = JSON.parse(marketSell.response[0].body);
+
+		expect(requestBody.side).toBe('SELL');
+		expect(requestBody.type).toBe('MARKET');
+		expect(typeof requestBody.quantity).toBe('number');
+		expect(requestBody.quantity).toBe(0.001);
+		expect(requestBody.clientOrderId).toBeUndefined();
+		expect(requestBody.dryRun).toBe(true);
+
+		expect(responseBody.success).toBe(true);
+		expect(responseBody.dryRun).toBe(true);
+		expect(responseBody.order.symbol).toBe('BTCUSDT');
+		expect(responseBody.order.side).toBe('SELL');
+		expect(responseBody.order.type).toBe('MARKET');
+		expect(responseBody.order.quantity).toBe(requestBody.quantity);
+		expect(typeof responseBody.order.quantity).toBe('number');
+		expect(responseBody.order.newClientOrderId).toBeUndefined();
+		expect(responseBody.order.newOrderRespType).toBe('FULL');
+	});
+
+	it('aligns Binance dry-run response shapes across LIMIT and bounded MARKET BUY examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const limitDryRun = findItem(collection.item, 'POST Binance order (dry-run LIMIT)');
+		const marketBuyDryRun = findItem(collection.item, 'POST Binance order (bounded MARKET BUY quantity dry-run)');
+
+		expect(limitDryRun).toBeDefined();
+		expect(marketBuyDryRun).toBeDefined();
+
+		const limitResp = JSON.parse(limitDryRun.response[0].body);
+		expect(limitResp.dryRun).toBe(true);
+		expect(limitResp.order.quantity).toBe(0.001);
+		expect(typeof limitResp.order.quantity).toBe('number');
+		expect(limitResp.order.newOrderRespType).toBe('FULL');
+		expect(limitResp.order.newClientOrderId).toBeUndefined();
+
+		const marketBuyResp = JSON.parse(marketBuyDryRun.response[0].body);
+		expect(marketBuyResp.dryRun).toBe(true);
+		expect(marketBuyResp.order.quoteOrderQty).toBe('50');
+		expect(marketBuyResp.order.newOrderRespType).toBe('FULL');
+		expect(marketBuyResp.order.newClientOrderId).toBeUndefined();
+	});
+
+	it('documents Request Timeout (408) response examples with required fields', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const endpointsWithTimeout = [
+			'POST Send Alert',
+			'POST Send Message',
+			'POST Create TradingView Analysis Job',
+		];
+
+		for (const name of endpointsWithTimeout) {
+			const item = findItem(collection.item, name);
+			expect(item).toBeDefined();
+			const timeoutExample = item.response.find((res) => res.code === 408);
+			expect(timeoutExample).toBeDefined();
+			expect(timeoutExample.name).toBe('Request Timeout (408)');
+			expect(timeoutExample.status).toBe('Request Timeout');
+			expect(timeoutExample.header).toEqual(expect.arrayContaining([
+				expect.objectContaining({ key: 'X-Request-Id' }),
+			]));
+
+			const parsed = JSON.parse(timeoutExample.body);
+			expect(parsed).toEqual(expect.objectContaining({
+				error: 'Request Timeout',
+				code: 'REQUEST_TIMEOUT',
+				requestId: expect.any(String),
+				deadlineMs: expect.any(Number),
+				durationMs: expect.any(Number),
+			}));
+		}
+	});
+
+	it('documents Request Timeout (408) on every affected admin request variant', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const affectedPaths = [
+			'/api/admin/test-alert',
+			'/api/alerts/batch/delete',
+			'/api/alerts/batch/export',
+			'/api/alerts/batch/replay',
+			'/api/news-monitor/pause',
+			'/api/news-monitor/resume',
+			'/api/news-monitor/status',
+			'/api/symbol-analyses',
+			'/api/symbol-analyses/summary',
+		];
+		const requestItems = collectRequestItems(collection.item);
+
+		for (const routePath of affectedPaths) {
+			const variants = requestItems.filter((item) => {
+				const rawUrl = item.request.url && item.request.url.raw;
+				return typeof rawUrl === 'string' && rawUrl.split('?')[0] === `{{baseUrl}}${routePath}`;
+			});
+			expect(variants.length).toBeGreaterThan(0);
+			for (const item of variants) {
+				expect(item.response.some((response) => response.code === 408)).toBe(true);
+			}
+		}
+	});
+
+	it('documents include=enrichment_summary success and invalid 400 response in GET List Alerts', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const includeItem = findItem(collection.item, 'GET List Alerts (include=enrichment_summary)');
+		const invalidIncludeItem = findItem(collection.item, 'GET List Alerts (invalid include - 400 Bad Request)');
+
+		expect(includeItem).toBeDefined();
+		expect(includeItem.request.url.raw).toContain('include=enrichment_summary');
+		const successBody = JSON.parse(includeItem.response[0].body);
+		expect(successBody.success).toBe(true);
+		expect(successBody.alerts[0].enrichmentSummary).toBeDefined();
+		expect(successBody.alerts[0].enrichmentSummary.sentiment).toBe('BULLISH');
+		expect(successBody.alerts[0].enrichmentSummary.promptProvenance).toBeDefined();
+
+		expect(invalidIncludeItem).toBeDefined();
+		expect(invalidIncludeItem.request.url.raw).toContain('include=invalid_field');
+		expect(invalidIncludeItem.response[0].code).toBe(400);
+		const errorBody = JSON.parse(invalidIncludeItem.response[0].body);
+		expect(errorBody.code).toBe('INVALID_REQUEST');
+		expect(errorBody.error).toContain('enrichment_summary');
+	});
+
+	it('documents chat preferences endpoints with request and response examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const getItem = findItem(collection.item, 'GET Get Chat Preferences');
+		const putItem = findItem(collection.item, 'PUT Update Chat Preferences');
+		const deleteItem = findItem(collection.item, 'DELETE Reset Chat Preferences');
+
+		expect(getItem).toBeDefined();
+		expect(getItem.request.url.raw).toContain('/api/preferences/telegram/');
+		expect(getItem.response).toEqual(expect.arrayContaining([
+			expect.objectContaining({ code: 200 }),
+			expect.objectContaining({ code: 400 }),
+			expect.objectContaining({ code: 401 }),
+		]));
+
+		expect(putItem).toBeDefined();
+		expect(putItem.request.method).toBe('PUT');
+		const putBody = JSON.parse(putItem.request.body.raw);
+		expect(putBody.symbolFilter).toContain('BTCUSDT');
+		expect(putItem.response).toEqual(expect.arrayContaining([
+			expect.objectContaining({ code: 200 }),
+			expect.objectContaining({ code: 400 }),
+		]));
+
+		expect(deleteItem).toBeDefined();
+		expect(deleteItem.request.method).toBe('DELETE');
+		expect(deleteItem.response[0].code).toBe(200);
+	});
+
+	it('documents symbol, exchange, and eventCategory query filters in GET List Alerts and GET Alert Analytics Summary', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const listFiltered = findItem(collection.item, 'GET List Alerts (symbol, exchange, eventCategory)');
+		const listInvalid = findItem(collection.item, 'GET List Alerts (invalid symbol - 400 Bad Request)');
+		const summaryFiltered = findItem(collection.item, 'GET Alert Analytics Summary (symbol, exchange, eventCategory)');
+		const summaryInvalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid symbol - 400 Bad Request)');
+
+		expect(listFiltered).toBeDefined();
+		expect(listFiltered.request.url.raw).toContain('symbol=BTCUSDT');
+		expect(listFiltered.request.url.raw).toContain('exchange=BINANCE');
+		expect(listFiltered.request.url.raw).toContain('eventCategory=price_surge');
+		expect(listFiltered.response[0].code).toBe(200);
+
+		expect(listInvalid).toBeDefined();
+		expect(listInvalid.response[0].code).toBe(400);
+		expect(JSON.parse(listInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+
+		expect(summaryFiltered).toBeDefined();
+		expect(summaryFiltered.request.url.raw).toContain('symbol=BTCUSDT');
+		expect(summaryFiltered.request.url.raw).toContain('exchange=BINANCE');
+		expect(summaryFiltered.request.url.raw).toContain('eventCategory=price_surge');
+		expect(summaryFiltered.response[0].code).toBe(200);
+
+		expect(summaryInvalid).toBeDefined();
+		expect(summaryInvalid.response[0].code).toBe(400);
+		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+	});
+
+	it('documents notificationRedrive in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		const statusBody = JSON.parse(status.response[0].body);
+		expect(statusBody.featureFlags.notificationRedrive).toBe(false);
+		expect(statusBody.dependencies.notificationRedrive).toEqual(expect.objectContaining({
+			enabled: false,
+			role: 'web',
+			workerRole: 'web',
+			maxAgeMs: 3600000,
+			lastSweepAt: null,
+			lastSweepResult: null,
+		}));
+
+		const capabilitiesBody = JSON.parse(capabilities.response[0].body);
+		expect(capabilitiesBody.featureFlags.notificationRedrive).toBe(false);
+		expect(capabilitiesBody.dependencies.notificationRedrive).toEqual(expect.objectContaining({
+			enabled: false,
+			role: 'web',
+			workerRole: 'web',
+			maxAgeMs: 3600000,
+			lastSweepAt: null,
+			lastSweepResult: null,
+		}));
+	});
+
+	it('documents both JSONL and CSV request variants and response examples for batch alert export', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const jsonlExport = findItem(collection.item, 'POST Batch Export Alerts (JSONL)') || findItem(collection.item, 'POST Batch Export Alerts');
+		const csvExport = findItem(collection.item, 'POST Batch Export Alerts (CSV)');
+
+		expect(jsonlExport).toBeDefined();
+		expect(csvExport).toBeDefined();
+
+		const jsonlBody = JSON.parse(jsonlExport.request.body.raw);
+		expect(jsonlBody.format).toBe('jsonl');
+
+		const csvBody = JSON.parse(csvExport.request.body.raw);
+		expect(csvBody.format).toBe('csv');
+
+		const csvSuccess = csvExport.response.find((r) => r.name.includes('CSV'));
+		expect(csvSuccess).toBeDefined();
+		expect(csvSuccess.code).toBe(200);
+	});
+
+	it('documents populated, omitted, and unauthorized response variants for firestore write metrics', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - firestore write metrics');
+
+		expect(item).toBeDefined();
+		const populated = item.response.find((res) => res.name.includes('populated'));
+		const omitted = item.response.find((res) => res.name.includes('omitted'));
+		const unauthorized = item.response.find((res) => res.code === 401);
+
+		expect(populated).toBeDefined();
+		expect(populated.code).toBe(200);
+		expect(JSON.parse(populated.body).dependencies.firestoreWriteMetrics).toBeDefined();
+
+		expect(omitted).toBeDefined();
+		expect(omitted.code).toBe(200);
+		expect(JSON.parse(omitted.body).dependencies.firestoreWriteMetrics).toBeUndefined();
+
+		expect(unauthorized).toBeDefined();
+		expect(unauthorized.code).toBe(401);
+		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
+	});
+
+	it('documents distinct invalid query variants for GET Summarize Signal Outcomes', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const invalidLimit = findItem(collection.item, 'GET Summarize Signal Outcomes (invalid limit)');
+		const invalidStatus = findItem(collection.item, 'GET Summarize Signal Outcomes (invalid status)');
+		const invalidWindow = findItem(collection.item, 'GET Summarize Signal Outcomes (invalid window)');
+		const malformedFrom = findItem(collection.item, 'GET Summarize Signal Outcomes (malformed from timestamp)');
+		const malformedTo = findItem(collection.item, 'GET Summarize Signal Outcomes (malformed to timestamp)');
+		const reversedRange = findItem(collection.item, 'GET Summarize Signal Outcomes (reversed time range)');
+
+		expect(invalidLimit).toBeDefined();
+		expect(invalidLimit.request.url.raw).toContain('limit=200');
+		expect(invalidLimit.response[0].code).toBe(400);
+		expect(JSON.parse(invalidLimit.response[0].body)).toEqual({
+			error: 'Invalid limit. Use an integer between 1 and 100.',
+			code: 'INVALID_REQUEST',
+		});
+
+		expect(invalidStatus).toBeDefined();
+		expect(invalidStatus.request.url.raw).toContain('status=invalid');
+		expect(invalidStatus.response[0].code).toBe(400);
+		expect(JSON.parse(invalidStatus.response[0].body)).toEqual({
+			error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
+			code: 'INVALID_REQUEST',
+		});
+
+		expect(invalidWindow).toBeDefined();
+		expect(invalidWindow.request.url.raw).toContain('window=invalid');
+		expect(invalidWindow.response[0].code).toBe(400);
+		expect(JSON.parse(invalidWindow.response[0].body)).toEqual({
+			error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+			code: 'INVALID_REQUEST',
+		});
+
+		expect(malformedFrom).toBeDefined();
+		expect(malformedFrom.request.url.raw).toContain('from=not-a-date');
+		expect(malformedFrom.response[0].code).toBe(400);
+		expect(JSON.parse(malformedFrom.response[0].body)).toEqual({
+			error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+			code: 'INVALID_REQUEST',
+		});
+
+		expect(malformedTo).toBeDefined();
+		expect(malformedTo.request.url.raw).toContain('to=not-a-date');
+		expect(malformedTo.response[0].code).toBe(400);
+		expect(JSON.parse(malformedTo.response[0].body)).toEqual({
+			error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+			code: 'INVALID_REQUEST',
+		});
+
+		expect(reversedRange).toBeDefined();
+		expect(reversedRange.request.url.raw).toContain('from=2026-08-30T00:00:00.000Z&to=2026-08-01T00:00:00.000Z');
+		expect(reversedRange.response[0].code).toBe(400);
+		expect(JSON.parse(reversedRange.response[0].body)).toEqual({
+			error: 'Invalid time window. from must be before or equal to to.',
+			code: 'INVALID_REQUEST',
+		});
+	});
 });
+

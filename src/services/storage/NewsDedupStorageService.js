@@ -18,6 +18,7 @@
 
 const admin = require('firebase-admin');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentials');
 
 const COLLECTION_NAME = 'news-monitor-dedup';
 const DELIVERY_ROUTING_FIELDS = {
@@ -100,20 +101,13 @@ function getFirestore() {
 	}
 
 	try {
-		let credential;
-
-		// Inline JSON (preferred for Render.com secret env vars)
-		if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-			const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-			credential = admin.credential.cert(serviceAccount);
-		}
-
+		const loaded = loadFirebaseAdminCredentialsOrNull();
 		const appOptions = {};
-		if (credential) {
-			appOptions.credential = credential;
+		if (loaded && loaded.credential) {
+			appOptions.credential = loaded.credential;
 		}
-		if (process.env.FIREBASE_PROJECT_ID) {
-			appOptions.projectId = process.env.FIREBASE_PROJECT_ID;
+		if (loaded && loaded.projectId) {
+			appOptions.projectId = loaded.projectId;
 		}
 
 		if (!admin.apps.length) {
@@ -271,11 +265,23 @@ async function setEntry(key, ttlMs, data) {
 		const expiresAtMs = now.toMillis() + ttlMs;
 		const expiresAt = admin.firestore.Timestamp.fromMillis(expiresAtMs);
 
-		await firestore.collection(COLLECTION_NAME).doc(key).set({
-			key,
-			createdAt: now,
-			expiresAt,
-			data: data || null,
+		await firestore.runTransaction(async transaction => {
+			const docRef = firestore.collection(COLLECTION_NAME).doc(key);
+			const existing = await transaction.get(docRef);
+			const existingData = existing.exists ? existing.data() : null;
+			// Merge over the current durable payload so concurrent field-scoped
+			// writes (e.g. originalPersistedState committed after this write
+			// started) are not erased by this replacement.
+			const baseData = existingData?.data && typeof existingData.data === 'object'
+				? existingData.data
+				: {};
+			const nextData = { ...baseData, ...(data || {}) };
+			transaction.set(docRef, {
+				key,
+				createdAt: existingData?.createdAt ?? now,
+				expiresAt,
+				data: nextData,
+			});
 		});
 		console.debug('[NewsDedupStorageService] Dedup entry written with data:', key);
 	} catch (error) {
@@ -309,11 +315,34 @@ async function updateEntry(key, data, options = {}) {
 				return false;
 			}
 
+			let nextData;
+			if (Array.isArray(options.mergeFields)) {
+				if (options.expectedField !== undefined) {
+					const currentValue = existingData.data
+						? existingData.data[options.expectedField]
+						: undefined;
+					const allowed = Array.isArray(options.expectedValues)
+						? options.expectedValues
+						: [];
+					if (currentValue !== undefined && !allowed.includes(currentValue)) {
+						return false;
+					}
+				}
+				nextData = { ...(existingData.data || {}) };
+				for (const field of options.mergeFields) {
+					if (Object.prototype.hasOwnProperty.call(data, field)) {
+						nextData[field] = data[field];
+					}
+				}
+			} else {
+				nextData = mergeDeliveryData(existingData.data, data, options) || null;
+			}
+
 			transaction.set(docRef, {
 				key,
 				createdAt: existingData.createdAt,
 				expiresAt: existingData.expiresAt,
-				data: mergeDeliveryData(existingData.data, data, options) || null,
+				data: nextData,
 			});
 			return true;
 		});
@@ -371,18 +400,20 @@ async function renewEntry(key, ttlMs, claimToken) {
  * Delete a dedup entry (mainly for testing / manual invalidation).
  *
  * @param {string} key - Dedup key
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>} true when the entry is deleted or storage is unavailable
  */
 async function deleteEntry(key) {
 	const firestore = getFirestore();
 	if (!firestore) {
-		return;
+		return true;
 	}
 
 	try {
 		await firestore.collection(COLLECTION_NAME).doc(key).delete();
+		return true;
 	} catch (error) {
 		console.warn('[NewsDedupStorageService] deleteEntry error:', error.message);
+		return false;
 	}
 }
 

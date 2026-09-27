@@ -577,6 +577,21 @@ describe('SentryService', () => {
 				);
 			});
 
+			it('should group external failures with a deterministic fingerprint', () => {
+				service.captureExternalFailure({
+					channel: 'telegram',
+					external: {
+						provider: 'telegram-api',
+						attemptCount: 2,
+						durationMs: 3000,
+						lastErrorCode: 429,
+					},
+				});
+
+				const [, scope] = Sentry.captureException.mock.calls[0];
+				expect(scope.fingerprint).toEqual(['external_failure', 'telegram', 'telegram-api', '429']);
+			});
+
 			it('should set correct message format for external failure', () => {
 				service.captureExternalFailure({
 					channel: 'telegram',
@@ -854,7 +869,7 @@ describe('profiling configuration', () => {
 		expect(initCall.profileSessionSampleRate).toBeUndefined();
 		expect(initCall.profileLifecycle).toBeUndefined();
 	});
-});
+	});
 
 	describe('Sanitization and Tag Enrichment (GH-340)', () => {
 		it('should sanitize sensitive tokens, bot tokens, GreenAPI URLs, and chat IDs from strings', () => {
@@ -936,4 +951,42 @@ describe('profiling configuration', () => {
 			});
 		});
 	});
+
+	describe('captureFirestoreWriteMetric', () => {
+		it('should record firestore_writes count metric when sentry is enabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			service.init();
+
+			service.captureFirestoreWriteMetric({ domain: 'alerts', status: 'success' });
+
+			expect(Sentry.metrics.count).toHaveBeenCalledWith('firestore_writes', 1, {
+				tags: {
+					domain: 'alerts',
+					status: 'success',
+				},
+			});
+		});
+
+		it('should handle failure status and fallback domain', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			service.init();
+
+			service.captureFirestoreWriteMetric({ domain: '', status: 'failure' });
+
+			expect(Sentry.metrics.count).toHaveBeenCalledWith('firestore_writes', 1, {
+				tags: {
+					domain: 'unknown',
+					status: 'failure',
+				},
+			});
+		});
+
+		it('should do nothing when sentry is disabled', () => {
+			service.captureFirestoreWriteMetric({ domain: 'alerts', status: 'success' });
+			expect(Sentry.metrics.count).not.toHaveBeenCalled();
+		});
+	});
 });
+

@@ -1,3 +1,4 @@
+const { getEventListeners } = require('node:events');
 const { postMarketScannerAlert, runScans } = require('../../src/controllers/webhooks/handlers/marketScanner/marketScanner');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { getNotificationManager, initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
@@ -81,6 +82,7 @@ describe('Market Scanner Handler', () => {
 
 		it('runs scans and formats report on success', async () => {
 			mockReq = {
+				headers: { 'x-request-id': 'scanner-request-id' },
 				body: {
 					exchange: 'BINANCE',
 					timeframe: '4h',
@@ -109,6 +111,7 @@ describe('Market Scanner Handler', () => {
 				expect.objectContaining({
 					success: true,
 					alertText: expect.stringContaining('GMTUSDT'),
+					requestId: 'scanner-request-id',
 				}),
 			);
 		});
@@ -143,18 +146,28 @@ describe('Market Scanner Handler', () => {
 
 			process.env.MARKET_SCANNER_TIMEOUT_MS = '1';
 
-			tradingViewMcpService.callScanTool.mockImplementation(
+			tradingViewMcpService.callScanTool.mockImplementationOnce(
 				(scanType, args, options) => new Promise((resolve, reject) => {
+					const onAbort = () => {
+						clearTimeout(timeoutId);
+						const err = new Error('AbortError');
+						err.name = 'AbortError';
+						reject(err);
+					};
 					const timeoutId = setTimeout(() => {
+						if (options?.signal) {
+							options.signal.removeEventListener('abort', onAbort);
+						}
 						resolve([]);
 					}, 100);
-					if (options && options.signal) {
-						options.signal.addEventListener('abort', () => {
-							clearTimeout(timeoutId);
-							reject(new Error('AbortError'));
-						});
+					if (options?.signal) {
+						if (options.signal.aborted) {
+							onAbort();
+						} else {
+							options.signal.addEventListener('abort', onAbort, { once: true });
+						}
 					}
-				})
+				}),
 			);
 
 			const handler = postMarketScannerAlert(null);
@@ -223,6 +236,7 @@ describe('Market Scanner Handler', () => {
 				status: 'error',
 				items: [],
 				error: 'First scan failed',
+				errorCategory: 'unknown',
 			});
 			expect(results[1]).toEqual({
 				scan: 'top_losers',
@@ -315,6 +329,29 @@ describe('Market Scanner Handler', () => {
 				scan: 'top_losers',
 				status: 'timeout',
 			}));
+		});
+
+		it('cleans up abort listeners across multi-scan execution with multi-timeframe confluence', async () => {
+			const controller = new AbortController();
+			const parsed = {
+				exchange: 'BINANCE',
+				timeframe: '1h',
+				scans: ['top_gainers', 'top_losers', 'volume_breakout_scanner'],
+				limit: 3,
+				includeMultiTimeframe: true,
+			};
+			tradingViewMcpService.callScanTool
+				.mockResolvedValueOnce([{ symbol: 'BINANCE:BTCUSDT', changePercent: 3.5 }])
+				.mockResolvedValueOnce([{ symbol: 'BINANCE:ETHUSDT', changePercent: -2.1 }])
+				.mockResolvedValueOnce([{ symbol: 'BINANCE:SOLUSDT', volume_ratio: 2.0 }]);
+			tradingViewMcpService.callMultiTimeframeAnalysis.mockResolvedValue({
+				alignment: { status: 'bullish', confidence: 80 },
+			});
+
+			const results = await runScans(parsed, { signal: controller.signal });
+
+			expect(results).toHaveLength(3);
+			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
 		});
 	});
 });

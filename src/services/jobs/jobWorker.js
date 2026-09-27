@@ -56,77 +56,223 @@ async function finalizeFailedJob(service, job, workerId, error, attempt) {
 	return false;
 }
 
+const JOB_POLL_DEFAULT_INTERVAL_MS = 15000;
+
+function getPollIntervalMs() {
+	try {
+		const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+		const config = getRuntimeConfig();
+		if (config && Number.isInteger(config.JOB_POLL_INTERVAL_MS) && config.JOB_POLL_INTERVAL_MS >= 1000) {
+			return config.JOB_POLL_INTERVAL_MS;
+		}
+	} catch {
+		// ignore
+	}
+	const raw = Number(process.env.JOB_POLL_INTERVAL_MS);
+	if (Number.isInteger(raw) && raw >= 1000 && raw <= 300000) {
+		return raw;
+	}
+	return JOB_POLL_DEFAULT_INTERVAL_MS;
+}
+
 async function startJobWorker({
 	queue = jobQueue,
 	service = new JobService(),
 	botOrGetter = null,
 	workerId = getWorkerId(),
 } = {}) {
-	if (!queue.isEnabled()) {
-		const error = new Error('JOB_EXECUTION_MODE must be render-worker for the job worker.');
+	const isQueueMode = typeof queue?.isEnabled === 'function' && queue.isEnabled();
+	const mode = isQueueMode ? 'render-worker' : (process.env.JOB_EXECUTION_MODE || 'local');
+	if (mode !== 'render-worker' && mode !== 'firestore-poller') {
+		const error = new Error('JOB_EXECUTION_MODE must be render-worker or firestore-poller for the job worker.');
 		error.code = 'JOB_WORKER_DISABLED';
 		throw error;
 	}
 
-	let stopped = false;
-	const worker = queue.createWorker(
-		(jobId) => service.processQueuedJob(jobId, botOrGetter, workerId),
-		{
-			onFailed: (job, error) => {
-				const jobId = job && job.data && job.data.jobId;
-				const claimAttempt = Number(error && error.claimAttempt);
-				const attempt = Number.isFinite(claimAttempt) ? claimAttempt : null;
-				if (!jobId) {
-					return undefined;
-				}
+	if (mode === 'render-worker') {
+		if (!queue.isEnabled()) {
+			const error = new Error('JOB_EXECUTION_MODE must be render-worker for the job worker.');
+			error.code = 'JOB_WORKER_DISABLED';
+			throw error;
+		}
 
-				if (hasAttemptsRemaining(job)) {
-					if (attempt === null) {
+		let stopped = false;
+		const worker = queue.createWorker(
+			(jobId) => service.processQueuedJob(jobId, botOrGetter, workerId),
+			{
+				onFailed: (job, error) => {
+					const jobId = job && job.data && job.data.jobId;
+					const claimAttempt = Number(error && error.claimAttempt);
+					const attempt = Number.isFinite(claimAttempt) ? claimAttempt : null;
+					if (!jobId) {
 						return undefined;
 					}
-					return service.releaseQueuedJob(jobId, workerId, error, attempt);
-				}
 
-				return finalizeFailedJob(service, job, workerId, error, attempt);
+					if (hasAttemptsRemaining(job)) {
+						if (attempt === null) {
+							return undefined;
+						}
+						return service.releaseQueuedJob(jobId, workerId, error, attempt);
+					}
+
+					return finalizeFailedJob(service, job, workerId, error, attempt);
+				},
 			},
-		},
-	);
+		);
 
-	if (worker && typeof worker.waitUntilReady === 'function') {
-		await worker.waitUntilReady();
-	}
-
-	let reconciliationTimer = null;
-	if (service && typeof service.reconcileQueuedJobs === 'function') {
-		const reconcileQueuedJobs = async () => {
-			try {
-				await service.reconcileQueuedJobs();
-			} catch (error) {
-				console.warn('[JobWorker] Queued-job reconciliation failed:', error.message);
-			}
-		};
-
-		void reconcileQueuedJobs();
-		reconciliationTimer = globalThis.setInterval(() => {
-			void reconcileQueuedJobs();
-		}, JOB_QUEUE_RECONCILIATION_INTERVAL_MS);
-		if (typeof reconciliationTimer.unref === 'function') {
-			reconciliationTimer.unref();
+		if (worker && typeof worker.waitUntilReady === 'function') {
+			await worker.waitUntilReady();
 		}
+
+		let reconciliationTimer = null;
+		if (service && typeof service.reconcileQueuedJobs === 'function') {
+			const reconcileQueuedJobs = async () => {
+				try {
+					await service.reconcileQueuedJobs();
+				} catch (error) {
+					console.warn('[JobWorker] Queued-job reconciliation failed:', error.message);
+				}
+			};
+
+			void reconcileQueuedJobs();
+			reconciliationTimer = globalThis.setInterval(() => {
+				void reconcileQueuedJobs();
+			}, JOB_QUEUE_RECONCILIATION_INTERVAL_MS);
+			if (typeof reconciliationTimer.unref === 'function') {
+				reconciliationTimer.unref();
+			}
+		}
+
+		return {
+			worker,
+			workerId,
+			stop: async () => {
+				if (stopped) {
+					return;
+				}
+				stopped = true;
+				if (reconciliationTimer) {
+					globalThis.clearInterval(reconciliationTimer);
+				}
+				await queue.closeWorker(worker);
+				if (service && typeof service.waitForCallbacks === 'function') {
+					await service.waitForCallbacks();
+				}
+			},
+		};
 	}
+
+	// firestore-poller mode
+	let stopped = false;
+	let pollingTimer = null;
+	let activePollPromise = null;
+	const inFlightJobs = new Set();
+	const maxAttempts = Number(process.env.JOB_QUEUE_ATTEMPTS) > 0
+		? Math.min(Number(process.env.JOB_QUEUE_ATTEMPTS), 20)
+		: 5;
+
+	const pollOnce = async () => {
+		if (stopped) {
+			return;
+		}
+		if (activePollPromise) {
+			return activePollPromise;
+		}
+
+		activePollPromise = (async () => {
+			try {
+				if (!service.repository || typeof service.repository.list !== 'function') {
+					return;
+				}
+				const jobs = await service.repository.list({ status: 'processing', limit: 50 });
+				if (stopped) return;
+				const jobList = Array.isArray(jobs) ? jobs : (jobs instanceof Map ? Array.from(jobs.values()) : []);
+				const now = Date.now();
+
+				for (const job of jobList) {
+					if (stopped) break;
+					const execution = job && job.execution ? job.execution : {};
+					const leaseUntilMs = Date.parse(execution.leaseUntil || '');
+					const expiredClaim = ['claimed', 'running'].includes(execution.status)
+						&& Number.isFinite(leaseUntilMs)
+						&& leaseUntilMs <= now;
+					const isEligible = job
+						&& typeof job.jobId === 'string'
+						&& execution.mode === 'firestore-poller'
+						&& (execution.status === 'queued' || expiredClaim);
+
+					if (!isEligible) {
+						continue;
+					}
+
+					const jobId = job.jobId;
+					const jobPromise = (async () => {
+						try {
+							await service.processQueuedJob(jobId, botOrGetter, workerId);
+						} catch (error) {
+							if (error && error.code === 'JOB_CLAIM_ACTIVE') {
+								return;
+							}
+							const claimAttempt = Number(error && error.claimAttempt);
+							const attempt = Number.isFinite(claimAttempt) ? claimAttempt : null;
+							if (attempt !== null && attempt < maxAttempts) {
+								try {
+									await service.releaseQueuedJob(jobId, workerId, error, attempt);
+								} catch (releaseErr) {
+									console.warn(`[JobWorker] Failed to release queued job ${jobId}:`, releaseErr.message);
+								}
+							} else {
+								await finalizeFailedJob(service, { data: { jobId } }, workerId, error, attempt);
+							}
+						}
+					})();
+
+					inFlightJobs.add(jobPromise);
+					jobPromise.finally(() => {
+						inFlightJobs.delete(jobPromise);
+					});
+
+					await jobPromise;
+				}
+			} catch (pollError) {
+				console.warn('[JobWorker] Firestore job poller error:', pollError.message);
+			} finally {
+				activePollPromise = null;
+			}
+		})();
+
+		return activePollPromise;
+	};
+
+	const scheduleNextPoll = () => {
+		if (stopped) return;
+		const intervalMs = getPollIntervalMs();
+		pollingTimer = globalThis.setTimeout(async () => {
+			await pollOnce();
+			scheduleNextPoll();
+		}, intervalMs);
+		if (typeof pollingTimer.unref === 'function') {
+			pollingTimer.unref();
+		}
+	};
+	scheduleNextPoll();
 
 	return {
-		worker,
+		worker: null,
 		workerId,
+		pollOnce,
 		stop: async () => {
 			if (stopped) {
 				return;
 			}
 			stopped = true;
-			if (reconciliationTimer) {
-				globalThis.clearInterval(reconciliationTimer);
+			if (pollingTimer) {
+				globalThis.clearTimeout(pollingTimer);
+				pollingTimer = null;
 			}
-			await queue.closeWorker(worker);
+			if (inFlightJobs.size > 0) {
+				await Promise.allSettled([...inFlightJobs]);
+			}
 			if (service && typeof service.waitForCallbacks === 'function') {
 				await service.waitForCallbacks();
 			}
@@ -139,5 +285,7 @@ module.exports = {
 	getWorkerId,
 	FINAL_FAILURE_RETRY_DELAY_MS,
 	JOB_QUEUE_RECONCILIATION_INTERVAL_MS,
+	JOB_POLL_DEFAULT_INTERVAL_MS,
+	getPollIntervalMs,
 	startJobWorker,
 };

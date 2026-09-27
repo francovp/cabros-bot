@@ -1,12 +1,15 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	MarketScannerRequestError,
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
+	getRiskLevelsForSide,
+	getScanItemSide,
+	pickLevel,
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
 	getNotificationManager,
@@ -22,12 +25,17 @@ const {
 } = require('../../../../services/notification/requestRouting');
 const { enrichScannerItemsWithTrendConfluence } = require('../../../../services/tradingview/marketScannerConfluence');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const {
+	classifyScannerError,
+	emptyScannerErrorCategoryCounts,
+	incrementScannerErrorCategoryCount,
+} = require('../../../../services/tradingview/marketScannerErrorCategories');
 
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
 
-function resolveBot(botOrGetter) {
-	if (typeof botOrGetter === 'function') {
+function resolveBot(botOrGetter) {	if (typeof botOrGetter === 'function') {
 		return botOrGetter();
 	}
 
@@ -42,7 +50,7 @@ function resolveDryRun(req) {
 
 function postMarketScannerAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 
 		try {
@@ -57,7 +65,7 @@ function postMarketScannerAlert(botOrGetter) {
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseMarketScannerRequest(req);
 			const timeoutMs = getMarketScannerTimeoutMs();
-			const deadline = createScannerDeadline(timeoutMs);
+			const deadline = createScannerDeadline(timeoutMs, req.requestDeadlineSignal);
 			let scanResults;
 
 			try {
@@ -84,7 +92,7 @@ function postMarketScannerAlert(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -109,7 +117,7 @@ function postMarketScannerAlert(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -118,27 +126,97 @@ function postMarketScannerAlert(botOrGetter) {
 				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
 			}
 
-			const deliveryResults = await sendWithNotificationRouting(notificationManager, { text: alertText }, routing, { parentSpan: requestSpan });
+			const deliveryResults = await sendWithNotificationRouting(
+				notificationManager,
+				{ text: alertText, source: 'market-scanner' },
+				routing,
+				{ parentSpan: requestSpan },
+			);
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(scanResults, deliveryResults);
 
+			// Fire-and-forget: persist delivered market-scanner report to AlertStorageService.
+			// Storage failures never block delivery (handled inside saveAlert).
+			if (alertStorageService.isEnabled() && deliveredChannels.length > 0) {
+				const scannerSymbols = successfulScans.length > 0
+					? Array.from(new Set(
+						successfulScans
+							.flatMap((scan) => Array.isArray(scan.items) ? scan.items : [])
+							.map((item) => item && item.symbol)
+							.filter(Boolean),
+					))
+					: [];
+				const scannerErrorCategories = scanResults
+					.filter((r) => r.status === 'error' && r.errorCategory)
+					.map((r) => r.errorCategory);
+				alertStorageService.saveAlert({
+					requestId,
+					text: alertText,
+					symbol: scannerSymbols[0] || null,
+					exchange: parsed.exchange || null,
+					enriched: false,
+					enrichmentData: null,
+					tokenUsage: null,
+					channels: requestedChannels,
+					deliveryResults,
+					source: 'market-scanner',
+					telegramChatId: routing.telegramChatId,
+					telegramThreadId: routing.telegramThreadId,
+					whatsappChatId: routing.whatsappChatId,
+					discordWebhookUrl: routing.discordWebhookUrl,
+					processingTimeMs: Date.now() - startTime,
+					scannerErrorCategories,
+				}).catch(() => {});
+			}
+
 			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 			if (signalOutcomeService.isEnabled()) {
 				for (const scanResult of scanResults) {
-					if (scanResult.status === 'success' && Array.isArray(scanResult.items)) {
-						for (const item of scanResult.items) {
+					if (scanResult.status === 'success' && Array.isArray(scanResult.items) && scanResult.items.length > 0) {
+						// Resolve sides from the same prepared (rank-normalized) item set the
+						// report rendered, so persisted sides match delivered levels
+						const preparedItems = prepareMarketScannerItems(scanResult, parsed.ranked === true);
+						for (const item of preparedItems) {
 							const closePrice = item.indicators?.close ?? null;
-							let itemSide = 'BUY';
-							if (scanResult.scan === 'top_losers') {
-								itemSide = 'SELL';
-							} else if (item.breakout_type) {
-								const lowerBreakout = item.breakout_type.trim().toLowerCase();
-								if (lowerBreakout === 'bearish' || lowerBreakout === 'sell') {
-									itemSide = 'SELL';
-								}
-							}
+							// Persisted side must match the rendered report side
+							const itemSide = getScanItemSide(scanResult.scan, item);
 							const itemScore = item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null;
+
+							const atr = pickLevel([item.indicators?.atr, item.indicators?.ATR, item.atr]);
+							const bbLower = pickLevel([item.indicators?.bb_lower, item.indicators?.bollinger_lower, item.indicators?.lower, item.bollinger?.lower, item.bollinger_lower]);
+							const bbUpper = pickLevel([item.indicators?.bb_upper, item.indicators?.bollinger_upper, item.indicators?.upper, item.bollinger?.upper, item.bollinger_upper]);
+							const support = pickLevel([
+								item.indicators?.support,
+								item.indicators?.nearest_support,
+								item.support,
+								item.support_resistance?.nearest_support,
+								item.support_resistance?.support_1,
+							]);
+							const resistance = pickLevel([
+								item.indicators?.resistance,
+								item.indicators?.nearest_resistance,
+								item.resistance,
+								item.support_resistance?.nearest_resistance,
+								item.support_resistance?.resistance_1,
+							]);
+
+							const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) && closePrice > 0 ? closePrice : null;
+							let stopLoss = null;
+							let takeProfit = null;
+							if (validPrice !== null) {
+								const riskLevels = getRiskLevelsForSide({
+									side: itemSide,
+									price: validPrice,
+									atr: typeof atr === 'number' && Number.isFinite(atr) && atr > 0 ? atr : null,
+									bbLower: typeof bbLower === 'number' && Number.isFinite(bbLower) && bbLower > 0 ? bbLower : null,
+									bbUpper: typeof bbUpper === 'number' && Number.isFinite(bbUpper) && bbUpper > 0 ? bbUpper : null,
+									support: typeof support === 'number' && Number.isFinite(support) && support > 0 ? support : null,
+									resistance: typeof resistance === 'number' && Number.isFinite(resistance) && resistance > 0 ? resistance : null,
+								});
+								stopLoss = riskLevels.stopLoss;
+								takeProfit = riskLevels.takeProfit;
+							}
 
 							signalOutcomeService.recordSignal({
 								requestId,
@@ -148,8 +226,12 @@ function postMarketScannerAlert(botOrGetter) {
 								timeframe: parsed.timeframe,
 								setupType: scanResult.scan,
 								score: itemScore,
+								confidenceScore: typeof item.confidence === 'number' && Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1 ? item.confidence : null,
 								side: itemSide,
-								price: typeof closePrice === 'number' ? closePrice : null,
+								price: validPrice,
+								priceSource: validPrice !== null ? 'tradingview-mcp' : null,
+								stop: stopLoss,
+								target: takeProfit,
 								sources: [],
 								tokenUsage: null,
 								processingTimeMs: Date.now() - startTime,
@@ -172,7 +254,7 @@ function postMarketScannerAlert(botOrGetter) {
 				timedOut,
 				timeoutMs,
 				requestId,
-				totalDurationMs: Date.now() - startTime,
+				processingTimeMs: Math.max(0, Date.now() - startTime),
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
@@ -215,6 +297,7 @@ function postMarketScannerAlert(botOrGetter) {
 async function runScans(parsed, options = {}) {
 	const { signal } = options;
 	const results = [];
+	const symbolCache = new Map();
 
 	for (let index = 0; index < parsed.scans.length; index++) {
 		const scanType = parsed.scans[index];
@@ -236,7 +319,7 @@ async function runScans(parsed, options = {}) {
 			let enrichedItems = items;
 			if (parsed.includeMultiTimeframe === true) {
 				try {
-					enrichedItems = await enrichScannerItemsWithTrendConfluence(items, { ...parsed, scanType }, signal);
+					enrichedItems = await enrichScannerItemsWithTrendConfluence(items, { ...parsed, scanType }, signal, { symbolCache });
 				} catch (error) {
 					if (isAbortTriggered(signal, error)) {
 						const timeoutMessage = getAbortMessage(signal, error.message);
@@ -267,11 +350,23 @@ async function runScans(parsed, options = {}) {
 			}
 
 			console.warn('[MarketScanner] Scan failed:', scanType, error.message);
+			const errorCategory = classifyScannerError(error);
+			sentryService.captureRuntimeError({
+				channel: 'market-scanner',
+				feature: 'market-scanner',
+				error,
+				extra: {
+					mcp_error_category: errorCategory,
+					scan_type: scanType,
+					source: 'market-scanner',
+				},
+			});
 			results.push({
 				scan: scanType,
 				status: 'error',
 				items: [],
 				error: error.message,
+				errorCategory,
 			});
 		}
 	}
@@ -287,6 +382,14 @@ function buildScanArgs(parsed, scanType) {
 	};
 	if (scanType === 'bollinger_scan') {
 		args.bbw_threshold = parsed.bbwThreshold;
+	} else if (scanType === 'rating_filter') {
+		args.rating = parsed.rating;
+	} else if (scanType === 'consecutive_candles_scan') {
+		args.pattern_type = parsed.consecutiveCandlesPatternType;
+		args.candle_count = parsed.candleCount;
+		if (parsed.minGrowth !== undefined) {
+			args.min_growth = parsed.minGrowth;
+		}
 	}
 	return args;
 }
@@ -298,6 +401,7 @@ function compactScanResults(results, includeScores = false) {
 				scan: result.scan,
 				status: result.status,
 				error: result.error,
+				errorCategory: result.errorCategory || null,
 			};
 		}
 
@@ -321,6 +425,12 @@ function compactScanResults(results, includeScores = false) {
 }
 
 function buildSummary(scanResults, deliveryResults) {
+	const errorCategories = emptyScannerErrorCategoryCounts();
+	for (const result of scanResults) {
+		if (result.status === 'error' && result.errorCategory) {
+			incrementScannerErrorCategoryCount(errorCategories, result.errorCategory);
+		}
+	}
 	return {
 		totalScans: scanResults.length,
 		success: scanResults.filter((r) => r.status === 'success').length,
@@ -328,6 +438,7 @@ function buildSummary(scanResults, deliveryResults) {
 		timeout: scanResults.filter((r) => r.status === 'timeout').length,
 		totalItems: scanResults.reduce((sum, r) => sum + r.items.length, 0),
 		delivered: deliveryResults.filter((r) => r.success).length,
+		errorCategoryCounts: errorCategories,
 	};
 }
 
@@ -341,14 +452,14 @@ function getMarketScannerTimeoutMs() {
 	return Math.min(parsedTimeout, MAX_SCANNER_TIMEOUT_MS);
 }
 
-function createScannerDeadline(timeoutMs) {
+function createScannerDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => {
 		controller.abort(new Error(`Market scanner timeout after ${timeoutMs}ms`));
 	}, timeoutMs);
 
 	return {
-		signal: controller.signal,
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
 		clear: () => clearTimeout(timeoutId),
 	};
 }

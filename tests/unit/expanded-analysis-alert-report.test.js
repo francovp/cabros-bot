@@ -1,6 +1,7 @@
 const {
 	parseExpandedAnalysisAlertRequest,
 	buildExpandedAnalysisAlertReport,
+	buildReportRow,
 } = require('../../src/services/tradingview/expandedAnalysisAlertReport');
 
 describe('Expanded Analysis Alert report', () => {
@@ -471,6 +472,68 @@ describe('Expanded Analysis Alert report', () => {
 			expect(report).toContain('- *Últimas Noticias:*');
 			expect(report).toContain('  • Bitcoin surges past 68k (CoinDesk)');
 			expect(report).toContain('  • Crypto market gains momentum (bloomberg.com)');
+		});
+	});
+
+	describe('side-aware risk barriers', () => {
+		const sellAnalysis = {
+			price_data: {
+				current_price: 100,
+				change_percent: -2.5,
+			},
+			technical_indicators: {
+				rsi: 40,
+				sma20: 102,
+				macd: -1.2,
+				macd_signal: -0.8,
+				atr: 4,
+			},
+		};
+
+		it('builds SELL-side stop above entry and target below entry', () => {
+			const row = buildReportRow({
+				input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+				analysis: sellAnalysis,
+				side: 'SELL',
+			});
+
+			expect(row.side).toBe('SELL');
+			expect(row.price).toBe(100);
+			expect(row.stopLoss).toBe(106); // price + atr*1.5 = 100 + 6
+			expect(row.stopLoss).toBeGreaterThan(row.price);
+			expect(row.takeProfit).toBe(88); // price - atr*3 = 100 - 12
+			expect(row.takeProfit).toBeLessThan(row.price);
+			expect(row.invalidationDistance).toBe(6); // stopLoss - price
+			expect(row.riskRewardRatio).toBeCloseTo(2, 5); // 12 / 6
+		});
+
+		it('keeps BUY-side geometry unchanged by default', () => {
+			const row = buildReportRow({
+				input: { raw: 'BINANCE:ETHUSDT', exchange: 'BINANCE', symbol: 'ETHUSDT' },
+				analysis: sellAnalysis,
+			});
+
+			expect(row.side).toBe('BUY');
+			expect(row.stopLoss).toBe(94); // price - atr*1.5
+			expect(row.stopLoss).toBeLessThan(row.price);
+			expect(row.takeProfit).toBe(112); // price + atr*3
+			expect(row.takeProfit).toBeGreaterThan(row.price);
+			expect(row.invalidationDistance).toBe(6);
+			expect(row.riskRewardRatio).toBeCloseTo(2, 5);
+		});
+
+		it('renders the SELL invalidation direction as por encima', () => {
+			const report = buildExpandedAnalysisAlertReport([
+				{
+					input: { raw: 'BINANCE:SOLUSDT', exchange: 'BINANCE', symbol: 'SOLUSDT' },
+					analysis: sellAnalysis,
+					side: 'SELL',
+				},
+			], { now: new Date('2026-05-22T12:00:00Z') });
+
+			expect(report).toContain('- *Stop Loss sugerido:* $106.00');
+			expect(report).toContain('- *Target sugerido:* $88.00');
+			expect(report).toContain('- *Invalidación:* $6.00 por encima del precio actual');
 		});
 	});
 });

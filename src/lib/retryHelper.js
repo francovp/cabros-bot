@@ -88,7 +88,10 @@ async function sendWithRetry(sendFn, maxRetries = 3, logger = null, options = {}
 			}
 
 			if (attempt < maxRetries) {
-				const delayMs = calculateBackoffDelay(attempt);
+				const delayMs = Math.min(
+					calculateBackoffDelay(attempt),
+					Number.isFinite(options.maxRetryDelayMs) ? Math.max(0, options.maxRetryDelayMs) : Number.POSITIVE_INFINITY,
+				);
 				if (logger) {
 					logger.warn?.(
 						`Retry ${attempt}/${maxRetries}: send failed${result.channel ? ` for ${result.channel}` : ''}. Retrying in ${delayMs}ms`,
@@ -117,7 +120,10 @@ async function sendWithRetry(sendFn, maxRetries = 3, logger = null, options = {}
 			}
 
 			if (attempt < maxRetries) {
-				const delayMs = calculateBackoffDelay(attempt);
+				const delayMs = Math.min(
+					calculateBackoffDelay(attempt),
+					Number.isFinite(options.maxRetryDelayMs) ? Math.max(0, options.maxRetryDelayMs) : Number.POSITIVE_INFINITY,
+				);
 				const abortedResult = await waitForRetryDelay(delayMs, signal, lastResult, totalStartTime, attempt);
 				if (abortedResult) {
 					return abortedResult;
