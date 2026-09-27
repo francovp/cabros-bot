@@ -108,6 +108,7 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		}));
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
 		expect(mockTelegramSendMessage.mock.calls[0][1]).toContain('ANÁLISIS AMPLIADO');
+		expect(signalOutcomeService.recordSignal.mock.calls[0][0].priceSource).toBe('tradingview-mcp');
 	});
 
 	it('records SELL expanded-analysis signals with side-correct stop and target barriers', async () => {
