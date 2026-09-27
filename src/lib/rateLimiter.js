@@ -114,11 +114,8 @@ function hashApiKey(apiKey) {
 	// identifier. There is no offline brute-force surface, so the rule's
 	// password-hashing guidance does not apply.
 	/* codeql[js/insufficient-password-hash] */
-	return crypto
-		.createHmac('sha256', getFingerprintSecret())
-		.update(String(apiKey))
-		.digest('hex')
-		.slice(0, 16);
+	const mac = crypto.createHmac('sha256', getFingerprintSecret());
+	return mac.update(String(apiKey)).digest('hex').slice(0, 16);
 }
 
 // Returns the union of all configured API keys (primary + secondary). The
