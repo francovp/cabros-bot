@@ -540,6 +540,15 @@ describe('Postman collection contract', () => {
 			error: 'Invalid time window. from must be before or equal to to.',
 			code: 'INVALID_REQUEST',
 		});
+
+		[invalidLimit, invalidStatus, invalidWindow, malformedFrom, malformedTo, reversedRange].forEach((item) => {
+			expect(item.event).toBeDefined();
+			const testEvent = item.event.find((e) => e.listen === 'test');
+			expect(testEvent).toBeDefined();
+			const scriptText = testEvent.script.exec.join('\n');
+			expect(scriptText).toContain('pm.response.to.have.status(400)');
+			expect(scriptText).toContain('INVALID_REQUEST');
+		});
 	});
 });
 

@@ -6331,6 +6331,23 @@
               "code": 400,
               "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST body\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
+            }
           ]
         },
         {
@@ -6369,6 +6386,23 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"error\": \"Invalid status filter. Use pending, evaluated, or unavailable.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST body\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
             }
           ]
         },
@@ -6409,6 +6443,23 @@
               "code": 400,
               "body": "{\n  \"error\": \"Invalid window filter. Use 1h, 4h, 1D, or 1W.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST body\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
+            }
           ]
         },
         {
@@ -6448,6 +6499,23 @@
               "code": 400,
               "body": "{\n  \"error\": \"Invalid from timestamp. Use an ISO-8601 timestamp.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST body\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
+            }
           ]
         },
         {
@@ -6486,6 +6554,23 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"error\": \"Invalid to timestamp. Use an ISO-8601 timestamp.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST body\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
             }
           ]
         },
@@ -6529,6 +6614,23 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"error\": \"Invalid time window. from must be before or equal to to.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST body\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
             }
           ]
         },

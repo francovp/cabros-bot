@@ -93,9 +93,9 @@ Review the diff systematically against [cabros-bot-review-rubric.md](references/
    - Is `.env.example` updated for new application-owned environment variables?
    - Do Remote Config additions in `firebase-remote-config-template.json` maintain 100% parity with `RemoteConfigService.PARAMETER_SCHEMA` and `README.md` parameter tables (keys, descriptions, types, defaults)?
    - Are new routes and payloads registered in `src/openapi/openapi.json` and `CabrosBot.postman_collection.json`?
-   - Does Postman include runnable negative/error input variants (e.g. 400 `INVALID_REQUEST` for invalid limits, windows, malformed timestamps, or reversed ranges) rather than only testing success cases?
+   - Does Postman include runnable negative/error input variants (e.g. 400 `INVALID_REQUEST` for invalid limits, windows, malformed timestamps, or reversed ranges) with executable test assertions (`pm.test`), rather than only testing success cases?
    - Do all error responses conform to the standardized error envelope (`{ success: false, error: ..., code: ... }` via `src/lib/errorEnvelope.js`)?
-   - Do replay endpoints (single and batch alert replay) preserve the entire raw payload and metadata without dropping downstream fields?
+   - Do replay endpoints (single and batch alert replay) start from the complete raw payload and overlay routing metadata, rather than cherry-picking known fields and dropping unrecognized attributes?
 
 6. **Agent & Model Attribution**:
    - Does the PR carry its mandatory `<agent>-<model>` label (e.g. `antigravity-gemini-3.7-flash`, `codex-gpt-5.6-luna`, `github-copilot-minimax-m3:free`)?

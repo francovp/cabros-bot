@@ -252,22 +252,23 @@ Root cause: Fragmented configuration management workflows where code, schemas, a
 **Area**: backend
 
 ### Summary
-Alert and signal replay handlers must explicitly propagate root domain classification attributes into outbound channel delivery payloads.
+Alert and signal replay handlers must start from the complete stored raw input payload and overlay replay/routing metadata, rather than cherry-picking fields from an explicit known-field list.
 
 ### Details
 In PR #1193 (feat(webhooks): classify alerts with signalClass enum (GH-858)), the single alert replay endpoint (`/api/alerts/:id/replay`) and batch redrive routines re-dispatched stored alerts to notification channels (Telegram, WhatsApp, Discord) without copying `storedAlert.signalClass` into the delivery payload. This caused replayed messages to lose their visual signal class markers, resulting in visual degradation and inconsistency between live and replayed notifications.
 
-Root cause: Replay handlers reconstructed delivery payloads by cherry-picking partial field subsets or assuming channel formatters could extract classifications from nested raw payloads instead of explicitly forwarding top-level domain metadata.
+Root cause: Replay handlers reconstructed delivery payloads by cherry-picking partial field subsets or explicitly whitelisting a subset of known fields instead of cloning the full raw input payload and overlaying routing metadata. Any newly introduced or unrecognized top-level attributes are silently dropped when reconstructing payloads from an explicit known-field list.
 
 ### Suggested Action
-1. When implementing replay, redrive, or retry routines, explicitly map all top-level classification and routing fields (`signalClass`, `source`, `receivedAt`, `symbols`) into the delivery payload object.
-2. Write integration tests for replay endpoints verifying that formatted notifications emitted during replay are byte-for-byte or semantically identical to original dispatches.
-3. Avoid relying on optional nested fields for channel-critical formatting.
+1. When implementing replay, redrive, or retry routines, start from the complete stored raw input payload (`{ ...storedAlert.payload }`) and overlay replay/routing metadata, rather than reconstructing payloads from a known-field list.
+2. Ensure all top-level domain classification and metadata attributes (such as `signalClass`, `source`, `receivedAt`, `symbols`) and any unrecognized top-level properties are preserved verbatim.
+3. Write integration tests for replay endpoints verifying that replayed payloads preserve all incoming fields and that outbound notifications are semantically identical to original dispatches.
+4. Avoid field cherry-picking, whitelisting, or relying on optional nested fields for channel-critical formatting.
 
 ### Metadata
 - Source: pr_review
 - Related Files: src/services/notification/TelegramService.js, src/controllers/admin/alerts.js, src/services/NotificationManager.js
-- Tags: replay, redrive, alert-ingestion, telegram, signal-classification
+- Tags: replay, redrive, alert-ingestion, telegram, signal-classification, payload-preservation
 - See Also: LRN-20260914-001
 - Pattern-Key: harden.replay_payload_preservation
 - Recurrence-Count: 1

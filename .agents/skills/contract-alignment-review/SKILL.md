@@ -15,14 +15,14 @@ Treat runtime behavior as a contract with multiple checked-in consumers. Update 
 4. **Synchronize deployment wiring.** A template or documented command is not operational until its checked-in Firebase/Render/Vercel/Railway configuration can actually select and publish it. Verify target names, worker-specific env, and post-merge readiness separately.
 5. **Keep names exact.** Match runtime casing, collection names, field names, headers, paths, URL anchors, and provider defaults. Do not rely on a permissive schema or substring check to stand in for runtime validation.
 6. **Make tests detect drift.** Assertions must cover the real spelling/pattern and read the current file names. Avoid tests that pass because a stale phrase, alternate casing, or incomplete regex misses the drift.
-7. **Preserve replay payloads.** Ensure replay endpoints (e.g. single and batch alert replay) and queue re-drive handlers pass the original raw alert/signal attributes and routing metadata without loss, truncation, or destructive filtering of unrecognized downstream fields.
+7. **Preserve replay payloads.** Ensure replay endpoints (e.g. single and batch alert replay) and queue re-drive handlers start from the complete stored raw input payload and overlay routing metadata, preserving all top-level attributes without field cherry-picking, truncation, or destructive filtering of unrecognized downstream fields.
 
 ## Required verification
 
 - Parse changed JSON/YAML and run focused contract/documentation tests.
 - Run `git diff --check`.
 - Check `README.md` parameter tables match `firebase-remote-config-template.json` and `RemoteConfigService.PARAMETER_SCHEMA`.
-- Verify `CabrosBot.postman_collection.json` includes runnable valid and negative/error response examples (e.g. 400 `INVALID_REQUEST`) with standardized error envelopes.
+- Verify `CabrosBot.postman_collection.json` includes runnable valid and negative/error response examples (e.g. 400 `INVALID_REQUEST`) with executable test assertions (`pm.test`) and standardized error envelopes.
 - Exercise every new request variant in Postman examples or an equivalent test.
 - If deployment config changed, validate the actual target/command and mark external rollout checks as unverified when unavailable; never claim pre-merge config equals production state.
 
