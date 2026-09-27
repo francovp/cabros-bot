@@ -847,12 +847,17 @@ class NewsAnalyzer {
    */
 	async analyzeSymbolInternal(symbol, requestId, tokenUsage, routing = {}, options = {}) {
 		const { dryRun = false } = options;
+		const classifierDevEnabled = classifierDevClient.isEnabled();
 
 		// Try cache first
 		if (!dryRun) {
 			for (const category of Object.values(EventCategory)) {
 				const cached = await this.cache.get(symbol, category);
 				if (cached) {
+					if (category === EventCategory.NONE && classifierDevEnabled && cached.classifierDevChecked !== true) {
+						console.debug('[Analyzer] Skipping cached no-event result without classifier.dev check:', symbol);
+						continue;
+					}
 					console.debug('[Analyzer] Returning cached result:', symbol, category);
 					let deliveryResults = cached.deliveryResults;
 					let redelivered = false;
@@ -1067,7 +1072,7 @@ class NewsAnalyzer {
 		// Adjust confidence score with volume expansion & RSI filters if marketContext contains them
 		geminiAnalysis.confidence = this.calculateAdjustedConfidence(geminiAnalysis.confidence, marketContext);
 
-		if (geminiAnalysis.event_category === EventCategory.NONE && classifierDevClient.isEnabled()) {
+		if (geminiAnalysis.event_category === EventCategory.NONE && classifierDevEnabled) {
 			const headline = typeof geminiAnalysis.headline === 'string' ? geminiAnalysis.headline.trim() : '';
 			if (headline) {
 				const classified = await classifierDevClient.classifyHeadline(`${symbol}: ${headline}`, {
@@ -1082,6 +1087,11 @@ class NewsAnalyzer {
 					&& classified.confidence >= this.alertThreshold) {
 					geminiAnalysis.event_category = classified.label;
 					geminiAnalysis.confidence = this.calculateAdjustedConfidence(classified.confidence, marketContext);
+					if ([EventCategory.PRICE_SURGE, EventCategory.PRICE_DECLINE].includes(classified.label)
+						&& Number.isFinite(geminiAnalysis.sentiment_score)) {
+						geminiAnalysis.sentiment_score = Math.abs(geminiAnalysis.sentiment_score)
+							* (classified.label === EventCategory.PRICE_DECLINE ? -1 : 1);
+					}
 					console.info('[Analyzer] classifier.dev promoted a no-event result:', symbol, classified.label, classified.confidence);
 				}
 			}
@@ -1092,6 +1102,7 @@ class NewsAnalyzer {
 			if (!dryRun) {
 				await this.cache.set(symbol, EventCategory.NONE, {
 					alert: null,
+					classifierDevChecked: classifierDevEnabled,
 					analysisResult: {
 						symbol,
 						status: AnalysisStatus.ANALYZED,

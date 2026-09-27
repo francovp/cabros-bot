@@ -371,6 +371,88 @@ describe('Analyzer - Unit Tests', () => {
 		expect(result.alert.eventCategory).toBe('price_surge');
 		expect(result.alert.confidence).toBe(0.93);
 	});
+
+	it.each([
+		{ label: 'price_decline', sentimentScore: 0.7, expectedSentiment: -0.7 },
+		{ label: 'price_surge', sentimentScore: -0.7, expectedSentiment: 0.7 },
+	])('aligns sentiment with classifier.dev $label promotions', async ({ label, sentimentScore, expectedSentiment }) => {
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeClassifierDev = require('../../src/services/classifierDevClient');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		activeClassifierDev.isEnabled.mockReturnValue(true);
+		activeClassifierDev.classifyHeadline.mockResolvedValue({ label, confidence: 0.93 });
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'none',
+			event_significance: 0,
+			sentiment_score: sentimentScore,
+			headline: 'Market-moving headline',
+			confidence: 0.2,
+			sources: ['https://example.com/news'],
+		});
+		const analyzer = new NewsAnalyzer();
+		analyzer.getMarketContext = jest.fn().mockResolvedValue(null);
+		analyzer.enrichmentService.isEnabled = jest.fn().mockReturnValue(false);
+
+		const result = await analyzer.analyzeSymbolInternal('BTCUSDT', 'req-1', null, {}, { dryRun: true });
+
+		expect(result.alert.eventCategory).toBe(label);
+		expect(result.alert.sentimentScore).toBe(expectedSentiment);
+	});
+
+	it('rechecks cached no-event results when classifier.dev has not been evaluated', async () => {
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeClassifierDev = require('../../src/services/classifierDevClient');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		activeClassifierDev.isEnabled.mockReturnValue(true);
+		activeClassifierDev.classifyHeadline.mockResolvedValue({ label: 'price_surge', confidence: 0.93 });
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'none',
+			event_significance: 0,
+			sentiment_score: 0.7,
+			headline: 'Bitcoin surges after a major exchange approval',
+			confidence: 0.2,
+			sources: ['https://example.com/news'],
+		});
+		const analyzer = new NewsAnalyzer();
+		analyzer.cache.get = jest.fn().mockImplementation(async (_symbol, category) => (
+			category === 'none' ? { alert: null, analysisResult: { status: 'analyzed' } } : null
+		));
+		analyzer.getMarketContext = jest.fn().mockResolvedValue(null);
+		analyzer.enrichmentService.isEnabled = jest.fn().mockReturnValue(false);
+
+		const result = await analyzer.analyzeSymbolInternal('BTCUSDT', 'req-1', null, {}, { deferDelivery: true });
+
+		expect(activeGemini.analyzeNewsForSymbol).toHaveBeenCalled();
+		expect(result.alert.eventCategory).toBe('price_surge');
+	});
+
+	it('marks cached no-event results after classifier.dev is checked', async () => {
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeClassifierDev = require('../../src/services/classifierDevClient');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		activeClassifierDev.isEnabled.mockReturnValue(true);
+		activeClassifierDev.classifyHeadline.mockResolvedValue({ label: 'none', confidence: 0.6 });
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'none',
+			event_significance: 0,
+			sentiment_score: 0,
+			headline: 'No material event detected',
+			confidence: 0.2,
+			sources: ['https://example.com/news'],
+		});
+		const analyzer = new NewsAnalyzer();
+		analyzer.cache.get = jest.fn().mockResolvedValue(null);
+		analyzer.cache.set = jest.fn().mockResolvedValue(true);
+		analyzer.getMarketContext = jest.fn().mockResolvedValue(null);
+
+		await analyzer.analyzeSymbolInternal('BTCUSDT', 'req-1');
+
+		expect(analyzer.cache.set).toHaveBeenCalledWith(
+			'BTCUSDT',
+			'none',
+			expect.objectContaining({ classifierDevChecked: true }),
+		);
+	});
 });
 
 describe('Analyzer - Grounding Calibration Surface', () => {
