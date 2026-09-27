@@ -5285,6 +5285,42 @@ describe('structured analysis forms', () => {
 			expect(playground.elements.body.value).toContain('Custom alert message 42');
 		});
 
+		it('preserves operation input when filtering auto-selects another operation', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+			});
+			await flush();
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
+			const alertOperation = optionValue('POST /api/webhook/alert');
+			const volumeOperation = optionValue('POST /api/webhook/volume-confirmation');
+
+			select.value = alertOperation;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ message: 'Original alert payload' });
+
+			const filter = playground.elements.filterOperations;
+			filter.value = 'volume-confirmation';
+			await filter.dispatch('input');
+			expect(select.value).toBe(volumeOperation);
+			playground.elements.body.value = JSON.stringify({ symbol: 'BINANCE:BTCUSDT', timeframe: '1h' });
+
+			filter.value = '';
+			await filter.dispatch('input');
+			select.value = alertOperation;
+			await select.dispatch('change');
+			expect(playground.elements.body.value).toContain('Original alert payload');
+
+			select.value = volumeOperation;
+			await select.dispatch('change');
+			expect(playground.elements.body.value).toContain('BINANCE:BTCUSDT');
+		});
+
 		it('renders structured results and provides collapsible raw JSON toggle', async () => {
 			const browser = createBrowser({
 				fetchImpl: async (url) => {
