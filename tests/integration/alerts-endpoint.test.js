@@ -1117,6 +1117,32 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	it('preserves signalClass when replaying a stored alert', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-classified',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay classified',
+			signalClass: 'breakout',
+			deliveryResults: [{ channel: 'telegram', success: false }],
+			source: 'webhook',
+		});
+
+		await request(app)
+			.post('/api/alerts/alert-classified/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-classified-key')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'Replay classified',
+				signalClass: 'breakout',
+			}),
+			['telegram'],
+		);
+	});
+
 	it('accepts x-idempotency-key when replaying a stored alert', async () => {
 		alertStorageService.getAlertById.mockResolvedValue({
 			id: 'alert-123',
@@ -1692,6 +1718,29 @@ describe('Alerts API Integration Tests', () => {
 			expect(res.body.results[0].payloadPreview.text).toBe('Dry run alert');
 			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+
+		it('preserves signalClass across batch replay items', async () => {
+			alertStorageService.getAlertById.mockResolvedValueOnce({
+				id: 'alert-batch-class',
+				text: 'Batch classified',
+				signalClass: 'reversal',
+			});
+
+			await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'batch-signal-class-key')
+				.send({ alertIds: ['alert-batch-class'], channels: ['telegram'] })
+				.expect(200);
+
+			expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+				expect.objectContaining({
+					text: 'Batch classified',
+					signalClass: 'reversal',
+				}),
+				['telegram'],
+			);
 		});
 
 		it('reconciles and skips previously delivered alerts on batch retry', async () => {

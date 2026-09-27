@@ -150,7 +150,7 @@
             "$ref": "#/components/parameters/XRequestIdHeader"
           },
           {
-            "$ref": "#/components/parameters/AlertSignalClass"
+            "$ref": "#/components/parameters/WebhookSignalClass"
           }
         ],
         "requestBody": {
@@ -946,7 +946,7 @@
             "description": "JSON Lines or CSV export",
             "headers": {
               "X-Shadow-Mode-Metrics": {
-                "description": "JSON-encoded shadow-mode outcome metrics payload emitted by SignalOutcomeService.getMetricsSummary(). Returns the string \"No measurements found\" when signal-outcome tracking is disabled or no measurements exist. Object form (when tracking is enabled with data) follows the ShadowModeMetrics schema: coverage buckets, per-window hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR plus drawdown proxy and latency/cost metadata. Omitted when source or enriched filters are supplied because the shadow-mode metrics service has no matching filters.",
+                "description": "JSON-encoded shadow-mode outcome metrics payload emitted by SignalOutcomeService.getMetricsSummary(). Returns the string \"No measurements found\" when signal-outcome tracking is disabled or no measurements exist. Object form (when tracking is enabled with data) follows the ShadowModeMetrics schema: coverage buckets, per-window hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR plus drawdown proxy and latency/cost metadata. Omitted when source, enriched, or signalClass filters are supplied because the shadow-mode metrics service has no matching filters.",
                 "schema": {
                   "type": "string"
                 }
@@ -3546,6 +3546,25 @@
         },
         "example": "BINANCE",
         "description": "Optional exchange filter (e.g. BINANCE, COINBASE). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against the extracted exchange field."
+      },
+      "WebhookSignalClass": {
+        "name": "signalClass",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "breakout",
+            "mean_reversion",
+            "trend_continuation",
+            "reversal",
+            "volume_spike",
+            "news_event",
+            "manual",
+            "unknown"
+          ]
+        },
+        "example": "breakout",
+        "description": "Optional signal classification enum value."
       },
       "AlertSignalClass": {
         "name": "signalClass",
@@ -8818,20 +8837,6 @@
           },
           "dryRun": {
             "type": "boolean"
-          },
-          "signalClass": {
-            "type": "string",
-            "enum": [
-              "breakout",
-              "mean_reversion",
-              "trend_continuation",
-              "reversal",
-              "volume_spike",
-              "news_event",
-              "manual",
-              "unknown"
-            ],
-            "description": "Classification category for the alert signal."
           },
           "payload": {
             "type": "object",

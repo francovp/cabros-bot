@@ -770,12 +770,12 @@ function buildDryRunChannelRouting(storedAlert, storedTelegramThreadId, channels
 				const isCustomChat = Boolean(
 					routing.telegramChatId
 					&& process.env.TELEGRAM_CHAT_ID
-					&& String(routing.telegramChatId) !== String(process.env.TELEGRAM_CHAT_ID)
+					&& String(routing.telegramChatId) !== String(process.env.TELEGRAM_CHAT_ID),
 				);
 				const topicRoutes = isCustomChat ? {} : parseTelegramTopicRoutes(process.env.TELEGRAM_TOPIC_ROUTES);
 				const resolvedThread = resolveTelegramThreadId(
 					{ ...storedAlert, source: storedAlert.source || 'alert-replay' },
-					topicRoutes
+					topicRoutes,
 				);
 				if (resolvedThread !== null && resolvedThread !== undefined) {
 					routing.telegramThreadId = resolvedThread;
@@ -898,6 +898,7 @@ function replayAlert(botOrGetter) {
 				text: storedAlert.text,
 				enriched: storedAlert.enrichmentData || undefined,
 				source: storedAlert.source || 'alert-replay',
+				signalClass: storedAlert.signalClass || undefined,
 				replay: {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),
@@ -1063,6 +1064,7 @@ function batchReplayAlerts(botOrGetter) {
 						text: storedAlert.text,
 						enriched: storedAlert.enrichmentData || undefined,
 						source: storedAlert.source || 'alert-replay',
+						signalClass: storedAlert.signalClass || undefined,
 						replay: {
 							originalAlertId: alertId,
 							idempotencyKey: alertIdempotencyKey,
