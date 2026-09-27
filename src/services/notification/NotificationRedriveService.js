@@ -1150,7 +1150,10 @@ class NotificationRedriveService {
 		}
 
 		const telegramService = notificationManager.channels?.get?.('telegram');
-		if (!telegramService || !telegramService.isEnabled()) {
+		const canSendAdmin = notificationManager.isTelegramAdminDeliveryEligible
+			? notificationManager.isTelegramAdminDeliveryEligible(telegramService)
+			: Boolean(telegramService && (telegramService.isEnabled?.() || telegramService.isAdminDeliveryEligible?.()));
+		if (!canSendAdmin) {
 			return;
 		}
 

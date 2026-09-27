@@ -347,6 +347,50 @@
       ]
     },
     {
+      "name": "Get Status - notification channel intent",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing notificationChannelIntent, the operator-intent view of channel configuration (GH-713). It mirrors NotificationChannel.isConfigured(): a channel counts as configured when its enable flag is set AND its required credentials/chat id/webhook are present. A channel with credentials present but its enable flag off reports as not configured, matching the zero-channel admin page because both call the same method. Separates channels the operator never set up from ones that are set up but currently failing, so an operator can answer 'why did I get the zero-channel page?' without inspecting credentials. Channel names only; no credentials or destinations are exposed."
+      },
+      "response": [
+        {
+          "name": "200 OK - Discord configured, Telegram and WhatsApp unconfigured",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"deliveryChannels\":{\"telegram\":{\"enabled\":false,\"status\":\"disabled\"},\"whatsapp\":{\"enabled\":true,\"status\":\"misconfigured\"},\"discord\":{\"enabled\":true,\"status\":\"ready\"}},\"notificationChannelIntent\":{\"configured\":[\"discord\"],\"unconfigured\":[\"telegram\",\"whatsapp\"]}}"
+        },
+        {
+          "name": "200 OK - no channel configured by operator intent",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"deliveryChannels\":{\"telegram\":{\"enabled\":false,\"status\":\"disabled\"},\"whatsapp\":{\"enabled\":false,\"status\":\"disabled\"},\"discord\":{\"enabled\":false,\"status\":\"disabled\"}},\"notificationChannelIntent\":{\"configured\":[],\"unconfigured\":[\"telegram\",\"whatsapp\",\"discord\"]}}"
+        },
+        {
+          "name": "401 Unauthorized - missing or invalid API key",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\"error\":\"Invalid or missing API key\",\"code\":\"UNAUTHORIZED\"}"
+        }
+      ]
+    },
+    {
       "name": "Get Status - firestore write metrics",
       "request": {
         "method": "GET",
