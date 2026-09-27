@@ -87,18 +87,21 @@ describe('OpenAPI contract', () => {
 		const firebaseAdminOperations = new Set([
 			'GET /api/alerts', 'GET /api/alerts/replays', 'GET /api/alerts/summary', 'GET /api/alerts/export',
 			'GET /api/alerts/{alertId}', 'POST /api/alerts/{alertId}/replay',
+			'POST /api/alerts/feedback', 'GET /api/alerts/feedback/summary',
 			'POST /api/alerts/batch/replay', 'POST /api/alerts/batch/export', 'POST /api/alerts/batch/delete',
 			'GET /api/scanner-presets', 'POST /api/scanner-presets',
 			'GET /api/scanner-presets/{id}', 'PUT /api/scanner-presets/{id}',
 			'DELETE /api/scanner-presets/{id}', 'POST /api/scanner-presets/{id}/run',
 			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
 			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
-			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary',
+			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/outcomes/calibration',
 			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
-			'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
 			'POST /api/news-monitor/pause', 'POST /api/news-monitor/resume', 'GET /api/news-monitor/status',
 			'GET /api/news-monitor/summary', 'GET /api/news-monitor/analyses',
-			'POST /api/admin/test-alert',
+			'POST /api/admin/test-alert', 'GET /api/admin/events',
+			'GET /api/preferences/{channel}/{chatId}', 'PUT /api/preferences/{channel}/{chatId}', 'DELETE /api/preferences/{channel}/{chatId}',
+			'GET /api/selftest', 'POST /api/selftest/run',
 		]);
 
 		for (const operation of operations) {
@@ -116,9 +119,11 @@ describe('OpenAPI contract', () => {
 			'GET /api/status': 'admin.viewer',
 			'GET /api/outcomes': 'admin.viewer',
 			'GET /api/outcomes/summary': 'admin.viewer',
+			'GET /api/outcomes/calibration': 'admin.viewer',
 			'GET /api/symbol-analyses': 'admin.viewer',
 			'GET /api/symbol-analyses/summary': 'admin.viewer',
 			'GET /api/trading/binance/orders': 'admin.viewer',
+			'GET /api/trading/binance/orders/audit': 'admin.viewer',
 			'POST /api/trading/binance/orders': 'admin.operator',
 			'DELETE /api/trading/binance/orders': 'admin.operator',
 			'GET /api/alerts': 'admin.viewer',
@@ -135,6 +140,12 @@ describe('OpenAPI contract', () => {
 			'GET /api/news-monitor/summary': 'admin.viewer',
 			'GET /api/news-monitor/analyses': 'admin.viewer',
 			'POST /api/admin/test-alert': 'admin.operator',
+			'GET /api/admin/events': 'admin.viewer',
+			'GET /api/preferences/{channel}/{chatId}': 'admin.viewer',
+			'PUT /api/preferences/{channel}/{chatId}': 'admin.operator',
+			'DELETE /api/preferences/{channel}/{chatId}': 'admin.operator',
+			'GET /api/selftest': 'admin.viewer',
+			'POST /api/selftest/run': 'admin.operator',
 		};
 
 		for (const [key, role] of Object.entries(expectedRoles)) {
@@ -457,6 +468,38 @@ describe('OpenAPI contract', () => {
 			expect(statusExample.dependencies.newsMonitorDedup.cacheSize.maxEntries).toBe(5000);
 			expect(statusExample.dependencies.newsMonitorDedup.cacheSize.deliveryLockMaxEntries).toBe(1000);
 			expect(contract.components.schemas.Status.description).toContain('dependencies.newsMonitorDedup reports');
+		});
+
+		it('documents TokenCostBudgetDependency schema and references it under Status dependencies', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const budgetRef = contract.components.schemas.Status.properties.dependencies.properties.tokenCostBudget;
+			expect(budgetRef).toEqual({
+				$ref: '#/components/schemas/TokenCostBudgetDependency',
+			});
+
+			const budgetSchema = contract.components.schemas.TokenCostBudgetDependency;
+			expect(budgetSchema).toBeDefined();
+			expect(budgetSchema.type).toBe('object');
+			expect(budgetSchema.required).toEqual(
+				expect.arrayContaining([
+					'enabled',
+					'configured',
+					'ready',
+					'status',
+					'dailySpendUsd',
+					'budgetUsd',
+					'utilizationPct',
+					'alertsSent',
+					'lastResetAt',
+				]),
+			);
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.dependencies.tokenCostBudget).toBeDefined();
+			expect(statusExample.dependencies.tokenCostBudget.budgetUsd).toBe(5);
+			expect(statusExample.featureFlags.tokenCostBudget).toBe(false);
 		});
 	});
 });

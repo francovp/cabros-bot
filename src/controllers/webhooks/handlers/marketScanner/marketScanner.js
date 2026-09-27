@@ -226,6 +226,7 @@ function postMarketScannerAlert(botOrGetter) {
 								timeframe: parsed.timeframe,
 								setupType: scanResult.scan,
 								score: itemScore,
+								confidenceScore: typeof item.confidence === 'number' && Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1 ? item.confidence : null,
 								side: itemSide,
 								price: validPrice,
 								priceSource: validPrice !== null ? 'tradingview-mcp' : null,

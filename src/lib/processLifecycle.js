@@ -87,6 +87,7 @@ function createProcessLifecycle(options = {}) {
 		stopRemoteConfig = () => undefined,
 		stopTelegramHealthProbe = () => undefined,
 		shutdownNewsMonitor = () => undefined,
+		closeAllSseConnections = () => undefined,
 		flushSentry = () => undefined,
 		timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
 		logger = console,
@@ -171,9 +172,11 @@ function createProcessLifecycle(options = {}) {
 			};
 
 			const cleanup = async () => {
+				const sseCleanup = safelyRun(logger, 'admin SSE streams', closeAllSseConnections);
 				const telegramCleanup = safelyRun(logger, 'Telegram bot', stopBot);
 				const bootstrapCleanup = safelyRun(logger, 'application bootstrap', getBootstrapPromise);
 				await closeServer(server, logger);
+				await sseCleanup;
 				await telegramCleanup;
 				await bootstrapCleanup;
 				await safelyRun(logger, 'background jobs', waitForBackgroundJobs);
