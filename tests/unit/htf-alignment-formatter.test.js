@@ -402,6 +402,42 @@ describe('HTF Alignment Formatter (Issue #635)', () => {
 			expect(result.classification).toBe('counter-trend');
 			expect(result.text).toBe('📉 HTF: EN CONTRA');
 		});
+
+		it('skips a non-directional recommendation action instead of masking the alignment status', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: {
+					alignment: { status: 'bullish' },
+					recommendation: { action: 'HOLD' },
+				},
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('keeps a directional alignment status ahead of a contradictory recommendation action', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: {
+					alignment: { status: 'bullish' },
+					recommendation: { action: 'SELL' },
+				},
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('prefers an explicit direction field over a directional alignment status', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { alignment: { status: 'bullish', direction: 'bearish' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('counter-trend');
+			expect(result.text).toBe('📉 HTF: EN CONTRA');
+		});
 	});
 
 	describe('formatHtfAlignment() with RemoteConfig gating', () => {

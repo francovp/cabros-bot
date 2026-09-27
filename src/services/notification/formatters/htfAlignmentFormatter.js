@@ -143,7 +143,7 @@ function resolveHtfAlignment(enriched = {}) {
 			? alignment.trend.trim()
 			: (typeof multiTimeframe.direction === 'string' && multiTimeframe.direction.trim()
 				? multiTimeframe.direction.trim()
-				: (stringTrend || stringRecommendation || stringAlignment || stringFallback)));
+				: (stringTrend || stringAlignment || stringFallback)));
 
 	let divergentTimeframes = [];
 	const rawDivergent = alignment.divergent_timeframes ?? multiTimeframe.divergent_timeframes;
@@ -178,19 +178,40 @@ function resolveHtfAlignment(enriched = {}) {
 		}
 	} else {
 		const normalizedStatus = normalizeConfluenceStatus(rawStatus);
-		// An explicit directional field is authoritative *when the side is known*, so
-		// side-aware classification can actually be compared against it. `rawDirection`
-		// falls back to `rawStatus`, so only a *dedicated* direction/trend/
-		// recommendation token may override a status verdict (GH-717) — including an
-		// object `recommendation.action`, which is a dedicated field even when it also
-		// served as the `rawStatus` fallback. With an unknown side there is nothing to
-		// compare, so the status verdict stands.
-		const hasDedicatedDirection = rawDirection !== null
-			&& (rawDirection !== rawStatus || rawDirection === stringRecommendation);
-		const explicitDirection = normalizeTrendDirection(
-			hasDedicatedDirection ? rawDirection : null,
-		);
 
+		// Pick the first *directional* token from an ordered candidate chain, skipping
+		// non-directional truthy values such as `recommendation.action: "HOLD"`, which
+		// would otherwise mask a directional alignment status (GH-717).
+		//
+		// Order mirrors `resolveDirectionFromRaw()` in marketScannerScoring.js so HTF
+		// rendering and scanner ranking agree: explicit direction/trend fields first,
+		// then a directional alignment status, then the recommendation token.
+		//
+		// No rawStatus guard is needed: `normalizeTrendDirection` never matches a
+		// confluence verdict ('aligned', 'counter-trend'), so a status can only enter
+		// this chain when it is genuinely directional ('bullish' / 'bearish'), which is
+		// exactly the case that should take precedence over a recommendation action.
+		const directionalCandidates = [
+			rawDirection,
+			alignment.status,
+			multiTimeframe.status,
+			stringTrend,
+			stringRecommendation,
+		];
+		let explicitDirection = null;
+		for (const candidate of directionalCandidates) {
+			const normalized = typeof candidate === 'string' && candidate.trim()
+				? normalizeTrendDirection(candidate)
+				: null;
+			if (normalized) {
+				explicitDirection = normalized;
+				break;
+			}
+		}
+
+		// An explicit directional field is authoritative only when the side is known,
+		// so side-aware classification can actually be compared against it. With an
+		// unknown side there is nothing to compare, so the status verdict stands.
 		if (explicitDirection && side) {
 			classification = classifyByDirection(explicitDirection, side);
 		} else if (normalizedStatus === 'aligned') {
