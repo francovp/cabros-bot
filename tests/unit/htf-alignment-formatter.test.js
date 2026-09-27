@@ -438,6 +438,36 @@ describe('HTF Alignment Formatter (Issue #635)', () => {
 			expect(result.classification).toBe('counter-trend');
 			expect(result.text).toBe('📉 HTF: EN CONTRA');
 		});
+
+		it('uses the direction of a recommendation object whose action is neutral', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { recommendation: { action: 'HOLD', direction: 'bullish' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('prefers recommendation.direction over recommendation.action when both are directional', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { recommendation: { action: 'BUY', direction: 'bearish' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('counter-trend');
+			expect(result.text).toBe('📉 HTF: EN CONTRA');
+		});
+
+		it('uses trend when a recommendation action is neutral and direction is absent', () => {
+			const result = resolveHtfAlignment({
+				side: 'SELL',
+				multiTimeframeData: { recommendation: { action: 'HOLD', trend: 'bearish' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
 	});
 
 	describe('formatHtfAlignment() with RemoteConfig gating', () => {

@@ -49,29 +49,40 @@ function resolveSide(enriched = {}) {
 }
 
 /**
- * Resolves a directional/recommendation token from a value that may be a plain
- * string or an object exposing `action`, `direction`, or `trend`.
+ * Resolves every directional token from a value that may be a plain string or an
+ * object exposing `direction`, `trend`, or `action`.
  *
  * TradingView MCP payloads arrive in both shapes: `{ recommendation: "BUY" }`
  * and `{ recommendation: { action: "BUY" } }`. Both must normalize identically,
  * otherwise a valid object payload silently drops the whole HTF line.
  *
+ * Object keys are ordered `direction` → `trend` → `action` → `status` so a neutral
+ * `action` (e.g. `HOLD`) never shadows an explicit directional field — matching the
+ * `recommendation.direction` before `recommendation.action` order used by
+ * `resolveDirectionFromRaw()` in marketScannerScoring.js.
+ *
+ * Every token is returned in precedence order, not just the first, so callers can
+ * skip non-directional values (`HOLD`, `mixed`) and keep looking.
+ *
  * @param {*} value
- * @returns {string|null}
+ * @returns {string[]}
  */
-function resolveDirectionalToken(value) {
+function resolveDirectionalTokens(value) {
 	if (typeof value === 'string') {
-		return value.trim() || null;
+		const trimmed = value.trim();
+		return trimmed ? [trimmed] : [];
 	}
 	if (value && typeof value === 'object' && !Array.isArray(value)) {
-		for (const key of ['action', 'direction', 'trend', 'status', 'recommendation']) {
+		const tokens = [];
+		for (const key of ['direction', 'trend', 'action', 'status', 'recommendation']) {
 			const candidate = value[key];
 			if (typeof candidate === 'string' && candidate.trim()) {
-				return candidate.trim();
+				tokens.push(candidate.trim());
 			}
 		}
+		return tokens;
 	}
-	return null;
+	return [];
 }
 
 /**
@@ -126,10 +137,16 @@ function resolveHtfAlignment(enriched = {}) {
 	const stringAlignment = typeof multiTimeframe.alignment === 'string' && multiTimeframe.alignment.trim()
 		? multiTimeframe.alignment.trim()
 		: null;
-	const stringRecommendation = resolveDirectionalToken(multiTimeframe.recommendation)
-		?? resolveDirectionalToken(alignment.recommendation);
-	const stringTrend = resolveDirectionalToken(multiTimeframe.trend)
-		?? resolveDirectionalToken(alignment.trend);
+	const recommendationTokens = [
+		...resolveDirectionalTokens(multiTimeframe.recommendation),
+		...resolveDirectionalTokens(alignment.recommendation),
+	];
+	const trendTokens = [
+		...resolveDirectionalTokens(multiTimeframe.trend),
+		...resolveDirectionalTokens(alignment.trend),
+	];
+	const stringRecommendation = recommendationTokens[0] ?? null;
+	const stringTrend = trendTokens[0] ?? null;
 
 	const netScore = numberOrNull(alignment.net_score ?? multiTimeframe.net_score);
 	const rawStatus = typeof alignment.status === 'string' && alignment.status.trim()
@@ -195,8 +212,8 @@ function resolveHtfAlignment(enriched = {}) {
 			rawDirection,
 			alignment.status,
 			multiTimeframe.status,
-			stringTrend,
-			stringRecommendation,
+			...trendTokens,
+			...recommendationTokens,
 		];
 		let explicitDirection = null;
 		for (const candidate of directionalCandidates) {
@@ -282,6 +299,6 @@ module.exports = {
 	formatHtfAlignment,
 	resolveHtfAlignment,
 	resolveSide,
-	resolveDirectionalToken,
+	resolveDirectionalTokens,
 	classifyByDirection,
 };
