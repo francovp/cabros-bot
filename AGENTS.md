@@ -216,3 +216,6 @@ The `virgin-trainee-dev` is in active training. To ensure it evolves and doesn't
 - **Target**: Log the event as a `correction` or `knowledge_gap` in `.learnings/LEARNINGS.md`.
 - **Goal**: Convert human feedback into durable prompt guidance to stop asking the same "trainee" questions and improve technical output.
 
+## Post-merge production environment sync
+
+After deploying an environment change, inspect its production sync plan with `pnpm run sync:production-env -- --key KEY_NAME` (`scripts/sync-production-env.js`). Dry-run by default: the script prints proposed platform commands and does not execute them. Never pass secret values as command-line arguments. After manually completing a change, use `--verified`, `--applied`, or `--status` to record its outcome.
