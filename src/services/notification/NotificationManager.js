@@ -132,6 +132,17 @@ class NotificationManager {
 	}
 
 	/**
+	 * Get array of names of registered channels the operator never configured.
+	 * Used to make the zero-channel admin page actionable ("why did I get this?").
+	 * @returns {Array<string>}
+	 */
+	getUnconfiguredChannels() {
+		return Array.from(this.channels.values())
+			.filter(channel => !this.isChannelConfigured(channel))
+			.map(channel => channel.name);
+	}
+
+	/**
 	 * Check if Telegram service is eligible to send admin notifications.
 	 * Allows dedicated admin paging during zero-channel outages even when
 	 * the default broadcast channel is disabled or missing its broadcast chat ID.
@@ -241,17 +252,27 @@ class NotificationManager {
 
 		const requestId = alert && (alert.requestId || alert.correlationId);
 		const configuredChannels = this.getConfiguredChannels();
+		const unconfiguredChannels = this.getUnconfiguredChannels();
 		const redriveContext = notificationRedriveService.isEnabled() && configuredChannels.length > 0
 			? [`Dead-letters queued for redrive (pending: ${notificationRedriveService.getPendingCount()})`]
 			: [];
 		const droppedMessage = configuredChannels.length > 0
 			? 'Broadcast alerts are being dropped and dead-lettered.'
 			: 'Broadcast alerts are being dropped.';
+		// Operator intent is the difference between "a channel broke" and "a channel was never
+		// configured". Reporting both sets makes the page self-diagnosing.
+		const channelContext = configuredChannels.length === 0
+			? ['No notification channels are configured (operator intent).']
+			: [`Configured channels (failing validation or disabled at runtime): ${configuredChannels.join(', ')}`];
+		if (unconfiguredChannels.length > 0) {
+			channelContext.push(`Not configured: ${unconfiguredChannels.join(', ')}`);
+		}
 		const message = [
 			'🚨 CRITICAL: Notification delivery failure (Zero channels enabled)',
 			'All notification channels are currently disabled or failing validation.',
 			droppedMessage,
 			`Total zero-channel broadcasts dropped: ${this.zeroChannelBroadcastCount}`,
+			...channelContext,
 			...redriveContext,
 			...(requestId ? [`Request ID: ${requestId}`] : []),
 		].join('\n');

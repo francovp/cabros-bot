@@ -1869,8 +1869,53 @@ describe('Status endpoints', () => {
 		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepResult).toBeNull();
 	});
 
-	it('waits for the initial notification redrive heartbeat before serializing status', async () => {
-		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+	it('reports operator-intent channel configuration for zero-channel triage (GH-713)', async () => {
+		// Nothing configured: every channel must be listed as unconfigured so an operator
+		// can tell "never configured" apart from "configured but failing".
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		delete process.env.BOT_TOKEN;
+		delete process.env.TELEGRAM_CHAT_ID;
+		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+		delete process.env.WHATSAPP_API_URL;
+		delete process.env.WHATSAPP_API_KEY;
+		delete process.env.WHATSAPP_CHAT_ID;
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		delete process.env.DISCORD_WEBHOOK_URL;
+
+		const unconfiguredResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(unconfiguredResponse.status).toBe(200);
+		expect(unconfiguredResponse.body.notificationChannelIntent).toEqual({
+			configured: [],
+			unconfigured: expect.arrayContaining(['telegram', 'whatsapp', 'discord']),
+		});
+
+		// Configure Discord only: intent must be Discord-configured, Telegram/WhatsApp unconfigured.
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1/abc';
+		const partialResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(partialResponse.status).toBe(200);
+		expect(partialResponse.body.notificationChannelIntent).toEqual({
+			configured: ['discord'],
+			unconfigured: expect.arrayContaining(['telegram', 'whatsapp']),
+		});
+
+		// Intent is deliberately independent of runtime readiness: a configured channel
+		// that is not enabled still counts as configured.
+		process.env.ENABLE_DISCORD_ALERTS = 'false';
+		const disabledResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(disabledResponse.body.notificationChannelIntent.configured).toEqual(['discord']);
+		expect(disabledResponse.body.dependencies.discord.ready).toBe(false);
+	});
+
+	it('waits for the initial notification redrive heartbeat before serializing status', async () => {		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
 		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
 		const statusController = require('../../src/controllers/status');
 		const service = require('../../src/services/notification/NotificationRedriveService').notificationRedriveService;

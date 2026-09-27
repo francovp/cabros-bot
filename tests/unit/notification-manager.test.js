@@ -700,5 +700,65 @@ describe('NotificationManager admin failure notifications', () => {
 			expect(observedSignal.aborted).toBe(true);
 		});
 	});
+
+	describe('zero-channel page diagnostic context (GH-713)', () => {
+		it('includes the configured and unconfigured channel names in the zero-channel admin page', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => false),
+				isConfigured: jest.fn(() => false),
+				send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram', messageId: 'admin-ctx-1' }),
+			};
+			const whatsappService = {
+				name: 'whatsapp',
+				isEnabled: jest.fn(() => false),
+				isConfigured: jest.fn(() => true),
+				send: jest.fn(),
+			};
+			const discordService = {
+				name: 'discord',
+				isEnabled: jest.fn(() => false),
+				isConfigured: jest.fn(() => false),
+				send: jest.fn(),
+			};
+
+			const manager = new NotificationManager(telegramService, whatsappService, discordService);
+
+			await manager.sendToAll({ text: 'BTC breakout', requestId: 'req-ctx-1' });
+			await waitForBackgroundTasks();
+
+			const adminMessage = telegramService.send.mock.calls.at(-1)[0].text;
+
+			// Operators must be able to answer "why did I get this page?" from the message alone.
+			expect(adminMessage).toContain('whatsapp');
+			expect(adminMessage).toMatch(/configured/i);
+			expect(adminMessage).toMatch(/not configured|unconfigured/i);
+		});
+
+		it('reports a distinct message when no channel is configured by operator intent', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+
+			const telegramService = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => false),
+				isConfigured: jest.fn(() => false),
+				send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram', messageId: 'admin-ctx-2' }),
+			};
+
+			const manager = new NotificationManager(telegramService);
+
+			await manager.sendToAll({ text: 'ETH breakout', requestId: 'req-ctx-2' });
+			await waitForBackgroundTasks();
+
+			const adminMessage = telegramService.send.mock.calls.at(-1)[0].text;
+
+			expect(adminMessage).toMatch(/no notification channels are configured/i);
+			// The dead-letter line must not claim dead-letters were queued when nothing was queued.
+			expect(adminMessage).not.toMatch(/dead-lettered/i);
+			expect(adminMessage).not.toMatch(/Dead-letters queued for redrive/i);
+		});
+	});
 });
 

@@ -428,6 +428,22 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				status: discord.status,
 			},
 		},
+		// Operator intent, not runtime reachability. `configured` mirrors
+		// NotificationChannel.isConfigured() and is what the zero-channel admin
+		// page reports, so operators can reconcile "why did I get paged?" here.
+		// `configured` is a ready-or-error status; `ready` stays runtime-only.
+		notificationChannelIntent: {
+			configured: [
+				{ name: 'telegram', ...telegram },
+				{ name: 'whatsapp', ...whatsapp },
+				{ name: 'discord', ...discord },
+			].filter((channel) => channel.configured).map((channel) => channel.name),
+			unconfigured: [
+				{ name: 'telegram', ...telegram },
+				{ name: 'whatsapp', ...whatsapp },
+				{ name: 'discord', ...discord },
+			].filter((channel) => !channel.configured).map((channel) => channel.name),
+		},
 		...(deliveryMetricsService.getSnapshot()
 			? { deliveryMetrics: deliveryMetricsService.getSnapshot() }
 			: {}),

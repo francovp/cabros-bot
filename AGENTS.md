@@ -1108,6 +1108,23 @@ ENABLE_FIRESTORE_SCANNER_PRESETS (scanner preset persistence)
 - The page lists failed/succeeded channels, provider errors, status/attempt metadata when available, and the request/correlation ID when present on the alert.
 - Admin paging calls `TelegramService.send()` directly instead of re-entering `NotificationManager`, so Telegram/admin delivery failures are logged but cannot recurse or change the original delivery results.
 
+### Zero-channel paging and operator-intent configuration (GH-713 / PR #1191)
+
+A zero-channel broadcast is a silent total loss of alerting: no channel is reachable, so nothing is delivered and nothing is reported. The zero-channel guard is built on an explicit **operator intent** concept, kept separate from runtime reachability.
+
+- `NotificationChannel.isConfigured()` — base returns `false`. Each concrete channel overrides it to mean "the operator deliberately set this up" (enable flag **plus** the required credentials/chat id/webhook). `TelegramService.isConfigured()` requires `ENABLE_TELEGRAM_BOT`, `BOT_TOKEN`, and `TELEGRAM_CHAT_ID`; `WhatsAppService`/`DiscordService` follow the same flag-plus-credentials rule.
+- `NotificationManager.isChannelConfigured(channel)` — resolves a channel's intent with three fallbacks in order: an `isConfigured()` method, a boolean `isConfigured` property, then `isEnabled()` for real `NotificationChannel` instances. A plain mock with none of those defaults to `true` so existing unit tests and non-subclass channels keep their prior behavior.
+- `NotificationManager.getConfiguredChannels()` / `getUnconfiguredChannels()` — partition the registered channels by intent. The zero-channel dead-letter branch queues synthetic dead-letters **only** for configured channels, so an operator who never configured WhatsApp gets no phantom dead-letters and no false exhaustion alarm. When nothing is configured, no dead-letters are queued at all.
+- `TelegramService.isAdminDeliveryEligible()` and `NotificationManager.isTelegramAdminDeliveryEligible()` — admin paging deliberately does **not** require the broadcast chat id, so `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` still receives the page when user-facing broadcasts are misconfigured. The admin chat id itself is still validated before any send.
+- The zero-channel page reports both channel sets (`Configured channels (failing validation or disabled at runtime): …` and `Not configured: …`, or `No notification channels are configured (operator intent).`) so the page is self-diagnosing, and the redrive line is only present when dead-letters were actually queued.
+- `/api/status` and `/api/capabilities` expose `notificationChannelIntent: { configured, unconfigured }` with channel **names only** — never tokens, webhook URLs, or chat IDs. It is intentionally independent of `deliveryChannels`/`dependencies.*.ready`, which stay runtime-reachability: a fully configured but currently disabled channel still reports as `configured`. This is what lets an operator reconcile an alert from the page and the status response without inspecting credentials.
+
+**Core components**: `src/services/notification/NotificationManager.js`, `src/services/notification/NotificationChannel.js`, `src/services/notification/{TelegramService,WhatsAppService,DiscordService}.js`, `src/controllers/status.js`, and the `NotificationChannelIntent` schema in `src/openapi/openapi.json`.
+
+**Coverage**: `tests/unit/notification-manager.test.js` (page diagnostic context, distinct no-channel-configured message), `tests/unit/{notification-channel,telegram-service,whatsapp-service,discord-service,notification-redrive-service}.test.js`, and `tests/integration/status-endpoint.test.js` (intent vs. runtime readiness).
+
+No new environment variable, Remote Config key, feature flag, or route was added; the behavior is unconditional and fail-open.
+
 **To extend**:
 1. **Discord integration**: Add in `src/services/notification/DiscordService.js`
 2. **Error aggregation**: Track error rates in memory for metrics
