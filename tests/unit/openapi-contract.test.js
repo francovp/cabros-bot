@@ -10,12 +10,25 @@ function normalizeExpressPath(routePath) {
 }
 
 function getMountedApiOperations() {
-	return getRoutes(null).stack
+	const routerOperations = getRoutes(null).stack
 		.filter((layer) => layer.route)
 		.flatMap((layer) => Object.keys(layer.route.methods)
 			.filter((method) => layer.route.methods[method])
-			.map((method) => `${method.toUpperCase()} ${normalizeExpressPath(layer.route.path)}`))
-		.sort();
+			.map((method) => `${method.toUpperCase()} ${normalizeExpressPath(layer.route.path)}`));
+
+	const app = require('../../app');
+	const appOperations = [];
+	for (const layer of app._router.stack) {
+		if (!layer.route) continue;
+		for (const method of Object.keys(layer.route.methods)) {
+			if (!layer.route.methods[method]) continue;
+			const routePath = layer.route.path;
+			if (!routePath.startsWith('/api/')) continue;
+			appOperations.push(`${method.toUpperCase()} ${routePath}`);
+		}
+	}
+
+	return [...routerOperations, ...appOperations].sort();
 }
 
 function getDocumentedApiOperations(contract) {
@@ -56,6 +69,18 @@ describe('OpenAPI contract', () => {
 		expect(getDocumentedApiOperations(contract)).toEqual(getMountedApiOperations());
 	});
 
+	it('documents the request-timeout response on every API operation', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const missingTimeoutResponses = Object.entries(contract.paths)
+			.filter(([routePath]) => routePath.startsWith('/api/'))
+			.flatMap(([routePath, pathItem]) => Object.entries(pathItem)
+				.filter(([method]) => ['get', 'post', 'put', 'patch', 'delete'].includes(method))
+				.filter(([, operation]) => !operation.responses || !operation.responses['408'])
+				.map(([method]) => `${method.toUpperCase()} ${routePath}`));
+
+		expect(missingTimeoutResponses).toEqual([]);
+	});
+
 	it('is a valid OpenAPI document', async () => {
 		if (!fs.existsSync(contractPath)) return;
 
@@ -75,22 +100,33 @@ describe('OpenAPI contract', () => {
 		const firebaseAdminOperations = new Set([
 			'GET /api/alerts', 'GET /api/alerts/replays', 'GET /api/alerts/summary', 'GET /api/alerts/export',
 			'GET /api/alerts/{alertId}', 'POST /api/alerts/{alertId}/replay',
+			'POST /api/alerts/feedback', 'GET /api/alerts/feedback/summary',
 			'POST /api/alerts/batch/replay', 'POST /api/alerts/batch/export', 'POST /api/alerts/batch/delete',
 			'GET /api/scanner-presets', 'POST /api/scanner-presets',
 			'GET /api/scanner-presets/{id}', 'PUT /api/scanner-presets/{id}',
 			'DELETE /api/scanner-presets/{id}', 'POST /api/scanner-presets/{id}/run',
 			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
 			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
-			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary',
+			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/outcomes/calibration',
 			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
-			'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
 			'POST /api/news-monitor/pause', 'POST /api/news-monitor/resume', 'GET /api/news-monitor/status',
 			'GET /api/news-monitor/summary', 'GET /api/news-monitor/analyses',
-			'POST /api/admin/test-alert',
+			'POST /api/admin/test-alert', 'GET /api/admin/events',
+			'GET /api/preferences/{channel}/{chatId}', 'PUT /api/preferences/{channel}/{chatId}', 'DELETE /api/preferences/{channel}/{chatId}',
+			'GET /api/selftest', 'POST /api/selftest/run',
+		]);
+
+		const unauthenticatedOperations = new Set([
+			'GET /api/public/status',
 		]);
 
 		for (const operation of operations) {
 			const operationKey = `${operation.method || 'UNKNOWN'} ${operation.path || ''}`;
+			if (unauthenticatedOperations.has(operationKey)) {
+				expect(operation.security).toBeUndefined();
+				continue;
+			}
 			const expected = [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
 			if (firebaseAdminOperations.has(operationKey)) expected.push({ FirebaseBearerAuth: [] });
 			expect(operation.security).toEqual(expected);
@@ -104,9 +140,11 @@ describe('OpenAPI contract', () => {
 			'GET /api/status': 'admin.viewer',
 			'GET /api/outcomes': 'admin.viewer',
 			'GET /api/outcomes/summary': 'admin.viewer',
+			'GET /api/outcomes/calibration': 'admin.viewer',
 			'GET /api/symbol-analyses': 'admin.viewer',
 			'GET /api/symbol-analyses/summary': 'admin.viewer',
 			'GET /api/trading/binance/orders': 'admin.viewer',
+			'GET /api/trading/binance/orders/audit': 'admin.viewer',
 			'POST /api/trading/binance/orders': 'admin.operator',
 			'DELETE /api/trading/binance/orders': 'admin.operator',
 			'GET /api/alerts': 'admin.viewer',
@@ -123,6 +161,12 @@ describe('OpenAPI contract', () => {
 			'GET /api/news-monitor/summary': 'admin.viewer',
 			'GET /api/news-monitor/analyses': 'admin.viewer',
 			'POST /api/admin/test-alert': 'admin.operator',
+			'GET /api/admin/events': 'admin.viewer',
+			'GET /api/preferences/{channel}/{chatId}': 'admin.viewer',
+			'PUT /api/preferences/{channel}/{chatId}': 'admin.operator',
+			'DELETE /api/preferences/{channel}/{chatId}': 'admin.operator',
+			'GET /api/selftest': 'admin.viewer',
+			'POST /api/selftest/run': 'admin.operator',
 		};
 
 		for (const [key, role] of Object.entries(expectedRoles)) {
@@ -187,6 +231,7 @@ describe('OpenAPI contract', () => {
 			{ $ref: '#/components/parameters/IdempotencyKeyHeader' },
 			{ $ref: '#/components/parameters/IdempotencyKeyQueryCamel' },
 			{ $ref: '#/components/parameters/IdempotencyKeyQuerySnake' },
+			{ $ref: '#/components/parameters/XRequestIdHeader' },
 		]));
 		expect(operation.responses['200']).toEqual({
 			$ref: '#/components/responses/MessageDeliveryResult',
@@ -198,6 +243,10 @@ describe('OpenAPI contract', () => {
 		expect(contract.components.schemas.MessageRequest.properties.idempotency_key).toBeDefined();
 		expect(contract.components.responses.MessageDeliveryResult.content['application/json'].examples.replay.value)
 			.toMatchObject({ success: true, idempotencyReplayed: true });
+		expect(contract.components.responses.MessageDeliveryResult.content['application/json'].examples.replay.value.requestId)
+			.toEqual(expect.any(String));
+		expect(contract.components.responses.MessageDeliveryResult.content['application/json'].examples.success.value.requestId)
+			.toEqual(expect.any(String));
 		expect(contract.components.responses.IdempotencyConflict.description)
 			.toBe('The idempotency key was reused with a different request fingerprint');
 		expect(contract.components.responses.MessageIdempotencyConflict.content['application/json'].example).toEqual({
@@ -445,6 +494,77 @@ describe('OpenAPI contract', () => {
 			expect(statusExample.dependencies.newsMonitorDedup.cacheSize.maxEntries).toBe(5000);
 			expect(statusExample.dependencies.newsMonitorDedup.cacheSize.deliveryLockMaxEntries).toBe(1000);
 			expect(contract.components.schemas.Status.description).toContain('dependencies.newsMonitorDedup reports');
+		});
+
+		it('documents TokenCostBudgetDependency schema and references it under Status dependencies', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const budgetRef = contract.components.schemas.Status.properties.dependencies.properties.tokenCostBudget;
+			expect(budgetRef).toEqual({
+				$ref: '#/components/schemas/TokenCostBudgetDependency',
+			});
+
+			const budgetSchema = contract.components.schemas.TokenCostBudgetDependency;
+			expect(budgetSchema).toBeDefined();
+			expect(budgetSchema.type).toBe('object');
+			expect(budgetSchema.required).toEqual(
+				expect.arrayContaining([
+					'enabled',
+					'configured',
+					'ready',
+					'status',
+					'dailySpendUsd',
+					'budgetUsd',
+					'utilizationPct',
+					'alertsSent',
+					'lastResetAt',
+				]),
+			);
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.dependencies.tokenCostBudget).toBeDefined();
+			expect(statusExample.dependencies.tokenCostBudget.budgetUsd).toBe(5);
+			expect(statusExample.featureFlags.tokenCostBudget).toBe(false);
+		});
+	});
+
+	describe('news-monitor alert barrier fields (GH-712)', () => {
+		it('types results[].alert as a structured NewsAlert schema with optional stop/target', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const newsMonitorResponse = contract.components.schemas.NewsMonitorResponse;
+			const resultItemSchema = newsMonitorResponse.properties.results.items;
+			expect(resultItemSchema.$ref).toBe('#/components/schemas/NewsMonitorResult');
+
+			const resultSchema = contract.components.schemas.NewsMonitorResult;
+			expect(resultSchema.properties.alert.$ref).toBe('#/components/schemas/NewsAlert');
+
+			const newsAlert = contract.components.schemas.NewsAlert;
+			expect(newsAlert.properties.stop).toEqual(expect.objectContaining({ type: 'number' }));
+			expect(newsAlert.properties.target).toEqual(expect.objectContaining({ type: 'number' }));
+			expect(newsAlert.required).not.toEqual(expect.arrayContaining(['stop', 'target']));
+		});
+
+		it('includes a populated stop/target example and a no-barrier example for the news-monitor response', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const response = contract.components.responses.NewsMonitorAnalysisResult;
+			const examples = response.content['application/json'].examples;
+			expect(examples.dryRun).toBeDefined();
+			expect(examples.analyzedNoBarriers).toBeDefined();
+
+			const dryRunAlert = examples.dryRun.value.results[0].alert;
+			expect(typeof dryRunAlert.stop).toBe('number');
+			expect(typeof dryRunAlert.target).toBe('number');
+			expect(dryRunAlert.stop).toBeGreaterThan(0);
+			expect(dryRunAlert.target).toBeGreaterThan(dryRunAlert.stop);
+
+			const noBarriersAlert = examples.analyzedNoBarriers.value.results[0].alert;
+			expect(noBarriersAlert.stop).toBeUndefined();
+			expect(noBarriersAlert.target).toBeUndefined();
 		});
 	});
 });

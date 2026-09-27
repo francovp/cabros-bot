@@ -452,6 +452,7 @@ const setupFirebaseAuth = async (config) => {
 			authState.user = user;
 			if (!user) {
 				authState.role = null;
+				disconnectSse();
 				showSignedOutState();
 				return;
 			}
@@ -459,12 +460,15 @@ const setupFirebaseAuth = async (config) => {
 				const tokenResult = await user.getIdTokenResult();
 				authState.role = window.CabrosAdminRequest.getAdminRole(tokenResult.claims);
 				if (!authState.role) {
+					disconnectSse();
 					showAuthState('This account is not authorized for the admin console.', true);
 					return;
 				}
 				showSignedInState();
+				setupSseStream();
 				navigateToView('status');
 			} catch (error) {
+				disconnectSse();
 				showAuthState('Unable to verify the signed-in account.', true);
 			}
 		});
@@ -472,6 +476,234 @@ const setupFirebaseAuth = async (config) => {
 		showAuthState('Firebase sign-in is unavailable. Ask an administrator to configure it.', true);
 	}
 };
+
+let sseAbortController = null;
+let sseReconnectTimer = null;
+let sseReconnectAttempts = 0;
+const sseListeners = new Set();
+const MAX_SSE_RECONNECT_DELAY_MS = 30000;
+
+const getRetryAfterMs = (response) => {
+	const rawValue = response?.headers?.get?.('retry-after');
+	if (!rawValue) return null;
+
+	const seconds = Number(String(rawValue).trim());
+	if (Number.isFinite(seconds) && seconds >= 0) {
+		return Math.min(MAX_SSE_RECONNECT_DELAY_MS, Math.ceil(seconds * 1000));
+	}
+
+	const retryAt = Date.parse(rawValue);
+	return Number.isFinite(retryAt)
+		? Math.min(MAX_SSE_RECONNECT_DELAY_MS, Math.max(0, retryAt - Date.now()))
+		: null;
+};
+
+const scheduleSseReconnect = (retryAfterMs = null) => {
+	if (sseReconnectTimer) clearTimeout(sseReconnectTimer);
+	updateSseIndicator('connecting', 'Reconnecting…');
+	const exponentialDelay = Math.min(MAX_SSE_RECONNECT_DELAY_MS, 2000 * Math.pow(1.5, sseReconnectAttempts));
+	const delay = Number.isFinite(retryAfterMs)
+		? Math.min(MAX_SSE_RECONNECT_DELAY_MS, Math.max(0, retryAfterMs))
+		: exponentialDelay + Math.random() * 1000;
+	sseReconnectAttempts++;
+	sseReconnectTimer = setTimeout(() => {
+		sseReconnectTimer = null;
+		setupSseStream();
+	}, delay);
+};
+
+const onSseEvent = (handler) => {
+	sseListeners.add(handler);
+	return () => sseListeners.delete(handler);
+};
+
+const dispatchSseEvent = (type, data) => {
+	sseListeners.forEach((listener) => {
+		try {
+			listener(type, data);
+		} catch (error) {
+			console.error('SSE listener error:', error);
+		}
+	});
+};
+
+const updateSseIndicator = (state, label) => {
+	const indicator = getElement('sse-status');
+	const labelEl = getElement('sse-label');
+	if (!indicator) return;
+	indicator.className = `sse-indicator ${state}`;
+	indicator.title = `Real-time stream: ${label}`;
+	if (labelEl) labelEl.textContent = label;
+};
+
+const showToast = (message, type = 'info', durationMs = 4000) => {
+	let container = getElement('toast-container');
+	if (!container) {
+		container = element('div', { id: 'toast-container', className: 'toast-container' });
+		document.body?.append(container);
+	}
+	const toast = element('div', { className: `toast toast-${type}`, text: message });
+	container?.append(toast);
+	setTimeout(() => {
+		if (toast.style) toast.style.opacity = '0';
+		setTimeout(() => {
+			if (typeof toast.remove === 'function') toast.remove();
+		}, 250);
+	}, durationMs);
+};
+
+const disconnectSse = () => {
+	if (sseReconnectTimer) {
+		clearTimeout(sseReconnectTimer);
+		sseReconnectTimer = null;
+	}
+	if (sseAbortController) {
+		try {
+			sseAbortController.abort();
+		} catch (_) {
+			// Fail-safe
+		}
+		sseAbortController = null;
+	}
+	sseReconnectAttempts = 0;
+	updateSseIndicator('disconnected', 'Offline');
+};
+
+const setupSseStream = async () => {
+	if (typeof window === 'undefined' || typeof window.fetch === 'undefined') {
+		return;
+	}
+	if (sseReconnectTimer) {
+		clearTimeout(sseReconnectTimer);
+		sseReconnectTimer = null;
+	}
+	if (sseAbortController) {
+		try {
+			sseAbortController.abort();
+		} catch (_) {
+			// Fail-safe
+		}
+		sseAbortController = null;
+	}
+
+	const headers = {
+		Accept: 'text/event-stream',
+	};
+
+	if (authState.enabled && authState.user) {
+		try {
+			const token = await authState.user.getIdToken();
+			headers.Authorization = `Bearer ${token}`;
+		} catch (_) {
+			updateSseIndicator('disconnected', 'Auth error');
+			return;
+		}
+	} else {
+		const apiKey = getElement('api-key')?.value || '';
+		if (apiKey) {
+			headers['x-api-key'] = apiKey;
+		}
+	}
+
+	if (!headers.Authorization && !headers['x-api-key']) {
+		updateSseIndicator('disconnected', 'Offline');
+		return;
+	}
+
+	updateSseIndicator('connecting', 'Connecting…');
+
+	const baseUrl = getApiBaseUrl();
+	const streamUrl = `${baseUrl}/api/admin/events`;
+	const controller = new AbortController();
+	sseAbortController = controller;
+
+	try {
+		const response = await fetch(streamUrl, {
+			method: 'GET',
+			headers,
+			signal: controller.signal,
+		});
+
+		if (!response.ok) {
+			const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+			if (!retryable) {
+				updateSseIndicator('disconnected', 'Unavailable');
+				return;
+			}
+			const error = new Error(`SSE stream HTTP ${response.status}`);
+			error.retryAfterMs = getRetryAfterMs(response);
+			throw error;
+		}
+
+		updateSseIndicator('connected', 'Live');
+		sseReconnectAttempts = 0;
+
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder();
+		let buffer = '';
+
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) {
+				if (sseAbortController === controller) scheduleSseReconnect();
+				return;
+			}
+			buffer += decoder.decode(value, { stream: true });
+			const blocks = buffer.split('\n\n');
+			buffer = blocks.pop() || '';
+
+			for (const block of blocks) {
+				const trimmed = block.trim();
+				if (!trimmed || trimmed.startsWith(':')) continue;
+
+				let eventType = 'message';
+				const dataLines = [];
+				for (const line of trimmed.split('\n')) {
+					if (line.startsWith('event:')) {
+						eventType = line.slice(6).trim();
+					} else if (line.startsWith('data:')) {
+						dataLines.push(line.slice(5).trim());
+					}
+				}
+
+				if (eventType === 'connected') {
+					updateSseIndicator('connected', 'Live');
+					continue;
+				}
+
+				if (dataLines.length > 0) {
+					try {
+						const data = JSON.parse(dataLines.join('\n'));
+						dispatchSseEvent(eventType, data);
+						if (eventType === 'job-progress') {
+							if (data.status === 'completed') {
+								showToast(`Job ${String(data.jobId).slice(0, 8)}… completed`, 'success');
+							} else if (data.status === 'failed' || data.status === 'timed_out') {
+								showToast(`Job ${String(data.jobId).slice(0, 8)}… ${data.status}: ${data.error || 'Failed'}`, 'error');
+							}
+						} else if (eventType === 'scanner-result') {
+							showToast(`Scanner preset completed${data.name ? `: ${data.name}` : ''}`, 'info');
+						} else if (eventType === 'alert-delivered') {
+							const channels = Array.isArray(data.channels) ? data.channels.join(', ') : 'channels';
+							showToast(`Alert delivered: ${data.symbol || 'symbol'} (${channels})`, 'success');
+						} else if (eventType === 'delivery-failure') {
+							showToast(`Delivery failure: ${data.symbol || 'symbol'} (${data.channel || 'channel'}): ${data.error || 'error'}`, 'error');
+						}
+					} catch (err) {
+						console.error('Failed to parse SSE event payload:', err);
+					}
+				}
+			}
+		}
+	} catch (error) {
+		if (controller.signal.aborted) {
+			return;
+		}
+		console.error('SSE stream error:', error);
+		scheduleSseReconnect(error.retryAfterMs);
+	}
+};
+
 
 const parseJson = (value, label) => {
 	if (!value.trim()) return undefined;
@@ -2912,6 +3144,160 @@ const createOutcomesSummaryForm = () => {
 	return form;
 };
 
+const renderOutcomesCalibrationBlocks = (data) => {
+	const calibration = asObject(data && data.calibration);
+	const wrap = element('div', { className: 'dashboard' });
+	const metrics = element('div', { className: 'metric-grid' });
+	wrap.append(metrics);
+
+	const available = calibration.available === true;
+	const totalScored = calibration.totalScoredAlerts ?? 0;
+	const suggestedThreshold = calibration.suggestedThreshold;
+	const rationale = calibration.suggestedThresholdRationale || '—';
+
+	metrics.append(
+		createMetricCard(
+			'Scored alerts',
+			formatJobValue(totalScored),
+			available ? 'Sufficient sample size' : 'Minimum 20 scored alerts required',
+		),
+		createMetricCard(
+			'Suggested threshold',
+			suggestedThreshold !== null && suggestedThreshold !== undefined ? `${suggestedThreshold}` : '—',
+			rationale,
+		),
+	);
+
+	const buckets = Array.isArray(calibration.buckets) ? calibration.buckets : [];
+	if (buckets.length) {
+		const section = element('section', { className: 'dashboard-section' });
+		section.append(element('h3', { text: 'Calibration buckets' }));
+		const table = element('table', { className: 'data-table' });
+		const head = element('tr');
+		['Confidence Range', 'Alerts', 'Avg Return (1h)', 'Avg Return (4h)', 'Target Hit Rate'].forEach((label) => head.append(element('th', { text: label })));
+		table.append(head);
+		buckets.forEach((b) => {
+			const detail = asObject(b);
+			const row = element('tr');
+			const hitRatePct = detail.targetHitRate !== undefined && detail.targetHitRate !== null
+				? `${Math.round(detail.targetHitRate * 100)}%`
+				: '—';
+			const ret1h = detail.avgReturn1h !== undefined && detail.avgReturn1h !== null
+				? `${detail.avgReturn1h > 0 ? '+' : ''}${detail.avgReturn1h}%`
+				: '—';
+			const ret4h = detail.avgReturn4h !== undefined && detail.avgReturn4h !== null
+				? `${detail.avgReturn4h > 0 ? '+' : ''}${detail.avgReturn4h}%`
+				: '—';
+			row.append(
+				element('td', { text: detail.range || '—' }),
+				element('td', { text: formatJobValue(detail.count ?? 0) }),
+				element('td', { text: ret1h }),
+				element('td', { text: ret4h }),
+				element('td', { text: hitRatePct }),
+			);
+			table.append(row);
+		});
+		section.append(table);
+		wrap.append(section);
+	}
+
+	return wrap;
+};
+
+const createOutcomesCalibrationForm = () => {
+	const definition = { method: 'GET', path: '/api/outcomes/calibration', label: 'Load outcomes calibration' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const symbol = addField(form, 'Symbol', 'symbol', { placeholder: 'BTCUSDT or BINANCE:BTCUSDT' });
+	const exchange = addField(form, 'Exchange', 'exchange', { placeholder: 'BINANCE' });
+	const windowField = addField(form, 'Window', 'window', { tag: 'select' });
+	[
+		['4h', '4h (Default)'],
+		['1h', '1h'],
+		['1D', '1D'],
+		['1W', '1W'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		windowField.append(option);
+	});
+	const from = addField(form, 'From', 'from', { placeholder: 'ISO-8601 timestamp' });
+	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
+	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 1000, value: 1000 });
+
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const blocks = element('div', { className: 'summary-host' });
+	let lastRawJson = '';
+	const rawOutput = element('pre', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.append(
+		element('summary', { text: 'Show raw calibration response' }),
+		rawCopyButton,
+		rawOutput,
+	);
+	form.append(button, output, blocks, rawToggle);
+
+	let calibrationGeneration = 0;
+	const invalidateCalibration = () => {
+		calibrationGeneration += 1;
+		button.disabled = false;
+		blocks.replaceChildren();
+		lastRawJson = '';
+		rawOutput.textContent = '';
+		rawCopyButton.hidden = true;
+		output.textContent = 'Filters changed — load outcomes calibration to refresh.';
+	};
+	[symbol, exchange, windowField, from, to, limit].forEach((field) => {
+		field.addEventListener('input', invalidateCalibration);
+		field.addEventListener('change', invalidateCalibration);
+	});
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		const generation = ++calibrationGeneration;
+		const query = Object.fromEntries(Object.entries({
+			limit: limit.value,
+			symbol: symbol.value,
+			exchange: exchange.value,
+			window: windowField.value,
+			from: from.value,
+			to: to.value,
+		}).filter(([, value]) => value !== ''));
+		sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button,
+			output,
+			isCurrent: () => generation === calibrationGeneration,
+			formatResponse: ({ summary: sumText, status: respStatus, elapsed, data }) => {
+				if (!data || !data.calibration) return `${sumText}\nHTTP ${respStatus} · ${elapsed} ms\n\nNo calibration data returned.`;
+				lastRawJson = JSON.stringify(data, null, 2);
+				return `${sumText}\nHTTP ${respStatus} · ${elapsed} ms`;
+			},
+		}).then((data) => {
+			if (generation !== calibrationGeneration) return;
+			if (!data || !data.calibration) {
+				blocks.replaceChildren();
+				lastRawJson = '';
+				rawOutput.textContent = '';
+				rawCopyButton.hidden = true;
+				return;
+			}
+			blocks.replaceChildren(renderOutcomesCalibrationBlocks(data));
+			rawOutput.textContent = lastRawJson;
+			rawCopyButton.hidden = false;
+		});
+	});
+	return form;
+};
+
 const getQueryEnum = (contract, definition, name) => {
 	const operation = getOperation(contract, definition);
 	const parameter = getParameters(contract, operation).find((item) => item.name === name);
@@ -3206,6 +3592,7 @@ const formatJobProgress = (progress) => {
 const createJobSummary = (job, onSelect) => {
 	const card = element('article', { className: 'operation-card' });
 	const jobId = formatJobValue(job && job.jobId);
+	if (job && job.jobId) card.dataset.jobId = job.jobId;
 	const jobHeading = element('h3');
 	jobHeading.append(
 		element('span', { text: jobId }),
@@ -3493,13 +3880,28 @@ const createJobStatusForm = () => {
 		Promise.resolve(requestStatus(false)).catch(() => {});
 	});
 
+	const unsubscribeSse = onSseEvent((type, data) => {
+		if (type === 'job-progress' && data && data.jobId) {
+			if (jobIdInput && jobIdInput.value.trim() === data.jobId) {
+				Promise.resolve(requestStatus(true)).catch(() => {});
+			}
+		}
+	});
+
 	detachActiveViewPoll = () => {
 		statusRequestVersion += 1;
 		stopPollTimer();
+		unsubscribeSse();
 	};
 
 	return {
 		form,
+		stopPollTimer,
+		destroy: () => {
+			statusRequestVersion += 1;
+			stopPollTimer();
+			unsubscribeSse();
+		},
 		selectJob: async (selectedJobId, options = {}) => {
 			statusRequestVersion += 1;
 			jobIdInput.value = selectedJobId;
@@ -4513,6 +4915,7 @@ const PLAYGROUND_STRUCTURED_RENDERERS = {
 	'POST /api/jobs/tradingview-analysis': (data) => (data && (data.jobId || data.status) ? createJobPanel(data) : null),
 	'GET /api/outcomes/{id}': (data) => (data && data.id ? createOutcomeDetailPanel(data) : null),
 	'GET /api/outcomes/summary': (data) => (data && data.summary ? renderOutcomesSummaryBlocks(data) : null),
+	'GET /api/outcomes/calibration': (data) => (data && data.calibration ? renderOutcomesCalibrationBlocks(data) : null),
 };
 
 const getPlaygroundRenderer = (definition) => {
@@ -5716,6 +6119,7 @@ const renderView = async (name) => {
 		if (name === 'outcomes') {
 			view.append(createOutcomesListForm());
 			view.append(createOutcomesSummaryForm());
+			view.append(createOutcomesCalibrationForm());
 			return;
 		}
 		if (name === 'jobs') {
@@ -5872,6 +6276,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 		getElement('save-key')?.click();
 	});
 
+	getElement('save-key')?.addEventListener('click', () => {
+		if (getElement('api-key')?.value) setupSseStream();
+	});
+
+	getElement('clear-key')?.addEventListener('click', () => {
+		disconnectSse();
+	});
+
 	const config = await loadAuthConfig();
 	if (config.enabled) {
 		await setupFirebaseAuth(config);
@@ -5882,5 +6294,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 	setHidden('firebase-auth', true);
 	setHidden('legacy-connection', false);
 	setupLegacyConsole();
+	if (getElement('api-key')?.value) setupSseStream();
 	renderView('overview');
 });
