@@ -453,6 +453,34 @@ describe('Analyzer - Unit Tests', () => {
 			expect.objectContaining({ classifierDevChecked: true }),
 		);
 	});
+
+	it('leaves cached no-event results eligible after classifier.dev fails', async () => {
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeClassifierDev = require('../../src/services/classifierDevClient');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		activeClassifierDev.isEnabled.mockReturnValue(true);
+		activeClassifierDev.classifyHeadline.mockResolvedValue(null);
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'none',
+			event_significance: 0,
+			sentiment_score: 0,
+			headline: 'Market-moving headline',
+			confidence: 0.2,
+			sources: ['https://example.com/news'],
+		});
+		const analyzer = new NewsAnalyzer();
+		analyzer.cache.get = jest.fn().mockResolvedValue(null);
+		analyzer.cache.set = jest.fn().mockResolvedValue(true);
+		analyzer.getMarketContext = jest.fn().mockResolvedValue(null);
+
+		await analyzer.analyzeSymbolInternal('BTCUSDT', 'req-1');
+
+		expect(analyzer.cache.set).toHaveBeenCalledWith(
+			'BTCUSDT',
+			'none',
+			expect.objectContaining({ classifierDevChecked: false }),
+		);
+	});
 });
 
 describe('Analyzer - Grounding Calibration Surface', () => {

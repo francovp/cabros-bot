@@ -848,6 +848,7 @@ class NewsAnalyzer {
 	async analyzeSymbolInternal(symbol, requestId, tokenUsage, routing = {}, options = {}) {
 		const { dryRun = false } = options;
 		const classifierDevEnabled = classifierDevClient.isEnabled();
+		let classifierDevChecked = false;
 
 		// Try cache first
 		if (!dryRun) {
@@ -1074,6 +1075,7 @@ class NewsAnalyzer {
 
 		if (geminiAnalysis.event_category === EventCategory.NONE && classifierDevEnabled) {
 			const headline = typeof geminiAnalysis.headline === 'string' ? geminiAnalysis.headline.trim() : '';
+			classifierDevChecked = !headline;
 			if (headline) {
 				const classified = await classifierDevClient.classifyHeadline(`${symbol}: ${headline}`, {
 					labels: Object.values(EventCategory),
@@ -1081,6 +1083,7 @@ class NewsAnalyzer {
 					signal: options.signal,
 					deadline: options.analysisDeadline ?? options.deadline,
 				});
+				classifierDevChecked = Boolean(classified);
 				if (classified
 					&& Object.values(EventCategory).includes(classified.label)
 					&& classified.label !== EventCategory.NONE
@@ -1102,7 +1105,7 @@ class NewsAnalyzer {
 			if (!dryRun) {
 				await this.cache.set(symbol, EventCategory.NONE, {
 					alert: null,
-					classifierDevChecked: classifierDevEnabled,
+					classifierDevChecked,
 					analysisResult: {
 						symbol,
 						status: AnalysisStatus.ANALYZED,
