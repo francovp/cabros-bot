@@ -537,6 +537,51 @@ describe('HTF Alignment Formatter (Issue #635)', () => {
 			expect(nestedVerdict.classification).toBe('aligned');
 			expect(nestedVerdict.text).toBe('📈 HTF: ALINEADO');
 		});
+
+		it('renders a bias-only payload instead of failing open to null', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { bias: 'bullish' },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('still fails open to null when a bias-only payload has no resolvable side', () => {
+			expect(resolveHtfAlignment({ multiTimeframeData: { bias: 'bullish' } })).not.toBeNull();
+			expect(resolveHtfAlignment({ multiTimeframeData: {} })).toBeNull();
+		});
+
+		it('normalizes an object-valued root trend at the root trend position', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { trend: { direction: 'bullish' }, alignment: { direction: 'bearish' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('normalizes an object-valued nested trend at the nested trend position', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { alignment: { status: 'bullish', trend: { direction: 'bearish' } } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('counter-trend');
+			expect(result.text).toBe('📉 HTF: EN CONTRA');
+		});
+
+		it('normalizes an object-valued direction at the root direction position', () => {
+			const result = resolveHtfAlignment({
+				side: 'SELL',
+				multiTimeframeData: { direction: { action: 'SELL' }, alignment: { direction: 'bullish' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
 	});
 
 	describe('formatHtfAlignment() with RemoteConfig gating', () => {
