@@ -517,6 +517,26 @@ describe('HTF Alignment Formatter (Issue #635)', () => {
 			expect(result.classification).toBe('counter-trend');
 			expect(result.text).toBe('📉 HTF: EN CONTRA');
 		});
+
+		it('prefers a nested alignment status over a contradictory root status', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { status: 'bearish', alignment: { status: 'bullish' } },
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('aligned');
+			expect(result.text).toBe('📈 HTF: ALINEADO');
+		});
+
+		it('agrees with rawStatus when only the root status is directional', () => {
+			const nestedVerdict = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { status: 'bearish', alignment: { status: 'aligned' } },
+			});
+			expect(nestedVerdict).not.toBeNull();
+			expect(nestedVerdict.classification).toBe('aligned');
+			expect(nestedVerdict.text).toBe('📈 HTF: ALINEADO');
+		});
 	});
 
 	describe('formatHtfAlignment() with RemoteConfig gating', () => {

@@ -202,24 +202,37 @@ function resolveHtfAlignment(enriched = {}) {
 		//
 		// The chain is built from the original payload fields, not from the collapsed
 		// `rawDirection`, and its order matches `resolveDirectionFromRaw()` in
-		// marketScannerScoring.js term for term — root direction/trend/bias, then nested
-		// alignment fields, then the recommendation token — so HTF rendering and scanner
-		// ranking agree on precedence rather than merely on vocabulary. (Rebuilding from
-		// `rawDirection` would invert root/nested precedence, because `rawDirection`
-		// reads `alignment.direction` before `multiTimeframe.direction`.)
+		// marketScannerScoring.js term for term — root direction/trend/bias, then the
+		// nested alignment direction and trend, then the nested status before the root
+		// status, then the trend and recommendation token lists — so HTF rendering and
+		// scanner ranking agree on precedence rather than merely on vocabulary.
+		// (Rebuilding from `rawDirection` would invert root/nested precedence, because
+		// `rawDirection` reads `alignment.direction` before `multiTimeframe.direction`.)
+		// Note the direction fields are root-first but the statuses are nested-first:
+		// that asymmetry is what both `rawStatus` above and `resolveDirectionFromRaw()`
+		// actually do, and keeping it means the chosen direction and the chosen status
+		// verdict come from the same level of the payload.
 		//
 		// No rawStatus guard is needed: `normalizeTrendDirection` never matches a
 		// confluence verdict ('aligned', 'counter-trend'), so a status can only enter
 		// this chain when it is genuinely directional ('bullish' / 'bearish'), which is
 		// exactly the case that should take precedence over a recommendation action.
+		// The status group is the single token `rawStatus` selected, so the chosen
+		// direction and the chosen status verdict always come from the same level of
+		// the payload. Consulting the other level's status here would let a
+		// non-directional nested verdict (e.g. 'aligned') fall through to a
+		// contradictory directional root verdict, contradicting `rawStatus`.
+		const authoritativeStatus = (typeof alignment.status === 'string' && alignment.status.trim())
+			? alignment.status
+			: multiTimeframe.status;
+
 		const directionalCandidates = [
 			multiTimeframe.direction,
 			multiTimeframe.trend,
 			multiTimeframe.bias,
 			alignment.direction,
 			alignment.trend,
-			multiTimeframe.status,
-			alignment.status,
+			authoritativeStatus,
 			...trendTokens,
 			...recommendationTokens,
 		];
