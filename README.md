@@ -958,6 +958,7 @@ Run TradingView MCP `volume_confirmation_analysis` on demand and return structur
 
 - `symbol`: Required `EXCHANGE:SYMBOL` identifier.
 - `timeframe`: Optional indicator interval. Defaults to `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` or `1h`.
+- `dryRun`: Optional. When `true` (or `?dryRun=true`), validates the request and returns the parsed `symbol`/`exchange`/`timeframe` echo with `dryRun: true`, `decision: 'unknown'`, `volumeRatio: null`, and `analysis: null` — no MCP call is made. Useful for validating request shape before paying the ~360s MCP budget.
 
 **Response (JSON):**
 ```json
@@ -999,6 +1000,7 @@ Analyze one `EXCHANGE:SYMBOL` with TradingView MCP and return the Spanish report
 }
 ```
 
+- `dryRun`: Optional. When `true` (or `?dryRun=true`), validates the request and returns the parsed `symbol`/`exchange`/`timeframe`/`analysisMode`/`includeMultiTimeframe` echo with `dryRun: true`, `side: null`, `analysis: null`, and `analysisStatus: 'dry-run'` — no MCP `coin_analysis` (or `multi_timeframe_analysis`) call is made. Useful for probe requests that want to avoid the ~120s MCP budget.
 The response includes `alertText`, normalized price/volume/indicator/signal/assessment data, sentiment/news/confluence, multi-timeframe results, and multi-agent consensus results (`multiAgent`) when requested (or when `ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT=true`), plus directional `risk` and `decision` metadata. When multi-agent consensus disagrees with the directional signal (decision is `HOLD`, confidence is `Low`, or decision opposes side), an advisory warning (`Consenso multi-agente no confirma la señal`) is appended to `decision.warnings` without flipping the primary action. `decision.action` is `BUY` or `SELL` only when the data and risk levels are sufficient; otherwise it is `NO_TRADE`. This endpoint never delivers notifications or submits orders. Invalid symbols return `400 INVALID_REQUEST`, TradingView failures return `502 SYMBOL_ANALYSIS_FAILED`, and deadline expiry returns `504 SYMBOL_ANALYSIS_TIMEOUT`. Upstream multi-agent failures fail open and mark `analysisStatus: "partial"` while preserving the base analysis.
 
 ### POST /api/webhook/market-scanner-alert
