@@ -97,6 +97,18 @@ const DISPLAY_LABELS = {
 	cloudflareAig: 'Cloudflare AI Gateway',
 };
 
+const VIEW_TITLES = {
+	overview: 'Overview',
+	status: 'Status',
+	alerts: 'Alerts',
+	outcomes: 'Outcomes',
+	presets: 'Presets',
+	jobs: 'Jobs',
+	analysis: 'Analysis',
+	playground: 'Playground',
+};
+const CONSOLE_TITLE_BASE = 'Cabros Bot Console';
+
 const ALLOWED_BACKEND_ORIGINS = new Set([
 	'https://cabros-bot-production.up.railway.app',
 ]);
@@ -6183,7 +6195,26 @@ const navigateToView = (name) => {
 	const buttons = document.querySelectorAll('[data-view]');
 	buttons.forEach((button) => button.removeAttribute('aria-current'));
 	[...buttons].find((button) => button.dataset.view === name)?.setAttribute('aria-current', 'page');
-	return renderView(name);
+	setViewTitle(name);
+	return renderView(name).then(() => moveFocusToView(name));
+};
+
+const setViewTitle = (name) => {
+	if (typeof document === 'undefined' || !document) return;
+	const label = VIEW_TITLES[name] || (name ? name[0].toUpperCase() + name.slice(1) : '');
+	document.title = label ? `${label} · ${CONSOLE_TITLE_BASE}` : CONSOLE_TITLE_BASE;
+};
+
+const moveFocusToView = (name) => {
+	if (typeof document === 'undefined' || !document) return;
+	const view = document.getElementById('view');
+	if (!view) return;
+	if (view.tabIndex === undefined || view.tabIndex === null) {
+		try { view.tabIndex = -1; } catch (_) { /* readonly in some test envs */ }
+	}
+	if (typeof view.focus === 'function') {
+		try { view.focus(); } catch (_) { /* focus is best-effort */ }
+	}
 };
 
 const setupLegacyConsole = ({ persist = true } = {}) => {
@@ -6257,5 +6288,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 	setHidden('legacy-connection', false);
 	setupLegacyConsole();
 	if (getElement('api-key')?.value) setupSseStream();
-	renderView('overview');
+	setViewTitle('overview');
+	renderView('overview').then(() => moveFocusToView('overview'));
+
 });
