@@ -10,6 +10,14 @@ license: MIT
 One HTTP call takes up to a thousand texts at a time and comes back in about a
 second, each with a confidence you can act on.
 
+## Data handling before any request
+
+Every CLI or HTTP call sends its inputs to a third-party service. Before sending:
+
+- Treat non-public text and text with unknown sensitivity as private, including source code, logs, tickets, conversations, incident reports, and operational details. Never send raw private text, credentials, tokens, or secrets.
+- Send private or unknown-sensitivity material only as a sanitized, non-sensitive derivative, after the user explicitly approves sharing that specific redacted content with `classifier.dev`. A request to classify text or invocation of this skill is not consent.
+- If approval is absent, sensitivity cannot be verified, or redaction would remove relevant meaning, classify locally or ask the user before making any request. Check public inputs for accidentally included secrets too.
+
 ## When this is worth a network call
 
 You are a language model. You can already classify any text you can see, for
