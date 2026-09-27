@@ -131,11 +131,17 @@
 				} else {
 					const numeric = ['number', 'integer'].includes(type);
 					const multiline = /text|message|prompt|description/i.test(props.title) && !numeric;
-					control = h(multiline ? 'textarea' : 'input', { ...attrs, rows: multiline ? 3 : undefined,
+					const inputControl = h(multiline ? 'textarea' : 'input', { ...attrs, rows: multiline ? 3 : undefined,
 						type: numeric ? 'number' : /secret|password|token|api.?key/i.test(props.title) ? 'password' : schema.format === 'uri' ? 'url' : 'text',
 						step: numeric ? type === 'integer' ? 1 : 'any' : undefined,
 						onInput: (e) => update(e.target.value === '' ? undefined : numeric ? e.target.valueAsNumber : e.target.value),
 					});
+					control = numeric && Array.isArray(schema.type) && schema.type.includes('null')
+						? h('div', { class: 'nullable-number' }, [inputControl, h('label', { class: 'checkbox-label' }, [
+							h('input', { type: 'checkbox', checked: value === null, onChange: (e) => update(e.target.checked ? null : undefined) }),
+							'No value (null)',
+						])])
+						: inputControl;
 				}
 				return h('div', { class: 'visual-field' }, [h('label', { for: id }, title), control, hint]);
 			};

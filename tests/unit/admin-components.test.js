@@ -1,7 +1,45 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 const { schemaFor, fieldSchema, present, typeOf, plainText } = require('../../src/admin/admin-components');
 const contract = require('../../src/openapi/openapi.json');
+
+const renderNullableNumberField = (value) => {
+	const registered = {};
+	const h = (type, props, children) => {
+		if (children === undefined && (Array.isArray(props) || typeof props === 'string')) {
+			children = props;
+			props = {};
+		}
+		return { type, props: props || {}, children: Array.isArray(children) ? children : children === undefined ? [] : [children] };
+	};
+	vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../src/admin/admin-components.js'), 'utf8'), {
+		window: { Vue: { h, ref: (initial) => ({ value: initial }), defineCustomElement: (definition) => definition } },
+		customElements: { define: (name, definition) => { registered[name] = definition; } },
+	});
+
+	const updates = [];
+	const schema = { type: 'object', properties: { quietHoursStart: { type: ['integer', 'null'], minimum: 0, maximum: 23 } } };
+	const wrapper = registered['cabros-fields'].setup({ value: { quietHoursStart: value }, schema, heading: 'Options' }, {
+		emit: (_event, next) => updates.push(next),
+	})();
+	const root = wrapper.type.setup(wrapper.props, { emit: (_event, next) => wrapper.props.onUpdate(next) })();
+	const find = (node, predicate) => {
+		if (!node || typeof node !== 'object') return undefined;
+		if (predicate(node)) return node;
+		for (const child of node.children || []) {
+			const found = find(child, predicate);
+			if (found) return found;
+		}
+		return undefined;
+	};
+	const field = find(root, (node) => node.type === wrapper.type && node.props.title === 'Quiet Hours Start');
+	const rendered = field.type.setup(field.props, { emit: (_event, next) => field.props.onUpdate(next) })();
+	const nullOption = find(rendered, (node) => node.type === 'input' && node.props.type === 'checkbox');
+	return { nullOption, updates };
+};
 
 describe('visual admin components', () => {
 	it('redacts credentials in result text without hiding token usage metrics', () => {
@@ -25,6 +63,14 @@ describe('visual admin components', () => {
 		const schema = schemaFor(contract, { $ref: '#/components/schemas/BinanceOrderRequest' });
 		expect(typeOf(schema.properties.quantity, '0.1234567890123456789')).toBe('string');
 		expect(typeOf({ type: 'integer' }, 3)).toBe('integer');
+	});
+
+	it('emits null when the operator selects the nullable number option', () => {
+		const { nullOption, updates } = renderNullableNumberField(22);
+
+		expect(nullOption).toBeDefined();
+		nullOption.props.onChange({ target: { checked: true } });
+		expect(updates).toEqual([{ quietHoursStart: null }]);
 	});
 
 	it('renders simulated delivery and nested secrets truthfully without changing API data', () => {
