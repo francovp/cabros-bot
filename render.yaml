@@ -345,6 +345,8 @@ services:
   envVars:
   - key: ENABLE_SIGNAL_OUTCOME_TRACKING
     sync: false
+  - key: ENABLE_FIREBASE_REMOTE_CONFIG
+    sync: false
   - key: ENABLE_SENTRY
     sync: false
   - key: SENTRY_DSN

@@ -69,6 +69,7 @@ describe('Volume confirmation endpoint', () => {
 			symbol: 'BTCUSDT',
 			exchange: 'BINANCE',
 			timeframe: '4h',
+			signal: expect.any(AbortSignal),
 		});
 	});
 

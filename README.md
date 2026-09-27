@@ -24,6 +24,8 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `BOT_TOKEN` - Telegram bot token (from BotFather). Required only when `ENABLE_TELEGRAM_BOT=true` and the app is expected to launch Telegraf outside PR previews
 - `TELEGRAM_CHAT_ID` - Telegram chat ID where alerts are sent
 - `ENABLE_TELEGRAM_BOT` - Enable Telegram bot (`true` or `false`)
+- `ENABLE_TELEGRAM_COMMAND_RATE_LIMITING` - Enable per-chat throttling for expensive Telegram commands (`true` by default; security control, excluded from Remote Config)
+- `TELEGRAM_COMMAND_RATE_LIMITS_JSON` - Optional JSON overrides for per-command `max` and `windowMs`; defaults are `/precio` 10 per 60 seconds and `/analisis`, `/scanner`, `/noticias` 3 per hour. Values are bounded to `max` 1-1000 and `windowMs` 1-86400000; invalid values use defaults (security control, excluded from Remote Config)
 
 ### Optional Variables
 
@@ -31,10 +33,14 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 - `TELEGRAM_TOPIC_ROUTES` - Optional mapping of alert categories/sources to Telegram forum topic `message_thread_id` values. Format: comma-separated pairs `category:threadId` (e.g. `webhook-signal:101,market-scanner:202,news-monitor:303,default:0`) or JSON object string `{"webhook-signal":101,"market-scanner":202}`. Thread ID `0` or `null` routes alerts to the chat's General topic.
 - `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` - Dedicated Telegram chat ID for admin/error notices (optional, falls back to `TELEGRAM_CHAT_ID`)
+- `ENABLE_STRICT_CHAT_ID_VALIDATION` - When `true`, validates per-request `telegramChatId` overrides as numeric chat IDs (5-20 digits, optional `-` prefix) and `whatsappChatId` overrides as GreenAPI `<digits>@<c.us|g.us>` chat IDs. Malformed or hostile IDs are rejected with `400 INVALID_REQUEST`. Default: `false` (backwards-compatible — any non-empty string is accepted). Classified as **environment-only** for Remote Config parity (controls request-time validation behavior; opt-in operator toggle).
+- `TELEGRAM_ACTION_OPERATOR_USER_IDS` - Comma-separated numeric Telegram user IDs allowed to use inline Replay. Empty or unset rejects replay callbacks; this security control is environment-only and is not published through Remote Config.
 
 #### Security
 
-- `WEBHOOK_API_KEY` - API key used to secure `/api/*` webhook endpoints. Required in production-like environments (`NODE_ENV=production`, Render, Vercel, Railway), where endpoints fail-closed with HTTP 503 if unset. When configured, clients must provide the key via the `x-api-key` header (or the `api-key` query parameter)
+- `WEBHOOK_API_KEY` - API key used to secure `/api/*` webhook endpoints. Required in production-like environments (`NODE_ENV=production`, Render, Vercel, Railway), where endpoints fail-closed with HTTP 503 if unset. When configured, clients must provide the key via the `x-api-key` header. The legacy `api-key` query parameter is deprecated ([GH-756](https://github.com/francovp/cabros-bot/issues/756)) — query strings may leak through reverse-proxy access logs, so a one-time deprecation warning is emitted on use; migrate to the header before the announced sunset date.
+- `API_KEY_QUERY_SUNSET` - Optional UTC sunset date (`YYYY-MM-DD`) for the deprecated `api-key` query-parameter auth path. After this date, requests authenticated only via `?api-key=...` are rejected with `401 API_KEY_QUERY_REMOVED`; the `x-api-key` header continues to work. Leave unset to keep accepting the legacy query parameter indefinitely. Classified as environment-only for Remote Config parity (auth/transport sunset policy; excluded from the Remote Config template).
+- `WEBHOOK_MAX_BODY_SIZE` - Maximum accepted webhook request body size for `/api/webhook/*` and `/api/news-monitor` (default `256kb`). Applies to `application/json`, `text/plain`, and `application/x-www-form-urlencoded` bodies. Accepts human-readable units (`b`, `kb`, `mb`, `gb`). Values outside `[1kb, 10mb]` or malformed strings fall back to the default with a startup warning. Oversized payloads are rejected with a structured `413 PAYLOAD_TOO_LARGE` response before any controller or middleware downstream of the body parsers runs, so a misconfigured client cannot consume CPU/memory by streaming a 10 MB body. Classified as environment-only (security control; excluded from Remote Config).
 - `ENABLE_FIREBASE_ADMIN_AUTH` - Enable opt-in Firebase email/password authentication for the browser admin console (`false` by default)
 - `FIREBASE_WEB_API_KEY` - Public Firebase Web API key used by the browser sign-in flow; not a service-account credential
 - `FIREBASE_AUTH_DOMAIN` - Public Firebase Auth domain used by the browser sign-in flow
@@ -74,10 +80,13 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - Firestore-backed `notificationDeadLetters` records use `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` once per project to enable native TTL and optionally backfill legacy records.
 - `ZERO_CHANNEL_ALERT_COOLDOWN_MS` - Cooldown between admin notifications when all channels are disabled in milliseconds (default: `300000`, Remote Config supported)
 - `ENABLE_API_ONLY_MODE` - Declare intentional API-only mode without notification delivery, suppressing zero-channel alerts and dead-letters (default: `false`, Remote Config supported)
+- `ENABLE_MAINTENANCE_MODE` - Remotely toggleable incident response kill switch (`true` or `false`, default: `false`, Remote Config supported). When active, gates incoming webhook alerts and bot commands with HTTP 503 while preserving `/healthcheck` and `/api/status`.
 
 #### URL Shortening (003-news-monitor)
 
 - `URL_SHORTENER_SERVICE` - URL-shortening provider for WhatsApp citations (optional; defaults to `picsee`; supported values: `picsee`, `tinyurl`, `cuttly`)
+- `URL_SHORTENER_CACHE_MAX_ENTRIES` - Maximum in-memory URL-shortener cache entries before LRU eviction (default: `1000`, range `1`-`100000`; Remote Config supported)
+- `URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES` - Maximum tracked URL-shortener providers (default: `32`, range `1`-`1024`; effective minimum is the number of configured providers)
 - `PICSEE_API_KEY` - PicSee API key, required when PicSee is selected
 - `CUTTLY_API_KEY` - Cuttly API key, required when Cuttly is selected
 - TinyURL uses its free endpoint and requires no credential. Bitly, reurl, and Pixnet0rz.tw are unavailable in the runtime.
@@ -91,6 +100,12 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - `GROUNDING_TIMEOUT_MS` - Grounding request timeout (default: `30000` ms)
 - `GROUNDING_MAX_LENGTH` - Maximum alert text length used in grounding prompts (default: `2000` characters)
 - `ALERT_GROUNDING_COALESCE_MS` - Optional equity-alert search coalescing window in milliseconds (default: `0`, disabled; Remote Config supported)
+
+#### Token Spend Tracking & Cost Budgeting
+
+- `ENABLE_TOKEN_COST_BUDGET` - Enable daily LLM token cost tracking and budget limits (`true` or `false`, default: `false`; Remote Config supported)
+- `TOKEN_COST_DAILY_BUDGET_USD` - Maximum daily spend in USD before LLM calls fail open safely (default: `5.00`, range `0.01`-`1000.00`; Remote Config supported)
+- `TOKEN_COST_WARN_THRESHOLD_PCT` - Percentage of daily budget that triggers an admin Telegram alert (default: `80`, range `1`-`100`; Remote Config supported)
 
 #### Cloudflare AI Gateway
 
@@ -126,6 +141,7 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` - Enable optional `combined_analysis` confluence enrichment for TradingView webhook alerts (`true` or `false`, default: `false`)
 - `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` - Also call `multi_timeframe_analysis` during confluence enrichment (`true` or `false`, default: `false`)
 - `ENABLE_ALERT_HTF_RENDER` - Enable rendering higher-timeframe trend alignment on enriched webhook alerts (`true` or `false`, default: `true`)
+- `ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT` - Enable multi-agent consensus analysis fallback for `/api/webhook/symbol-analysis` (`true` or `false`, default: `false`)
 - `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` - Suppress duplicate channel delivery for the same `exchange|symbol|timeframe|side` signal within its cooldown window; suppressed alerts are still persisted with a `suppressedRepeat: true` marker and opposite-side flips always deliver (`true` or `false`, default: `false`)
 - `ALERT_SIGNAL_COOLDOWN_BARS` - Cooldown length in alert-timeframe bars for repeat suppression (`1`-`10`, default: `1`)
 - Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
@@ -134,10 +150,14 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 
 - `ENABLE_FIRESTORE_ALERT_STORAGE` - Enable Firestore persistence and alert read API (`true` or `false`, default: `false`)
 - `ALERT_STORAGE_RETENTION_DAYS` - Retention for `alerts` and `alertReplays` records in days (`1`-`3650`, default: `90`). New records get `expiresAt`; run `bash ops/configure-firestore-alert-retention.sh` once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
+- **Backup & Disaster Recovery**: To safeguard high-value analytical history (`alerts`, `alertReplays`, `tradingSignalOutcomes`, `scannerPresets`) against permanent TTL deletion, automated scheduled workflows (`.github/workflows/firestore-backup.yml`), managed GCS exports (`ops/export-firestore-managed.sh`), and selective JSONL exports (`pnpm run backup:firestore`, `pnpm run restore:firestore`) are provided. See [`docs/firestore-backup-and-restore.md`](docs/firestore-backup-and-restore.md) for the complete runbook and restore procedures.
 - `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`)
 - `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`)
+- `ENABLE_FIRESTORE_ALERT_FEEDBACK` - Enable Firestore persistence for trader alert feedback (👍/👎 verdicts from inline keyboard callbacks) (`true` or `false`, default: `false`). Disabled falls back to a process-local in-memory surface so the summary endpoints still return aggregate counts in development.
+- `ALERT_FEEDBACK_RETENTION_DAYS` - Retention for `alertFeedback` records in days (`1`-`3650`, default: `90`, matches alert retention). New records get `expiresAt`; backfill + native TTL can be enabled via `ops/configure-firestore-alert-retention.sh` once per Firebase project.
 - `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
 - `SIGNAL_OUTCOME_RETENTION_DAYS` - Retention for `tradingSignalOutcomes` records in days (`1`-`3650`, default: `365`). New records get `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` (or with `BACKFILL=true`) once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
+- `SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES` - Optional comma-separated first-success provider chain (`mcp`, `binance`, `twelve-data`, `gemini`); empty preserves the existing crypto (`mcp,binance,gemini`) and equity (`twelve-data`) defaults. Active chains are reported under `dependencies.signalOutcomeWorker.entryPriceSources`.
 - `ENABLE_EQUITY_MARKET_DATA` - Opt in to equity/forex/index outcome evaluation for `NASDAQ`, `BATS`, `NYSE`, `AMEX`, `NYSE ARCA`, `FX_IDC`, and `SPCFD` signals (`true` or `false`, default: `false`)
 - `EQUITY_MARKET_DATA_PROVIDER` - Equity provider name; currently `twelve-data`
 - `TWELVE_DATA_API_KEY` - Twelve Data API key; sent in the `Authorization` header and never returned by status endpoints
@@ -147,6 +167,12 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access
 - `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization
 - `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a service account JSON file for local development
+
+#### Per-Chat User Preferences
+
+- `ENABLE_FIRESTORE_CHAT_PREFERENCES` - Enable persistent per-chat alert preferences in Cloud Firestore (`true` or `false`, default: `false`, Remote Config supported)
+- `CHAT_PREFERENCES_RETENTION_DAYS` - Retention for `chatPreferences` documents in days (`1`-`365`, default: `90`, Remote Config supported). New records write `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` once per Firebase project to enable native Firestore TTL deletion on `expiresAt`. Reads safely reject expired records past `expiresAt`.
+- `CHAT_PREFERENCES_CACHE_TTL_MS` - In-memory cache TTL for chat preferences in milliseconds (`1000`-`3600000`, default: `60000`, Remote Config supported). Governs local cache expiration before querying Firestore on alert routing and commands.
 
 #### Worker Queue & Poller Execution
 
@@ -187,7 +213,7 @@ When signal-outcome tracking is disabled, or when no measurements exist in the r
 - `FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS` - Maximum template-load wait (default: `10000`, maximum: `30000`)
 - `FIREBASE_REMOTE_CONFIG_MAX_AGE_MS` - Maximum age of a successful template before environment/default fallback (default: `3600000`, maximum: `604800000`)
 
-The initial allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), and `ENABLE_MESSAGE_FOOTER_METADATA`. Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, route/security gates, and Telegram destinations are never read from Remote Config.
+The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), and per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
 
 The service loads once at startup and refreshes on the bounded cadence; it does not fetch Remote Config per alert. `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS` remains environment-only because the worker timer is created during process startup and is not a request-time setting. Disabled, unavailable, timed-out, stale, malformed, or invalid values fail open to the current environment/default behavior. The server-side Remote Config API is currently a Firebase Preview feature, so monitor its quota and error rate before enabling it in production. `firebase-admin` is upgraded to the Node 24-compatible 12.x line (`^12.1.0`, lockfile resolution `12.7.0`).
 
@@ -216,8 +242,10 @@ pnpm test:firebase
 - `RAILWAY_ENVIRONMENT_NAME` / `RAILWAY_GIT_PULL_REQUEST_NUMBER` - Railway preview markers; a PR number or environment name containing a hyphen-delimited `pr` segment disables the bot
 - `RAILWAY_GIT_COMMIT_SHA` / `RAILWAY_GIT_REPO_OWNER` / `RAILWAY_GIT_REPO_NAME` - Railway GitHub deployment metadata used for release and deployment notifications
 - `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel/Railway, and `false` for direct deployments)
+- `REQUEST_TIMEOUT_MS` - Hard request-deadline ceiling for mounted `/api` routes in milliseconds (default: `30000`, valid range: `1000`-`120000`; invalid values fall back to the default). The timeout returns `408 REQUEST_TIMEOUT` with a request ID.
+- `REQUEST_DEADLINE_EXEMPT_PATHS` - Optional comma-separated paths excluded from the deadline; `/healthcheck`, `/ready`, `/openapi.json`, and `/docs` are always exempt. Per-endpoint deadlines such as `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` and `MARKET_SCANNER_TIMEOUT_MS` remain the operation-specific soft budgets inside the global ceiling.
 - `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes; invalid values use the default)
-- `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default). Core `/api/webhook/alert` and `/api/webhook/message` ingest uses an isolated finite bucket of 1,000 requests per window so TradingView bursts do not consume the ordinary client bucket; API-key validation still applies.
+- `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default). Webhook and MCP ingest endpoints (`/api/webhook/alert`, `/api/webhook/message`, `/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, `/api/webhook/volume-confirmation`, `/api/webhook/symbol-analysis`, and `/api/news-monitor`) use an isolated finite bucket of 1,000 requests per window so TradingView and scanner bursts do not consume the ordinary client bucket; API-key validation still applies.
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production). The logger automatically masks sensitive plain-object keys, bare-scalar secrets preceded by sensitive labels, URL query secrets, embedded JSON strings, Authorization/Bearer credentials, Telegram bot tokens, Discord webhook tokens, OpenAI keys, and dynamically registered request-scoped secrets via `registerSecretValue` / `clearSecretValue`.
 - `SERVICE_NAME` - Optional service name included in JSON logs (default: package name or `cabros-bot`)
 
@@ -228,11 +256,16 @@ pnpm test:firebase
 - `NEWS_SYMBOLS_STOCKS` - Default stock symbols if not provided in request (comma-separated)
 - `NEWS_ALERT_THRESHOLD` - Confidence score threshold for sending alerts (default: `0.7`, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` - Cache time-to-live for deduplication (default: `6` hours)
+- `NEWS_CACHE_MAX_ENTRIES` - Maximum in-memory news-cache entries before LRU eviction (default: `5000`, range `1`-`1000000`; Remote Config supported)
+- `NEWS_DELIVERY_LOCK_MAX_ENTRIES` - Maximum in-memory channel delivery leases (default: `1000`, range `1`-`100000`; active leases are preserved)
 - `ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP` - Enable Firestore-backed news deduplication (`true` or `false`, default: `false`; failures fall back to memory)
 - `NEWS_TIMEOUT_MS` - Per-symbol analysis timeout (default: `30000` ms)
 - `NEWS_GEMINI_CONCURRENCY` - Max concurrent Gemini-backed symbol analyses. Production policy is `3`; unset keeps legacy parallel fan-out for backward compatibility.
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` - Max per-symbol retries for Gemini `429 RESOURCE_EXHAUSTED` errors (default: `2`)
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` - Base exponential backoff when Gemini does not provide retry delay metadata (default: `1000` ms)
+- `NEWS_MAX_ALERTS_PER_BATCH` - Maximum alerts delivered per `/api/news-monitor` request (default: `10`, range: `1`-`50`; Remote Config supported)
+- `NEWS_MAX_ALERTS_PER_WINDOW` - Maximum alerts delivered by this process during the volume window (default: `20`, range: `1`-`200`; Remote Config supported)
+- `NEWS_MAX_ALERTS_PER_WINDOW_MS` - Sliding volume-window duration (default: `300000` ms / 5 minutes, range: `1000`-`3600000`; Remote Config supported)
 - `ENABLE_BINANCE_PRICE_CHECK` - Enable Binance crypto price fetching (`true` or `false`, default: `false`)
 - `BINANCE_DATA_BASE_URL` - Optional custom Binance market-data host for public data (klines, ticker, avgPrice), e.g. `https://data-api.binance.vision` (default: unset / `https://api.binance.com`)
 - `BINANCE_FETCH_TIMEOUT_MS` - Binance price request timeout (default: `5000` ms)
@@ -292,6 +325,7 @@ The response and audit logs include only sanitized order metadata. API credentia
 - `PUT /api/scanner-presets/:id` and `DELETE /api/scanner-presets/:id` accept an optional `If-Match: "<version>"` request header for opt-in optimistic concurrency. A missing `If-Match` keeps today's behavior (the write succeeds and increments `version`).
 - A mismatched `If-Match` returns `412 PRECONDITION_FAILED` with the current preset (including `version`) so the client can rebase before retrying.
 - An update targeting a preset whose `lockedUntil` is in the future returns `409 PRESET_LOCKED` with the `lockedUntil` timestamp and the current preset, so an operator save cannot silently overwrite an in-flight sweep's lease.
+- `POST /api/scanner-presets` and `PUT /api/scanner-presets/:id` enforce case-insensitive unique names: a create/update that collides with another preset's name returns `409 NAME_CONFLICT` with the conflicting preset so the operator can rename/reuse the existing record instead of producing an ambiguous duplicate. The current preset can rename itself with a case-only change (e.g. `My Watchlist` → `my watchlist`) without tripping the conflict.
 
 #### Scanner Preset Scheduler
 
@@ -311,6 +345,17 @@ The response and audit logs include only sanitized order metadata. API credentia
 - `NEWS_MONITOR_SCHEDULER_LEASE_MS` - Distributed concurrency lock lease duration in milliseconds (default: `120000`, bounds `10000`-`600000`).
 - `NEWS_MONITOR_SCHEDULER_TIMEOUT_MS` - Per-sweep execution deadline in milliseconds (default: `90000`, bounds `1000`-`600000`).
 - `dependencies.newsMonitorScheduler` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `role`, `running`, `lastRunAt`, `lastRunDurationMs`, `lastRunSymbolCount`, `lastRunExecutedCount`, `lastRunErrorCount`, and `lastError` without secrets.
+
+#### Alert Scheduler
+
+- `ENABLE_ALERT_SCHEDULER` - Enable JSON-defined recurring background runner for news-monitor and market-scanner runs (default: `false`).
+- `ALERT_SCHEDULER_WORKER_ROLE` - Scheduler worker role: `web` (default), `worker`, or `disabled`.
+- `ALERT_SCHEDULER_INTERVAL_MS` - Background sweep interval in milliseconds (default: `60000`, bounds `1000`-`3600000`).
+- `ALERT_SCHEDULER_BATCH_LIMIT` - Maximum due schedules processed per sweep (default: `10`, bounds `1`-`100`).
+- `ALERT_SCHEDULER_TIMEOUT_MS` - Per-sweep execution deadline in milliseconds (default: `90000`, bounds `1000`-`600000`).
+- `ALERT_SCHEDULER_LEASE_MS` - Distributed concurrency lock lease duration in milliseconds (default: `120000`, bounds `10000`-`600000`).
+- `ALERT_SCHEDULER_SCHEDULES` - JSON array defining recurring news and scanner schedules.
+- `dependencies.alertScheduler` in `/api/status` exposes `enabled`, `configured`, `ready`, `status`, `role`, `running`, `scheduleCount`, `lastRunAt`, `lastRunDurationMs`, `lastRunExecutedCount`, `lastRunErrorCount`, and `lastError` without secrets.
 
 ## Setup
 
@@ -386,11 +431,40 @@ The canonical API contract is served publicly at [`/openapi.json`](http://localh
 
 ### GET /healthcheck
 
-Health check endpoint.
+Liveness health check endpoint. The default behavior returns 200 with `uptime` only.
 
-**Response:**
+When called with `?deep=true`, the endpoint reuses the existing channel readiness logic from `/api/status` dependencies and returns 200 when every enabled channel is ready, or 503 when any enabled channel is degraded. Disabled channels are treated as healthy (not required). The endpoint is never API-key protected.
+
+**Default response (200):**
 ```json
 {"uptime":"..."}
+```
+
+**Deep response (200 — all enabled channels ready):**
+```json
+{
+  "status": "healthy",
+  "uptime": 42.5,
+  "channels": {
+    "telegram": { "enabled": true, "ready": true, "status": "ready" },
+    "whatsapp": { "enabled": false, "ready": false, "status": "disabled" },
+    "discord": { "enabled": false, "ready": false, "status": "disabled" }
+  }
+}
+```
+
+**Deep response (503 — enabled channel degraded):**
+```json
+{
+  "status": "degraded",
+  "uptime": 42.5,
+  "degradedChannels": ["whatsapp"],
+  "channels": {
+    "telegram": { "enabled": true, "ready": true, "status": "ready" },
+    "whatsapp": { "enabled": true, "ready": false, "status": "error", "error": "Missing WHATSAPP_API_KEY" },
+    "discord": { "enabled": false, "ready": false, "status": "disabled" }
+  }
+}
 ```
 
 ### GET /ready
@@ -436,10 +510,12 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
 
 When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, `/api/webhook/alert` suppresses duplicate channel delivery for the same `(exchange, symbol, timeframe, side)` signal within a cooldown window of `ALERT_SIGNAL_COOLDOWN_BARS` bars (default `1`). Suppressed requests still return 200 with `suppressedRepeat: true`, empty `results`/`deliveredChannels`, and remain persisted with a suppression marker so replay and audit stay complete. Opposite-side flips always deliver; storage failures fail open to normal delivery. `featureFlags.alertSignalRepeatSuppression` reports the gate and `dependencies.alertSignalRepeatSuppression` exposes non-sensitive counters (`suppressedCount`, `lastSuppressedAt`, `activeTrackedSignals`).
 
+`dependencies.firestoreWriteMetrics` exposes in-memory per-domain Firestore write counters for `AlertStorageService.saveAlert`/`saveReplayAttempt` and `JobRepository.save`. The section is omitted entirely until at least one write has been recorded and resets on process restart, mirroring the existing `deliveryMetrics` pattern. Counters report `writesAttempted`, `writesSucceeded`, `writesFailed`, overall `successRate`, and a per-domain `byDomain` breakdown with sanitized counts so silent persistence failures can be detected without exposing provider responses or credentials.
+
 `featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
 
 When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports Twelve Data readiness and the supported `BATS`/`NASDAQ`/`NYSE`/`AMEX`/`NYSE ARCA`/`FX_IDC`/`SPCFD` exchanges without exposing the API key. Signal outcome tracking uses `/quote` for missing entry prices and `/time_series` for bounded historical bars; provider, timeout, malformed-data, and quota failures mark equity outcomes unavailable without blocking alert delivery. Extended-hours data is excluded by default. Confirm current Twelve Data plan limits and licensing before production use: [pricing](https://twelvedata.com/pricing), [US equities coverage](https://support.twelvedata.com/en/articles/9935903-us-equities-market-data), and [commercial usage](https://support.twelvedata.com/en/articles/5332349-commercial-and-personal-usage).
-`dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
+`dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, active entry-price chains, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
 
 The dedicated worker also persists the same non-sensitive heartbeat to `workerHeartbeats/signal-outcome` in Firestore. Heartbeat writes fail open and never block alert delivery.
 `featureFlags.firebaseRemoteConfig` reports `ENABLE_FIREBASE_REMOTE_CONFIG`. This is server-side Remote Config: the Firebase Admin SDK loads the published template with `initServerTemplate()`, while no Firebase Web/Client SDK configuration is involved. `dependencies.firebaseRemoteConfig` exposes only `enabled`, `configured`, `ready` (true only after a successful, fresh template load), `status` (`ready`, `degraded`, `unknown`, `misconfigured`, or `disabled`), `source` (`remote`, `environment`, `default`, or `disabled`), `templateVersion`, `lastSuccessfulLoad`, `lastErrorCategory`, `consecutiveFailures`, and bounded loader settings; it never returns remote parameter values or credentials.
@@ -447,6 +523,30 @@ The dedicated worker also persists the same non-sensitive heartbeat to `workerHe
 `GET /api/capabilities` is an alias for the same payload.
 
 When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`demo`/`live` environment, allow-listed symbols, and readiness state.
+
+### GET /api/public/status
+
+Public, unauthenticated, secrets-free status snapshot for external monitoring widgets, status pages, and trader self-checks. No API key is required and the endpoint is mounted before the global rate limiter so monitoring traffic never consumes the ordinary bucket. The endpoint returns:
+
+```json
+{
+  "service": { "name": "cabros-bot", "version": "0.1.0" },
+  "status": {
+    "ok": true,
+    "uptimeSeconds": 42319,
+    "lastUpdated": "2026-08-27T19:30:00.000Z",
+    "shuttingDown": false
+  },
+  "channels": { "enabled": ["telegram"] },
+  "dependencies": {
+    "gemini":      { "ready": true },
+    "tradingview": { "ready": true },
+    "firestore":   { "ready": true }
+  }
+}
+```
+
+The snapshot is cached for 30 seconds per process. The endpoint returns HTTP `503` with `code: "SERVICE_NOT_READY"` while the process is still bootstrapping or shutting down; otherwise it returns `200`. Build commit, environment, configuration values, per-channel counters, feature flags, admin chat IDs, the `WEBHOOK_API_KEY`, Sentry DSN, Firebase project ID, and per-feature cost data are intentionally omitted.
 
 ### Browser admin authentication
 
@@ -507,7 +607,7 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
     "telegram": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "whatsapp": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "gemini": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
-    "tradingViewMcp": { "enabled": true, "configured": true, "ready": false, "status": "unknown", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0, "enrichment": { "alertPath": { "windowMs": 86400000, "totalCount": 0, "appliedCount": 0, "failedCount": 0, "appliedRate24h": 0, "failureRate24h": 0 } } },
+    "tradingViewMcp": { "enabled": true, "configured": true, "ready": false, "status": "unknown", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0, "enrichment": { "alertPath": { "windowMs": 86400000, "totalCount": 0, "appliedCount": 0, "failedCount": 0, "appliedRate24h": 0, "failureRate24h": 0 } }, "toolMetrics": {} },
     "tradingViewVolumeConfirmation": { "enabled": false, "configured": true, "ready": false, "status": "disabled", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0 },
     "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "firestoreJobStorage": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
@@ -563,6 +663,9 @@ When `ENABLE_GEMINI_GROUNDING=true`:
 
 - `ENABLE_GEMINI_GROUNDING` - Enable/disable enrichment (default: `false`)
 - `GEMINI_API_KEY` - Google API key with Generative AI enabled
+- `ENABLE_TOKEN_COST_BUDGET` - Enable/disable global LLM daily token spend tracking and budget enforcement (default: `false`)
+- `TOKEN_COST_DAILY_BUDGET_USD` - Daily LLM spend ceiling in USD before calls fail open (default: `5.00`)
+- `TOKEN_COST_WARN_THRESHOLD_PCT` - Percentage of daily budget that triggers an admin Telegram alert (default: `80`)
 
 ### How Langfuse Prompt Management Works
 
@@ -759,6 +862,7 @@ Dry-run response excerpt:
     "total": 2,
     "analyzed": 1,
     "cached": 1,
+    "throttled": 0,
     "timeout": 0,
     "error": 0,
     "quota_exhausted": 0,
@@ -784,6 +888,7 @@ Dry-run response excerpt:
 **Response Status Values**:
 - `analyzed` - Symbol successfully analyzed, alerts generated/filtered
 - `cached` - Result returned from cache (within TTL for same event category)
+- `throttled` - Alert delivery suppressed by alert volume throttling (exceeded batch capacity or sliding window limit)
 - `timeout` - Analysis exceeded per-symbol timeout (30s default)
 - `error` - API failure (Binance, Gemini, or other service error). Gemini quota exhaustion is reported as `error.code = "GEMINI_QUOTA_EXHAUSTED"` and counted in `summary.quota_exhausted`.
 
@@ -886,11 +991,12 @@ Analyze one `EXCHANGE:SYMBOL` with TradingView MCP and return the Spanish report
   "symbol": "BINANCE:BTCUSDT",
   "timeframe": "1D",
   "analysisMode": "combined",
-  "includeMultiTimeframe": true
+  "includeMultiTimeframe": true,
+  "includeMultiAgent": true
 }
 ```
 
-The response includes `alertText`, normalized price/volume/indicator/signal/assessment data, sentiment/news/confluence and multi-timeframe results when requested, plus directional `risk` and `decision` metadata. `decision.action` is `BUY` or `SELL` only when the data and risk levels are sufficient; otherwise it is `NO_TRADE`. This endpoint never delivers notifications or submits orders. Invalid symbols return `400 INVALID_REQUEST`, TradingView failures return `502 SYMBOL_ANALYSIS_FAILED`, and deadline expiry returns `504 SYMBOL_ANALYSIS_TIMEOUT`.
+The response includes `alertText`, normalized price/volume/indicator/signal/assessment data, sentiment/news/confluence, multi-timeframe results, and multi-agent consensus results (`multiAgent`) when requested (or when `ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT=true`), plus directional `risk` and `decision` metadata. When multi-agent consensus disagrees with the directional signal (decision is `HOLD`, confidence is `Low`, or decision opposes side), an advisory warning (`Consenso multi-agente no confirma la señal`) is appended to `decision.warnings` without flipping the primary action. `decision.action` is `BUY` or `SELL` only when the data and risk levels are sufficient; otherwise it is `NO_TRADE`. This endpoint never delivers notifications or submits orders. Invalid symbols return `400 INVALID_REQUEST`, TradingView failures return `502 SYMBOL_ANALYSIS_FAILED`, and deadline expiry returns `504 SYMBOL_ANALYSIS_TIMEOUT`. Upstream multi-agent failures fail open and mark `analysisStatus: "partial"` while preserving the base analysis.
 
 ### POST /api/webhook/market-scanner-alert
 
@@ -1172,6 +1278,10 @@ List stored alerts ordered by `receivedAt` descending.
 - `before` - Either a legacy ISO-8601 timestamp cursor or the opaque `nextBefore` token from a previous response
 - `source` - Optional source filter. Valid values include `webhook`, `news-monitor`, `market-scanner`, and `expanded-analysis`.
 - `enriched` - Optional boolean filter (`true` or `false`)
+- `symbol` - Optional symbol filter (e.g. `BTCUSDT`, `BINANCE:BTCUSDT`, `AAPL`). Case-insensitive and matched against extracted symbol and exchange fields. Up to 64 characters.
+- `exchange` - Optional exchange filter (e.g. `BINANCE`, `COINBASE`). Case-insensitive and matched against the extracted exchange field. Up to 64 characters.
+- `eventCategory` - Optional event category filter (e.g. `price_surge`, `price_decline`, `regulatory`). Case-insensitive and matched against `eventCategory`. Up to 64 characters.
+- `include` - Optional projection filter. Allowed value: `enrichment_summary`. When set, each returned alert item includes a sanitized `enrichmentSummary` projection object (with `sentiment`, `sentiment_score`, `setup_type`, `invalidation_level`, `target_level`, `risk_reward_ratio`, `sourceCount`, `sourceDomains`, `tradingViewEnrichmentApplied`, `tradingViewEnrichmentStatus`, and `promptProvenance`) and a sanitized `enrichmentData` payload without requiring N+1 detail fetches.
 
 **Response (200 OK):**
 ```json
@@ -1218,6 +1328,7 @@ Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string 
 - `limit` - Integer between `1` and `1000` (default: `500`)
 - `source` / `enriched` - Optional filters
 - `includeText` - Optional boolean; raw alert text is excluded unless `true`
+- `includeEnrichment` - Optional boolean; safe bounded projection of `enrichmentData` is excluded unless `true`
 
 #### GET /api/alerts/summary
 
@@ -1231,6 +1342,11 @@ Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited gr
 - `from` - Optional ISO-8601 lower bound; defaults to 24 hours before `to`
 - `to` - Optional ISO-8601 upper bound; defaults to request time
 - `limit` - Integer between `1` and `1000` (default: `500`)
+- `source` - Optional source filter
+- `enriched` - Optional boolean filter (`true` or `false`)
+- `symbol` - Optional symbol filter (e.g. `BTCUSDT`, `BINANCE:BTCUSDT`, `AAPL`). Case-insensitive and matched against extracted symbol and exchange fields. Up to 64 characters.
+- `exchange` - Optional exchange filter (e.g. `BINANCE`, `COINBASE`). Case-insensitive and matched against the extracted exchange field. Up to 64 characters.
+- `eventCategory` - Optional event category filter (e.g. `price_surge`, `price_decline`, `regulatory`). Case-insensitive and matched against `eventCategory`. Up to 64 characters.
 
 The service caps the queried window at 31 days to keep routine operator usage cheap.
 
@@ -1335,7 +1451,34 @@ The service caps the queried window at 31 days to keep routine operator usage ch
     },
     "latency": {
       "averageProcessingMs": 250,
-      "averageDeliveryMs": 150
+      "averageDeliveryMs": 150,
+      "byChannel": {
+        "telegram": {
+          "averageMs": 170,
+          "p95Ms": 200,
+          "sampleCount": 2
+        },
+        "whatsapp": {
+          "averageMs": 110,
+          "p95Ms": 110,
+          "sampleCount": 1
+        }
+      }
+    },
+    "feedback": {
+      "total": 4,
+      "up": 3,
+      "down": 1,
+      "ratio": 0.75,
+      "bySource": { "webhook-alert": 3, "scanner": 1 },
+      "bySymbol": { "BTCUSDT": 3, "ETHUSDT": 1 },
+      "byExchange": { "BINANCE": 4 },
+      "source": "firestore",
+      "window": {
+        "from": "2026-06-06T00:00:00.000Z",
+        "to": "2026-06-07T00:00:00.000Z",
+        "limit": 500
+      }
     }
   }
 }
@@ -1343,6 +1486,117 @@ The service caps the queried window at 31 days to keep routine operator usage ch
 
 For rollout validation, first verify the active prompt provenance and coverage in preview, then observe a bounded production/shadow window after aligning the remote `alert-enrichment` prompt with the local optional-risk schema. Treat missing fields as unavailable data; do not use zero coverage as a trading outcome or fabricate stops, targets, setup types, or R:R values.
 
+The `feedback` block is always included regardless of the report filters so traders can correlate prompt calibration with raw trader outcomes. Counts are sourced from the `alertFeedback` collection (when `ENABLE_FIRESTORE_ALERT_FEEDBACK=true`) or the in-process memory surface; only SHA-256 chat hashes are persisted and raw chat ids are never returned.
+
+#### POST /api/alerts/feedback
+
+Persist a trader verdict (👍 / 👎) for a stored alert. Re-clicks with the same `(alertId, chatId)` tuple update the verdict instead of appending a new row. Bounded by `ALERT_FEEDBACK_RETENTION_DAYS` (default: `90`, range `1`-`3650`). Requires `admin.operator` and the shared idempotency middleware (the `idempotency-key` header is recommended).
+
+**Request Body:**
+```json
+{
+  "alertId": "alert-123",
+  "chatId": "120363422033474991@g.us",
+  "verdict": "up",
+  "symbol": "BTCUSDT",
+  "exchange": "BINANCE",
+  "source": "webhook-alert"
+}
+```
+
+`verdict` must be exactly `"up"` or `"down"`. `source` is optional and is one of `webhook-alert`, `expanded-analysis`, `scanner`, `news`, or `unknown` (default). `symbol`/`exchange` are uppercased and used only for the per-symbol/per-exchange aggregates in the summary endpoint.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "persisted": true,
+  "source": "firestore",
+  "alertId": "alert-123",
+  "verdict": "up"
+}
+```
+
+`source` reports `firestore` when `ENABLE_FIRESTORE_ALERT_FEEDBACK=true` and the write succeeded; it reports `memory` when Firestore is disabled or unavailable (fail-open). The endpoint is fail-open in every path: any Firestore outage falls back to a process-local in-memory map that is bounded by the configured retention window and is cleared on process restart.
+
+#### GET /api/alerts/feedback/summary
+
+Aggregate trader verdicts within a bounded time window. Requires `admin.viewer`. Raw chat ids are never returned — only the SHA-256 chat hashes persisted on the alertFeedback documents are aggregated into the per-source/per-symbol/per-exchange counts.
+
+**Query Parameters:**
+- `from` - Optional ISO-8601 lower bound; defaults to 7 days before `to`
+- `to` - Optional ISO-8601 upper bound; defaults to request time
+- `limit` - Integer between `1` and `1000` (default: `500`)
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "feedback": {
+    "total": 4,
+    "up": 3,
+    "down": 1,
+    "ratio": 0.75,
+    "bySource": { "webhook-alert": 3, "scanner": 1 },
+    "bySymbol": { "BTCUSDT": 3, "ETHUSDT": 1 },
+    "byExchange": { "BINANCE": 4 },
+    "source": "firestore",
+    "window": {
+      "from": "2026-06-06T00:00:00.000Z",
+      "to": "2026-06-13T00:00:00.000Z",
+      "limit": 500
+    }
+  }
+}
+```
+
+#### POST /api/alerts/:alertId/replay
+
+Replay a stored alert through the configured notification channels. The endpoint requires an idempotency key (`idempotency-key`/`x-idempotency-key` header or `idempotencyKey` body/query field) and an `ENABLE_FIRESTORE_ALERT_STORAGE=true` gate. Successful replays persist a `alertReplays` audit document with a SHA-256 hash of the key.
+
+**Dry-run mode:** add `dryRun: true` to the body (or `?dryRun=true` to the URL) to fetch the stored alert and build the would-be payload, then return it without dispatching to any channel and without persisting a replay attempt. Use this to preview the text, enrichment data, and per-channel routing (resolving channel service defaults and `TELEGRAM_TOPIC_ROUTES` when the stored alert lacks explicit overrides) before triggering a real replay. The dry-run response returns the 12-character SHA-256 hash prefix `idempotencyKeyHashPrefix` without leaking the raw key into upstream caches (the live endpoint never returns it).
+
+**Request body:**
+```json
+{
+  "channels": ["telegram", "whatsapp"],
+  "dryRun": true
+}
+```
+
+**Response (200 OK - dry-run):**
+```json
+{
+  "success": true,
+  "dryRun": true,
+  "alertId": "alert-123",
+  "channels": ["telegram"],
+  "idempotencyKeyHashPrefix": "06bdeddf2a29",
+  "payloadPreview": {
+    "text": "BINANCE:ETHUSDT(240) pasó a señal de COMPRA",
+    "enriched": { "sentiment": "BULLISH", "sentiment_score": 0.62 },
+    "channelRouting": {
+      "telegramChatId": "111",
+      "telegramThreadId": 7,
+      "whatsappChatId": "222"
+    }
+  }
+}
+```
+
+**Response (200 OK - live replay):**
+```json
+{
+  "success": true,
+  "alertId": "alert-123",
+  "replayId": "1700000000000_<uuid>",
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-1" }
+  ]
+}
+```
+
+The same `403 FEATURE_DISABLED` (when `ENABLE_FIRESTORE_ALERT_STORAGE=false`), `503 STORAGE_UNAVAILABLE`, and `400 INVALID_REQUEST` mapping as the sibling endpoints applies. A reused idempotency key with a different request fingerprint returns `409 IDEMPOTENCY_CONFLICT`.
 #### GET /api/alerts/replays
 
 List bounded alert-replay audit records from the Firestore `alertReplays` collection, ordered by `replayedAt` descending. Each `POST /api/alerts/{alertId}/replay` writes a unique audit document so retries with the same idempotency key are preserved as history instead of overwriting prior attempts; the HTTP `Idempotency-Replay` contract remains upstream of storage. Raw idempotency keys are never stored or returned — only a SHA-256 hash prefix is exposed.
@@ -1457,7 +1711,7 @@ Retrieve a single stored alert by Firestore document ID. The response also surfa
 
 #### GET /api/outcomes
 
-Query durably recorded signal outcomes record-by-record with pagination and filtering by symbol, exchange, status, window, and date range. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role. Returns `403 FEATURE_DISABLED` if `ENABLE_SIGNAL_OUTCOME_TRACKING !== 'true'`, and `503 STORAGE_UNAVAILABLE` if Firestore is enabled but inaccessible.
+Query durably recorded signal outcomes record-by-record with pagination and filtering by symbol, exchange, status, window, and date range. Requires `x-api-key` header (or deprecated `api-key` query parameter — see [GH-756](https://github.com/francovp/cabros-bot/issues/756)) or Firebase Bearer token with `admin.viewer` or `admin.operator` role. Returns `403 FEATURE_DISABLED` if `ENABLE_SIGNAL_OUTCOME_TRACKING !== 'true'`, and `503 STORAGE_UNAVAILABLE` if Firestore is enabled but inaccessible.
 
 **Query Parameters:**
 - `limit` - Integer between `1` and `100` (default: `50`)
@@ -1477,6 +1731,15 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
     {
       "id": "outcome-doc-1",
       "receivedAt": "2026-08-23T12:00:00.000Z",
+      "observedAt": "2026-08-23T12:00:00.000Z",
+      "decisionBarClosedAt": null,
+      "tradableAt": "2026-08-23T12:00:00.000Z",
+      "anchorMode": "raw_received_at",
+      "anchorVersion": "v1",
+      "calendarId": null,
+      "calendarTimeZone": null,
+      "sessionContext": "crypto_24_7",
+      "measurementCohort": "raw_received_at",
       "requestId": "req-1",
       "source": "news-monitor",
       "symbol": "BTCUSDT",
@@ -1487,6 +1750,8 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
       "score": 0.9,
       "side": "BUY",
       "price": 65000,
+      "observedPrice": 65000,
+      "tradablePrice": 65000,
       "entryPriceSource": "tradingview-mcp",
       "stop": 63000,
       "target": 68000,
@@ -1499,6 +1764,9 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
           "status": "evaluated",
           "reason": null,
           "targetTime": "2026-08-23T13:00:00.000Z",
+          "anchorMode": "raw_received_at",
+          "anchorVersion": "v1",
+          "measurementCohort": "raw_received_at",
           "price": 66000,
           "return": 1.5385,
           "maxFavorableExcursion": 2.0,
@@ -1528,9 +1796,11 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
 }
 ```
 
+Equity records also persist `sessionContext`, `decisionBarClosedAt`, `tradableAt`, and separate observed/tradable price fields. Post-close or holiday records are labeled `raw_received_at_after_hours` or `raw_market_closed`; they remain in the shadow raw-observation cohort until a separate executable-session price is available.
+
 #### GET /api/outcomes/summary
 
-Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range. When no outcomes match the filters or tracking is enabled with an empty dataset, the endpoint returns `200 OK` with `available: false` and a typed empty summary structure. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
+Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range. Explicit `from`/`to` ranges may include archived records restored from backups; requests without `from` remain bounded by the configured retention window. When no outcomes match the filters or tracking is enabled with an empty dataset, the endpoint returns `200 OK` with `available: false` and a typed empty summary structure. Requires `x-api-key` header (or deprecated `api-key` query parameter — see [GH-756](https://github.com/francovp/cabros-bot/issues/756)) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
 
 **Query Parameters:**
 - `limit` - Maximum number of recent outcomes to aggregate (integer between `1` and `100`, default: `50`)
@@ -1611,6 +1881,68 @@ Query aggregated performance and coverage metrics for recorded signal outcomes, 
         "totalCost": 0.0035
       }
     }
+  }
+}
+```
+
+#### GET /api/outcomes/calibration
+
+Query empirical confidence calibration feedback metrics comparing news-monitor and alert confidence scores against realized signal outcomes. Groups evaluated signals into confidence buckets (`<0.70`, `0.70-0.75`, `0.75-0.80`, `0.80-0.85`, `0.85-0.90`, `0.90-1.00`), calculating count, average 1h and 4h returns, and target hit rate per bucket. Also computes a recommended confidence threshold with deterministic rationale once an empirical sample of at least 20 scored alerts is available. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
+
+**Query Parameters:**
+- `limit` - Maximum number of recent signals to evaluate for calibration (integer between `1` and `1000`, default: `1000`)
+- `symbol` - Filter by trading symbol (e.g. `BTCUSDT` or `BINANCE:BTCUSDT`)
+- `exchange` - Filter by exchange identifier (e.g. `BINANCE`, `NASDAQ`)
+- `window` - Evaluation window for hit-rate benchmark (`1h`, `4h`, `1D`, `1W`, default: `4h`)
+- `from` - Optional ISO-8601 lower bound timestamp
+- `to` - Optional ISO-8601 upper bound timestamp
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "calibration": {
+    "available": true,
+    "totalScoredAlerts": 45,
+    "buckets": [
+      {
+        "range": "0.70-0.75",
+        "count": 10,
+        "avgReturn1h": 0.45,
+        "avgReturn4h": 0.82,
+        "targetHitRate": 0.4
+      },
+      {
+        "range": "0.75-0.80",
+        "count": 15,
+        "avgReturn1h": 1.12,
+        "avgReturn4h": 1.85,
+        "targetHitRate": 0.6
+      },
+      {
+        "range": "0.80-0.85",
+        "count": 12,
+        "avgReturn1h": 1.45,
+        "avgReturn4h": 2.3,
+        "targetHitRate": 0.67
+      },
+      {
+        "range": "0.85-0.90",
+        "count": 6,
+        "avgReturn1h": 1.95,
+        "avgReturn4h": 3.1,
+        "targetHitRate": 0.83
+      },
+      {
+        "range": "0.90-1.00",
+        "count": 2,
+        "avgReturn1h": 2.4,
+        "avgReturn4h": 3.8,
+        "targetHitRate": 1.0
+      }
+    ],
+    "suggestedThreshold": 0.75,
+    "suggestedThresholdRationale": "Alerts at 0.75+ show 60%+ target hit rate at 4h window"
   }
 }
 ```
@@ -1723,6 +2055,7 @@ Sources:
 - HTTP 200 OK returned (fail-open pattern)
 - Failures logged at WARN/ERROR level
 - If `channels` is omitted in the generic message webhook, delivery fans out to every enabled channel
+- Successful generic-message deliveries are persisted as `source: webhook-message` when Firestore alert storage is enabled, without delaying the response
 
 **Example - Dual Channel Delivery**:
 
