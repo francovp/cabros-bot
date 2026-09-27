@@ -30,13 +30,25 @@ function isQueryApiKeyPresent(req) {
 	return typeof value === 'string' || Array.isArray(value);
 }
 
+/**
+ * Strip the query string so deprecation logging cannot echo a credential.
+ * `api-key` is the value this warning discourages, so the whole query is
+ * dropped rather than redacting selected keys.
+ */
+function safeRouteForLogging(req) {
+	const raw = (req && (req.originalUrl || req.url)) || 'unknown';
+	if (typeof raw !== 'string') return 'unknown';
+	const queryIndex = raw.indexOf('?');
+	return queryIndex === -1 ? raw : raw.slice(0, queryIndex);
+}
+
 function warnQueryApiKeyDeprecationOnce(req) {
 	if (process.env[QUERY_DEPRECATION_FLAG_KEY] === '1') return;
 	process.env[QUERY_DEPRECATION_FLAG_KEY] = '1';
-	const route = (req && (req.originalUrl || req.url)) || 'unknown';
+	const route = safeRouteForLogging(req);
 	const sunset = process.env.API_KEY_QUERY_SUNSET;
 	const sunsetNote = sunset
-		? ` Set API_KEY_QUERY_SUNSET=${sunset} has passed; remove the query parameter from your client.`
+		? `API_KEY_QUERY_SUNSET=${sunset} has passed; remove the query parameter from your client.`
 		: ' Migrate to the x-api-key header before the announced sunset date.';
 	console.warn(`[auth] The api-key query parameter is deprecated and may leak through reverse-proxy access logs. Route: ${route}.${sunsetNote}`);
 }

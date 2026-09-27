@@ -49,6 +49,27 @@ describe('Security: api-key query-parameter deprecation (GH-756)', () => {
 		warn.mockRestore();
 	});
 
+	it('never echoes the api-key value into the deprecation log line', async () => {
+		const secret = 'sup3r-s3cret-key-value';
+		process.env.WEBHOOK_API_KEY = secret;
+		const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+		const app = buildApp(auth);
+
+		const res = await request(app)
+			.post('/protected?api-key=' + encodeURIComponent(secret))
+			.send({});
+		expect(res.status).toBe(200);
+
+		const messages = warn.mock.calls.map(([message]) => String(message));
+		for (const message of messages) {
+			expect(message).not.toContain(secret);
+			expect(message).not.toContain('api-key=');
+		}
+		expect(messages.join('\n')).toContain('/protected');
+
+		warn.mockRestore();
+	});
+
 	it('does not emit a deprecation warning when header auth is used', async () => {
 		const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
 		const app = buildApp(auth);
