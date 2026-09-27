@@ -14,11 +14,33 @@ const mockDocUpdate = jest.fn();
 const mockDocDelete = jest.fn();
 const mockServerTimestamp = jest.fn(() => ({ _type: 'serverTimestamp' }));
 const mockTimestampFromDate = jest.fn((date) => ({ _type: 'timestamp', toDate: () => date }));
+const mockTimestampFromSeconds = jest.fn((seconds, nanoseconds = 0) => ({
+	_type: 'timestamp',
+	seconds,
+	nanoseconds,
+	toDate: () => new Date((seconds * 1000) + Math.floor(nanoseconds / 1000000)),
+}));
 const mockDocumentId = jest.fn(() => '__name__');
 const mockOrderBy = jest.fn(() => null);
 const mockWhere = jest.fn(() => null);
 const mockLimit = jest.fn(() => null);
 const mockStartAfter = jest.fn(() => null);
+
+class MockVectorValue {
+	constructor(values) {
+		this._values = [...(values || [])];
+	}
+
+	toArray() {
+		return [...this._values];
+	}
+
+	isEqual(other) {
+		return other instanceof MockVectorValue
+			&& this._values.length === other._values.length
+			&& this._values.every((value, index) => value === other._values[index]);
+	}
+}
 
 const mockState = global.__firebaseAdminMockState || (global.__firebaseAdminMockState = {
 	collections: new Map(),
@@ -96,8 +118,8 @@ function buildQuerySnapshot(collectionName, queryState = {}) {
 		}
 	}
 
-	if (queryState.where && Array.isArray(queryState.where)) {
-		const [field, op, val] = queryState.where;
+	const wheres = queryState.wheres || (queryState.where && Array.isArray(queryState.where) ? [queryState.where] : []);
+	for (const [field, op, val] of wheres) {
 		if (op === '==') {
 			docs = docs.filter(d => d.data() && getNestedValue(d.data(), field) === val);
 		}
@@ -178,6 +200,8 @@ function createQueryApi(collectionName) {
 		where: (...args) => {
 			mockWhere(...args);
 			queryState.where = args;
+			queryState.wheres = queryState.wheres || [];
+			queryState.wheres.push(args);
 			return api;
 		},
 		limit: (count) => {
@@ -203,6 +227,57 @@ function createQueryApi(collectionName) {
 	return api;
 }
 
+const mockBatchCommit = jest.fn();
+const mockBatchDelete = jest.fn();
+const mockBatchSet = jest.fn();
+const mockBatchUpdate = jest.fn();
+const mockBatch = jest.fn(() => {
+	const pendingOperations = [];
+	const batchInstance = {
+		delete: (ref) => {
+			mockBatchDelete(ref);
+			pendingOperations.push(() => {
+				if (ref && typeof ref.delete === 'function') {
+					return ref.delete();
+				}
+				return Promise.resolve();
+			});
+			return batchInstance;
+		},
+		set: (ref, data, options) => {
+			mockBatchSet(ref, data, options);
+			pendingOperations.push(() => {
+				if (ref && typeof ref.set === 'function') {
+					return ref.set(data, options);
+				}
+				return Promise.resolve();
+			});
+			return batchInstance;
+		},
+		update: (ref, data) => {
+			mockBatchUpdate(ref, data);
+			pendingOperations.push(() => {
+				if (ref && typeof ref.update === 'function') {
+					return ref.update(data);
+				}
+				return Promise.resolve();
+			});
+			return batchInstance;
+		},
+		commit: async () => {
+			const configured = mockBatchCommit();
+			if (configured !== undefined) {
+				return configured;
+			}
+			for (const op of pendingOperations) {
+				await op();
+			}
+			return [];
+		},
+	};
+	return batchInstance;
+});
+
 const mockCollection = jest.fn((collectionName) => createQueryApi(collectionName));
 const mockInitializeApp = jest.fn();
 const mockCert = jest.fn((sa) => ({ type: 'service_account_credential', sa }));
@@ -210,10 +285,11 @@ const mockDeleteFieldValue = jest.fn(() => ({ __deleteField: true }));
 
 let apps = [];
 
-const firestore = jest.fn(() => ({ collection: mockCollection }));
+const firestore = jest.fn(() => ({ collection: mockCollection, batch: mockBatch }));
 firestore.FieldValue = { serverTimestamp: mockServerTimestamp, delete: mockDeleteFieldValue };
-firestore.Timestamp = { fromDate: mockTimestampFromDate };
+firestore.Timestamp = { fromDate: mockTimestampFromDate, fromSeconds: mockTimestampFromSeconds };
 firestore.FieldPath = { documentId: mockDocumentId };
+firestore.VectorValue = MockVectorValue;
 
 const mock = {
 	get apps() { return apps; },
@@ -229,12 +305,18 @@ const mock = {
 	__mockDocSet: mockDocSet,
 	__mockDocUpdate: mockDocUpdate,
 	__mockDocDelete: mockDocDelete,
+	__mockBatch: mockBatch,
+	__mockBatchCommit: mockBatchCommit,
+	__mockBatchDelete: mockBatchDelete,
+	__mockBatchSet: mockBatchSet,
+	__mockBatchUpdate: mockBatchUpdate,
 	__mockOrderBy: mockOrderBy,
 	__mockWhere: mockWhere,
 	__mockLimit: mockLimit,
 	__mockStartAfter: mockStartAfter,
 	__mockServerTimestamp: mockServerTimestamp,
 	__mockTimestampFromDate: mockTimestampFromDate,
+	__mockTimestampFromSeconds: mockTimestampFromSeconds,
 	__mockDocumentId: mockDocumentId,
 	__mockInitializeApp: mockInitializeApp,
 	__mockCert: mockCert,

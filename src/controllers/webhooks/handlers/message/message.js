@@ -1,12 +1,17 @@
 require('dotenv').config();
 const sentryService = require('../../../../services/monitoring/SentryService');
-const { getNotificationManager, initializeNotificationServices } = require('../alert/alert');
+const {
+	getNotificationManager,
+	initializeNotificationServices,
+	resolveRequestId,
+} = require('../alert/alert');
 const {
 	VALID_CHANNELS,
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
 	sendWithNotificationRouting,
 } = require('../../../../services/notification/requestRouting');
+const alertStorageService = require('../../../../services/storage/AlertStorageService');
 const MAX_MESSAGE_LENGTH = 4000;
 
 function validateMessageRequest(body) {
@@ -32,9 +37,18 @@ function validateMessageRequest(body) {
 
 function postMessage(botOrGetter) {
 	return async (req, res) => {
+		const requestId = resolveRequestId(req);
+		const startTime = Date.now();
 		try {
-			const { text, channels, telegramChatId, whatsappChatId, discordWebhookUrl } = validateMessageRequest(req.body);
-			const alert = { text, telegramChatId, whatsappChatId, discordWebhookUrl };
+			const routing = validateMessageRequest(req.body);
+			const alert = {
+				text: routing.text,
+				source: 'generic-message',
+				telegramChatId: routing.telegramChatId,
+				telegramThreadId: routing.telegramThreadId,
+				whatsappChatId: routing.whatsappChatId,
+				discordWebhookUrl: routing.discordWebhookUrl,
+			};
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
@@ -50,6 +64,7 @@ function postMessage(botOrGetter) {
 					return res.status(503).json({
 						success: false,
 						error: 'Notification services not initialized',
+						requestId,
 					});
 				}
 			}
@@ -57,22 +72,40 @@ function postMessage(botOrGetter) {
 			const httpContext = {
 				endpoint: '/api/webhook/message',
 				method: 'POST',
+				requestId,
 			};
 
 			const results = await sendWithNotificationRouting(
 				notificationManager,
 				alert,
-				{ channels, telegramChatId, whatsappChatId, discordWebhookUrl },
+				routing,
 				{ http: httpContext },
 			);
 
-			res.json({ success: true, results });
+			res.json({ success: true, results, requestId });
+
+			// Fire-and-forget: persist after responding so storage never blocks delivery.
+			// Do not persist raw discordWebhookUrl to avoid storing sensitive webhook credentials.
+			alertStorageService.saveAlert({
+				text: alert.text,
+				enriched: false,
+				enrichmentData: null,
+				tokenUsage: null,
+				deliveryResults: results,
+				channels: routing.channels || results.map((result) => result.channel).filter(Boolean),
+				source: 'webhook-message',
+				processingTimeMs: Math.max(0, Date.now() - startTime),
+				telegramChatId: routing.telegramChatId,
+				telegramThreadId: routing.telegramThreadId,
+				whatsappChatId: routing.whatsappChatId,
+			}).catch(() => {});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
 				return res.status(error.statusCode).json({
 					success: false,
 					error: error.message,
 					details: error.details,
+					requestId,
 				});
 			}
 
@@ -87,6 +120,7 @@ function postMessage(botOrGetter) {
 					endpoint: '/api/webhook/message',
 					method: 'POST',
 					statusCode: 500,
+					requestId,
 				},
 				extra: {
 					category: 'http_webhook_error',
@@ -96,6 +130,7 @@ function postMessage(botOrGetter) {
 			res.status(500).json({
 				success: false,
 				error: 'Internal server error',
+				requestId,
 			});
 		}
 	};
@@ -106,4 +141,5 @@ module.exports = {
 	MessageValidationError: NotificationRoutingValidationError,
 	VALID_CHANNELS,
 	MAX_MESSAGE_LENGTH,
+	resolveRequestId,
 };

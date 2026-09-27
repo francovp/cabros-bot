@@ -27,9 +27,16 @@ const {
 	parseIdempotencyTtlMs,
 	parseDedupTtlMs,
 	parseNotificationRedriveTtlMs,
+	parseSignalOutcomeRetentionTtlMs,
+	parseBinanceOrderAuditRetentionTtlMs,
 	isDeliveryLease,
 	DELIVERY_LOCK_TTL_MS,
 	PENDING_STALE_TIMEOUT_MS,
+	DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS,
+	MAX_SIGNAL_OUTCOME_RETENTION_DAYS,
+	DEFAULT_BINANCE_ORDER_AUDIT_RETENTION_DAYS,
+	MAX_BINANCE_ORDER_AUDIT_RETENTION_DAYS,
+	DAY_MS,
 } = require('../../ops/backfill-operational-collection-retention');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -164,6 +171,93 @@ describe('parseDedupTtlMs', () => {
 	});
 });
 
+describe('parseSignalOutcomeRetentionTtlMs', () => {
+	const DAY_MS = 24 * 60 * 60 * 1000;
+
+	test('returns parsed days → ms for valid input', () => {
+		expect(parseSignalOutcomeRetentionTtlMs('90')).toBe(90 * DAY_MS);
+		expect(parseSignalOutcomeRetentionTtlMs(180)).toBe(180 * DAY_MS);
+	});
+
+	test('returns default 365 days when no argument given (undefined)', () => {
+		const originalEnv = process.env.SIGNAL_OUTCOME_RETENTION_DAYS;
+		delete process.env.SIGNAL_OUTCOME_RETENTION_DAYS;
+		expect(parseSignalOutcomeRetentionTtlMs(undefined)).toBe(DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS);
+		if (originalEnv !== undefined) process.env.SIGNAL_OUTCOME_RETENTION_DAYS = originalEnv;
+	});
+
+	test('returns default for NaN or non-integer', () => {
+		expect(parseSignalOutcomeRetentionTtlMs('invalid')).toBe(DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS);
+		expect(parseSignalOutcomeRetentionTtlMs('1.5')).toBe(DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS);
+		expect(parseSignalOutcomeRetentionTtlMs('')).toBe(DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS);
+	});
+
+	test('returns default for zero or negative', () => {
+		expect(parseSignalOutcomeRetentionTtlMs('0')).toBe(DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS);
+		expect(parseSignalOutcomeRetentionTtlMs('-5')).toBe(DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS);
+	});
+
+	test('returns default for value exceeding MAX_SIGNAL_OUTCOME_RETENTION_DAYS (3650)', () => {
+		expect(parseSignalOutcomeRetentionTtlMs('3651')).toBe(DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS);
+	});
+
+	test('sources retention days from RemoteConfigService with precedence over env when raw is omitted', () => {
+		const originalEnv = process.env.SIGNAL_OUTCOME_RETENTION_DAYS;
+		process.env.SIGNAL_OUTCOME_RETENTION_DAYS = '365';
+
+		const RemoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+		const spy = jest.spyOn(RemoteConfigService, 'getRuntimeConfig').mockReturnValue({
+			SIGNAL_OUTCOME_RETENTION_DAYS: 30,
+		});
+
+		expect(parseSignalOutcomeRetentionTtlMs()).toBe(30 * DAY_MS);
+
+		spy.mockRestore();
+		if (originalEnv !== undefined) process.env.SIGNAL_OUTCOME_RETENTION_DAYS = originalEnv;
+		else delete process.env.SIGNAL_OUTCOME_RETENTION_DAYS;
+	});
+});
+
+describe('parseBinanceOrderAuditRetentionTtlMs', () => {
+	test('returns parsed days → ms for valid input', () => {
+		expect(parseBinanceOrderAuditRetentionTtlMs('60')).toBe(60 * DAY_MS);
+	});
+
+	test('returns default 30 days when no argument given (undefined)', () => {
+		expect(parseBinanceOrderAuditRetentionTtlMs()).toBe(DEFAULT_BINANCE_ORDER_AUDIT_RETENTION_DAYS * DAY_MS);
+	});
+
+	test('returns default for NaN or non-integer', () => {
+		expect(parseBinanceOrderAuditRetentionTtlMs('invalid')).toBe(DEFAULT_BINANCE_ORDER_AUDIT_RETENTION_DAYS * DAY_MS);
+		expect(parseBinanceOrderAuditRetentionTtlMs('30.5')).toBe(DEFAULT_BINANCE_ORDER_AUDIT_RETENTION_DAYS * DAY_MS);
+	});
+
+	test('returns default for zero or negative', () => {
+		expect(parseBinanceOrderAuditRetentionTtlMs('0')).toBe(DEFAULT_BINANCE_ORDER_AUDIT_RETENTION_DAYS * DAY_MS);
+		expect(parseBinanceOrderAuditRetentionTtlMs('-5')).toBe(DEFAULT_BINANCE_ORDER_AUDIT_RETENTION_DAYS * DAY_MS);
+	});
+
+	test('returns default for value exceeding MAX_BINANCE_ORDER_AUDIT_RETENTION_DAYS (365)', () => {
+		expect(parseBinanceOrderAuditRetentionTtlMs('400')).toBe(DEFAULT_BINANCE_ORDER_AUDIT_RETENTION_DAYS * DAY_MS);
+	});
+
+	test('sources retention days from RemoteConfigService with precedence over env when raw is omitted', () => {
+		const originalEnv = process.env.BINANCE_ORDER_AUDIT_RETENTION_DAYS;
+		process.env.BINANCE_ORDER_AUDIT_RETENTION_DAYS = '30';
+
+		const RemoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+		const spy = jest.spyOn(RemoteConfigService, 'getRuntimeConfig').mockReturnValue({
+			BINANCE_ORDER_AUDIT_RETENTION_DAYS: 45,
+		});
+
+		expect(parseBinanceOrderAuditRetentionTtlMs()).toBe(45 * DAY_MS);
+
+		spy.mockRestore();
+		if (originalEnv !== undefined) process.env.BINANCE_ORDER_AUDIT_RETENTION_DAYS = originalEnv;
+		else delete process.env.BINANCE_ORDER_AUDIT_RETENTION_DAYS;
+	});
+});
+
 describe('getOperationalCollectionConfigs', () => {
 	test('includes notification dead letters with the configured redrive max age', () => {
 		const originalEnv = process.env.NOTIFICATION_REDRIVE_MAX_AGE_MS;
@@ -179,6 +273,36 @@ describe('getOperationalCollectionConfigs', () => {
 
 		if (originalEnv !== undefined) process.env.NOTIFICATION_REDRIVE_MAX_AGE_MS = originalEnv;
 		else delete process.env.NOTIFICATION_REDRIVE_MAX_AGE_MS;
+	});
+
+	test('includes tradingSignalOutcomes with the configured retention days', () => {
+		const originalEnv = process.env.SIGNAL_OUTCOME_RETENTION_DAYS;
+		process.env.SIGNAL_OUTCOME_RETENTION_DAYS = '60';
+
+		expect(getOperationalCollectionConfigs()).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				collectionName: 'tradingSignalOutcomes',
+				ttlMs: 60 * 24 * 60 * 60 * 1000,
+			}),
+		]));
+
+		if (originalEnv !== undefined) process.env.SIGNAL_OUTCOME_RETENTION_DAYS = originalEnv;
+		else delete process.env.SIGNAL_OUTCOME_RETENTION_DAYS;
+	});
+
+	test('includes binanceOrderAudit with the configured retention days', () => {
+		const originalEnv = process.env.BINANCE_ORDER_AUDIT_RETENTION_DAYS;
+		process.env.BINANCE_ORDER_AUDIT_RETENTION_DAYS = '90';
+
+		expect(getOperationalCollectionConfigs()).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				collectionName: 'binanceOrderAudit',
+				ttlMs: 90 * 24 * 60 * 60 * 1000,
+			}),
+		]));
+
+		if (originalEnv !== undefined) process.env.BINANCE_ORDER_AUDIT_RETENTION_DAYS = originalEnv;
+		else delete process.env.BINANCE_ORDER_AUDIT_RETENTION_DAYS;
 	});
 });
 
@@ -346,6 +470,42 @@ describe('backfillCollection', () => {
 		const call = batchUpdateMock.mock.calls[0];
 		const update = call[1];
 		expect(update).toHaveProperty('expiresAt');
+	});
+
+	test('uses receivedAt as base timestamp when backfilling tradingSignalOutcomes', async () => {
+		const receivedMs = 1700000000000;
+		const doc = makeFakeDoc({ receivedAt: makeFakeTimestamp(receivedMs) });
+		doc.data = () => ({ receivedAt: makeFakeTimestamp(receivedMs) });
+
+		const { firestoreMock, batchUpdateMock, batchCommitMock } = buildFirestoreMock([doc]);
+
+		const ttlMs = 365 * 24 * 60 * 60 * 1000;
+		const result = await backfillCollection(firestoreMock, 'tradingSignalOutcomes', ttlMs);
+
+		expect(result.scanned).toBe(1);
+		expect(result.updated).toBe(1);
+		expect(batchUpdateMock).toHaveBeenCalledWith(doc.ref, {
+			expiresAt: expect.objectContaining({ _ms: receivedMs + ttlMs }),
+		});
+		expect(batchCommitMock).toHaveBeenCalledTimes(1);
+	});
+
+	test('uses timestamp as base timestamp when backfilling binanceOrderAudit', async () => {
+		const timestampMs = 1700000050000;
+		const doc = makeFakeDoc({ timestamp: makeFakeTimestamp(timestampMs), createdAt: undefined });
+		doc.data = () => ({ timestamp: makeFakeTimestamp(timestampMs) });
+
+		const { firestoreMock, batchUpdateMock, batchCommitMock } = buildFirestoreMock([doc]);
+
+		const ttlMs = 30 * 24 * 60 * 60 * 1000;
+		const result = await backfillCollection(firestoreMock, 'binanceOrderAudit', ttlMs);
+
+		expect(result.scanned).toBe(1);
+		expect(result.updated).toBe(1);
+		expect(batchUpdateMock).toHaveBeenCalledWith(doc.ref, {
+			expiresAt: expect.objectContaining({ _ms: timestampMs + ttlMs }),
+		});
+		expect(batchCommitMock).toHaveBeenCalledTimes(1);
 	});
 
 	test('handles empty collection gracefully', async () => {

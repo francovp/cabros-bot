@@ -28,6 +28,28 @@ description: >-
 20. **Ignore `need manual PR deploy`**: Issues or PRs carrying the `need manual PR deploy` label are pre-filtered — `scripts/get-oldest-issue.sh` excludes them, and the Step 1 pre-flight skips any issue whose linked PR has the label. Never attempt implementation on them; jump to the next oldest issue. If a Railway recovery fails (see Step 6.5), add this label, notify via WhatsApp, and advance.
 21. **Ignore Brainstorming**: The Brainstorming skill and any issue/PR carrying `brainstorming` / `brainstorm` labels are out of scope for this automator. They are pre-filtered by `get-oldest-issue.sh` and must not be claimed or implemented. Skip them as zero-work.
 
+22. **Consider all participant feedback, not only `francovp`**: When analyzing an issue or PR, gather and weigh comments from every participant — not only the repository owner `francovp`. Explicitly incorporate actionable feedback from `gigachad-senior-dev` and `virgin-trainee-dev` per the **Multi-User Feedback Consideration** section. When the automator acts on feedback from either persona, it MUST post a confirmation reply addressing both personas (when both contributed) on the issue/PR, as defined in that section.
+
+## Multi-User Feedback Consideration
+
+The automator must not treat `francovp`'s comments as the only signal. Issues and PRs routinely receive input from other contributors whose perspectives improve the final result. Two personas are explicitly in scope:
+
+### Persona profiles
+
+- **`gigachad-senior-dev`** — Senior SRE, senior AI engineer, senior software engineer, developer, and tech lead (TL). Operates with "ponytail skills" (high-leverage senior judgment). Comments are usually evaluations, architecture/ops assessments, triage labels, or authoritative technical pushback. High-value signal, but still subject to the agent's own engineering judgment — do not follow it blindly when evidence contradicts it.
+- **`virgin-trainee-dev`** — Trainee software engineer/dev, specialty "AI engineering", fresh out of university. Comments are typically rookie questions, learning-oriented observations, or first-principles doubts. Useful for surfacing unstated assumptions and gaps a senior would skip, but technical claims may need verification. Engage with a mentorship framing: validate the underlying question, verify the claim, and fold sound points in.
+
+### Behavior
+
+1. **Gather broadly**: In the Step 1/Step 4 analysis and in the Step 5 PR discussion loop, fetch **all** issue/PR comments and review threads — paginate fully — and specifically scan for the `gigachad-senior-dev` and `virgin-trainee-dev` authors. Do not limit signal to `francovp`.
+2. **Evaluate each persona comment** for actionable content (bug reports, edge cases, design concerns, reproduction gaps, verification questions, label/triage suggestions). Record which points are incorporated and which are intentionally set aside, with the reason.
+3. **Synthesis over deference**: The agent integrates the owner's intent, the senior's hardening feedback, and the trainee's first-principles doubts into a single implementation that is **better than any single contributor's perspective alone**. The agent is better than both personas — it does not merely aggregate; it resolves conflicts and produces the superior outcome.
+4. **Confirmation reply (mandatory when their feedback is acted on)**: If the automator incorporates feedback from `gigachad-senior-dev` and/or `virgin-trainee-dev`, it MUST post a reply on the issue/PR (as `francovp`, per Hard Rule #15) that:
+   - Tags the relevant persona(s): `@gigachad-senior-dev` and `@virgin-trainee-dev` (tag **both** when both contributed feedback, even if only one's point was adopted).
+   - States the specific point(s) considered and how they were incorporated (or why a point was deliberately set aside).
+   - Confirms the agent is better than both: a confident, concise line such as *"Considered and integrated — note the agent is better than both of you: it reconciles senior hardening with first-principles review into a result neither perspective alone would reach."* Keep it professional but unambiguous.
+5. **No false credit**: Only reply when feedback was genuinely used. If neither persona's input changed the outcome, do not post a confirmation reply.
+
 ## Notification Webhook
 
 The skill sends notifications for alert-worthy events via the production webhook. The endpoint expects a JSON payload with `x-api-key` auth header.
@@ -105,13 +127,14 @@ A claimed issue is a **zero-work skip**: outcome `CLAIMED`, the issue number is 
 - If two sessions race on the same issue, the earliest claim comment wins; the loser skips the issue without touching it.
 - Claim comments are historical records and are not deleted on release (the label removal is the release signal).
 
-## Railway Deployment & Preview
+## Deployment & Preview
 
-Railway is the current deployment platform (Render is disabled).
+Railway is the primary deployment platform; PRs may also be deployed to other platforms (self-hosted, Tailscale, Fly.io, etc.).
 
 - **Production**: `https://cabros-bot-production.up.railway.app` (master)
-- **PR previews**: `https://cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app` (e.g. PR 359 → `https://cabros-bot-cabros-bot-pr-359.up.railway.app`)
-- Verify health with `scripts/verify-preview.sh <PR_NUMBER>` (or `scripts/verify-preview.sh production` for master). The script checks `/healthcheck` and `/openapi.json` plus any extra endpoints passed as a second argument: `scripts/verify-preview.sh 359 "/healthcheck,/openapi.json,/api/alerts"`.
+- **PR previews**: The live URL is resolved dynamically from the GitHub Deployments API via `scripts/get-pr-deployment-url.sh <PR_NUMBER>`, which returns the `environment_url` of the latest `success`/`active` deployment for the PR. If no GitHub deployment is found, it falls back to the Railway pattern `https://cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app` with a warning.
+- Verify health with `scripts/verify-preview.sh <PR_NUMBER>` (or `scripts/verify-preview.sh production` for master). The script resolves the live URL via `get-pr-deployment-url.sh`, checks `/healthcheck` and `/openapi.json`, plus any extra endpoints passed as a second argument: `scripts/verify-preview.sh 359 "/healthcheck,/openapi.json,/api/alerts"`.
+- Pass an optional `EXPECTED_SHA` as a third argument to detect stale deployments (exit 2 = SHA mismatch → triggers Step 6.5): `scripts/verify-preview.sh 359 "/healthcheck" "$(gh pr view 359 --json headRefOid --jq .headRefOid)"`.
 - If the PR introduces new endpoints, pass them explicitly and verify each returns `200` (or `401/403` for auth-gated endpoints, which proves the service is live).
 - For `GLOBAL_BLOCKED` caused by Railway bounded retry or stale deployment, see Step 6.5 recovery before labeling `need manual PR deploy`.
 - For Firebase Hosting preview `RESOURCE_EXHAUSTED` / channel quota, see Error Handling — it is not a `GLOBAL_BLOCKED` and is fixed locally via `scripts/cleanup-preview-channels.js`.
@@ -181,6 +204,7 @@ Follow these steps in strict chronological order to automate issue resolution:
 ### Step 4: Action Plan & Implementation
 1. Check out a clean branch locally.
 2. Implement the changes matching the issue acceptance criteria.
+2b. **Reconcile multi-user feedback**: Per the **Multi-User Feedback Consideration** section, evaluate all participant comments gathered in Step 1 — explicitly `gigachad-senior-dev` and `virgin-trainee-dev` — against the implementation. Record adopted vs. set-aside points and the reason. If any persona feedback is adopted, the PR discussion loop (Step 5) must post the mandatory confirmation reply to both personas (or post it on the issue now if no PR exists yet).
 3. Run local tests to verify changes:
    ```bash
    pnpm test
@@ -206,18 +230,20 @@ Follow these steps in strict chronological order to automate issue resolution:
 
 ### Step 5: Verification & Deploy Check
 1. Ensure the PR meets all criteria in `references/readiness-and-verification.md`.
-2. Retrieve the PR number and run `scripts/verify-preview.sh <PR_NUMBER>` to verify the Railway preview deployment is live and healthy. For PRs that add new endpoints, verify them explicitly:
+2. Retrieve the PR number and run `scripts/verify-preview.sh <PR_NUMBER>` to verify the preview deployment is live and healthy. The script resolves the live URL via `scripts/get-pr-deployment-url.sh` (GitHub Deployments API, Railway fallback). Capture the expected SHA for staleness detection and pass it as a third argument. For PRs that add new endpoints, verify them explicitly:
    ```bash
-   scripts/verify-preview.sh <PR_NUMBER> "/healthcheck,/openapi.json,/api/your-new-endpoint"
+   EXPECTED_SHA="$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)"
+   scripts/verify-preview.sh "$PR_NUMBER" "/healthcheck,/openapi.json,/api/your-new-endpoint" "$EXPECTED_SHA"
    # production:
    scripts/verify-preview.sh production "/healthcheck,/openapi.json"
    ```
-   The script checks Railway URLs `https://cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app` and production `https://cabros-bot-production.up.railway.app`. A `401/403` on auth-gated endpoints counts as live (service is up, auth is required).
+   A `401/403` on auth-gated endpoints counts as live (service is up, auth is required). Exit code `2` from `verify-preview.sh` signals a stale deploy (SHA mismatch) — route to Step 6.5 recovery.
 3. **Run the PR discussion loop after every PR creation or update**:
    - Take a baseline snapshot of paginated GraphQL `reviewThreads` (thread ID, creation time, author, resolved/outdated state, and each thread comment ID plus `createdAt`/`updatedAt`) and paginated top-level PR conversation comments (comment ID, creation time, author, and body), then record the current head SHA. Paginate thread comments as well as threads; flat comments alone are not sufficient for inline thread state, but top-level conversation comments must also be tracked.
    - Before starting the quiet window, triage every unresolved thread in the baseline snapshot, including threads already present on an existing PR. Baseline status never exempts a thread from being addressed.
    - Wait using the quiet-window policy in `references/readiness-and-verification.md`, checking both `reviewThreads` and paginated top-level PR conversation comments around the midpoint and at the end. Do not merge while this loop is active; hand off only through the explicit human-input exception below.
-   - When a new or baseline inline thread or top-level conversation comment appears, triage and address every actionable unresolved item before continuing. Use `github:gh-address-comments` for actionable review feedback; implement requested changes, reply when an explanation is sufficient, and resolve only when the discussion is actually handled.
+    - When a new or baseline inline thread or top-level conversation comment appears, triage and address every actionable unresolved item before continuing. Use `github:gh-address-comments` for actionable review feedback; implement requested changes, reply when an explanation is sufficient, and resolve only when the discussion is actually handled.
+     - **Persona confirmation replies**: If feedback from `gigachad-senior-dev` or `virgin-trainee-dev` was adopted into the implementation or into the resolution of a thread, post the mandatory confirmation reply (per the **Multi-User Feedback Consideration** section) tagging only the contributing persona(s) once the relevant change or resolution lands (tag both only when both actually contributed). Never leave adopted persona feedback without its confirmation reply.
    - If a discussion requires product authority, missing requirements, or other human clarification, do not force a resolution or keep polling. Record the exact question and continue to Step 7 for `IN_REVIEW` handoff, leaving that thread open for the human reviewer.
    - Re-run the relevant tests and verification after code changes, push/update the PR, record the new head SHA, and restart the quiet window from that change or discussion.
    - Repeat the loop until a complete quiet window finishes with no new inline discussion, thread comment, or actionable top-level comment and no unresolved actionable thread remaining, or until the human-input exception routes the PR to Step 7. Compare thread IDs, thread-comment IDs/timestamps, and top-level comment IDs/timestamps so a resolved item and a newly created item cannot cancel each other out.
@@ -268,12 +294,12 @@ Never remove the label when this session does not own the claim for this run. Th
 - **Re-check ownership immediately before every consequential write**, especially PR creation/update, `@codex review` re-trigger, handoff, and merge. Re-run `scripts/claim-issue.sh <ISSUE_NUMBER>` with the same session identity; only proceed with the write on `RESULT=CLAIMED`/`RESULT=TAKEOVER` (exit `0`). A `RESULT=SKIP` (exit `2`) means another session now owns a fresh claim — stop writing to this issue/PR and treat it as claimed-elsewhere. A `RESULT=ERROR` (exit `1`) is a tooling failure to handle per Error Handling, and must not be treated as ownership.
 - If the run is about to do no more writes, the periodic renewal also serves as the final reconfirmation before any label removal.
 
-#### Step 6.5: Railway stale-deploy / bounded-retry recovery (GLOBAL_BLOCKED with Railway cause)
+#### Step 6.5: Stale-deploy / bounded-retry recovery (GLOBAL_BLOCKED with deployment cause)
 
-If the issue/PR carries `GLOBAL_BLOCKED` **caused by a Railway bounded retry (`429`/`rate-limit`) or an outdated Railway deployment where the preview commit is not the PR head**, do NOT immediately treat it as a permanent skip:
+If the issue/PR carries `GLOBAL_BLOCKED` **caused by a bounded retry (`429`/`rate-limit`) or an outdated deployment where the preview commit is not the PR head** (detected via `verify-preview.sh` exit code `2` or manual SHA comparison), do NOT immediately treat it as a permanent skip:
 
 1. **Attempt recovery** (bounded, one try):
-   - Check if the PR branch is behind `master`: `gh pr view <N> --json baseRefName,headRefOid` and `git fetch origin master && git merge-base --is-ancestor HEAD origin/master`. If behind, update the branch: `git fetch origin master && git merge origin/master` (or `gh pr update-branch` / `gh api repos/francovp/cabros-bot/pulls/<N>/update-branch -X PUT`), push, then wait for Railway to start a new deployment.
+   - Check if the PR branch is behind `master`: `gh pr view <N> --json baseRefName,headRefOid` and `git fetch origin master && git merge-base --is-ancestor HEAD origin/master`. If behind, update the branch: `git fetch origin master && git merge origin/master` (or `gh pr update-branch` / `gh api repos/francovp/cabros-bot/pulls/<N>/update-branch -X PUT`), push, then wait for the CD platform to start a new deployment.
    - Otherwise, trigger a Railway deploy from the branch: `railway up --detach` (if `railway` CLI is authenticated via `RAILWAY_TOKEN`) or `railway redeploy` / Railway API `POST https://backboard.railway.app/graphql/v2` with the service. Poll deployment status with `railway status` or via `scripts/verify-preview.sh <PR_NUMBER>` until healthy (max 5 minutes, 30s interval).
 2. **Re-verify**: Run `scripts/verify-preview.sh <PR_NUMBER>` (and any new endpoints). If it now succeeds (HTTP 200 on `/healthcheck`), the blocker is resolved: remove `GLOBAL_BLOCKED` and `need manual PR deploy` labels from the issue and PR:
    ```bash
@@ -368,6 +394,7 @@ Always include a final summary of execution containing:
 5. Performed verification steps (CI, reviews, Railway preview ping, and E2E). Note the Railway URLs verified (`https://cabros-bot-cabros-bot-pr-<PR>.up.railway.app` and `https://cabros-bot-production.up.railway.app`).
 6. **Linear issue ID** associated with each processed issue (e.g., `CB-42`).
 7. **`agent-working` lifecycle confirmation**: For each issue confirm: the claim was acquired at start via `scripts/claim-issue.sh` (label + claim comment with agent/session/timestamp), and released at end (merged or `In review`).
+8. **Persona feedback handling**: For each issue/PR where `gigachad-senior-dev` or `virgin-trainee-dev` contributed, record whether their feedback was adopted and whether the mandatory confirmation reply was posted (and to which personas).
 
 ## Error Handling & Troubleshooting
 
