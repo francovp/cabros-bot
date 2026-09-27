@@ -1,8 +1,33 @@
 'use strict';
 
 const { JobRepository, _resetForTesting } = require('../../src/services/jobs/JobRepository');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 
 describe('JobRepository durable claims', () => {
+	it('records a failed durable write when Firestore is unavailable', async () => {
+		process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => null);
+
+		try {
+			await expect(repository.save({
+				jobId: 'job-init-failure',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+			})).resolves.toBe('job-init-failure');
+
+			expect(firestoreWriteMetricsService.getSnapshot()).toMatchObject({
+				writesAttempted: 1,
+				writesSucceeded: 0,
+				writesFailed: 1,
+				byDomain: { jobs: { failure: 1 } },
+			});
+		} finally {
+			delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+			_resetForTesting();
+		}
+	});
+
 	it('stores a one-hour expiry for terminal durable jobs only', async () => {
 		const terminalCreatedAt = new Date(Date.now() - 1000).toISOString();
 		const activeCreatedAt = new Date(Date.now() - 1000).toISOString();
@@ -850,5 +875,4 @@ describe('JobRepository durable claims', () => {
 		expect(hasChatScopeIndex).toBe(true);
 	});
 });
-
 

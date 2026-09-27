@@ -8,6 +8,7 @@ const {
 	deriveFallbackTradePlan,
 	calculateFallbackRiskLevels,
 } = require('../../../../services/tradingview/fallbackTradePlan');
+const { tokenCostBudgetService } = require('../../../../lib/tokenUsage');
 
 function mergeUnique(first = [], second = [], maxItems = 6) {
 	const result = [];
@@ -447,7 +448,11 @@ async function enrichAlert(alert, options = {}) {
 	const validated = validateAlert(inputText, metadata);
 	// validateAlert may return either a string (when mocked in tests) or an object { text, metadata }
 	const text = (typeof validated === 'string') ? validated : (validated && validated.text) ? validated.text : inputText;
-	const isGeminiEnabled = getRuntimeConfig().ENABLE_GEMINI_GROUNDING;
+	const isBudgetExceeded = tokenCostBudgetService.isBudgetExceeded();
+	if (isBudgetExceeded) {
+		console.warn('[Alert] Daily token cost budget exceeded, disabling Gemini grounding for alert');
+	}
+	const isGeminiEnabled = getRuntimeConfig().ENABLE_GEMINI_GROUNDING && !isBudgetExceeded;
 	const shouldUseTradingViewData = options.useTradingViewData === true;
 	const isMcpEnabled = shouldUseTradingViewData && tradingViewMcpService.isEnabled();
 
