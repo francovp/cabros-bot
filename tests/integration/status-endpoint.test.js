@@ -470,6 +470,26 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.messageFooterMetadata).toBe(false);
 	});
 
+	it('reports signal class marker as enabled by default', async () => {
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.signalClassMarker).toBe(true);
+	});
+
+	it('reports signal class marker as disabled when explicitly disabled', async () => {
+		process.env.ENABLE_SIGNAL_CLASS_MARKER = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.signalClassMarker).toBe(false);
+	});
+
 	it('reports alert signal repeat suppression as disabled by default', async () => {
 		delete process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION;
 
@@ -1846,6 +1866,7 @@ describe('Status endpoints', () => {
 			workerRole: 'web',
 			running: false,
 			pendingCount: 0,
+			zeroChannelBroadcasts: 0,
 			lastSweepAt: null,
 			lastSweepResult: null,
 		});
@@ -1864,13 +1885,66 @@ describe('Status endpoints', () => {
 			workerRole: 'worker',
 			batchLimit: 50,
 			maxAttempts: 5,
+			zeroChannelBroadcasts: 0,
 		});
 		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepAt).toBeNull();
 		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepResult).toBeNull();
 	});
 
-	it('waits for the initial notification redrive heartbeat before serializing status', async () => {
-		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+	it('reports operator-intent channel configuration for zero-channel triage (GH-713)', async () => {
+		// Nothing configured: every channel must be listed as unconfigured so an operator
+		// can tell "never configured" apart from "configured but failing".
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		delete process.env.BOT_TOKEN;
+		delete process.env.TELEGRAM_CHAT_ID;
+		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+		delete process.env.WHATSAPP_API_URL;
+		delete process.env.WHATSAPP_API_KEY;
+		delete process.env.WHATSAPP_CHAT_ID;
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		delete process.env.DISCORD_WEBHOOK_URL;
+
+		const unconfiguredResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(unconfiguredResponse.status).toBe(200);
+		expect(unconfiguredResponse.body.notificationChannelIntent).toEqual({
+			configured: [],
+			unconfigured: expect.arrayContaining(['telegram', 'whatsapp', 'discord']),
+		});
+
+		// Configure Discord only: intent must be Discord-configured, Telegram/WhatsApp unconfigured.
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1/abc';
+		const partialResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(partialResponse.status).toBe(200);
+		expect(partialResponse.body.notificationChannelIntent).toEqual({
+			configured: ['discord'],
+			unconfigured: expect.arrayContaining(['telegram', 'whatsapp']),
+		});
+
+		// Intent mirrors NotificationChannel.isConfigured() = enable flag AND
+		// credentials (dependencyStatus.ready). A channel whose webhook URL is set
+		// but whose ENABLE_DISCORD_ALERTS flag is off is therefore NOT configured
+		// by operator intent — the same verdict the zero-channel page reaches,
+		// since it calls that same method. Reporting it as configured here would
+		// contradict the page that reported it as unconfigured.
+		process.env.ENABLE_DISCORD_ALERTS = 'false';
+		const flagDisabledResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(flagDisabledResponse.body.dependencies.discord.configured).toBe(true);
+		expect(flagDisabledResponse.body.dependencies.discord.ready).toBe(false);
+		expect(flagDisabledResponse.body.notificationChannelIntent.configured).toEqual([]);
+		expect(flagDisabledResponse.body.notificationChannelIntent.unconfigured)
+			.toEqual(expect.arrayContaining(['telegram', 'whatsapp', 'discord']));
+	});
+
+	it('waits for the initial notification redrive heartbeat before serializing status', async () => {		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
 		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
 		const statusController = require('../../src/controllers/status');
 		const service = require('../../src/services/notification/NotificationRedriveService').notificationRedriveService;

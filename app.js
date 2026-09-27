@@ -65,10 +65,12 @@ app.get('/ready', (req, res) => {
 // the global bucket and never require operator credentials.
 app.get('/api/public/status', getPublicStatus(getAdminStatus));
 
-// Rate Limiter (must be after healthcheck to avoid limiting health checks)
-app.use(require('./src/lib/rateLimiter'));
-
-// Public, read-only API contract and interactive documentation.
+// Public, read-only API contract and interactive documentation (mounted before
+// the rate limiter so browsing documentation and the admin console does not consume
+// the protected /api budget).
 app.use(getOpenApiDocsRouter());
+
+// Rate Limiter (must be after healthcheck, public status, and public docs to avoid limiting them)
+app.use(require('./src/lib/rateLimiter'));
 
 module.exports = app;

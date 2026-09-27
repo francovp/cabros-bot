@@ -111,6 +111,18 @@ class DiscordService extends NotificationChannel {
 		return this.enabled;
 	}
 
+	/**
+	 * Check if Discord is configured for alert delivery by operator intent.
+	 * Requires the ENABLE_DISCORD_ALERTS flag and a webhook URL.
+	 * @returns {boolean}
+	 */
+	isConfigured() {
+		return (
+			process.env.ENABLE_DISCORD_ALERTS === 'true' &&
+			Boolean(this.webhookUrl || process.env.DISCORD_WEBHOOK_URL)
+		);
+	}
+
 	async send(alert = {}, options = {}) {
 		const startedAt = Date.now();
 		try {
@@ -169,11 +181,14 @@ class DiscordService extends NotificationChannel {
 	}
 
 	async formatAlert(alert = {}) {
+		const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
 		if (alert.enriched && typeof alert.enriched === 'object') {
-			return this.formatter.formatEnriched(alert.enriched);
+			return this.formatter.formatEnriched(alert.enriched, { signalClass });
 		}
 
-		return typeof alert.text === 'string' ? alert.text : '';
+		return typeof alert.text === 'string'
+			? this.formatter.format(alert.text, { signalClass })
+			: '';
 	}
 
 	extractRetryAfterMs(response, bodyText) {
