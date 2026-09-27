@@ -11,6 +11,7 @@ const {
 	parseNotificationRouting,
 	sendWithNotificationRouting,
 } = require('../../../../services/notification/requestRouting');
+const alertStorageService = require('../../../../services/storage/AlertStorageService');
 const MAX_MESSAGE_LENGTH = 4000;
 
 function validateMessageRequest(body) {
@@ -37,6 +38,7 @@ function validateMessageRequest(body) {
 function postMessage(botOrGetter) {
 	return async (req, res) => {
 		const requestId = resolveRequestId(req);
+		const startTime = Date.now();
 		try {
 			const routing = validateMessageRequest(req.body);
 			const alert = {
@@ -81,6 +83,22 @@ function postMessage(botOrGetter) {
 			);
 
 			res.json({ success: true, results, requestId });
+
+			// Fire-and-forget: persist after responding so storage never blocks delivery.
+			// Do not persist raw discordWebhookUrl to avoid storing sensitive webhook credentials.
+			alertStorageService.saveAlert({
+				text: alert.text,
+				enriched: false,
+				enrichmentData: null,
+				tokenUsage: null,
+				deliveryResults: results,
+				channels: routing.channels || results.map((result) => result.channel).filter(Boolean),
+				source: 'webhook-message',
+				processingTimeMs: Math.max(0, Date.now() - startTime),
+				telegramChatId: routing.telegramChatId,
+				telegramThreadId: routing.telegramThreadId,
+				whatsappChatId: routing.whatsappChatId,
+			}).catch(() => {});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
 				return res.status(error.statusCode).json({
