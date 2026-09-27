@@ -93,7 +93,10 @@ let fingerprintSecret = null;
 function getFingerprintSecret() {
 	if (fingerprintSecret) return fingerprintSecret;
 	const configured = process.env.RATE_LIMIT_FINGERPRINT_SECRET;
-	if (configured && configured.trim().length >= 16) {
+	// 32+ characters, matching the documented requirement in .env.example. A short
+	// secret still yields a working HMAC but weakens the bucket-key derivation, so
+	// an undersized value is ignored in favour of the random per-process secret.
+	if (configured && configured.trim().length >= 32) {
 		fingerprintSecret = configured.trim();
 		return fingerprintSecret;
 	}
@@ -105,6 +108,12 @@ function getFingerprintSecret() {
 // HMAC-SHA256 so an attacker with access to a single bucket key cannot
 // recover the cleartext; the secret is per-process and never logged.
 function hashApiKey(apiKey) {
+	// HMAC-SHA256 keyed with a server-side secret, not a password hash: the key is
+	// either RATE_LIMIT_FINGERPRINT_SECRET (>=32 chars, deployment-controlled) or a
+	// 32-byte crypto.randomBytes value, and the digest is only a rate-limit bucket
+	// identifier. There is no offline brute-force surface, so the rule's
+	// password-hashing guidance does not apply.
+	/* codeql[js/insufficient-password-hash] */
 	return crypto
 		.createHmac('sha256', getFingerprintSecret())
 		.update(String(apiKey))
