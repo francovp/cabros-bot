@@ -415,6 +415,63 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
 	});
 
+	it('documents signalClass in alert webhook and alert query/summary examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const postAlert = findItem(collection.item, 'POST Send Alert');
+		expect(postAlert).toBeDefined();
+		const body = JSON.parse(postAlert.request.body.raw);
+		expect(body.signalClass).toBe('breakout');
+
+		const dryRunAlert = findItem(collection.item, 'POST Send Alert Dry Run (risk metadata)');
+		expect(dryRunAlert).toBeDefined();
+		const dryRunBody = JSON.parse(dryRunAlert.request.body.raw);
+		expect(dryRunBody.signalClass).toBe('breakout');
+		const dryRunResp = JSON.parse(dryRunAlert.response[0].body);
+		expect(dryRunResp.signalClass).toBeUndefined();
+		expect(dryRunResp.payload.signalClass).toBe('breakout');
+
+		const listFiltered = findItem(collection.item, 'GET List Alerts (symbol, exchange, eventCategory)');
+		const listAlert = JSON.parse(listFiltered.response[0].body).alerts[0];
+		expect(listAlert.signalClass).toBe('breakout');
+
+		const summaryFiltered = findItem(collection.item, 'GET Alert Analytics Summary (symbol, exchange, eventCategory)');
+		const summary = JSON.parse(summaryFiltered.response[0].body).summary;
+		expect(summary.signalClassCounts).toBeDefined();
+		expect(summary.signalClassCounts.breakout).toBe(1);
+
+		const postInvalid = findItem(collection.item, 'POST Send Alert (invalid signalClass - 400 Bad Request)');
+		expect(postInvalid).toBeDefined();
+		expect(postInvalid.response[0].code).toBe(400);
+		expect(JSON.parse(postInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+
+		const listClassFiltered = findItem(collection.item, 'GET List Alerts (signalClass filter)');
+		expect(listClassFiltered).toBeDefined();
+		expect(listClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');
+		expect(listClassFiltered.response[0].code).toBe(200);
+
+		const listClassInvalid = findItem(collection.item, 'GET List Alerts (invalid signalClass - 400 Bad Request)');
+		expect(listClassInvalid).toBeDefined();
+		expect(listClassInvalid.response[0].code).toBe(400);
+
+		const summaryClassFiltered = findItem(collection.item, 'GET Alert Analytics Summary (signalClass filter)');
+		expect(summaryClassFiltered).toBeDefined();
+		expect(summaryClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');
+		expect(summaryClassFiltered.response[0].code).toBe(200);
+
+		const summaryClassInvalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid signalClass - 400 Bad Request)');
+		expect(summaryClassInvalid).toBeDefined();
+		expect(summaryClassInvalid.response[0].code).toBe(400);
+
+		const exportClassFiltered = findItem(collection.item, 'GET Export Alerts (JSONL - signalClass filter)');
+		expect(exportClassFiltered).toBeDefined();
+		expect(exportClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');
+		expect(exportClassFiltered.response[0].code).toBe(200);
+
+		const exportClassInvalid = findItem(collection.item, 'GET Export Alerts (invalid signalClass - 400 Bad Request)');
+		expect(exportClassInvalid).toBeDefined();
+		expect(exportClassInvalid.response[0].code).toBe(400);
+	});
+
 	it('documents notificationRedrive and zeroChannelBroadcasts in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');
