@@ -160,7 +160,7 @@
       "request": {
         "method": "GET",
         "header": [],
-        "description": "Public, read-only canonical OpenAPI contract. No API key is required.",
+        "description": "Public, read-only canonical OpenAPI contract. No API key is required, and requests are exempt from the global rate limit budget.",
         "url": {
           "raw": "{{baseUrl}}/openapi.json",
           "host": [
@@ -191,7 +191,7 @@
       "request": {
         "method": "GET",
         "header": [],
-        "description": "Public Swagger UI backed by /openapi.json. Protected API calls still require authorization.",
+        "description": "Public Swagger UI backed by /openapi.json. Protected API calls still require authorization; docs assets are exempt from the global rate limit budget.",
         "url": {
           "raw": "{{baseUrl}}/docs",
           "host": [
@@ -245,7 +245,40 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false,\"alertScheduler\":false,\"notificationRedrive\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0,\"entryPriceSources\":{\"configured\":false,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"twelve-data\"]}},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"alertScheduler\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":10,\"scheduleCount\":0,\"activeCount\":0,\"lastRunAt\":null,\"lastRunDurationMs\":null,\"lastRunExecutedCount\":0,\"lastRunErrorCount\":0,\"lastError\":null,\"schedules\":[]},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"newsMonitorDedup\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"mode\":\"in-memory\",\"backend\":null,\"cacheSize\":{\"entries\":0,\"maxEntries\":5000,\"evictionCount\":0,\"deliveryLocks\":0,\"deliveryLockMaxEntries\":1000,\"deliveryLockEvictionCount\":0,\"urlShortenerCache\":{\"size\":0,\"maxEntries\":1000,\"evictionCount\":0},\"urlShortenerServiceFailures\":{\"size\":0,\"maxEntries\":32,\"evictionCount\":0}}}}}"
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false,\"alertScheduler\":false,\"notificationRedrive\":false,\"firestoreChatPreferences\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0,\"entryPriceSources\":{\"configured\":false,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"twelve-data\"]}},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"alertScheduler\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":10,\"scheduleCount\":0,\"activeCount\":0,\"lastRunAt\":null,\"lastRunDurationMs\":null,\"lastRunExecutedCount\":0,\"lastRunErrorCount\":0,\"lastError\":null,\"schedules\":[]},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"newsMonitorDedup\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"mode\":\"in-memory\",\"backend\":null,\"cacheSize\":{\"entries\":0,\"maxEntries\":5000,\"evictionCount\":0,\"deliveryLocks\":0,\"deliveryLockMaxEntries\":1000,\"deliveryLockEvictionCount\":0,\"urlShortenerCache\":{\"size\":0,\"maxEntries\":1000,\"evictionCount\":0},\"urlShortenerServiceFailures\":{\"size\":0,\"maxEntries\":32,\"evictionCount\":0}}},\"chatPreferences\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cachedCount\":0,\"cacheTtlMs\":60000,\"retentionDays\":90},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"}}}"
+        }
+      ]
+    },
+    {
+      "name": "Get Public Status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/public/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "public",
+            "status"
+          ]
+        },
+        "description": "Public, unauthenticated service status snapshot. No API key required. Returns a redacted view of service identity, uptime, enabled notification channels, and per-dependency readiness booleans. Cached for 30 seconds per process. Returns HTTP 503 with code SERVICE_NOT_READY when the process is still bootstrapping or shutting down."
+      },
+      "response": [
+        {
+          "name": "Success",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"status\":{\"ok\":true,\"uptimeSeconds\":42319,\"lastUpdated\":\"2026-08-27T19:30:00.000Z\",\"shuttingDown\":false},\"channels\":{\"enabled\":[\"telegram\"]},\"dependencies\":{\"gemini\":{\"ready\":true},\"tradingview\":{\"ready\":true},\"firestore\":{\"ready\":true}}}"
+        },
+        {
+          "name": "503 - service not ready",
+          "status": "Service Unavailable",
+          "code": 503,
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"status\":{\"ok\":false,\"uptimeSeconds\":2,\"lastUpdated\":\"2026-08-27T19:30:00.000Z\",\"shuttingDown\":false},\"channels\":{\"enabled\":[]},\"dependencies\":{\"gemini\":{\"ready\":false},\"tradingview\":{\"ready\":false},\"firestore\":{\"ready\":false}},\"error\":\"service_not_ready\",\"code\":\"SERVICE_NOT_READY\"}"
         }
       ]
     },
@@ -314,6 +347,210 @@
       ]
     },
     {
+      "name": "Get Status - notification channel intent",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing notificationChannelIntent, the operator-intent view of channel configuration (GH-713). It mirrors NotificationChannel.isConfigured(): a channel counts as configured when its enable flag is set AND its required credentials/chat id/webhook are present. A channel with credentials present but its enable flag off reports as not configured, matching the zero-channel admin page because both call the same method. Separates channels the operator never set up from ones that are set up but currently failing, so an operator can answer 'why did I get the zero-channel page?' without inspecting credentials. Channel names only; no credentials or destinations are exposed."
+      },
+      "response": [
+        {
+          "name": "200 OK - Discord configured, Telegram and WhatsApp unconfigured",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"deliveryChannels\":{\"telegram\":{\"enabled\":false,\"status\":\"disabled\"},\"whatsapp\":{\"enabled\":true,\"status\":\"misconfigured\"},\"discord\":{\"enabled\":true,\"status\":\"ready\"}},\"notificationChannelIntent\":{\"configured\":[\"discord\"],\"unconfigured\":[\"telegram\",\"whatsapp\"]}}"
+        },
+        {
+          "name": "200 OK - no channel configured by operator intent",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"deliveryChannels\":{\"telegram\":{\"enabled\":false,\"status\":\"disabled\"},\"whatsapp\":{\"enabled\":false,\"status\":\"disabled\"},\"discord\":{\"enabled\":false,\"status\":\"disabled\"}},\"notificationChannelIntent\":{\"configured\":[],\"unconfigured\":[\"telegram\",\"whatsapp\",\"discord\"]}}"
+        },
+        {
+          "name": "401 Unauthorized - missing or invalid API key",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\"error\":\"Invalid or missing API key\",\"code\":\"UNAUTHORIZED\"}"
+        }
+      ]
+    },
+    {
+      "name": "Get Status - firestore write metrics",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing the in-memory per-domain Firestore write metrics. counters reset on process restart and the dependencies.firestoreWriteMetrics key is omitted entirely until at least one Firestore write attempt is recorded by AlertStorageService.saveAlert/saveReplayAttempt or JobRepository.save. Mirrors the existing per-channel deliveryMetrics pattern."
+      },
+      "response": [
+        {
+          "name": "200 OK - firestoreWriteMetrics populated",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"firestoreWriteMetrics\":{\"window\":{\"startedAt\":\"2026-08-31T22:30:00.000Z\",\"durationMs\":60000},\"writesAttempted\":1247,\"writesSucceeded\":1245,\"writesFailed\":2,\"successRate\":0.9984,\"byDomain\":{\"alerts\":{\"success\":1100,\"failure\":1,\"total\":1101,\"successRate\":0.9991},\"alertReplays\":{\"success\":12,\"failure\":0,\"total\":12,\"successRate\":1},\"jobs\":{\"success\":133,\"failure\":1,\"total\":134,\"successRate\":0.9925}}}}}"
+        },
+        {
+          "name": "200 OK - firestoreWriteMetrics omitted (before first write)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"firestoreJobStorage\":true},\"dependencies\":{\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"}}}"
+        },
+        {
+          "name": "401 Unauthorized (missing API key)",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\"error\":\"Unauthorized: Missing API key\"}"
+        }
+      ]
+    },
+    {
+      "name": "Run Self-Test",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/selftest/run",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "selftest",
+            "run"
+          ]
+        },
+        "description": "Runs the self-diagnostic suite. Each check has a 5s deadline; the whole suite has a 30s budget. Optional `only` query parameter scopes the run to a comma-separated list of check ids."
+      },
+      "response": [
+        {
+          "name": "200 OK - full run",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"warn\",\"summary\":{\"pass\":4,\"warn\":1,\"fail\":1,\"skipped\":4},\"checks\":[{\"id\":\"telegram.bot_info\",\"status\":\"skipped\",\"message\":\"Telegram bot is disabled\",\"durationMs\":1,\"evidence\":null},{\"id\":\"telegram.env\",\"status\":\"pass\",\"message\":\"BOT_TOKEN and TELEGRAM_CHAT_ID are set\",\"durationMs\":0,\"evidence\":null},{\"id\":\"auth.api_key\",\"status\":\"pass\",\"message\":\"WEBHOOK_API_KEY is set\",\"durationMs\":0,\"evidence\":null},{\"id\":\"gemini.grounding\",\"status\":\"skipped\",\"message\":\"ENABLE_GEMINI_GROUNDING is not enabled\",\"durationMs\":0,\"evidence\":null},{\"id\":\"tradingview_mcp.endpoint\",\"status\":\"skipped\",\"message\":\"TRADINGVIEW_MCP_URL is not configured\",\"durationMs\":0,\"evidence\":null},{\"id\":\"firestore.collections\",\"status\":\"skipped\",\"message\":\"No Firestore feature is enabled\",\"durationMs\":0,\"evidence\":null},{\"id\":\"binance.trading\",\"status\":\"skipped\",\"message\":\"ENABLE_BINANCE_TRADING is not enabled\",\"durationMs\":0,\"evidence\":null},{\"id\":\"channels.enabled\",\"status\":\"warn\",\"message\":\"No outbound notification channels are enabled\",\"durationMs\":0,\"evidence\":null},{\"id\":\"rate_limiter.config\",\"status\":\"pass\",\"message\":\"Rate limiter is configured\",\"durationMs\":0,\"evidence\":{\"max\":100,\"windowMs\":60000}},{\"id\":\"service.metadata\",\"status\":\"pass\",\"message\":\"Service metadata is available\",\"durationMs\":0,\"evidence\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\",\"commit\":\"abc123\",\"uptimeSec\":12345,\"nodeVersion\":\"v24.18.0\"}}],\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\",\"commit\":\"abc123\",\"uptimeSec\":12345,\"nodeVersion\":\"v24.18.0\"},\"startedAt\":\"2026-09-02T16:00:00.000Z\",\"finishedAt\":\"2026-09-02T16:00:00.020Z\",\"durationMs\":20,\"requestId\":\"selftest-001\",\"cached\":false}"
+        }
+      ]
+    },
+    {
+      "name": "Get Self-Test (cached)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/selftest",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "selftest"
+          ]
+        },
+        "description": "Returns the cached result of the most recent POST /api/selftest/run call. The result expires after 60 seconds; clients should call POST /api/selftest/run to refresh."
+      },
+      "response": [
+        {
+          "name": "200 OK - cached result",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"warn\",\"summary\":{\"pass\":4,\"warn\":1,\"fail\":1,\"skipped\":4},\"checks\":[{\"id\":\"telegram.env\",\"status\":\"pass\",\"message\":\"BOT_TOKEN and TELEGRAM_CHAT_ID are set\",\"durationMs\":0,\"evidence\":null}],\"requestId\":\"selftest-002\",\"cached\":true}"
+        },
+        {
+          "name": "200 OK - no run yet",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"unknown\",\"message\":\"No self-test has been run yet. POST /api/selftest/run to trigger one.\",\"requestId\":\"selftest-003\",\"cached\":false}"
+        }
+      ]
+    },
+    {
+      "name": "Run Self-Test (scoped to subset)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/selftest/run?only=auth.api_key,service.metadata",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "selftest",
+            "run"
+          ],
+          "query": [
+            {
+              "key": "only",
+              "value": "auth.api_key,service.metadata"
+            }
+          ]
+        },
+        "description": "Scoped run: only executes the named checks. Unknown check ids return a fail result without running anything else."
+      },
+      "response": [
+        {
+          "name": "200 OK - scoped run",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"pass\",\"summary\":{\"pass\":2,\"warn\":0,\"fail\":0,\"skipped\":0},\"checks\":[{\"id\":\"auth.api_key\",\"status\":\"pass\",\"message\":\"WEBHOOK_API_KEY is set\",\"durationMs\":0,\"evidence\":null},{\"id\":\"service.metadata\",\"status\":\"pass\",\"message\":\"Service metadata is available\",\"durationMs\":0,\"evidence\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"}}],\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"startedAt\":\"2026-09-02T16:00:00.000Z\",\"finishedAt\":\"2026-09-02T16:00:00.005Z\",\"durationMs\":5,\"requestId\":\"selftest-004\",\"cached\":false}"
+        },
+        {
+          "name": "200 OK - unknown ids reported as fail",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"fail\",\"summary\":{\"pass\":0,\"warn\":0,\"fail\":1,\"skipped\":0},\"checks\":[{\"id\":\"unknown\",\"status\":\"fail\",\"message\":\"unknown checks: nope.nope\",\"durationMs\":0}],\"startedAt\":\"2026-09-02T16:00:00.000Z\",\"finishedAt\":\"2026-09-02T16:00:00.001Z\",\"durationMs\":1,\"requestId\":\"selftest-005\",\"cached\":false}"
+        }
+      ]
+    },
+    {
       "name": "Get Capabilities",
       "request": {
         "method": "GET",
@@ -341,7 +578,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true,\"notificationRedrive\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"signalOutcomeWorker\":{\"entryPriceSources\":{\"configured\":true,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"mcp\",\"binance\",\"gemini\"]}},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null}}}"
+          "body": "{\"featureFlags\": {\"tradingViewVolumeConfirmation\": true, \"firestoreJobStorage\": true, \"newsMonitorTestMode\": false, \"messageFooterMetadata\": true, \"cloudflareAig\": false, \"equityMarketData\": false, \"firebaseRemoteConfig\": true, \"notificationRedrive\": false, \"tokenCostBudget\": false, \"signalClassMarker\": true}, \"dependencies\": {\"geminiQuota\": {\"enabled\": true, \"configured\": true, \"ready\": true, \"status\": \"ready\", \"cooldownActive\": false, \"remainingCooldownMs\": 0, \"lastTriggeredAt\": null, \"triggersTotal\": 0, \"braveFallbacksDuringCooldown\": 0, \"lastBraveFallbackAt\": null, \"metrics\": {\"totalRequests\": 0, \"successRequests\": 0, \"failureRequests\": 0, \"timeoutRequests\": 0}}, \"tradingViewMcp\": {\"enabled\": true, \"configured\": true, \"ready\": false, \"status\": \"unknown\", \"lastCheckedAt\": null, \"lastSuccessAt\": null, \"lastFailureAt\": null, \"lastErrorCategory\": null, \"successCount\": 0, \"failureCount\": 0, \"circuitBreaker\": {\"state\": \"closed\", \"consecutiveFailures\": 0, \"openedAt\": null, \"lastStateChangeAt\": null, \"failureThreshold\": 5, \"cooldownMs\": 600000}, \"toolMetrics\": {}}, \"tradingViewVolumeConfirmation\": {\"enabled\": true, \"configured\": true, \"ready\": true, \"status\": \"ready\", \"circuitBreaker\": {\"state\": \"closed\", \"consecutiveFailures\": 0, \"openedAt\": null, \"lastStateChangeAt\": null, \"failureThreshold\": 5, \"cooldownMs\": 600000}}, \"firestoreJobStorage\": {\"enabled\": true, \"configured\": true, \"ready\": true, \"status\": \"ready\"}, \"cloudflareAig\": {\"enabled\": false, \"configured\": false, \"ready\": false, \"status\": \"disabled\"}, \"equityMarketData\": {\"provider\": null, \"enabled\": false, \"configured\": false, \"ready\": false, \"status\": \"disabled\", \"supportedExchanges\": [\"BATS\", \"NASDAQ\", \"NYSE\", \"AMEX\", \"NYSE ARCA\", \"FX_IDC\", \"SPCFD\"], \"timeoutMs\": 5000}, \"firebaseRemoteConfig\": {\"enabled\": true, \"configured\": true, \"ready\": true, \"status\": \"ready\", \"source\": \"remote\", \"templateVersion\": \"7\", \"lastSuccessfulLoad\": \"2026-08-02T08:30:00.000Z\", \"lastErrorCategory\": null, \"consecutiveFailures\": 0, \"refreshIntervalMs\": 900000, \"maxAgeMs\": 3600000}, \"signalOutcomeWorker\": {\"entryPriceSources\": {\"configured\": true, \"crypto\": [\"mcp\", \"binance\", \"gemini\"], \"equity\": [\"mcp\", \"binance\", \"gemini\"]}}, \"notificationRedrive\": {\"enabled\": false, \"configured\": true, \"ready\": false, \"status\": \"disabled\", \"role\": \"web\", \"workerRole\": \"web\", \"running\": false, \"intervalMs\": 60000, \"batchLimit\": 50, \"maxAttempts\": 5, \"maxAgeMs\": 3600000, \"pendingCount\": 0, \"deliveredCount\": 0, \"exhaustedCount\": 0, \"zeroChannelBroadcasts\": 0, \"lastRunAt\": null, \"lastSweepAt\": null, \"lastRunDurationMs\": null, \"lastRunScannedCount\": 0, \"lastRunRedrivenCount\": 0, \"lastRunErrorCount\": 0, \"lastRunExhaustedCount\": 0, \"lastSweepResult\": null}, \"tokenCostBudget\": {\"enabled\": false, \"configured\": true, \"ready\": false, \"status\": \"disabled\", \"dailySpendUsd\": 0, \"budgetUsd\": 5, \"utilizationPct\": 0, \"alertsSent\": 0, \"lastResetAt\": \"2026-03-29T00:00:00.000Z\"}}}"
         }
       ]
     },
@@ -387,7 +624,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101\n}"
+              "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"signalClass\": \"breakout\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert",
@@ -407,6 +644,66 @@
               "status": "OK",
               "code": 200,
               "body": "{\"success\":true,\"requestId\":\"req-12345\",\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\"}],\"enriched\":false}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            },
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Send Alert (invalid signalClass - 400 Bad Request)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"signalClass\": \"invalid_class\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid signalClass",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Invalid signalClass: \\\"invalid_class\\\". Valid values are: breakout, mean_reversion, trend_continuation, reversal, volume_spike, news_event, manual, unknown\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-12345\",\n  \"retryable\": false\n}"
             }
           ]
         },
@@ -428,7 +725,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"Bitcoin breaks above $83,000 with strong volume\"\n}"
+              "raw": "{\n  \"text\": \"Bitcoin breaks above $83,000 with strong volume\",\n  \"signalClass\": \"breakout\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert?dryRun=true",
@@ -453,7 +750,7 @@
               "name": "Enriched payload",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"sentiment_score_raw\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"setup_evidence\":\"Price broke above resistance range with volume confirmation\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[]}},\"tokenUsage\":{}}"
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"signalClass\":\"breakout\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"sentiment_score_raw\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"setup_evidence\":\"Price broke above resistance range with volume confirmation\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[]}},\"tokenUsage\":{}}"
             }
           ]
         },
@@ -603,7 +900,21 @@
                 "expanded-analysis-alert"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            }
+          ]
         },
         {
           "name": "POST Expanded Analysis Alert (combined mode)",
@@ -676,7 +987,21 @@
                 "market-scanner-alert"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            }
+          ]
         },
         {
           "name": "POST Market Scanner Alert (dry run)",
@@ -1016,6 +1341,18 @@
                 }
               ],
               "body": "{\n  \"success\": false,\n  \"error\": \"MCP unavailable\",\n  \"code\": \"VOLUME_CONFIRMATION_FAILED\",\n  \"requestId\": \"req-vol-502\",\n  \"processingTimeMs\": 450\n}"
+            },
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
             }
           ]
         },
@@ -1081,6 +1418,18 @@
               "status": "Gateway Timeout",
               "code": 504,
               "body": "{\n  \"success\": false,\n  \"error\": \"Symbol analysis timed out.\",\n  \"code\": \"SYMBOL_ANALYSIS_TIMEOUT\",\n  \"requestId\": \"req-sym-504\",\n  \"processingTimeMs\": 90000\n}"
+            },
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
             }
           ]
         },
@@ -1088,7 +1437,7 @@
           "name": "POST Send Message",
           "request": {
             "method": "POST",
-            "description": "Idempotency accepts the recommended idempotency-key header, x-idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true; conflicting payload reuse returns 409.",
+            "description": "Idempotency accepts the recommended idempotency-key header, x-idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true; conflicting payload reuse returns 409. The response always carries a requestId field that mirrors the inbound x-request-id header (when supplied, sanitized to printable ASCII and <=128 chars) or a generated UUIDv4 so callers can correlate deliveries with logs and Sentry.",
             "header": [
               {
                 "key": "Content-Type",
@@ -1099,6 +1448,12 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "x-request-id",
+                "value": "msg-correlation-001",
+                "type": "text",
+                "description": "Optional correlation ID echoed in the response and propagated to Sentry."
               },
               {
                 "key": "idempotency-key",
@@ -1134,13 +1489,13 @@
               "name": "Success (selected channels)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320\n    },\n    {\n      \"channel\": \"discord\",\n      \"success\": true,\n      \"messageId\": \"discord-msg-789\"\n    }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"requestId\": \"msg-correlation-001\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320\n    },\n    {\n      \"channel\": \"discord\",\n      \"success\": true,\n      \"messageId\": \"discord-msg-789\"\n    }\n  ]\n}"
             },
             {
               "name": "Success (single channel)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 410\n    }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"requestId\": \"msg-correlation-002\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 410\n    }\n  ]\n}"
             },
             {
               "name": "Success (idempotent replay)",
@@ -1152,7 +1507,7 @@
                   "value": "true"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"requestId\": \"msg-correlation-001\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ]\n}"
             },
             {
               "name": "Error (idempotency conflict)",
@@ -1197,6 +1552,24 @@
               "body": "{\n  \"success\": false,\n  \"error\": \"\\\"discordWebhookUrl\\\" must be a valid HTTPS Discord webhook URL\",\n  \"details\": {\n    \"field\": \"discordWebhookUrl\"\n  }\n}"
             },
             {
+              "name": "Error (strict telegramChatId — non-numeric)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"telegramChatId\\\" must be a numeric chat ID (5-20 digits, optional \\\"-\\\" prefix)\",\n  \"details\": {\n    \"field\": \"telegramChatId\"\n  }\n}"
+            },
+            {
+              "name": "Error (strict telegramChatId — MarkdownV2 escape character)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"telegramChatId\\\" contains disallowed characters (whitespace or MarkdownV2 escape-trigger characters)\",\n  \"details\": {\n    \"field\": \"telegramChatId\"\n  }\n}"
+            },
+            {
+              "name": "Error (strict whatsappChatId — missing GreenAPI suffix)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"whatsappChatId\\\" must be a GreenAPI chat ID in the format <digits>@<c.us|g.us>\",\n  \"details\": {\n    \"field\": \"whatsappChatId\"\n  }\n}"
+            },
+            {
               "name": "Error (unknown channel)",
               "status": "Bad Request",
               "code": 400,
@@ -1218,7 +1591,31 @@
               "name": "Internal Server Error (500)",
               "status": "Internal Server Error",
               "code": 500,
-              "body": "{\n  \"success\": false,\n  \"error\": \"Internal server error\"\n}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"Internal server error\",\n  \"requestId\": \"msg-correlation-500\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            },
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
             }
           ]
         },
@@ -1266,7 +1663,19 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"results\": [{\n    \"channel\": \"telegram\",\n    \"success\": true,\n    \"messageId\": \"tg-msg-123\"\n  }]\n}"
+              "body": "{\n  \"success\": true,\n  \"results\": [{\n    \"channel\": \"telegram\",\n    \"success\": true,\n    \"messageId\": \"tg-msg-123\",\n    \"attemptCount\": 1,\n    \"durationMs\": 450\n  }]\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -1308,7 +1717,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"results\": [{\n    \"channel\": \"telegram\",\n    \"success\": true,\n    \"messageId\": \"tg-msg-123\"\n  }]\n}"
+              "body": "{\n  \"success\": true,\n  \"results\": [{\n    \"channel\": \"telegram\",\n    \"success\": true,\n    \"messageId\": \"tg-msg-123\",\n    \"attemptCount\": 1,\n    \"durationMs\": 450\n  }]\n}"
             }
           ]
         },
@@ -1658,6 +2067,12 @@
               "body": "{\n  \"error\": \"name must be a string\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             },
             {
+              "name": "Error (duplicate name)",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"error\": \"A scanner preset with this name already exists\",\n  \"code\": \"NAME_CONFLICT\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\"\n  }\n}"
+            },
+            {
               "name": "Created with Schedule and Routing",
               "status": "Created",
               "code": 201,
@@ -1825,6 +2240,12 @@
               "status": "Conflict",
               "code": 409,
               "body": "{\n  \"success\": false,\n  \"error\": \"Preset is locked by an in-flight sweep until 2026-08-30T20:00:00.000Z\",\n  \"code\": \"PRESET_LOCKED\",\n  \"lockedUntil\": \"2026-08-30T20:00:00.000Z\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
+            },
+            {
+              "name": "Rename to existing preset name (409 NAME_CONFLICT)",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"success\": false,\n  \"error\": \"A scanner preset with this name already exists\",\n  \"code\": \"NAME_CONFLICT\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Updated Scan\"\n  }\n}"
             }
           ]
         },
@@ -2011,6 +2432,192 @@
       ]
     },
     {
+      "name": "Chat Preferences",
+      "item": [
+        {
+          "name": "GET Get Chat Preferences",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/preferences/telegram/123456789",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "preferences",
+                "telegram",
+                "123456789"
+              ]
+            },
+            "description": "Fetch per-chat alert preferences. Returns default configuration if no custom preferences are stored."
+          },
+          "response": [
+            {
+              "name": "200 OK - Preferences Found",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"chatId\": \"123456789\",\n    \"channel\": \"telegram\",\n    \"symbolFilter\": [\"BTCUSDT\", \"ETHUSDT\"],\n    \"symbolExclude\": [\"DOGEUSDT\"],\n    \"categories\": [\"scanner\", \"news\"],\n    \"minConfidence\": 0.7,\n    \"quietHoursStart\": 22,\n    \"quietHoursEnd\": 8,\n    \"timezone\": \"America/Santiago\",\n    \"updatedAt\": \"2026-09-12T12:00:00.000Z\",\n    \"expiresAt\": \"2026-12-11T12:00:00.000Z\"\n  }\n}"
+            },
+            {
+              "name": "400 Bad Request - Invalid Channel",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Canal inválido. Soportados: telegram, whatsapp, discord\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Get Chat Preferences (Firebase bearer)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{firebaseIdToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/preferences/telegram/123456789",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "preferences",
+                "telegram",
+                "123456789"
+              ]
+            },
+            "description": "Fetch per-chat alert preferences using Firebase bearer token authentication (admin.viewer role)."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"chatId\": \"123456789\",\n    \"channel\": \"telegram\",\n    \"symbolFilter\": [],\n    \"symbolExclude\": [],\n    \"categories\": [\"alerts\", \"scanner\", \"news\"],\n    \"minConfidence\": 0,\n    \"quietHoursStart\": null,\n    \"quietHoursEnd\": null,\n    \"timezone\": \"UTC\"\n  }\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized\",\n  \"code\": \"ADMIN_AUTH_REQUIRED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "PUT Update Chat Preferences",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbolFilter\": [\"BTCUSDT\", \"ETHUSDT\"],\n  \"symbolExclude\": [\"DOGEUSDT\"],\n  \"minConfidence\": 0.75,\n  \"quietHoursStart\": 22,\n  \"quietHoursEnd\": 8,\n  \"timezone\": \"America/Santiago\",\n  \"categories\": [\"scanner\", \"news\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/preferences/telegram/123456789",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "preferences",
+                "telegram",
+                "123456789"
+              ]
+            },
+            "description": "Update per-chat alert preferences. Missing fields retain existing values or safe defaults."
+          },
+          "response": [
+            {
+              "name": "200 OK - Preferences Updated",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"chatId\": \"123456789\",\n    \"channel\": \"telegram\",\n    \"symbolFilter\": [\"BTCUSDT\", \"ETHUSDT\"],\n    \"symbolExclude\": [\"DOGEUSDT\"],\n    \"categories\": [\"scanner\", \"news\"],\n    \"minConfidence\": 0.75,\n    \"quietHoursStart\": 22,\n    \"quietHoursEnd\": 8,\n    \"timezone\": \"America/Santiago\",\n    \"updatedAt\": \"2026-09-12T12:00:00.000Z\",\n    \"expiresAt\": \"2026-12-11T12:00:00.000Z\"\n  }\n}"
+            },
+            {
+              "name": "400 Bad Request - Invalid minConfidence",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"minConfidence debe ser un número entre 0 y 1\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "400 Bad Request - Invalid Quiet Hours",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"quietHoursStart y quietHoursEnd deben ser enteros entre 0 y 23\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "DELETE Reset Chat Preferences",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/preferences/telegram/123456789",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "preferences",
+                "telegram",
+                "123456789"
+              ]
+            },
+            "description": "Delete stored per-chat preferences, resetting the chat to default settings."
+          },
+          "response": [
+            {
+              "name": "200 OK - Reset to Defaults",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"message\": \"Preferencias eliminadas. Se usarán valores por defecto.\"\n}"
+            },
+            {
+              "name": "400 Bad Request - Invalid Channel",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Canal inválido. Soportados: telegram, whatsapp, discord\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "News Monitor",
       "item": [
         {
@@ -2085,7 +2692,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"analyzed\",\n      \"alert\": null,\n      \"cached\": false,\n      \"requestId\": \"req-abc123\",\n      \"totalDurationMs\": 800\n    }\n  ],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 0\n  },\n  \"requestedChannels\": [\"telegram\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 850,\n  \"requestId\": \"req-abc123\",\n  \"tokenUsage\": {\n    \"inputTokens\": 10,\n    \"outputTokens\": 20,\n    \"totalTokens\": 30\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"analyzed\",\n      \"alert\": {\n        \"symbol\": \"BTCUSDT\",\n        \"eventCategory\": \"price_surge\",\n        \"headline\": \"Bitcoin breaks resistance at $68,000 with strong volume\",\n        \"sentimentScore\": 0.65,\n        \"confidence\": 0.85,\n        \"sources\": [\n          \"https://www.coindesk.com/markets/2026/08/bitcoin-resistance\"\n        ],\n        \"formattedMessage\": \"BTCUSDT breakout above resistance (confidence 0.85).\",\n        \"timestamp\": 1724745600000,\n        \"marketContext\": {\n          \"price\": 68500,\n          \"change24h\": 2.4,\n          \"volume24h\": 18500000000,\n          \"source\": \"binance\",\n          \"timestamp\": 1724745599000\n        },\n        \"stop\": 67130,\n        \"target\": 71925\n      },\n      \"deliveryResults\": [],\n      \"cached\": false,\n      \"requestId\": \"req-abc123\",\n      \"totalDurationMs\": 800\n    },\n    {\n      \"symbol\": \"ETHUSDT\",\n      \"status\": \"analyzed\",\n      \"alert\": {\n        \"symbol\": \"ETHUSDT\",\n        \"eventCategory\": \"public_figure\",\n        \"headline\": \"Vitalik discusses scaling roadmap\",\n        \"sentimentScore\": 0.3,\n        \"confidence\": 0.6,\n        \"sources\": [\n          \"https://example.com/eth-news\"\n        ],\n        \"formattedMessage\": \"ETHUSDT public_figure event (confidence 0.6).\",\n        \"timestamp\": 1724745600000\n      },\n      \"deliveryResults\": [],\n      \"cached\": false,\n      \"requestId\": \"req-abc124\",\n      \"totalDurationMs\": 720\n    }\n  ],\n  \"summary\": {\n    \"total\": 2,\n    \"analyzed\": 2,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 850,\n  \"requestId\": \"req-abc123\",\n  \"tokenUsage\": {\n    \"inputTokens\": 10,\n    \"outputTokens\": 20,\n    \"totalTokens\": 30\n  }\n}"
             },
             {
               "name": "200 OK - Partial quota exhaustion",
@@ -2127,7 +2734,20 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"partial_success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"error\",\n      \"error\": {\n        \"code\": \"GEMINI_QUOTA_EXHAUSTED\",\n        \"message\": \"429 RESOURCE_EXHAUSTED: quota exceeded\"\n      },\n      \"cached\": false,\n      \"requestId\": \"req-quota123\",\n      \"totalDurationMs\": 0\n    },\n    {\n      \"symbol\": \"ETHUSD\",\n      \"status\": \"analyzed\",\n      \"alert\": null,\n      \"cached\": false,\n      \"requestId\": \"req-quota123\",\n      \"totalDurationMs\": 900\n    }\n  ],\n  \"summary\": {\n    \"total\": 2,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 1,\n    \"quota_exhausted\": 1,\n    \"alerts_sent\": 0\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 950,\n  \"requestId\": \"req-quota123\",\n  \"tokenUsage\": {}\n}"
+              "body": "{\n  \"success\": true,\n  \"partial_success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"error\",\n      \"error\": {\n        \"code\": \"GEMINI_QUOTA_EXHAUSTED\",\n        \"message\": \"429 RESOURCE_EXHAUSTED: quota exceeded\"\n      },\n      \"cached\": false,\n      \"requestId\": \"req-quota123\",\n      \"totalDurationMs\": 0\n    },\n    {\n      \"symbol\": \"ETHUSD\",\n      \"status\": \"analyzed\",\n      \"alert\": null,\n      \"cached\": false,\n      \"requestId\": \"req-quota123\",\n      \"totalDurationMs\": 900\n    }\n  ],\n  \"summary\": {\n    \"total\": 2,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 1,\n    \"quota_exhausted\": 1,\n    \"throttled\": 0,\n    \"alerts_sent\": 0\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 950,\n  \"requestId\": \"req-quota123\",\n  \"tokenUsage\": {},\n  \"windowUsage\": {\n    \"alertsDelivered\": 0,\n    \"alertsThrottled\": 0,\n    \"windowResetsAt\": \"2026-09-12T10:20:00.000Z\"\n  }\n}"
+            },
+            {
+              "name": "200 OK - Volume throttled alerts",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"throttled\",\n      \"reason\": \"alert_volume_cap\",\n      \"alert\": {\n        \"eventCategory\": \"price_surge\",\n        \"headline\": \"Bitcoin breaks resistance\",\n        \"confidence\": 0.75\n      },\n      \"cached\": false,\n      \"deliveryResults\": []\n    }\n  ],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 0,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"throttled\": 1,\n    \"alerts_sent\": 0\n  },\n  \"requestedChannels\": [\"telegram\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 750,\n  \"requestId\": \"req-throttled123\",\n  \"tokenUsage\": {},\n  \"windowUsage\": {\n    \"alertsDelivered\": 10,\n    \"alertsThrottled\": 1,\n    \"windowResetsAt\": \"2026-09-12T10:20:00.000Z\"\n  }\n}"
             },
             {
               "name": "503 Service Unavailable - News monitor paused",
@@ -2141,6 +2761,18 @@
                 }
               ],
               "body": "{\n  \"error\": \"News monitor is temporarily paused: Gemini quota exhaustion\",\n  \"code\": \"NEWS_MONITOR_PAUSED\",\n  \"paused\": true,\n  \"pausedAt\": \"2026-09-04T05:00:00.000Z\",\n  \"reason\": \"Gemini quota exhaustion\",\n  \"requestId\": \"req-paused123\"\n}"
+            },
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
             }
           ]
         },
@@ -2179,7 +2811,21 @@
                 }
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "Service Unavailable - Maintenance Mode (503)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            }
+          ]
         },
         {
           "name": "POST News Monitor (dry run)",
@@ -2224,7 +2870,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [{\n    \"symbol\": \"BTCUSDT\",\n    \"status\": \"analyzed\",\n    \"alert\": {\n      \"eventCategory\": \"price_surge\",\n      \"headline\": \"Bitcoin breaks resistance\"\n    },\n    \"deliveryResults\": [],\n    \"cached\": false\n  }],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"deliveredChannels\": [],\n  \"requestId\": \"req-dryrun123\"\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [{\n    \"symbol\": \"BTCUSDT\",\n    \"status\": \"analyzed\",\n    \"alert\": {\n      \"symbol\": \"BTCUSDT\",\n      \"eventCategory\": \"price_surge\",\n      \"headline\": \"Bitcoin breaks resistance\",\n      \"sentimentScore\": 0.65,\n      \"confidence\": 0.85,\n      \"sources\": [\n        \"https://www.coindesk.com/markets/2026/08/bitcoin-resistance\"\n      ],\n      \"formattedMessage\": \"BTCUSDT breakout above resistance (confidence 0.85).\",\n      \"timestamp\": 1724745600000,\n      \"marketContext\": {\n        \"price\": 68500,\n        \"change24h\": 2.4,\n        \"volume24h\": 18500000000,\n        \"source\": \"binance\",\n        \"timestamp\": 1724745599000\n      },\n      \"stop\": 67130,\n      \"target\": 71925\n    },\n    \"deliveryResults\": [],\n    \"cached\": false\n  }],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"deliveredChannels\": [],\n  \"requestId\": \"req-dryrun123\"\n}"
             }
           ]
         },
@@ -2300,6 +2946,18 @@
                 }
               ],
               "body": "{\n  \"error\": \"Admin operator role required\",\n  \"code\": \"ADMIN_ROLE_REQUIRED\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -2353,6 +3011,18 @@
                 }
               ],
               "body": "{\n  \"error\": \"Unauthorized\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -2406,6 +3076,18 @@
                 }
               ],
               "body": "{\n  \"error\": \"Unauthorized\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         }
@@ -2609,7 +3291,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"alert-123\",\n      \"receivedAt\": \"2026-06-06T12:00:00.000Z\",\n      \"source\": \"webhook\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"eventCategory\": \"price_surge\",\n      \"enriched\": true,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"123\"\n        }\n      ]\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 10,\n    \"nextBefore\": null\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"alert-123\",\n      \"receivedAt\": \"2026-06-06T12:00:00.000Z\",\n      \"source\": \"webhook\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"eventCategory\": \"price_surge\",\n      \"signalClass\": \"breakout\",\n      \"enriched\": true,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"123\"\n        }\n      ]\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 10,\n    \"nextBefore\": null\n  }\n}"
             }
           ]
         },
@@ -2648,6 +3330,82 @@
               "code": 400,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"error\": \"Invalid symbol filter. Use a non-empty string up to 64 characters.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Alerts (signalClass filter)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?signalClass=breakout,reversal",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "signalClass",
+                  "value": "breakout,reversal"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Filtered alerts by signalClass",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"alert-class-1\",\n      \"receivedAt\": \"2026-06-06T12:34:56.000Z\",\n      \"text\": \"BTCUSDT: Price breakout above $85,000\",\n      \"signalClass\": \"breakout\",\n      \"enriched\": true,\n      \"source\": \"webhook\"\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 50,\n    \"nextBefore\": null\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Alerts (invalid signalClass - 400 Bad Request)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?signalClass=invalid_class",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "signalClass",
+                  "value": "invalid_class"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid signalClass filter",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Invalid signalClass filter: \\\"invalid_class\\\". Allowed values: breakout, mean_reversion, trend_continuation, reversal, volume_spike, news_event, manual, unknown.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
@@ -3063,7 +3821,7 @@
               "name": "200 OK - Analytics summary",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31\n    },\n    \"totalAlerts\": 2,\n    \"bySource\": { \"webhook\": 2 },\n    \"bySymbol\": { \"BTCUSDT\": 1, \"ETHUSDT\": 1 },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 1,\n      \"tradingViewData\": 1,\n      \"withoutTradingViewData\": 1\n    },\n    \"enrichment\": {\n      \"enrichedAlerts\": 1,\n      \"plainAlerts\": 1,\n      \"riskMetadataCoverage\": {\n        \"denominator\": 1,\n        \"fields\": {\n          \"invalidation_level\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"target_level\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"setup_type\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"risk_reward_ratio\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          }\n        },\n        \"byPromptProvenance\": {\n          \"alert-enrichment:langfuse:production:1\": {\n            \"name\": \"alert-enrichment\",\n            \"source\": \"langfuse\",\n            \"label\": \"production\",\n            \"version\": 1,\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"target_level\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"setup_type\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"risk_reward_ratio\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              }\n            }\n          }\n        }\n      },\n      \"tokenUsage\": {\n        \"inputTokens\": 10,\n        \"outputTokens\": 20,\n        \"totalTokens\": 30,\n        \"totalCost\": 0.001\n      }\n    },\n    \"delivery\": {\n      \"totalSuccess\": 2,\n      \"totalFailure\": 1,\n      \"byChannel\": {\n        \"telegram\": { \"total\": 2, \"success\": 1, \"failure\": 1 },\n        \"whatsapp\": { \"total\": 1, \"success\": 1, \"failure\": 0 }\n      }\n    },\n    \"latency\": {\n      \"averageProcessingMs\": 250,\n      \"averageDeliveryMs\": 150\n    },\n    \"shadowModeMetrics\": {\n      \"totalSignalsEvaluated\": 1,\n      \"targetHitRatePercent\": 0,\n      \"stopHitRatePercent\": 0,\n      \"expectancyR\": null,\n      \"windows\": {\n        \"1h\": {\n          \"totalSignals\": 1,\n          \"hitRatePercent\": 100,\n          \"targetEligibleWindows\": 0,\n          \"stopEligibleWindows\": 0,\n          \"targetHitRatePercent\": 0,\n          \"stopHitRatePercent\": 0,\n          \"averageReturnPercent\": 0.7353,\n          \"averageMfePercent\": 0.7353,\n          \"averageMaePercent\": 0.0,\n          \"maxAdverseExcursionPercent\": 0.0\n        }\n      },\n      \"drawdownProxy\": {\n        \"averageMaxAdverseExcursionPercent\": 0.0,\n        \"absoluteMaxAdverseExcursionPercent\": 0.0\n      },\n      \"falsePositiveCandidatesCount\": 0,\n      \"falsePositiveCandidates\": [],\n      \"latencyCostMetadata\": {\n        \"averageProcessingTimeMs\": 250,\n        \"tokenUsage\": {\n          \"inputTokens\": 10,\n          \"outputTokens\": 20,\n          \"totalCost\": 0.001\n        }\n      }\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31\n    },\n    \"totalAlerts\": 2,\n    \"bySource\": { \"webhook\": 2 },\n    \"bySymbol\": { \"BTCUSDT\": 1, \"ETHUSDT\": 1 },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 1,\n      \"tradingViewData\": 1,\n      \"withoutTradingViewData\": 1\n    },\n    \"enrichment\": {\n      \"enrichedAlerts\": 1,\n      \"plainAlerts\": 1,\n      \"riskMetadataCoverage\": {\n        \"denominator\": 1,\n        \"fields\": {\n          \"invalidation_level\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"target_level\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"setup_type\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"risk_reward_ratio\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          }\n        },\n        \"byPromptProvenance\": {\n          \"alert-enrichment:langfuse:production:1\": {\n            \"name\": \"alert-enrichment\",\n            \"source\": \"langfuse\",\n            \"label\": \"production\",\n            \"version\": 1,\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"target_level\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"setup_type\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"risk_reward_ratio\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              }\n            }\n          }\n        }\n      },\n      \"tokenUsage\": {\n        \"inputTokens\": 10,\n        \"outputTokens\": 20,\n        \"totalTokens\": 30,\n        \"totalCost\": 0.001\n      }\n    },\n    \"delivery\": {\n      \"totalSuccess\": 2,\n      \"totalFailure\": 1,\n      \"byChannel\": {\n        \"telegram\": { \"total\": 2, \"success\": 1, \"failure\": 1 },\n        \"whatsapp\": { \"total\": 1, \"success\": 1, \"failure\": 0 }\n      }\n    },\n    \"latency\": {\n      \"averageProcessingMs\": 250,\n      \"averageDeliveryMs\": 150,\n      \"byChannel\": {\n        \"telegram\": {\n          \"averageMs\": 170,\n          \"p95Ms\": 200,\n          \"sampleCount\": 2\n        },\n        \"whatsapp\": {\n          \"averageMs\": 110,\n          \"p95Ms\": 110,\n          \"sampleCount\": 1\n        }\n      }\n    },\n    \"shadowModeMetrics\": {\n      \"totalSignalsEvaluated\": 1,\n      \"targetHitRatePercent\": 0,\n      \"stopHitRatePercent\": 0,\n      \"expectancyR\": null,\n      \"windows\": {\n        \"1h\": {\n          \"totalSignals\": 1,\n          \"hitRatePercent\": 100,\n          \"targetEligibleWindows\": 0,\n          \"stopEligibleWindows\": 0,\n          \"targetHitRatePercent\": 0,\n          \"stopHitRatePercent\": 0,\n          \"averageReturnPercent\": 0.7353,\n          \"averageMfePercent\": 0.7353,\n          \"averageMaePercent\": 0.0,\n          \"maxAdverseExcursionPercent\": 0.0\n        }\n      },\n      \"drawdownProxy\": {\n        \"averageMaxAdverseExcursionPercent\": 0.0,\n        \"absoluteMaxAdverseExcursionPercent\": 0.0\n      },\n      \"falsePositiveCandidatesCount\": 0,\n      \"falsePositiveCandidates\": [],\n      \"latencyCostMetadata\": {\n        \"averageProcessingTimeMs\": 250,\n        \"tokenUsage\": {\n          \"inputTokens\": 10,\n          \"outputTokens\": 20,\n          \"totalCost\": 0.001\n        }\n      }\n    }\n  }\n}"
             },
             {
               "name": "200 OK - TradingView application counters",
@@ -3213,6 +3971,230 @@
           ]
         },
         {
+          "name": "POST Submit Alert Feedback (👍 upvote)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "fb-upvote-001",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alertId\": \"alert-123\",\n  \"chatId\": \"120363422033474991@g.us\",\n  \"verdict\": \"up\",\n  \"symbol\": \"BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"source\": \"webhook-alert\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/feedback",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "feedback"
+              ]
+            },
+            "description": "Persist a trader thumbs-up verdict for a stored alert. Re-clicks with the same alertId + chatId update the verdict instead of appending a new row."
+          },
+          "response": [
+            {
+              "name": "200 OK - Verdict recorded",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"persisted\": true,\n  \"source\": \"firestore\",\n  \"alertId\": \"alert-123\",\n  \"verdict\": \"up\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Submit Alert Feedback (👎 downvote)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "fb-downvote-001",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alertId\": \"alert-456\",\n  \"chatId\": \"-1001234567890\",\n  \"verdict\": \"down\",\n  \"symbol\": \"ETHUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"source\": \"scanner\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/feedback",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "feedback"
+              ]
+            },
+            "description": "Persist a trader thumbs-down verdict. Same (alertId, chatId) tuple collapses with the upvote request when re-keyed."
+          },
+          "response": [
+            {
+              "name": "200 OK - Verdict recorded",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"persisted\": true,\n  \"source\": \"firestore\",\n  \"alertId\": \"alert-456\",\n  \"verdict\": \"down\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Submit Alert Feedback (invalid verdict)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alertId\": \"alert-1\",\n  \"chatId\": \"120363422033474991@g.us\",\n  \"verdict\": \"maybe\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/feedback",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "feedback"
+              ]
+            },
+            "description": "Invalid input variant: verdict must be exactly \"up\" or \"down\"."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid verdict",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"verdict must be \\\"up\\\" or \\\"down\\\".\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Feedback Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/feedback/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-13T00:00:00.000Z&limit=500",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "feedback",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-13T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                }
+              ]
+            },
+            "description": "Aggregated trader verdict counts within a bounded time window. Raw chat ids are never returned — only SHA-256 chat hashes are persisted on the alertFeedback collection."
+          },
+          "response": [
+            {
+              "name": "200 OK - Aggregated verdict counts",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"feedback\": {\n    \"total\": 4,\n    \"up\": 3,\n    \"down\": 1,\n    \"ratio\": 0.75,\n    \"bySource\": { \"webhook-alert\": 3, \"scanner\": 1 },\n    \"bySymbol\": { \"BTCUSDT\": 3, \"ETHUSDT\": 1 },\n    \"byExchange\": { \"BINANCE\": 4 },\n    \"source\": \"firestore\",\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-13T00:00:00.000Z\",\n      \"limit\": 500\n    }\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Feedback Summary (limit out of range)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/feedback/summary?limit=99999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "feedback",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "99999"
+                }
+              ]
+            },
+            "description": "Invalid input variant: limit must be an integer between 1 and 1000."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Limit out of range",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 1000.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "GET Alert Analytics Summary (symbol, exchange, eventCategory)",
           "request": {
             "method": "GET",
@@ -3267,7 +4249,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500\n    },\n    \"totalAlerts\": 1,\n    \"bySource\": {\n      \"webhook\": 1\n    },\n    \"bySymbol\": {\n      \"BTCUSDT\": 1\n    },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 0,\n      \"tradingViewData\": 0,\n      \"tradingViewDataApplied\": 0,\n      \"withoutTradingViewData\": 1\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500\n    },\n    \"totalAlerts\": 1,\n    \"bySource\": {\n      \"webhook\": 1\n    },\n    \"bySymbol\": {\n      \"BTCUSDT\": 1\n    },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 0,\n      \"tradingViewData\": 0,\n      \"tradingViewDataApplied\": 0,\n      \"withoutTradingViewData\": 1\n    },\n    \"signalClassCounts\": {\n      \"breakout\": 1,\n      \"mean_reversion\": 0,\n      \"trend_continuation\": 0,\n      \"reversal\": 0,\n      \"volume_spike\": 0,\n      \"news_event\": 0,\n      \"manual\": 0,\n      \"unknown\": 0\n    }\n  }\n}"
             }
           ]
         },
@@ -3307,6 +4289,96 @@
               "code": 400,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"error\": \"Invalid symbol filter. Use a non-empty string up to 64 characters.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (signalClass filter)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500&signalClass=breakout,reversal",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "signalClass",
+                  "value": "breakout,reversal"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - Analytics summary filtered by signalClass",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500\n    },\n    \"totalAlerts\": 1,\n    \"bySource\": {\n      \"webhook\": 1\n    },\n    \"bySymbol\": {\n      \"BTCUSDT\": 1\n    },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 0,\n      \"tradingViewData\": 0,\n      \"tradingViewDataApplied\": 0,\n      \"withoutTradingViewData\": 1\n    },\n    \"signalClassCounts\": {\n      \"breakout\": 1,\n      \"mean_reversion\": 0,\n      \"trend_continuation\": 0,\n      \"reversal\": 0,\n      \"volume_spike\": 0,\n      \"news_event\": 0,\n      \"manual\": 0,\n      \"unknown\": 0\n    }\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (invalid signalClass - 400 Bad Request)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?signalClass=invalid_class",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "signalClass",
+                  "value": "invalid_class"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid signalClass filter",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Invalid signalClass filter: \\\"invalid_class\\\". Allowed values: breakout, mean_reversion, trend_continuation, reversal, volume_spike, news_event, manual, unknown.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
@@ -3358,7 +4430,7 @@
                 }
               ]
             },
-            "description": "Exports bounded stored alerts as JSON Lines. Requires from/to, validates x-api-key, and excludes raw text unless includeText=true. Unfiltered responses emit the X-Shadow-Mode-Metrics response header with the JSON-encoded shadow-mode outcome metrics payload (string sentinel \"No measurements found\" when tracking is disabled or has no data; full OutcomesSummary object form otherwise). The header is omitted when source or enriched filters are supplied."
+            "description": "Exports bounded stored alerts as JSON Lines. Requires from/to, validates x-api-key, and excludes raw text unless includeText=true. Unfiltered responses emit the X-Shadow-Mode-Metrics response header with the JSON-encoded shadow-mode outcome metrics payload (string sentinel \"No measurements found\" when tracking is disabled or has no data; full OutcomesSummary object form otherwise). The header is omitted when source, enriched, or signalClass filters are supplied."
           },
           "response": [
             {
@@ -3713,6 +4785,114 @@
           ]
         },
         {
+          "name": "GET Export Alerts (JSONL - signalClass filter)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500&signalClass=breakout,reversal",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "jsonl"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "signalClass",
+                  "value": "breakout,reversal"
+                }
+              ]
+            },
+            "description": "Exports bounded stored alerts filtered by signalClass as JSON Lines. The X-Shadow-Mode-Metrics response header is omitted because the request specifies a signalClass filter."
+          },
+          "response": [
+            {
+              "name": "200 OK - JSONL export (signalClass filter)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\"id\":\"alert-class-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"signalClass\":\"breakout\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001}}\n"
+            }
+          ]
+        },
+        {
+          "name": "GET Export Alerts (invalid signalClass - 400 Bad Request)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&signalClass=invalid_class",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "jsonl"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "signalClass",
+                  "value": "invalid_class"
+                }
+              ]
+            },
+            "description": "Fails with 400 when signalClass filter contains an invalid value."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid signalClass filter",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Invalid signalClass filter: \\\"invalid_class\\\". Allowed values: breakout, mean_reversion, trend_continuation, reversal, volume_spike, news_event, manual, unknown.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "GET Export Alerts (missing bounds)",
           "request": {
             "method": "GET",
@@ -3840,6 +5020,18 @@
               "code": 400,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"error\": \"alertIds must be a non-empty array of up to 50 alert IDs.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -3901,6 +5093,18 @@
               "code": 400,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"error\": \"alertIds must be a non-empty array of up to 1000 alert IDs.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -3962,6 +5166,18 @@
               "code": 400,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"error\": \"format must be either 'jsonl' or 'csv'.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -4013,6 +5229,18 @@
               "code": 400,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"error\": \"alertIds must be a non-empty array of up to 500 alert IDs.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -4656,6 +5884,18 @@
                   ]
                 }
               }
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -4734,6 +5974,18 @@
                   ]
                 }
               }
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -4812,6 +6064,18 @@
                   ]
                 }
               }
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -4894,6 +6158,18 @@
                   ]
                 }
               }
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -4972,6 +6248,125 @@
                   ]
                 }
               }
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET SSE Real-Time Events",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "events"
+              ]
+            },
+            "description": "Establish a Server-Sent Events (SSE) stream for real-time console updates (job progress, scanner results, alert delivery). Requires admin.viewer."
+          },
+          "response": [
+            {
+              "name": "200 Connected Stream",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/events",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "events"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "text",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "text/event-stream"
+                },
+                {
+                  "key": "Cache-Control",
+                  "value": "no-cache, no-transform"
+                },
+                {
+                  "key": "Connection",
+                  "value": "keep-alive"
+                }
+              ],
+              "body": ":connected\nevent: connected\ndata: {\"clientId\":\"4519965b-db0d-4536-a81d-ef291f09c735\",\"timestamp\":\"2026-09-12T20:00:00.000Z\",\"activeConnections\":1}\n\n"
+            },
+            {
+              "name": "503 SSE Connection Limit Exceeded",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/events",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "events"
+                  ]
+                }
+              },
+              "status": "Service Unavailable",
+              "code": 503,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "30"
+                }
+              ],
+              "body": "{\n  \"error\": \"Server has reached maximum SSE connection capacity. Please retry shortly.\",\n  \"code\": \"SSE_CONNECTION_LIMIT_EXCEEDED\"\n}"
             }
           ]
         }
@@ -5329,7 +6724,7 @@
           ]
         },
         {
-          "name": "GET Summarize Signal Outcomes (invalid parameters)",
+          "name": "GET Summarize Signal Outcomes (invalid limit)",
           "request": {
             "method": "GET",
             "header": [
@@ -5339,7 +6734,7 @@
                 "type": "text"
               }
             ],
-            "description": "Example of 400 INVALID_REQUEST response when passing invalid limit, status, window, or dates to summarize outcomes.",
+            "description": "Example of 400 INVALID_REQUEST response when passing invalid limit to summarize outcomes.",
             "url": {
               "raw": "{{baseUrl}}/api/outcomes/summary?limit=200",
               "host": [
@@ -5364,6 +6759,700 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST body\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (invalid status)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing an invalid status filter to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?status=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "invalid"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Status",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid status filter. Use pending, evaluated, or unavailable.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST body\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (invalid window)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing an invalid window filter to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?window=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "window",
+                  "value": "invalid"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Window",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid window filter. Use 1h, 4h, 1D, or 1W.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST body\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (malformed from timestamp)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing a malformed from timestamp to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?from=not-a-date",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "not-a-date"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid From Timestamp",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid from timestamp. Use an ISO-8601 timestamp.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST body\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (malformed to timestamp)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing a malformed to timestamp to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?to=not-a-date",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "to",
+                  "value": "not-a-date"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid To Timestamp",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid to timestamp. Use an ISO-8601 timestamp.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST body\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (reversed time range)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when from timestamp is later than to timestamp.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?from=2026-08-30T00:00:00.000Z&to=2026-08-01T00:00:00.000Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-08-30T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-01T00:00:00.000Z"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Time Window",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid time window. from must be before or equal to to.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST body\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (invalid status)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing an invalid status filter to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?status=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "invalid"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Status",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid status filter. Use pending, evaluated, or unavailable.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (invalid window)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing an invalid window filter to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?window=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "window",
+                  "value": "invalid"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Window",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid window filter. Use 1h, 4h, 1D, or 1W.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (malformed from timestamp)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing a malformed from timestamp to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?from=not-a-date",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "not-a-date"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid From Timestamp",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid from timestamp. Use an ISO-8601 timestamp.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (malformed to timestamp)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing a malformed to timestamp to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?to=not-a-date",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "to",
+                  "value": "not-a-date"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid To Timestamp",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid to timestamp. Use an ISO-8601 timestamp.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (reversed time range)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when from timestamp is later than to timestamp.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?from=2026-08-30T00:00:00.000Z&to=2026-08-01T00:00:00.000Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-08-30T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-01T00:00:00.000Z"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Time Window",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid time window. from must be before or equal to to.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Confidence Calibration",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Calculates empirical target-hit rates and average returns grouped by confidence score buckets (e.g. 0.70–0.75, 0.75–0.80, 0.80–0.85, 0.85–0.90, 0.90–1.00) over evaluated signals, suggesting an optimal confidence threshold.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/calibration",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "calibration"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"calibration\": {\n    \"available\": true,\n    \"totalScoredAlerts\": 25,\n    \"buckets\": [\n      {\n        \"range\": \"0.70-0.75\",\n        \"count\": 5,\n        \"avgReturn1h\": 0.45,\n        \"avgReturn4h\": 0.82,\n        \"targetHitRate\": 0.4\n      },\n      {\n        \"range\": \"0.75-0.80\",\n        \"count\": 8,\n        \"avgReturn1h\": 1.12,\n        \"avgReturn4h\": 1.85,\n        \"targetHitRate\": 0.625\n      },\n      {\n        \"range\": \"0.80-0.85\",\n        \"count\": 6,\n        \"avgReturn1h\": 1.45,\n        \"avgReturn4h\": 2.3,\n        \"targetHitRate\": 0.667\n      },\n      {\n        \"range\": \"0.85-0.90\",\n        \"count\": 4,\n        \"avgReturn1h\": 1.95,\n        \"avgReturn4h\": 3.1,\n        \"targetHitRate\": 0.75\n      },\n      {\n        \"range\": \"0.90-1.00\",\n        \"count\": 2,\n        \"avgReturn1h\": 2.4,\n        \"avgReturn4h\": 3.8,\n        \"targetHitRate\": 1.0\n      }\n    ],\n    \"suggestedThreshold\": 0.75,\n    \"suggestedThresholdRationale\": \"Alerts at 0.75+ show 62.5%+ target hit rate at 4h window\"\n  }\n}"
+            },
+            {
+              "name": "200 Insufficient Data (<20 alerts)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"calibration\": {\n    \"available\": false,\n    \"totalScoredAlerts\": 5,\n    \"buckets\": [],\n    \"suggestedThreshold\": null,\n    \"suggestedThresholdRationale\": \"Insufficient sample size (<20 scored alerts) to recommend a confidence threshold\"\n  }\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "403 Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Confidence Calibration (filtered)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Calculates confidence calibration filtered by symbol, exchange, window, limit, and date range.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/calibration?symbol=BTCUSDT&exchange=BINANCE&window=1h&limit=500&from=2026-08-23T00:00:00.000Z&to=2026-08-23T23:59:59.000Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "calibration"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "exchange",
+                  "value": "BINANCE"
+                },
+                {
+                  "key": "window",
+                  "value": "1h"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-08-23T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-23T23:59:59.000Z"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Filtered Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"calibration\": {\n    \"available\": true,\n    \"totalScoredAlerts\": 20,\n    \"buckets\": [\n      {\n        \"range\": \"0.75-0.80\",\n        \"count\": 10,\n        \"avgReturn1h\": 1.2,\n        \"avgReturn4h\": 1.9,\n        \"targetHitRate\": 0.6\n      },\n      {\n        \"range\": \"0.80-0.85\",\n        \"count\": 10,\n        \"avgReturn1h\": 1.6,\n        \"avgReturn4h\": 2.5,\n        \"targetHitRate\": 0.7\n      }\n    ],\n    \"suggestedThreshold\": 0.75,\n    \"suggestedThresholdRationale\": \"Alerts at 0.75+ show 60%+ target hit rate at 1h window\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Confidence Calibration (Firebase bearer)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{firebaseIdToken}}",
+                "type": "text"
+              }
+            ],
+            "description": "Retrieves confidence calibration authenticated with a Firebase Admin ID token (admin.viewer role).",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/calibration?limit=1000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "calibration"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "1000"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"calibration\": {\n    \"available\": true,\n    \"totalScoredAlerts\": 30,\n    \"buckets\": [],\n    \"suggestedThreshold\": 0.75,\n    \"suggestedThresholdRationale\": \"Alerts at 0.75+ show 60%+ target hit rate at 4h window\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Confidence Calibration (invalid parameters)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing invalid limit, window, or dates to calibration.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/calibration?limit=2000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "calibration"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "2000"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Limit",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 1000.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         }
@@ -5420,6 +7509,18 @@
               "status": "Service Unavailable",
               "code": 503,
               "body": "{\n  \"error\": \"Firestore is unavailable or not configured.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -5471,6 +7572,18 @@
               "status": "Service Unavailable",
               "code": 503,
               "body": "{\n  \"error\": \"Firestore is unavailable or not configured.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         }
@@ -5631,6 +7744,18 @@
               "status": "Service Unavailable",
               "code": 503,
               "body": "{\n  \"error\": \"The queue acceptance state could not be determined.\",\n  \"code\": \"JOB_QUEUE_ACCEPTANCE_UNKNOWN\",\n  \"jobId\": \"8f8ef192-349f-4318-8547-0e6d628bf739\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             },
             {
               "name": "Create Job with Callback",
@@ -7191,6 +9316,82 @@
               "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
             }
           ]
+        },
+        {
+          "name": "GET Binance Order Audit",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Queries durable audit records for Binance Spot order mutations (submissions, dry runs, rejections, cancellations, and reconciliations). Supports filtering by symbol, status, environment, orderId, and time range with cursor pagination.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders/audit?symbol=BTCUSDT&status=confirmed&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders",
+                "audit"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT",
+                  "description": "Filter by symbol"
+                },
+                {
+                  "key": "status",
+                  "value": "confirmed",
+                  "description": "Filter by status (e.g. dry_run, submitted, confirmed, rejected, ambiguous, queried, canceled)"
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Page size limit (1..100)"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"records\": [\n    {\n      \"id\": \"audit-doc-id\",\n      \"orderId\": \"audit-doc-id\",\n      \"idempotencyKeyHash\": \"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\",\n      \"symbol\": \"BTCUSDT\",\n      \"side\": \"BUY\",\n      \"type\": \"LIMIT\",\n      \"environment\": \"testnet\",\n      \"status\": \"confirmed\",\n      \"errorCode\": null,\n      \"dryRun\": false,\n      \"requestFingerprint\": \"4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a\",\n      \"timestamp\": \"2026-09-12T12:00:00.000Z\",\n      \"operator\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n      \"action\": \"PLACE\",\n      \"quantity\": 0.001,\n      \"quoteOrderQty\": null,\n      \"price\": 60000,\n      \"timeInForce\": \"GTC\",\n      \"binanceOrderId\": 42,\n      \"clientOrderId\": \"cabros-order-1\",\n      \"response\": {},\n      \"processingMs\": 25,\n      \"expiresAt\": \"2026-10-12T12:00:00.000Z\"\n    }\n  ],\n  \"audit\": [\n    {\n      \"id\": \"audit-doc-id\",\n      \"orderId\": \"audit-doc-id\",\n      \"idempotencyKeyHash\": \"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\",\n      \"symbol\": \"BTCUSDT\",\n      \"side\": \"BUY\",\n      \"type\": \"LIMIT\",\n      \"environment\": \"testnet\",\n      \"status\": \"confirmed\",\n      \"errorCode\": null,\n      \"dryRun\": false,\n      \"requestFingerprint\": \"4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a\",\n      \"timestamp\": \"2026-09-12T12:00:00.000Z\",\n      \"operator\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n      \"action\": \"PLACE\",\n      \"quantity\": 0.001,\n      \"quoteOrderQty\": null,\n      \"price\": 60000,\n      \"timeInForce\": \"GTC\",\n      \"binanceOrderId\": 42,\n      \"clientOrderId\": \"cabros-order-1\",\n      \"response\": {},\n      \"processingMs\": 25,\n      \"expiresAt\": \"2026-10-12T12:00:00.000Z\"\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 50,\n    \"nextBefore\": null,\n    \"scanTruncated\": false\n  }\n}"
+            },
+            {
+              "name": "Invalid Query Parameters",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid from date parameter\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance order audit trail is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance order audit trail is enabled but Firestore is not configured\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized\",\n  \"code\": \"ADMIN_AUTH_REQUIRED\"\n}"
+            }
+          ]
         }
       ]
     },
@@ -7199,7 +9400,7 @@
       "request": {
         "method": "GET",
         "header": [],
-        "description": "Public browser configuration. Returns only non-secret Firebase Web Auth settings; ENABLE_FIREBASE_ADMIN_AUTH controls whether sign-in is required.",
+        "description": "Public browser configuration. Returns only non-secret Firebase Web Auth settings; ENABLE_FIREBASE_ADMIN_AUTH controls whether sign-in is required. Exempt from the global rate limit budget.",
         "url": {
           "raw": "{{baseUrl}}/admin/auth-config",
           "host": [

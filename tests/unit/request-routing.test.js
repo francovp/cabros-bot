@@ -1,6 +1,7 @@
 const {
 	parseNotificationRouting,
 	sendWithNotificationRouting,
+	assertChannelsAvailable,
 	NotificationRoutingValidationError,
 } = require('../../src/services/notification/requestRouting');
 
@@ -100,6 +101,106 @@ describe('requestRouting - discordWebhookUrl validation', () => {
 	});
 });
 
+describe('requestRouting - strict chat ID validation (opt-in via { strictChatIds: true })', () => {
+	it('accepts numeric Telegram chat IDs and GreenAPI WhatsApp chat IDs when strict is enabled', () => {
+		const result = parseNotificationRouting(
+			{
+				telegramChatId: '-1001234567890',
+				whatsappChatId: '120363025492938@g.us',
+			},
+			{ strictChatIds: true },
+		);
+		expect(result.telegramChatId).toBe('-1001234567890');
+		expect(result.whatsappChatId).toBe('120363025492938@g.us');
+	});
+
+	it('accepts @c.us WhatsApp chat IDs in strict mode', () => {
+		const result = parseNotificationRouting(
+			{ whatsappChatId: '5511999999999@c.us' },
+			{ strictChatIds: true },
+		);
+		expect(result.whatsappChatId).toBe('5511999999999@c.us');
+	});
+
+	it('rejects @public handles in strict mode (only numeric Telegram IDs accepted by default)', () => {
+		expect(() => parseNotificationRouting(
+			{ telegramChatId: '@tradingview' },
+			{ strictChatIds: true },
+		)).toThrow(NotificationRoutingValidationError);
+
+		expect(() => parseNotificationRouting(
+			{ telegramChatId: '@everyone' },
+			{ strictChatIds: true },
+		)).toThrow(NotificationRoutingValidationError);
+	});
+
+	it('rejects free-form Telegram chat IDs in strict mode', () => {
+		expect(() => parseNotificationRouting(
+			{ telegramChatId: '<script>alert(1)</script>' },
+			{ strictChatIds: true },
+		)).toThrow(NotificationRoutingValidationError);
+
+		expect(() => parseNotificationRouting(
+			{ telegramChatId: 'not-a-number' },
+			{ strictChatIds: true },
+		)).toThrow(NotificationRoutingValidationError);
+
+		expect(() => parseNotificationRouting(
+			{ telegramChatId: '0' },
+			{ strictChatIds: true },
+		)).toThrow(NotificationRoutingValidationError);
+	});
+
+	it('rejects malformed WhatsApp chat IDs in strict mode', () => {
+		expect(() => parseNotificationRouting(
+			{ whatsappChatId: 'not-a-greenapi-id' },
+			{ strictChatIds: true },
+		)).toThrow(NotificationRoutingValidationError);
+
+		expect(() => parseNotificationRouting(
+			{ whatsappChatId: '120363025492938@unknown.us' },
+			{ strictChatIds: true },
+		)).toThrow(NotificationRoutingValidationError);
+
+		expect(() => parseNotificationRouting(
+			{ whatsappChatId: 'abc@c.us' },
+			{ strictChatIds: true },
+		)).toThrow(NotificationRoutingValidationError);
+	});
+
+	it('rejects chat IDs that contain MarkdownV2 escape-trigger characters in strict mode', () => {
+		expect(() => parseNotificationRouting(
+			{ telegramChatId: '100123 ' },
+			{ strictChatIds: true },
+		)).toThrow(NotificationRoutingValidationError);
+
+		expect(() => parseNotificationRouting(
+			{ telegramChatId: '100123<' },
+			{ strictChatIds: true },
+		)).toThrow(NotificationRoutingValidationError);
+
+		expect(() => parseNotificationRouting(
+			{ whatsappChatId: '120363@g.us\r' },
+			{ strictChatIds: true },
+		)).toThrow(NotificationRoutingValidationError);
+	});
+
+	it('does NOT validate chat IDs by default (strictChatIds opt-in for back-compat)', () => {
+		const result = parseNotificationRouting({
+			telegramChatId: 'chat-override-999',
+			whatsappChatId: 'not-a-greenapi-id',
+		});
+		expect(result.telegramChatId).toBe('chat-override-999');
+		expect(result.whatsappChatId).toBe('not-a-greenapi-id');
+	});
+
+	it('still returns undefined when chat IDs are omitted in strict mode', () => {
+		const result = parseNotificationRouting({ text: 'hello' }, { strictChatIds: true });
+		expect(result.telegramChatId).toBeUndefined();
+		expect(result.whatsappChatId).toBeUndefined();
+	});
+});
+
 describe('requestRouting - telegramThreadId validation', () => {
 	it('parses valid integer and numeric string telegramThreadId', () => {
 		expect(parseNotificationRouting({ telegramThreadId: 12345 }).telegramThreadId).toBe(12345);
@@ -149,3 +250,57 @@ describe('requestRouting - telegramThreadId validation', () => {
 	});
 });
 
+describe('requestRouting - assertChannelsAvailable (GH-854 fail-fast)', () => {
+	it('is a no-op when routing.channels is omitted (legacy broadcast)', () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
+		};
+
+		expect(() => assertChannelsAvailable(notificationManager, {})).not.toThrow();
+		expect(() => assertChannelsAvailable(notificationManager, { channels: undefined })).not.toThrow();
+		expect(() => assertChannelsAvailable(notificationManager, null)).not.toThrow();
+		// Legacy broadcast does not consult the notification manager
+		expect(notificationManager.getEnabledChannels).not.toHaveBeenCalled();
+	});
+
+	it('is a no-op when every requested channel is enabled', () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram', 'whatsapp', 'discord']),
+		};
+
+		expect(() => assertChannelsAvailable(notificationManager, { channels: ['telegram', 'discord'] }))
+			.not.toThrow();
+		expect(notificationManager.getEnabledChannels).toHaveBeenCalledTimes(1);
+	});
+
+	it('throws NotificationRoutingValidationError when a requested channel is disabled', () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
+		};
+
+		expect(() => assertChannelsAvailable(notificationManager, { channels: ['whatsapp'] }))
+			.toThrow(NotificationRoutingValidationError);
+		try {
+			assertChannelsAvailable(notificationManager, { channels: ['whatsapp'] });
+		} catch (error) {
+			expect(error).toBeInstanceOf(NotificationRoutingValidationError);
+			expect(error.statusCode).toBe(400);
+			expect(error.message).toContain('Requested channel(s) disabled or misconfigured');
+			expect(error.details).toEqual(expect.objectContaining({ field: 'channels', unavailableChannels: ['whatsapp'] }));
+		}
+	});
+
+	it('lists every unavailable channel when multiple are missing', () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
+		};
+
+		expect(() => assertChannelsAvailable(notificationManager, { channels: ['whatsapp', 'discord'] }))
+			.toThrow(/whatsapp.*discord|discord.*whatsapp/);
+	});
+
+	it('tolerates a missing notification manager when routing.channels is absent', () => {
+		expect(() => assertChannelsAvailable(null, {})).not.toThrow();
+		expect(() => assertChannelsAvailable(undefined, { channels: undefined })).not.toThrow();
+	});
+});
