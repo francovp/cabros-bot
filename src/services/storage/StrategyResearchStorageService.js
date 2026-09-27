@@ -73,7 +73,7 @@ class StrategyResearchStorageService {
 				const appOptions = {};
 				if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
 					appOptions.credential = admin.credential.cert(
-						JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+						JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON),
 					);
 				}
 				if (process.env.FIREBASE_PROJECT_ID) {

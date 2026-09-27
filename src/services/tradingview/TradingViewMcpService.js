@@ -148,6 +148,7 @@ class TradingViewMcpService {
 		this.requestCounter = 0;
 		this.runtimeStatus = createRuntimeStatus();
 		this.volumeRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
+		this.strategyResearchRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
 		this.consecutiveFailures = 0;
 		this.breakerState = 'closed';
 		this.breakerOpenedAt = null;
@@ -162,6 +163,7 @@ class TradingViewMcpService {
 	_resetForTesting() {
 		this.runtimeStatus = createRuntimeStatus();
 		this.volumeRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
+		this.strategyResearchRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
 		this.consecutiveFailures = 0;
 		this.breakerState = 'closed';
 		this.breakerOpenedAt = null;
@@ -675,6 +677,55 @@ class TradingViewMcpService {
 
 			return normalizedResult;
 		}, { signal, runtimeStatusKey: 'volumeRuntimeStatus' });
+	}
+
+	async callStrategyResearch(toolName, args = {}, options = {}) {
+		const { signal } = options;
+
+		try {
+			const rpcResult = await this._callTool(toolName, args, { signal });
+
+			const timestamp = new Date().toISOString();
+			this.strategyResearchRuntimeStatus = {
+				...this.strategyResearchRuntimeStatus,
+				status: 'ready',
+				lastCheckedAt: timestamp,
+				lastSuccessAt: timestamp,
+				lastErrorCategory: null,
+				successCount: this.strategyResearchRuntimeStatus.successCount + 1,
+			};
+
+			return rpcResult && Object.prototype.hasOwnProperty.call(rpcResult, 'result')
+				? rpcResult.result
+				: rpcResult;
+		} catch (error) {
+			if (signal && signal.aborted && getAbortMessage(signal, '') === 'Job cancelled by user') {
+				throw error;
+			}
+
+			const timestamp = new Date().toISOString();
+			const errorCategory = this._getErrorCategory(error);
+			const prevCounts = this.strategyResearchRuntimeStatus.errorCategoryCounts
+				|| createEmptyErrorCategoryCounts();
+			const nextCounts = { ...prevCounts };
+			if (Object.prototype.hasOwnProperty.call(nextCounts, errorCategory)) {
+				nextCounts[errorCategory] += 1;
+			} else {
+				nextCounts.request_failed = (nextCounts.request_failed || 0) + 1;
+			}
+			this.strategyResearchRuntimeStatus = {
+				...this.strategyResearchRuntimeStatus,
+				status: 'degraded',
+				lastCheckedAt: timestamp,
+				lastFailureAt: timestamp,
+				lastErrorCategory: errorCategory,
+				failureCount: this.strategyResearchRuntimeStatus.failureCount + 1,
+				errorCategoryCounts: nextCounts,
+			};
+
+			error.message = `TradingView MCP strategy research ${toolName} failed: ${error.message}`;
+			throw error;
+		}
 	}
 
 	async callScanTool(toolName, args = {}, options = {}) {

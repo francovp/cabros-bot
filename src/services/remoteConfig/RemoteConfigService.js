@@ -35,6 +35,10 @@ const PARAMETER_SCHEMA = Object.freeze({
 	URL_SHORTENER_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 100000 },
 	URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: { type: 'number', defaultValue: 32, integer: true, min: 1, max: 1024 },
 	BINANCE_FETCH_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
+	// Strategy research (TradingView MCP backtest / compare / walk-forward).
+	// Default false: these endpoints call paid upstream MCP tools.
+	ENABLE_STRATEGY_RESEARCH: { type: 'boolean', defaultValue: false },
+	STRATEGY_RESEARCH_CACHE_TTL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 0, max: 86400000 },
 	TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: {
 		type: 'string',
 		defaultValue: '1h',

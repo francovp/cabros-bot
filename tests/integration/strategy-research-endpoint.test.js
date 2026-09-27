@@ -154,7 +154,7 @@ describe('Strategy Research Endpoints', () => {
 					period: '2y',
 					n_splits: 5,
 				}),
-				expect.any(Object)
+				expect.any(Object),
 			);
 		});
 
@@ -223,7 +223,7 @@ describe('Strategy Research Endpoints', () => {
 
 		it('returns 429 when upstream rate limit is encountered', async () => {
 			tradingViewMcpService.callStrategyResearch.mockRejectedValueOnce(
-				new Error('Upstream HTTP 429 Too Many Requests: Rate limit exceeded')
+				new Error('Upstream HTTP 429 Too Many Requests: Rate limit exceeded'),
 			);
 
 			const res = await request(app)
@@ -236,7 +236,7 @@ describe('Strategy Research Endpoints', () => {
 
 		it('returns 502 when upstream fails with general error', async () => {
 			tradingViewMcpService.callStrategyResearch.mockRejectedValueOnce(
-				new Error('TradingView MCP internal service error')
+				new Error('TradingView MCP internal service error'),
 			);
 
 			const res = await request(app)

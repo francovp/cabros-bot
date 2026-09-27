@@ -34,6 +34,11 @@ const {
 } = require('../controllers/alerts/alerts');
 const { listOutcomes, summarizeOutcomes } = require('../controllers/outcomes/outcomes');
 const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/symbolAnalyses/symbolAnalyses');
+const {
+	getCompareStrategies,
+	postWalkForward,
+	postBacktest,
+} = require('../controllers/research/strategyResearch');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const { postBinanceOrder, getBinanceOrders, deleteBinanceOrder } = require('../controllers/trading/binanceOrders');
@@ -73,6 +78,14 @@ function getRoutes(botOrGetter) {
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
 	router.get('/symbol-analyses', ...adminRead, listSymbolAnalyses);
 	router.get('/symbol-analyses/summary', ...adminRead, summarizeSymbolAnalyses);
+	// Strategy research (TradingView MCP backtest / compare / walk-forward).
+	// Gated by validateApiKey rather than adminRead: these are read-only analytics
+	// over upstream MCP results, not operator/tenant data, and they are
+	// additionally gated by the ENABLE_STRATEGY_RESEARCH feature flag.
+	// Each handler is a factory that returns the express handler.
+	router.get('/research/strategies', validateApiKey, getCompareStrategies());
+	router.post('/research/walk-forward', validateApiKey, postWalkForward());
+	router.post('/research/backtest', validateApiKey, postBacktest());
 	router.post('/scanner-presets', ...adminWrite, postPreset);
 	router.get('/scanner-presets', ...adminRead, listPresets);
 	router.get('/scanner-presets/:id', ...adminRead, getPreset);

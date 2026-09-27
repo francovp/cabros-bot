@@ -42,7 +42,7 @@ describe('TradingViewMcpService.callStrategyResearch', () => {
 				interval: '1h',
 				period: '1y',
 			},
-			{ signal: undefined }
+			{ signal: undefined },
 		);
 
 		expect(result).toEqual(mockResponse.result);
@@ -57,7 +57,7 @@ describe('TradingViewMcpService.callStrategyResearch', () => {
 			service.callStrategyResearch('walk_forward_backtest_strategy', {
 				symbol: 'ETHUSDT',
 				strategy: 'rsi',
-			})
+			}),
 		).rejects.toThrow('TradingView MCP strategy research walk_forward_backtest_strategy failed');
 
 		expect(service.strategyResearchRuntimeStatus.status).toBe('degraded');
