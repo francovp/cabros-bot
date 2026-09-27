@@ -18,6 +18,9 @@ const PARAMETER_SCHEMA = Object.freeze({
 	NEWS_GEMINI_CONCURRENCY: { type: 'number', defaultValue: Infinity, integer: true, min: 1, max: 50 },
 	NEWS_GEMINI_QUOTA_MAX_RETRIES: { type: 'number', defaultValue: 2, integer: true, min: 1, max: 5 },
 	NEWS_GEMINI_QUOTA_RETRY_BASE_MS: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 60000 },
+	NEWS_MAX_ALERTS_PER_BATCH: { type: 'number', defaultValue: 10, integer: true, min: 1, max: 50 },
+	NEWS_MAX_ALERTS_PER_WINDOW: { type: 'number', defaultValue: 20, integer: true, min: 1, max: 200 },
+	NEWS_MAX_ALERTS_PER_WINDOW_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 3600000 },
 	TRADINGVIEW_MCP_TIMEOUT_MS: { type: 'number', defaultValue: 12000, integer: true, min: 1000, max: 120000 },
 	TRADINGVIEW_MCP_MAX_RETRIES: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 5 },
 	TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: { type: 'number', defaultValue: 12000, integer: true, min: 1000, max: 120000 },
@@ -91,6 +94,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	REQUEST_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },
 	ENABLE_BINANCE_ORDER_AUDIT: { type: 'boolean', defaultValue: false },
 	BINANCE_ORDER_AUDIT_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
 	ENABLE_SYMBOL_ANALYSIS_STORAGE: { type: 'boolean', defaultValue: false },
@@ -98,11 +102,21 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT: { type: 'boolean', defaultValue: false },
 	ENABLE_FIRESTORE_NEWS_ANALYSIS: { type: 'boolean', defaultValue: false },
 	NEWS_ANALYSIS_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
+	ENABLE_FIRESTORE_CHAT_PREFERENCES: { type: 'boolean', defaultValue: false },
+	CHAT_PREFERENCES_RETENTION_DAYS: { type: 'number', defaultValue: 90, integer: true, min: 1, max: 365 },
+	CHAT_PREFERENCES_CACHE_TTL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
 	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
 	// notification destinations — must remain deployment-controlled.
 	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
-	// ENABLE_TEST_ALERT, TEST_ALERT_DAILY_LIMIT excluded:
-	// route-enablement gate and abuse rate-limiting controls must remain deployment-controlled.
+	// ENABLE_TEST_ALERT, TEST_ALERT_DAILY_LIMIT, ENABLE_ADMIN_SSE excluded:
+	// route-enablement gates and abuse rate-limiting controls must remain deployment-controlled.
+	ADMIN_SSE_MAX_CLIENT_CONNECTIONS: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 20 },
+	ADMIN_SSE_MAX_TOTAL_CONNECTIONS: { type: 'number', defaultValue: 100, integer: true, min: 10, max: 1000 },
+	ADMIN_SSE_HEARTBEAT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 5000, max: 120000 },
+	ENABLE_TOKEN_COST_BUDGET: { type: 'boolean', defaultValue: false },
+	TOKEN_COST_DAILY_BUDGET_USD: { type: 'number', defaultValue: 5.0, min: 0.01, max: 10000 },
+	TOKEN_COST_WARN_THRESHOLD_PCT: { type: 'number', defaultValue: 80, integer: true, min: 1, max: 100 },
+	ENABLE_MAINTENANCE_MODE: { type: 'boolean', defaultValue: false },
 });
 
 let remoteOverrides = {};
@@ -113,6 +127,26 @@ let lastErrorCategory = null;
 let refreshTimer = null;
 let loadingPromise = null;
 let consecutiveFailures = 0;
+const changeListeners = new Set();
+
+function addChangeListener(fn) {
+	if (typeof fn === 'function') {
+		changeListeners.add(fn);
+	}
+	return () => {
+		changeListeners.delete(fn);
+	};
+}
+
+function notifyChangeListeners(prevOverrides, nextOverrides, version) {
+	for (const fn of changeListeners) {
+		try {
+			fn({ prevOverrides, nextOverrides, templateVersion: version });
+		} catch (err) {
+			console.warn('[RemoteConfigService] Change listener failed:', err?.message);
+		}
+	}
+}
 
 function isEnabled() {
 	return process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true';
@@ -412,6 +446,7 @@ async function loadNow(options = {}) {
 				}
 			});
 
+			const prevOverrides = remoteOverrides;
 			remoteOverrides = nextOverrides;
 			remoteLoadedAt = Date.now();
 			templateVersion = getTemplateVersion(template);
@@ -421,13 +456,16 @@ async function loadNow(options = {}) {
 			if (invalidValue) {
 				console.warn('[RemoteConfigService] Ignored invalid allow-listed value');
 			}
+			notifyChangeListeners(prevOverrides, remoteOverrides, templateVersion);
 			return true;
 		} catch (error) {
+			const prevOverrides = remoteOverrides;
 			remoteOverrides = {};
 			remoteLoadedAt = null;
 			lastErrorCategory = getErrorCategory(error);
 			consecutiveFailures += 1;
 			console.warn('[RemoteConfigService] Remote Config load failed:', lastErrorCategory);
+			notifyChangeListeners(prevOverrides, remoteOverrides, null);
 			return false;
 		} finally {
 			loadingPromise = null;
@@ -477,13 +515,16 @@ module.exports = {
 	loadNow,
 	start,
 	stop,
+	addChangeListener,
 	_resetForTesting: resetForTesting,
-	_setRemoteOverridesForTesting(overrides, loadedAt = Date.now()) {
+	_setRemoteOverridesForTesting(overrides, loadedAt = Date.now(), version = 'test') {
+		const prevOverrides = remoteOverrides;
 		remoteOverrides = { ...overrides };
 		remoteLoadedAt = loadedAt;
-		templateVersion = 'test';
+		templateVersion = version;
 		lastSuccessfulLoad = new Date(loadedAt).toISOString();
 		lastErrorCategory = null;
 		consecutiveFailures = 0;
+		notifyChangeListeners(prevOverrides, remoteOverrides, templateVersion);
 	},
 };

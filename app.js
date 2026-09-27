@@ -6,6 +6,7 @@ const { createCorsMiddleware } = require('./src/lib/cors');
 const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
+const requestDeadline = require('./src/lib/requestDeadline');
 const { buildWebhookBodySize } = require('./src/lib/webhookBodySize');
 
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
@@ -14,6 +15,9 @@ setupTrustProxy(app);
 // Apply CORS before body parsers so parser errors, including structured 413
 // responses, retain the same browser-visible headers as successful requests.
 app.use(createCorsMiddleware());
+
+// Start the request deadline before body parsing so slow uploads are bounded too.
+app.use(requestDeadline);
 
 // Webhook body size limits (configurable via WEBHOOK_MAX_BODY_SIZE; default 256kb).
 // Centralized so both JSON and text/plain parsers share the same effective limit and
@@ -45,6 +49,7 @@ contentSecurityPolicy['connect-src'] = [
 	'https://cabros-bot-production.up.railway.app',
 ];
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
+app.use(requestDeadline.guard);
 
 const { getDeepHealthcheckHandler } = require('./src/controllers/healthcheck');
 app.use('/healthcheck', getDeepHealthcheckHandler());
