@@ -143,7 +143,7 @@ function resolveHtfAlignment(enriched = {}) {
 			? alignment.trend.trim()
 			: (typeof multiTimeframe.direction === 'string' && multiTimeframe.direction.trim()
 				? multiTimeframe.direction.trim()
-				: (stringTrend || stringAlignment || stringFallback)));
+				: (stringTrend || stringRecommendation || stringAlignment || stringFallback)));
 
 	let divergentTimeframes = [];
 	const rawDivergent = alignment.divergent_timeframes ?? multiTimeframe.divergent_timeframes;
@@ -178,13 +178,17 @@ function resolveHtfAlignment(enriched = {}) {
 		}
 	} else {
 		const normalizedStatus = normalizeConfluenceStatus(rawStatus);
-		// An explicit direction field is authoritative *when the side is known*, so
+		// An explicit directional field is authoritative *when the side is known*, so
 		// side-aware classification can actually be compared against it. `rawDirection`
 		// falls back to `rawStatus`, so only a *dedicated* direction/trend/
-		// recommendation token may override a status verdict (GH-717). With an
-		// unknown side there is nothing to compare, so the status verdict stands.
+		// recommendation token may override a status verdict (GH-717) — including an
+		// object `recommendation.action`, which is a dedicated field even when it also
+		// served as the `rawStatus` fallback. With an unknown side there is nothing to
+		// compare, so the status verdict stands.
+		const hasDedicatedDirection = rawDirection !== null
+			&& (rawDirection !== rawStatus || rawDirection === stringRecommendation);
 		const explicitDirection = normalizeTrendDirection(
-			rawDirection && rawDirection !== rawStatus ? rawDirection : null,
+			hasDedicatedDirection ? rawDirection : null,
 		);
 
 		if (explicitDirection && side) {

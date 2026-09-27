@@ -376,6 +376,32 @@ describe('HTF Alignment Formatter (Issue #635)', () => {
 			expect(result.netScore).toBe(3);
 			expect(result.text).toBe('📈 HTF: ALINEADO (net +3)');
 		});
+
+		it('lets an object recommendation action override an aligned status for BUY', () => {
+			const result = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: {
+					alignment: { status: 'aligned' },
+					recommendation: { action: 'SELL' },
+				},
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('counter-trend');
+			expect(result.text).toBe('📉 HTF: EN CONTRA');
+		});
+
+		it('lets an object recommendation action override a counter-trend status for SELL', () => {
+			const result = resolveHtfAlignment({
+				side: 'SELL',
+				multiTimeframeData: {
+					alignment: { status: 'counter-trend' },
+					recommendation: { action: 'BUY' },
+				},
+			});
+			expect(result).not.toBeNull();
+			expect(result.classification).toBe('counter-trend');
+			expect(result.text).toBe('📉 HTF: EN CONTRA');
+		});
 	});
 
 	describe('formatHtfAlignment() with RemoteConfig gating', () => {
