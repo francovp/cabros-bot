@@ -83,8 +83,11 @@ function createProcessLifecycle(options = {}) {
 		stopWhatsAppCommandBridge = () => undefined,
 		stopScannerPresetScheduler = () => undefined,
 		stopNewsMonitorScheduler = () => undefined,
+		stopAlertScheduler = () => undefined,
 		stopRemoteConfig = () => undefined,
+		stopTelegramHealthProbe = () => undefined,
 		shutdownNewsMonitor = () => undefined,
+		closeAllSseConnections = () => undefined,
 		flushSentry = () => undefined,
 		timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
 		logger = console,
@@ -169,9 +172,11 @@ function createProcessLifecycle(options = {}) {
 			};
 
 			const cleanup = async () => {
+				const sseCleanup = safelyRun(logger, 'admin SSE streams', closeAllSseConnections);
 				const telegramCleanup = safelyRun(logger, 'Telegram bot', stopBot);
 				const bootstrapCleanup = safelyRun(logger, 'application bootstrap', getBootstrapPromise);
 				await closeServer(server, logger);
+				await sseCleanup;
 				await telegramCleanup;
 				await bootstrapCleanup;
 				await safelyRun(logger, 'background jobs', waitForBackgroundJobs);
@@ -182,7 +187,9 @@ function createProcessLifecycle(options = {}) {
 					safelyRun(logger, 'whatsapp command bridge', () => stopWhatsAppCommandBridge({ drain: true })),
 					safelyRun(logger, 'scanner preset scheduler', () => stopScannerPresetScheduler({ drain: true })),
 					safelyRun(logger, 'news monitor scheduler', () => stopNewsMonitorScheduler({ drain: true })),
+					safelyRun(logger, 'alert scheduler', () => stopAlertScheduler({ drain: true })),
 					safelyRun(logger, 'remote config service', stopRemoteConfig),
+					safelyRun(logger, 'telegram health probe', stopTelegramHealthProbe),
 					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
 				]);
 				await safelyRun(logger, 'Sentry', () => flushSentry(Math.min(shutdownTimeoutMs, 2000)));

@@ -8,6 +8,7 @@ const remoteConfigService = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { notificationRedriveService } = require('./NotificationRedriveService');
 const { deliveryMetricsService } = require('./DeliveryMetricsService');
+const { chatPreferenceService } = require('../preferences/ChatPreferenceService');
 
 const DEFAULT_ZERO_CHANNEL_ALERT_COOLDOWN_MS = 300000;
 
@@ -16,8 +17,9 @@ class NotificationManager {
    * @param {Object} telegramService - TelegramService instance
    * @param {Object} whatsappService - WhatsAppService instance
    * @param {Object} discordService - DiscordService instance
+   * @param {Object} [preferenceService] - ChatPreferenceService instance
    */
-	constructor(telegramService, whatsappService, discordService) {
+	constructor(telegramService, whatsappService, discordService, preferenceService = chatPreferenceService) {
 		this.channels = new Map(
 			[
 				['telegram', telegramService],
@@ -25,6 +27,7 @@ class NotificationManager {
 				['discord', discordService],
 			].filter(([, channel]) => !!channel),
 		);
+		this.chatPreferenceService = preferenceService || chatPreferenceService;
 		this.zeroChannelBroadcastCount = 0;
 		this.lastZeroChannelAlertAt = 0;
 		notificationRedriveService.setNotificationManagerGetter(() => this);
@@ -268,10 +271,38 @@ class NotificationManager {
 					},
 				});
 
+				const channelStartTime = Date.now();
 				return Promise.resolve()
-					.then(() => ch.send(alert, {
-						...options,
-						signal: options.signalByChannel?.[ch.name] || options.signal,
+					.then(async () => {
+						const prefCheck = await this._evaluateChatPreferences(ch, alert, options);
+						if (!prefCheck.deliver) {
+							return {
+								channel: ch.name,
+								success: true,
+								skipped: true,
+								reason: 'PREFERENCE_FILTER',
+								filterReason: prefCheck.reason,
+							};
+						}
+						const channelSignal = options.signalByChannel?.[ch.name];
+						let signal = options.signal;
+						if (channelSignal && signal) {
+							signal = AbortSignal.any([channelSignal, signal]);
+						} else if (channelSignal) {
+							signal = channelSignal;
+						}
+						return ch.send(alert, {
+							...options,
+							signal,
+						});
+					})
+					.then((value) => ({
+						value,
+						durationMs: Date.now() - channelStartTime,
+					}))
+					.catch((error) => Promise.reject({
+						error,
+						durationMs: Date.now() - channelStartTime,
 					}))
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
@@ -283,30 +314,48 @@ class NotificationManager {
 			sentryService.endSpan(dispatchSpan);
 		}
 
+		const totalDurationMs = Date.now() - startTime;
+
 		const formattedResults = results.map((r, idx) => {
 			const chName = channels[idx] ? channels[idx].name : 'unknown';
 			if (r.status === 'fulfilled') {
-				if (r.value && typeof r.value === 'object') {
-					return {
+				const val = r.value && r.value.value;
+				const fallbackDuration = (r.value && typeof r.value.durationMs === 'number')
+					? r.value.durationMs
+					: Math.max(Date.now() - startTime, 0);
+
+				if (val && typeof val === 'object') {
+					const item = {
 						channel: chName,
-						...r.value,
+						...val,
 					};
+					if (typeof item.durationMs !== 'number' || !Number.isFinite(item.durationMs) || item.durationMs < 0) {
+						item.durationMs = fallbackDuration;
+					}
+					return item;
 				}
 				return {
 					success: false,
 					channel: chName,
 					error: 'Channel returned empty response',
+					durationMs: fallbackDuration,
 				};
 			}
+
+			const reasonErr = r.reason && r.reason.error !== undefined ? r.reason.error : r.reason;
+			const fallbackDuration = (r.reason && typeof r.reason.durationMs === 'number')
+				? r.reason.durationMs
+				: Math.max(Date.now() - startTime, 0);
+
 			return {
 				success: false,
 				channel: chName,
-				error: (r.reason && (r.reason.message || String(r.reason))) || 'Unknown error',
+				error: (reasonErr && (reasonErr.message || String(reasonErr))) || 'Unknown error',
+				durationMs: fallbackDuration,
 			};
 		});
 
 		// Report external failures to Sentry
-		const totalDurationMs = Date.now() - startTime;
 		const httpContext = options.http || (options.endpoint ? {
 			endpoint: options.endpoint,
 			method: options.method || 'POST',
@@ -336,7 +385,14 @@ class NotificationManager {
 			}
 		}
 
-		if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+		const isRedriveIneligible =
+			Boolean(options.isRedrive) ||
+			options.redriveEligible === false ||
+			Boolean(options.isProbe) ||
+			Boolean(alert?.isProbe) ||
+			alert?.redriveEligible === false;
+
+		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 			const failedResults = formattedResults.filter(result => result && !result.success);
 			if (failedResults.length > 0) {
 				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
@@ -400,7 +456,14 @@ class NotificationManager {
 				http: httpContext,
 			});
 
-			if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+		const isRedriveIneligible =
+			Boolean(options.isRedrive) ||
+			options.redriveEligible === false ||
+			Boolean(options.isProbe) ||
+			Boolean(alert?.isProbe) ||
+			alert?.redriveEligible === false;
+
+		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 				const candidateChannels = Array.from(this.channels.keys());
 				const channelsToQueue = candidateChannels.length > 0 ? candidateChannels : ['telegram', 'whatsapp', 'discord'];
 				const syntheticResults = channelsToQueue.map(channelName => ({
@@ -453,10 +516,31 @@ class NotificationManager {
 					},
 				});
 
+				const channelStartTime = Date.now();
 				return Promise.resolve()
-					.then(() => ch.send(alert, {
-						...options,
-						signal: options.signalByChannel?.[ch.name] || options.signal,
+					.then(async () => {
+						const prefCheck = await this._evaluateChatPreferences(ch, alert, options);
+						if (!prefCheck.deliver) {
+							return {
+								channel: ch.name,
+								success: true,
+								skipped: true,
+								reason: 'PREFERENCE_FILTER',
+								filterReason: prefCheck.reason,
+							};
+						}
+						return ch.send(alert, {
+							...options,
+							signal: options.signalByChannel?.[ch.name] || options.signal,
+						});
+					})
+					.then((value) => ({
+						value,
+						durationMs: Date.now() - channelStartTime,
+					}))
+					.catch((error) => Promise.reject({
+						error,
+						durationMs: Date.now() - channelStartTime,
 					}))
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
@@ -468,30 +552,48 @@ class NotificationManager {
 			sentryService.endSpan(dispatchSpan);
 		}
 
+		const totalDurationMs = Date.now() - startTime;
+
 		const formattedResults = results.map((r, idx) => {
 			const chName = enabledChannels[idx] ? enabledChannels[idx].name : 'unknown';
 			if (r.status === 'fulfilled') {
-				if (r.value && typeof r.value === 'object') {
-					return {
+				const val = r.value && r.value.value;
+				const fallbackDuration = (r.value && typeof r.value.durationMs === 'number')
+					? r.value.durationMs
+					: Math.max(Date.now() - startTime, 0);
+
+				if (val && typeof val === 'object') {
+					const item = {
 						channel: chName,
-						...r.value,
+						...val,
 					};
+					if (typeof item.durationMs !== 'number' || !Number.isFinite(item.durationMs) || item.durationMs < 0) {
+						item.durationMs = fallbackDuration;
+					}
+					return item;
 				}
 				return {
 					success: false,
 					channel: chName,
 					error: 'Channel returned empty response',
+					durationMs: fallbackDuration,
 				};
 			}
+
+			const reasonErr = r.reason && r.reason.error !== undefined ? r.reason.error : r.reason;
+			const fallbackDuration = (r.reason && typeof r.reason.durationMs === 'number')
+				? r.reason.durationMs
+				: Math.max(Date.now() - startTime, 0);
+
 			return {
 				success: false,
 				channel: chName,
-				error: (r.reason && (r.reason.message || String(r.reason))) || 'Unknown error',
+				error: (reasonErr && (reasonErr.message || String(reasonErr))) || 'Unknown error',
+				durationMs: fallbackDuration,
 			};
 		});
 
 		// Report external failures to Sentry (T014)
-		const totalDurationMs = Date.now() - startTime;
 		const httpContext = options.http || (options.endpoint ? {
 			endpoint: options.endpoint,
 			method: options.method || 'POST',
@@ -521,7 +623,14 @@ class NotificationManager {
 			}
 		}
 
-		if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+		const isRedriveIneligible =
+			Boolean(options.isRedrive) ||
+			options.redriveEligible === false ||
+			Boolean(options.isProbe) ||
+			Boolean(alert?.isProbe) ||
+			alert?.redriveEligible === false;
+
+		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 			const failedResults = formattedResults.filter(result => result && !result.success);
 			if (failedResults.length > 0) {
 				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
@@ -546,12 +655,31 @@ class NotificationManager {
 		return formattedResults;
 	}
 
+	async _evaluateChatPreferences(channel, alert, options = {}) {
+		if (options.bypassPreferences || alert?.bypassPreferences || alert?.isProbe || options.isProbe) {
+			return { deliver: true };
+		}
+		const chatId = channel.name === 'telegram'
+			? (alert?.telegramChatId || channel.chatId)
+			: channel.name === 'whatsapp'
+				? (alert?.whatsappChatId || channel.chatId)
+				: channel.chatId;
+
+		const prefService = this.chatPreferenceService || chatPreferenceService;
+		return prefService.shouldDeliverAlert({
+			chatId: chatId ? String(chatId) : '',
+			channel: channel.name,
+			alert,
+			options,
+		});
+	}
+
 	_recordDeliveryMetrics(formattedResults, fallbackDurationMs) {
 		if (!Array.isArray(formattedResults) || formattedResults.length === 0) {
 			return;
 		}
 		for (const result of formattedResults) {
-			if (!result || typeof result !== 'object') {
+			if (!result || typeof result !== 'object' || result.skipped) {
 				continue;
 			}
 			const durationMs = typeof result.durationMs === 'number' && Number.isFinite(result.durationMs)
