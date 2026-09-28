@@ -446,4 +446,103 @@ describe('WhatsAppService', () => {
 			expect(global.fetch).toHaveBeenCalledTimes(1);
 		});
 	});
+
+	describe('_sendChunkedMessage resume', () => {
+		const buildChunks = (count) => Array.from({ length: count }, (_, i) => `chunk-${i + 1}`);
+
+		const buildService = async () => {
+			process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+			const svc = new WhatsAppService({ logger: mockLogger });
+			await svc.validate();
+			return svc;
+		};
+
+		it('resumes from startChunk and skips already-delivered chunks', async () => {
+			const svc = await buildService();
+			global.fetch = jest
+				.fn()
+				.mockResolvedValueOnce({ ok: true, json: async () => ({ idMessage: 'msg-3' }) })
+				.mockResolvedValueOnce({ ok: true, json: async () => ({ idMessage: 'msg-4' }) });
+
+			const result = await svc._sendChunkedMessage(buildChunks(4), 'chat@g.us', { startChunk: 2 });
+
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+			expect(result.success).toBe(true);
+			expect(result.messageIds).toEqual(['msg-3', 'msg-4']);
+			expect(result.messageCount).toBe(2);
+			expect(result.splitMessageCount).toBe(4);
+			expect(result.resumedFromChunk).toBe(2);
+		});
+
+		it('returns failedPart = startChunk + 1 when the resumed chunk fails', async () => {
+			const svc = await buildService();
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: false,
+				status: 502,
+				text: async () => 'gateway error',
+			});
+
+			const result = await svc._sendChunkedMessage(buildChunks(5), 'chat@g.us', { startChunk: 2 });
+
+			expect(result.success).toBe(false);
+			expect(result.splitMessageCount).toBe(5);
+			expect(result.failedPart).toBe(3);
+			expect(result.messageIds).toEqual([]);
+			expect(result.messageCount).toBe(0);
+			expect(result.resumedFromChunk).toBe(2);
+		});
+
+		it('caps startChunk to the last chunk index when out of range', async () => {
+			const svc = await buildService();
+			global.fetch = jest
+				.fn()
+				.mockResolvedValueOnce({ ok: true, json: async () => ({ idMessage: 'msg-last' }) });
+
+			const result = await svc._sendChunkedMessage(buildChunks(3), 'chat@g.us', { startChunk: 99 });
+
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+			expect(result.messageIds).toEqual(['msg-last']);
+			expect(result.resumedFromChunk).toBe(2);
+		});
+
+		it('treats startChunk <= 0 as 0 (no resume)', async () => {
+			const svc = await buildService();
+			global.fetch = jest
+				.fn()
+				.mockResolvedValueOnce({ ok: true, json: async () => ({ idMessage: 'msg-1' }) })
+				.mockResolvedValueOnce({ ok: true, json: async () => ({ idMessage: 'msg-2' }) });
+
+			const result = await svc._sendChunkedMessage(buildChunks(2), 'chat@g.us', { startChunk: 0 });
+
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+			expect(result.messageIds).toEqual(['msg-1', 'msg-2']);
+			expect(result.resumedFromChunk).toBe(0);
+		});
+	});
+	describe('isConfigured', () => {
+		const originalEnv = { ...process.env };
+
+		afterEach(() => {
+			process.env = { ...originalEnv };
+		});
+
+		it('returns true only when ENABLE_WHATSAPP_ALERTS, apiUrl, apiKey, and chatId are present', () => {
+			process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+			process.env.WHATSAPP_API_URL = 'https://api.green.com/';
+			process.env.WHATSAPP_API_KEY = 'test-key';
+			process.env.WHATSAPP_CHAT_ID = 'chat@g.us';
+
+			const service = new WhatsAppService();
+			expect(service.isConfigured()).toBe(true);
+
+			process.env.ENABLE_WHATSAPP_ALERTS = 'false';
+			expect(service.isConfigured()).toBe(false);
+
+			process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+			delete process.env.WHATSAPP_CHAT_ID;
+			const missingChatService = new WhatsAppService();
+			expect(missingChatService.isConfigured()).toBe(false);
+		});
+	});
 });
+
