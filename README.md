@@ -157,6 +157,7 @@ When the Telegram bot is enabled (`ENABLE_TELEGRAM_BOT=true`), the bot provides 
 | :--- | :--- | :--- |
 | `/help`, `/start` | None | Displays command list and argument help. |
 | `/precio` | `<symbol>` | Real-time crypto (Binance) or equity (Twelve Data) price quote. |
+| `/alerta`, `/alert` | `<symbol> <op> <price>` | Creates a user-defined price-threshold alert. Also `/alerta list` and `/alerta cancel <id>`. |
 | `/cryptobot` | `id` | Displays the current Telegram chat ID. |
 | `/analisis` | `<symbols>` | Runs quick TradingView technical analysis for specified symbols. |
 | `/scanner` | `[options]` | Executes market scanner sweep across preconfigured assets. |
@@ -186,6 +187,44 @@ The news monitor endpoint reports volume throttling status in its response paylo
 }
 ```
 - `throttled` - The number of symbols skipped during the execution sweep because the rate limit window was reached. See [News Monitoring Guide](docs/news-monitor.md).
+
+### User-Defined Price Threshold Alerts
+
+Users can create their own threshold alerts from Telegram (opt-in via `ENABLE_USER_PRICE_ALERTS=true`, disabled by default):
+
+```
+/alerta BTCUSDT < 60000      # notify when BTC drops below 60000
+/alerta NASDAQ:NVDA >= 140   # notify when NVDA reaches 140
+/alerta ETHUSDT mayor 3500   # natural-language operator
+/alerta list                 # list this chat's active alerts
+/alerta cancel <id>          # cancel an alert
+```
+
+Alerts are stored in the server-side-only `userPriceAlerts` Firestore collection (client access is denied by `firestore.rules`) and evaluated by a bounded background sweep. Key behavior:
+
+- **Durable with a fail-open in-memory fallback.** When Firestore is unavailable the service runs from an in-process map; a durable write failure is reported to the user instead of silently acknowledging a lost alert.
+- **Durable reads never fall back to the ephemeral mirror.** If a durable `list`/`get`/sweep read fails, the service reports the storage error instead of answering from the process-local map, which would tell a user their armed alerts had vanished and make them impossible to cancel.
+- **Fires at most once.** The `armed → triggered` transition is claimed inside a Firestore transaction before the notification is dispatched, and the sweep is guarded by a distributed lease (`userPriceAlertLocks`), so overlapping sweeps or multiple replicas cannot double-notify.
+- **A trigger is only consumed when it is actually delivered.** If no Telegram bot is available, the claim is rolled back and the alert returns to `armed` so a replica that can send still notifies the user. Delivery records `deliveryAttemptedAt` *before* the send and `deliveredAt` after it, and the re-arm requires the absence of both — so a lost delivery-marker write can never resurrect a notification the user already received.
+- **A replica that cannot deliver never sweeps.** If the process has no Telegram bot (Telegram disabled, or a preview deployment), the sweep is deferred instead of claiming and re-arming the same alert on every cycle.
+- **No starvation.** The sweep orders by document id and resumes after the last scanned id, so alerts beyond `USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT` are still evaluated on later sweeps.
+- **Bounded cost.** Prices are deduplicated per symbol and fetched with at most `USER_PRICE_ALERT_PRICE_FETCH_CONCURRENCY` concurrent provider calls.
+- **Bounded state.** Each chat may hold at most `USER_PRICE_ALERT_MAX_PER_CHAT` armed alerts, they expire after `USER_PRICE_ALERT_RETENTION_DAYS`, and `/alerta` is rate-limited like the other expensive commands.
+- **Forum topics.** A Telegram forum topic id of `0` (the chat's General topic) is preserved as an explicit destination rather than treated as "no topic".
+- **Notification-only.** No exchange-key custody and no order placement; trading stays behind the operator-only Binance endpoint.
+
+`GET /api/status` and `GET /api/capabilities` expose `featureFlags.userPriceAlerts` and a non-sensitive `dependencies.userPriceAlertWorker` block (role, running state, sweep counters, `lastError`, and `storageMode`). `ready` is only true when storage is `durable`; without Firestore the service reports `configured: false` / `status: "degraded"` so process-local alerts are never mistaken for durable ones.
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `ENABLE_USER_PRICE_ALERTS` | `false` | Master feature gate. Remote Config eligible. |
+| `USER_PRICE_ALERT_WORKER_ROLE` | `web` | `web`, `worker`, or `disabled`. Must match the process source. |
+| `USER_PRICE_ALERT_EVALUATION_INTERVAL_MS` | `60000` | Sweep cadence. Remote Config eligible. |
+| `USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT` | `50` | Armed alerts scanned per sweep. Remote Config eligible. |
+| `USER_PRICE_ALERT_MAX_PER_CHAT` | `20` | Per-chat armed-alert quota. |
+| `USER_PRICE_ALERT_RETENTION_DAYS` | `30` | Days before an armed alert expires. |
+| `USER_PRICE_ALERT_LEASE_MS` | `120000` | Distributed sweep lease duration. |
+| `USER_PRICE_ALERT_PRICE_FETCH_CONCURRENCY` | `3` | Concurrent price lookups per sweep. |
 
 ---
 
