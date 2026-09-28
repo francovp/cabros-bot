@@ -246,6 +246,7 @@ Behind a trusted proxy (`TRUST_PROXY` truthy or `RENDER`/`VERCEL`/`RAILWAY_ENVIR
 #### News Monitoring (003-news-monitor)
 
 - `ENABLE_NEWS_MONITOR` - Enable news monitoring endpoint (`true` or `false`, default: `false`)
+- `ENABLE_NEWS_MONITOR_CLASSIFIER` - Re-check Gemini `none` headlines with classifier.dev (`true` or `false`, default: `false`). Sends the symbol and generated headline externally; this privacy gate is environment-only and excluded from Firebase Remote Config.
 - `NEWS_SYMBOLS_CRYPTO` - Default crypto symbols if not provided in request (comma-separated, e.g., `BTCUSDT,ETHUSD`)
 - `NEWS_SYMBOLS_STOCKS` - Default stock symbols if not provided in request (comma-separated)
 - `NEWS_ALERT_THRESHOLD` - Confidence score threshold for sending alerts (default: `0.7`, range 0.0-1.0)
