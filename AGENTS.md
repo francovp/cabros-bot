@@ -120,6 +120,10 @@ Maintain these patterns and rules in all contributions:
 
 ---
 
+## API Key Timing-Safe Comparison (Issue #667)
+
+`src/lib/auth.js` now copies supplied and configured webhook API keys into fixed-size zero-padded buffers before `crypto.timingSafeEqual`, ensuring mismatched-length keys take the fixed-length comparison path without triggering weak-password-hash analysis. Values above the 4 KiB comparison ceiling are rejected after comparison. The middleware's redundant key extraction was removed. `tests/security/auth_check.test.js` covers the short-key regression; no environment, endpoint, OpenAPI, Postman, or Remote Config contract changed.
+
 ## Testing Instructions
 
 ### Test Locations & Conventions
