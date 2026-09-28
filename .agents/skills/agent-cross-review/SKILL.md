@@ -120,8 +120,11 @@ Review the diff systematically against [cabros-bot-review-rubric.md](references/
 
 5. **Contract & Configuration Parity**:
    - Is `.env.example` updated for new application-owned environment variables?
-   - Are non-secret runtime variables added to `RemoteConfigService.js` and `firebase-remote-config-template.json`?
+   - Do Remote Config additions in `firebase-remote-config-template.json` maintain 100% parity with `RemoteConfigService.PARAMETER_SCHEMA` and `README.md` parameter tables (keys, descriptions, types, defaults)?
    - Are new routes and payloads registered in `src/openapi/openapi.json` and `CabrosBot.postman_collection.json`?
+   - Does Postman include runnable negative/error input variants (e.g. 400 `INVALID_REQUEST` for invalid limits, windows, malformed timestamps, or reversed ranges) with executable test assertions (`pm.test`), rather than only testing success cases?
+   - Do all error responses conform to the standardized error envelope (`{ success: false, error: ..., code: ... }` via `src/lib/errorEnvelope.js`)?
+   - Do replay endpoints (single and batch alert replay) start from the complete raw payload and overlay routing metadata, rather than cherry-picking known fields and dropping unrecognized attributes?
 
 6. **Agent & Model Attribution**:
    - Does the PR carry its mandatory `<agent>-<model>` label (e.g. `antigravity-gemini-3.7-flash`, `codex-gpt-5.6-luna`, `github-copilot-minimax-m3:free`)?
@@ -177,8 +180,10 @@ Assemble the review using this standard structure:
 - [ ] Firestore undefined sanitization
 - [ ] Timing-safe auth & fail-closed production check
 - [ ] No open CodeQL / GHAS inline threads (clear-text logging, GET query param secrets)
-- [ ] `.env.example` & Remote Config parity
-- [ ] OpenAPI 3.1 & Postman collection sync
+- [ ] `.env.example`, Remote Config & README documentation parity
+- [ ] OpenAPI 3.1 & Postman collection sync (including 400 negative variants)
+- [ ] Standardized error envelopes (`{ success: false, error: ..., code: ... }`)
+- [ ] Replay payload preservation (no dropped fields during replay)
 - [ ] Agent & Model attribution label (`<agent>-<model>`)
 - [ ] Unit & Integration test coverage
 
