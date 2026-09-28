@@ -5,9 +5,7 @@ const {
 	UserPriceAlertService,
 	userPriceAlertService,
 	parseUserPriceAlertInput,
-	normalizeOperator,
 	UserPriceAlertError,
-	stripUndefinedFieldsDeep,
 } = require('../../src/services/alerts/UserPriceAlertService');
 const fetchPriceModule = require('../../src/controllers/commands/handlers/core/fetchPriceCryptoSymbol');
 
@@ -36,16 +34,18 @@ describe('UserPriceAlertService - Unit Tests', () => {
 	});
 
 	describe('Input Parsing & Operator Normalization', () => {
-		it('normalizes valid operators', () => {
-			expect(normalizeOperator('<')).toBe('<');
-			expect(normalizeOperator('<=')).toBe('<=');
-			expect(normalizeOperator('>')).toBe('>');
-			expect(normalizeOperator('>=')).toBe('>=');
-			expect(normalizeOperator('menor')).toBe('<');
-			expect(normalizeOperator('mayor')).toBe('>');
-			expect(normalizeOperator('debajo')).toBe('<');
-			expect(normalizeOperator('encima')).toBe('>');
-			expect(normalizeOperator('invalid')).toBe(null);
+		it('normalizes valid operators through the parser', () => {
+			const cases = [
+				['<', '<'], ['<=', '<='], ['>', '>'], ['>=', '>='],
+				['menor', '<'], ['mayor', '>'], ['debajo', '<'], ['encima', '>'],
+			];
+			for (const [input, expected] of cases) {
+				const parsed = parseUserPriceAlertInput(['BTCUSDT', input, '60000']);
+				expect(parsed.valid).toBe(true);
+				expect(parsed.operator).toBe(expected);
+			}
+			// Unrecognized verbs must not be silently accepted as an operator.
+			expect(parseUserPriceAlertInput(['BTCUSDT', 'invalid', '60000']).valid).toBe(false);
 		});
 
 		it('parses separated args: SYMBOL OPERATOR PRICE', () => {
@@ -298,6 +298,326 @@ describe('UserPriceAlertService - Unit Tests', () => {
 			const status = service.getStatus();
 			expect(status.enabled).toBe(false);
 			expect(status.ready).toBe(false);
+		});
+
+		it('starts only when the configured role matches the process source', async () => {
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(null);
+
+			expect(service.startWorker({ source: 'web' })).toBe(true);
+			await service.stopWorker({ drain: false });
+
+			process.env.USER_PRICE_ALERT_WORKER_ROLE = 'worker';
+			expect(service.startWorker({ source: 'web' })).toBe(false);
+
+			process.env.USER_PRICE_ALERT_WORKER_ROLE = 'disabled';
+			expect(service.startWorker({ source: 'worker' })).toBe(false);
+		});
+
+		it('exposes retention, lease and price-fetch concurrency with safe defaults', () => {
+			delete process.env.USER_PRICE_ALERT_RETENTION_DAYS;
+			delete process.env.USER_PRICE_ALERT_LEASE_MS;
+			delete process.env.USER_PRICE_ALERT_PRICE_FETCH_CONCURRENCY;
+			expect(service.getRetentionDays()).toBe(30);
+			expect(service.getLeaseMs()).toBe(120000);
+			expect(service.getPriceFetchConcurrency()).toBe(3);
+
+			process.env.USER_PRICE_ALERT_RETENTION_DAYS = 'not-a-number';
+			process.env.USER_PRICE_ALERT_LEASE_MS = '5';
+			process.env.USER_PRICE_ALERT_PRICE_FETCH_CONCURRENCY = '999';
+			expect(service.getRetentionDays()).toBe(30);
+			expect(service.getLeaseMs()).toBe(10000);
+			expect(service.getPriceFetchConcurrency()).toBe(10);
+		});
+	});
+
+	describe('Firestore persistence (durable mode)', () => {
+		const admin = require('firebase-admin');
+
+		// Minimal in-memory Firestore double supporting the exact API surface the
+		// service uses: where/orderBy/limit/startAfter/get, doc set/update/get, and
+		// runTransaction with transactional reads/writes.
+		// Seed shape: { '<collectionName>': { '<docId>': data } }
+		function createMockFirestore(seed = {}) {
+			const collections = new Map(
+				Object.entries(seed).map(([name, docs]) => [name, new Map(
+					Object.entries(docs).map(([id, data]) => [id, { ...data }]),
+				)]),
+			);
+			const written = [];
+
+			function docsOf(name) {
+				if (!collections.has(name)) collections.set(name, new Map());
+				return collections.get(name);
+			}
+
+			const db = {
+				written,
+				store: collections,
+				collection(name) {
+					const coll = docsOf(name);
+					const buildDoc = (id) => ({
+						id,
+						data: () => (coll.get(id) || {}),
+						set: async (payload, opts) => {
+							written.push({ id, payload, collection: name });
+							coll.set(id, opts && opts.merge
+								? { ...(coll.get(id) || {}), ...payload }
+								: { ...payload });
+						},
+						update: async (payload) => {
+							written.push({ id, payload, collection: name, update: true });
+							coll.set(id, { ...(coll.get(id) || {}), ...payload });
+						},
+						get: async () => ({ exists: coll.has(id), data: () => (coll.get(id) || {}) }),
+					});
+
+					const makeQuery = (filters = [], startAfterId = null, max = Infinity) => ({
+						where: (field, op, value) => makeQuery(
+							[...filters, { field, op, value }],
+							startAfterId,
+							max,
+						),
+						orderBy: () => makeQuery(filters, startAfterId, max),
+						startAfter: (afterId) => makeQuery(filters, afterId, max),
+						limit: (n) => makeQuery(filters, startAfterId, n),
+						get: async () => {
+							let rows = Array.from(coll.entries())
+								.sort((a, b) => a[0].localeCompare(b[0]));
+							for (const { field, op, value } of filters) {
+								rows = rows.filter(([, data]) => {
+									if (op !== '==') return true;
+									return data[field] === value;
+								});
+							}
+							if (startAfterId) {
+								const idx = rows.findIndex(([id]) => id === startAfterId);
+								if (idx >= 0) rows = rows.slice(idx + 1);
+							}
+							return {
+								docs: rows.slice(0, max).map(([id]) => ({ id, data: () => coll.get(id) })),
+								empty: rows.length === 0,
+							};
+						},
+					});
+
+					return { doc: buildDoc, ...makeQuery([]) };
+				},
+				runTransaction: jest.fn(async (fn) => fn({
+					get: async (ref) => {
+						const coll = docsOf(ref.__collection);
+						return { exists: coll.has(ref.id), data: () => (coll.get(ref.id) || {}) };
+					},
+					set: (ref, payload) => {
+						const coll = docsOf(ref.__collection);
+						coll.set(ref.id, { ...(coll.get(ref.id) || {}), ...payload });
+					},
+					update: (ref, payload) => {
+						const coll = docsOf(ref.__collection);
+						coll.set(ref.id, { ...(coll.get(ref.id) || {}), ...payload });
+					},
+				})),
+			};
+
+			// Annotate refs so the transaction stub can resolve the right collection.
+			const originalCollection = db.collection.bind(db);
+			db.collection = (name) => {
+				const coll = originalCollection(name);
+				const originalDoc = coll.doc;
+				coll.doc = (id) => ({ ...originalDoc(id), __collection: name });
+				return coll;
+			};
+			return db;
+		}
+
+		it('preserves Firestore sentinel instance types in the written payload', async () => {
+			// The repo's shared firebase-admin mock returns plain objects, so stub
+			// sentinels as real class instances to prove the sanitizer preserves
+			// prototype identity instead of rebuilding them as literals.
+			class StubFieldValue { constructor() { this._type = 'serverTimestamp'; } }
+			class StubTimestamp {
+				constructor(date) { this._date = date; }
+				toDate() { return this._date; }
+			}
+			const db = createMockFirestore();
+			jest.spyOn(admin.firestore.FieldValue, 'serverTimestamp').mockImplementation(() => new StubFieldValue());
+			jest.spyOn(admin.firestore.Timestamp, 'fromDate').mockImplementation((date) => new StubTimestamp(date));
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+
+			await service.createAlert({
+				chatId: 'chat-durable',
+				symbol: 'BTCUSDT',
+				operator: '<',
+				targetPrice: 60000,
+				initialPrice: 65000,
+			});
+
+			const written = db.written.find((entry) => entry.collection === 'userPriceAlerts');
+			expect(written).toBeDefined();
+			// A plain-object rebuild would turn serverTimestamp() into {} and a
+			// Timestamp into {_seconds,_nanoseconds}; the Admin SDK rejects both.
+			expect(written.payload.createdAt).toBeInstanceOf(StubFieldValue);
+			expect(written.payload.expiresAt).toBeInstanceOf(StubTimestamp);
+			expect(typeof written.payload.expiresAt.toDate().getTime()).toBe('number');
+			// undefined must still be stripped from the payload.
+			expect(Object.prototype.hasOwnProperty.call(written.payload, 'userId')).toBe(false);
+		});
+
+		it('surfaces a durable write failure instead of silently losing the alert', async () => {
+			const db = createMockFirestore();
+			db.collection = () => ({
+				doc: () => ({ set: async () => { throw new Error('Firestore unavailable'); } }),
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+
+			await expect(service.createAlert({
+				chatId: 'chat-fail',
+				symbol: 'BTCUSDT',
+				operator: '<',
+				targetPrice: 60000,
+			})).rejects.toThrow(UserPriceAlertError);
+		});
+
+		it('reads back a durable alert through the chatId+status query', async () => {
+			const db = createMockFirestore();
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+
+			const created = await service.createAlert({
+				chatId: 'chat-read',
+				symbol: 'BTCUSDT',
+				operator: '<',
+				targetPrice: 60000,
+			});
+
+			const listed = await service.listAlerts({ chatId: 'chat-read', status: 'armed' });
+			expect(listed).toHaveLength(1);
+			expect(listed[0].id).toBe(created.id);
+			// Firestore Timestamp must be projected back to an ISO string.
+			expect(typeof listed[0].expiresAt).toBe('string');
+		});
+
+		it('skips the sweep entirely when another replica holds the lease', async () => {
+			const db = createMockFirestore({
+				userPriceAlertLocks: {
+					singleton: { lockedUntil: new Date(Date.now() + 60000).toISOString(), lockedBy: 'other-worker' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+
+			const result = await service.evaluateAlerts();
+			expect(result.skipped).toBe('lease-held');
+			expect(result.evaluatedCount).toBe(0);
+		});
+
+		it('delivers a triggered alert only once when two sweeps overlap', async () => {
+			const alertId = 'alert_dup01';
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					[alertId]: { chatId: 'chat-dup', symbol: 'BTCUSDT', operator: '>', targetPrice: 100, status: 'armed' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+
+			const sendMessage = jest.fn().mockResolvedValue({ message_id: 1 });
+			service.setBotGetter({ telegram: { sendMessage } });
+			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'BTCUSDT', price: 150, assetClass: 'crypto' });
+
+			const first = await service.evaluateAlerts();
+			expect(first.triggeredCount).toBe(1);
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+
+			// The durable row is now `triggered`, so a second sweep cannot re-fire it.
+			const second = await service.evaluateAlerts();
+			expect(second.triggeredCount).toBe(0);
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+		});
+
+		it('does not notify when the trigger cannot be claimed', async () => {
+			const alertId = 'alert_claim1';
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					[alertId]: { chatId: 'chat-claim', symbol: 'BTCUSDT', operator: '>', targetPrice: 100, status: 'armed' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			// Simulate another replica winning the transition between read and claim.
+			db.runTransaction = jest.fn(async (fn) => {
+				let claimed;
+				await fn({
+					get: async () => ({ exists: true, data: () => ({ status: 'triggered' }) }),
+					update: () => { claimed = true; },
+					set: () => { claimed = true; },
+				});
+				return claimed !== undefined;
+			});
+
+			const sendMessage = jest.fn();
+			service.setBotGetter({ telegram: { sendMessage } });
+			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'BTCUSDT', price: 150, assetClass: 'crypto' });
+
+			const result = await service.evaluateAlerts();
+			expect(result.triggeredCount).toBe(0);
+			expect(sendMessage).not.toHaveBeenCalled();
+		});
+
+		it('rotates the scan cursor so alerts past the batch limit are not starved', async () => {
+			process.env.USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT = '1';
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					alert_aaa: { chatId: 'c', symbol: 'BTCUSDT', operator: '>', targetPrice: 1e12, status: 'armed' },
+					alert_bbb: { chatId: 'c', symbol: 'ETHUSDT', operator: '>', targetPrice: 1e12, status: 'armed' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'X', price: 1, assetClass: 'crypto' });
+
+			const first = await service.evaluateAlerts();
+			const second = await service.evaluateAlerts();
+
+			expect(first.evaluatedCount).toBe(1);
+			expect(second.evaluatedCount).toBe(1);
+			// Each sweep must advance to a different document.
+			expect(service._lastScannedDocId).not.toBe(null);
+		});
+
+		it('escapes MarkdownV2 reserved characters in the delivered notification', async () => {
+			const alertId = 'alert_esc01';
+			// A backtick in the symbol would break an unescaped code span and make
+			// Telegram reject the whole message with "can't parse entities".
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					[alertId]: { chatId: 'chat-esc', symbol: 'BTC`USDT', operator: '>', targetPrice: 1e9, status: 'armed' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+
+			const sendMessage = jest.fn().mockResolvedValue({ message_id: 1 });
+			service.setBotGetter({ telegram: { sendMessage } });
+			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'BTC`USDT', price: 2e9, assetClass: 'crypto' });
+
+			await service.evaluateAlerts();
+
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+			const sentText = sendMessage.mock.calls[0][1];
+			// No unescaped backtick may survive.
+			expect(sentText.replace(/\\`/g, '')).not.toContain('`');
+			expect(sentText).toContain('\\`');
+		});
+
+		it('reports a dropped delivery when the bot is unavailable instead of hiding it', async () => {
+			const alertId = 'alert_nobot';
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					[alertId]: { chatId: 'chat-nobot', symbol: 'BTCUSDT', operator: '>', targetPrice: 100, status: 'armed' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			service.setBotGetter(null);
+			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'BTCUSDT', price: 150, assetClass: 'crypto' });
+
+			const result = await service.evaluateAlerts();
+			expect(result.triggeredCount).toBe(1);
+			expect(result.errorsCount).toBe(1);
+			expect(service.getStatus().lastError).toBe('telegram_bot_unavailable');
 		});
 	});
 });

@@ -7,9 +7,10 @@ const {
 } = require('../../../../services/alerts/UserPriceAlertService');
 const fetchPriceModule = require('./fetchPriceCryptoSymbol');
 const sentryService = require('../../../../services/monitoring/SentryService');
+const { smartEscapeMarkdownV2 } = require('../../../../services/notification/formatters/markdownV2Formatter');
 
 function escapeMarkdownV2(text) {
-	return String(text || '').replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+	return smartEscapeMarkdownV2(text);
 }
 
 function getChatId(context) {
@@ -35,6 +36,7 @@ function buildAlertHelpMessage() {
 		'  _Ejemplos: `/alerta BTCUSDT < 60000`, `/alerta ETHUSDT > 3500`, `/alerta NVDA > 140`_',
 		'• `/alerta list` — Lista tus alertas activas \\(alias: `/alerta lista`\\)',
 		'• `/alerta cancel <id>` — Cancela una alerta \\(alias: `/alerta borrar <id>`\\)',
+		'• `_Operadores válidos: `<`, `<=`, `>`, `>=`, `menor`, `mayor`_',
 		'• `/alerta help` — Muestra esta guía de uso',
 	].join('\n');
 }
@@ -71,7 +73,7 @@ const userPriceAlertCmd = async (context) => {
 		const subCommand = tokens[0].toLowerCase();
 
 		// 2. List subcommand
-		if (subCommand === 'list' || subCommand === 'lista' || subCommand === 'listar') {
+		if (subCommand === 'list' || subCommand === 'lista') {
 			const alerts = await userPriceAlertService.listAlerts({ chatId: String(chatId), status: 'armed' });
 			if (alerts.length === 0) {
 				await context.reply(
@@ -87,7 +89,7 @@ const userPriceAlertCmd = async (context) => {
 			];
 			alerts.forEach((alert) => {
 				const cond = `${alert.operator} ${Number(alert.targetPrice).toLocaleString('en-US')}`;
-				lines.push(`• \`${alert.id}\` — \`${alert.symbol} ${cond}\``);
+				lines.push(`• ${escapeMarkdownV2(alert.id)} — ${escapeMarkdownV2(alert.symbol)} ${escapeMarkdownV2(cond)}`);
 			});
 			lines.push('');
 			lines.push('Para cancelar una alerta usa: `/alerta cancel <ID>`');
@@ -97,7 +99,7 @@ const userPriceAlertCmd = async (context) => {
 		}
 
 		// 3. Cancel subcommand
-		if (subCommand === 'cancel' || subCommand === 'cancelar' || subCommand === 'borrar' || subCommand === 'delete' || subCommand === 'del') {
+		if (subCommand === 'cancel' || subCommand === 'cancelar' || subCommand === 'borrar') {
 			const alertId = tokens[1];
 			if (!alertId) {
 				await context.reply(
@@ -110,7 +112,7 @@ const userPriceAlertCmd = async (context) => {
 			const cancelled = await userPriceAlertService.cancelAlert({ chatId: String(chatId), alertId });
 			const cond = `${cancelled.operator} ${Number(cancelled.targetPrice).toLocaleString('en-US')}`;
 			await context.reply(
-				`✅ Alerta cancelada exitosamente: \`${cancelled.id}\` \\(\`${cancelled.symbol} ${cond}\`\\)`,
+				`✅ Alerta cancelada exitosamente: ${escapeMarkdownV2(cancelled.id)} \\(${escapeMarkdownV2(cancelled.symbol)} ${escapeMarkdownV2(cond)}\\)`,
 				replyOptions,
 			);
 			return;
@@ -172,10 +174,10 @@ const userPriceAlertCmd = async (context) => {
 		const messageLines = [
 			'✅ *Alerta de precio creada*',
 			'',
-			`• Símbolo: \`${alert.symbol}\``,
-			`• Condición: \`${condText}\``,
+			`• Símbolo: ${escapeMarkdownV2(alert.symbol)}`,
+			`• Condición: ${escapeMarkdownV2(condText)}`,
 			`• Precio actual: *${escapeMarkdownV2(currentPriceText)}*`,
-			`• ID: \`${alert.id}\``,
+			`• ID: ${escapeMarkdownV2(alert.id)}`,
 			'',
 			'_Te avisaremos automáticamente cuando se alcance el objetivo\\._',
 		];

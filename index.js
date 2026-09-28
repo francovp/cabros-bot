@@ -121,7 +121,7 @@ async function bootstrapApplication() {
 	scannerPresetSchedulerService.startWorker();
 	// Start background user price alert worker if enabled
 	userPriceAlertService.setBotGetter(() => bot);
-	userPriceAlertService.startWorker();
+	userPriceAlertService.startWorker({ source: 'web' });
 	// Start background news-monitor scheduler if enabled
 	newsMonitorSchedulerService.startWorker({ source: 'web' });
 	// Start background alert scheduler (JSON-defined news + scanner schedules) if enabled

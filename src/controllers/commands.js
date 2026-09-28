@@ -65,6 +65,7 @@ const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	silencio: { max: 20, windowMs: 60_000 },
 	umbral: { max: 20, windowMs: 60_000 },
 	categorias: { max: 20, windowMs: 60_000 },
+	alerta: { max: 10, windowMs: 60_000 },
 });
 const TELEGRAM_COMMAND_ALIASES = Object.freeze({
 	analysis: 'analisis',
@@ -74,6 +75,7 @@ const TELEGRAM_COMMAND_ALIASES = Object.freeze({
 	quiet: 'silencio',
 	threshold: 'umbral',
 	categories: 'categorias',
+	alert: 'alerta',
 });
 const MAX_TELEGRAM_COMMAND_RATE_LIMIT = 1_000;
 const MAX_TELEGRAM_COMMAND_WINDOW_MS = 86_400_000;

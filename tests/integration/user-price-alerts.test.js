@@ -1,6 +1,7 @@
 'use strict';
 
 const { userPriceAlertService } = require('../../src/services/alerts/UserPriceAlertService');
+const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const fetchPriceModule = require('../../src/controllers/commands/handlers/core/fetchPriceCryptoSymbol');
 
 describe('User Price Alerts Integration', () => {
@@ -11,6 +12,8 @@ describe('User Price Alerts Integration', () => {
 
 	beforeEach(() => {
 		process.env.ENABLE_USER_PRICE_ALERTS = 'true';
+		// Force the in-memory backend so durable-mode state cannot leak across tests.
+		jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(null);
 		userPriceAlertService._resetForTesting();
 
 		sendTelegramMock = jest.fn().mockResolvedValue({ message_id: 999 });
@@ -84,7 +87,7 @@ describe('User Price Alerts Integration', () => {
 		});
 
 		// 2. Run evaluation sweep
-		const sweepResults = await userPriceAlertService.evaluateAlerts({ maxBatch: 10 });
+		const sweepResults = await userPriceAlertService.evaluateAlerts();
 		expect(sweepResults.evaluatedCount).toBe(3);
 		expect(sweepResults.triggeredCount).toBe(2);
 		expect(sweepResults.errorsCount).toBe(0);
@@ -96,8 +99,8 @@ describe('User Price Alerts Integration', () => {
 		const btcCall = sendTelegramMock.mock.calls.find(c => c[0] === '987654' && c[1].includes('BTCUSDT'));
 		expect(btcCall).toBeDefined();
 		expect(btcCall[1]).toContain('🔔 *Alerta de Precio Activada*');
-		expect(btcCall[1]).toContain('• Símbolo: `BTCUSDT`');
-		expect(btcCall[1]).toContain('• Condición: `< 60,000`');
+		expect(btcCall[1]).toContain('• Símbolo: BTCUSDT');
+		expect(btcCall[1]).toContain('• Condición: \\< 60,000');
 		expect(btcCall[1]).toContain('• Precio actual: *58,000*');
 		expect(btcCall[2]).toEqual({
 			parse_mode: 'MarkdownV2',
@@ -107,8 +110,8 @@ describe('User Price Alerts Integration', () => {
 		// Verify NVDA notification details
 		const nvdaCall = sendTelegramMock.mock.calls.find(c => c[0] === '987654' && c[1].includes('NVDA'));
 		expect(nvdaCall).toBeDefined();
-		expect(nvdaCall[1]).toContain('• Símbolo: `NVDA`');
-		expect(nvdaCall[1]).toContain('• Condición: `>= 140`');
+		expect(nvdaCall[1]).toContain('• Símbolo: NVDA');
+		expect(nvdaCall[1]).toContain('• Condición: \\>\\= 140');
 		expect(nvdaCall[1]).toContain('• Precio actual: *145*');
 
 		// 4. Verify statuses

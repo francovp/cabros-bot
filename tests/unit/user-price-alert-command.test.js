@@ -2,6 +2,7 @@
 
 const { userPriceAlertCmd, buildAlertHelpMessage } = require('../../src/controllers/commands/handlers/core/userPriceAlertHandler');
 const { userPriceAlertService, UserPriceAlertError } = require('../../src/services/alerts/UserPriceAlertService');
+const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const fetchPriceModule = require('../../src/controllers/commands/handlers/core/fetchPriceCryptoSymbol');
 const sentryService = require('../../src/services/monitoring/SentryService');
 
@@ -9,8 +10,16 @@ describe('User price alert Telegram command (/alerta)', () => {
 	let context;
 	let fetchCryptoSpy;
 	let fetchEquitySpy;
+	let savedEnv;
 
 	beforeEach(() => {
+		savedEnv = { ...process.env };
+		// The command must refuse to create an alert while the feature is disabled.
+		process.env.ENABLE_USER_PRICE_ALERTS = 'true';
+		process.env.USER_PRICE_ALERT_MAX_PER_CHAT = '20';
+		// Force the in-memory backend: without this the shared firebase-admin mock
+		// makes the durable path resolve and state leaks between tests.
+		jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(null);
 		userPriceAlertService._resetForTesting();
 		context = {
 			message: {
@@ -44,8 +53,20 @@ describe('User price alert Telegram command (/alerta)', () => {
 		});
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
+		await userPriceAlertService.stopWorker({ drain: false });
+		process.env = savedEnv;
 		jest.restoreAllMocks();
+	});
+
+	it('refuses to create an alert while the feature is disabled', async () => {
+		process.env.ENABLE_USER_PRICE_ALERTS = 'false';
+		context.message.text = '/alerta BTCUSDT < 60000';
+
+		await userPriceAlertCmd(context);
+
+		expect(context.reply).toHaveBeenCalledTimes(1);
+		expect(context.reply.mock.calls[0][0]).toContain('no están habilitadas');
 	});
 
 	it('replies with help guide when no arguments or help subcommand is provided', async () => {
@@ -119,8 +140,20 @@ describe('User price alert Telegram command (/alerta)', () => {
 		expect(context.reply).toHaveBeenCalledTimes(1);
 		const [replyText] = context.reply.mock.calls[0];
 		expect(replyText).toContain('Tus Alertas de Precio Activas');
-		expect(replyText).toContain('BTCUSDT < 60,000');
-		expect(replyText).toContain('ETHUSDT >= 4,000');
+		// Values are MarkdownV2-escaped, so `<` / `>=` must appear escaped; a raw
+		// reserved character would make Telegram reject the whole message.
+		expect(replyText).toContain('BTCUSDT \\< 60,000');
+		expect(replyText).toContain('ETHUSDT \\>\\= 4,000');
+		// The dynamic alert lines must not leak an unescaped reserved character.
+		// (The static footer intentionally documents the raw `<ID>` placeholder.)
+		const dynamicLines = replyText.split('\n').filter((line) => line.startsWith('• '));
+		expect(dynamicLines.length).toBeGreaterThan(0);
+		for (const line of dynamicLines) {
+			// The shared escaper also handles `<` and `&`; include them so a real
+			// unescaped reserved character still fails this assertion.
+			const unescaped = line.replace(/\\([_*[\]()~`>#+\-=|{}.!&<\\])/g, '');
+			expect(unescaped).not.toMatch(/[<>]/);
+		}
 	});
 
 	it('replies friendly when no active alerts exist for list', async () => {

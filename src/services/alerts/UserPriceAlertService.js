@@ -3,15 +3,17 @@
 const crypto = require('crypto');
 const admin = require('firebase-admin');
 const alertStorageService = require('../storage/AlertStorageService');
-const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 const sentryService = require('../monitoring/SentryService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { smartEscapeMarkdownV2 } = require('../notification/formatters/markdownV2Formatter');
 
 function getFetchPriceModule() {
 	return require('../../controllers/commands/handlers/core/fetchPriceCryptoSymbol');
 }
 
 const COLLECTION_NAME = 'userPriceAlerts';
+const LOCK_COLLECTION_NAME = 'userPriceAlertLocks';
+const LOCK_DOCUMENT_ID = 'singleton';
 const DEFAULT_EVALUATION_INTERVAL_MS = 60000;
 const MIN_EVALUATION_INTERVAL_MS = 1000;
 const MAX_EVALUATION_INTERVAL_MS = 3600000;
@@ -24,7 +26,20 @@ const DEFAULT_MAX_PER_CHAT = 20;
 const MIN_MAX_PER_CHAT = 1;
 const MAX_MAX_PER_CHAT = 100;
 
-const DEFAULT_EXPIRY_DAYS = 30;
+const DEFAULT_LEASE_MS = 120000;
+const MIN_LEASE_MS = 10000;
+const MAX_LEASE_MS = 600000;
+
+const DEFAULT_RETENTION_DAYS = 30;
+const MIN_RETENTION_DAYS = 1;
+const MAX_RETENTION_DAYS = 3650;
+
+// Bounds the fan-out of provider price lookups per sweep. Without this an armed
+// batch of `batchLimit` distinct symbols would issue that many concurrent
+// Binance/Twelve Data calls and exhaust provider quota (see NEWS_GEMINI_CONCURRENCY).
+const DEFAULT_PRICE_FETCH_CONCURRENCY = 3;
+const MAX_PRICE_FETCH_CONCURRENCY = 10;
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 class UserPriceAlertError extends Error {
@@ -54,6 +69,39 @@ function stripUndefinedFieldsDeep(value) {
 	return result;
 }
 
+/**
+ * Strip `undefined` without destroying Firestore sentinel values.
+ *
+ * `FieldValue.serverTimestamp()` has zero own keys, so the plain-object rebuild
+ * above turns it into `{}` and a `Timestamp` into `{_seconds,_nanoseconds}`,
+ * both of which the Admin SDK then rejects (or silently misreads). Sentinel
+ * instances must survive by identity, so this variant copies every non-plain
+ * object through untouched and only recurses into plain objects and arrays.
+ */
+function sanitizeFirestorePayload(value) {
+	if (value === null || typeof value !== 'object') {
+		return value;
+	}
+	if (Array.isArray(value)) {
+		return value
+			.map((item) => sanitizeFirestorePayload(item))
+			.filter((item) => item !== undefined);
+	}
+	// Non-plain objects (Timestamp, FieldValue, GeoPoint, Buffer, DocumentReference…)
+	// are pass-through sentinels and must keep their prototype.
+	const proto = Object.getPrototypeOf(value);
+	if (proto !== Object.prototype && proto !== null) {
+		return value;
+	}
+	const result = {};
+	for (const [key, val] of Object.entries(value)) {
+		if (val !== undefined) {
+			result[key] = sanitizeFirestorePayload(val);
+		}
+	}
+	return result;
+}
+
 function parseEnvInt(value, fallback, min = 1, max = Number.MAX_SAFE_INTEGER) {
 	if (value === undefined || value === null || value === '') {
 		return fallback;
@@ -71,10 +119,10 @@ function normalizeOperator(op) {
 	if (trimmed === '<' || trimmed === '<=' || trimmed === '>' || trimmed === '>=') {
 		return trimmed;
 	}
-	if (trimmed === 'menor' || trimmed === 'debajo' || trimmed === 'lower' || trimmed === 'below') {
+	if (trimmed === 'menor' || trimmed === 'debajo') {
 		return '<';
 	}
-	if (trimmed === 'mayor' || trimmed === 'encima' || trimmed === 'higher' || trimmed === 'above') {
+	if (trimmed === 'mayor' || trimmed === 'encima') {
 		return '>';
 	}
 	return null;
@@ -169,19 +217,24 @@ function parseUserPriceAlertInput(tokens, options = {}) {
 }
 
 function escapeMarkdownV2(text) {
-	return String(text || '').replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+	return smartEscapeMarkdownV2(text);
 }
 
 class UserPriceAlertService {
 	constructor(options = {}) {
 		this.botGetter = options.botGetter || null;
+		this.workerId = options.workerId || `${process.pid}-${crypto.randomUUID()}`;
 		this.running = false;
 		this.timer = null;
 		this.activeSweepPromise = null;
+		this.activeSweepController = null;
 		this.shutdownRequested = false;
 
-		// In-memory fallback
+		// In-memory fallback (only authoritative when Firestore is unavailable)
 		this._memoryAlerts = new Map();
+
+		// Rotating scan cursor so alerts past the batch limit are never starved.
+		this._lastScannedDocId = null;
 
 		// Metrics
 		this.lastRunAt = null;
@@ -189,15 +242,26 @@ class UserPriceAlertService {
 		this.lastRunScannedCount = 0;
 		this.lastRunTriggeredCount = 0;
 		this.lastRunErrorCount = 0;
+		this.lastError = null;
 	}
 
 	_resetForTesting() {
 		this._memoryAlerts.clear();
+		this._lastScannedDocId = null;
 		this.lastRunAt = null;
 		this.lastRunDurationMs = null;
 		this.lastRunScannedCount = 0;
 		this.lastRunTriggeredCount = 0;
 		this.lastRunErrorCount = 0;
+		this.lastError = null;
+	}
+
+	// Durable mode is decided ONCE per operation from a single accessor. Deciding
+	// it independently per call site lets a partial Firestore double (or a
+	// mid-sweep initialization change) split reads and writes across backends and
+	// silently lose state.
+	_getFirestore() {
+		return alertStorageService.getFirestore();
 	}
 
 	setBotGetter(getter) {
@@ -244,6 +308,33 @@ class UserPriceAlertService {
 		return parseEnvInt(raw, DEFAULT_MAX_PER_CHAT, MIN_MAX_PER_CHAT, MAX_MAX_PER_CHAT);
 	}
 
+	getRetentionDays() {
+		return parseEnvInt(
+			process.env.USER_PRICE_ALERT_RETENTION_DAYS,
+			DEFAULT_RETENTION_DAYS,
+			MIN_RETENTION_DAYS,
+			MAX_RETENTION_DAYS,
+		);
+	}
+
+	getLeaseMs() {
+		return parseEnvInt(
+			process.env.USER_PRICE_ALERT_LEASE_MS,
+			DEFAULT_LEASE_MS,
+			MIN_LEASE_MS,
+			MAX_LEASE_MS,
+		);
+	}
+
+	getPriceFetchConcurrency() {
+		return parseEnvInt(
+			process.env.USER_PRICE_ALERT_PRICE_FETCH_CONCURRENCY,
+			DEFAULT_PRICE_FETCH_CONCURRENCY,
+			1,
+			MAX_PRICE_FETCH_CONCURRENCY,
+		);
+	}
+
 	getStatus() {
 		const enabled = this.isEnabled();
 		const role = this.getWorkerRole();
@@ -259,11 +350,15 @@ class UserPriceAlertService {
 			intervalMs: this.getIntervalMs(),
 			batchLimit: this.getBatchLimit(),
 			maxPerChat: this.getMaxPerChat(),
+			retentionDays: this.getRetentionDays(),
+			priceFetchConcurrency: this.getPriceFetchConcurrency(),
+			storageMode: this._getFirestore() ? 'durable' : 'ephemeral',
 			lastRunAt: this.lastRunAt ? this.lastRunAt.toISOString() : null,
 			lastRunDurationMs: this.lastRunDurationMs,
 			lastRunScannedCount: this.lastRunScannedCount,
 			lastRunTriggeredCount: this.lastRunTriggeredCount,
 			lastRunErrorCount: this.lastRunErrorCount,
+			lastError: this.lastError,
 		};
 	}
 
@@ -280,6 +375,15 @@ class UserPriceAlertService {
 			initialPrice,
 			userId,
 		} = params;
+
+		// Without this guard an alert could be created while the feature is off and
+		// then never evaluated, leaving the user with a permanently silent alert.
+		if (!this.isEnabled()) {
+			throw new UserPriceAlertError(
+				'Las alertas de precio no están habilitadas en este momento.',
+				'USER_PRICE_ALERTS_DISABLED',
+			);
+		}
 
 		if (!chatId) {
 			throw new UserPriceAlertError('chatId es requerido para crear una alerta.');
@@ -306,7 +410,7 @@ class UserPriceAlertService {
 
 		const alertId = `alert_${crypto.randomUUID().slice(0, 8)}`;
 		const now = new Date();
-		const expiresAtDate = new Date(now.getTime() + DEFAULT_EXPIRY_DAYS * DAY_MS);
+		const expiresAtDate = new Date(now.getTime() + this.getRetentionDays() * DAY_MS);
 
 		const alertData = {
 			id: alertId,
@@ -326,30 +430,50 @@ class UserPriceAlertService {
 		};
 
 		const cleanedData = stripUndefinedFieldsDeep(alertData);
-		this._memoryAlerts.set(alertId, cleanedData);
 
-		const firestore = alertStorageService.getFirestore();
+		const firestore = this._getFirestore();
 		if (firestore) {
 			try {
+				// Sentinel values MUST be injected after `undefined` sanitization:
+				// `stripUndefinedFieldsDeep` rebuilds plain objects and would turn
+				// `serverTimestamp()` into `{}` and a `Timestamp` into
+				// `{_seconds,_nanoseconds}`, which the Admin SDK rejects. The
+				// sentinel-aware sanitizer keeps their prototype intact.
 				const docRef = firestore.collection(COLLECTION_NAME).doc(alertId);
 				const docPayload = {
 					...cleanedData,
 					createdAt: admin.firestore.FieldValue.serverTimestamp(),
 					expiresAt: admin.firestore.Timestamp.fromDate(expiresAtDate),
 				};
-				await docRef.set(stripUndefinedFieldsDeep(docPayload));
+				await docRef.set(sanitizeFirestorePayload(docPayload));
 			} catch (err) {
-				console.warn('[UserPriceAlertService] Firestore write failed, saving to memory fallback:', err.message);
+				// The alert would live only in this process's memory and the sweep
+				// would read the durable collection, so the user would never be
+				// notified. Fail loudly instead of acknowledging a lost alert.
+				console.error('[UserPriceAlertService] Firestore write failed:', err.message);
+				sentryService.captureRuntimeError({
+					channel: 'user-price-alerts',
+					error: err,
+					extra: { service: 'UserPriceAlertService', operation: 'createAlert', alertId },
+				});
+				throw new UserPriceAlertError(
+					'No se pudo guardar la alerta de precio. Intenta nuevamente en unos segundos.',
+					'USER_PRICE_ALERT_PERSIST_UNAVAILABLE',
+				);
 			}
+		} else {
+			this._memoryAlerts.set(alertId, cleanedData);
 		}
 
 		return cleanedData;
 	}
 
 	async listAlerts({ chatId, status = 'armed', limit = 50 } = {}) {
-		const firestore = alertStorageService.getFirestore();
+		const firestore = this._getFirestore();
 		if (firestore) {
 			try {
+				// Requires the userPriceAlerts{chatId,status} composite index declared in
+				// firestore.indexes.json. Without it Firestore rejects the query outright.
 				let query = firestore.collection(COLLECTION_NAME);
 				if (chatId) {
 					query = query.where('chatId', '==', String(chatId));
@@ -360,8 +484,7 @@ class UserPriceAlertService {
 				query = query.limit(limit);
 				const snapshot = await query.get();
 				const docs = [];
-				const docsList = snapshot && Array.isArray(snapshot.docs) ? snapshot.docs : (snapshot && typeof snapshot.forEach === 'function' ? snapshot : []);
-				(docsList.forEach ? docsList : (snapshot && snapshot.docs) || []).forEach((doc) => {
+				for (const doc of (snapshot.docs || [])) {
 					const data = doc.data() || {};
 					docs.push({
 						...data,
@@ -373,7 +496,7 @@ class UserPriceAlertService {
 							? data.expiresAt.toDate().toISOString()
 							: (data.expiresAt || null),
 					});
-				});
+				}
 				return docs;
 			} catch (err) {
 				console.warn('[UserPriceAlertService] Firestore query failed, falling back to memory:', err.message);
@@ -393,7 +516,14 @@ class UserPriceAlertService {
 
 	async getAlert(alertId) {
 		if (!alertId) return null;
-		const firestore = alertStorageService.getFirestore();
+		// The in-memory mirror is written on every state transition (including the
+		// transactional claim), so it stays current for this process and must win
+		// over a stale durable read.
+		const local = this._memoryAlerts.get(alertId);
+		if (local) {
+			return local;
+		}
+		const firestore = this._getFirestore();
 		if (firestore) {
 			try {
 				const doc = await firestore.collection(COLLECTION_NAME).doc(alertId).get();
@@ -408,7 +538,7 @@ class UserPriceAlertService {
 				console.warn('[UserPriceAlertService] Firestore get failed:', err.message);
 			}
 		}
-		return this._memoryAlerts.get(alertId) || null;
+		return null;
 	}
 
 	async cancelAlert({ chatId, alertId }) {
@@ -428,19 +558,45 @@ class UserPriceAlertService {
 			cancelledAt: now.toISOString(),
 		};
 
-		const firestore = alertStorageService.getFirestore();
+		const firestore = this._getFirestore();
 		if (firestore) {
 			try {
-				await firestore.collection(COLLECTION_NAME).doc(alertId).update({
-					status: 'cancelled',
-					cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+				// Claim the transition so a concurrent sweep cannot fire an alert the
+				// user just cancelled.
+				const claimed = await firestore.runTransaction(async (tx) => {
+					const ref = firestore.collection(COLLECTION_NAME).doc(alertId);
+					const doc = await tx.get(ref);
+					if (!doc.exists) return false;
+					const status = (doc.data() || {}).status;
+					if (status !== 'armed') return false;
+					tx.update(ref, {
+						status: 'cancelled',
+						cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+					});
+					return true;
 				});
+				if (!claimed) {
+					throw new UserPriceAlertError(`No se encontró una alerta activa con ese ID: ${alertId}`);
+				}
 			} catch (err) {
-				console.warn('[UserPriceAlertService] Firestore cancel update failed, updating memory:', err.message);
+				// Never acknowledge a cancel that did not durably land: the alert would
+				// still be `armed` and would fire later.
+				if (err instanceof UserPriceAlertError) throw err;
+				console.error('[UserPriceAlertService] Firestore cancel update failed:', err.message);
+				sentryService.captureRuntimeError({
+					channel: 'user-price-alerts',
+					error: err,
+					extra: { service: 'UserPriceAlertService', operation: 'cancelAlert', alertId },
+				});
+				throw new UserPriceAlertError(
+					'No se pudo cancelar la alerta de precio. Intenta nuevamente en unos segundos.',
+					'USER_PRICE_ALERT_PERSIST_UNAVAILABLE',
+				);
 			}
+		} else {
+			this._memoryAlerts.set(alertId, updatedData);
 		}
 
-		this._memoryAlerts.set(alertId, updatedData);
 		return updatedData;
 	}
 
@@ -460,194 +616,408 @@ class UserPriceAlertService {
 		let scannedCount = 0;
 		let triggeredCount = 0;
 		let errorsCount = 0;
+		let lastErrorMessage = null;
 
 		const batchLimit = this.getBatchLimit();
-		let armedAlerts = [];
+		const leaseMs = options.leaseMs || this.getLeaseMs();
+		const firestore = this._getFirestore();
 
-		const firestore = alertStorageService.getFirestore();
-		if (firestore) {
-			try {
-				const snapshot = await firestore
-					.collection(COLLECTION_NAME)
-					.where('status', '==', 'armed')
-					.limit(batchLimit)
-					.get();
+		// Distributed lease: without it, two web replicas (or the dedicated worker
+		// alongside a web replica) both read the same armed documents and both
+		// deliver the same notification.
+		if (firestore && typeof firestore.runTransaction === 'function') {
+			const acquired = await this._acquireLease(Date.now(), leaseMs);
+			if (!acquired) {
+				this.lastRunAt = new Date(startTime);
+				this.lastRunDurationMs = Date.now() - startTime;
+				this.lastRunScannedCount = 0;
+				this.lastRunTriggeredCount = 0;
+				this.lastRunErrorCount = 0;
+				return {
+					evaluatedCount: 0,
+					triggeredCount: 0,
+					errorsCount: 0,
+					durationMs: this.lastRunDurationMs,
+					skipped: 'lease-held',
+				};
+			}
+		}
 
-				const docsList = snapshot && Array.isArray(snapshot.docs) ? snapshot.docs : (snapshot && typeof snapshot.forEach === 'function' ? snapshot : []);
-				(docsList.forEach ? docsList : (snapshot && snapshot.docs) || []).forEach((doc) => {
-					const data = doc.data() || {};
-					armedAlerts.push({
-						...data,
-						id: doc.id,
-						expiresAt: data.expiresAt && typeof data.expiresAt.toDate === 'function'
-							? data.expiresAt.toDate()
-							: (data.expiresAt ? new Date(data.expiresAt) : null),
-					});
-				});
-			} catch (err) {
-				console.warn('[UserPriceAlertService] Firestore sweep fetch failed, using memory:', err.message);
+		const renewHandle = setInterval(() => {
+			void this._renewLease(Date.now() + leaseMs);
+		}, Math.max(1000, Math.floor(leaseMs / 2)));
+		if (typeof renewHandle.unref === 'function') renewHandle.unref();
+
+		try {
+			let armedAlerts = [];
+
+			if (firestore) {
+				try {
+					// Order by document id and resume after the last scanned id so a
+					// fixed batch limit can never starve the alerts past it.
+					let query = firestore
+						.collection(COLLECTION_NAME)
+						.where('status', '==', 'armed')
+						.orderBy(admin.firestore.FieldPath.documentId())
+						.limit(batchLimit);
+					if (this._lastScannedDocId) {
+						query = query.startAfter(this._lastScannedDocId);
+					}
+					const snapshot = await query.get();
+					const docs = snapshot.docs || [];
+					for (const doc of docs) {
+						const data = doc.data() || {};
+						armedAlerts.push({
+							...data,
+							id: doc.id,
+							expiresAt: data.expiresAt && typeof data.expiresAt.toDate === 'function'
+								? data.expiresAt.toDate()
+								: (data.expiresAt ? new Date(data.expiresAt) : null),
+						});
+					}
+					this._lastScannedDocId = docs.length > 0
+						? docs[docs.length - 1].id
+						: null;
+				} catch (err) {
+					// Without the cursor the next sweep would repeat the same window.
+					this._lastScannedDocId = null;
+					errorsCount += 1;
+					lastErrorMessage = err.message;
+					console.warn('[UserPriceAlertService] Firestore sweep fetch failed:', err.message);
+					armedAlerts = Array.from(this._memoryAlerts.values()).filter((a) => a.status === 'armed');
+				}
+			} else {
 				armedAlerts = Array.from(this._memoryAlerts.values()).filter((a) => a.status === 'armed');
 			}
-		} else {
-			armedAlerts = Array.from(this._memoryAlerts.values()).filter((a) => a.status === 'armed');
-		}
 
-		scannedCount = armedAlerts.length;
-		const nowTime = Date.now();
+			scannedCount = armedAlerts.length;
+			const nowTime = Date.now();
 
-		// Step 1: Check expiration
-		const validAlerts = [];
-		for (const alert of armedAlerts) {
-			const expiryMillis = alert.expiresAt ? new Date(alert.expiresAt).getTime() : null;
-			if (expiryMillis && expiryMillis <= nowTime) {
-				alert.status = 'expired';
-				if (firestore) {
-					void firestore.collection(COLLECTION_NAME).doc(alert.id).update({
-						status: 'expired',
-					}).catch(() => {});
-				}
-				this._memoryAlerts.set(alert.id, { ...alert, status: 'expired' });
-			} else {
-				validAlerts.push(alert);
-			}
-		}
-
-		// Step 2: Fetch prices for distinct symbols
-		const symbolMap = new Map();
-		for (const alert of validAlerts) {
-			const key = `${alert.assetClass || 'crypto'}:${alert.symbol}:${alert.exchange || ''}`;
-			if (!symbolMap.has(key)) {
-				symbolMap.set(key, {
-					symbol: alert.symbol,
-					exchange: alert.exchange,
-					assetClass: alert.assetClass || 'crypto',
-				});
-			}
-		}
-
-		const priceCache = new Map();
-		await Promise.all(
-			Array.from(symbolMap.entries()).map(async ([key, query]) => {
-				try {
-					const priceInfo = await this._fetchCurrentPrice(query);
-					if (priceInfo && Number.isFinite(priceInfo.price)) {
-						priceCache.set(key, priceInfo.price);
+			// Step 1: expire
+			const validAlerts = [];
+			for (const alert of armedAlerts) {
+				const expiryMillis = alert.expiresAt ? new Date(alert.expiresAt).getTime() : null;
+				if (expiryMillis && expiryMillis <= nowTime) {
+					alert.status = 'expired';
+					if (firestore) {
+						try {
+							await firestore.collection(COLLECTION_NAME).doc(alert.id).update({
+								status: 'expired',
+							});
+						} catch (expErr) {
+							errorsCount += 1;
+							lastErrorMessage = expErr.message;
+							console.warn(`[UserPriceAlertService] Failed to expire alert ${alert.id}:`, expErr.message);
+						}
 					}
-				} catch (priceErr) {
-					console.warn(`[UserPriceAlertService] Price lookup failed for ${query.symbol}:`, priceErr.message);
-					errorsCount++;
+					this._memoryAlerts.set(alert.id, { ...alert, status: 'expired' });
+				} else {
+					validAlerts.push(alert);
 				}
-			}),
-		);
-
-		// Step 3: Evaluate conditions and trigger
-		const bot = typeof this.botGetter === 'function' ? this.botGetter() : this.botGetter;
-
-		for (const alert of validAlerts) {
-			const key = `${alert.assetClass || 'crypto'}:${alert.symbol}:${alert.exchange || ''}`;
-			const currentPrice = priceCache.get(key);
-			if (currentPrice === undefined || !Number.isFinite(currentPrice)) {
-				continue;
 			}
 
-			let triggered = false;
-			const target = alert.targetPrice;
-			if (alert.operator === '<' && currentPrice < target) triggered = true;
-			else if (alert.operator === '<=' && currentPrice <= target) triggered = true;
-			else if (alert.operator === '>' && currentPrice > target) triggered = true;
-			else if (alert.operator === '>=' && currentPrice >= target) triggered = true;
+			// Step 2: dedupe and fetch prices for distinct symbols, with bounded
+			// concurrency so a large armed batch cannot exhaust provider quota.
+			const symbolMap = new Map();
+			for (const alert of validAlerts) {
+				const key = `${alert.assetClass || 'crypto'}:${alert.symbol}:${alert.exchange || ''}`;
+				if (!symbolMap.has(key)) {
+					symbolMap.set(key, {
+						symbol: alert.symbol,
+						exchange: alert.exchange,
+						assetClass: alert.assetClass || 'crypto',
+					});
+				}
+			}
 
-			if (triggered) {
-				triggeredCount++;
-				const triggeredAtDate = new Date();
-				const updated = {
+			const priceCache = new Map();
+			const priceEntries = Array.from(symbolMap.entries());
+			let cursorIndex = 0;
+			const priceWorkers = Array.from(
+				{ length: Math.max(1, Math.min(this.getPriceFetchConcurrency(), priceEntries.length)) },
+				async () => {
+					while (cursorIndex < priceEntries.length) {
+						const entry = priceEntries[cursorIndex];
+						cursorIndex += 1;
+						const [key, query] = entry;
+						try {
+							const priceInfo = await this._fetchCurrentPrice(query);
+							if (priceInfo && Number.isFinite(priceInfo.price)) {
+								priceCache.set(key, priceInfo.price);
+							}
+						} catch (priceErr) {
+							console.warn(`[UserPriceAlertService] Price lookup failed for ${query.symbol}:`, priceErr.message);
+							errorsCount += 1;
+							lastErrorMessage = priceErr.message;
+						}
+					}
+				},
+			);
+			await Promise.all(priceWorkers);
+
+			// Step 3: evaluate conditions and claim each trigger atomically
+			const bot = typeof this.botGetter === 'function' ? this.botGetter() : this.botGetter;
+
+			for (const alert of validAlerts) {
+				if (this.shutdownRequested) break;
+
+				const key = `${alert.assetClass || 'crypto'}:${alert.symbol}:${alert.exchange || ''}`;
+				const currentPrice = priceCache.get(key);
+				if (currentPrice === undefined || !Number.isFinite(currentPrice)) {
+					continue;
+				}
+
+				const target = Number(alert.targetPrice);
+				if (!Number.isFinite(target)) {
+					continue;
+				}
+
+				const triggered = (alert.operator === '<' && currentPrice < target)
+					|| (alert.operator === '<=' && currentPrice <= target)
+					|| (alert.operator === '>' && currentPrice > target)
+					|| (alert.operator === '>=' && currentPrice >= target);
+
+				if (!triggered) continue;
+
+				// Claim the armed → triggered transition before notifying, so a
+				// concurrent replica or overlapping sweep cannot double-notify.
+				let claimed;
+				if (firestore && typeof firestore.runTransaction === 'function') {
+					try {
+						claimed = await firestore.runTransaction(async (tx) => {
+							const ref = firestore.collection(COLLECTION_NAME).doc(alert.id);
+							const doc = await tx.get(ref);
+							if (!doc.exists || (doc.data() || {}).status !== 'armed') return false;
+							tx.update(ref, {
+								status: 'triggered',
+								triggeredPrice: currentPrice,
+								triggeredAt: admin.firestore.FieldValue.serverTimestamp(),
+							});
+							return true;
+						});
+					} catch (txErr) {
+						errorsCount += 1;
+						lastErrorMessage = txErr.message;
+						console.warn(`[UserPriceAlertService] Failed to claim triggered alert ${alert.id}:`, txErr.message);
+						continue;
+					}
+				} else {
+					if (this._memoryAlerts.get(alert.id)
+						&& this._memoryAlerts.get(alert.id).status !== 'armed') {
+						claimed = false;
+					} else {
+						this._memoryAlerts.set(alert.id, {
+							...alert,
+							status: 'triggered',
+							triggeredPrice: currentPrice,
+							triggeredAt: new Date().toISOString(),
+						});
+						claimed = true;
+					}
+				}
+
+				if (!claimed) continue;
+				triggeredCount += 1;
+
+				// Mirror the durable transition locally so a subsequent read in this
+				// process reports `triggered` immediately.
+				this._memoryAlerts.set(alert.id, {
 					...alert,
 					status: 'triggered',
 					triggeredPrice: currentPrice,
-					triggeredAt: triggeredAtDate.toISOString(),
-				};
+					triggeredAt: new Date().toISOString(),
+				});
 
-				if (firestore) {
-					try {
-						await firestore.collection(COLLECTION_NAME).doc(alert.id).update({
-							status: 'triggered',
-							triggeredPrice: currentPrice,
-							triggeredAt: admin.firestore.FieldValue.serverTimestamp(),
-						});
-					} catch (updErr) {
-						console.warn(`[UserPriceAlertService] Failed to update triggered alert ${alert.id}:`, updErr.message);
-					}
+				// Deliver the notification. A missing bot must not consume the
+				// already-claimed trigger silently — report it so it is visible.
+				if (!bot || !bot.telegram) {
+					errorsCount += 1;
+					lastErrorMessage = 'telegram_bot_unavailable';
+					console.error(
+						`[UserPriceAlertService] Alert ${alert.id} triggered but the Telegram bot is unavailable; notification dropped.`,
+					);
+					sentryService.captureRuntimeError({
+						channel: 'telegram',
+						error: new Error('Telegram bot unavailable for user price alert delivery'),
+						extra: { service: 'UserPriceAlertService', alertId: alert.id },
+					});
+					continue;
 				}
-				this._memoryAlerts.set(alert.id, updated);
 
-				// Deliver notification
-				if (bot && bot.telegram) {
-					const conditionText = `${alert.operator} ${target.toLocaleString('en-US')}`;
-					const priceText = currentPrice.toLocaleString('en-US');
-					const initialPriceText = alert.initialPrice !== undefined ? alert.initialPrice.toLocaleString('en-US') : null;
+				const conditionText = `${alert.operator} ${target.toLocaleString('en-US')}`;
+				const priceText = currentPrice.toLocaleString('en-US');
+				const initialPriceText = alert.initialPrice !== undefined && alert.initialPrice !== null
+					? Number(alert.initialPrice).toLocaleString('en-US')
+					: null;
 
-					const lines = [
-						'🔔 *Alerta de Precio Activada*',
-						'',
-						`• Símbolo: \`${alert.symbol}\``,
-						`• Condición: \`${conditionText}\``,
-						`• Precio actual: *${escapeMarkdownV2(priceText)}*`,
-					];
-					if (initialPriceText) {
-						lines.push(`• Precio inicial: ${escapeMarkdownV2(initialPriceText)}`);
-					}
-					lines.push(`• ID: \`${alert.id}\``);
+				const lines = [
+					'🔔 *Alerta de Precio Activada*',
+					'',
+					`• Símbolo: ${escapeMarkdownV2(alert.symbol)}`,
+					`• Condición: ${escapeMarkdownV2(conditionText)}`,
+					`• Precio actual: *${escapeMarkdownV2(priceText)}*`,
+				];
+				if (initialPriceText) {
+					lines.push(`• Precio inicial: ${escapeMarkdownV2(initialPriceText)}`);
+				}
+				lines.push(`• ID: ${escapeMarkdownV2(alert.id)}`);
 
-					const messageText = lines.join('\n');
-					const sendOptions = { parse_mode: 'MarkdownV2' };
-					if (alert.telegramThreadId !== undefined && alert.telegramThreadId !== null) {
-						sendOptions.message_thread_id = alert.telegramThreadId;
-					}
+				const sendOptions = { parse_mode: 'MarkdownV2' };
+				if (alert.telegramThreadId !== undefined && alert.telegramThreadId !== null) {
+					sendOptions.message_thread_id = alert.telegramThreadId;
+				}
 
-					try {
-						await bot.telegram.sendMessage(alert.chatId, messageText, sendOptions);
-					} catch (sendErr) {
-						console.error(`[UserPriceAlertService] Failed to deliver alert ${alert.id} to chat ${alert.chatId}:`, sendErr.message);
-						sentryService.captureRuntimeError({
-							channel: 'telegram',
-							error: sendErr,
-							extra: {
-								service: 'UserPriceAlertService',
-								alertId: alert.id,
-								chatId: alert.chatId,
-							},
-						});
-					}
+				try {
+					await bot.telegram.sendMessage(alert.chatId, lines.join('\n'), sendOptions);
+				} catch (sendErr) {
+					errorsCount += 1;
+					lastErrorMessage = sendErr.message;
+					console.error(`[UserPriceAlertService] Failed to deliver alert ${alert.id}:`, sendErr.message);
+					sentryService.captureRuntimeError({
+						channel: 'telegram',
+						error: sendErr,
+						extra: {
+							service: 'UserPriceAlertService',
+							alertId: alert.id,
+							chatId: alert.chatId,
+						},
+					});
 				}
 			}
+		} catch (error) {
+			errorsCount += 1;
+			lastErrorMessage = error.message;
+			console.error('[UserPriceAlertService] Sweep error:', error.message);
+			sentryService.captureRuntimeError({
+				channel: 'user-price-alerts',
+				error,
+			});
+		} finally {
+			clearInterval(renewHandle);
+			if (firestore && typeof firestore.runTransaction === 'function') {
+				await this._releaseLease(Date.now());
+			}
+			this.lastRunAt = new Date(startTime);
+			this.lastRunDurationMs = Date.now() - startTime;
+			this.lastRunScannedCount = scannedCount;
+			this.lastRunTriggeredCount = triggeredCount;
+			this.lastRunErrorCount = errorsCount;
+			this.lastError = lastErrorMessage;
 		}
-
-		const durationMs = Date.now() - startTime;
-		this.lastRunAt = new Date();
-		this.lastRunDurationMs = durationMs;
-		this.lastRunScannedCount = scannedCount;
-		this.lastRunTriggeredCount = triggeredCount;
-		this.lastRunErrorCount = errorsCount;
 
 		return {
 			evaluatedCount: scannedCount,
 			triggeredCount,
 			errorsCount,
-			durationMs,
+			durationMs: this.lastRunDurationMs,
 		};
 	}
 
-	startWorker(options = {}) {
-		if (!this.isEnabled() || this.getWorkerRole() === 'disabled') {
+	async _acquireLease(nowMs, leaseMs) {
+		const firestore = this._getFirestore();
+		if (!firestore || typeof firestore.runTransaction !== 'function') {
+			return true;
+		}
+
+		try {
+			const docRef = firestore.collection(LOCK_COLLECTION_NAME).doc(LOCK_DOCUMENT_ID);
+			const acquired = await firestore.runTransaction(async (tx) => {
+				const doc = await tx.get(docRef);
+				const data = doc.exists ? (doc.data() || {}) : {};
+				const lockedUntilMs = data.lockedUntil ? new Date(data.lockedUntil).getTime() : 0;
+				const lockedBy = data.lockedBy || null;
+
+				if (lockedUntilMs > nowMs && lockedBy && lockedBy !== this.workerId) {
+					return false;
+				}
+
+				tx.set(docRef, {
+					lockedUntil: new Date(nowMs + leaseMs).toISOString(),
+					lockedBy: this.workerId,
+					updatedAt: new Date(nowMs).toISOString(),
+				}, { merge: true });
+				return true;
+			});
+			return Boolean(acquired);
+		} catch (err) {
+			// Fail-open: keep the sweep running rather than silently disabling it.
+			console.warn('[UserPriceAlertService] Lease acquire failed:', err.message);
+			return true;
+		}
+	}
+
+	async _renewLease(lockedUntilMs) {
+		const firestore = this._getFirestore();
+		if (!firestore || typeof firestore.runTransaction !== 'function') {
 			return false;
 		}
+
+		try {
+			const docRef = firestore.collection(LOCK_COLLECTION_NAME).doc(LOCK_DOCUMENT_ID);
+			return Boolean(await firestore.runTransaction(async (tx) => {
+				const doc = await tx.get(docRef);
+				if (!doc.exists) return false;
+				const data = doc.data() || {};
+				if (data.lockedBy && data.lockedBy !== this.workerId) {
+					return false;
+				}
+				tx.set(docRef, {
+					lockedUntil: new Date(lockedUntilMs).toISOString(),
+					updatedAt: new Date().toISOString(),
+				}, { merge: true });
+				return true;
+			}));
+		} catch (err) {
+			console.warn('[UserPriceAlertService] Lease renew failed:', err.message);
+			return false;
+		}
+	}
+
+	async _releaseLease() {
+		const firestore = this._getFirestore();
+		if (!firestore || typeof firestore.runTransaction !== 'function') {
+			return;
+		}
+
+		try {
+			const docRef = firestore.collection(LOCK_COLLECTION_NAME).doc(LOCK_DOCUMENT_ID);
+			await firestore.runTransaction(async (tx) => {
+				const doc = await tx.get(docRef);
+				if (!doc.exists) return;
+				const data = doc.data() || {};
+				if (data.lockedBy && data.lockedBy !== this.workerId) {
+					return;
+				}
+				tx.set(docRef, {
+					lockedUntil: new Date(0).toISOString(),
+					lockedBy: null,
+					updatedAt: new Date().toISOString(),
+				}, { merge: true });
+			});
+		} catch (err) {
+			console.warn('[UserPriceAlertService] Lease release failed:', err.message);
+		}
+	}
+
+	startWorker(options = {}) {
+		if (!this.isEnabled()) {
+			return false;
+		}
+
+		// Role must match the process source, otherwise `USER_PRICE_ALERT_WORKER_ROLE=worker`
+		// only disables the web timer and silently starts nothing anywhere.
+		const source = options.source === 'worker' ? 'worker' : 'web';
+		if (this.getWorkerRole() !== source) {
+			return false;
+		}
+
 		if (this.running) {
 			return true;
 		}
 
 		this.running = true;
 		this.shutdownRequested = false;
-		this._scheduleNextSweep(this.getIntervalMs());
+		this._scheduleNextSweep(options.intervalMs || this.getIntervalMs());
 		console.log('[UserPriceAlertService] Worker started');
 		return true;
 	}
@@ -655,6 +1025,10 @@ class UserPriceAlertService {
 	_scheduleNextSweep(delayMs) {
 		if (!this.running || this.shutdownRequested) {
 			return;
+		}
+		if (this.timer) {
+			clearTimeout(this.timer);
+			this.timer = null;
 		}
 		this.timer = setTimeout(async () => {
 			if (!this.running || this.shutdownRequested) return;
@@ -681,9 +1055,16 @@ class UserPriceAlertService {
 			this.timer = null;
 		}
 		if (options.drain && this.activeSweepPromise) {
-			try {
-				await this.activeSweepPromise;
-			} catch (_) {}
+			const sweep = this.activeSweepPromise;
+			const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 30000;
+			// Bound the drain so shutdown cannot hang on a stalled provider call.
+			await Promise.race([
+				sweep.catch(() => undefined),
+				new Promise((resolve) => {
+					const handle = setTimeout(resolve, timeoutMs);
+					if (typeof handle.unref === 'function') handle.unref();
+				}),
+			]);
 		}
 	}
 }
@@ -695,7 +1076,4 @@ module.exports = {
 	userPriceAlertService,
 	UserPriceAlertError,
 	parseUserPriceAlertInput,
-	normalizeOperator,
-	parsePriceNumber,
-	stripUndefinedFieldsDeep,
 };
