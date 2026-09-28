@@ -774,7 +774,13 @@ class NewsAnalyzer {
 
 				lastQuotaError = error;
 				attempt += 1;
-				const delayMs = geminiQuotaManager.triggerQuotaCooldown(error, attempt, this.geminiQuotaRetryBaseMs);
+				// The rejection may already have been counted by a lower layer
+				// (genaiClient.search / geminiPriceService) that triggered the
+				// cooldown before rethrowing. Counting it again here inflated
+				// `triggersTotal` for a single provider rejection (#718), so
+				// extend the cooldown without recording a new incident and let
+				// the lowest layer that observes the rejection own the count.
+				const delayMs = geminiQuotaManager.extendQuotaCooldown(error, attempt, this.geminiQuotaRetryBaseMs);
 				const remainingAfterAttemptMs = analysisDeadline - Date.now();
 				if (delayMs >= remainingAfterAttemptMs) {
 					console.warn('[Analyzer] Gemini quota retry skipped; delay exceeds remaining budget:', symbol);

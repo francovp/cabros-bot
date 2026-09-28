@@ -415,6 +415,63 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
 	});
 
+	it('documents signalClass in alert webhook and alert query/summary examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const postAlert = findItem(collection.item, 'POST Send Alert');
+		expect(postAlert).toBeDefined();
+		const body = JSON.parse(postAlert.request.body.raw);
+		expect(body.signalClass).toBe('breakout');
+
+		const dryRunAlert = findItem(collection.item, 'POST Send Alert Dry Run (risk metadata)');
+		expect(dryRunAlert).toBeDefined();
+		const dryRunBody = JSON.parse(dryRunAlert.request.body.raw);
+		expect(dryRunBody.signalClass).toBe('breakout');
+		const dryRunResp = JSON.parse(dryRunAlert.response[0].body);
+		expect(dryRunResp.signalClass).toBeUndefined();
+		expect(dryRunResp.payload.signalClass).toBe('breakout');
+
+		const listFiltered = findItem(collection.item, 'GET List Alerts (symbol, exchange, eventCategory)');
+		const listAlert = JSON.parse(listFiltered.response[0].body).alerts[0];
+		expect(listAlert.signalClass).toBe('breakout');
+
+		const summaryFiltered = findItem(collection.item, 'GET Alert Analytics Summary (symbol, exchange, eventCategory)');
+		const summary = JSON.parse(summaryFiltered.response[0].body).summary;
+		expect(summary.signalClassCounts).toBeDefined();
+		expect(summary.signalClassCounts.breakout).toBe(1);
+
+		const postInvalid = findItem(collection.item, 'POST Send Alert (invalid signalClass - 400 Bad Request)');
+		expect(postInvalid).toBeDefined();
+		expect(postInvalid.response[0].code).toBe(400);
+		expect(JSON.parse(postInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+
+		const listClassFiltered = findItem(collection.item, 'GET List Alerts (signalClass filter)');
+		expect(listClassFiltered).toBeDefined();
+		expect(listClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');
+		expect(listClassFiltered.response[0].code).toBe(200);
+
+		const listClassInvalid = findItem(collection.item, 'GET List Alerts (invalid signalClass - 400 Bad Request)');
+		expect(listClassInvalid).toBeDefined();
+		expect(listClassInvalid.response[0].code).toBe(400);
+
+		const summaryClassFiltered = findItem(collection.item, 'GET Alert Analytics Summary (signalClass filter)');
+		expect(summaryClassFiltered).toBeDefined();
+		expect(summaryClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');
+		expect(summaryClassFiltered.response[0].code).toBe(200);
+
+		const summaryClassInvalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid signalClass - 400 Bad Request)');
+		expect(summaryClassInvalid).toBeDefined();
+		expect(summaryClassInvalid.response[0].code).toBe(400);
+
+		const exportClassFiltered = findItem(collection.item, 'GET Export Alerts (JSONL - signalClass filter)');
+		expect(exportClassFiltered).toBeDefined();
+		expect(exportClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');
+		expect(exportClassFiltered.response[0].code).toBe(200);
+
+		const exportClassInvalid = findItem(collection.item, 'GET Export Alerts (invalid signalClass - 400 Bad Request)');
+		expect(exportClassInvalid).toBeDefined();
+		expect(exportClassInvalid.response[0].code).toBe(400);
+	});
+
 	it('documents notificationRedrive and zeroChannelBroadcasts in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');
@@ -498,50 +555,104 @@ describe('Postman collection contract', () => {
 		expect(invalidLimit).toBeDefined();
 		expect(invalidLimit.request.url.raw).toContain('limit=200');
 		expect(invalidLimit.response[0].code).toBe(400);
-		expect(JSON.parse(invalidLimit.response[0].body)).toEqual({
-			error: 'Invalid limit. Use an integer between 1 and 100.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(invalidLimit.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid limit. Use an integer between 1 and 100.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(invalidStatus).toBeDefined();
 		expect(invalidStatus.request.url.raw).toContain('status=invalid');
 		expect(invalidStatus.response[0].code).toBe(400);
-		expect(JSON.parse(invalidStatus.response[0].body)).toEqual({
-			error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(invalidStatus.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(invalidWindow).toBeDefined();
 		expect(invalidWindow.request.url.raw).toContain('window=invalid');
 		expect(invalidWindow.response[0].code).toBe(400);
-		expect(JSON.parse(invalidWindow.response[0].body)).toEqual({
-			error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(invalidWindow.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(malformedFrom).toBeDefined();
 		expect(malformedFrom.request.url.raw).toContain('from=not-a-date');
 		expect(malformedFrom.response[0].code).toBe(400);
-		expect(JSON.parse(malformedFrom.response[0].body)).toEqual({
-			error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(malformedFrom.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(malformedTo).toBeDefined();
 		expect(malformedTo.request.url.raw).toContain('to=not-a-date');
 		expect(malformedTo.response[0].code).toBe(400);
-		expect(JSON.parse(malformedTo.response[0].body)).toEqual({
-			error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
-			code: 'INVALID_REQUEST',
-		});
+		expect(JSON.parse(malformedTo.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
 
 		expect(reversedRange).toBeDefined();
 		expect(reversedRange.request.url.raw).toContain('from=2026-08-30T00:00:00.000Z&to=2026-08-01T00:00:00.000Z');
 		expect(reversedRange.response[0].code).toBe(400);
-		expect(JSON.parse(reversedRange.response[0].body)).toEqual({
-			error: 'Invalid time window. from must be before or equal to to.',
-			code: 'INVALID_REQUEST',
+		expect(JSON.parse(reversedRange.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid time window. from must be before or equal to to.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		[invalidLimit, invalidStatus, invalidWindow, malformedFrom, malformedTo, reversedRange].forEach((item) => {
+			expect(item.event).toBeDefined();
+			const testEvent = item.event.find((e) => e.listen === 'test');
+			expect(testEvent).toBeDefined();
+			const scriptText = testEvent.script.exec.join('\n');
+			expect(scriptText).toContain('pm.response.to.have.status(400)');
+			expect(scriptText).toContain('INVALID_REQUEST');
 		});
+	});
+	it('documents idempotency headers and replay examples for volume confirmation and symbol analysis', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const volumeConfirm = findItem(collection.item, 'POST Volume Confirmation');
+		const symbolAnalysis = findItem(collection.item, 'POST Single Symbol Analysis');
+
+		expect(volumeConfirm).toBeDefined();
+		expect(findHeader(volumeConfirm, 'idempotency-key')).toEqual(expect.objectContaining({
+			value: 'volume-confirm-demo-1',
+		}));
+		expect(findHeader(volumeConfirm, 'x-idempotency-key')).toEqual(expect.objectContaining({
+			value: 'volume-confirm-key-1',
+			disabled: true,
+		}));
+		expect(volumeConfirm.response.map((r) => r.name)).toEqual(expect.arrayContaining([
+			'Success - volume confirmed (idempotent replay)',
+			'409 Idempotency conflict',
+			'400 Invalid idempotency key',
+		]));
+
+		expect(symbolAnalysis).toBeDefined();
+		expect(findHeader(symbolAnalysis, 'idempotency-key')).toEqual(expect.objectContaining({
+			value: 'symbol-analysis-demo-1',
+		}));
+		expect(findHeader(symbolAnalysis, 'x-idempotency-key')).toEqual(expect.objectContaining({
+			value: 'symbol-analysis-key-1',
+			disabled: true,
+		}));
+		expect(symbolAnalysis.response.map((r) => r.name)).toEqual(expect.arrayContaining([
+			'Success - decision-ready analysis (idempotent replay)',
+			'409 Idempotency conflict',
+			'400 Invalid idempotency key',
+		]));
 	});
 });
 
