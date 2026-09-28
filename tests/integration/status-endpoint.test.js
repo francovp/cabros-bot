@@ -1,3 +1,4 @@
+/* global saveEnv, restoreEnv */
 const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('fs');
 const request = require('supertest');
 const express = require('express');
@@ -448,6 +449,23 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.newsMonitorTestMode).toBe(true);
+	});
+
+	it('reports the optional news monitor classifier gate', async () => {
+		let response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.newsMonitorClassifier).toBe(false);
+
+		process.env.ENABLE_NEWS_MONITOR_CLASSIFIER = 'true';
+		response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.newsMonitorClassifier).toBe(true);
 	});
 
 	it('reports message footer metadata as enabled by default', async () => {
@@ -928,7 +946,7 @@ describe('Status endpoints', () => {
 				alertsDelivered: 0,
 				alertsThrottled: 0,
 				windowResetsAt: expect.any(String),
-			})
+			}),
 		);
 	});
 
@@ -1944,7 +1962,8 @@ describe('Status endpoints', () => {
 			.toEqual(expect.arrayContaining(['telegram', 'whatsapp', 'discord']));
 	});
 
-	it('waits for the initial notification redrive heartbeat before serializing status', async () => {		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+	it('waits for the initial notification redrive heartbeat before serializing status', async () => {
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
 		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
 		const statusController = require('../../src/controllers/status');
 		const service = require('../../src/services/notification/NotificationRedriveService').notificationRedriveService;
