@@ -2746,3 +2746,4 @@ The application logs to stdout:
 - Failed alerts automatically retry per channel (WhatsApp up to 3 attempts with 1s → 2s → 4s exponential backoff per chunk; Telegram and Discord for 429 rate limits up to their configured retry limits)
 - ±10% jitter prevents thundering herd on exponential backoff
 - All retries logged at WARN/ERROR level
+# test
