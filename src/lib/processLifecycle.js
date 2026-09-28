@@ -1,5 +1,7 @@
 'use strict';
 
+let globalShutdownFlag = false;
+
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10000;
 const MAX_SHUTDOWN_TIMEOUT_MS = 30000;
 const DEFAULT_FORCED_FINALIZATION_TIMEOUT_MS = 2000;
@@ -83,9 +85,13 @@ function createProcessLifecycle(options = {}) {
 		stopWhatsAppCommandBridge = () => undefined,
 		stopScannerPresetScheduler = () => undefined,
 		stopJobBacklogMonitor = () => undefined,
+		stopUserPriceAlertWorker = () => undefined,
 		stopNewsMonitorScheduler = () => undefined,
+		stopAlertScheduler = () => undefined,
 		stopRemoteConfig = () => undefined,
+		stopTelegramHealthProbe = () => undefined,
 		shutdownNewsMonitor = () => undefined,
+		closeAllSseConnections = () => undefined,
 		flushSentry = () => undefined,
 		timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
 		logger = console,
@@ -102,6 +108,7 @@ function createProcessLifecycle(options = {}) {
 		}
 
 		shuttingDown = true;
+		globalShutdownFlag = true;
 		logger.info('[ProcessLifecycle] Shutdown requested', { signal });
 		shutdownPromise = (async () => {
 			const server = getServer();
@@ -170,9 +177,11 @@ function createProcessLifecycle(options = {}) {
 			};
 
 			const cleanup = async () => {
+				const sseCleanup = safelyRun(logger, 'admin SSE streams', closeAllSseConnections);
 				const telegramCleanup = safelyRun(logger, 'Telegram bot', stopBot);
 				const bootstrapCleanup = safelyRun(logger, 'application bootstrap', getBootstrapPromise);
 				await closeServer(server, logger);
+				await sseCleanup;
 				await telegramCleanup;
 				await bootstrapCleanup;
 				await safelyRun(logger, 'background jobs', waitForBackgroundJobs);
@@ -183,8 +192,11 @@ function createProcessLifecycle(options = {}) {
 					safelyRun(logger, 'whatsapp command bridge', () => stopWhatsAppCommandBridge({ drain: true })),
 					safelyRun(logger, 'scanner preset scheduler', () => stopScannerPresetScheduler({ drain: true })),
 					safelyRun(logger, 'job backlog monitor', stopJobBacklogMonitor),
+					safelyRun(logger, 'user price alert worker', () => stopUserPriceAlertWorker({ drain: true })),
 					safelyRun(logger, 'news monitor scheduler', () => stopNewsMonitorScheduler({ drain: true })),
+					safelyRun(logger, 'alert scheduler', () => stopAlertScheduler({ drain: true })),
 					safelyRun(logger, 'remote config service', stopRemoteConfig),
+					safelyRun(logger, 'telegram health probe', stopTelegramHealthProbe),
 					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
 				]);
 				await safelyRun(logger, 'Sentry', () => flushSentry(Math.min(shutdownTimeoutMs, 2000)));
@@ -243,7 +255,17 @@ function createProcessLifecycle(options = {}) {
 	};
 }
 
+function isShuttingDownForPublicStatus() {
+	return globalShutdownFlag === true;
+}
+
+function markShuttingDownForPublicStatus() {
+	globalShutdownFlag = true;
+}
+
 module.exports = {
 	createProcessLifecycle,
 	parseShutdownTimeout,
+	isShuttingDownForPublicStatus,
+	markShuttingDownForPublicStatus,
 };
