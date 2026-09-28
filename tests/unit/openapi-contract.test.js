@@ -570,3 +570,59 @@ describe('OpenAPI contract', () => {
 		});
 	});
 });
+
+describe('status dependency contract drift', () => {
+	const postmanPath = path.join(__dirname, '../../CabrosBot.postman_collection.json');
+	const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+	function collectRequestLeaves(node, acc = []) {
+		if (Array.isArray(node)) {
+			for (const child of node) collectRequestLeaves(child, acc);
+		} else if (node && typeof node === 'object') {
+			if (Array.isArray(node.item)) {
+				collectRequestLeaves(node.item, acc);
+			} else {
+				acc.push(node);
+			}
+		}
+		return acc;
+	}
+
+	function getStatusExamples() {
+		const collection = JSON.parse(fs.readFileSync(postmanPath, 'utf8'));
+		return collectRequestLeaves(collection.item)
+			.filter((request) => typeof request.name === 'string' && request.name.startsWith('Get Status'))
+			.flatMap((request) => (request.response || [])
+				.filter((response) => response.name === 'Success' || /^(200 OK|200)/.test(String(response.name)))
+				.map((response) => {
+					try {
+						return JSON.parse(response.body);
+					} catch {
+						return null;
+					}
+				})
+				.filter(Boolean));
+	}
+
+	function documentedDependencyKeys() {
+		const dependencies = contract.components.schemas.Status.properties.dependencies;
+		return Object.entries(dependencies.properties)
+			.filter(([, schema]) => schema && schema.$ref)
+			.map(([key]) => key);
+	}
+
+	it('documents at least one named dependency schema to guard against', () => {
+		expect(documentedDependencyKeys().length).toBeGreaterThan(0);
+	});
+
+	it('exposes every named Status dependency in some Postman status example', () => {
+		const examples = getStatusExamples();
+		expect(examples.length).toBeGreaterThan(0);
+		const seen = new Set();
+		for (const example of examples) {
+			for (const key of Object.keys(example.dependencies || {})) seen.add(key);
+		}
+		const missing = documentedDependencyKeys().filter((key) => !seen.has(key));
+		expect(missing).toEqual([]);
+	});
+});

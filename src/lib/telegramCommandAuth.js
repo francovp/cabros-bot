@@ -23,12 +23,34 @@ const sentryService = require('../services/monitoring/SentryService');
 
 const SILENT_DROP_LOG_COOLDOWN_MS = 60000;
 
+/**
+ * The cooldown map only suppresses duplicate log lines, so it must stay bounded:
+ * strangers discovering the bot are the stated threat model, and an unbounded
+ * per-chat-id map would grow without limit under sustained traffic. Evicting
+ * early only costs one extra log line, so this stays fail-open.
+ */
+const SILENT_DROP_TRACKED_TTL_MS = 600000;
+const SILENT_DROP_TRACKED_MAX_ENTRIES = 1000;
+
 let silentDropState = {
 	deniedSenders: new Map(),
+	deniedTotal: 0,
 };
 
 function resetSilentDropState() {
-	silentDropState = { deniedSenders: new Map() };
+	silentDropState = { deniedSenders: new Map(), deniedTotal: 0 };
+}
+
+function pruneTrackedDenials(now) {
+	for (const [key, timestamp] of silentDropState.deniedSenders) {
+		if (now - timestamp > SILENT_DROP_TRACKED_TTL_MS) {
+			silentDropState.deniedSenders.delete(key);
+		}
+	}
+	while (silentDropState.deniedSenders.size > SILENT_DROP_TRACKED_MAX_ENTRIES) {
+		const oldest = silentDropState.deniedSenders.keys().next().value;
+		silentDropState.deniedSenders.delete(oldest);
+	}
 }
 
 function parseAllowedChatIds(value) {
@@ -61,7 +83,9 @@ function getStatus() {
 		enabled: allowed.length > 0,
 		allowlistSource: explicit.length > 0 ? 'TELEGRAM_ALLOWED_CHAT_IDS' : 'TELEGRAM_CHAT_ID',
 		allowlistSize: allowed.length,
-		deniedSinceStart: silentDropState.deniedSenders.size,
+		deniedSinceStart: silentDropState.deniedTotal,
+		trackedDeniedSenders: silentDropState.deniedSenders.size,
+		deniedSenderCacheLimit: SILENT_DROP_TRACKED_MAX_ENTRIES,
 	};
 }
 
@@ -96,11 +120,14 @@ function recordSilentDrop(chatId) {
 	if (chatId === undefined || chatId === null) return;
 	const key = String(chatId);
 	const now = Date.now();
+	pruneTrackedDenials(now);
 	const previous = silentDropState.deniedSenders.get(key) || 0;
 	if (now - previous < SILENT_DROP_LOG_COOLDOWN_MS) {
 		return;
 	}
 	silentDropState.deniedSenders.set(key, now);
+	silentDropState.deniedTotal += 1;
+	pruneTrackedDenials(now);
 	console.warn('[telegram] Dropped command from unauthorized chat:', key);
 }
 

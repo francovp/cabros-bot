@@ -213,6 +213,34 @@ describe('registerAuthMiddleware', () => {
 		});
 	});
 
+	it('bounds the denied-sender cooldown cache and tracks lifetime drops separately', async () => {
+		const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			await withEnv({ TELEGRAM_ALLOWED_CHAT_IDS: '777' }, async () => {
+				const bot = buildBotStub();
+				registerAuthMiddleware(bot);
+
+				const limit = getStatus().deniedSenderCacheLimit;
+				expect(limit).toBeGreaterThan(0);
+
+				// Two more distinct unauthorized chats than the cache can hold.
+				// Ids start above 777 so none of them collides with the allowlist.
+				for (let offset = 0; offset <= limit; offset += 1) {
+					await bot.handlers[0]({ update: { message: { chat: { id: 100000 + offset } } } }, jest.fn());
+				}
+
+				const status = getStatus();
+				// Every drop is still counted for the lifetime total...
+				expect(status.deniedSinceStart).toBe(limit + 1);
+				// ...but the cache itself never exceeds its bound.
+				expect(status.trackedDeniedSenders).toBeLessThanOrEqual(limit);
+				expect(warn).toHaveBeenCalledTimes(limit + 1);
+			});
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
 	it('logs denied senders once per cooldown window and tracks unique senders', async () => {
 		const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
 		await withEnv({ TELEGRAM_ALLOWED_CHAT_IDS: '777' }, async () => {
