@@ -2,6 +2,7 @@ const {
 	parseNotificationRouting,
 	sendWithNotificationRouting,
 	assertChannelsAvailable,
+	resolveSymbolRouteDispatches,
 	NotificationRoutingValidationError,
 } = require('../../src/services/notification/requestRouting');
 
@@ -306,7 +307,7 @@ describe('requestRouting - symbolRoutes', () => {
 		expect(notificationManager.sendToAll).not.toHaveBeenCalled();
 	});
 
-	it('uses global channels for symbols without a route', async () => {
+	it('dispatches only configured route keys and ignores unrouted symbols', async () => {
 		const notificationManager = {
 			getEnabledChannels: jest.fn().mockReturnValue(['telegram', 'whatsapp']),
 			sendToChannels: jest.fn().mockResolvedValue([{ success: true, channel: 'telegram' }]),
@@ -324,16 +325,76 @@ describe('requestRouting - symbolRoutes', () => {
 			routing,
 		);
 
+		// Only BTCUSDT is a configured route key, so exactly one dispatch happens.
+		expect(notificationManager.sendToChannels).toHaveBeenCalledTimes(1);
 		expect(notificationManager.sendToChannels).toHaveBeenCalledWith(
 			expect.objectContaining({ symbol: 'BTCUSDT' }),
 			['telegram'],
 			expect.any(Object),
 		);
-		expect(notificationManager.sendToChannels).toHaveBeenCalledWith(
+		// ETHUSDT has no route and therefore no dispatch of its own.
+		expect(notificationManager.sendToChannels).not.toHaveBeenCalledWith(
 			expect.objectContaining({ symbol: 'ETHUSDT' }),
-			['whatsapp'],
-			expect.any(Object),
+			expect.anything(),
+			expect.anything(),
 		);
+	});
+
+	it('ignores uppercase indicator words instead of dispatching them as symbols', () => {
+		// Regression: a free-standing uppercase token heuristic read RSI/OVERBOUGHT
+		// as symbols, each falling back to the request channels or a broadcast and
+		// therefore delivering the same alert extra times.
+		const routing = parseNotificationRouting({
+			channels: ['whatsapp'],
+			symbolRoutes: { BTCUSDT: { channels: ['telegram'] } },
+		});
+
+		const dispatches = resolveSymbolRouteDispatches(
+			'BINANCE:BTCUSDT RSI OVERBOUGHT',
+			routing.symbolRoutes,
+			routing,
+		);
+
+		expect(dispatches).toEqual([{ symbol: 'BTCUSDT', channels: ['telegram'] }]);
+	});
+
+	it('matches a bare route key inside an exchange-qualified reference', () => {
+		const routing = parseNotificationRouting({
+			symbolRoutes: { BTCUSDT: { channels: ['telegram'] } },
+		});
+
+		expect(resolveSymbolRouteDispatches('BINANCE:BTCUSDT breakout', routing.symbolRoutes, routing))
+			.toEqual([{ symbol: 'BTCUSDT', channels: ['telegram'] }]);
+	});
+
+	it('matches digit-initial symbols that the route-key validator accepts', () => {
+		const routing = parseNotificationRouting({
+			symbolRoutes: { '1INCHUSDT': { channels: ['telegram'] } },
+		});
+
+		expect(resolveSymbolRouteDispatches('1INCHUSDT pumping', routing.symbolRoutes, routing))
+			.toEqual([{ symbol: '1INCHUSDT', channels: ['telegram'] }]);
+	});
+
+	it('matches an exchange-qualified route key as a unit', () => {
+		const routing = parseNotificationRouting({
+			symbolRoutes: { 'NASDAQ:NVDA': { channels: ['discord'] } },
+		});
+
+		expect(resolveSymbolRouteDispatches('NASDAQ:NVDA earnings gap', routing.symbolRoutes, routing))
+			.toEqual([{ symbol: 'NVDA', channels: ['discord'] }]);
+	});
+
+	it('returns null when no configured route key appears in the text', () => {
+		const routing = parseNotificationRouting({
+			channels: ['whatsapp'],
+			symbolRoutes: { BTCUSDT: { channels: ['telegram'] } },
+		});
+
+		expect(resolveSymbolRouteDispatches('ETHUSDT only mentions another pair', routing.symbolRoutes, routing))
+			.toBeNull();
+	});
+});
 
 describe('requestRouting - assertChannelsAvailable (GH-854 fail-fast)', () => {
 	it('is a no-op when routing.channels is omitted (legacy broadcast)', () => {

@@ -8295,7 +8295,7 @@
           "symbolRoutes": {
             "type": "object",
             "minProperties": 1,
-            "description": "Optional per-symbol channel routing. Matched symbols use their configured channels; symbols without a route use the global channels or enabled-channel broadcast.",
+            "description": "Optional per-symbol channel routing. A dispatch is produced only for a symbol that matches one of the configured keys (case-insensitive, bare or `EXCHANGE:SYMBOL`). Matched symbols are delivered to their configured channels; text that mentions no configured route key is delivered normally via the request-level `channels` or the enabled-channel broadcast.",
             "propertyNames": {
               "type": "string",
               "pattern": "^(?:[A-Za-z][A-Za-z0-9_]{1,15}:)?[A-Za-z0-9._-]{2,20}$"

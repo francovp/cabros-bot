@@ -1,7 +1,6 @@
 'use strict';
 
 const VALID_CHANNELS = ['telegram', 'whatsapp', 'discord'];
-const SYMBOL_STOP_WORDS = new Set(['AND', 'THE', 'THIS', 'ONLY', 'SEND', 'ALERT', 'UPDATE', 'WITH', 'FROM', 'TO', 'BUY', 'SELL', 'VENTA', 'COMPRA']);
 
 // Strict format patterns for chat IDs. These run only when strictChatIds is
 // explicitly enabled so existing operators with ad-hoc strings can opt out.
@@ -238,54 +237,105 @@ function normalizeSymbolRoutes(rawSymbolRoutes) {
 	}));
 }
 
-function extractSymbolReferences(text) {
-	if (typeof text !== 'string') {
-		return [];
-	}
+// Matches a symbol reference candidate in alert text. The symbol group allows a
+// leading digit so digit-initial symbols accepted by normalizeSymbolRouteKey
+// (e.g. `1INCHUSDT`) can actually be matched.
+const SYMBOL_REFERENCE_PATTERN = /\b(?:([A-Za-z][A-Za-z0-9_]{1,15}):)?([A-Za-z0-9][A-Za-z0-9._-]{1,19})\b/g;
 
-	const references = [];
-	const seen = new Set();
-	// ponytail: token heuristic; use structured alert metadata if symbol grammars expand.
-	const symbolPattern = /\b(?:([A-Za-z][A-Za-z0-9_]{1,15}):)?([A-Za-z][A-Za-z0-9._-]{1,19})\b/g;
-	let match;
-	while ((match = symbolPattern.exec(text)) !== null) {
-		const rawExchange = match[1];
-		const rawSymbol = match[2];
-		const symbol = rawSymbol.toUpperCase();
-		if ((!rawExchange && rawSymbol !== symbol) || SYMBOL_STOP_WORDS.has(symbol)) {
-			continue;
-		}
-		const referenceKey = rawExchange ? `${rawExchange}:${symbol}`.toUpperCase() : symbol;
-		if (seen.has(referenceKey)) {
-			continue;
-		}
-		seen.add(referenceKey);
-		references.push({
-			symbol,
-			lookupKeys: rawExchange ? [normalizeSymbolRouteKey(referenceKey), symbol] : [symbol],
-		});
-	}
-
-	return references;
+/**
+ * Escapes a literal for safe use inside a RegExp.
+ */
+function escapeRegExp(value) {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * Extracts the symbol references present in `text` that actually correspond to a
+ * configured `symbolRoutes` key.
+ *
+ * Only *configured* keys can produce a dispatch, so restricting extraction to those
+ * keys removes the ambiguity of a free-standing "is this token a symbol?" heuristic.
+ * Previously every uppercase-looking token became a reference, so text such as
+ * `BINANCE:BTCUSDT RSI OVERBOUGHT` was read as three symbols; `RSI` and `OVERBOUGHT`
+ * then fell back to the request-level channels or a broadcast and the alert was
+ * delivered two extra times. Now an unmatched token produces no dispatch at all.
+ *
+ * @param {string} text - Alert text to scan.
+ * @param {Object} symbolRoutes - Normalized `symbolRoutes` map from parseNotificationRouting.
+ * @returns {Array<{symbol: string, channels: string[]|undefined}>} Ordered, deduplicated matches.
+ */
 function resolveSymbolRouteDispatches(text, symbolRoutes, routing = {}) {
 	if (!symbolRoutes) {
 		return null;
 	}
 
-	const references = extractSymbolReferences(text);
-	if (references.length === 0) {
+	if (typeof text !== 'string') {
 		return null;
 	}
 
-	return references.map((reference) => {
-		const route = reference.lookupKeys.map((key) => symbolRoutes[key]).find(Boolean);
-		return {
-			symbol: reference.symbol,
-			channels: route ? route.channels : routing.channels,
-		};
-	});
+	// Exchange-qualified keys (e.g. `NASDAQ:NVDA`) are matched as a unit, because a
+	// bare `NVDA` may be a legitimately distinct route key of its own.
+	const qualifiedPattern = Object.keys(symbolRoutes)
+		.filter((key) => key.includes(':'))
+		.sort((a, b) => b.length - a.length)
+		.map(escapeRegExp)
+		.join('|');
+	// Bare keys are matched standalone, ignoring an `EXCHANGE:` prefix in the text so
+	// `BINANCE:BTCUSDT` still routes to a `BTCUSDT` key.
+	const barePattern = Object.keys(symbolRoutes)
+		.filter((key) => !key.includes(':'))
+		.sort((a, b) => b.length - a.length)
+		.map(escapeRegExp)
+		.join('|');
+
+	if (!qualifiedPattern && !barePattern) {
+		return null;
+	}
+
+	// Every alternation branch must be able to match. An empty branch would match
+	// the empty string and `exec` would never advance past the same index, so the
+	// scan below would loop forever. This case is already guarded above, but the
+	// non-empty filter keeps the pattern structurally safe.
+	const branches = [];
+	if (qualifiedPattern) {
+		branches.push(`(?<qualified>${qualifiedPattern})`);
+	}
+	if (barePattern) {
+		branches.push(`(?<bare>${barePattern})`);
+	}
+	if (branches.length === 0) {
+		return null;
+	}
+	const combined = new RegExp(
+		branches
+			.map((branch) => (branch.includes('<bare>') ? `\\b${branch}\\b` : branch))
+			.join('|'),
+		'g',
+	);
+
+	const dispatches = [];
+	const seen = new Set();
+	let match;
+	while ((match = combined.exec(text)) !== null) {
+		const referenceKey = match.groups?.qualified || match.groups?.bare;
+		if (!referenceKey) {
+			// Defensive: a zero-width match would otherwise make exec() spin forever.
+			combined.lastIndex += 1;
+			continue;
+		}
+		if (seen.has(referenceKey)) {
+			continue;
+		}
+		seen.add(referenceKey);
+		dispatches.push({
+			// Report the bare symbol (`NVDA`) even for an exchange-qualified route key
+			// (`NASDAQ:NVDA`) so delivery results stay readable and stable.
+			symbol: referenceKey.includes(':') ? referenceKey.split(':').pop() : referenceKey,
+			channels: symbolRoutes[referenceKey].channels || routing.channels,
+		});
+	}
+
+	return dispatches.length > 0 ? dispatches : null;
 }
 
 function parseNotificationRouting(raw = {}, options = {}) {
@@ -457,6 +507,5 @@ module.exports = {
 	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,
-	extractSymbolReferences,
 	resolveSymbolRouteDispatches,
 };

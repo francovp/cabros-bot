@@ -1658,19 +1658,6 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
 
-<<<<<<< HEAD
-## Per-symbol Alert Notification Routing (Issue #627)
-
-`POST /api/webhook/alert` accepts optional `symbolRoutes`, an object whose bare or `EXCHANGE:SYMBOL` keys map to non-empty channel arrays. Matched symbol references are dispatched independently to their configured channels; unmatched references use the request-level `channels` list or the existing enabled-channel broadcast. Delivery results include the matched `symbol`. Without `symbolRoutes`, the existing broadcast and request-level routing path is unchanged.
-
-**Coverage**:
-- `src/services/notification/requestRouting.js` — validates symbol route keys/channels, extracts explicit and uppercase symbol references, and dispatches per-symbol routes with global fallback.
-- `src/controllers/webhooks/handlers/alert/alert.js` — passes alert text when calculating effective requested channels.
-- `tests/unit/request-routing.test.js` and `tests/integration/alert-grounding.test.js` — validation, multi-symbol channel isolation, fallback, and end-to-end delivery coverage.
-- `src/openapi/openapi.json`, `CabrosBot.postman_collection.json`, and `README.md` — request/response contract and valid/invalid examples.
-
-No new environment variable, startup gate, destination, secret, or Remote Config key was introduced. Linear issue creation was intentionally skipped per the automation operator instruction.
-=======
 ## Global Request Deadline Middleware (GH-693)
 
 `app.js` mounts `src/lib/requestDeadline.js` so every `/api` route inherits a server-side time budget and 408s instead of holding the connection open past the reverse-proxy timeout.
@@ -1787,4 +1774,20 @@ The `virgin-trainee-dev` is in active training. To ensure it evolves and doesn't
 ## Global HTTP Request Timeouts (Issue #609)
 
 The HTTP server applies bounded Node.js timeouts at startup: 10 seconds for headers, 120 seconds for complete requests, and 30 seconds for keep-alive connections. Node enforces `headersTimeout` only when its periodic connection checker fires, so `connectionsCheckingInterval` is also fixed at 5 seconds — with Node's default 30s interval the nominal 10-second header bound is not applied until ~30 seconds. The sweep is aligned to server start, not to each connection, so a connection beginning just after a sweep is first observed on the next one: the **worst-case** slow-header lifetime is `headersTimeout + connectionsCheckingInterval` = **15 seconds**, not exactly 10 (measured 10.9s / 12.9s / 15.0s by sweep phase; `MAX_SLOW_HEADER_LIFETIME_MS` is exported and asserted by the test). Lowering the interval to 1s would tighten this to ~11s at the cost of waking the checker every second for the process lifetime; a hard per-connection deadline would need socket-level timers. `src/lib/serverTimeouts.js` owns the fixed values and `tests/unit/server-timeouts.test.js` verifies the configuration. No new environment variable, endpoint, OpenAPI, Postman, or Remote Config change was required. These transport-level bounds are complementary to the per-request application deadline in `src/lib/requestDeadline.js` (GH-693): the deadline middleware returns a structured `408` per `/api` route, while these server timeouts bound slow or idle clients across all routes (including `/healthcheck` and static assets that the deadline exempts).
->>>>>>> origin/master
+
+## Per-Symbol Alert Notification Routing (Issue #627)
+
+`POST /api/webhook/alert` accepts optional `symbolRoutes`: an object whose keys are bare symbols (`BTCUSDT`) or exchange-qualified keys (`NASDAQ:NVDA`), each mapping to a non-empty channel array. Delivery results include the matched `symbol`. Without `symbolRoutes`, the existing broadcast and request-level routing path is unchanged.
+
+**Extraction is route-key driven, not heuristic.** `resolveSymbolRouteDispatches()` only produces a dispatch for a symbol that actually appears as a configured `symbolRoutes` key, matched case-insensitively with word boundaries. This is deliberate: an earlier version treated nearly every uppercase token as a symbol, so `BINANCE:BTCUSDT RSI OVERBOUGHT` was read as three symbols. `RSI` and `OVERBOUGHT` then fell back to the request-level channels or a broadcast, and the same alert was delivered up to three times. Unmatched tokens now produce no dispatch at all. Exchange-qualified keys are matched as a unit; bare keys are matched standalone, so `BINANCE:BTCUSDT` still routes to a `BTCUSDT` key. Digit-initial symbols accepted by the route-key validator (e.g. `1INCHUSDT`) are matched too, and the reported `symbol` is always the bare form (`NVDA`) even for a `NASDAQ:NVDA` key.
+
+**Repeat suppression narrows symbol routes too.** When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` narrows the request-level channel set, every `symbolRoutes` entry is intersected with that same set before dispatch. Without this, a route's own channel list resurrects a channel that is still cooling down and defeats the per-(channel, destination) suppression guarantee.
+
+**Coverage**:
+- `src/services/notification/requestRouting.js` — route-key validation, route-key-driven dispatch extraction, and per-symbol routing.
+- `src/controllers/webhooks/handlers/alert/alert.js` — passes alert text for effective requested channels and narrows `symbolRoutes` on repeat suppression.
+- `tests/unit/request-routing.test.js` — validation, exchange-qualified and digit-initial matching, indicator-word rejection, and no-match-returns-null.
+- `tests/integration/alert-repeat-suppression.test.js` — symbol routes narrowed to the surviving channels (verified to fail without the fix).
+- `src/openapi/openapi.json`, `CabrosBot.postman_collection.json`, and `README.md` — request/response contract and valid/invalid examples.
+
+No new environment variable, startup gate, destination, secret, or Remote Config key was introduced.

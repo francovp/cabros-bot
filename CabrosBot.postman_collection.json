@@ -817,7 +817,7 @@
               "name": "Invalid symbol route",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"success\":false,\"error\":\"Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord\",\"details\":{\"field\":\"symbolRoutes\"}}"
+              "body": "{\"success\":false,\"error\":\"Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord\",\"details\":{\"field\":\"channels\",\"unknownChannels\":[\"slack\"]}}"
             }
           ]
         },
