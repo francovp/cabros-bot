@@ -51,32 +51,17 @@ class UserPriceAlertError extends Error {
 	}
 }
 
-function stripUndefinedFieldsDeep(value) {
-	if (value === null || typeof value !== 'object') {
-		return value;
-	}
-	if (Array.isArray(value)) {
-		return value
-			.map((item) => stripUndefinedFieldsDeep(item))
-			.filter((item) => item !== undefined);
-	}
-	const result = {};
-	for (const [key, val] of Object.entries(value)) {
-		if (val !== undefined) {
-			result[key] = stripUndefinedFieldsDeep(val);
-		}
-	}
-	return result;
-}
-
 /**
  * Strip `undefined` without destroying Firestore sentinel values.
  *
- * `FieldValue.serverTimestamp()` has zero own keys, so the plain-object rebuild
- * above turns it into `{}` and a `Timestamp` into `{_seconds,_nanoseconds}`,
- * both of which the Admin SDK then rejects (or silently misreads). Sentinel
- * instances must survive by identity, so this variant copies every non-plain
- * object through untouched and only recurses into plain objects and arrays.
+ * `FieldValue.serverTimestamp()` has zero own keys, so a plain-object rebuild
+ * turns it into `{}` and a `Timestamp` into `{_seconds,_nanoseconds}`, both of
+ * which the Admin SDK then rejects (or silently misreads). Sentinel instances
+ * must survive by identity, so every non-plain object is copied through
+ * untouched and only plain objects and arrays are recursed into.
+ *
+ * This also covers the ordinary `undefined`-stripping case, so it is the single
+ * sanitizer used for both the durable write and the value returned to callers.
  */
 function sanitizeFirestorePayload(value) {
 	if (value === null || typeof value !== 'object') {
@@ -216,10 +201,6 @@ function parseUserPriceAlertInput(tokens, options = {}) {
 	};
 }
 
-function escapeMarkdownV2(text) {
-	return smartEscapeMarkdownV2(text);
-}
-
 // Accept a Firestore `Timestamp`, a `Date`, or an ISO string and return an ISO
 // string, so every read path exposes one consistent shape.
 function normalizeFirestoreTimestamp(value) {
@@ -241,7 +222,6 @@ class UserPriceAlertService {
 		this.running = false;
 		this.timer = null;
 		this.activeSweepPromise = null;
-		this.activeSweepController = null;
 		this.shutdownRequested = false;
 
 		// In-memory fallback (only authoritative when Firestore is unavailable)
@@ -352,13 +332,18 @@ class UserPriceAlertService {
 	getStatus() {
 		const enabled = this.isEnabled();
 		const role = this.getWorkerRole();
-		const ready = enabled && role !== 'disabled';
+		// Without Firestore the alerts are process-local and are lost on every
+		// deploy, so an operator must not read `ready: true` as "durable".
+		const durable = Boolean(this._getFirestore());
+		const ready = enabled && durable && role !== 'disabled';
 
 		return {
 			enabled,
-			configured: true,
+			configured: durable,
 			ready,
-			status: !enabled ? 'disabled' : (role === 'disabled' ? 'disabled' : 'ready'),
+			status: !enabled
+				? 'disabled'
+				: (role === 'disabled' || !durable ? 'degraded' : 'ready'),
 			role,
 			running: this.running,
 			intervalMs: this.getIntervalMs(),
@@ -366,7 +351,7 @@ class UserPriceAlertService {
 			maxPerChat: this.getMaxPerChat(),
 			retentionDays: this.getRetentionDays(),
 			priceFetchConcurrency: this.getPriceFetchConcurrency(),
-			storageMode: this._getFirestore() ? 'durable' : 'ephemeral',
+			storageMode: durable ? 'durable' : 'ephemeral',
 			lastRunAt: this.lastRunAt ? this.lastRunAt.toISOString() : null,
 			lastRunDurationMs: this.lastRunDurationMs,
 			lastRunScannedCount: this.lastRunScannedCount,
@@ -381,13 +366,11 @@ class UserPriceAlertService {
 			chatId,
 			telegramThreadId,
 			symbol,
-			rawSymbol,
 			exchange,
 			assetClass = 'crypto',
 			operator,
 			targetPrice,
 			initialPrice,
-			userId,
 		} = params;
 
 		// Without this guard an alert could be created while the feature is off and
@@ -431,28 +414,24 @@ class UserPriceAlertService {
 			chatId: String(chatId),
 			telegramThreadId: telegramThreadId !== undefined && telegramThreadId !== null ? Number(telegramThreadId) : undefined,
 			symbol: symbol.toUpperCase(),
-			rawSymbol: rawSymbol ? rawSymbol.toUpperCase() : symbol.toUpperCase(),
 			exchange: exchange || undefined,
 			assetClass,
 			operator: normalizedOp,
 			targetPrice: priceNum,
 			initialPrice: initialPrice !== undefined && initialPrice !== null ? Number(initialPrice) : undefined,
-			userId: userId ? String(userId) : undefined,
 			status: 'armed',
 			createdAt: now.toISOString(),
 			expiresAt: expiresAtDate.toISOString(),
 		};
 
-		const cleanedData = stripUndefinedFieldsDeep(alertData);
+		const cleanedData = sanitizeFirestorePayload(alertData);
 
 		const firestore = this._getFirestore();
 		if (firestore) {
 			try {
-				// Sentinel values MUST be injected after `undefined` sanitization:
-				// `stripUndefinedFieldsDeep` rebuilds plain objects and would turn
-				// `serverTimestamp()` into `{}` and a `Timestamp` into
-				// `{_seconds,_nanoseconds}`, which the Admin SDK rejects. The
-				// sentinel-aware sanitizer keeps their prototype intact.
+				// Sentinels are injected after `undefined` sanitization; the
+				// sentinel-aware sanitizer keeps their prototype intact so the
+				// Admin SDK accepts them.
 				const docRef = firestore.collection(COLLECTION_NAME).doc(alertId);
 				const docPayload = {
 					...cleanedData,
@@ -513,7 +492,20 @@ class UserPriceAlertService {
 				}
 				return docs;
 			} catch (err) {
-				console.warn('[UserPriceAlertService] Firestore query failed, falling back to memory:', err.message);
+				// In durable mode the in-process map is NOT authoritative, so falling
+				// back to it here would report "no alerts" while the durable rows are
+				// still armed and will fire — and would make them impossible to cancel.
+				// Surface the storage failure instead of silently under-reporting.
+				console.error('[UserPriceAlertService] Firestore listAlerts query failed:', err.message);
+				sentryService.captureRuntimeError({
+					channel: 'user-price-alerts',
+					error: err,
+					extra: { service: 'UserPriceAlertService', operation: 'listAlerts' },
+				});
+				throw new UserPriceAlertError(
+					'No se pudieron consultar tus alertas de precio. Intenta nuevamente en unos segundos.',
+					'USER_PRICE_ALERT_PERSIST_UNAVAILABLE',
+				);
 			}
 		}
 
@@ -530,13 +522,6 @@ class UserPriceAlertService {
 
 	async getAlert(alertId) {
 		if (!alertId) return null;
-		// The in-memory mirror is written on every state transition (including the
-		// transactional claim), so it stays current for this process and must win
-		// over a stale durable read.
-		const local = this._memoryAlerts.get(alertId);
-		if (local) {
-			return local;
-		}
 		const firestore = this._getFirestore();
 		if (firestore) {
 			try {
@@ -552,11 +537,81 @@ class UserPriceAlertService {
 						expiresAt: normalizeFirestoreTimestamp(data.expiresAt),
 					};
 				}
+				return null;
 			} catch (err) {
-				console.warn('[UserPriceAlertService] Firestore get failed:', err.message);
+				// Never answer from the process-local mirror here: a read that failed
+				// must not be reported as a durable read, or `cancelAlert` would
+				// accept a cancel whose authoritative status is unknown.
+				console.error('[UserPriceAlertService] Firestore get failed:', err.message);
+				sentryService.captureRuntimeError({
+					channel: 'user-price-alerts',
+					error: err,
+					extra: { service: 'UserPriceAlertService', operation: 'getAlert', alertId },
+				});
+				throw new UserPriceAlertError(
+					'No se pudo consultar la alerta de precio. Intenta nuevamente en unos segundos.',
+					'USER_PRICE_ALERT_PERSIST_UNAVAILABLE',
+				);
 			}
 		}
-		return null;
+		// Ephemeral mode: the in-process map is the only source of truth.
+		return this._memoryAlerts.get(alertId) || null;
+	}
+
+	/**
+	 * Return a claimed `triggered` alert to `armed` when the notification could
+	 * not be delivered at all (no Telegram bot available).
+	 *
+	 * The rollback is conditional on the document still being `triggered` and
+	 * never having recorded a `deliveredAt`, so it can never resurrect an alert a
+	 * replica really delivered. It is best-effort and fail-open: if the write
+	 * fails the alert simply stays `triggered`.
+	 */
+	async _rearmUndelivered(alertId) {
+		const firestore = this._getFirestore();
+		if (firestore && typeof firestore.runTransaction === 'function') {
+			try {
+				await firestore.runTransaction(async (tx) => {
+					const ref = firestore.collection(COLLECTION_NAME).doc(alertId);
+					const doc = await tx.get(ref);
+					if (!doc.exists) return;
+					const data = doc.data() || {};
+					if (data.status !== 'triggered' || data.deliveredAt) return;
+					tx.update(ref, { status: 'armed', triggeredPrice: null, triggeredAt: null });
+				});
+			} catch (err) {
+				console.warn('[UserPriceAlertService] Failed to re-arm undelivered alert:', err.message);
+			}
+		}
+		const local = this._memoryAlerts.get(alertId);
+		if (local && local.status === 'triggered' && !local.deliveredAt) {
+			this._memoryAlerts.set(alertId, { ...local, status: 'armed', triggeredPrice: undefined, triggeredAt: undefined });
+		}
+	}
+
+	/**
+	 * Record that a claimed trigger was actually delivered, so a later
+	 * undelivered re-arm can never roll it back.
+	 */
+	async _markDelivered(alertId) {
+		const firestore = this._getFirestore();
+		if (firestore && typeof firestore.runTransaction === 'function') {
+			try {
+				await firestore.runTransaction(async (tx) => {
+					const ref = firestore.collection(COLLECTION_NAME).doc(alertId);
+					const doc = await tx.get(ref);
+					if (!doc.exists) return;
+					if ((doc.data() || {}).status !== 'triggered') return;
+					tx.update(ref, { deliveredAt: admin.firestore.FieldValue.serverTimestamp() });
+				});
+			} catch (err) {
+				console.warn('[UserPriceAlertService] Failed to record delivery:', err.message);
+			}
+		}
+		const local = this._memoryAlerts.get(alertId);
+		if (local) {
+			this._memoryAlerts.set(alertId, { ...local, deliveredAt: new Date().toISOString() });
+		}
 	}
 
 	async cancelAlert({ chatId, alertId }) {
@@ -631,7 +686,7 @@ class UserPriceAlertService {
 		return { symbol: quote.symbol, price: quote.price, assetClass: 'crypto' };
 	}
 
-	async evaluateAlerts(options = {}) {
+	async evaluateAlerts() {
 		const startTime = Date.now();
 		let scannedCount = 0;
 		let triggeredCount = 0;
@@ -639,7 +694,7 @@ class UserPriceAlertService {
 		let lastErrorMessage = null;
 
 		const batchLimit = this.getBatchLimit();
-		const leaseMs = options.leaseMs || this.getLeaseMs();
+		const leaseMs = this.getLeaseMs();
 		const firestore = this._getFirestore();
 
 		// Distributed lease: without it, two web replicas (or the dedicated worker
@@ -703,8 +758,17 @@ class UserPriceAlertService {
 					this._lastScannedDocId = null;
 					errorsCount += 1;
 					lastErrorMessage = err.message;
+					// Durable mode: the process-local map is not authoritative, so
+					// evaluating it here would silently skip the real armed alerts
+					// (and, worse, re-evaluate ones another replica already handled).
+					// Skip this tick and keep the durable source of truth intact.
 					console.warn('[UserPriceAlertService] Firestore sweep fetch failed:', err.message);
-					armedAlerts = Array.from(this._memoryAlerts.values()).filter((a) => a.status === 'armed');
+					sentryService.captureRuntimeError({
+						channel: 'user-price-alerts',
+						error: err,
+						extra: { service: 'UserPriceAlertService', operation: 'evaluateAlerts', phase: 'fetch' },
+					});
+					armedAlerts = [];
 				}
 			} else {
 				armedAlerts = Array.from(this._memoryAlerts.values()).filter((a) => a.status === 'armed');
@@ -822,17 +886,15 @@ class UserPriceAlertService {
 						continue;
 					}
 				} else {
-					if (this._memoryAlerts.get(alert.id)
-						&& this._memoryAlerts.get(alert.id).status !== 'armed') {
-						claimed = false;
-					} else {
+					const local = this._memoryAlerts.get(alert.id);
+					claimed = !(local && local.status !== 'armed');
+					if (claimed) {
 						this._memoryAlerts.set(alert.id, {
 							...alert,
 							status: 'triggered',
 							triggeredPrice: currentPrice,
 							triggeredAt: new Date().toISOString(),
 						});
-						claimed = true;
 					}
 				}
 
@@ -848,19 +910,21 @@ class UserPriceAlertService {
 					triggeredAt: new Date().toISOString(),
 				});
 
-				// Deliver the notification. A missing bot must not consume the
-				// already-claimed trigger silently — report it so it is visible.
+				// A missing bot means nothing was delivered. The claim is rolled back so
+				// the alert stays `armed` and a later sweep (on a replica that has a
+				// bot) can notify instead of silently consuming the user's trigger.
 				if (!bot || !bot.telegram) {
 					errorsCount += 1;
 					lastErrorMessage = 'telegram_bot_unavailable';
 					console.error(
-						`[UserPriceAlertService] Alert ${alert.id} triggered but the Telegram bot is unavailable; notification dropped.`,
+						`[UserPriceAlertService] Alert ${alert.id} reached its threshold but the Telegram bot is unavailable; re-arming instead of dropping the trigger.`,
 					);
 					sentryService.captureRuntimeError({
 						channel: 'telegram',
 						error: new Error('Telegram bot unavailable for user price alert delivery'),
 						extra: { service: 'UserPriceAlertService', alertId: alert.id },
 					});
+					await this._rearmUndelivered(alert.id);
 					continue;
 				}
 
@@ -873,14 +937,14 @@ class UserPriceAlertService {
 				const lines = [
 					'🔔 *Alerta de Precio Activada*',
 					'',
-					`• Símbolo: ${escapeMarkdownV2(alert.symbol)}`,
-					`• Condición: ${escapeMarkdownV2(conditionText)}`,
-					`• Precio actual: *${escapeMarkdownV2(priceText)}*`,
+					`• Símbolo: ${smartEscapeMarkdownV2(alert.symbol)}`,
+					`• Condición: ${smartEscapeMarkdownV2(conditionText)}`,
+					`• Precio actual: *${smartEscapeMarkdownV2(priceText)}*`,
 				];
 				if (initialPriceText) {
-					lines.push(`• Precio inicial: ${escapeMarkdownV2(initialPriceText)}`);
+					lines.push(`• Precio inicial: ${smartEscapeMarkdownV2(initialPriceText)}`);
 				}
-				lines.push(`• ID: ${escapeMarkdownV2(alert.id)}`);
+				lines.push(`• ID: ${smartEscapeMarkdownV2(alert.id)}`);
 
 				const sendOptions = { parse_mode: 'MarkdownV2' };
 				if (alert.telegramThreadId !== undefined && alert.telegramThreadId !== null) {
@@ -889,6 +953,9 @@ class UserPriceAlertService {
 
 				try {
 					await bot.telegram.sendMessage(alert.chatId, lines.join('\n'), sendOptions);
+					// Only a real send makes the trigger final. Anything that leaves the
+					// alert undelivered keeps it re-armable so a later sweep retries.
+					await this._markDelivered(alert.id);
 				} catch (sendErr) {
 					errorsCount += 1;
 					lastErrorMessage = sendErr.message;

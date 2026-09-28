@@ -9,20 +9,24 @@ const fetchPriceModule = require('./fetchPriceCryptoSymbol');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { smartEscapeMarkdownV2 } = require('../../../../services/notification/formatters/markdownV2Formatter');
 
-function escapeMarkdownV2(text) {
-	return smartEscapeMarkdownV2(text);
-}
-
 function getChatId(context) {
 	return context.update && context.update.message && context.update.message.chat && context.update.message.chat.id;
 }
 
 function getMessageThreadId(context) {
-	return (
-		context.message?.message_thread_id ||
-		context.update?.message?.message_thread_id ||
-		undefined
-	);
+	// `0` is the Telegram forum "General" topic, which is a valid explicit target
+	// (see TELEGRAM_TOPIC_ROUTES). A truthiness check would drop it, so compare
+	// against null/undefined explicitly.
+	const candidates = [
+		context.message?.message_thread_id,
+		context.update?.message?.message_thread_id,
+	];
+	for (const candidate of candidates) {
+		if (candidate !== undefined && candidate !== null) {
+			return candidate;
+		}
+	}
+	return undefined;
 }
 
 function buildAlertHelpMessage() {
@@ -89,7 +93,7 @@ const userPriceAlertCmd = async (context) => {
 			];
 			alerts.forEach((alert) => {
 				const cond = `${alert.operator} ${Number(alert.targetPrice).toLocaleString('en-US')}`;
-				lines.push(`• ${escapeMarkdownV2(alert.id)} — ${escapeMarkdownV2(alert.symbol)} ${escapeMarkdownV2(cond)}`);
+				lines.push(`• ${smartEscapeMarkdownV2(alert.id)} — ${smartEscapeMarkdownV2(alert.symbol)} ${smartEscapeMarkdownV2(cond)}`);
 			});
 			lines.push('');
 			lines.push('Para cancelar una alerta usa: `/alerta cancel <ID>`');
@@ -112,7 +116,7 @@ const userPriceAlertCmd = async (context) => {
 			const cancelled = await userPriceAlertService.cancelAlert({ chatId: String(chatId), alertId });
 			const cond = `${cancelled.operator} ${Number(cancelled.targetPrice).toLocaleString('en-US')}`;
 			await context.reply(
-				`✅ Alerta cancelada exitosamente: ${escapeMarkdownV2(cancelled.id)} \\(${escapeMarkdownV2(cancelled.symbol)} ${escapeMarkdownV2(cond)}\\)`,
+				`✅ Alerta cancelada exitosamente: ${smartEscapeMarkdownV2(cancelled.id)} \\(${smartEscapeMarkdownV2(cancelled.symbol)} ${smartEscapeMarkdownV2(cond)}\\)`,
 				replyOptions,
 			);
 			return;
@@ -123,7 +127,7 @@ const userPriceAlertCmd = async (context) => {
 		if (!classification.valid || classification.assetClass === 'unsupported') {
 			const reason = classification.reason ? `${classification.reason}.` : 'Símbolo no válido.';
 			await context.reply(
-				`${escapeMarkdownV2(reason)} Ejemplo: \`/alerta BTCUSDT < 60000\` o \`/alerta NVDA > 140\``,
+				`${smartEscapeMarkdownV2(reason)} Ejemplo: \`/alerta BTCUSDT < 60000\` o \`/alerta NVDA > 140\``,
 				replyOptions,
 			);
 			return;
@@ -139,7 +143,7 @@ const userPriceAlertCmd = async (context) => {
 			}
 		} catch (fetchErr) {
 			await context.reply(
-				`No se pudo obtener el precio actual para \`${escapeMarkdownV2(classification.symbol)}\`: ${escapeMarkdownV2(fetchErr.message || 'Error de conexión')}`,
+				`No se pudo obtener el precio actual para \`${smartEscapeMarkdownV2(classification.symbol)}\`: ${smartEscapeMarkdownV2(fetchErr.message || 'Error de conexión')}`,
 				replyOptions,
 			);
 			return;
@@ -159,13 +163,11 @@ const userPriceAlertCmd = async (context) => {
 			chatId: String(chatId),
 			telegramThreadId: threadId,
 			symbol: classification.symbol,
-			rawSymbol: tokens[0],
 			exchange: classification.exchange,
 			assetClass: classification.assetClass,
 			operator: parsed.operator,
 			targetPrice: parsed.targetPrice,
 			initialPrice: currentPrice,
-			userId: context.from?.id,
 		});
 
 		const condText = `${alert.operator} ${Number(alert.targetPrice).toLocaleString('en-US')}`;
@@ -174,10 +176,10 @@ const userPriceAlertCmd = async (context) => {
 		const messageLines = [
 			'✅ *Alerta de precio creada*',
 			'',
-			`• Símbolo: ${escapeMarkdownV2(alert.symbol)}`,
-			`• Condición: ${escapeMarkdownV2(condText)}`,
-			`• Precio actual: *${escapeMarkdownV2(currentPriceText)}*`,
-			`• ID: ${escapeMarkdownV2(alert.id)}`,
+			`• Símbolo: ${smartEscapeMarkdownV2(alert.symbol)}`,
+			`• Condición: ${smartEscapeMarkdownV2(condText)}`,
+			`• Precio actual: *${smartEscapeMarkdownV2(currentPriceText)}*`,
+			`• ID: ${smartEscapeMarkdownV2(alert.id)}`,
 			'',
 			'_Te avisaremos automáticamente cuando se alcance el objetivo\\._',
 		];
@@ -187,7 +189,7 @@ const userPriceAlertCmd = async (context) => {
 		console.error('[userPriceAlertCmd] Error:', error);
 		if (error instanceof UserPriceAlertError || error.isUserFriendly) {
 			await context.reply(
-				`⚠️ ${escapeMarkdownV2(error.message)}`,
+				`⚠️ ${smartEscapeMarkdownV2(error.message)}`,
 				replyOptions,
 			);
 		} else {

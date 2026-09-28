@@ -105,6 +105,20 @@ describe('User price alert Telegram command (/alerta)', () => {
 		expect(activeAlerts[0].telegramThreadId).toBe(42);
 	});
 
+	it('keeps a Telegram forum General topic id of 0 instead of dropping it', async () => {
+		// `message_thread_id: 0` is the chat's General topic and is a valid
+		// explicit target. A truthiness check would silently drop it and the
+		// alert would fire in the chat root instead of the originating topic.
+		context.message.text = '/alerta BTCUSDT < 60000';
+		context.message.message_thread_id = 0;
+		context.update.message.message_thread_id = 0;
+		await userPriceAlertCmd(context);
+
+		const activeAlerts = await userPriceAlertService.listAlerts({ chatId: '123456', status: 'armed' });
+		expect(activeAlerts).toHaveLength(1);
+		expect(activeAlerts[0].telegramThreadId).toBe(0);
+	});
+
 	it('creates an equity price alert when given equity symbol', async () => {
 		context.message.text = '/alerta NASDAQ:NVDA > 140';
 		await userPriceAlertCmd(context);

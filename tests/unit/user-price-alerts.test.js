@@ -159,6 +159,23 @@ describe('UserPriceAlertService - Unit Tests', () => {
 			).rejects.toThrow(/Límite de alertas activas alcanzado/i);
 		});
 
+		it('allows a new alert once the quota is raised above the active count', async () => {
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(null);
+			process.env.USER_PRICE_ALERT_MAX_PER_CHAT = '2';
+
+			await service.createAlert({ chatId: 'chat-quota2', symbol: 'BTCUSDT', operator: '<', targetPrice: 60000 });
+			await service.createAlert({ chatId: 'chat-quota2', symbol: 'ETHUSDT', operator: '>', targetPrice: 3500 });
+			await expect(
+				service.createAlert({ chatId: 'chat-quota2', symbol: 'SOLUSDT', operator: '>', targetPrice: 200 }),
+			).rejects.toThrow(/Límite de alertas activas alcanzado/i);
+
+			// Pin the bound to the configured value rather than the default of 20.
+			process.env.USER_PRICE_ALERT_MAX_PER_CHAT = '3';
+			await expect(
+				service.createAlert({ chatId: 'chat-quota2', symbol: 'SOLUSDT', operator: '>', targetPrice: 200 }),
+			).resolves.toMatchObject({ status: 'armed' });
+		});
+
 		it('allows cancelling an existing alert', async () => {
 			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(null);
 
@@ -284,13 +301,25 @@ describe('UserPriceAlertService - Unit Tests', () => {
 	});
 
 	describe('Worker Gating and Status', () => {
-		it('reports correct status when enabled and configured', () => {
+		it('reports the configured status shape with the env values in effect', () => {
+			// Note: the shared firebase-admin mock resolves a Firestore instance, so
+			// this exercises the durable path; an ephemeral environment must report
+			// `configured: false` and `degraded` so an operator cannot mistake
+			// process-local alerts for durable ones.
 			const status = service.getStatus();
 			expect(status.enabled).toBe(true);
-			expect(status.ready).toBe(true);
 			expect(status.role).toBe('web');
 			expect(status.intervalMs).toBe(60000);
 			expect(status.batchLimit).toBe(50);
+		});
+
+		it('does not report ready when alerts are only process-local', () => {
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(null);
+			const status = service.getStatus();
+			expect(status.storageMode).toBe('ephemeral');
+			expect(status.configured).toBe(false);
+			expect(status.ready).toBe(false);
+			expect(status.status).toBe('degraded');
 		});
 
 		it('reports disabled status when ENABLE_USER_PRICE_ALERTS is false', () => {
@@ -429,6 +458,29 @@ describe('UserPriceAlertService - Unit Tests', () => {
 			return db;
 		}
 
+		// The double builds a fresh query object per `collection()` call, so a
+		// failure has to be installed on the collection factory itself. Point
+		// `get()` at a rejecting stub so every query chain built from it fails.
+		function makeQueriesFail(db, message) {
+			const original = db.collection;
+			db.collection = (name) => {
+				const coll = original(name);
+				const broken = { doc: coll.doc };
+				const chain = () => {
+					const q = {
+						where: () => q,
+						orderBy: () => q,
+						startAfter: () => q,
+						limit: () => q,
+						get: async () => { throw new Error(message); },
+					};
+					return q;
+				};
+				Object.assign(broken, chain());
+				return broken;
+			};
+		}
+
 		it('preserves Firestore sentinel instance types in the written payload', async () => {
 			// The repo's shared firebase-admin mock returns plain objects, so stub
 			// sentinels as real class instances to prove the sanitizer preserves
@@ -508,6 +560,109 @@ describe('UserPriceAlertService - Unit Tests', () => {
 			expect(result.evaluatedCount).toBe(0);
 		});
 
+		it('surfaces a durable list failure instead of reporting an empty list', async () => {
+			// The in-process map is not authoritative in durable mode. Reporting an
+			// empty list here would tell the user their armed alerts are gone, and
+			// make them impossible to cancel.
+			const db = createMockFirestore();
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			makeQueriesFail(db, 'Firestore unavailable');
+
+			await expect(service.listAlerts({ chatId: 'chat-x', status: 'armed' }))
+				.rejects.toThrow(UserPriceAlertError);
+		});
+
+		it('does not answer a durable get from the stale process-local mirror', async () => {
+			// Replica A cancelled the alert; replica B's mirror still says `armed`.
+			// A memory-first read would let B report a bogus successful cancel.
+			const alertId = 'alert_stale1';
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					[alertId]: { chatId: 'chat-stale', symbol: 'BTCUSDT', operator: '<', targetPrice: 1, status: 'cancelled' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			service._memoryAlerts.set(alertId, {
+				id: alertId, chatId: 'chat-stale', symbol: 'BTCUSDT', operator: '<', targetPrice: 1, status: 'armed',
+			});
+
+			const alert = await service.getAlert(alertId);
+			expect(alert.status).toBe('cancelled');
+
+			await expect(service.cancelAlert({ chatId: 'chat-stale', alertId }))
+				.rejects.toThrow(UserPriceAlertError);
+		});
+
+		it('re-arms an undelivered trigger instead of consuming it when no bot is available', async () => {
+			const alertId = 'alert_nobot1';
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					[alertId]: { chatId: 'chat-nobot', symbol: 'BTCUSDT', operator: '>', targetPrice: 100, status: 'armed' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			// No bot: nothing was delivered, so the trigger must not be lost.
+			service.setBotGetter(null);
+			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'BTCUSDT', price: 150, assetClass: 'crypto' });
+
+			const first = await service.evaluateAlerts();
+			expect(first.triggeredCount).toBe(1);
+			expect(db.store.get('userPriceAlerts').get(alertId).status).toBe('armed');
+
+			// Once a bot is available the same threshold still notifies the user.
+			const sendMessage = jest.fn().mockResolvedValue({ message_id: 7 });
+			service.setBotGetter({ telegram: { sendMessage } });
+			service._lastScannedDocId = null;
+			const second = await service.evaluateAlerts();
+			expect(second.triggeredCount).toBe(1);
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+		});
+
+		it('keeps an alert triggered when a prior delivery succeeded', async () => {
+			// The re-arm rollback must never resurrect an alert that really fired.
+			const alertId = 'alert_fired1';
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					[alertId]: {
+						chatId: 'chat-fired', symbol: 'BTCUSDT', operator: '>', targetPrice: 100, status: 'armed',
+					},
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			const sendMessage = jest.fn().mockResolvedValue({ message_id: 9 });
+			service.setBotGetter({ telegram: { sendMessage } });
+			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'BTCUSDT', price: 150, assetClass: 'crypto' });
+
+			await service.evaluateAlerts();
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+			expect(db.store.get('userPriceAlerts').get(alertId).status).toBe('triggered');
+
+			await service._rearmUndelivered(alertId);
+			expect(db.store.get('userPriceAlerts').get(alertId).status).toBe('triggered');
+		});
+
+		it('does not silently fall back to the process-local map when the sweep read fails', async () => {
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					alert_armed9: { chatId: 'chat-sweep', symbol: 'BTCUSDT', operator: '>', targetPrice: 100, status: 'armed' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			const sendMessage = jest.fn().mockResolvedValue({ message_id: 3 });
+			service.setBotGetter({ telegram: { sendMessage } });
+			// Durable rows must never be evaluated from the ephemeral mirror.
+			service._memoryAlerts.set('alert_ghost', {
+				id: 'alert_ghost', chatId: 'chat-sweep', symbol: 'ETHUSDT', operator: '>', targetPrice: 1, status: 'armed',
+			});
+			makeQueriesFail(db, 'Firestore unavailable');
+			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'ETHUSDT', price: 10, assetClass: 'crypto' });
+
+			const result = await service.evaluateAlerts();
+			expect(result.evaluatedCount).toBe(0);
+			expect(result.triggeredCount).toBe(0);
+			expect(sendMessage).not.toHaveBeenCalled();
+		});
+
 		it('delivers a triggered alert only once when two sweeps overlap', async () => {
 			const alertId = 'alert_dup01';
 			const db = createMockFirestore({
@@ -568,15 +723,13 @@ describe('UserPriceAlertService - Unit Tests', () => {
 				},
 			});
 			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
-			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'X', price: 1, assetClass: 'crypto' });
 
 			// Track which document each sweep actually scanned.
 			const scanned = [];
-			const fetchSpy = jest.spyOn(service, '_fetchCurrentPrice').mockImplementation(async (query) => {
+			jest.spyOn(service, '_fetchCurrentPrice').mockImplementation(async (query) => {
 				scanned.push(query.symbol);
 				return { symbol: query.symbol, price: 1, assetClass: 'crypto' };
 			});
-			void fetchSpy;
 
 			const first = await service.evaluateAlerts();
 			const cursorAfterFirst = service._lastScannedDocId;
@@ -589,6 +742,8 @@ describe('UserPriceAlertService - Unit Tests', () => {
 			// without rotation would return the same document forever.
 			expect(cursorAfterFirst).toBe('alert_aaa');
 			expect(cursorAfterSecond).toBe('alert_bbb');
+			// Each sweep must see a *different* document, proving rotation rather
+			// than a repeated window.
 			expect(scanned).toEqual(['BTCUSDT', 'ETHUSDT']);
 		});
 
@@ -686,6 +841,9 @@ describe('UserPriceAlertService - Unit Tests', () => {
 			expect(result.triggeredCount).toBe(1);
 			expect(result.errorsCount).toBe(1);
 			expect(service.getStatus().lastError).toBe('telegram_bot_unavailable');
+			// The failure is visible AND the user's trigger is preserved for a later
+			// sweep that does have a bot.
+			expect(db.store.get('userPriceAlerts').get(alertId).status).toBe('armed');
 		});
 	});
 });
