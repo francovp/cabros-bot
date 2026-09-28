@@ -18,7 +18,7 @@ AUTH_UTILS="$REPO_ROOT/.agents/skills/issue-automator/scripts/gh-auth-utils.sh"
 if [[ -f "$AUTH_UTILS" ]]; then
   # shellcheck source=/dev/null
   source "$AUTH_UTILS"
-  trap 'restore_gh_user' EXIT
+  trap 'rc=$?; restore_gh_user; exit $rc' EXIT
   save_gh_user && switch_to_francovp
 fi
 
@@ -29,6 +29,7 @@ TARGET_LABEL=""
 EXCLUDE_SELF=""
 TARGET_PR=""
 ADD_LABEL=""
+AUTO_LABEL=false
 OUTPUT_JSON=false
 REPO_NAME=""
 
@@ -62,6 +63,10 @@ while [[ $# -gt 0 ]]; do
       ADD_LABEL="${2:?missing value for --add-label}"
       shift 2
       ;;
+    --auto-label)
+      AUTO_LABEL=true
+      shift
+      ;;
     --json)
       OUTPUT_JSON=true
       shift
@@ -82,6 +87,7 @@ Options:
   --exclude-self NAME  Exclude PRs authored by current agent (e.g. antigravity, codex)
   --pr NUMBER          Inspect a specific PR number
   --add-label LABEL    Attach an agent-model label to the specified PR (--pr required)
+  --auto-label         Auto-detect authoring agent and attach corresponding agent-model label to unlabeled PRs
   --json               Output machine-readable JSON
   --repo OWNER/NAME    Target GitHub repository (default: current repo)
   -h, --help           Show this help message
@@ -239,6 +245,58 @@ CLASSIFIED_JSON="$(echo "$PR_JSON" | jq --arg targetAgent "$TARGET_AGENT" --arg 
       )
   )
 ')"
+
+# If --auto-label was requested, attach detected authoring agent labels to unlabeled PRs
+if [[ "$AUTO_LABEL" == "true" ]]; then
+  UNLABELED_PRS="$(echo "$CLASSIFIED_JSON" | jq -c '.[] | select(.agentLabel == null and .detectedAgent != "human")')"
+  if [[ -n "$UNLABELED_PRS" ]]; then
+    while IFS= read -r pr_item; do
+      [[ -z "$pr_item" ]] && continue
+      PR_NUM="$(echo "$pr_item" | jq -r '.number')"
+      DET_AGENT="$(echo "$pr_item" | jq -r '.detectedAgent')"
+
+      case "$DET_AGENT" in
+        codex) DERIVED_LABEL="codex-gpt-5.6-luna" ;;
+        github-copilot) DERIVED_LABEL="github-copilot-minimax-m3:free" ;;
+        claude) DERIVED_LABEL="claude-3.7-sonnet" ;;
+        opencode) DERIVED_LABEL="opencode-glm-4.5" ;;
+        antigravity) DERIVED_LABEL="antigravity-gemini-3.7-flash" ;;
+        cursor) DERIVED_LABEL="cursor-claude-3.7-sonnet" ;;
+        *) DERIVED_LABEL="${DET_AGENT}-unknown" ;;
+      esac
+
+      gh label create "$DERIVED_LABEL" --repo "$REPO_NAME" --color "7057ff" --description "Agent and model attribution label" 2>/dev/null || true
+      gh pr edit "$PR_NUM" --repo "$REPO_NAME" --add-label "$DERIVED_LABEL" >/dev/null
+
+      if [[ "$OUTPUT_JSON" != "true" ]]; then
+        echo "Auto-attached authoring agent label '$DERIVED_LABEL' to PR #$PR_NUM (detected author: $DET_AGENT)."
+      fi
+
+      # Update entry in CLASSIFIED_JSON
+      CLASSIFIED_JSON="$(echo "$CLASSIFIED_JSON" | jq --argjson prNum "$PR_NUM" --arg lbl "$DERIVED_LABEL" '
+        map(
+          if .number == $prNum then
+            .labels = ((.labels // []) + [{ name: $lbl }]) |
+            .agentLabel = $lbl |
+            .detectedModel = (
+              if ($lbl | test("^antigravity-"; "i")) then ($lbl | sub("^antigravity-"; ""; "i"))
+              elif ($lbl | test("^codex-"; "i")) then ($lbl | sub("^codex-"; ""; "i"))
+              elif ($lbl | test("^github-copilot-"; "i")) then ($lbl | sub("^github-copilot-"; ""; "i"))
+              elif ($lbl | test("^copilot-"; "i")) then ($lbl | sub("^copilot-"; ""; "i"))
+              elif ($lbl | test("^claude-"; "i")) then ($lbl | sub("^claude-"; ""; "i"))
+              elif ($lbl | test("^opencode-"; "i")) then ($lbl | sub("^opencode-"; ""; "i"))
+              elif ($lbl | test("^cursor-"; "i")) then ($lbl | sub("^cursor-"; ""; "i"))
+              else ($lbl | sub("^[a-zA-Z0-9_]+-"; ""))
+              end
+            )
+          else
+            .
+          end
+        )
+      ')"
+    done <<< "$UNLABELED_PRS"
+  fi
+fi
 
 if [[ "$OUTPUT_JSON" == "true" ]]; then
   echo "$CLASSIFIED_JSON"

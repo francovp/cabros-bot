@@ -81,6 +81,12 @@ jest.mock('@sentry/node', () => ({
 	setTag: jest.fn(),
 	setContext: jest.fn(),
 	setExtra: jest.fn(),
+	metrics: {
+		count: jest.fn(),
+		distribution: jest.fn(),
+		gauge: jest.fn(),
+		set: jest.fn(),
+	},
 }), { virtual: true });
 
 // Mock @sentry/profiling-node to prevent loading native binary in tests
@@ -93,8 +99,10 @@ jest.setTimeout(15000);
 
 const rateLimiter = require('../src/lib/rateLimiter');
 const geminiQuotaManager = require('../src/services/grounding/geminiQuotaManager');
+const { resetVolumeTrackerForTesting } = require('../src/controllers/webhooks/handlers/newsMonitor/volumeTracker');
 afterEach(() => {
 	rateLimiter.disableTestMode();
 	rateLimiter.reset();
 	geminiQuotaManager.resetForTesting();
+	resetVolumeTrackerForTesting();
 });
