@@ -1787,6 +1787,17 @@ class NewsAnalyzer {
 			calibrationFields.grounding_calibration = geminiAnalysis.calibration;
 		}
 
+		// Issue #1230: surface the source-quality tier so an operator can audit
+		// WHY an alert cleared the threshold. Unresolved tier => omitted.
+		const sourceQualityTier = (geminiAnalysis.calibration
+			&& typeof geminiAnalysis.calibration.qualityTier === 'string'
+			&& geminiAnalysis.calibration.qualityTier.trim())
+			? geminiAnalysis.calibration.qualityTier.trim()
+			: undefined;
+		if (sourceQualityTier) {
+			calibrationFields.source_quality_tier = sourceQualityTier;
+		}
+
 		// Build the title/original text
 		const eventLabel = this.eventCategoryLabel(geminiAnalysis.event_category);
 		const headline = (geminiAnalysis.headline && geminiAnalysis.headline.trim())
@@ -1893,6 +1904,7 @@ class NewsAnalyzer {
 			uncertainty_reason: geminiAnalysis.uncertainty_reason,
 			invalidation_hint: geminiAnalysis.invalidation_hint,
 			calibration: geminiAnalysis.calibration || undefined,
+			sourceQualityTier,
 			promptVersion: geminiAnalysis.promptVersion || undefined,
 			timestamp: Date.now(),
 			marketContext: marketContext || undefined,
@@ -1936,6 +1948,20 @@ class NewsAnalyzer {
 		const reason = analysis.confidence_reason || '';
 		if (reason) {
 			message += `Reason: ${reason}\n`;
+		}
+
+		// Issue #1230: make the source-quality tier auditable in the delivered
+		// message, not just in logs.
+		const qualityTier = (analysis.calibration
+			&& typeof analysis.calibration.qualityTier === 'string'
+			&& analysis.calibration.qualityTier.trim())
+			? analysis.calibration.qualityTier.trim()
+			: '';
+		if (qualityTier) {
+			const qualityPenalty = typeof analysis.calibration.qualityPenalty === 'number'
+				? ` (x${analysis.calibration.qualityPenalty})`
+				: '';
+			message += `Source Quality: ${qualityTier}${qualityPenalty}\n`;
 		}
 
 		if (marketContext) {

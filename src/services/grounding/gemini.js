@@ -560,6 +560,42 @@ function deriveGroundingCalibration(groundingSources, options = {}) {
  * @param {Array<Object>} [groundingSources] - Actual SearchResult[] from genaiClient.search()
  * @returns {{ confidence: number, confidence_reason: string, calibration: Object }}
  */
+/**
+ * Bounded multiplicative confidence penalty per domain-quality tier (issue #1230).
+ *
+ * HIGH is the baseline and never penalizes. The multipliers are all <= 1 so the
+ * quality penalty can only ever reduce a calibrated score — never inflate it.
+ */
+const QUALITY_TIER_PENALTIES = Object.freeze({
+	high: 1,
+	medium: 0.95,
+	low: 0.85,
+	unknown: 0.7,
+});
+
+/**
+ * Resolve the weakest (most penalty-bearing) quality tier present in a source
+ * set, so a single blog-spam source cannot be masked by reputable ones.
+ *
+ * Fails open: any malformed input yields `null`, which callers treat as
+ * "no tier resolved" and therefore apply no penalty.
+ *
+ * @param {Object} tierCounts - domainQuality tierCounts
+ * @returns {{ tier: string, penalty: number }|null}
+ */
+function resolveWeakestQualityTier(tierCounts) {
+	if (!tierCounts || typeof tierCounts !== 'object') {
+		return null;
+	}
+	for (const tier of ['unknown', 'low', 'medium', 'high']) {
+		const count = tierCounts[tier];
+		if (Number.isFinite(count) && count > 0) {
+			return { tier, penalty: QUALITY_TIER_PENALTIES[tier] };
+		}
+	}
+	return null;
+}
+
 function calibrateNewsConfidence(analysisResult, groundingSources = null, options = {}) {
 	const {
 		event_significance,
@@ -604,6 +640,26 @@ function calibrateNewsConfidence(analysisResult, groundingSources = null, option
 	let effectiveQuality = modelSourceQuality;
 	if (actualCalibration) {
 		effectiveQuality = actualCalibration.actual_source_quality;
+	}
+
+	// Resolve the domain-quality tier for the multiplicative penalty (#1230).
+	// Only meaningful when grounding actually returned sources; the zero-source
+	// case is already fully covered by the source-count penalty.
+	let qualityTier = null;
+	let qualityPenalty = 1;
+	if (actualCalibration && actualCalibration.actual_source_count > 0) {
+		try {
+			const resolved = resolveWeakestQualityTier(actualCalibration.actual_quality_tiers);
+			if (resolved) {
+				qualityTier = resolved.tier;
+				qualityPenalty = resolved.penalty;
+			}
+		} catch (error) {
+			// Fail open: an unresolvable tier is a no-op, never a crash.
+			console.warn('[Gemini] domain quality tier resolution failed, applying no quality penalty:', error.message);
+			qualityTier = null;
+			qualityPenalty = 1;
+		}
 	}
 
 	// Apply penalties
@@ -665,7 +721,20 @@ function calibrateNewsConfidence(analysisResult, groundingSources = null, option
 		reasons.push(`may invalidate: ${invalidation_hint}`);
 	}
 
-	const finalConfidence = Math.max(0, Math.min(1, baseConfidence - penalty));
+	const penaltyAdjustedConfidence = baseConfidence - penalty;
+
+	// Multiplicative quality-tier penalty, applied after the additive penalties
+	// and clamped into the existing [0, 1] range. Every multiplier is <= 1, so
+	// this step is monotonically non-increasing.
+	const finalConfidence = Math.max(
+		0,
+		Math.min(1, qualityPenalty < 1 ? penaltyAdjustedConfidence * qualityPenalty : penaltyAdjustedConfidence),
+	);
+
+	if (qualityPenalty < 1) {
+		reasons.push(`low source quality tier (${qualityTier}, x${qualityPenalty})`);
+	}
+
 	const confidenceReason = reasons.length > 0 ? reasons.join('; ') : 'sufficient corroboration and freshness';
 
 	const calibration = {
@@ -677,6 +746,8 @@ function calibrateNewsConfidence(analysisResult, groundingSources = null, option
 		effective_source_quality: effectiveQuality,
 		grounding_used: actualCalibration != null,
 		freshness_unknown: freshnessIsUnknown,
+		qualityTier,
+		qualityPenalty,
 	};
 
 	if (actualCalibration) {

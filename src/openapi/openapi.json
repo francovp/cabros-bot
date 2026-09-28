@@ -9330,6 +9330,103 @@
           }
         }
       },
+      "NewsGroundingCalibration": {
+        "type": "object",
+        "description": "Grounding-derived source metadata used to calibrate the news-monitor confidence score. `qualityTier` and `qualityPenalty` were added in issue #1230 and are always present; `qualityTier` is `null` and `qualityPenalty` is `1` when no tier was resolved (no grounding sources, or grounding derivation failed).",
+        "properties": {
+          "grounding_used": {
+            "type": "boolean",
+            "description": "True when the actual grounding search results were available to derive source metadata from."
+          },
+          "model_source_count": {
+            "type": "number",
+            "description": "Source count as emitted by the model, before grounding override."
+          },
+          "model_source_freshness": {
+            "type": "number",
+            "description": "Source freshness score as emitted by the model, before grounding override."
+          },
+          "model_source_quality": {
+            "type": "number",
+            "description": "Source quality score as emitted by the model, before grounding override."
+          },
+          "effective_source_count": {
+            "type": "number",
+            "description": "Source count actually used for the source-count penalty."
+          },
+          "effective_source_freshness": {
+            "type": "number",
+            "description": "Freshness score actually used for the freshness penalty."
+          },
+          "effective_source_quality": {
+            "type": "number",
+            "description": "Quality score actually used for the source-authority penalty."
+          },
+          "freshness_unknown": {
+            "type": "boolean",
+            "description": "True when grounding sources carried no explicit dates, so a conservative unknown-freshness penalty was applied."
+          },
+          "qualityTier": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "high",
+              "medium",
+              "low",
+              "unknown"
+            ],
+            "description": "Weakest (most penalty-bearing) domain-quality tier present in the grounding sources. `null` when no tier was resolved."
+          },
+          "qualityPenalty": {
+            "type": "number",
+            "description": "Bounded multiplicative penalty applied to the additive-penalty-adjusted confidence. Always <= 1, so the quality step can only reduce a score. `1` means no penalty was applied.",
+            "example": 0.85
+          },
+          "actual_source_count": {
+            "type": "number",
+            "description": "Number of grounding search results returned."
+          },
+          "actual_source_quality": {
+            "type": "number",
+            "description": "Average domain-quality score across the grounding sources (0..1)."
+          },
+          "actual_source_freshness": {
+            "type": "number",
+            "description": "Average freshness score across the dated grounding sources (0..1)."
+          },
+          "actual_quality_tiers": {
+            "type": "object",
+            "description": "Per-tier counts across the grounding sources.",
+            "properties": {
+              "high": { "type": "number" },
+              "medium": { "type": "number" },
+              "low": { "type": "number" },
+              "unknown": { "type": "number" }
+            }
+          },
+          "actual_source_domains": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Normalized hostnames classified from the grounding sources."
+          },
+          "actual_stale_sources": {
+            "type": "number",
+            "description": "Grounding sources older than the freshness window."
+          },
+          "actual_dated_sources": {
+            "type": "number",
+            "description": "Grounding sources that carried an explicit date."
+          },
+          "has_explicit_dates": {
+            "type": "boolean",
+            "description": "True when at least one grounding source carried an explicit date."
+          },
+          "actual_freshness_reason": {
+            "type": "string",
+            "description": "Human-readable freshness classification used for the penalty decision."
+          }
+        }
+      },
       "NewsAlert": {
         "type": "object",
         "description": "Structured news alert payload returned by `/api/news-monitor`. Optional numeric `stop` and `target` risk barriers are present whenever a finite, on-side-of-entry value is available from market context or `deriveBarriers()`; otherwise they are omitted.",
@@ -9361,6 +9458,19 @@
             "items": {
               "type": "string"
             }
+          },
+          "sourceQualityTier": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low",
+              "unknown"
+            ],
+            "description": "Weakest domain-quality tier resolved from the grounding sources (issue #1230). Present only when grounding returned at least one source. The tier drives a bounded multiplicative confidence penalty (`high` x1, `medium` x0.95, `low` x0.85, `unknown` x0.7) applied after the additive source-count, freshness, and authority penalties. Omitted when no tier was resolved (no grounding, or zero grounding sources), in which case no quality penalty is applied."
+          },
+          "calibration": {
+            "$ref": "#/components/schemas/NewsGroundingCalibration"
           },
           "formattedMessage": {
             "type": "string"

@@ -589,4 +589,39 @@ describe('Analyzer - Grounding Calibration Surface', () => {
 		expect(alert.calibration).toBeUndefined();
 		expect(alert.confidence_reason).toBeDefined();
 	});
+
+	// Issue #1230: surface the source-quality tier so an operator can audit WHY
+	// an alert cleared NEWS_ALERT_THRESHOLD.
+	it('should surface the source quality tier for operator auditing', () => {
+		const analysis = baseAnalysis({
+			calibration: {
+				grounding_used: true,
+				actual_source_count: 3,
+				actual_quality_tiers: { high: 0, medium: 0, low: 3, unknown: 0 },
+				qualityTier: 'low',
+				qualityPenalty: 0.85,
+			},
+		});
+		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
+
+		expect(alert.calibration.qualityTier).toBe('low');
+		expect(alert.calibration.qualityPenalty).toBe(0.85);
+		expect(alert.sourceQualityTier).toBe('low');
+
+		const message = analyzer.formatAlertMessage('BTCUSDT', analysis, null);
+		expect(message).toMatch(/Source Quality:/);
+		expect(message).toMatch(/low/);
+	});
+
+	it('should omit the quality tier line when no tier was resolved', () => {
+		const analysis = baseAnalysis({
+			calibration: { grounding_used: true, actual_source_count: 0, qualityTier: null, qualityPenalty: 1 },
+		});
+		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
+
+		expect(alert.sourceQualityTier).toBeUndefined();
+
+		const message = analyzer.formatAlertMessage('BTCUSDT', analysis, null);
+		expect(message).not.toContain('Source Quality:');
+	});
 });

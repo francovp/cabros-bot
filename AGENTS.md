@@ -697,13 +697,49 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 
 **Dry-run request mode:** Add `dryRun=true` to GET or POST `/api/news-monitor` (query parameter; POST also accepts the boolean body field) to run validation and analysis without notification delivery, deduplication cache reads/claims/writes, or signal-outcome persistence. The response includes `dryRun: true`, generated alerts, intended `requestedChannels`, and an empty `deliveredChannels` array. Dry runs bypass cached results so operators inspect fresh analysis output.
 
+### News Monitor Domain-Quality Confidence Penalty (Issue #1230)
+
+`calibrateNewsConfidence()` in `src/services/grounding/gemini.js` now applies a bounded **multiplicative** domain-quality penalty on top of the existing additive source-count, freshness, and authority penalties.
+
+Previously the `domainQuality` tier classifier (`src/services/grounding/domainQuality.js`, `src/services/grounding/qualityTiers.js`) leaked out of the module without feeding back into confidence: three blog-spam sources scored identically to three reputable financial sources, so a weak signal could clear `NEWS_ALERT_THRESHOLD` on source count alone.
+
+**Penalty pipeline** (in order):
+1. `baseConfidence = 0.6 × event_significance + 0.4 × |sentiment_score|`
+2. Additive penalties (source count, freshness, authority, uncertainty, invalidation hint) → `penaltyAdjustedConfidence`
+3. Multiplicative quality-tier penalty → `qualityPenalty`
+4. Clamp into `[0, 1]`
+
+**Tier multipliers** — the *weakest* (most penalty-bearing) tier present in the source set wins, so one blog-spam source cannot be masked by reputable ones:
+
+| Tier | Multiplier | Rationale |
+|---|---|---|
+| `high` | `×1` | Reputable wire/financial press, regulators, exchange disclosures — baseline, no penalty |
+| `medium` | `×0.95` | Recognizable finance/crypto outlets |
+| `low` | `×0.85` | Aggregator/UGC platforms and low-editorial-control TLDs (`.blog`, `.buzz`, `.xyz`, …) |
+| `unknown` | `×0.7` | No resolvable domain on the grounding result |
+
+**Safety properties** (all covered by tests):
+- **Monotonicity**: every multiplier is `<= 1`, so the calibrated result is **non-increasing** vs. the pre-#1230 value for every input. This is a false-positive *reduction* feature; it can never inflate a score. `tests/unit/event-detection.test.js` asserts this against a fixed matrix of pre-change oracle values.
+- **Fail open**: a missing, blank, or malformed tier is a **no-op** (no penalty, no crash). A throwing `domainQuality` classifier is caught, logged at `warn`, and discarded — calibration falls back to model-emitted metadata exactly as before.
+- **No double-penalty on empty grounding**: when grounding returns zero sources the source-count penalty (`-0.3`) already applies, so the quality step is skipped and `qualityTier` stays `null`.
+- **No threshold change**: `NEWS_ALERT_THRESHOLD` keeps its `0.7` default. The multiplier is applied *before* the threshold comparison, so the effective bar rises for weak-source signals while the configured default is untouched.
+
+**Observability**: `calibration.qualityTier` and `calibration.qualityPenalty` are always present (issue #1230) so an operator can audit *why* an alert cleared the threshold. The resolved tier is also surfaced as `alert.sourceQualityTier` and rendered as a `Source Quality: <tier> (x<multiplier>)` line in the delivered Telegram/WhatsApp message, and as `confidence_reason` text.
+
+**Where to look first**:
+- `src/services/grounding/gemini.js` — `QUALITY_TIER_PENALTIES`, `resolveWeakestQualityTier()`, and the penalty step in `calibrateNewsConfidence()`
+- `src/services/grounding/domainQuality.js` / `qualityTiers.js` — tier classification inputs
+- `src/controllers/webhooks/handlers/newsMonitor/analyzer.js` — `buildAlert()` and `formatAlertMessage()` tier surfacing
+- `tests/unit/event-detection.test.js` — tier-penalty, monotonicity, and fail-open coverage
+- `tests/unit/analyzer.test.js` — alert-payload and message surfacing coverage
+
 **Configuration**:
 - `ENABLE_NEWS_MONITOR` — Feature flag (default: false for safe rollout)
 - `ENABLE_NEWS_MONITOR_TEST_MODE` — Expose news monitor test-mode state in `/api/status` and `/api/capabilities` (default: false)
 - `ENABLE_NEWS_MONITOR_CLASSIFIER` — Optional classifier.dev second pass when Gemini returns `none` (default: false); only recognized categories at or above `NEWS_ALERT_THRESHOLD` are promoted, and request failures preserve `none`. Because it sends the asset symbol and generated headline to an external provider, keep it environment-only and exclude it from Firebase Remote Config. `/api/status` reports its state as `featureFlags.newsMonitorClassifier`.
 - `NEWS_SYMBOLS_CRYPTO` — Default crypto symbols if not provided in request (comma-separated, e.g., "BTCUSDT,ETHUSD")
 - `NEWS_SYMBOLS_STOCKS` — Default stock symbols if not provided in request (comma-separated)
-- `NEWS_ALERT_THRESHOLD` — Confidence score threshold (default: 0.7, range 0.0-1.0)
+- `NEWS_ALERT_THRESHOLD` — Confidence score threshold (default: 0.7, range 0.0-1.0). Unchanged by #1230; the domain-quality multiplier is applied *before* this comparison, so the effective bar rises for weak-source signals without moving the configured default.
 - `NEWS_CACHE_TTL_HOURS` — Cache time-to-live (default: 6 hours)
 - `NEWS_CACHE_MAX_ENTRIES` — Maximum in-memory news-cache entries before LRU eviction (default: `5000`, range `1`-`1000000`; Remote Config supported)
 - `NEWS_DELIVERY_LOCK_MAX_ENTRIES` — Maximum in-memory channel delivery leases (default: `1000`, range `1`-`100000`; active leases are preserved)
