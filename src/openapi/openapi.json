@@ -203,6 +203,9 @@
           },
           {
             "$ref": "#/components/parameters/XRequestIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignalClass"
           }
         ],
         "requestBody": {
@@ -444,6 +447,9 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
           "502": {
             "$ref": "#/components/responses/Error"
           },
@@ -483,6 +489,9 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -678,6 +687,9 @@
           },
           {
             "$ref": "#/components/parameters/AlertExchange"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSignalClass"
           }
         ],
         "responses": {
@@ -798,6 +810,9 @@
           },
           {
             "$ref": "#/components/parameters/AlertExchange"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSignalClass"
           }
         ],
         "responses": {
@@ -985,6 +1000,9 @@
           },
           {
             "$ref": "#/components/parameters/IncludeText"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSignalClass"
           }
         ],
         "responses": {
@@ -992,7 +1010,7 @@
             "description": "JSON Lines or CSV export",
             "headers": {
               "X-Shadow-Mode-Metrics": {
-                "description": "JSON-encoded shadow-mode outcome metrics payload emitted by SignalOutcomeService.getMetricsSummary(). Returns the string \"No measurements found\" when signal-outcome tracking is disabled or no measurements exist. Object form (when tracking is enabled with data) follows the ShadowModeMetrics schema: coverage buckets, per-window hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR plus drawdown proxy and latency/cost metadata. Omitted when source or enriched filters are supplied because the shadow-mode metrics service has no matching filters.",
+                "description": "JSON-encoded shadow-mode outcome metrics payload emitted by SignalOutcomeService.getMetricsSummary(). Returns the string \"No measurements found\" when signal-outcome tracking is disabled or no measurements exist. Object form (when tracking is enabled with data) follows the ShadowModeMetrics schema: coverage buckets, per-window hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR plus drawdown proxy and latency/cost metadata. Omitted when source, enriched, or signalClass filters are supplied because the shadow-mode metrics service has no matching filters.",
                 "schema": {
                   "type": "string"
                 }
@@ -3603,6 +3621,34 @@
         },
         "example": "BINANCE",
         "description": "Optional exchange filter (e.g. BINANCE, COINBASE). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against the extracted exchange field."
+      },
+      "WebhookSignalClass": {
+        "name": "signalClass",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "breakout",
+            "mean_reversion",
+            "trend_continuation",
+            "reversal",
+            "volume_spike",
+            "news_event",
+            "manual",
+            "unknown"
+          ]
+        },
+        "example": "breakout",
+        "description": "Optional signal classification enum value."
+      },
+      "AlertSignalClass": {
+        "name": "signalClass",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "example": "breakout",
+        "description": "Optional signal class filter (breakout, mean_reversion, trend_continuation, reversal, volume_spike, news_event, manual, unknown) or comma-separated list."
       },
       "IncludeText": {
         "name": "includeText",
@@ -7373,6 +7419,20 @@
               "null"
             ]
           },
+          "signalClass": {
+            "type": "string",
+            "enum": [
+              "breakout",
+              "mean_reversion",
+              "trend_continuation",
+              "reversal",
+              "volume_spike",
+              "news_event",
+              "manual",
+              "unknown"
+            ],
+            "description": "Classification category for the alert signal."
+          },
           "truncated": {
             "type": "boolean",
             "description": "True when the stored text was clipped to the 20,000-character cap; see originalLength for the pre-truncation size."
@@ -7616,6 +7676,10 @@
           "byFeatureFlag": {
             "$ref": "#/components/schemas/JsonObject",
             "description": "Includes tradingViewData for requested MCP enrichment, tradingViewDataApplied for successfully applied MCP results, and withoutTradingViewData for requests that did not opt in."
+          },
+          "signalClassCounts": {
+            "$ref": "#/components/schemas/JsonObject",
+            "description": "Aggregate count of stored alerts per signal class (breakout, mean_reversion, trend_continuation, reversal, volume_spike, news_event, manual, unknown)."
           },
           "enrichment": {
             "type": "object",
@@ -8031,6 +8095,20 @@
             "minLength": 1,
             "pattern": "^\\d{6,20}@(c|g)\\.us$",
             "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
+          },
+          "signalClass": {
+            "type": "string",
+            "enum": [
+              "breakout",
+              "mean_reversion",
+              "trend_continuation",
+              "reversal",
+              "volume_spike",
+              "news_event",
+              "manual",
+              "unknown"
+            ],
+            "description": "Classification category for the alert signal."
           }
         }
       },
@@ -8244,6 +8322,11 @@
           },
           "timeframe": {
             "type": "string"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "When true, validates the request and returns a dryRun response without invoking the TradingView MCP volume_confirmation_analysis call. Useful for probe requests that want to avoid the ~360s MCP budget.",
+            "default": false
           }
         }
       },
@@ -8307,6 +8390,11 @@
           "include_multi_timeframe": {
             "type": "boolean",
             "default": false
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "When true, validates the request and returns a dryRun response without invoking the TradingView MCP coin_analysis (or multi_timeframe_analysis) call. Useful for probe requests that want to avoid the ~120s MCP budget.",
+            "default": false
           }
         },
         "additionalProperties": false
@@ -8324,6 +8412,11 @@
         "properties": {
           "success": {
             "type": "boolean"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "Set to true on the dry-run response shape when dryRun is requested. When true, alertText and analysis are not produced (analysis is null).",
+            "default": false
           },
           "symbol": {
             "type": "string"
@@ -8344,7 +8437,8 @@
             "type": "string",
             "enum": [
               "complete",
-              "partial"
+              "partial",
+              "dry-run"
             ]
           },
           "analysis": {
@@ -9153,6 +9247,20 @@
             "properties": {
               "text": {
                 "type": "string"
+              },
+              "signalClass": {
+                "type": "string",
+                "enum": [
+                  "breakout",
+                  "mean_reversion",
+                  "trend_continuation",
+                  "reversal",
+                  "volume_spike",
+                  "news_event",
+                  "manual",
+                  "unknown"
+                ],
+                "description": "Classification category for the alert signal."
               },
               "enrichedData": {
                 "type": [

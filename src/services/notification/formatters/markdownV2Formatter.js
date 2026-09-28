@@ -31,6 +31,7 @@ const SPECIAL_CHARS = [
 ];
 
 const { formatHtfAlignment } = require('./htfAlignmentFormatter');
+const { formatSignalClassMarker } = require('./signalClassMarker');
 
 /**
  * Normalize backslashes to avoid double-escaping
@@ -110,9 +111,11 @@ class MarkdownV2Formatter {
 	/**
    * Format text for Telegram MarkdownV2
    * @param {string} text - Raw or enriched alert text
+   * @param {Object} [options] - Additional formatting options
+   * @param {string} [options.signalClass] - Signal classification enum value
    * @returns {string} Formatted text with MarkdownV2 escaping
    */
-	format(text) {
+	format(text, options = {}) {
 		if (!text || typeof text !== 'string') {
 			return '';
 		}
@@ -121,30 +124,40 @@ class MarkdownV2Formatter {
 		const normalized = normalizeBackslashes(text);
 
 		// Escape MarkdownV2 special characters
-		return smartEscapeMarkdownV2(normalized);
+		const formatted = smartEscapeMarkdownV2(normalized);
+		const signalClass = options.signalClass;
+		const marker = formatSignalClassMarker(signalClass, { markdownV2: true });
+		if (marker) {
+			return `${marker}\n\n${formatted}`;
+		}
+		return formatted;
 	}
 
 	/**
    * Format an enriched alert with sentiment, insights, technical levels, and sources
    * Dispatches to specific formatter based on enriched data structure
    * @param {Object} enriched - Enriched alert object
+   * @param {Object} [options] - Additional formatting options
+   * @param {string} [options.signalClass] - Signal classification enum value
    * @returns {string} Formatted message with MarkdownV2 escaping
    */
-	formatEnriched(enriched = {}) {
+	formatEnriched(enriched = {}, options = {}) {
 		// Check for Feature 004 EnrichedAlert structure (has original_text or insights array)
 		if (enriched.original_text || (enriched.insights && Array.isArray(enriched.insights))) {
-			return this.formatWebhookAlert(enriched);
+			return this.formatWebhookAlert(enriched, options);
 		}
 		// Fallback to Feature 003 NewsAlert structure
-		return this.formatNewsAlert(enriched);
+		return this.formatNewsAlert(enriched, options);
 	}
 
 	/**
    * Format Feature 004 EnrichedAlert (Webhook)
    * @param {Object} enriched - EnrichedAlert object
+   * @param {Object} [options] - Additional formatting options
+   * @param {string} [options.signalClass] - Signal classification enum value
    * @returns {string} Formatted message
    */
-	formatWebhookAlert(enriched = {}) {
+	formatWebhookAlert(enriched = {}, options = {}) {
 		const {
 			original_text = '',
 			sentiment = 'NEUTRAL',
@@ -168,6 +181,12 @@ class MarkdownV2Formatter {
 
 		// Build the message
 		let message = `*${escapedText}*`;
+
+		const signalClass = options.signalClass || enriched.signalClass;
+		const marker = formatSignalClassMarker(signalClass, { markdownV2: true });
+		if (marker) {
+			message = `${marker}\n\n${message}`;
+		}
 
 		if (truncated) {
 			message += '\n\n_\\(Message was truncated due to length\\)_';
@@ -255,9 +274,11 @@ class MarkdownV2Formatter {
 	/**
    * Format Feature 003 NewsAlert (News Monitor)
    * @param {Object} enriched - NewsAlert enriched object
+   * @param {Object} [options] - Additional formatting options
+   * @param {string} [options.signalClass] - Signal classification enum value
    * @returns {string} Formatted message
    */
-	formatNewsAlert(enriched = {}) {
+	formatNewsAlert(enriched = {}, options = {}) {
 		const {
 			originalText = '',
 			summary = '',
@@ -273,6 +294,12 @@ class MarkdownV2Formatter {
 		// Escape title
 		const escapedTitle = smartEscapeMarkdownV2(normalizeBackslashes(originalText));
 		let message = `*${escapedTitle}*`;
+
+		const signalClass = options.signalClass || enriched.signalClass;
+		const marker = formatSignalClassMarker(signalClass, { markdownV2: true });
+		if (marker) {
+			message = `${marker}\n\n${message}`;
+		}
 
 		// Summary - assume it contains some markdown (*Sentiment:*) but also dynamic text.
 		// We append it as is to preserve NewsAnalyzer formatting.
@@ -323,8 +350,10 @@ class MarkdownV2Formatter {
 }
 
 MarkdownV2Formatter.smartEscapeMarkdownV2 = smartEscapeMarkdownV2;
+MarkdownV2Formatter.formatSignalClassMarker = (signalClass, options = {}) => formatSignalClassMarker(signalClass, { markdownV2: true, ...options });
 
 module.exports = MarkdownV2Formatter;
 module.exports.smartEscapeMarkdownV2 = smartEscapeMarkdownV2;
 module.exports.escapeRiskFieldValue = escapeRiskFieldValue;
+module.exports.formatSignalClassMarker = (signalClass, options = {}) => formatSignalClassMarker(signalClass, { markdownV2: true, ...options });
 

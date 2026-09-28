@@ -86,6 +86,17 @@ class FakeElement {
 		const results = this.querySelectorAll(selector);
 		return results[0] || null;
 	}
+	focus() {
+		this._focused = true;
+	}
+
+	get tabIndex() {
+		return this._tabIndex;
+	}
+
+	set tabIndex(value) {
+		this._tabIndex = value;
+	}
 
 	querySelectorAll(selector) {
 		if (selector === '[data-view]') return findAll(this, (node) => node.dataset.view);
@@ -190,6 +201,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 	const downloads = [];
 	const timers = new Map();
 	const timerDelays = new Map();
+	const titleHistory = [''];
 	const document = {
 		body,
 		createElement: (tag) => {
@@ -202,6 +214,12 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		querySelectorAll: (selector) => body.querySelectorAll(selector),
 		addEventListener: (type, listener) => { documentListeners[type] = listener; },
 		execCommand: () => false,
+		get title() {
+			return titleHistory[titleHistory.length - 1];
+		},
+		set title(value) {
+			titleHistory.push(String(value));
+		},
 	};
 	const storage = new Map(storedKey ? [['cabros-admin-api-key', storedKey]] : []);
 	const helperCalls = [];
@@ -254,7 +272,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 	);
 	documentListeners.DOMContentLoaded();
 
-	return { body, context, elementsById, helperCalls, storage, downloads, timers, timerDelays };
+	return { body, context, elementsById, helperCalls, storage, downloads, timers, timerDelays, titleHistory };
 }
 
 async function selectView(browser, name) {
@@ -820,7 +838,7 @@ describe('admin browser client', () => {
 		const requests = [];
 		const browser = createBrowser({
 			location: {
-				hostname: 'cabros-bot.web.app',
+				hostname: 'cabros-bot--pr-1211-abcdef.web.app',
 				search: '?backend=https%3A%2F%2Fattacker.example',
 			},
 			fetchImpl: async (url) => {
@@ -831,7 +849,7 @@ describe('admin browser client', () => {
 		});
 		await flush();
 
-		expect(requests[0]).toBe('https://cabros-bot-production.up.railway.app/admin/auth-config');
+		expect(requests[0]).toBe('https://openclaw.tail5e4271.ts.net/admin/auth-config');
 		expect(requests.some((url) => url.includes('attacker.example'))).toBe(false);
 		void browser;
 	});
@@ -5461,4 +5479,41 @@ describe('structured analysis forms', () => {
 			expect(curlCommand).not.toContain('actual-production-secret-key-12345');
 		});
 	});
+	it('moves focus to the view region and updates the document title on every view switch', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+
+		const view = browser.elementsById.view;
+		// Initial load focuses the overview view region.
+		expect(view._focused).toBe(true);
+		expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
+
+		view._focused = false;
+		await selectView(browser, 'status');
+		expect(view._focused).toBe(true);
+		expect(view.tabIndex).toBe(-1);
+		expect(browser.titleHistory.at(-1)).toMatch(/Status/);
+
+		view._focused = false;
+		await selectView(browser, 'alerts');
+		expect(view._focused).toBe(true);
+		expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+
+		view._focused = false;
+		await selectView(browser, 'overview');
+		expect(view._focused).toBe(true);
+		expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
+	});
+
+	it('keeps the view region focusable for screen readers', () => {
+		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
+		expect(shell).toMatch(/<section id="view"[^>]*tabindex="-1"/);
+	});
+
 });

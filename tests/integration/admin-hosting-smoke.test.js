@@ -11,6 +11,7 @@ describe('Admin Console Hosting Smoke & Security', () => {
 		expect(res.headers['content-security-policy']).toContain('https://*.web.app');
 		expect(res.headers['content-security-policy']).toContain('https://*.firebaseapp.com');
 		expect(res.headers['content-security-policy']).toContain('https://identitytoolkit.googleapis.com');
+		expect(res.headers['content-security-policy']).toContain('https://openclaw.tail5e4271.ts.net');
 		expect(res.text).toContain('/admin/admin.js');
 		expect(res.text).toContain('/admin/admin-request.js');
 		expect(res.text).toContain('/admin/admin.css');
