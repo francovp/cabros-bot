@@ -264,6 +264,15 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		modelProvider,
 	});
 	const geminiQuota = getGeminiQuotaDependency({ gemini });
+	const grounding = geminiGroundingEnabled
+		? {
+			enabled: true,
+			configured: gemini.configured,
+			ready: gemini.ready,
+			status: gemini.status,
+			metrics: groundingMetrics.getMetrics(),
+		}
+		: null;
 	const tradingViewRuntimeStatus = tradingViewMcpService.getStatus({ enabled: tradingViewMcpEnabled });
 	const tradingViewMcp = {
 		...tradingViewRuntimeStatus,
@@ -466,6 +475,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			gemini,
 			geminiQuota,
 			groundingCoalescing: getCoalescingStatus(),
+			...(grounding ? { grounding } : {}),
 			tradingViewMcp,
 			tradingViewVolumeConfirmation,
 			firestore,
