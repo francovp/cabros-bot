@@ -117,7 +117,8 @@ describe('standalone worker Sentry shutdown flush', () => {
 			stopWorker: jest.fn(async () => events.push('outcomes:stop')),
 		}));
 
-		require('../../src/workers/signalOutcomeWorker');
+		const { main } = require('../../src/workers/signalOutcomeWorker');
+		await main();
 		process.emit('SIGTERM');
 		await waitForShutdown();
 
