@@ -155,7 +155,7 @@ describe('UserPriceAlertService - Unit Tests', () => {
 					operator: '>',
 					targetPrice: 200,
 					initialPrice: 150,
-				})
+				}),
 			).rejects.toThrow(/Límite de alertas activas alcanzado/i);
 		});
 
@@ -214,7 +214,7 @@ describe('UserPriceAlertService - Unit Tests', () => {
 				service.cancelAlert({
 					chatId: 'other-chat',
 					alertId: alert.id,
-				})
+				}),
 			).rejects.toThrow(/No se encontró una alerta activa con ese ID/i);
 		});
 	});
@@ -572,6 +572,23 @@ describe('UserPriceAlertService - Unit Tests', () => {
 				.rejects.toThrow(UserPriceAlertError);
 		});
 
+		it('does not create an ephemeral alert when the durable quota read fails', async () => {
+			// createAlert counts existing alerts through listAlerts. If that read
+			// fails we must not proceed to the write: the user would get an
+			// acknowledgement for an alert whose quota state was never verified.
+			const db = createMockFirestore();
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			makeQueriesFail(db, 'Firestore unavailable');
+
+			await expect(service.createAlert({
+				chatId: 'chat-quota-read',
+				symbol: 'BTCUSDT',
+				operator: '<',
+				targetPrice: 60000,
+			})).rejects.toThrow(UserPriceAlertError);
+			expect(db.written.filter((w) => w.collection === 'userPriceAlerts')).toHaveLength(0);
+		});
+
 		it('does not answer a durable get from the stale process-local mirror', async () => {
 			// Replica A cancelled the alert; replica B's mirror still says `armed`.
 			// A memory-first read would let B report a bogus successful cancel.
@@ -616,6 +633,53 @@ describe('UserPriceAlertService - Unit Tests', () => {
 			const second = await service.evaluateAlerts();
 			expect(second.triggeredCount).toBe(1);
 			expect(sendMessage).toHaveBeenCalledTimes(1);
+		});
+
+		it('does not notify again when a delivery attempt fails after the claim', async () => {
+			// A failed send leaves the claim at `triggered` with no `deliveredAt`.
+			// The re-arm only runs on the "no bot" branch, so a rejected send must
+			// stay consumed and never spam the user on the next sweep.
+			const alertId = 'alert_sendfail';
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					[alertId]: { chatId: 'chat-sf', symbol: 'BTCUSDT', operator: '>', targetPrice: 100, status: 'armed' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			const sendMessage = jest.fn().mockRejectedValue(new Error('Telegram 500'));
+			service.setBotGetter({ telegram: { sendMessage } });
+			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'BTCUSDT', price: 150, assetClass: 'crypto' });
+
+			const first = await service.evaluateAlerts();
+			expect(first.triggeredCount).toBe(1);
+			expect(first.errorsCount).toBe(1);
+			const stored = db.store.get('userPriceAlerts').get(alertId);
+			expect(stored.status).toBe('triggered');
+			expect(stored.deliveredAt).toBeUndefined();
+
+			service._lastScannedDocId = null;
+			const second = await service.evaluateAlerts();
+			expect(second.triggeredCount).toBe(0);
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+		});
+
+		it('records deliveredAt only after a successful send', async () => {
+			const alertId = 'alert_delivered';
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					[alertId]: { chatId: 'chat-d', symbol: 'BTCUSDT', operator: '>', targetPrice: 100, status: 'armed' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			const sendMessage = jest.fn().mockResolvedValue({ message_id: 5 });
+			service.setBotGetter({ telegram: { sendMessage } });
+			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'BTCUSDT', price: 150, assetClass: 'crypto' });
+
+			await service.evaluateAlerts();
+			const stored = db.store.get('userPriceAlerts').get(alertId);
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+			expect(stored.status).toBe('triggered');
+			expect(stored).toHaveProperty('deliveredAt');
 		});
 
 		it('keeps an alert triggered when a prior delivery succeeded', async () => {
