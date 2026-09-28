@@ -4468,7 +4468,7 @@ const createPresetSummary = (preset, { onEdit, onRun, onDelete }) => {
 	const resultHost = element('div');
 	const output = element('div', { className: 'response-block', text: '' });
 	output.hidden = true;
-	const lastRawJson = '';
+	let lastRawJson = '';
 	const rawOutput = element('div', { className: 'response-block' });
 	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
@@ -4477,7 +4477,9 @@ const createPresetSummary = (preset, { onEdit, onRun, onDelete }) => {
 	rawToggle.append(element('summary', { text: 'Run details' }), rawCopyButton, rawOutput);
 
 	runBtn.addEventListener('click', () => {
-		onRun(preset, runBtn, card, output, resultHost, rawToggle, rawOutput, rawCopyButton);
+		onRun(preset, runBtn, card, output, resultHost, rawToggle, rawOutput, rawCopyButton, (rawJson) => {
+			lastRawJson = rawJson;
+		});
 	});
 	editBtn.addEventListener('click', () => {
 		onEdit(preset);
@@ -4528,7 +4530,7 @@ const createPresetListForm = (contract, { onEdit, onStorageUpdate }) => {
 
 	form.append(button, listContainer, output, rawToggle);
 
-	const onRunPreset = async (preset, runBtn, card, cardOutput, cardResultHost, cardRawToggle, cardRawOutput, cardRawCopy) => {
+	const onRunPreset = async (preset, runBtn, card, cardOutput, cardResultHost, cardRawToggle, cardRawOutput, cardRawCopy, setRawJson) => {
 		const runDef = {
 			method: 'POST',
 			path: '/api/scanner-presets/{id}/run',
@@ -4537,6 +4539,7 @@ const createPresetListForm = (contract, { onEdit, onStorageUpdate }) => {
 			requiredRole: 'admin.operator',
 		};
 		cardResultHost.replaceChildren();
+		setRawJson('');
 		cardRawToggle.hidden = true;
 		cardOutput.hidden = false;
 		cardOutput.className = 'response-block request-state';
@@ -4559,6 +4562,7 @@ const createPresetListForm = (contract, { onEdit, onStorageUpdate }) => {
 				if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
 			}
 			const rawJson = JSON.stringify(data, null, 2);
+			setRawJson(rawJson);
 			showResult(cardRawOutput, rawJson);
 			cardRawCopy.hidden = false;
 			cardRawToggle.hidden = false;

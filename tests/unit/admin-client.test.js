@@ -1603,6 +1603,18 @@ describe('admin browser client', () => {
 		expect(requests.at(-1)[0]).toContain('/api/scanner-presets/crypto_breakout/run?dryRun=false');
 		expect(listForm.textContent).toContain('Technical scan report for crypto breakout');
 		expect(listForm.textContent).toContain('Run details');
+
+		let copiedTextarea;
+		const createElement = browser.context.document.createElement;
+		browser.context.document.createElement = (tag) => {
+			const node = createElement(tag);
+			if (tag === 'textarea') copiedTextarea = node;
+			return node;
+		};
+		browser.context.document.execCommand = () => true;
+		await findButton(runBtn.parentNode.parentNode, 'Copy details').dispatch('click');
+		await flush();
+		expect(copiedTextarea.value).toContain('Technical scan report for crypto breakout');
 	});
 
 	it('supports editing a scanner preset from its card and populates update form fields', async () => {
