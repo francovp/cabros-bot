@@ -1,7 +1,60 @@
 const request = require('supertest');
 const express = require('express');
-const { validateApiKey } = require('../../src/lib/auth');
+const { validateApiKey, matchesAnyApiKey } = require('../../src/lib/auth');
 const { requireConfiguredAdminAccess } = require('../../src/lib/adminAuth');
+
+// A length-based skip made the comparison count depend on the presented key's
+// length, which leaked the configured key-length set. Counting comparisons is a
+// non-flaky proxy for that: the old code called timingSafeEqual only for
+// same-length candidates.
+describe('Security: matchesAnyApiKey has no length-dependent comparison count', () => {
+	const crypto = require('crypto');
+
+	afterEach(() => {
+		jest.restoreAllMocks();
+	});
+
+	it('compares every candidate even when none share the presented key length', () => {
+		const candidates = ['a', 'bb', 'ccc', 'dddd'];
+		const equalSpy = jest.spyOn(crypto, 'timingSafeEqual');
+
+		const result = matchesAnyApiKey('zzzzzzz', candidates);
+
+		expect(result).toBe(false);
+		expect(equalSpy).toHaveBeenCalledTimes(candidates.length);
+	});
+
+	it('still matches a key of a different length than its neighbours', () => {
+		const equalSpy = jest.spyOn(crypto, 'timingSafeEqual');
+
+		const result = matchesAnyApiKey('longer-key-value', ['short', 'medium', 'longer-key-value']);
+
+		expect(result).toBe(true);
+		expect(equalSpy).toHaveBeenCalledTimes(3);
+	});
+
+	it('keeps the comparison count stable across presented key lengths', () => {
+		const candidates = ['k1', 'k22', 'k333'];
+
+		const shortCount = (() => {
+			const spy = jest.spyOn(crypto, 'timingSafeEqual');
+			matchesAnyApiKey('x', candidates);
+			const n = spy.mock.calls.length;
+			spy.mockRestore();
+			return n;
+		})();
+		const longCount = (() => {
+			const spy = jest.spyOn(crypto, 'timingSafeEqual');
+			matchesAnyApiKey('x'.repeat(64), candidates);
+			const n = spy.mock.calls.length;
+			spy.mockRestore();
+			return n;
+		})();
+
+		expect(shortCount).toBe(longCount);
+		expect(shortCount).toBe(candidates.length);
+	});
+});
 
 describe('Security: API Key Validation', () => {
 	let app;

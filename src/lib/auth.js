@@ -143,12 +143,16 @@ function matchesAnyApiKey(keyToCheck, candidates) {
 	if (typeof keyToCheck !== 'string' || !Array.isArray(candidates) || candidates.length === 0) {
 		return false;
 	}
-	const bufferApiKey = Buffer.from(keyToCheck);
+	// Compare fixed-length digests for every candidate, with no length-based skip and
+	// no early exit. Skipping candidates whose length differs made the number of
+	// comparisons depend on the presented key's length, so varying input lengths
+	// revealed which lengths are configured. Both sides are always 32 bytes, which
+	// also keeps timingSafeEqual from throwing on a length mismatch.
+	const digestOf = (value) => crypto.createHash('sha256').update(value, 'utf8').digest();
+	const bufferApiKey = digestOf(keyToCheck);
 	let matched = false;
 	for (const candidate of candidates) {
-		const bufferCandidate = Buffer.from(candidate);
-		if (bufferApiKey.length !== bufferCandidate.length) continue;
-		if (crypto.timingSafeEqual(bufferApiKey, bufferCandidate)) {
+		if (crypto.timingSafeEqual(bufferApiKey, digestOf(String(candidate)))) {
 			matched = true;
 		}
 	}
