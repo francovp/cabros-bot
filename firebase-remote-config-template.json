@@ -573,6 +573,20 @@
       },
       "description": "Maintenance mode toggle to pause webhooks and commands during incidents",
       "valueType": "BOOLEAN"
+    },
+    "ENABLE_STRATEGY_RESEARCH": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable TradingView MCP strategy research endpoints (compare_strategies, walk_forward_backtest_strategy, backtest_strategy)",
+      "valueType": "BOOLEAN"
+    },
+    "STRATEGY_RESEARCH_CACHE_TTL_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "In-memory cache TTL for TradingView MCP strategy research results",
+      "valueType": "NUMBER"
     }
   },
   "version": {

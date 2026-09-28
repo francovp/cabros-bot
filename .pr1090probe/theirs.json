@@ -44,7 +44,7 @@
     }
   ],
   "paths": {
-    "/api/public/status": {
+"/api/public/status": {
       "get": {
         "tags": [
           "Operations"
@@ -53,9 +53,9 @@
         "description": "Returns a redacted, secrets-free snapshot of service name/version, uptime, enabled notification channels, and dependency readiness booleans. No API key required. Cached for 30 seconds per process. Returns 503 when the process is still bootstrapping or shutting down.",
         "operationId": "getPublicStatus",
         "responses": {
-          "408": {
-            "$ref": "#/components/responses/RequestTimeout"
-          },
+                "408": {
+                  "$ref": "#/components/responses/RequestTimeout"
+                },
           "200": {
             "description": "Public status snapshot",
             "content": {
@@ -75,20 +75,12 @@
                     "shuttingDown": false
                   },
                   "channels": {
-                    "enabled": [
-                      "telegram"
-                    ]
+                    "enabled": ["telegram"]
                   },
                   "dependencies": {
-                    "gemini": {
-                      "ready": true
-                    },
-                    "tradingview": {
-                      "ready": true
-                    },
-                    "firestore": {
-                      "ready": true
-                    }
+                    "gemini": { "ready": true },
+                    "tradingview": { "ready": true },
+                    "firestore": { "ready": true }
                   }
                 }
               }
@@ -211,9 +203,6 @@
           },
           {
             "$ref": "#/components/parameters/XRequestIdHeader"
-          },
-          {
-            "$ref": "#/components/parameters/WebhookSignalClass"
           }
         ],
         "requestBody": {
@@ -455,9 +444,6 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
-          "409": {
-            "$ref": "#/components/responses/IdempotencyConflict"
-          },
           "502": {
             "$ref": "#/components/responses/Error"
           },
@@ -497,9 +483,6 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
-          },
-          "409": {
-            "$ref": "#/components/responses/IdempotencyConflict"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -695,9 +678,6 @@
           },
           {
             "$ref": "#/components/parameters/AlertExchange"
-          },
-          {
-            "$ref": "#/components/parameters/AlertSignalClass"
           }
         ],
         "responses": {
@@ -818,9 +798,6 @@
           },
           {
             "$ref": "#/components/parameters/AlertExchange"
-          },
-          {
-            "$ref": "#/components/parameters/AlertSignalClass"
           }
         ],
         "responses": {
@@ -1008,9 +985,6 @@
           },
           {
             "$ref": "#/components/parameters/IncludeText"
-          },
-          {
-            "$ref": "#/components/parameters/AlertSignalClass"
           }
         ],
         "responses": {
@@ -1018,7 +992,7 @@
             "description": "JSON Lines or CSV export",
             "headers": {
               "X-Shadow-Mode-Metrics": {
-                "description": "JSON-encoded shadow-mode outcome metrics payload emitted by SignalOutcomeService.getMetricsSummary(). Returns the string \"No measurements found\" when signal-outcome tracking is disabled or no measurements exist. Object form (when tracking is enabled with data) follows the ShadowModeMetrics schema: coverage buckets, per-window hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR plus drawdown proxy and latency/cost metadata. Omitted when source, enriched, or signalClass filters are supplied because the shadow-mode metrics service has no matching filters.",
+                "description": "JSON-encoded shadow-mode outcome metrics payload emitted by SignalOutcomeService.getMetricsSummary(). Returns the string \"No measurements found\" when signal-outcome tracking is disabled or no measurements exist. Object form (when tracking is enabled with data) follows the ShadowModeMetrics schema: coverage buckets, per-window hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR plus drawdown proxy and latency/cost metadata. Omitted when source or enriched filters are supplied because the shadow-mode metrics service has no matching filters.",
                 "schema": {
                   "type": "string"
                 }
@@ -3202,27 +3176,14 @@
               "application/json": {
                 "schema": {
                   "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/SelfTestResult"
-                    },
+                    { "$ref": "#/components/schemas/SelfTestResult" },
                     {
                       "type": "object",
                       "properties": {
-                        "status": {
-                          "type": "string",
-                          "enum": [
-                            "unknown"
-                          ]
-                        },
-                        "message": {
-                          "type": "string"
-                        },
-                        "requestId": {
-                          "type": "string"
-                        },
-                        "cached": {
-                          "type": "boolean"
-                        }
+                        "status": { "type": "string", "enum": ["unknown"] },
+                        "message": { "type": "string" },
+                        "requestId": { "type": "string" },
+                        "cached": { "type": "boolean" }
                       }
                     }
                   ]
@@ -3241,15 +3202,9 @@
           }
         },
         "security": [
-          {
-            "ApiKeyHeader": []
-          },
-          {
-            "ApiKeyQuery": []
-          },
-          {
-            "FirebaseBearerAuth": []
-          }
+          { "ApiKeyHeader": [] },
+          { "ApiKeyQuery": [] },
+          { "FirebaseBearerAuth": [] }
         ],
         "x-admin-role": "admin.viewer"
       }
@@ -3267,9 +3222,7 @@
             "name": "only",
             "in": "query",
             "required": false,
-            "schema": {
-              "type": "string"
-            },
+            "schema": { "type": "string" },
             "description": "Comma-separated check ids to scope the run to. Unknown ids return a fail result."
           }
         ],
@@ -3280,9 +3233,7 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "only": {
-                    "type": "string"
-                  }
+                  "only": { "type": "string" }
                 }
               }
             }
@@ -3293,9 +3244,7 @@
             "description": "Self-test result.",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SelfTestResult"
-                }
+                "schema": { "$ref": "#/components/schemas/SelfTestResult" }
               }
             }
           },
@@ -3313,555 +3262,9 @@
           }
         },
         "security": [
-          {
-            "ApiKeyHeader": []
-          },
-          {
-            "ApiKeyQuery": []
-          },
-          {
-            "FirebaseBearerAuth": []
-          }
-        ],
-        "x-admin-role": "admin.operator"
-      }
-    },
-    "/api/research/strategies": {
-      "get": {
-        "tags": [
-          "Research"
-        ],
-        "summary": "Compare multiple technical strategies using TradingView MCP",
-        "description": "Evaluates multiple strategies across historical data for a given asset and returns comparative performance metrics.",
-        "operationId": "getCompareStrategies",
-        "parameters": [
-          {
-            "name": "symbol",
-            "in": "query",
-            "required": true,
-            "description": "TradingView symbol (e.g. BTCUSDT or BINANCE:BTCUSDT)",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "exchange",
-            "in": "query",
-            "required": false,
-            "description": "Exchange identifier (e.g. BINANCE)",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "interval",
-            "in": "query",
-            "required": false,
-            "description": "Bar interval (1h or 1d; 4h is mapped to 1h)",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "1h",
-                "1d"
-              ],
-              "default": "1h"
-            }
-          },
-          {
-            "name": "period",
-            "in": "query",
-            "required": false,
-            "description": "Historical lookback period (e.g. 1y, 6m, 30d)",
-            "schema": {
-              "type": "string",
-              "default": "1y"
-            }
-          },
-          {
-            "name": "initial_capital",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "number",
-              "default": 10000
-            }
-          },
-          {
-            "name": "commission_pct",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "number",
-              "default": 0.001
-            }
-          },
-          {
-            "name": "slippage_pct",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "number",
-              "default": 0.0005
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Strategy comparison results",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "success",
-                    "tool",
-                    "symbol",
-                    "exchange",
-                    "cached",
-                    "result",
-                    "requestId",
-                    "processingTimeMs"
-                  ],
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    },
-                    "tool": {
-                      "type": "string",
-                      "example": "compare_strategies"
-                    },
-                    "symbol": {
-                      "type": "string",
-                      "example": "BTCUSDT"
-                    },
-                    "exchange": {
-                      "type": "string",
-                      "example": "BINANCE"
-                    },
-                    "interval": {
-                      "type": "string",
-                      "example": "1h"
-                    },
-                    "period": {
-                      "type": "string",
-                      "example": "1y"
-                    },
-                    "cached": {
-                      "type": "boolean"
-                    },
-                    "result": {
-                      "type": "object"
-                    },
-                    "requestId": {
-                      "type": "string"
-                    },
-                    "processingTimeMs": {
-                      "type": "number"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
-          },
-          "404": {
-            "$ref": "#/components/responses/Error"
-          },
-          "408": {
-            "$ref": "#/components/responses/RequestTimeout"
-          },
-          "429": {
-            "$ref": "#/components/responses/Error"
-          },
-          "502": {
-            "$ref": "#/components/responses/Error"
-          },
-          "504": {
-            "$ref": "#/components/responses/Error"
-          }
-        },
-        "security": [
-          {
-            "ApiKeyHeader": []
-          },
-          {
-            "ApiKeyQuery": []
-          }
-        ],
-        "x-admin-role": "admin.viewer"
-      }
-    },
-    "/api/research/walk-forward": {
-      "post": {
-        "tags": [
-          "Research"
-        ],
-        "summary": "Execute walk-forward strategy backtest using TradingView MCP",
-        "description": "Performs out-of-sample walk-forward validation across rolling train/test splits for a specified strategy.",
-        "operationId": "postWalkForward",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/IdempotencyKeyHeader"
-          },
-          {
-            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "symbol",
-                  "strategy"
-                ],
-                "properties": {
-                  "symbol": {
-                    "type": "string",
-                    "example": "BINANCE:BTCUSDT"
-                  },
-                  "exchange": {
-                    "type": "string",
-                    "example": "BINANCE"
-                  },
-                  "strategy": {
-                    "type": "string",
-                    "enum": [
-                      "rsi",
-                      "bollinger",
-                      "macd",
-                      "ema_cross",
-                      "supertrend",
-                      "donchian"
-                    ],
-                    "example": "rsi"
-                  },
-                  "interval": {
-                    "type": "string",
-                    "enum": [
-                      "1h",
-                      "1d"
-                    ],
-                    "default": "1h"
-                  },
-                  "period": {
-                    "type": "string",
-                    "default": "1y"
-                  },
-                  "n_splits": {
-                    "type": "integer",
-                    "minimum": 2,
-                    "maximum": 10,
-                    "default": 5
-                  },
-                  "train_ratio": {
-                    "type": "number",
-                    "minimum": 0.5,
-                    "maximum": 0.9,
-                    "default": 0.7
-                  },
-                  "initial_capital": {
-                    "type": "number",
-                    "default": 10000
-                  },
-                  "commission_pct": {
-                    "type": "number",
-                    "default": 0.001
-                  },
-                  "slippage_pct": {
-                    "type": "number",
-                    "default": 0.0005
-                  },
-                  "include_trade_log": {
-                    "type": "boolean",
-                    "default": false
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Walk forward backtest results",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "success",
-                    "tool",
-                    "symbol",
-                    "exchange",
-                    "strategy",
-                    "cached",
-                    "result",
-                    "requestId",
-                    "processingTimeMs"
-                  ],
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    },
-                    "tool": {
-                      "type": "string",
-                      "example": "walk_forward_backtest_strategy"
-                    },
-                    "symbol": {
-                      "type": "string",
-                      "example": "BTCUSDT"
-                    },
-                    "exchange": {
-                      "type": "string",
-                      "example": "BINANCE"
-                    },
-                    "strategy": {
-                      "type": "string",
-                      "example": "rsi"
-                    },
-                    "interval": {
-                      "type": "string",
-                      "example": "1h"
-                    },
-                    "period": {
-                      "type": "string",
-                      "example": "1y"
-                    },
-                    "cached": {
-                      "type": "boolean"
-                    },
-                    "result": {
-                      "type": "object"
-                    },
-                    "requestId": {
-                      "type": "string"
-                    },
-                    "processingTimeMs": {
-                      "type": "number"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
-          },
-          "404": {
-            "$ref": "#/components/responses/Error"
-          },
-          "408": {
-            "$ref": "#/components/responses/RequestTimeout"
-          },
-          "409": {
-            "$ref": "#/components/responses/IdempotencyConflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/Error"
-          },
-          "502": {
-            "$ref": "#/components/responses/Error"
-          },
-          "504": {
-            "$ref": "#/components/responses/Error"
-          }
-        },
-        "security": [
-          {
-            "ApiKeyHeader": []
-          },
-          {
-            "ApiKeyQuery": []
-          }
-        ],
-        "x-admin-role": "admin.operator"
-      }
-    },
-    "/api/research/backtest": {
-      "post": {
-        "tags": [
-          "Research"
-        ],
-        "summary": "Execute single technical strategy backtest using TradingView MCP",
-        "description": "Runs a backtest for a chosen indicator-based strategy over historical price data.",
-        "operationId": "postBacktest",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/IdempotencyKeyHeader"
-          },
-          {
-            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "symbol",
-                  "strategy"
-                ],
-                "properties": {
-                  "symbol": {
-                    "type": "string",
-                    "example": "BINANCE:BTCUSDT"
-                  },
-                  "exchange": {
-                    "type": "string",
-                    "example": "BINANCE"
-                  },
-                  "strategy": {
-                    "type": "string",
-                    "enum": [
-                      "rsi",
-                      "bollinger",
-                      "macd",
-                      "ema_cross",
-                      "supertrend",
-                      "donchian"
-                    ],
-                    "example": "ema_cross"
-                  },
-                  "interval": {
-                    "type": "string",
-                    "enum": [
-                      "1h",
-                      "1d"
-                    ],
-                    "default": "1h"
-                  },
-                  "period": {
-                    "type": "string",
-                    "default": "1y"
-                  },
-                  "initial_capital": {
-                    "type": "number",
-                    "default": 10000
-                  },
-                  "commission_pct": {
-                    "type": "number",
-                    "default": 0.001
-                  },
-                  "slippage_pct": {
-                    "type": "number",
-                    "default": 0.0005
-                  },
-                  "include_trade_log": {
-                    "type": "boolean",
-                    "default": false
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Backtest results",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "success",
-                    "tool",
-                    "symbol",
-                    "exchange",
-                    "strategy",
-                    "cached",
-                    "result",
-                    "requestId",
-                    "processingTimeMs"
-                  ],
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    },
-                    "tool": {
-                      "type": "string",
-                      "example": "backtest_strategy"
-                    },
-                    "symbol": {
-                      "type": "string",
-                      "example": "BTCUSDT"
-                    },
-                    "exchange": {
-                      "type": "string",
-                      "example": "BINANCE"
-                    },
-                    "strategy": {
-                      "type": "string",
-                      "example": "ema_cross"
-                    },
-                    "interval": {
-                      "type": "string",
-                      "example": "1h"
-                    },
-                    "period": {
-                      "type": "string",
-                      "example": "1y"
-                    },
-                    "cached": {
-                      "type": "boolean"
-                    },
-                    "result": {
-                      "type": "object"
-                    },
-                    "requestId": {
-                      "type": "string"
-                    },
-                    "processingTimeMs": {
-                      "type": "number"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
-          },
-          "404": {
-            "$ref": "#/components/responses/Error"
-          },
-          "408": {
-            "$ref": "#/components/responses/RequestTimeout"
-          },
-          "409": {
-            "$ref": "#/components/responses/IdempotencyConflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/Error"
-          },
-          "502": {
-            "$ref": "#/components/responses/Error"
-          },
-          "504": {
-            "$ref": "#/components/responses/Error"
-          }
-        },
-        "security": [
-          {
-            "ApiKeyHeader": []
-          },
-          {
-            "ApiKeyQuery": []
-          }
+          { "ApiKeyHeader": [] },
+          { "ApiKeyQuery": [] },
+          { "FirebaseBearerAuth": [] }
         ],
         "x-admin-role": "admin.operator"
       }
@@ -4200,34 +3603,6 @@
         },
         "example": "BINANCE",
         "description": "Optional exchange filter (e.g. BINANCE, COINBASE). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against the extracted exchange field."
-      },
-      "WebhookSignalClass": {
-        "name": "signalClass",
-        "in": "query",
-        "schema": {
-          "type": "string",
-          "enum": [
-            "breakout",
-            "mean_reversion",
-            "trend_continuation",
-            "reversal",
-            "volume_spike",
-            "news_event",
-            "manual",
-            "unknown"
-          ]
-        },
-        "example": "breakout",
-        "description": "Optional signal classification enum value."
-      },
-      "AlertSignalClass": {
-        "name": "signalClass",
-        "in": "query",
-        "schema": {
-          "type": "string"
-        },
-        "example": "breakout",
-        "description": "Optional signal class filter (breakout, mean_reversion, trend_continuation, reversal, volume_spike, news_event, manual, unknown) or comma-separated list."
       },
       "IncludeText": {
         "name": "includeText",
@@ -6323,102 +5698,56 @@
       }
     },
     "schemas": {
-      "PublicStatus": {
+"PublicStatus": {
         "type": "object",
         "description": "Public, unauthenticated service status snapshot. Intentionally omits credentials, configuration details, per-channel counters, feature flags, and operator identifiers.",
-        "required": [
-          "service",
-          "status",
-          "channels",
-          "dependencies"
-        ],
+        "required": ["service", "status", "channels", "dependencies"],
         "properties": {
-          "service": {
-            "$ref": "#/components/schemas/PublicStatusService"
-          },
-          "status": {
-            "$ref": "#/components/schemas/PublicStatusBody"
-          },
-          "channels": {
-            "$ref": "#/components/schemas/PublicStatusChannels"
-          },
-          "dependencies": {
-            "$ref": "#/components/schemas/PublicStatusDependencies"
-          }
+          "service": { "$ref": "#/components/schemas/PublicStatusService" },
+          "status": { "$ref": "#/components/schemas/PublicStatusBody" },
+          "channels": { "$ref": "#/components/schemas/PublicStatusChannels" },
+          "dependencies": { "$ref": "#/components/schemas/PublicStatusDependencies" }
         }
       },
-      "PublicStatusBody": {
+"PublicStatusBody": {
         "type": "object",
         "description": "Process lifecycle signal reported in the public snapshot.",
-        "required": [
-          "ok",
-          "uptimeSeconds",
-          "lastUpdated",
-          "shuttingDown"
-        ],
+        "required": ["ok", "uptimeSeconds", "lastUpdated", "shuttingDown"],
         "properties": {
-          "ok": {
-            "type": "boolean"
-          },
-          "uptimeSeconds": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "lastUpdated": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "shuttingDown": {
-            "type": "boolean"
-          }
+          "ok": { "type": "boolean" },
+          "uptimeSeconds": { "type": "integer", "minimum": 0 },
+          "lastUpdated": { "type": "string", "format": "date-time" },
+          "shuttingDown": { "type": "boolean" }
         }
       },
-      "PublicStatusChannels": {
+"PublicStatusChannels": {
         "type": "object",
         "description": "Notification channels currently enabled and ready. Order is not significant.",
-        "required": [
-          "enabled"
-        ],
+        "required": ["enabled"],
         "properties": {
           "enabled": {
             "type": "array",
             "items": {
               "type": "string",
-              "enum": [
-                "telegram",
-                "whatsapp",
-                "discord"
-              ]
+              "enum": ["telegram", "whatsapp", "discord"]
             }
           }
         }
       },
-      "PublicStatusDependencies": {
+"PublicStatusDependencies": {
         "type": "object",
         "description": "Subset of dependency readiness flags safe for public, unauthenticated consumption.",
-        "required": [
-          "gemini",
-          "tradingview",
-          "firestore"
-        ],
+        "required": ["gemini", "tradingview", "firestore"],
         "properties": {
-          "gemini": {
-            "$ref": "#/components/schemas/PublicStatusDependencyFlag"
-          },
-          "tradingview": {
-            "$ref": "#/components/schemas/PublicStatusDependencyFlag"
-          },
-          "firestore": {
-            "$ref": "#/components/schemas/PublicStatusDependencyFlag"
-          }
+          "gemini": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" },
+          "tradingview": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" },
+          "firestore": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" }
         }
       },
-      "PublicStatusDependencyFlag": {
+"PublicStatusDependencyFlag": {
         "type": "object",
         "description": "Boolean readiness flag for a single dependency in the public, unauthenticated status snapshot. No credentials, configuration details, or provider metadata are exposed.",
-        "required": [
-          "ready"
-        ],
+        "required": ["ready"],
         "properties": {
           "ready": {
             "type": "boolean",
@@ -6426,58 +5755,26 @@
           }
         }
       },
-      "PublicStatusNotReady": {
+"PublicStatusNotReady": {
         "type": "object",
         "description": "Returned with HTTP 503 when the public snapshot cannot be served because the process is still bootstrapping or shutting down.",
-        "required": [
-          "service",
-          "status",
-          "channels",
-          "dependencies",
-          "error",
-          "code"
-        ],
+        "required": ["service", "status", "channels", "dependencies", "error", "code"],
         "properties": {
-          "service": {
-            "$ref": "#/components/schemas/PublicStatusService"
-          },
-          "status": {
-            "$ref": "#/components/schemas/PublicStatusBody"
-          },
-          "channels": {
-            "$ref": "#/components/schemas/PublicStatusChannels"
-          },
-          "dependencies": {
-            "$ref": "#/components/schemas/PublicStatusDependencies"
-          },
-          "error": {
-            "type": "string"
-          },
-          "code": {
-            "type": "string",
-            "enum": [
-              "SERVICE_NOT_READY"
-            ]
-          }
+          "service": { "$ref": "#/components/schemas/PublicStatusService" },
+          "status": { "$ref": "#/components/schemas/PublicStatusBody" },
+          "channels": { "$ref": "#/components/schemas/PublicStatusChannels" },
+          "dependencies": { "$ref": "#/components/schemas/PublicStatusDependencies" },
+          "error": { "type": "string" },
+          "code": { "type": "string", "enum": ["SERVICE_NOT_READY"] }
         }
       },
-      "PublicStatusService": {
+"PublicStatusService": {
         "type": "object",
         "description": "Service identity exposed in the public snapshot. Build commit and environment are intentionally omitted.",
-        "required": [
-          "name",
-          "version"
-        ],
+        "required": ["name", "version"],
         "properties": {
-          "name": {
-            "type": "string"
-          },
-          "version": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
+          "name": { "type": "string" },
+          "version": { "type": ["string", "null"] }
         }
       },
       "JsonObject": {
@@ -6954,21 +6251,11 @@
       "FirestoreWriteMetrics": {
         "type": "object",
         "description": "In-memory counters for Firestore persistence attempts on alert storage, alert replays, and tradingviewJobs. Counters reset on process restart, never block delivery, and the field is omitted entirely from /api/status when nothing has been recorded yet. Mirrors DeliveryMetricsService for write-path observability so silent persistence failures cannot masquerade as 'Firestore ready'.",
-        "required": [
-          "window",
-          "writesAttempted",
-          "writesSucceeded",
-          "writesFailed",
-          "successRate",
-          "byDomain"
-        ],
+        "required": ["window", "writesAttempted", "writesSucceeded", "writesFailed", "successRate", "byDomain"],
         "properties": {
           "window": {
             "type": "object",
-            "required": [
-              "startedAt",
-              "durationMs"
-            ],
+            "required": ["startedAt", "durationMs"],
             "properties": {
               "startedAt": {
                 "type": "string",
@@ -7010,12 +6297,7 @@
       },
       "FirestoreWriteDomainMetrics": {
         "type": "object",
-        "required": [
-          "success",
-          "failure",
-          "total",
-          "successRate"
-        ],
+        "required": ["success", "failure", "total", "successRate"],
         "properties": {
           "success": {
             "type": "integer",
@@ -7041,173 +6323,68 @@
       "SelfTestResult": {
         "type": "object",
         "description": "Self-test diagnostic suite result. Sensitive evidence is redacted server-side; secrets are never returned.",
-        "required": [
-          "status",
-          "summary",
-          "checks",
-          "startedAt",
-          "finishedAt",
-          "durationMs",
-          "requestId"
-        ],
+        "required": ["status", "summary", "checks", "startedAt", "finishedAt", "durationMs", "requestId"],
         "properties": {
           "status": {
             "type": "string",
-            "enum": [
-              "pass",
-              "warn",
-              "fail"
-            ]
+            "enum": ["pass", "warn", "fail"]
           },
           "summary": {
             "type": "object",
-            "required": [
-              "pass",
-              "warn",
-              "fail",
-              "skipped"
-            ],
+            "required": ["pass", "warn", "fail", "skipped"],
             "properties": {
-              "pass": {
-                "type": "integer",
-                "format": "int64"
-              },
-              "warn": {
-                "type": "integer",
-                "format": "int64"
-              },
-              "fail": {
-                "type": "integer",
-                "format": "int64"
-              },
-              "skipped": {
-                "type": "integer",
-                "format": "int64"
-              }
+              "pass": { "type": "integer", "format": "int64" },
+              "warn": { "type": "integer", "format": "int64" },
+              "fail": { "type": "integer", "format": "int64" },
+              "skipped": { "type": "integer", "format": "int64" }
             }
           },
           "checks": {
             "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/SelfTestCheck"
-            }
+            "items": { "$ref": "#/components/schemas/SelfTestCheck" }
           },
           "service": {
             "type": "object",
             "nullable": true,
             "properties": {
-              "name": {
-                "type": "string"
-              },
-              "version": {
-                "type": "string"
-              },
-              "commit": {
-                "type": "string",
-                "nullable": true
-              },
-              "uptimeSec": {
-                "type": "integer"
-              },
-              "nodeVersion": {
-                "type": "string"
-              }
+              "name": { "type": "string" },
+              "version": { "type": "string" },
+              "commit": { "type": "string", "nullable": true },
+              "uptimeSec": { "type": "integer" },
+              "nodeVersion": { "type": "string" }
             }
           },
-          "startedAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "finishedAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "durationMs": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "requestId": {
-            "type": "string"
-          },
-          "cached": {
-            "type": "boolean"
-          },
-          "expired": {
-            "type": "boolean"
-          }
+          "startedAt": { "type": "string", "format": "date-time" },
+          "finishedAt": { "type": "string", "format": "date-time" },
+          "durationMs": { "type": "integer", "format": "int64" },
+          "requestId": { "type": "string" },
+          "cached": { "type": "boolean" },
+          "expired": { "type": "boolean" }
         }
       },
       "SelfTestCheck": {
         "type": "object",
-        "required": [
-          "id",
-          "status",
-          "message",
-          "durationMs"
-        ],
+        "required": ["id", "status", "message", "durationMs"],
         "properties": {
-          "id": {
-            "type": "string"
-          },
+          "id": { "type": "string" },
           "status": {
             "type": "string",
-            "enum": [
-              "pass",
-              "warn",
-              "fail",
-              "skipped"
-            ]
+            "enum": ["pass", "warn", "fail", "skipped"]
           },
-          "message": {
-            "type": "string"
-          },
-          "durationMs": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "evidence": {
-            "nullable": true
-          }
+          "message": { "type": "string" },
+          "durationMs": { "type": "integer", "format": "int64" },
+          "evidence": { "nullable": true }
         }
       },
       "SelfTestStatus": {
         "type": "object",
         "description": "Self-test dependency status surfaced under /api/status.dependencies.selfTest.",
-        "required": [
-          "lastStatus",
-          "ttlSec"
-        ],
+        "required": ["lastStatus", "ttlSec"],
         "properties": {
-          "lastRunAt": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "lastStatus": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "enum": [
-              "pass",
-              "warn",
-              "fail",
-              "unknown",
-              null
-            ]
-          },
-          "ttlSec": {
-            "type": "integer"
-          },
-          "ageMs": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64"
-          }
+          "lastRunAt": { "type": ["string", "null"], "format": "date-time" },
+          "lastStatus": { "type": ["string", "null"], "enum": ["pass", "warn", "fail", "unknown", null] },
+          "ttlSec": { "type": "integer" },
+          "ageMs": { "type": ["integer", "null"], "format": "int64" }
         }
       },
       "BootstrapReadiness": {
@@ -8196,20 +7373,6 @@
               "null"
             ]
           },
-          "signalClass": {
-            "type": "string",
-            "enum": [
-              "breakout",
-              "mean_reversion",
-              "trend_continuation",
-              "reversal",
-              "volume_spike",
-              "news_event",
-              "manual",
-              "unknown"
-            ],
-            "description": "Classification category for the alert signal."
-          },
           "truncated": {
             "type": "boolean",
             "description": "True when the stored text was clipped to the 20,000-character cap; see originalLength for the pre-truncation size."
@@ -8453,10 +7616,6 @@
           "byFeatureFlag": {
             "$ref": "#/components/schemas/JsonObject",
             "description": "Includes tradingViewData for requested MCP enrichment, tradingViewDataApplied for successfully applied MCP results, and withoutTradingViewData for requests that did not opt in."
-          },
-          "signalClassCounts": {
-            "$ref": "#/components/schemas/JsonObject",
-            "description": "Aggregate count of stored alerts per signal class (breakout, mean_reversion, trend_continuation, reversal, volume_spike, news_event, manual, unknown)."
           },
           "enrichment": {
             "type": "object",
@@ -8872,20 +8031,6 @@
             "minLength": 1,
             "pattern": "^\\d{6,20}@(c|g)\\.us$",
             "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
-          },
-          "signalClass": {
-            "type": "string",
-            "enum": [
-              "breakout",
-              "mean_reversion",
-              "trend_continuation",
-              "reversal",
-              "volume_spike",
-              "news_event",
-              "manual",
-              "unknown"
-            ],
-            "description": "Classification category for the alert signal."
           }
         }
       },
@@ -9099,11 +8244,6 @@
           },
           "timeframe": {
             "type": "string"
-          },
-          "dryRun": {
-            "type": "boolean",
-            "description": "When true, validates the request and returns a dryRun response without invoking the TradingView MCP volume_confirmation_analysis call. Useful for probe requests that want to avoid the ~360s MCP budget.",
-            "default": false
           }
         }
       },
@@ -9167,11 +8307,6 @@
           "include_multi_timeframe": {
             "type": "boolean",
             "default": false
-          },
-          "dryRun": {
-            "type": "boolean",
-            "description": "When true, validates the request and returns a dryRun response without invoking the TradingView MCP coin_analysis (or multi_timeframe_analysis) call. Useful for probe requests that want to avoid the ~120s MCP budget.",
-            "default": false
           }
         },
         "additionalProperties": false
@@ -9189,11 +8324,6 @@
         "properties": {
           "success": {
             "type": "boolean"
-          },
-          "dryRun": {
-            "type": "boolean",
-            "description": "Set to true on the dry-run response shape when dryRun is requested. When true, alertText and analysis are not produced (analysis is null).",
-            "default": false
           },
           "symbol": {
             "type": "string"
@@ -9214,8 +8344,7 @@
             "type": "string",
             "enum": [
               "complete",
-              "partial",
-              "dry-run"
+              "partial"
             ]
           },
           "analysis": {
@@ -9227,8 +8356,7 @@
           "processingTimeMs": {
             "type": "integer",
             "minimum": 0,
-            "description": "Total endpoint execution time in milliseconds.",
-            "example": 850
+            "description": "Total endpoint execution time in milliseconds."
           }
         }
       },
@@ -10025,20 +9153,6 @@
             "properties": {
               "text": {
                 "type": "string"
-              },
-              "signalClass": {
-                "type": "string",
-                "enum": [
-                  "breakout",
-                  "mean_reversion",
-                  "trend_continuation",
-                  "reversal",
-                  "volume_spike",
-                  "news_event",
-                  "manual",
-                  "unknown"
-                ],
-                "description": "Classification category for the alert signal."
               },
               "enrichedData": {
                 "type": [
