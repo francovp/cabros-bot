@@ -1708,7 +1708,7 @@ Retrieve a single stored alert by Firestore document ID. The response also surfa
   },
   "createdAt": "2026-05-25T01:30:00.000Z",
   "updatedAt": "2026-05-25T01:30:12.000Z",
-  "totalDurationMs": 12053
+  "processingTimeMs": 12053
 }
 ```
 

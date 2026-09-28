@@ -34,7 +34,7 @@ function postVolumeConfirmation() {
 					volumeRatio: null,
 					analysis: null,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 			const analysis = await tradingViewMcpService.callVolumeConfirmation({

@@ -8450,7 +8450,8 @@
           "processingTimeMs": {
             "type": "integer",
             "minimum": 0,
-            "description": "Total endpoint execution time in milliseconds."
+            "description": "Total endpoint execution time in milliseconds.",
+            "example": 850
           }
         }
       },

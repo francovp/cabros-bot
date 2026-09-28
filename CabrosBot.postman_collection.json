@@ -2197,7 +2197,7 @@
               "name": "Success - dryRun echoes parsed request without MCP call",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"confirmed\": null,\n  \"decision\": \"unknown\",\n  \"volumeRatio\": null,\n  \"analysis\": null,\n  \"requestId\": \"req-dryrun-456\",\n  \"totalDurationMs\": 3\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"confirmed\": null,\n  \"decision\": \"unknown\",\n  \"volumeRatio\": null,\n  \"analysis\": null,\n  \"requestId\": \"req-dryrun-456\",\n  \"processingTimeMs\": 3\n}"
             },
             {
               "name": "400 Invalid symbol on dryRun path",
@@ -2251,7 +2251,7 @@
               "name": "Success - dryRun echoes parsed request without MCP call",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"analysisMode\": \"combined\",\n  \"includeMultiTimeframe\": true,\n  \"side\": null,\n  \"analysis\": null,\n  \"analysisStatus\": \"dry-run\",\n  \"requestId\": \"req-dryrun-123\",\n  \"totalDurationMs\": 4\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"analysisMode\": \"combined\",\n  \"includeMultiTimeframe\": true,\n  \"side\": null,\n  \"analysis\": null,\n  \"analysisStatus\": \"dry-run\",\n  \"requestId\": \"req-dryrun-123\",\n  \"processingTimeMs\": 4\n}"
             },
             {
               "name": "400 Invalid symbol on dryRun path",
@@ -2581,7 +2581,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"📡 *SCANNER DE MERCADO — ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"totalDurationMs\": 1450\n}"
+              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"📡 *SCANNER DE MERCADO — ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"processingTimeMs\": 1450\n}"
             }
           ]
         },

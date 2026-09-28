@@ -45,7 +45,7 @@ function postSymbolAnalysis() {
 					analysis: null,
 					analysisStatus: 'dry-run',
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 			deadline = createDeadline(getTimeoutMs(), req.requestDeadlineSignal);
