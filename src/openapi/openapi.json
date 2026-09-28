@@ -10401,6 +10401,9 @@
               "notificationRedrive": {
                 "$ref": "#/components/schemas/NotificationRedriveDependency"
               },
+              "telegramCommandAuth": {
+                "$ref": "#/components/schemas/TelegramCommandAuthStatus"
+              },
               "newsMonitorDedup": {
                 "$ref": "#/components/schemas/NewsMonitorDedupDependency"
               },
@@ -10527,6 +10530,31 @@
           }
         },
         "additionalProperties": false
+      },
+      "TelegramCommandAuthStatus": {
+        "type": "object",
+        "description": "Safe runtime metadata for the Telegram command allowlist gate. Reports no chat ids; deniedSender counts only.",
+        "required": [
+          "enabled",
+          "allowlistSource",
+          "allowlistSize",
+          "deniedSinceStart",
+          "trackedDeniedSenders",
+          "deniedSenderCacheLimit"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "description": "True when at least one chat id is authorized." },
+          "allowlistSource": {
+            "type": "string",
+            "enum": ["TELEGRAM_ALLOWED_CHAT_IDS", "TELEGRAM_CHAT_ID"],
+            "description": "Which variable supplied the allowlist; falls back to TELEGRAM_CHAT_ID when the explicit list is unset."
+          },
+          "allowlistSize": { "type": "integer", "minimum": 0 },
+          "deniedSinceStart": { "type": "integer", "minimum": 0, "description": "Lifetime count of denied commands that produced a log line; cooldown-suppressed repeats are not counted." },
+          "trackedDeniedSenders": { "type": "integer", "minimum": 0, "description": "Chat ids currently held in the bounded log-cooldown cache." },
+          "deniedSenderCacheLimit": { "type": "integer", "minimum": 1, "description": "Maximum entries retained in the cooldown cache; oldest entries are evicted first." }
+        }
       },
       "NotificationRedriveDependency": {
         "type": "object",

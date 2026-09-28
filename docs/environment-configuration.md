@@ -20,6 +20,7 @@
 - `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` - Dedicated Telegram chat ID for admin/error notices (optional, falls back to `TELEGRAM_CHAT_ID`)
 - `ENABLE_STRICT_CHAT_ID_VALIDATION` - When `true`, validates per-request `telegramChatId` overrides as numeric chat IDs (5-20 digits, optional `-` prefix) and `whatsappChatId` overrides as GreenAPI `<digits>@<c.us|g.us>` chat IDs. Malformed or hostile IDs are rejected with `400 INVALID_REQUEST`. Default: `false` (backwards-compatible — any non-empty string is accepted). Classified as **environment-only** for Remote Config parity (controls request-time validation behavior; opt-in operator toggle).
 - `TELEGRAM_ACTION_OPERATOR_USER_IDS` - Comma-separated numeric Telegram user IDs allowed to use inline Replay. Empty or unset rejects replay callbacks; this security control is environment-only and is not published through Remote Config.
+- `TELEGRAM_ALLOWED_CHAT_IDS` - Optional comma-separated allowlist of Telegram chat IDs permitted to invoke bot commands (`/precio`, `/cryptobot`, `/analisis`, `/scanner`, `/jobs`, `/noticias`, `/outcomes`). Defaults to `TELEGRAM_CHAT_ID` when unset, so a single-owner setup works out of the box. Unauthorized senders are dropped silently (no reply, logged once per sender per cooldown) to avoid confirming the bot's features. This is a security control and remains **environment-only** - it is intentionally excluded from Remote Config.
 
 #### Security
 
