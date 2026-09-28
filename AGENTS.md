@@ -700,6 +700,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 **Configuration**:
 - `ENABLE_NEWS_MONITOR` — Feature flag (default: false for safe rollout)
 - `ENABLE_NEWS_MONITOR_TEST_MODE` — Expose news monitor test-mode state in `/api/status` and `/api/capabilities` (default: false)
+- `ENABLE_NEWS_MONITOR_CLASSIFIER` — Optional classifier.dev second pass when Gemini returns `none` (default: false); only recognized categories at or above `NEWS_ALERT_THRESHOLD` are promoted, and request failures preserve `none`. Because it sends the asset symbol and generated headline to an external provider, keep it environment-only and exclude it from Firebase Remote Config. `/api/status` reports its state as `featureFlags.newsMonitorClassifier`.
 - `NEWS_SYMBOLS_CRYPTO` — Default crypto symbols if not provided in request (comma-separated, e.g., "BTCUSDT,ETHUSD")
 - `NEWS_SYMBOLS_STOCKS` — Default stock symbols if not provided in request (comma-separated)
 - `NEWS_ALERT_THRESHOLD` — Confidence score threshold (default: 0.7, range 0.0-1.0)

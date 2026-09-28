@@ -46,7 +46,6 @@ Comprehensive guides and technical documentation are maintained inside the [`doc
 | **[SDK Major Drift Audit](docs/runtime-sdk-major-drift-audit.md)** | Dependency audit and version compatibility policy across Node.js runtime and SDKs. |
 
 ---
->>>>>>> origin/master
 
 ## Quick Start
 
