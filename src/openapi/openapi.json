@@ -2733,6 +2733,204 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/trading/binance/orders/preview": {
+      "post": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Preview a Binance Spot order without submitting it",
+        "description": "Returns a BINANCE_ORDER_PREVIEW response with the LOT_SIZE-adjusted quantity, projected notional, estimated maker/taker fees, slippage estimate from a fail-open depth probe (4-second AbortController deadline), and a 5-second expiresAt token. The endpoint is read-only and never calls submitNewOrder. Preview-time validation reuses the same exchange-info filters and Binance order-test filters as POST /api/trading/binance/orders, but cannot be replayed after expiresAt. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot; wouldExceedBudget is reported when the slippageBps estimate exceeds the supplied budget but no order is rejected. BINANCE_TRADING_MAX_NOTIONAL is enforced — previews above the cap return 403 MAX_NOTIONAL_EXCEEDED.",
+        "operationId": "postBinanceSpotOrderPreview",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BinanceOrderPreviewRequest"
+              },
+              "examples": {
+                "marketBuyPreview": {
+                  "summary": "MARKET BUY preview with a slippage budget",
+                  "value": {
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "type": "MARKET",
+                    "quantity": "0.01",
+                    "maxSlippageBps": 75
+                  }
+                },
+                "limitSellPreview": {
+                  "summary": "LIMIT SELL preview without depth probe",
+                  "value": {
+                    "symbol": "BTCUSDT",
+                    "side": "SELL",
+                    "type": "LIMIT",
+                    "quantity": "0.01",
+                    "price": "65000",
+                    "timeInForce": "GTC"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Preview generated without submitting an order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinanceOrderPreviewResult"
+                },
+                "examples": {
+                  "marketBuyPreview": {
+                    "value": {
+                      "success": true,
+                      "preview": true,
+                      "environment": "testnet",
+                      "order": {
+                        "symbol": "BTCUSDT",
+                        "side": "BUY",
+                        "type": "MARKET",
+                        "quantity": "0.01",
+                        "quoteOrderQty": null,
+                        "price": null,
+                        "timeInForce": null,
+                        "clientOrderId": null
+                      },
+                      "adjustedQuantity": "0.01",
+                      "adjustedNotional": "650",
+                      "constraints": {
+                        "lotSize": {
+                          "minQty": "0.00001",
+                          "maxQty": "9000",
+                          "stepSize": "0.00001"
+                        },
+                        "priceFilter": {
+                          "minPrice": "0.01",
+                          "maxPrice": "1000000",
+                          "tickSize": "0.01"
+                        },
+                        "notional": {
+                          "minNotional": "10",
+                          "maxNotional": null,
+                          "applyMinToMarket": true,
+                          "applyMaxToMarket": null
+                        }
+                      },
+                      "flags": {
+                        "lotSizeOk": true,
+                        "priceFilterOk": true,
+                        "minNotionalOk": true,
+                        "maxNotionalOk": true,
+                        "minNotionalExceededReason": null,
+                        "maxNotionalExceededReason": null
+                      },
+                      "effectivePriceEstimate": "65000",
+                      "priceSource": "avgPrice",
+                      "marketPriceError": null,
+                      "feeEstimate": {
+                        "takerFeeBps": 10,
+                        "makerFeeBps": 10,
+                        "appliedFeeBps": 10,
+                        "estimatedFeeQuote": "0.65",
+                        "label": "estimate — not a Binance fill guarantee"
+                      },
+                      "slippage": {
+                        "slippageBudgetBps": 75,
+                        "wouldExceedBudget": false
+                      },
+                      "depthSnapshot": {
+                        "limit": 20,
+                        "fetchedAt": "2026-08-30T02:30:32.043Z",
+                        "available": true
+                      },
+                      "expiresAt": "2026-08-30T02:30:37.043Z",
+                      "previewFingerprint": "8bcc995647ef3bb71bf0d6d7"
+                    }
+                  },
+                  "minNotionalViolation": {
+                    "value": {
+                      "success": false,
+                      "error": "order notional is below Binance minimum",
+                      "code": "INVALID_ORDER_REQUEST",
+                      "preview": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or LOT_SIZE/PRICE_FILTER violation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "lotSizeViolation": {
+                    "value": {
+                      "success": false,
+                      "error": "quantity does not match Binance lot-size step; suggested adjustedQuantity: 0.0001",
+                      "code": "INVALID_ORDER_REQUEST",
+                      "preview": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Feature disabled or preview exceeds the configured BINANCE_TRADING_MAX_NOTIONAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "featureDisabled": {
+                    "value": {
+                      "success": false,
+                      "error": "Binance trading is disabled",
+                      "code": "FEATURE_DISABLED"
+                    }
+                  },
+                  "maxNotionalExceeded": {
+                    "value": {
+                      "success": false,
+                      "error": "order notional exceeds configured maximum",
+                      "code": "MAX_NOTIONAL_EXCEEDED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "502": {
+            "$ref": "#/components/responses/BinanceOrderFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/trading/binance/orders": {
       "get": {
         "tags": [
@@ -8450,7 +8648,8 @@
           "processingTimeMs": {
             "type": "integer",
             "minimum": 0,
-            "description": "Total endpoint execution time in milliseconds."
+            "description": "Total endpoint execution time in milliseconds.",
+            "example": 850
           }
         }
       },
@@ -9883,6 +10082,290 @@
           }
         }
       },
+      "BinanceOrderPreviewRequest": {
+        "type": "object",
+        "description": "Pre-trade preview body. The endpoint never calls submitNewOrder; the response includes a 5-second expiresAt token. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot.",
+        "required": [
+          "symbol",
+          "side",
+          "type"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{5,20}$",
+            "description": "Allow-listed Binance Spot symbol, for example BTCUSDT."
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "MARKET",
+              "LIMIT"
+            ]
+          },
+          "quantity": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Base-asset quantity. Required for LIMIT. Optional for MARKET (must be paired with quoteOrderQty when provided)."
+          },
+          "quoteOrderQty": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Quote-asset amount for MARKET orders."
+          },
+          "price": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Required for LIMIT orders."
+          },
+          "timeInForce": {
+            "type": "string",
+            "enum": [
+              "GTC",
+              "IOC",
+              "FOK"
+            ],
+            "description": "LIMIT-only. MARKET orders must omit this field."
+          },
+          "clientOrderId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,36}$"
+          },
+          "maxSlippageBps": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "description": "Optional slippage budget in basis points. MARKET BUY orders with an available depth snapshot return wouldExceedBudget when the slippageBps estimate exceeds this value; the budget never rejects the preview itself."
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "quantity"
+            ]
+          },
+          {
+            "required": [
+              "quoteOrderQty"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "BinanceOrderPreviewResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "preview",
+          "environment",
+          "order",
+          "adjustedQuantity",
+          "constraints",
+          "flags",
+          "effectivePriceEstimate",
+          "priceSource",
+          "feeEstimate",
+          "depthSnapshot",
+          "expiresAt",
+          "previewFingerprint"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "preview": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "live"
+            ]
+          },
+          "order": {
+            "type": "object",
+            "required": [
+              "symbol",
+              "side",
+              "type"
+            ],
+            "properties": {
+              "symbol": {
+                "type": "string"
+              },
+              "side": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "string"
+              },
+              "quoteOrderQty": {
+                "type": "string"
+              },
+              "price": {
+                "type": "string"
+              },
+              "timeInForce": {
+                "type": "string"
+              },
+              "clientOrderId": {
+                "type": "string"
+              }
+            }
+          },
+          "adjustedQuantity": {
+            "type": "string"
+          },
+          "adjustedNotional": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "lotSize": {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              "priceFilter": {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              "notional": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          },
+          "flags": {
+            "type": "object",
+            "required": [
+              "lotSizeOk",
+              "priceFilterOk",
+              "minNotionalOk",
+              "maxNotionalOk"
+            ],
+            "properties": {
+              "lotSizeOk": {
+                "type": "boolean"
+              },
+              "priceFilterOk": {
+                "type": "boolean"
+              },
+              "minNotionalOk": {
+                "type": "boolean"
+              },
+              "maxNotionalOk": {
+                "type": "boolean"
+              },
+              "minNotionalExceededReason": {
+                "type": "string"
+              },
+              "maxNotionalExceededReason": {
+                "type": "string"
+              }
+            }
+          },
+          "effectivePriceEstimate": {
+            "type": "string"
+          },
+          "priceSource": {
+            "type": "string",
+            "enum": [
+              "limitPrice",
+              "avgPrice",
+              "quoteOrderQty",
+              "none"
+            ]
+          },
+          "marketPriceError": {
+            "type": "string"
+          },
+          "feeEstimate": {
+            "type": "object",
+            "required": [
+              "takerFeeBps",
+              "makerFeeBps",
+              "appliedFeeBps",
+              "estimatedFeeQuote",
+              "label"
+            ],
+            "properties": {
+              "takerFeeBps": {
+                "type": "integer"
+              },
+              "makerFeeBps": {
+                "type": "integer"
+              },
+              "appliedFeeBps": {
+                "type": "integer"
+              },
+              "estimatedFeeQuote": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "slippage": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "slippageBudgetBps": {
+                "type": "number"
+              },
+              "wouldExceedBudget": {
+                "type": "boolean"
+              }
+            }
+          },
+          "depthSnapshot": {
+            "type": "object",
+            "required": [
+              "available"
+            ],
+            "properties": {
+              "limit": {
+                "type": "integer"
+              },
+              "fetchedAt": {
+                "type": "string"
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "error": {
+                "type": "string"
+              }
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "ISO 8601 timestamp after which the preview must not be replayed."
+          },
+          "previewFingerprint": {
+            "type": "string",
+            "description": "Short SHA-256 fingerprint of the preview parameters and expiry."
+          }
+        }
+      },
       "Status": {
         "type": "object",
        "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations.",
@@ -9917,6 +10400,9 @@
               },
               "notificationRedrive": {
                 "$ref": "#/components/schemas/NotificationRedriveDependency"
+              },
+              "telegramCommandAuth": {
+                "$ref": "#/components/schemas/TelegramCommandAuthStatus"
               },
               "newsMonitorDedup": {
                 "$ref": "#/components/schemas/NewsMonitorDedupDependency"
@@ -10044,6 +10530,31 @@
           }
         },
         "additionalProperties": false
+      },
+      "TelegramCommandAuthStatus": {
+        "type": "object",
+        "description": "Safe runtime metadata for the Telegram command allowlist gate. Reports no chat ids; deniedSender counts only.",
+        "required": [
+          "enabled",
+          "allowlistSource",
+          "allowlistSize",
+          "deniedSinceStart",
+          "trackedDeniedSenders",
+          "deniedSenderCacheLimit"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "description": "True when at least one chat id is authorized." },
+          "allowlistSource": {
+            "type": "string",
+            "enum": ["TELEGRAM_ALLOWED_CHAT_IDS", "TELEGRAM_CHAT_ID"],
+            "description": "Which variable supplied the allowlist; falls back to TELEGRAM_CHAT_ID when the explicit list is unset."
+          },
+          "allowlistSize": { "type": "integer", "minimum": 0 },
+          "deniedSinceStart": { "type": "integer", "minimum": 0, "description": "Lifetime count of denied commands that produced a log line; cooldown-suppressed repeats are not counted." },
+          "trackedDeniedSenders": { "type": "integer", "minimum": 0, "description": "Chat ids currently held in the bounded log-cooldown cache." },
+          "deniedSenderCacheLimit": { "type": "integer", "minimum": 1, "description": "Maximum entries retained in the cooldown cache; oldest entries are evicted first." }
+        }
       },
       "NotificationRedriveDependency": {
         "type": "object",
