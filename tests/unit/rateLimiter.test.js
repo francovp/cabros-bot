@@ -35,6 +35,44 @@ describe('Rate Limiter Middleware', () => {
 		}
 	});
 
+	// RATE_LIMIT_API_KEY_MAX deliberately does not apply to webhook ingest paths:
+	// those always use the isolated fixed 1,000-request allowance so TradingView
+	// and scanner bursts keep their headroom. Asserted here so the precedence
+	// cannot be flipped silently; the exclusion is documented in .env.example
+	// and docs/environment-configuration.md.
+	test('ignores RATE_LIMIT_API_KEY_MAX on webhook ingest paths', () => {
+		const saved = {
+			RATE_LIMIT_API_KEY_MAX: process.env.RATE_LIMIT_API_KEY_MAX,
+			WEBHOOK_API_KEY: process.env.WEBHOOK_API_KEY,
+		};
+		process.env.RATE_LIMIT_API_KEY_MAX = '1';
+		process.env.RATE_LIMIT_MAX = '1';
+		process.env.WEBHOOK_API_KEY = 'ingest-key';
+		rateLimiter.reset();
+
+		try {
+			const ingestReq = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/webhook/alert',
+				ip: '127.0.0.1',
+				headers: { 'x-api-key': 'ingest-key' },
+			});
+			const firstNext = jest.fn();
+			rateLimiter(ingestReq, httpMocks.createResponse(), firstNext);
+			const secondNext = jest.fn();
+			rateLimiter(ingestReq, httpMocks.createResponse(), secondNext);
+
+			// Both pass: the ingest allowance is 1,000, not the configured 1.
+			expect(firstNext).toHaveBeenCalled();
+			expect(secondNext).toHaveBeenCalled();
+		} finally {
+			for (const [key, value] of Object.entries(saved)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	});
+
 	test('should fallback to req.socket.remoteAddress if req.ip is undefined', () => {
 		delete req.ip;
 		req.socket = { remoteAddress: '192.168.1.50' };
