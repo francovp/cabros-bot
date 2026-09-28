@@ -111,7 +111,20 @@ class DiscordService extends NotificationChannel {
 		return this.enabled;
 	}
 
+	/**
+	 * Check if Discord is configured for alert delivery by operator intent.
+	 * Requires the ENABLE_DISCORD_ALERTS flag and a webhook URL.
+	 * @returns {boolean}
+	 */
+	isConfigured() {
+		return (
+			process.env.ENABLE_DISCORD_ALERTS === 'true' &&
+			Boolean(this.webhookUrl || process.env.DISCORD_WEBHOOK_URL)
+		);
+	}
+
 	async send(alert = {}, options = {}) {
+		const startedAt = Date.now();
 		try {
 			const webhookUrl = alert.discordWebhookUrl || this.webhookUrl;
 			if (!webhookUrl) {
@@ -119,6 +132,7 @@ class DiscordService extends NotificationChannel {
 					success: false,
 					channel: 'discord',
 					error: 'Missing DISCORD_WEBHOOK_URL',
+					durationMs: Date.now() - startedAt,
 				};
 			}
 
@@ -130,7 +144,6 @@ class DiscordService extends NotificationChannel {
 				: 0;
 			const messageIds = [];
 			let totalAttempts = 0;
-			const startedAt = Date.now();
 
 			for (let index = resumeFromChunk; index < chunks.length; index += 1) {
 				const result = await this.sendChunk(chunks[index], webhookUrl, options.signal);
@@ -140,6 +153,7 @@ class DiscordService extends NotificationChannel {
 						return {
 							...result,
 							attemptCount: totalAttempts,
+							durationMs: Date.now() - startedAt,
 							messageIds,
 							messageCount: messageIds.length,
 							...(isChunked ? {
@@ -151,12 +165,12 @@ class DiscordService extends NotificationChannel {
 					}
 					return {
 						...result,
+						durationMs: Date.now() - startedAt,
 						messageIds,
 						messageCount: messageIds.length,
 						...(isChunked ? {
 							splitMessageCount: chunks.length,
 							failedPart: index + 1,
-							durationMs: Date.now() - startedAt,
 							resumedFromChunk: resumeFromChunk,
 						} : {}),
 					};
@@ -170,9 +184,9 @@ class DiscordService extends NotificationChannel {
 				messageId: messageIds.join(','),
 				messageIds,
 				messageCount: messageIds.length,
+					durationMs: Date.now() - startedAt,
 				...(isChunked ? {
 					splitMessageCount: chunks.length,
-					durationMs: Date.now() - startedAt,
 					resumedFromChunk: resumeFromChunk,
 				} : {}),
 			};
@@ -182,6 +196,7 @@ class DiscordService extends NotificationChannel {
 				success: false,
 				channel: 'discord',
 				error: error.message,
+				durationMs: Date.now() - startedAt,
 			};
 		}
 	}
@@ -195,11 +210,14 @@ class DiscordService extends NotificationChannel {
 	}
 
 	async formatAlert(alert = {}) {
+		const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
 		if (alert.enriched && typeof alert.enriched === 'object') {
-			return this.formatter.formatEnriched(alert.enriched);
+			return this.formatter.formatEnriched(alert.enriched, { signalClass });
 		}
 
-		return typeof alert.text === 'string' ? alert.text : '';
+		return typeof alert.text === 'string'
+			? this.formatter.format(alert.text, { signalClass })
+			: '';
 	}
 
 	extractRetryAfterMs(response, bodyText) {

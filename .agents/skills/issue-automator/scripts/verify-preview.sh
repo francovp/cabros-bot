@@ -58,6 +58,8 @@ else
     exit 1
   fi
   PREVIEW_URL="$("${SCRIPT_DIR}/get-pr-deployment-url.sh" "$PR_NUMBER")"
+  # Normalize: remove trailing slashes to prevent //endpoint concatenation issues
+  PREVIEW_URL="${PREVIEW_URL%%/}"
   LABEL="PR #${PR_NUMBER}"
 fi
 
