@@ -3,7 +3,7 @@
   "info": {
     "title": "Cabros Bot API",
     "version": "0.1.0",
-    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter exists only for legacy compatibility and may leak through logs. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true."
+    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter is deprecated and exists only for legacy compatibility — it may leak through reverse-proxy access logs. A one-time per-process deprecation warning is emitted on use; setting API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) rejects query-parameter auth with 401 API_KEY_QUERY_REMOVED after the date. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true."
   },
   "servers": [
     {
@@ -37,10 +37,68 @@
       "name": "Admin"
     },
     {
+      "name": "Preferences"
+    },
+    {
       "name": "Operations"
     }
   ],
   "paths": {
+"/api/public/status": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Public, unauthenticated service status snapshot",
+        "description": "Returns a redacted, secrets-free snapshot of service name/version, uptime, enabled notification channels, and dependency readiness booleans. No API key required. Cached for 30 seconds per process. Returns 503 when the process is still bootstrapping or shutting down.",
+        "operationId": "getPublicStatus",
+        "responses": {
+                "408": {
+                  "$ref": "#/components/responses/RequestTimeout"
+                },
+          "200": {
+            "description": "Public status snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicStatus"
+                },
+                "example": {
+                  "service": {
+                    "name": "cabros-bot",
+                    "version": "1.2.3"
+                  },
+                  "status": {
+                    "ok": true,
+                    "uptimeSeconds": 42319,
+                    "lastUpdated": "2026-08-27T19:30:00.000Z",
+                    "shuttingDown": false
+                  },
+                  "channels": {
+                    "enabled": ["telegram"]
+                  },
+                  "dependencies": {
+                    "gemini": { "ready": true },
+                    "tradingview": { "ready": true },
+                    "firestore": { "ready": true }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service is not yet ready (bootstrap pending or shutdown draining)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicStatusNotReady"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthcheck": {
       "get": {
         "tags": [
@@ -54,7 +112,9 @@
             "name": "deep",
             "in": "query",
             "required": false,
-            "schema": { "type": "boolean" },
+            "schema": {
+              "type": "boolean"
+            },
             "description": "When `true`, include channel readiness and return 503 if any enabled channel is degraded."
           }
         ],
@@ -80,7 +140,9 @@
             "description": "One or more enabled channels are degraded, or readiness evaluation failed.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/DeepHealthcheck" }
+                "schema": {
+                  "$ref": "#/components/schemas/DeepHealthcheck"
+                }
               }
             }
           }
@@ -141,6 +203,9 @@
           },
           {
             "$ref": "#/components/parameters/XRequestIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignalClass"
           }
         ],
         "requestBody": {
@@ -156,11 +221,17 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/MaintenanceMode"
           }
         },
         "security": [
@@ -192,6 +263,9 @@
           },
           {
             "$ref": "#/components/parameters/IdempotencyKeyQuerySnake"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -207,11 +281,17 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/MessageIdempotencyConflict"
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/MessageServiceUnavailable"
           }
         },
         "security": [
@@ -255,6 +335,9 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
@@ -263,6 +346,9 @@
           },
           "502": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/MaintenanceMode"
           },
           "504": {
             "$ref": "#/components/responses/Error"
@@ -309,6 +395,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
@@ -317,6 +406,9 @@
           },
           "502": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/MaintenanceMode"
           },
           "504": {
             "$ref": "#/components/responses/Error"
@@ -349,11 +441,20 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
           "502": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/MaintenanceMode"
           }
         },
         "security": [
@@ -383,11 +484,20 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
           "502": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/MaintenanceMode"
           },
           "504": {
             "$ref": "#/components/responses/Error"
@@ -427,6 +537,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "429": {
             "description": "Rate limited by the 60-second caller cooldown or TEST_ALERT_DAILY_LIMIT.",
@@ -469,6 +582,83 @@
         "x-admin-role": "admin.operator"
       }
     },
+    "/api/admin/events": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Stream real-time operator console events (SSE)",
+        "description": "Establishes a long-lived Server-Sent Events (SSE) stream for real-time operator updates, including job progress, scanner results, alert delivery events, and delivery failures. Supports up to 5 concurrent connections per client session with graceful oldest-connection eviction.",
+        "operationId": "getAdminEvents",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "description": "Firebase ID token query parameter for browser EventSource clients.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE event stream opened successfully.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": ":connected\nevent: connected\ndata: {\"clientId\":\"4519965b-db0d-4536-a81d-ef291f09c735\",\"timestamp\":\"2026-09-12T20:00:00.000Z\",\"activeConnections\":1}\n\n"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "503": {
+            "description": "Maximum server SSE connection capacity exceeded.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds to wait before reconnecting."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "Server has reached maximum SSE connection capacity. Please retry shortly.",
+                  "code": "SSE_CONNECTION_LIMIT_EXCEEDED"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/alerts": {
       "get": {
         "tags": [
@@ -497,6 +687,9 @@
           },
           {
             "$ref": "#/components/parameters/AlertExchange"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSignalClass"
           }
         ],
         "responses": {
@@ -508,6 +701,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -562,6 +758,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -611,6 +810,9 @@
           },
           {
             "$ref": "#/components/parameters/AlertExchange"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSignalClass"
           }
         ],
         "responses": {
@@ -623,8 +825,137 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/alerts/feedback": {
+      "post": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "Record a trader verdict (👍 / 👎) for a stored alert",
+        "operationId": "submitAlertFeedback",
+        "description": "Persists a single trader verdict per (alertId, chatId) tuple. Re-clicks update the verdict instead of appending a new row. Bounded by ALERT_FEEDBACK_RETENTION_DAYS and a SHA-256 chat hash; raw chat ids are never returned through this surface.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertFeedbackSubmission"
+              },
+              "examples": {
+                "upvote": {
+                  "summary": "Thumbs-up verdict on a stored alert",
+                  "value": {
+                    "alertId": "alert-123",
+                    "chatId": "120363422033474991@g.us",
+                    "verdict": "up",
+                    "symbol": "BTCUSDT",
+                    "exchange": "BINANCE",
+                    "source": "webhook-alert"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verdict recorded (or replayed via the idempotency middleware).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertFeedbackResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/alerts/feedback/summary": {
+      "get": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "Aggregate trader verdicts within a bounded time window",
+        "operationId": "getAlertFeedbackSummary",
+        "description": "Returns per-source, per-symbol, and per-exchange counts plus an up/down ratio. Raw chat ids are never included; only SHA-256 chat hashes are stored on documents.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/SummaryLimit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Aggregated verdict counts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertFeedbackSummaryResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -669,6 +1000,9 @@
           },
           {
             "$ref": "#/components/parameters/IncludeText"
+          },
+          {
+            "$ref": "#/components/parameters/AlertSignalClass"
           }
         ],
         "responses": {
@@ -676,7 +1010,7 @@
             "description": "JSON Lines or CSV export",
             "headers": {
               "X-Shadow-Mode-Metrics": {
-                "description": "JSON-encoded shadow-mode outcome metrics payload emitted by SignalOutcomeService.getMetricsSummary(). Returns the string \"No measurements found\" when signal-outcome tracking is disabled or no measurements exist. Object form (when tracking is enabled with data) follows the ShadowModeMetrics schema: coverage buckets, per-window hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR plus drawdown proxy and latency/cost metadata. Omitted when source or enriched filters are supplied because the shadow-mode metrics service has no matching filters.",
+                "description": "JSON-encoded shadow-mode outcome metrics payload emitted by SignalOutcomeService.getMetricsSummary(). Returns the string \"No measurements found\" when signal-outcome tracking is disabled or no measurements exist. Object form (when tracking is enabled with data) follows the ShadowModeMetrics schema: coverage buckets, per-window hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR plus drawdown proxy and latency/cost metadata. Omitted when source, enriched, or signalClass filters are supplied because the shadow-mode metrics service has no matching filters.",
                 "schema": {
                   "type": "string"
                 }
@@ -700,6 +1034,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -745,6 +1082,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -804,6 +1144,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -860,6 +1203,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
@@ -899,6 +1245,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -952,10 +1301,144 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
           "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/preferences/{channel}/{chatId}": {
+      "get": {
+        "tags": [
+          "Preferences"
+        ],
+        "summary": "Get chat alert preferences",
+        "description": "Returns per-chat alert preferences (symbol filters, quiet hours, confidence thresholds, categories) for a specific notification channel and chat ID. Returns default values if no custom preferences are saved.",
+        "operationId": "getChatPreferences",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PreferenceChannel"
+          },
+          {
+            "$ref": "#/components/parameters/PreferenceChatId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ChatPreferencesResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      },
+      "put": {
+        "tags": [
+          "Preferences"
+        ],
+        "summary": "Update chat alert preferences",
+        "description": "Creates or updates per-chat alert preferences. Missing fields retain existing values or safe defaults.",
+        "operationId": "updateChatPreferences",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PreferenceChannel"
+          },
+          {
+            "$ref": "#/components/parameters/PreferenceChatId"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/ChatPreferences"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ChatPreferencesResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      },
+      "delete": {
+        "tags": [
+          "Preferences"
+        ],
+        "summary": "Reset chat alert preferences to defaults",
+        "description": "Deletes stored preferences for the chat, restoring system defaults.",
+        "operationId": "deleteChatPreferences",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PreferenceChannel"
+          },
+          {
+            "$ref": "#/components/parameters/PreferenceChatId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ChatPreferencesDeleteResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
             "$ref": "#/components/responses/Error"
           }
         },
@@ -983,6 +1466,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/ScannerPresetResult"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -1020,6 +1506,19 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "description": "A scanner preset with the same case-insensitive name already exists. Response body includes code=NAME_CONFLICT and the conflicting preset so the client can resolve the conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
+                }
+              }
+            }
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -1056,6 +1555,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -1116,8 +1618,11 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
-            "description": "Preset is locked by an in-flight sweep (lockedUntil > now). Response body includes code=PRESET_LOCKED and the lockedUntil timestamp; the current preset is also returned so the client can decide whether to retry.",
+            "description": "Preset is locked by an in-flight sweep (lockedUntil > now) OR the new name matches an existing preset's name case-insensitively (code=NAME_CONFLICT, body includes the conflicting preset).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1191,6 +1696,9 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "412": {
             "description": "If-Match version does not match the current preset version. Response body includes code=PRECONDITION_FAILED and the current preset so the client can rebase.",
             "content": {
@@ -1256,6 +1764,9 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
@@ -1304,6 +1815,9 @@
           },
           "400": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
@@ -1354,6 +1868,9 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -1391,6 +1908,9 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -1427,6 +1947,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "$ref": "#/components/responses/Error"
@@ -1473,6 +1996,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "$ref": "#/components/responses/JobConflict"
@@ -1523,6 +2049,9 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/JobConflict"
           },
@@ -1572,8 +2101,14 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/NewsMonitorServiceUnavailable"
           }
         },
         "security": [
@@ -1609,8 +2144,14 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/NewsMonitorServiceUnavailable"
           }
         },
         "security": [
@@ -1660,6 +2201,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -1720,6 +2264,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -1761,6 +2308,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -1794,6 +2344,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -1827,6 +2380,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -1890,6 +2446,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -1948,6 +2507,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -2017,6 +2579,74 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/outcomes/calibration": {
+      "get": {
+        "tags": [
+          "Signal outcomes"
+        ],
+        "summary": "Retrieve confidence calibration analysis for signal outcomes",
+        "description": "Calculates empirical target-hit rates and average returns grouped by confidence score buckets (e.g. 0.70–0.75, 0.75–0.80, 0.80–0.85, 0.85–0.90, 0.90–1.00) over evaluated signals, suggesting an optimal confidence threshold.",
+        "operationId": "getOutcomesCalibration",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CalibrationLimit"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeExchange"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeWindow"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OutcomesCalibrationResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -2079,8 +2709,209 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/trading/binance/orders/preview": {
+      "post": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Preview a Binance Spot order without submitting it",
+        "description": "Returns a BINANCE_ORDER_PREVIEW response with the LOT_SIZE-adjusted quantity, projected notional, estimated maker/taker fees, slippage estimate from a fail-open depth probe (4-second AbortController deadline), and a 5-second expiresAt token. The endpoint is read-only and never calls submitNewOrder. Preview-time validation reuses the same exchange-info filters and Binance order-test filters as POST /api/trading/binance/orders, but cannot be replayed after expiresAt. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot; wouldExceedBudget is reported when the slippageBps estimate exceeds the supplied budget but no order is rejected. BINANCE_TRADING_MAX_NOTIONAL is enforced — previews above the cap return 403 MAX_NOTIONAL_EXCEEDED.",
+        "operationId": "postBinanceSpotOrderPreview",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BinanceOrderPreviewRequest"
+              },
+              "examples": {
+                "marketBuyPreview": {
+                  "summary": "MARKET BUY preview with a slippage budget",
+                  "value": {
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "type": "MARKET",
+                    "quantity": "0.01",
+                    "maxSlippageBps": 75
+                  }
+                },
+                "limitSellPreview": {
+                  "summary": "LIMIT SELL preview without depth probe",
+                  "value": {
+                    "symbol": "BTCUSDT",
+                    "side": "SELL",
+                    "type": "LIMIT",
+                    "quantity": "0.01",
+                    "price": "65000",
+                    "timeInForce": "GTC"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Preview generated without submitting an order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinanceOrderPreviewResult"
+                },
+                "examples": {
+                  "marketBuyPreview": {
+                    "value": {
+                      "success": true,
+                      "preview": true,
+                      "environment": "testnet",
+                      "order": {
+                        "symbol": "BTCUSDT",
+                        "side": "BUY",
+                        "type": "MARKET",
+                        "quantity": "0.01",
+                        "quoteOrderQty": null,
+                        "price": null,
+                        "timeInForce": null,
+                        "clientOrderId": null
+                      },
+                      "adjustedQuantity": "0.01",
+                      "adjustedNotional": "650",
+                      "constraints": {
+                        "lotSize": {
+                          "minQty": "0.00001",
+                          "maxQty": "9000",
+                          "stepSize": "0.00001"
+                        },
+                        "priceFilter": {
+                          "minPrice": "0.01",
+                          "maxPrice": "1000000",
+                          "tickSize": "0.01"
+                        },
+                        "notional": {
+                          "minNotional": "10",
+                          "maxNotional": null,
+                          "applyMinToMarket": true,
+                          "applyMaxToMarket": null
+                        }
+                      },
+                      "flags": {
+                        "lotSizeOk": true,
+                        "priceFilterOk": true,
+                        "minNotionalOk": true,
+                        "maxNotionalOk": true,
+                        "minNotionalExceededReason": null,
+                        "maxNotionalExceededReason": null
+                      },
+                      "effectivePriceEstimate": "65000",
+                      "priceSource": "avgPrice",
+                      "marketPriceError": null,
+                      "feeEstimate": {
+                        "takerFeeBps": 10,
+                        "makerFeeBps": 10,
+                        "appliedFeeBps": 10,
+                        "estimatedFeeQuote": "0.65",
+                        "label": "estimate — not a Binance fill guarantee"
+                      },
+                      "slippage": {
+                        "slippageBudgetBps": 75,
+                        "wouldExceedBudget": false
+                      },
+                      "depthSnapshot": {
+                        "limit": 20,
+                        "fetchedAt": "2026-08-30T02:30:32.043Z",
+                        "available": true
+                      },
+                      "expiresAt": "2026-08-30T02:30:37.043Z",
+                      "previewFingerprint": "8bcc995647ef3bb71bf0d6d7"
+                    }
+                  },
+                  "minNotionalViolation": {
+                    "value": {
+                      "success": false,
+                      "error": "order notional is below Binance minimum",
+                      "code": "INVALID_ORDER_REQUEST",
+                      "preview": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or LOT_SIZE/PRICE_FILTER violation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "lotSizeViolation": {
+                    "value": {
+                      "success": false,
+                      "error": "quantity does not match Binance lot-size step; suggested adjustedQuantity: 0.0001",
+                      "code": "INVALID_ORDER_REQUEST",
+                      "preview": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Feature disabled or preview exceeds the configured BINANCE_TRADING_MAX_NOTIONAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "featureDisabled": {
+                    "value": {
+                      "success": false,
+                      "error": "Binance trading is disabled",
+                      "code": "FEATURE_DISABLED"
+                    }
+                  },
+                  "maxNotionalExceeded": {
+                    "value": {
+                      "success": false,
+                      "error": "order notional exceeds configured maximum",
+                      "code": "MAX_NOTIONAL_EXCEEDED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "502": {
+            "$ref": "#/components/responses/BinanceOrderFailure"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -2178,6 +3009,9 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "502": {
             "$ref": "#/components/responses/BinanceOrderFailure"
           },
@@ -2228,6 +3062,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
             "description": "The idempotency key conflicts with the request, or the recovered Binance order does not match the requested order.",
@@ -2340,6 +3177,9 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "502": {
             "$ref": "#/components/responses/BinanceOrderFailure"
           },
@@ -2361,6 +3201,124 @@
         "x-admin-role": "admin.operator"
       }
     },
+    "/api/trading/binance/orders/audit": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Query Binance Spot order audit trail",
+        "description": "Queries durable audit records for Binance Spot order mutations (submissions, dry runs, rejections, cancellations, and reconciliations). Supports filtering by symbol, status, environment, orderId, and time range with cursor pagination.",
+        "operationId": "getBinanceOrderAudit",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records by symbol (e.g. BTCUSDT).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records by status (e.g. dry_run, submitted, confirmed, rejected, ambiguous, queried, canceled).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records by execution environment (e.g. testnet, live, demo).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "orderId",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records by Binance order ID or client order ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records created on or after this ISO 8601 timestamp.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Filter audit records created on or before this ISO 8601 timestamp.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of audit records to return (default 50, max 100).",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "description": "Cursor for backward pagination.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BinanceOrderAuditList"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/status": {
       "get": {
         "tags": [
@@ -2371,6 +3329,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/StatusResult"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -2397,6 +3358,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/StatusResult"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           }
         },
         "security": [
@@ -2412,6 +3376,114 @@
         ],
         "x-admin-role": "admin.viewer"
       }
+    },
+    "/api/selftest": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Get the last self-test diagnostic result",
+        "description": "Returns the cached result of the most recent POST /api/selftest/run call. The result expires after 60 seconds; clients should call POST /api/selftest/run to refresh.",
+        "operationId": "getSelfTest",
+        "responses": {
+          "200": {
+            "description": "Last self-test result (or a `unknown` stub when no run has occurred).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    { "$ref": "#/components/schemas/SelfTestResult" },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": { "type": "string", "enum": ["unknown"] },
+                        "message": { "type": "string" },
+                        "requestId": { "type": "string" },
+                        "cached": { "type": "boolean" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          { "ApiKeyHeader": [] },
+          { "ApiKeyQuery": [] },
+          { "FirebaseBearerAuth": [] }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/selftest/run": {
+      "post": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Run the self-test diagnostic suite",
+        "description": "Runs a bounded self-diagnostic suite (each check has a 5s deadline; the whole suite is bounded to 30s). Optional `only` filter scopes the run to a comma-separated list of check ids.",
+        "operationId": "postSelfTestRun",
+        "parameters": [
+          {
+            "name": "only",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Comma-separated check ids to scope the run to. Unknown ids return a fail result."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "only": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Self-test result.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SelfTestResult" }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          { "ApiKeyHeader": [] },
+          { "ApiKeyQuery": [] },
+          { "FirebaseBearerAuth": [] }
+        ],
+        "x-admin-role": "admin.operator"
+      }
     }
   },
   "components": {
@@ -2425,7 +3497,8 @@
         "type": "apiKey",
         "in": "query",
         "name": "api-key",
-        "description": "Legacy compatibility only. Prefer x-api-key because query strings may be logged."
+        "description": "Deprecated (GH-756): legacy compatibility only — query strings may be logged by reverse proxies and access logs. Prefer the x-api-key header. A process-scoped deprecation warning is logged on first use, and a sunset date (API_KEY_QUERY_SUNSET, YYYY-MM-DD UTC) can be set to reject query-parameter auth with 401 API_KEY_QUERY_REMOVED.",
+        "x-deprecated": true
       },
       "FirebaseBearerAuth": {
         "type": "http",
@@ -2451,6 +3524,29 @@
         "schema": {
           "type": "string",
           "format": "uuid"
+        }
+      },
+      "PreferenceChannel": {
+        "name": "channel",
+        "in": "path",
+        "required": true,
+        "description": "Notification channel name",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "telegram",
+            "whatsapp",
+            "discord"
+          ]
+        }
+      },
+      "PreferenceChatId": {
+        "name": "chatId",
+        "in": "path",
+        "required": true,
+        "description": "Chat identifier for the given channel",
+        "schema": {
+          "type": "string"
         }
       },
       "JobId": {
@@ -2536,6 +3632,17 @@
           "default": 50
         },
         "description": "Maximum number of outcomes to return (1-100)."
+      },
+      "CalibrationLimit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 1000
+        },
+        "description": "Maximum number of signals to evaluate for calibration (1-1000)."
       },
       "BeforeCursor": {
         "name": "before",
@@ -2712,6 +3819,34 @@
         },
         "example": "BINANCE",
         "description": "Optional exchange filter (e.g. BINANCE, COINBASE). Case-insensitive non-empty string up to 64 characters (whitespace-only strings are rejected) matched against the extracted exchange field."
+      },
+      "WebhookSignalClass": {
+        "name": "signalClass",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "breakout",
+            "mean_reversion",
+            "trend_continuation",
+            "reversal",
+            "volume_spike",
+            "news_event",
+            "manual",
+            "unknown"
+          ]
+        },
+        "example": "breakout",
+        "description": "Optional signal classification enum value."
+      },
+      "AlertSignalClass": {
+        "name": "signalClass",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "example": "breakout",
+        "description": "Optional signal class filter (breakout, mean_reversion, trend_continuation, reversal, volume_spike, news_event, manual, unknown) or comma-separated list."
       },
       "IncludeText": {
         "name": "includeText",
@@ -3424,9 +4559,46 @@
             }
           }
         }
+      },
+      "ChatPreferences": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ChatPreferencesUpdateInput"
+            },
+            "example": {
+              "symbolFilter": [
+                "BTC",
+                "ETH"
+              ],
+              "symbolExclude": [
+                "DOGE"
+              ],
+              "minConfidence": 0.75,
+              "quietHoursStart": 22,
+              "quietHoursEnd": 8,
+              "timezone": "America/Santiago",
+              "categories": [
+                "scanner",
+                "news"
+              ]
+            }
+          }
+        }
       }
     },
     "responses": {
+      "BinanceOrderAuditList": {
+        "description": "Paginated Binance order audit records.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/BinanceOrderAuditList"
+            }
+          }
+        }
+      },
       "BinanceOrdersQueryResult": {
         "description": "Binance Spot order status or recent order history query result.",
         "content": {
@@ -3562,6 +4734,90 @@
             "example": {
               "error": "Unauthorized",
               "code": "UNAUTHORIZED"
+            }
+          }
+        }
+      },
+      "MaintenanceMode": {
+        "description": "Service is temporarily unavailable due to active maintenance mode",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/MaintenanceModeError"
+            },
+            "example": {
+              "error": "MAINTENANCE_MODE",
+              "message": "Service is temporarily unavailable for maintenance"
+            }
+          }
+        }
+      },
+      "MessageServiceUnavailable": {
+        "description": "Service is temporarily unavailable due to active maintenance mode or uninitialized notification services",
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/MaintenanceModeError"
+                },
+                {
+                  "$ref": "#/components/schemas/NotificationServiceUnavailableError"
+                }
+              ]
+            },
+            "examples": {
+              "maintenanceMode": {
+                "summary": "Maintenance mode active",
+                "value": {
+                  "error": "MAINTENANCE_MODE",
+                  "message": "Service is temporarily unavailable for maintenance"
+                }
+              },
+              "servicesUninitialized": {
+                "summary": "Notification services not initialized",
+                "value": {
+                  "success": false,
+                  "error": "Notification services not initialized"
+                }
+              }
+            }
+          }
+        }
+      },
+      "NewsMonitorServiceUnavailable": {
+        "description": "Service is temporarily unavailable due to active maintenance mode or paused news monitoring",
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/MaintenanceModeError"
+                },
+                {
+                  "$ref": "#/components/schemas/NewsMonitorPausedError"
+                }
+              ]
+            },
+            "examples": {
+              "maintenanceMode": {
+                "summary": "Maintenance mode active",
+                "value": {
+                  "error": "MAINTENANCE_MODE",
+                  "message": "Service is temporarily unavailable for maintenance"
+                }
+              },
+              "newsMonitorPaused": {
+                "summary": "News monitor paused",
+                "value": {
+                  "error": "News monitor analysis is temporarily paused.",
+                  "code": "NEWS_MONITOR_PAUSED",
+                  "paused": true,
+                  "pausedAt": "2026-03-30T12:00:00.000Z",
+                  "reason": "Operator paused news monitor",
+                  "requestId": "req-123"
+                }
+              }
             }
           }
         }
@@ -3773,7 +5029,7 @@
         }
       },
       "MessageDeliveryResult": {
-        "description": "Generic-message delivery response. A replay returns the cached body with idempotencyReplayed=true and Idempotency-Replay: true.",
+        "description": "Generic-message delivery response. A replay returns the cached body with idempotencyReplayed=true and Idempotency-Replay: true. The requestId field mirrors the inbound x-request-id header (sanitized) or a generated UUIDv4 so callers can correlate the response with logs, Sentry, and admin paging.",
         "headers": {
           "Idempotency-Replay": {
             "description": "false for the first accepted request, true for a cached replay.",
@@ -3807,11 +5063,13 @@
               "success": {
                 "value": {
                   "success": true,
+                  "requestId": "msg-correlation-001",
                   "results": [
                     {
                       "channel": "telegram",
                       "success": true,
-                      "messageId": "tg-msg-123"
+                      "messageId": "tg-msg-123",
+                      "durationMs": 450
                     }
                   ]
                 }
@@ -3820,11 +5078,13 @@
                 "value": {
                   "success": true,
                   "idempotencyReplayed": true,
+                  "requestId": "msg-correlation-001",
                   "results": [
                     {
                       "channel": "telegram",
                       "success": true,
-                      "messageId": "tg-msg-123"
+                      "messageId": "tg-msg-123",
+                      "durationMs": 450
                     }
                   ]
                 }
@@ -3860,7 +5120,8 @@
               "results": [
                 {
                   "channel": "telegram",
-                  "success": true
+                  "success": true,
+                  "durationMs": 180
                 }
               ]
             }
@@ -3998,6 +5259,29 @@
           }
         }
       },
+      "OutcomesCalibrationResult": {
+        "description": "Signal outcomes confidence calibration result",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "calibration"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "calibration": {
+                  "$ref": "#/components/schemas/OutcomesCalibration"
+                }
+              }
+            }
+          }
+        }
+      },
       "OutcomesSummaryResult": {
         "description": "Signal outcomes aggregate metrics summary",
         "content": {
@@ -4039,9 +5323,25 @@
                       "symbol": "BTCUSDT",
                       "status": "analyzed",
                       "alert": {
+                        "symbol": "BTCUSDT",
                         "eventCategory": "price_surge",
                         "headline": "Bitcoin breaks resistance",
-                        "confidence": 0.85
+                        "sentimentScore": 0.65,
+                        "confidence": 0.85,
+                        "sources": [
+                          "https://www.coindesk.com/markets/2026/08/bitcoin-resistance"
+                        ],
+                        "formattedMessage": "BTCUSDT breakout above resistance (confidence 0.85).",
+                        "timestamp": 1724745600000,
+                        "marketContext": {
+                          "price": 68500.0,
+                          "change24h": 2.4,
+                          "volume24h": 18500000000,
+                          "source": "binance",
+                          "timestamp": 1724745599000
+                        },
+                        "stop": 67130.0,
+                        "target": 71925.0
                       },
                       "deliveryResults": [],
                       "cached": false,
@@ -4055,6 +5355,7 @@
                     "timeout": 0,
                     "error": 0,
                     "quota_exhausted": 0,
+                    "throttled": 0,
                     "alerts_sent": 1
                   },
                   "requestedChannels": [
@@ -4064,7 +5365,54 @@
                   "deliveredChannels": [],
                   "totalDurationMs": 850,
                   "requestId": "req-dryrun123",
-                  "tokenUsage": {}
+                  "tokenUsage": {},
+                  "windowUsage": {
+                    "alertsDelivered": 0,
+                    "alertsThrottled": 0,
+                    "windowResetsAt": "2026-09-12T10:20:00.000Z"
+                  }
+                }
+              },
+              "analyzedNoBarriers": {
+                "summary": "Analyzed alert without numeric barriers",
+                "value": {
+                  "success": true,
+                  "results": [
+                    {
+                      "symbol": "ETHUSDT",
+                      "status": "analyzed",
+                      "alert": {
+                        "symbol": "ETHUSDT",
+                        "eventCategory": "public_figure",
+                        "headline": "Vitalik discusses scaling roadmap",
+                        "sentimentScore": 0.3,
+                        "confidence": 0.6,
+                        "sources": [
+                          "https://example.com/eth-news"
+                        ],
+                        "formattedMessage": "ETHUSDT public_figure event (confidence 0.6).",
+                        "timestamp": 1724745600000
+                      },
+                      "deliveryResults": [],
+                      "cached": false,
+                      "requestId": "req-nobarriers456"
+                    }
+                  ],
+                  "summary": {
+                    "total": 1,
+                    "analyzed": 1,
+                    "cached": 0,
+                    "timeout": 0,
+                    "error": 0,
+                    "quota_exhausted": 0,
+                    "alerts_sent": 0
+                  },
+                  "requestedChannels": [
+                    "telegram"
+                  ],
+                  "deliveredChannels": [],
+                  "totalDurationMs": 720,
+                  "requestId": "req-nobarriers456"
                 }
               }
             }
@@ -4158,7 +5506,7 @@
         }
       },
       "StatusResult": {
-        "description": "Non-sensitive runtime readiness. When Firebase Remote Config is enabled, dependencies.firebaseRemoteConfig reports loader metadata only; it never exposes remote parameter values or credentials.",
+        "description": "Non-sensitive runtime readiness. featureFlags.newsMonitorClassifier reports whether optional classifier.dev rechecks are enabled. When Firebase Remote Config is enabled, dependencies.firebaseRemoteConfig reports loader metadata only; it never exposes remote parameter values or credentials.",
         "content": {
           "application/json": {
             "schema": {
@@ -4169,7 +5517,10 @@
                 "alertScheduler": false,
                 "equityMarketData": false,
                 "firebaseRemoteConfig": false,
-                "notificationRedrive": false
+                "maintenanceMode": false,
+                "notificationRedrive": false,
+                "tokenCostBudget": false,
+                "newsMonitorClassifier": false
               },
               "dependencies": {
                 "alertScheduler": {
@@ -4250,7 +5601,8 @@
                     "lastStateChangeAt": null,
                     "failureThreshold": 5,
                     "cooldownMs": 600000
-                  }
+                  },
+                  "toolMetrics": {}
                 },
                 "equityMarketData": {
                   "provider": null,
@@ -4332,8 +5684,44 @@
                       "evictionCount": 0
                     }
                   }
+                },
+                "tokenCostBudget": {
+                  "enabled": false,
+                  "configured": true,
+                  "ready": false,
+                  "status": "disabled",
+                  "dailySpendUsd": 0,
+                  "budgetUsd": 5,
+                  "utilizationPct": 0,
+                  "alertsSent": 0,
+                  "lastResetAt": "2026-03-29T00:00:00.000Z"
                 }
               }
+            }
+          }
+        }
+      },
+      "RequestTimeout": {
+        "description": "Request processing exceeded the global request-deadline ceiling",
+        "headers": {
+          "X-Request-Id": {
+            "description": "Unique identifier assigned to the request",
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RequestTimeoutError"
+            },
+            "example": {
+              "error": "Request Timeout",
+              "code": "REQUEST_TIMEOUT",
+              "requestId": "req-1726214400000-abcdef",
+              "deadlineMs": 30000,
+              "durationMs": 30005
             }
           }
         }
@@ -4519,12 +5907,278 @@
             }
           }
         }
+      },
+      "ChatPreferencesResult": {
+        "description": "Chat preferences result",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "data": {
+                  "$ref": "#/components/schemas/ChatPreferences"
+                }
+              },
+              "required": [
+                "success",
+                "data"
+              ]
+            }
+          }
+        }
+      },
+      "ChatPreferencesDeleteResult": {
+        "description": "Chat preferences reset result",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "message": {
+                  "type": "string",
+                  "example": "Preferencias eliminadas. Se usarán valores por defecto."
+                }
+              },
+              "required": [
+                "success",
+                "message"
+              ]
+            }
+          }
+        }
       }
     },
     "schemas": {
+"PublicStatus": {
+        "type": "object",
+        "description": "Public, unauthenticated service status snapshot. Intentionally omits credentials, configuration details, per-channel counters, feature flags, and operator identifiers.",
+        "required": ["service", "status", "channels", "dependencies"],
+        "properties": {
+          "service": { "$ref": "#/components/schemas/PublicStatusService" },
+          "status": { "$ref": "#/components/schemas/PublicStatusBody" },
+          "channels": { "$ref": "#/components/schemas/PublicStatusChannels" },
+          "dependencies": { "$ref": "#/components/schemas/PublicStatusDependencies" }
+        }
+      },
+"PublicStatusBody": {
+        "type": "object",
+        "description": "Process lifecycle signal reported in the public snapshot.",
+        "required": ["ok", "uptimeSeconds", "lastUpdated", "shuttingDown"],
+        "properties": {
+          "ok": { "type": "boolean" },
+          "uptimeSeconds": { "type": "integer", "minimum": 0 },
+          "lastUpdated": { "type": "string", "format": "date-time" },
+          "shuttingDown": { "type": "boolean" }
+        }
+      },
+"PublicStatusChannels": {
+        "type": "object",
+        "description": "Notification channels currently enabled and ready. Order is not significant.",
+        "required": ["enabled"],
+        "properties": {
+          "enabled": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["telegram", "whatsapp", "discord"]
+            }
+          }
+        }
+      },
+"PublicStatusDependencies": {
+        "type": "object",
+        "description": "Subset of dependency readiness flags safe for public, unauthenticated consumption.",
+        "required": ["gemini", "tradingview", "firestore"],
+        "properties": {
+          "gemini": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" },
+          "tradingview": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" },
+          "firestore": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" }
+        }
+      },
+"PublicStatusDependencyFlag": {
+        "type": "object",
+        "description": "Boolean readiness flag for a single dependency in the public, unauthenticated status snapshot. No credentials, configuration details, or provider metadata are exposed.",
+        "required": ["ready"],
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "description": "True when the dependency is enabled, configured, and currently ready."
+          }
+        }
+      },
+"PublicStatusNotReady": {
+        "type": "object",
+        "description": "Returned with HTTP 503 when the public snapshot cannot be served because the process is still bootstrapping or shutting down.",
+        "required": ["service", "status", "channels", "dependencies", "error", "code"],
+        "properties": {
+          "service": { "$ref": "#/components/schemas/PublicStatusService" },
+          "status": { "$ref": "#/components/schemas/PublicStatusBody" },
+          "channels": { "$ref": "#/components/schemas/PublicStatusChannels" },
+          "dependencies": { "$ref": "#/components/schemas/PublicStatusDependencies" },
+          "error": { "type": "string" },
+          "code": { "type": "string", "enum": ["SERVICE_NOT_READY"] }
+        }
+      },
+"PublicStatusService": {
+        "type": "object",
+        "description": "Service identity exposed in the public snapshot. Build commit and environment are intentionally omitted.",
+        "required": ["name", "version"],
+        "properties": {
+          "name": { "type": "string" },
+          "version": { "type": ["string", "null"] }
+        }
+      },
       "JsonObject": {
         "type": "object",
         "additionalProperties": true
+      },
+      "ChatPreferences": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "example": "123456789"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "telegram",
+              "whatsapp",
+              "discord"
+            ],
+            "example": "telegram"
+          },
+          "symbolFilter": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "example": [
+              "BTCUSDT",
+              "ETHUSDT"
+            ]
+          },
+          "symbolExclude": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "example": [
+              "DOGEUSDT"
+            ]
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "example": [
+              "scanner",
+              "news"
+            ]
+          },
+          "minConfidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "example": 0.7
+          },
+          "quietHoursStart": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 23,
+            "example": 22
+          },
+          "quietHoursEnd": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 23,
+            "example": 8
+          },
+          "timezone": {
+            "type": "string",
+            "example": "America/Santiago"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "chatId",
+          "channel",
+          "symbolFilter",
+          "symbolExclude",
+          "categories",
+          "minConfidence",
+          "timezone"
+        ]
+      },
+      "ChatPreferencesUpdateInput": {
+        "type": "object",
+        "properties": {
+          "symbolFilter": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "symbolExclude": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "minConfidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "quietHoursStart": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 23
+          },
+          "quietHoursEnd": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 23
+          },
+          "timezone": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "BatchDeleteResult": {
         "type": "object",
@@ -4611,9 +6265,15 @@
               "discord"
             ],
             "properties": {
-              "telegram": { "$ref": "#/components/schemas/ChannelReadiness" },
-              "whatsapp": { "$ref": "#/components/schemas/ChannelReadiness" },
-              "discord": { "$ref": "#/components/schemas/ChannelReadiness" }
+              "telegram": {
+                "$ref": "#/components/schemas/ChannelReadiness"
+              },
+              "whatsapp": {
+                "$ref": "#/components/schemas/ChannelReadiness"
+              },
+              "discord": {
+                "$ref": "#/components/schemas/ChannelReadiness"
+              }
             }
           }
         }
@@ -4790,8 +6450,12 @@
           "status"
         ],
         "properties": {
-          "enabled": { "type": "boolean" },
-          "ready": { "type": "boolean" },
+          "enabled": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -4802,7 +6466,9 @@
               "unknown"
             ]
           },
-          "error": { "type": "string" }
+          "error": {
+            "type": "string"
+          }
         }
       },
       "DeliveryChannelMetrics": {
@@ -4839,6 +6505,145 @@
             "format": "double",
             "nullable": true
           }
+        }
+      },
+      "FirestoreWriteMetrics": {
+        "type": "object",
+        "description": "In-memory counters for Firestore persistence attempts on alert storage, alert replays, and tradingviewJobs. Counters reset on process restart, never block delivery, and the field is omitted entirely from /api/status when nothing has been recorded yet. Mirrors DeliveryMetricsService for write-path observability so silent persistence failures cannot masquerade as 'Firestore ready'.",
+        "required": ["window", "writesAttempted", "writesSucceeded", "writesFailed", "successRate", "byDomain"],
+        "properties": {
+          "window": {
+            "type": "object",
+            "required": ["startedAt", "durationMs"],
+            "properties": {
+              "startedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "durationMs": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          },
+          "writesAttempted": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "writesSucceeded": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "writesFailed": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "successRate": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "byDomain": {
+            "type": "object",
+            "description": "Per-domain breakdown (alerts, alertReplays, jobs).",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FirestoreWriteDomainMetrics"
+            }
+          }
+        }
+      },
+      "FirestoreWriteDomainMetrics": {
+        "type": "object",
+        "required": ["success", "failure", "total", "successRate"],
+        "properties": {
+          "success": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failure": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "successRate": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      },
+      "SelfTestResult": {
+        "type": "object",
+        "description": "Self-test diagnostic suite result. Sensitive evidence is redacted server-side; secrets are never returned.",
+        "required": ["status", "summary", "checks", "startedAt", "finishedAt", "durationMs", "requestId"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["pass", "warn", "fail"]
+          },
+          "summary": {
+            "type": "object",
+            "required": ["pass", "warn", "fail", "skipped"],
+            "properties": {
+              "pass": { "type": "integer", "format": "int64" },
+              "warn": { "type": "integer", "format": "int64" },
+              "fail": { "type": "integer", "format": "int64" },
+              "skipped": { "type": "integer", "format": "int64" }
+            }
+          },
+          "checks": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/SelfTestCheck" }
+          },
+          "service": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "name": { "type": "string" },
+              "version": { "type": "string" },
+              "commit": { "type": "string", "nullable": true },
+              "uptimeSec": { "type": "integer" },
+              "nodeVersion": { "type": "string" }
+            }
+          },
+          "startedAt": { "type": "string", "format": "date-time" },
+          "finishedAt": { "type": "string", "format": "date-time" },
+          "durationMs": { "type": "integer", "format": "int64" },
+          "requestId": { "type": "string" },
+          "cached": { "type": "boolean" },
+          "expired": { "type": "boolean" }
+        }
+      },
+      "SelfTestCheck": {
+        "type": "object",
+        "required": ["id", "status", "message", "durationMs"],
+        "properties": {
+          "id": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["pass", "warn", "fail", "skipped"]
+          },
+          "message": { "type": "string" },
+          "durationMs": { "type": "integer", "format": "int64" },
+          "evidence": { "nullable": true }
+        }
+      },
+      "SelfTestStatus": {
+        "type": "object",
+        "description": "Self-test dependency status surfaced under /api/status.dependencies.selfTest.",
+        "required": ["lastStatus", "ttlSec"],
+        "properties": {
+          "lastRunAt": { "type": ["string", "null"], "format": "date-time" },
+          "lastStatus": { "type": ["string", "null"], "enum": ["pass", "warn", "fail", "unknown", null] },
+          "ttlSec": { "type": "integer" },
+          "ageMs": { "type": ["integer", "null"], "format": "int64" }
         }
       },
       "BootstrapReadiness": {
@@ -4924,6 +6729,85 @@
             ]
           }
         }
+      },
+      "MaintenanceModeError": {
+        "type": "object",
+        "required": [
+          "error",
+          "message"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "MAINTENANCE_MODE"
+          },
+          "message": {
+            "type": "string",
+            "example": "Service is temporarily unavailable for maintenance"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NotificationServiceUnavailableError": {
+        "type": "object",
+        "required": [
+          "success",
+          "error"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ],
+            "example": false
+          },
+          "error": {
+            "type": "string",
+            "example": "Notification services not initialized"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewsMonitorPausedError": {
+        "type": "object",
+        "required": [
+          "error",
+          "code",
+          "paused"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "News monitor analysis is temporarily paused."
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "NEWS_MONITOR_PAUSED"
+            ],
+            "example": "NEWS_MONITOR_PAUSED"
+          },
+          "paused": {
+            "type": "boolean",
+            "example": true
+          },
+          "pausedAt": {
+            "type": "string",
+            "nullable": true,
+            "example": "2026-03-30T12:00:00.000Z"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "example": "Operator paused news monitor"
+          },
+          "requestId": {
+            "type": "string",
+            "example": "req-123"
+          }
+        },
+        "additionalProperties": false
       },
       "Error": {
         "type": "object",
@@ -5130,6 +7014,84 @@
               "null"
             ],
             "example": 150
+          }
+        }
+      },
+      "OutcomesCalibration": {
+        "type": "object",
+        "required": [
+          "available",
+          "totalScoredAlerts",
+          "buckets",
+          "suggestedThreshold",
+          "suggestedThresholdRationale"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "example": true
+          },
+          "totalScoredAlerts": {
+            "type": "integer",
+            "example": 45
+          },
+          "buckets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CalibrationBucket"
+            }
+          },
+          "suggestedThreshold": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 0.78
+          },
+          "suggestedThresholdRationale": {
+            "type": "string",
+            "example": "Alerts at 0.78+ show 55%+ target hit rate at 4h window"
+          }
+        }
+      },
+      "CalibrationBucket": {
+        "type": "object",
+        "required": [
+          "range",
+          "count",
+          "avgReturn1h",
+          "avgReturn4h",
+          "targetHitRate"
+        ],
+        "properties": {
+          "range": {
+            "type": "string",
+            "example": "0.75-0.80"
+          },
+          "count": {
+            "type": "integer",
+            "example": 15
+          },
+          "avgReturn1h": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 0.82
+          },
+          "avgReturn4h": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 1.45
+          },
+          "targetHitRate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 0.6
           }
         }
       },
@@ -5670,6 +7632,20 @@
               "null"
             ]
           },
+          "signalClass": {
+            "type": "string",
+            "enum": [
+              "breakout",
+              "mean_reversion",
+              "trend_continuation",
+              "reversal",
+              "volume_spike",
+              "news_event",
+              "manual",
+              "unknown"
+            ],
+            "description": "Classification category for the alert signal."
+          },
           "truncated": {
             "type": "boolean",
             "description": "True when the stored text was clipped to the 20,000-character cap; see originalLength for the pre-truncation size."
@@ -5914,6 +7890,10 @@
             "$ref": "#/components/schemas/JsonObject",
             "description": "Includes tradingViewData for requested MCP enrichment, tradingViewDataApplied for successfully applied MCP results, and withoutTradingViewData for requests that did not opt in."
           },
+          "signalClassCounts": {
+            "$ref": "#/components/schemas/JsonObject",
+            "description": "Aggregate count of stored alerts per signal class (breakout, mean_reversion, trend_continuation, reversal, volume_spike, news_event, manual, unknown)."
+          },
           "enrichment": {
             "type": "object",
             "properties": {
@@ -6031,11 +8011,63 @@
             "$ref": "#/components/schemas/JsonObject"
           },
           "latency": {
-            "$ref": "#/components/schemas/JsonObject"
+            "$ref": "#/components/schemas/AlertSummaryLatency"
           },
           "shadowModeMetrics": {
             "description": "Aggregated shadow-mode outcome metrics. When an object, includes the full OutcomesSummary payload (coverage buckets, per-window WindowStats with hit/target/stop rates and expectancyR, drawdown proxy, latency/cost metadata, and falsePositiveCandidates). When no data is available or signal-outcome tracking is disabled, the value is the string sentinel \"No measurements found\". Equity providers remain opt-in and fail open. This field is omitted when source or enriched filters are supplied because shadow-mode metrics do not support those filters. Win-rate field semantics: hitRatePercent counts evaluated window outcomes whose return > 0; targetHitRatePercent/stopHitRatePercent count explicit target/stop hits (including firstHit fallbacks) over barrier-eligible denominators only; expectancyR averages finite rMultiple over evaluated windows.",
             "$ref": "#/components/schemas/ShadowModeMetrics"
+          },
+          "feedback": {
+            "$ref": "#/components/schemas/AlertFeedbackBlock"
+          }
+        }
+      },
+      "ChannelLatencyStats": {
+        "type": "object",
+        "description": "Per-channel delivery latency statistics for a summary window.",
+        "required": [
+          "averageMs",
+          "p95Ms",
+          "sampleCount"
+        ],
+        "properties": {
+          "averageMs": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Average delivery latency in milliseconds for this channel across samples."
+          },
+          "p95Ms": {
+            "type": "integer",
+            "nullable": true,
+            "description": "95th percentile delivery latency in milliseconds for this channel."
+          },
+          "sampleCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of delivery latency samples recorded for this channel."
+          }
+        }
+      },
+      "AlertSummaryLatency": {
+        "type": "object",
+        "description": "Processing and multi-channel delivery latency metrics across alerts in the summary window.",
+        "properties": {
+          "averageProcessingMs": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Average alert processing time in milliseconds."
+          },
+          "averageDeliveryMs": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Average delivery latency in milliseconds across all channels."
+          },
+          "byChannel": {
+            "type": "object",
+            "description": "Per-channel delivery latency breakdown. Only channels with recorded delivery samples in the window are included.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ChannelLatencyStats"
+            }
           }
         }
       },
@@ -6051,6 +8083,186 @@
           },
           "summary": {
             "$ref": "#/components/schemas/AlertSummary"
+          }
+        }
+      },
+      "AlertFeedbackSubmission": {
+        "type": "object",
+        "required": [
+          "alertId",
+          "chatId",
+          "verdict"
+        ],
+        "properties": {
+          "alertId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stored alert document id; combined with the chat hash to form the upsert key."
+          },
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Raw chat id (Telegram chat id, WhatsApp group id, etc.). Only its SHA-256 hash is exposed by summary endpoints."
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down"
+            ]
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Optional extracted symbol (uppercase, exchange-less)."
+          },
+          "exchange": {
+            "type": "string",
+            "description": "Optional extracted exchange (uppercase)."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "webhook-alert",
+              "expanded-analysis",
+              "scanner",
+              "news",
+              "unknown"
+            ],
+            "default": "unknown"
+          }
+        }
+      },
+      "AlertFeedbackResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "persisted",
+          "source",
+          "alertId",
+          "verdict"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "persisted": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          },
+          "alertId": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down",
+              null
+            ],
+            "nullable": true
+          },
+          "idempotencyReplayed": {
+            "type": "boolean",
+            "description": "True when the response was replayed from the idempotency cache."
+          }
+        }
+      },
+      "AlertFeedbackBlock": {
+        "type": "object",
+        "required": [
+          "total",
+          "up",
+          "down",
+          "ratio",
+          "bySource",
+          "bySymbol",
+          "byExchange",
+          "source",
+          "window"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "up": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "down": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ratio": {
+            "type": "number",
+            "description": "up / (up + down); 0 when total is 0."
+          },
+          "bySource": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "bySymbol": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "byExchange": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          },
+          "window": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              }
+            }
+          }
+        }
+      },
+      "AlertFeedbackSummaryResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "feedback"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "feedback": {
+            "$ref": "#/components/schemas/AlertFeedbackBlock"
           }
         }
       },
@@ -6082,7 +8294,9 @@
           },
           "telegramChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^-?\\d{5,20}$",
+            "description": "Optional Telegram chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match a numeric chat ID (5-20 digits, optional '-' prefix); free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "telegramThreadId": {
             "type": "integer",
@@ -6091,7 +8305,23 @@
           },
           "whatsappChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^\\d{6,20}@(c|g)\\.us$",
+            "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
+          },
+          "signalClass": {
+            "type": "string",
+            "enum": [
+              "breakout",
+              "mean_reversion",
+              "trend_continuation",
+              "reversal",
+              "volume_spike",
+              "news_event",
+              "manual",
+              "unknown"
+            ],
+            "description": "Classification category for the alert signal."
           }
         }
       },
@@ -6119,7 +8349,9 @@
           },
           "telegramChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^-?\\d{5,20}$",
+            "description": "Optional Telegram chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match a numeric chat ID (5-20 digits, optional '-' prefix); free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "telegramThreadId": {
             "type": "integer",
@@ -6128,7 +8360,9 @@
           },
           "whatsappChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^\\d{6,20}@(c|g)\\.us$",
+            "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "discordWebhookUrl": {
             "type": "string",
@@ -6197,7 +8431,9 @@
           },
           "telegramChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^-?\\d{5,20}$",
+            "description": "Optional Telegram chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match a numeric chat ID (5-20 digits, optional '-' prefix); free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "telegramThreadId": {
             "type": "integer",
@@ -6206,7 +8442,9 @@
           },
           "whatsappChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^\\d{6,20}@(c|g)\\.us$",
+            "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
           }
         }
       },
@@ -6268,7 +8506,9 @@
           },
           "telegramChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^-?\\d{5,20}$",
+            "description": "Optional Telegram chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match a numeric chat ID (5-20 digits, optional '-' prefix); free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "telegramThreadId": {
             "type": "integer",
@@ -6277,7 +8517,9 @@
           },
           "whatsappChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^\\d{6,20}@(c|g)\\.us$",
+            "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
           }
         }
       },
@@ -6293,6 +8535,11 @@
           },
           "timeframe": {
             "type": "string"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "When true, validates the request and returns a dryRun response without invoking the TradingView MCP volume_confirmation_analysis call. Useful for probe requests that want to avoid the ~360s MCP budget.",
+            "default": false
           }
         }
       },
@@ -6356,6 +8603,11 @@
           "include_multi_timeframe": {
             "type": "boolean",
             "default": false
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "When true, validates the request and returns a dryRun response without invoking the TradingView MCP coin_analysis (or multi_timeframe_analysis) call. Useful for probe requests that want to avoid the ~120s MCP budget.",
+            "default": false
           }
         },
         "additionalProperties": false
@@ -6373,6 +8625,11 @@
         "properties": {
           "success": {
             "type": "boolean"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "Set to true on the dry-run response shape when dryRun is requested. When true, alertText and analysis are not produced (analysis is null).",
+            "default": false
           },
           "symbol": {
             "type": "string"
@@ -6393,7 +8650,8 @@
             "type": "string",
             "enum": [
               "complete",
-              "partial"
+              "partial",
+              "dry-run"
             ]
           },
           "analysis": {
@@ -6405,7 +8663,8 @@
           "processingTimeMs": {
             "type": "integer",
             "minimum": 0,
-            "description": "Total endpoint execution time in milliseconds."
+            "description": "Total endpoint execution time in milliseconds.",
+            "example": 850
           }
         }
       },
@@ -6547,13 +8806,17 @@
             }
           },
           "telegramChatId": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^-?\\d{5,20}$",
+            "description": "Optional Telegram chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match a numeric chat ID (5-20 digits, optional '-' prefix); free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "telegramThreadId": {
             "type": "integer"
           },
           "whatsappChatId": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^\\d{6,20}@(c|g)\\.us$",
+            "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "discordWebhookUrl": {
             "type": "string"
@@ -6662,7 +8925,9 @@
             }
           },
           "telegramChatId": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^-?\\d{5,20}$",
+            "description": "Optional Telegram chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match a numeric chat ID (5-20 digits, optional '-' prefix); free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "telegramThreadId": {
             "type": "integer",
@@ -6671,7 +8936,9 @@
             "description": "Optional Telegram forum topic message_thread_id override (0 routes to the chat general topic)."
           },
           "whatsappChatId": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^\\d{6,20}@(c|g)\\.us$",
+            "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "discordWebhookUrl": {
             "type": "string",
@@ -6911,7 +9178,9 @@
           },
           "telegramChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^-?\\d{5,20}$",
+            "description": "Optional Telegram chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match a numeric chat ID (5-20 digits, optional '-' prefix); free-form strings are rejected with 400 INVALID_REQUEST."
           },
           "telegramThreadId": {
             "type": "integer",
@@ -6920,7 +9189,9 @@
           },
           "whatsappChatId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^\\d{6,20}@(c|g)\\.us$",
+            "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
           }
         }
       },
@@ -6946,7 +9217,7 @@
           "results": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/JsonObject"
+              "$ref": "#/components/schemas/NewsMonitorResult"
             }
           },
           "summary": {
@@ -6970,6 +9241,10 @@
               "quota_exhausted": {
                 "type": "integer",
                 "description": "Number of symbols that exhausted Gemini 429 RESOURCE_EXHAUSTED retries."
+              },
+              "throttled": {
+                "type": "integer",
+                "description": "Number of alert candidates throttled due to global batch or window volume caps."
               },
               "alerts_sent": {
                 "type": "integer"
@@ -6998,6 +9273,169 @@
           },
           "tokenUsage": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "windowUsage": {
+            "type": "object",
+            "properties": {
+              "alertsDelivered": {
+                "type": "integer",
+                "description": "Number of alerts delivered in the current sliding window."
+              },
+              "alertsThrottled": {
+                "type": "integer",
+                "description": "Number of alerts throttled in the current sliding window."
+              },
+              "windowResetsAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Timestamp when the current sliding window resets."
+              }
+            }
+          }
+        }
+      },
+      "NewsMonitorResult": {
+        "type": "object",
+        "description": "Per-symbol news-monitor analysis result. The optional `alert` object carries the risk-barrier fields (`stop`, `target`) whenever a finite, on-side-of-entry barrier is available from market context or `deriveBarriers()`.",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "analyzed",
+              "cached",
+              "timeout",
+              "error"
+            ]
+          },
+          "alert": {
+            "$ref": "#/components/schemas/NewsAlert"
+          },
+          "deliveryResults": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryResult"
+            }
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "originalError": {
+                "type": "string"
+              }
+            }
+          },
+          "totalDurationMs": {
+            "type": "integer"
+          },
+          "cached": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        }
+      },
+      "NewsAlert": {
+        "type": "object",
+        "description": "Structured news alert payload returned by `/api/news-monitor`. Optional numeric `stop` and `target` risk barriers are present whenever a finite, on-side-of-entry value is available from market context or `deriveBarriers()`; otherwise they are omitted.",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "eventCategory": {
+            "type": "string",
+            "enum": [
+              "price_surge",
+              "price_decline",
+              "public_figure",
+              "regulatory",
+              "none"
+            ]
+          },
+          "headline": {
+            "type": "string"
+          },
+          "sentimentScore": {
+            "type": "number"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "formattedMessage": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "integer"
+          },
+          "marketContext": {
+            "type": "object",
+            "properties": {
+              "price": {
+                "type": "number"
+              },
+              "change24h": {
+                "type": "number"
+              },
+              "volume24h": {
+                "type": "number"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "binance",
+                  "gemini"
+                ]
+              },
+              "timestamp": {
+                "type": "integer"
+              }
+            }
+          },
+          "enrichmentMetadata": {
+            "type": "object",
+            "properties": {
+              "original_confidence": {
+                "type": "number"
+              },
+              "enriched_confidence": {
+                "type": "number"
+              },
+              "enrichment_applied": {
+                "type": "boolean"
+              },
+              "reasoning_excerpt": {
+                "type": "string"
+              },
+              "model_name": {
+                "type": "string"
+              },
+              "processing_time_ms": {
+                "type": "integer"
+              }
+            }
+          },
+          "stop": {
+            "type": "number",
+            "description": "Optional numeric stop barrier in the same units as `marketContext.price`. Populated when market context supplies a stop or `deriveBarriers()` produces a finite, on-side-of-entry value; omitted otherwise."
+          },
+          "target": {
+            "type": "number",
+            "description": "Optional numeric target barrier in the same units as `marketContext.price`. Populated when market context supplies a target or `deriveBarriers()` produces a finite, on-side-of-entry value; omitted otherwise."
           }
         }
       },
@@ -7023,6 +9461,20 @@
             "properties": {
               "text": {
                 "type": "string"
+              },
+              "signalClass": {
+                "type": "string",
+                "enum": [
+                  "breakout",
+                  "mean_reversion",
+                  "trend_continuation",
+                  "reversal",
+                  "volume_spike",
+                  "news_event",
+                  "manual",
+                  "unknown"
+                ],
+                "description": "Classification category for the alert signal."
               },
               "enrichedData": {
                 "type": [
@@ -7133,6 +9585,10 @@
                 },
                 "error": {
                   "type": "string"
+                },
+                "durationMs": {
+                  "type": "integer",
+                  "description": "Channel delivery duration in milliseconds."
                 }
               }
             }
@@ -7391,6 +9847,193 @@
         ],
         "additionalProperties": false
       },
+      "BinanceOrderAuditRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "orderId",
+          "action",
+          "status",
+          "timestamp"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "idempotencyKeyHash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "side": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "environment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "requestFingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ]
+          },
+          "quoteOrderQty": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ]
+          },
+          "price": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ]
+          },
+          "timeInForce": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "binanceOrderId": {
+            "type": [
+              "integer",
+              "string",
+              "null"
+            ]
+          },
+          "clientOrderId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "processingMs": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BinanceOrderAuditList": {
+        "type": "object",
+        "required": [
+          "success",
+          "records",
+          "audit",
+          "pagination"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BinanceOrderAuditRecord"
+            }
+          },
+          "audit": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BinanceOrderAuditRecord"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "required": [
+              "hasMore",
+              "limit",
+              "nextBefore"
+            ],
+            "properties": {
+              "hasMore": {
+                "type": "boolean"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "nextBefore": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "scanTruncated": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "BinanceOrdersQueryResult": {
         "type": "object",
         "required": [
@@ -7454,9 +10097,293 @@
           }
         }
       },
+      "BinanceOrderPreviewRequest": {
+        "type": "object",
+        "description": "Pre-trade preview body. The endpoint never calls submitNewOrder; the response includes a 5-second expiresAt token. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot.",
+        "required": [
+          "symbol",
+          "side",
+          "type"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{5,20}$",
+            "description": "Allow-listed Binance Spot symbol, for example BTCUSDT."
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "MARKET",
+              "LIMIT"
+            ]
+          },
+          "quantity": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Base-asset quantity. Required for LIMIT. Optional for MARKET (must be paired with quoteOrderQty when provided)."
+          },
+          "quoteOrderQty": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Quote-asset amount for MARKET orders."
+          },
+          "price": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Required for LIMIT orders."
+          },
+          "timeInForce": {
+            "type": "string",
+            "enum": [
+              "GTC",
+              "IOC",
+              "FOK"
+            ],
+            "description": "LIMIT-only. MARKET orders must omit this field."
+          },
+          "clientOrderId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,36}$"
+          },
+          "maxSlippageBps": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "description": "Optional slippage budget in basis points. MARKET BUY orders with an available depth snapshot return wouldExceedBudget when the slippageBps estimate exceeds this value; the budget never rejects the preview itself."
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "quantity"
+            ]
+          },
+          {
+            "required": [
+              "quoteOrderQty"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "BinanceOrderPreviewResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "preview",
+          "environment",
+          "order",
+          "adjustedQuantity",
+          "constraints",
+          "flags",
+          "effectivePriceEstimate",
+          "priceSource",
+          "feeEstimate",
+          "depthSnapshot",
+          "expiresAt",
+          "previewFingerprint"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "preview": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "live"
+            ]
+          },
+          "order": {
+            "type": "object",
+            "required": [
+              "symbol",
+              "side",
+              "type"
+            ],
+            "properties": {
+              "symbol": {
+                "type": "string"
+              },
+              "side": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "string"
+              },
+              "quoteOrderQty": {
+                "type": "string"
+              },
+              "price": {
+                "type": "string"
+              },
+              "timeInForce": {
+                "type": "string"
+              },
+              "clientOrderId": {
+                "type": "string"
+              }
+            }
+          },
+          "adjustedQuantity": {
+            "type": "string"
+          },
+          "adjustedNotional": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "lotSize": {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              "priceFilter": {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              "notional": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          },
+          "flags": {
+            "type": "object",
+            "required": [
+              "lotSizeOk",
+              "priceFilterOk",
+              "minNotionalOk",
+              "maxNotionalOk"
+            ],
+            "properties": {
+              "lotSizeOk": {
+                "type": "boolean"
+              },
+              "priceFilterOk": {
+                "type": "boolean"
+              },
+              "minNotionalOk": {
+                "type": "boolean"
+              },
+              "maxNotionalOk": {
+                "type": "boolean"
+              },
+              "minNotionalExceededReason": {
+                "type": "string"
+              },
+              "maxNotionalExceededReason": {
+                "type": "string"
+              }
+            }
+          },
+          "effectivePriceEstimate": {
+            "type": "string"
+          },
+          "priceSource": {
+            "type": "string",
+            "enum": [
+              "limitPrice",
+              "avgPrice",
+              "quoteOrderQty",
+              "none"
+            ]
+          },
+          "marketPriceError": {
+            "type": "string"
+          },
+          "feeEstimate": {
+            "type": "object",
+            "required": [
+              "takerFeeBps",
+              "makerFeeBps",
+              "appliedFeeBps",
+              "estimatedFeeQuote",
+              "label"
+            ],
+            "properties": {
+              "takerFeeBps": {
+                "type": "integer"
+              },
+              "makerFeeBps": {
+                "type": "integer"
+              },
+              "appliedFeeBps": {
+                "type": "integer"
+              },
+              "estimatedFeeQuote": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "slippage": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "slippageBudgetBps": {
+                "type": "number"
+              },
+              "wouldExceedBudget": {
+                "type": "boolean"
+              }
+            }
+          },
+          "depthSnapshot": {
+            "type": "object",
+            "required": [
+              "available"
+            ],
+            "properties": {
+              "limit": {
+                "type": "integer"
+              },
+              "fetchedAt": {
+                "type": "string"
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "error": {
+                "type": "string"
+              }
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "ISO 8601 timestamp after which the preview must not be replayed."
+          },
+          "previewFingerprint": {
+            "type": "string",
+            "description": "Short SHA-256 fingerprint of the preview parameters and expiry."
+          }
+        }
+      },
       "Status": {
         "type": "object",
-        "description": "Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts.",
+       "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.newsMonitorClassifier reports ENABLE_NEWS_MONITOR_CLASSIFIER and defaults to false; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations.",
         "properties": {
           "readiness": {
             "$ref": "#/components/schemas/BootstrapReadiness"
@@ -7470,6 +10397,9 @@
           "deliveryChannels": {
             "$ref": "#/components/schemas/JsonObject"
           },
+          "notificationChannelIntent": {
+            "$ref": "#/components/schemas/NotificationChannelIntent"
+          },
           "deliveryMetrics": {
             "$ref": "#/components/schemas/DeliveryMetrics"
           },
@@ -7477,14 +10407,26 @@
             "type": "object",
             "additionalProperties": true,
             "properties": {
+              "firestoreWriteMetrics": {
+                "$ref": "#/components/schemas/FirestoreWriteMetrics"
+              },
               "firebaseRemoteConfig": {
                 "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
               },
               "notificationRedrive": {
                 "$ref": "#/components/schemas/NotificationRedriveDependency"
               },
+              "telegramCommandAuth": {
+                "$ref": "#/components/schemas/TelegramCommandAuthStatus"
+              },
               "newsMonitorDedup": {
                 "$ref": "#/components/schemas/NewsMonitorDedupDependency"
+              },
+              "tokenCostBudget": {
+                "$ref": "#/components/schemas/TokenCostBudgetDependency"
+              },
+              "selfTest": {
+                "$ref": "#/components/schemas/SelfTestStatus"
               }
             }
           }
@@ -7585,6 +10527,48 @@
             "minimum": 1,
             "description": "Configured cache max age in milliseconds before values are considered stale."
           }
+        }
+      },
+      "NotificationChannelIntent": {
+        "type": "object",
+        "description": "Operator-intent view of notification channel configuration, mirroring NotificationChannel.isConfigured(): a channel counts as configured when its enable flag is set AND its required credentials/chat id/webhook are present. A channel with credentials present but its enable flag off is therefore NOT configured, matching the verdict the zero-channel admin page reaches because both call the same method. This lets an operator answer 'why did I get the zero-channel page?' from the status response alone. Channel names only; no credentials or destinations are exposed.",
+        "properties": {
+          "configured": {
+            "type": "array",
+            "description": "Channel names the operator configured, regardless of runtime readiness.",
+            "items": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] }
+          },
+          "unconfigured": {
+            "type": "array",
+            "description": "Channel names the operator never configured (missing credentials, webhook URL, or chat id).",
+            "items": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] }
+          }
+        },
+        "additionalProperties": false
+      },
+      "TelegramCommandAuthStatus": {
+        "type": "object",
+        "description": "Safe runtime metadata for the Telegram command allowlist gate. Reports no chat ids; deniedSender counts only.",
+        "required": [
+          "enabled",
+          "allowlistSource",
+          "allowlistSize",
+          "deniedSinceStart",
+          "trackedDeniedSenders",
+          "deniedSenderCacheLimit"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "description": "True when at least one chat id is authorized." },
+          "allowlistSource": {
+            "type": "string",
+            "enum": ["TELEGRAM_ALLOWED_CHAT_IDS", "TELEGRAM_CHAT_ID"],
+            "description": "Which variable supplied the allowlist; falls back to TELEGRAM_CHAT_ID when the explicit list is unset."
+          },
+          "allowlistSize": { "type": "integer", "minimum": 0 },
+          "deniedSinceStart": { "type": "integer", "minimum": 0, "description": "Lifetime count of denied commands that produced a log line; cooldown-suppressed repeats are not counted." },
+          "trackedDeniedSenders": { "type": "integer", "minimum": 0, "description": "Chat ids currently held in the bounded log-cooldown cache." },
+          "deniedSenderCacheLimit": { "type": "integer", "minimum": 1, "description": "Maximum entries retained in the cooldown cache; oldest entries are evicted first." }
         }
       },
       "NotificationRedriveDependency": {
@@ -7909,6 +10893,66 @@
           }
         }
       },
+      "TokenCostBudgetDependency": {
+        "type": "object",
+        "description": "Safe runtime metadata for aggregate daily token spend tracking and budget alerting ceiling without exposing sensitive keys.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "dailySpendUsd",
+          "budgetUsd",
+          "utilizationPct",
+          "alertsSent",
+          "lastResetAt"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether daily token cost budget tracking and threshold alerting are enabled."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether token cost budget tracking is configured."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "Whether token cost budget is ready and below the daily hard ceiling."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "ready",
+              "warning",
+              "exceeded"
+            ],
+            "description": "Operational budget state: disabled when feature is off, ready when spend is normal, warning when above alert threshold, exceeded when hard limit reached."
+          },
+          "dailySpendUsd": {
+            "type": "number",
+            "description": "Aggregate daily token spend in USD for the current UTC calendar day."
+          },
+          "budgetUsd": {
+            "type": "number",
+            "description": "Daily token cost budget ceiling in USD."
+          },
+          "utilizationPct": {
+            "type": "number",
+            "description": "Current percentage of daily budget utilized."
+          },
+          "alertsSent": {
+            "type": "integer",
+            "description": "Number of budget alert notifications dispatched during the current UTC day."
+          },
+          "lastResetAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO timestamp of the last daily spend rollover (00:00 UTC)."
+          }
+        }
+      },
       "BinanceOrderCancelRequest": {
         "type": "object",
         "required": [
@@ -7973,6 +11017,38 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "RequestTimeoutError": {
+        "type": "object",
+        "required": [
+          "error",
+          "code",
+          "requestId",
+          "deadlineMs",
+          "durationMs"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "Request Timeout"
+          },
+          "code": {
+            "type": "string",
+            "example": "REQUEST_TIMEOUT"
+          },
+          "requestId": {
+            "type": "string",
+            "example": "req-1726214400000-abcdef"
+          },
+          "deadlineMs": {
+            "type": "integer",
+            "example": 30000
+          },
+          "durationMs": {
+            "type": "integer",
+            "example": 30005
           }
         }
       },

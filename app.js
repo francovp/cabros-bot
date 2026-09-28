@@ -6,6 +6,9 @@ const { createCorsMiddleware } = require('./src/lib/cors');
 const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
+const { getPublicStatus } = require('./src/controllers/publicStatus');
+const { getStatus: getAdminStatus } = require('./src/controllers/status');
+const requestDeadline = require('./src/lib/requestDeadline');
 const { buildWebhookBodySize } = require('./src/lib/webhookBodySize');
 
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
@@ -14,6 +17,9 @@ setupTrustProxy(app);
 // Apply CORS before body parsers so parser errors, including structured 413
 // responses, retain the same browser-visible headers as successful requests.
 app.use(createCorsMiddleware());
+
+// Start the request deadline before body parsing so slow uploads are bounded too.
+app.use(requestDeadline);
 
 // Webhook body size limits (configurable via WEBHOOK_MAX_BODY_SIZE; default 256kb).
 // Centralized so both JSON and text/plain parsers share the same effective limit and
@@ -45,6 +51,7 @@ contentSecurityPolicy['connect-src'] = [
 	'https://cabros-bot-production.up.railway.app',
 ];
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
+app.use(requestDeadline.guard);
 
 const { getDeepHealthcheckHandler } = require('./src/controllers/healthcheck');
 app.use('/healthcheck', getDeepHealthcheckHandler());
@@ -53,10 +60,17 @@ app.get('/ready', (req, res) => {
 	return res.status(status.ready ? 200 : 503).json(status);
 });
 
-// Rate Limiter (must be after healthcheck to avoid limiting health checks)
-app.use(require('./src/lib/rateLimiter'));
+// Public, unauthenticated, read-only status snapshot. Mounted before the
+// rate limiter so monitoring traffic and embedded status widgets never hit
+// the global bucket and never require operator credentials.
+app.get('/api/public/status', getPublicStatus(getAdminStatus));
 
-// Public, read-only API contract and interactive documentation.
+// Public, read-only API contract and interactive documentation (mounted before
+// the rate limiter so browsing documentation and the admin console does not consume
+// the protected /api budget).
 app.use(getOpenApiDocsRouter());
+
+// Rate Limiter (must be after healthcheck, public status, and public docs to avoid limiting them)
+app.use(require('./src/lib/rateLimiter'));
 
 module.exports = app;

@@ -1,7 +1,7 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	ExpandedAnalysisAlertRequestError,
 	parseExpandedAnalysisAlertRequest,
@@ -15,15 +15,41 @@ const sentryService = require('../../../../services/monitoring/SentryService');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const symbolAnalysisStorageService = require('../../../../services/storage/SymbolAnalysisStorageService');
 
+function resolveDryRun(req) {
+	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
+	const bodyFlag = req.body && typeof req.body === 'object' && (req.body.dryRun === true || req.body.dryRun === 'true');
+	return queryFlag || bodyFlag;
+}
+
 function postSymbolAnalysis() {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 		let deadline;
 
 		try {
 			const parsed = parseSymbolAnalysisRequest(req);
-			deadline = createDeadline(getTimeoutMs());
+			if (resolveDryRun(req)) {
+				const input = parsed.symbols[0];
+				console.debug('[SymbolAnalysis] Dry-run mode: skipping TradingView MCP call');
+				return res.status(200).json({
+					success: true,
+					dryRun: true,
+					symbol: input.raw,
+					exchange: input.exchange,
+					asset: input.symbol,
+					timeframe: parsed.timeframe,
+					analysisMode: parsed.analysisMode,
+					includeMultiTimeframe: parsed.includeMultiTimeframe,
+					side: null,
+					analysis: null,
+					analysisStatus: 'dry-run',
+					requestId,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
+				});
+			}
+			deadline = createDeadline(getTimeoutMs(), req.requestDeadlineSignal);
+
 			const input = parsed.symbols[0];
 			const analysis = await tradingViewMcpService.analyzeSymbolIdentifier({
 				...input,
@@ -406,10 +432,13 @@ function getTimeoutMs() {
 	return Number.isFinite(value) && value > 0 ? Math.min(value, 120000) : 60000;
 }
 
-function createDeadline(timeoutMs) {
+function createDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(new Error(`Symbol analysis timeout after ${timeoutMs}ms`)), timeoutMs);
-	return { signal: controller.signal, clear: () => clearTimeout(timeoutId) };
+	return {
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
+		clear: () => clearTimeout(timeoutId),
+	};
 }
 
 function numberOrNull(value) {
