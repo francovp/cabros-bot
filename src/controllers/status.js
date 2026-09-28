@@ -56,6 +56,7 @@ const {
 } = require('./webhooks/handlers/newsMonitor/pauseState');
 const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTracker');
 const { getSelfTestService } = require('./diagnostics/selftest');
+const telegramCommandAuth = require('../lib/telegramCommandAuth');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -398,6 +399,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			newsMonitor: newsMonitorEnabled,
 			newsMonitorPaused: isNewsMonitorPaused(),
 			newsMonitorTestMode: newsMonitorTestModeEnabled,
+			newsMonitorClassifier: isEnabled(process.env.ENABLE_NEWS_MONITOR_CLASSIFIER),
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
 			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationFlagEnabled,
 			tradingViewConfluenceEnrichment: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT),
@@ -437,6 +439,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			signalClassMarker: signalClassMarkerEnabled,
 			chartAttachments: chartAttachmentsEnabled,
 			maintenanceMode: isMaintenanceModeEnabled(),
+			telegramCommandAuth: telegramCommandAuth.getStatus().enabled,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -558,6 +561,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			},
 			tokenCostBudget: tokenCostBudgetService.getBudgetStatus(),
 			selfTest: getSelfTestService().getStatus(),
+			telegramCommandAuth: telegramCommandAuth.getStatus(),
 		},
 	};
 }

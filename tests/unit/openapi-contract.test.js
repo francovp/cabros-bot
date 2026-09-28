@@ -110,6 +110,7 @@ describe('OpenAPI contract', () => {
 			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/outcomes/calibration',
 			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
 			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'POST /api/trading/binance/orders/preview',
 			'POST /api/news-monitor/pause', 'POST /api/news-monitor/resume', 'GET /api/news-monitor/status',
 			'GET /api/news-monitor/summary', 'GET /api/news-monitor/analyses',
 			'POST /api/admin/test-alert', 'GET /api/admin/events',
@@ -145,6 +146,7 @@ describe('OpenAPI contract', () => {
 			'GET /api/symbol-analyses/summary': 'admin.viewer',
 			'GET /api/trading/binance/orders': 'admin.viewer',
 			'GET /api/trading/binance/orders/audit': 'admin.viewer',
+			'POST /api/trading/binance/orders/preview': 'admin.viewer',
 			'POST /api/trading/binance/orders': 'admin.operator',
 			'DELETE /api/trading/binance/orders': 'admin.operator',
 			'GET /api/alerts': 'admin.viewer',
@@ -566,5 +568,61 @@ describe('OpenAPI contract', () => {
 			expect(noBarriersAlert.stop).toBeUndefined();
 			expect(noBarriersAlert.target).toBeUndefined();
 		});
+	});
+});
+
+describe('status dependency contract drift', () => {
+	const postmanPath = path.join(__dirname, '../../CabrosBot.postman_collection.json');
+	const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+	function collectRequestLeaves(node, acc = []) {
+		if (Array.isArray(node)) {
+			for (const child of node) collectRequestLeaves(child, acc);
+		} else if (node && typeof node === 'object') {
+			if (Array.isArray(node.item)) {
+				collectRequestLeaves(node.item, acc);
+			} else {
+				acc.push(node);
+			}
+		}
+		return acc;
+	}
+
+	function getStatusExamples() {
+		const collection = JSON.parse(fs.readFileSync(postmanPath, 'utf8'));
+		return collectRequestLeaves(collection.item)
+			.filter((request) => typeof request.name === 'string' && request.name.startsWith('Get Status'))
+			.flatMap((request) => (request.response || [])
+				.filter((response) => response.name === 'Success' || /^(200 OK|200)/.test(String(response.name)))
+				.map((response) => {
+					try {
+						return JSON.parse(response.body);
+					} catch {
+						return null;
+					}
+				})
+				.filter(Boolean));
+	}
+
+	function documentedDependencyKeys() {
+		const dependencies = contract.components.schemas.Status.properties.dependencies;
+		return Object.entries(dependencies.properties)
+			.filter(([, schema]) => schema && schema.$ref)
+			.map(([key]) => key);
+	}
+
+	it('documents at least one named dependency schema to guard against', () => {
+		expect(documentedDependencyKeys().length).toBeGreaterThan(0);
+	});
+
+	it('exposes every named Status dependency in some Postman status example', () => {
+		const examples = getStatusExamples();
+		expect(examples.length).toBeGreaterThan(0);
+		const seen = new Set();
+		for (const example of examples) {
+			for (const key of Object.keys(example.dependencies || {})) seen.add(key);
+		}
+		const missing = documentedDependencyKeys().filter((key) => !seen.has(key));
+		expect(missing).toEqual([]);
 	});
 });
