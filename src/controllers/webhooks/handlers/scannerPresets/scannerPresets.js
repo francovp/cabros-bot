@@ -2,7 +2,6 @@
 
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
 const {
 	scannerPresetService,
 	parseIfMatchHeader,
@@ -29,11 +28,14 @@ const sentryService = require('../../../../services/monitoring/SentryService');
 const {
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
+	assertChannelsAvailable,
 	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const { adminSseService } = require('../../../../services/sse/AdminSseService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 
 const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 	'5', '5M', '15', '15M', '60', '1H', '240', '4H',
@@ -103,14 +105,14 @@ function getScannerTimeoutMs() {
 	return Math.min(parsedTimeout, MAX_SCANNER_TIMEOUT_MS);
 }
 
-function createScannerDeadline(timeoutMs) {
+function createScannerDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => {
 		controller.abort(new Error(`Market scanner timeout after ${timeoutMs}ms`));
 	}, timeoutMs);
 
 	return {
-		signal: controller.signal,
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
 		clear: () => clearTimeout(timeoutId),
 	};
 }
@@ -127,10 +129,17 @@ function postPreset(req, res) {
 			});
 		} catch (error) {
 			if (error instanceof MarketScannerRequestError) {
-				return res.status(400).json({
+				const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 400;
+				const body = {
 					error: error.message,
 					code: error.code || 'INVALID_REQUEST',
-				});
+					storage: getStorageMetadata(),
+				};
+				if (error.code === 'NAME_CONFLICT' && error.preset) {
+					body.preset = error.preset;
+					setPresetEtag(res, error.preset);
+				}
+				return res.status(statusCode).json(body);
 			}
 
 			console.error('[ScannerPresets] Create failed:', error.message);
@@ -324,6 +333,10 @@ function updatePreset(req, res) {
 						setPresetEtag(res, error.preset);
 					}
 				}
+				if (error.code === 'NAME_CONFLICT' && error.preset) {
+					body.preset = error.preset;
+					setPresetEtag(res, error.preset);
+				}
 				return res.status(statusCode).json(body);
 			}
 
@@ -404,7 +417,7 @@ function validatePresetConfig(preset, reqBody = {}) {
 
 function postRunPreset(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 
 		try {
@@ -518,7 +531,21 @@ function postRunPreset(botOrGetter) {
 			}
 
 			const timeoutMs = getScannerTimeoutMs();
-			const deadline = createScannerDeadline(timeoutMs);
+			const deadline = createScannerDeadline(timeoutMs, req.requestDeadlineSignal);
+
+			// Fail-fast channel availability check (GH-854): when the caller
+			// explicitly requests channels, validate they are enabled and
+			// configured BEFORE running any MCP scan. Each scan can take up
+			// to ~120s of TradingView MCP budget; spending that on a request
+			// that is guaranteed to fail (disabled channel) wastes quota
+			// and risks 502 timeouts before the validation error surfaces.
+			if (routing.channels) {
+				let presetNotificationManager = getNotificationManager();
+				if (!presetNotificationManager) {
+					presetNotificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+				}
+				assertChannelsAvailable(presetNotificationManager, routing);
+			}
 			let scanResults;
 
 			try {
@@ -568,6 +595,20 @@ function postRunPreset(botOrGetter) {
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(scanResults, deliveryResults);
+
+			try {
+				adminSseService.broadcast('scanner-result', {
+					presetId: preset.id,
+					name: preset.name,
+					symbolsCount: preset.symbols?.length || (scanResults ? scanResults.length : 0),
+					summary,
+					timedOut,
+					totalDurationMs: Date.now() - startTime,
+					timestamp: new Date().toISOString(),
+				});
+			} catch (_) {
+				// Fail-safe
+			}
 
 			return res.status(200).json({
 				success: true,

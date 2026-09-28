@@ -74,4 +74,76 @@ describe('public OpenAPI documentation', () => {
 		expect(client.text).toContain('CONTRACT_TIMEOUT_MS');
 		expect(client.text).not.toContain(process.env.WEBHOOK_API_KEY);
 	});
+
+	describe('rate limit exemption', () => {
+		const rateLimiter = require('../../src/lib/rateLimiter');
+
+		beforeEach(() => {
+			rateLimiter.enableTestMode();
+			rateLimiter.reset();
+			process.env.RATE_LIMIT_MAX = '2';
+		});
+
+		afterEach(() => {
+			rateLimiter.disableTestMode();
+			rateLimiter.reset();
+		});
+
+		it('serves docs and admin routes even when the global rate limit is exhausted', async () => {
+			// Exhaust rate limit on a non-exempt path that reaches the rate limiter
+			await request(app).get('/api/unregistered-path-for-rate-limit');
+			await request(app).get('/api/unregistered-path-for-rate-limit');
+			const blocked = await request(app).get('/api/unregistered-path-for-rate-limit');
+			expect(blocked.status).toBe(429);
+
+			// Public OpenAPI and Swagger UI routes remain accessible
+			const openApiResponse = await request(app).get('/openapi.json');
+			expect(openApiResponse.status).toBe(200);
+
+			const docsResponse = await request(app).get('/docs');
+			expect(docsResponse.status).toBe(200);
+
+			const docsCssResponse = await request(app).get('/docs/swagger-ui.css');
+			expect(docsCssResponse.status).toBe(200);
+
+			// Admin console HTML, auth config, and static JS/CSS remain accessible
+			const adminResponse = await request(app).get('/admin');
+			expect(adminResponse.status).toBe(200);
+
+			const adminConfigResponse = await request(app).get('/admin/auth-config');
+			expect(adminConfigResponse.status).toBe(200);
+
+			const adminJsResponse = await request(app).get('/admin/admin.js');
+			expect(adminJsResponse.status).toBe(200);
+
+			const adminCssResponse = await request(app).get('/admin/admin.css');
+			expect(adminCssResponse.status).toBe(200);
+		});
+
+		it('does not consume the global rate limiter budget when accessing docs or admin routes', async () => {
+			// Make multiple requests to public docs and admin routes
+			for (let i = 0; i < 5; i++) {
+				const openApi = await request(app).get('/openapi.json');
+				expect(openApi.status).toBe(200);
+
+				const docs = await request(app).get('/docs');
+				expect(docs.status).toBe(200);
+
+				const admin = await request(app).get('/admin');
+				expect(admin.status).toBe(200);
+			}
+
+			// The rate limit budget for non-exempt paths is still fresh (limit is 2)
+			const res1 = await request(app).get('/api/fresh-budget-check');
+			expect(res1.status).toBe(404); // reached route handler past rateLimiter
+
+			const res2 = await request(app).get('/api/fresh-budget-check');
+			expect(res2.status).toBe(404);
+
+			// Third non-exempt request hits the limit
+			const res3 = await request(app).get('/api/fresh-budget-check');
+			expect(res3.status).toBe(429);
+		});
+	});
 });
+
