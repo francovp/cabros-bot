@@ -34,6 +34,7 @@ const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
 const { adminSseService } = require('../sse/AdminSseService');
 const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
+const { deriveAssetContext } = require('../tradingview/parseTradingViewSignal');
 
 function createEmptySignalClassCounts() {
 	return {
@@ -730,6 +731,93 @@ function incrementCounter(target, key) {
 	target[normalizedKey] = (target[normalizedKey] || 0) + 1;
 }
 
+const UNKNOWN_SYMBOL = 'unknown';
+const MAX_EXTRACTED_SYMBOL_LENGTH = 32;
+// A normalized crypto pair ("BTC/USDT") keeps a single internal slash; every
+// other separator usage is rejected. Each side must itself be a real ticker.
+const SLASH_PAIR_PATTERN = /^[A-Z0-9][A-Z0-9._-]+\/[A-Z0-9][A-Z0-9._-]+$/;
+
+/**
+ * A candidate value is only usable as an indexable symbol when it is a non-empty
+ * string that is not the `unknown` sentinel, contains no whitespace, carries at
+ * most one well-formed slash pair, and is at least two characters long and not
+ * numeric-only.
+ *
+ * Issue #222: production `bySymbol` analytics contained a bare integer (`"53"`)
+ * and a single-character value, so a permissive extractor silently polluted the
+ * very surface this guard exists to keep honest. `unknown` must stay the honest
+ * fallback rather than a fabricated ticker.
+ */
+function isValidExtractedSymbol(value) {
+	if (typeof value !== 'string') {
+		return false;
+	}
+
+	const candidate = value.trim();
+	if (candidate.length < 2 || candidate.length > MAX_EXTRACTED_SYMBOL_LENGTH) {
+		return false;
+	}
+	if (candidate.toLowerCase() === UNKNOWN_SYMBOL) {
+		return false;
+	}
+	if (/\s/.test(candidate) || candidate.includes('\\')) {
+		return false;
+	}
+	if (candidate.includes('/') && !SLASH_PAIR_PATTERN.test(candidate)) {
+		return false;
+	}
+	// Numeric-only values are never tickers.
+	if (/^\d+$/.test(candidate)) {
+		return false;
+	}
+
+	return true;
+}
+
+/**
+ * Normalizes an `EXCHANGE:SYMBOL` (or bare `SYMBOL`) candidate and returns
+ * `{ symbol, exchange }`, or null when the symbol is not indexable.
+ */
+function normalizeSymbolCandidate(candidate, exchangeFallback) {
+	if (typeof candidate !== 'string' || !candidate.trim()) {
+		return null;
+	}
+
+	const normalized = candidate.trim().toUpperCase();
+	const fallbackExchange = typeof exchangeFallback === 'string' && exchangeFallback.trim()
+		? exchangeFallback.trim().toUpperCase()
+		: null;
+
+	if (normalized.includes(':')) {
+		const separatorIndex = normalized.indexOf(':');
+		const exchange = normalized.slice(0, separatorIndex).trim();
+		const symbol = normalized.slice(separatorIndex + 1).trim();
+		if (!isValidExtractedSymbol(symbol)) {
+			return null;
+		}
+		return { symbol, exchange: exchange || fallbackExchange };
+	}
+
+	if (!isValidExtractedSymbol(normalized)) {
+		return null;
+	}
+
+	return { symbol: normalized, exchange: fallbackExchange };
+}
+
+/**
+ * Deterministic symbol extraction from raw alert text.
+ *
+ * Prefers the hardened `deriveAssetContext()` normalizer (the same one used by
+ * the grounding / search-query path) so the `aerosol` / `teeth` lowercase-prose
+ * guards and the `BTC/USDT` slash-pair preservation stay in a single place
+ * instead of being re-implemented as a parallel regex. Because
+ * `deriveAssetContext()` intentionally returns null for non-crypto shapes it
+ * does not own (a bare `EXCHANGE:SYMBOL`, a 2-character ticker), the pre-existing
+ * TradingView alert patterns are retained as a second, now-validated pass so
+ * coverage is not reduced. Every returned symbol is validated, so bare integers
+ * and single characters can never be extracted.
+ */
 function parseSymbolFromText(text) {
 	if (!text || typeof text !== 'string') {
 		return null;
@@ -740,17 +828,34 @@ function parseSymbolFromText(text) {
 		return null;
 	}
 
+	try {
+		const context = deriveAssetContext(cleaned);
+		if (context && context.symbol && isValidExtractedSymbol(context.symbol)) {
+			return {
+				symbol: context.symbol.trim().toUpperCase(),
+				exchange: typeof context.exchange === 'string' && context.exchange.trim()
+					? context.exchange.trim().toUpperCase()
+					: null,
+			};
+		}
+	} catch {
+		// Extraction must never throw: fall through to the next strategy.
+	}
+
 	const exchangeMatch = cleaned.match(/(?:^|\b)(?<exchange>[A-Z0-9_]{2,10}):(?<symbol>[A-Z0-9._-]{2,20})(?:\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\))?/i);
-	if (exchangeMatch && exchangeMatch.groups && exchangeMatch.groups.symbol) {
-		const symbol = exchangeMatch.groups.symbol.toUpperCase();
-		const exchange = exchangeMatch.groups.exchange ? exchangeMatch.groups.exchange.toUpperCase() : null;
-		return { symbol, exchange };
+	if (exchangeMatch && exchangeMatch.groups && isValidExtractedSymbol(exchangeMatch.groups.symbol)) {
+		return {
+			symbol: exchangeMatch.groups.symbol.trim().toUpperCase(),
+			exchange: exchangeMatch.groups.exchange ? exchangeMatch.groups.exchange.toUpperCase() : null,
+		};
 	}
 
 	const timeframeMatch = cleaned.match(/(?:^|\s)(?<symbol>[A-Z0-9._-]{2,20})\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\)/i);
-	if (timeframeMatch && timeframeMatch.groups && timeframeMatch.groups.symbol) {
-		const symbol = timeframeMatch.groups.symbol.toUpperCase();
-		return { symbol, exchange: null };
+	if (timeframeMatch && timeframeMatch.groups && isValidExtractedSymbol(timeframeMatch.groups.symbol)) {
+		return {
+			symbol: timeframeMatch.groups.symbol.trim().toUpperCase(),
+			exchange: null,
+		};
 	}
 
 	return null;
@@ -758,31 +863,25 @@ function parseSymbolFromText(text) {
 
 function extractSymbolAndExchange(data) {
 	if (!data || typeof data !== 'object') {
-		return { symbol: 'unknown', exchange: null };
+		return { symbol: UNKNOWN_SYMBOL, exchange: null };
 	}
 
+	const topLevelExchange = typeof data.exchange === 'string' && data.exchange.trim()
+		? data.exchange.trim().toUpperCase()
+		: null;
+
 	if (typeof data.symbol === 'string' && data.symbol.trim()) {
-		const sym = data.symbol.trim().toUpperCase();
-		if (sym.includes(':')) {
-			const parts = sym.split(':');
-			return { symbol: parts[1], exchange: parts[0] };
+		const normalized = normalizeSymbolCandidate(data.symbol, topLevelExchange);
+		if (normalized) {
+			return normalized;
 		}
-		return {
-			symbol: sym,
-			exchange: typeof data.exchange === 'string' && data.exchange.trim() ? data.exchange.trim().toUpperCase() : null,
-		};
 	}
 
 	if (typeof data.ticker === 'string' && data.ticker.trim()) {
-		const ticker = data.ticker.trim().toUpperCase();
-		if (ticker.includes(':')) {
-			const parts = ticker.split(':');
-			return { symbol: parts[1], exchange: parts[0] };
+		const normalized = normalizeSymbolCandidate(data.ticker, topLevelExchange);
+		if (normalized) {
+			return normalized;
 		}
-		return {
-			symbol: ticker,
-			exchange: typeof data.exchange === 'string' && data.exchange.trim() ? data.exchange.trim().toUpperCase() : null,
-		};
 	}
 
 	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
@@ -792,17 +891,17 @@ function extractSymbolAndExchange(data) {
 			data.enrichmentData.asset,
 			data.enrichmentData.original_symbol,
 		];
-		const found = candidates.find((c) => typeof c === 'string' && c.trim());
-		if (found) {
-			const sym = found.trim().toUpperCase();
-			if (sym.includes(':')) {
-				const parts = sym.split(':');
-				return { symbol: parts[1], exchange: parts[0] };
+		const enrichmentExchange = typeof data.enrichmentData.exchange === 'string' && data.enrichmentData.exchange.trim()
+			? data.enrichmentData.exchange.trim().toUpperCase()
+			: null;
+		for (const candidate of candidates) {
+			const normalized = normalizeSymbolCandidate(
+				candidate,
+				enrichmentExchange || topLevelExchange,
+			);
+			if (normalized) {
+				return normalized;
 			}
-			const exchange = typeof data.enrichmentData.exchange === 'string' && data.enrichmentData.exchange.trim()
-				? data.enrichmentData.exchange.trim().toUpperCase()
-				: (typeof data.exchange === 'string' && data.exchange.trim() ? data.exchange.trim().toUpperCase() : null);
-			return { symbol: sym, exchange };
 		}
 	}
 
@@ -813,7 +912,7 @@ function extractSymbolAndExchange(data) {
 		}
 	}
 
-	return { symbol: 'unknown', exchange: null };
+	return { symbol: UNKNOWN_SYMBOL, exchange: null };
 }
 
 function extractAlertSymbol(data) {
@@ -2448,6 +2547,7 @@ module.exports = {
 	getLatestReplayForAlert,
 	getReplayAttemptByIdempotencyKey,
 	parseSymbolFromText,
+	isValidExtractedSymbol,
 	extractSymbolAndExchange,
 	extractAlertSymbol,
 	formatEnrichmentSummary,

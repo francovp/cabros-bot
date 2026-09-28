@@ -288,6 +288,7 @@ describe('AlertStorageService', () => {
 				receivedAt: expect.anything(), // serverTimestamp sentinel
 				expiresAt: expect.anything(),
 				text: 'ETH breakout',
+				symbol: 'ETH',
 				signalClass: 'unknown',
 				enriched: true,
 				enrichmentData: { sentiment: 'bullish', insights: ['RSI > 70'] },
@@ -301,6 +302,52 @@ describe('AlertStorageService', () => {
 				useTradingViewData: true,
 				tradingViewEnrichmentApplied: false,
 			});
+		});
+
+		// Regression (issue #222): symbol must be captured at WRITE time so stored
+		// alerts are indexed by symbol instead of falling back to `unknown`.
+		it('captures the symbol at write time from plain alert text', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'doc-symbol-write' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				text: 'BINANCE:ETHUSDT(D) cambió a señal de VENTA',
+			}));
+
+			expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
+				symbol: 'ETHUSDT',
+				exchange: 'BINANCE',
+			}));
+		});
+
+		// Regression (issue #222): "53" reached bySymbol in production analytics.
+		it('never persists a numeric-only or single-character symbol at write time', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'doc-numeric' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				text: 'Momentum shifted after 53 candles on the higher timeframe',
+				symbol: '53',
+				exchange: 'NASDAQ',
+			}));
+
+			const document = mockAdd.mock.calls[0][0];
+			expect(document.symbol).toBeUndefined();
+			expect(document.exchange).toBeUndefined();
+		});
+
+		it('still persists the alert when extraction is not possible', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'doc-unknown' });
+
+			const result = await AlertStorageService.saveAlert(buildParams({
+				text: 'Alerta sin simbolo reconocible',
+			}));
+
+			expect(result).toBe('doc-unknown');
+			const document = mockAdd.mock.calls[0][0];
+			expect(document.text).toBe('Alerta sin simbolo reconocible');
+			expect(document.symbol).toBeUndefined();
 		});
 
 		it('persists news-monitor alert with source, eventCategory, confidence, and dedupStatus', async () => {
@@ -756,6 +803,7 @@ describe('AlertStorageService', () => {
 					id: 'alert-1',
 					receivedAt: '2026-06-06T12:00:00.000Z',
 					text: 'BTC alert',
+					symbol: 'BTC',
 					signalClass: 'unknown',
 					enriched: true,
 					enrichmentData: { sentiment: 'bullish' },
@@ -3103,6 +3151,48 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		// Regression (issue #222): production bySymbol contained a bare integer "53"
+		// and the parse artifact "MASTER", polluting the same analytics surface this
+		// work is meant to clean up.
+		it('does not index numeric-only or single-character symbols in bySymbol', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-numeric', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'Momentum shifted after 53 candles',
+						symbol: '53',
+						exchange: 'NASDAQ',
+						deliveryResults: [],
+						source: 'webhook',
+					}),
+					buildQueryDoc('alert-single', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						text: 'Signal on B',
+						symbol: 'B',
+						deliveryResults: [],
+						source: 'webhook',
+					}),
+					buildQueryDoc('alert-valid', {
+						receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+						text: 'BINANCE:ETHUSDT(D) alert triggered',
+						symbol: 'ETHUSDT',
+						exchange: 'BINANCE',
+						deliveryResults: [],
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			});
+
+			expect(result.bySymbol).toEqual({ ETHUSDT: 1, unknown: 2 });
+		});
+
 		it('aggregates per-channel delivery latency with average, p95, and sampleCount and omits zero-delivery channels', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
@@ -3245,6 +3335,91 @@ describe('AlertStorageService', () => {
 				expect(AlertStorageService.parseSymbolFromText('')).toBeNull();
 				expect(AlertStorageService.parseSymbolFromText(null)).toBeNull();
 			});
+
+			// Regression (issue #222): the summary metric showed a bare integer "53"
+			// indexed as if it were a ticker. Integers and single characters are never
+			// valid symbols, even when they are syntactically well formed.
+			it('rejects bare integers instead of extracting them as tickers', () => {
+				expect(AlertStorageService.parseSymbolFromText('53')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('53(1h)')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('Price moved 53 points on 1h momentum shift')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('RSI crossed 53 on the daily close')).toBeNull();
+			});
+
+			// The timeframe is not the symbol: "BTCUSDT(53)" is a legitimate
+			// extraction and must keep working.
+			it('treats a numeric token inside parentheses as the timeframe, not the symbol', () => {
+				expect(AlertStorageService.parseSymbolFromText('BTCUSDT(53)')).toEqual({
+					symbol: 'BTCUSDT',
+					exchange: null,
+				});
+			});
+
+			it('rejects single-character symbols', () => {
+				expect(AlertStorageService.parseSymbolFromText('B')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('X(1h)')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('A:1')).toBeNull();
+			});
+
+			it('rejects numeric-only and single-character exchange-qualified symbols', () => {
+				expect(AlertStorageService.parseSymbolFromText('NASDAQ:53')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('NASDAQ:5')).toBeNull();
+			});
+
+			it('still accepts two-character real tickers', () => {
+				expect(AlertStorageService.parseSymbolFromText('FX_IDC:USDCLP(D)')).toEqual({
+					symbol: 'USDCLP',
+					exchange: 'FX_IDC',
+				});
+				expect(AlertStorageService.parseSymbolFromText('ON(1h)')).toEqual({
+					symbol: 'ON',
+					exchange: null,
+				});
+			});
+
+			it('reuses hardened asset-context normalization for crypto pairs and suffixes', () => {
+				expect(AlertStorageService.parseSymbolFromText('BTC/USDT breakout')).toEqual({
+					symbol: 'BTC/USDT',
+					exchange: null,
+				});
+				expect(AlertStorageService.parseSymbolFromText('aerosol prices rose after the announcement')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('teeth broke resistance')).toBeNull();
+			});
+		});
+
+		describe('isValidExtractedSymbol()', () => {
+			it('rejects non-strings, blank, and unknown sentinels', () => {
+				expect(AlertStorageService.isValidExtractedSymbol(null)).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol(undefined)).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol(42)).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('   ')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('unknown')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('UNKNOWN')).toBe(false);
+			});
+
+			it('rejects numeric-only and single-character symbols', () => {
+				expect(AlertStorageService.isValidExtractedSymbol('53')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('1')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('007')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('A')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('/')).toBe(false);
+			});
+
+			it('rejects symbols containing whitespace or path separators', () => {
+				expect(AlertStorageService.isValidExtractedSymbol('BTC USDT')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('A/B')).toBe(false);
+			});
+
+			it('accepts real tickers and a normalized slash pair', () => {
+				expect(AlertStorageService.isValidExtractedSymbol('BTCUSDT')).toBe(true);
+				expect(AlertStorageService.isValidExtractedSymbol('ETHUSD')).toBe(true);
+				expect(AlertStorageService.isValidExtractedSymbol('AAPL')).toBe(true);
+				expect(AlertStorageService.isValidExtractedSymbol('USDCLP')).toBe(true);
+				expect(AlertStorageService.isValidExtractedSymbol('BRK.B')).toBe(true);
+				expect(AlertStorageService.isValidExtractedSymbol('on')).toBe(true);
+				expect(AlertStorageService.isValidExtractedSymbol('BTC/USDT')).toBe(true);
+			});
 		});
 
 		describe('extractSymbolAndExchange()', () => {
@@ -3274,6 +3449,39 @@ describe('AlertStorageService', () => {
 				expect(AlertStorageService.extractSymbolAndExchange({ text: 'Not a symbol alert' })).toEqual({
 					symbol: 'unknown',
 					exchange: null,
+				});
+			});
+
+			it('rejects numeric-only and single-character values supplied as explicit properties', () => {
+				expect(AlertStorageService.extractSymbolAndExchange({ symbol: '53' })).toEqual({
+					symbol: 'unknown',
+					exchange: null,
+				});
+				expect(AlertStorageService.extractSymbolAndExchange({ ticker: '53' })).toEqual({
+					symbol: 'unknown',
+					exchange: null,
+				});
+				expect(AlertStorageService.extractSymbolAndExchange({ symbol: 'A' })).toEqual({
+					symbol: 'unknown',
+					exchange: null,
+				});
+				expect(AlertStorageService.extractSymbolAndExchange({ symbol: 'NASDAQ:53' })).toEqual({
+					symbol: 'unknown',
+					exchange: null,
+				});
+				expect(AlertStorageService.extractSymbolAndExchange({ enrichmentData: { symbol: '53' } })).toEqual({
+					symbol: 'unknown',
+					exchange: null,
+				});
+			});
+
+			it('falls back to raw text extraction when an explicit property is invalid', () => {
+				expect(AlertStorageService.extractSymbolAndExchange({
+					symbol: '53',
+					text: 'BINANCE:ETHUSDT(D) cambió a señal de VENTA',
+				})).toEqual({
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
 				});
 			});
 		});
