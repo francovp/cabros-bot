@@ -59,7 +59,7 @@ bootstrapReadiness.begin({
 let bot;
 let botLaunchPromise;
 let bootstrapPromise;
-let server;
+
 
 const port = process.env.PORT || 80;
 const now = new Date();
@@ -195,7 +195,7 @@ async function bootstrapApplication() {
 	}
 }
 
-server = app.listen(port, () => {
+const server = app.listen(port, () => {
 	bootstrapPromise = bootstrapApplication();
 	void bootstrapPromise.catch((error) => {
 		bootstrapReadiness.fail(error);
