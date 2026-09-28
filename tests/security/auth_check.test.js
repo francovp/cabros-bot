@@ -1,6 +1,7 @@
 const request = require('supertest');
 const express = require('express');
 const { validateApiKey } = require('../../src/lib/auth');
+const { requireConfiguredAdminAccess } = require('../../src/lib/adminAuth');
 
 describe('Security: API Key Validation', () => {
 	let app;
@@ -258,5 +259,58 @@ describe('Security: list-only WEBHOOK_API_KEYS configuration (issue #692 review)
 		const res = await request(app).post('/protected').set('x-api-key', 'anything').send({});
 		expect(res.status).toBe(503);
 		expect(res.body.code).toBe('WEBHOOK_API_KEY_UNSET');
+	});
+
+	// The tests above post to a validateApiKey route, so they cannot exercise the
+	// admin config gate: requireConfiguredAdminAccess is a separate middleware and
+	// emits its own ADMIN_AUTH_UNAVAILABLE code. These mount it directly.
+	describe('requireConfiguredAdminAccess config gate', () => {
+		let adminApp;
+		let adminSavedEnv;
+
+		beforeEach(() => {
+			adminSavedEnv = saveEnv();
+			adminApp = express();
+			adminApp.use(express.json());
+			adminApp.post('/admin', requireConfiguredAdminAccess, (req, res) => {
+				res.status(200).json({ success: true, role: req.adminRole });
+			});
+		});
+
+		afterEach(() => {
+			restoreEnv(adminSavedEnv);
+		});
+
+		it('admits a listed key when only WEBHOOK_API_KEYS is set', async () => {
+			setProdLike();
+			delete process.env.WEBHOOK_API_KEY;
+			delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
+			process.env.WEBHOOK_API_KEYS = 'key-one,key-two';
+
+			const res = await request(adminApp).post('/admin').set('x-api-key', 'key-one').send({});
+			expect(res.status).toBe(200);
+			expect(res.body.code).toBeUndefined();
+		});
+
+		it('reports ADMIN_AUTH_UNAVAILABLE when no API key source is configured', async () => {
+			setProdLike();
+			delete process.env.WEBHOOK_API_KEY;
+			delete process.env.WEBHOOK_API_KEYS;
+			delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
+
+			const res = await request(adminApp).post('/admin').set('x-api-key', 'anything').send({});
+			expect(res.status).toBe(503);
+			expect(res.body.code).toBe('ADMIN_AUTH_UNAVAILABLE');
+		});
+
+		it('still rejects an unlisted key when only WEBHOOK_API_KEYS is set', async () => {
+			setProdLike();
+			delete process.env.WEBHOOK_API_KEY;
+			delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
+			process.env.WEBHOOK_API_KEYS = 'key-one,key-two';
+
+			const res = await request(adminApp).post('/admin').set('x-api-key', 'not-a-key').send({});
+			expect(res.status).toBe(403);
+		});
 	});
 });

@@ -225,6 +225,20 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports webhookAuth configured when only WEBHOOK_API_KEYS is set', async () => {
+		// getValidApiKeys() unions WEBHOOK_API_KEYS; reading WEBHOOK_API_KEY alone
+		// reported configured:false for a valid list-only deployment.
+		delete process.env.WEBHOOK_API_KEY;
+		process.env.WEBHOOK_API_KEYS = 'key-one,key-two';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'key-one');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.webhookAuth.configured).toBe(true);
+	});
+
 	it('exposes rolling alert-path MCP enrichment rates', async () => {
 		tradingViewMcpService.runtimeStatus = {
 			status: 'degraded',
