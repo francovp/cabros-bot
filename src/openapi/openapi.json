@@ -9486,9 +9486,10 @@
                   "levelsSource": {
                     "type": "string",
                     "enum": [
-                      "gemini-grounding"
+                      "gemini-grounding",
+                      "fallback-trade-plan"
                     ],
-                    "description": "Provenance of technical_levels. Set to 'gemini-grounding' only when Gemini-parsed fallback levels are emitted because TradingView MCP data was absent or failed; omitted when MCP-derived levels win (GH-509 / CB-226)."
+                    "description": "Provenance of technical_levels. Set to 'gemini-grounding' only when Gemini-parsed fallback levels are emitted because TradingView MCP data was absent or failed; omitted when MCP-derived levels win (GH-509 / CB-226). Set to 'fallback-trade-plan' when TradingView MCP supplied the price but its ATR-derived risk block was rejected (zero, non-finite, or failing the side/positivity checks) and the secondary heuristic timeframe risk plan was used instead (GH-1229)."
                   },
                   "current_price": {
                     "type": [

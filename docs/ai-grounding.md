@@ -21,6 +21,7 @@ When `ENABLE_GEMINI_GROUNDING=true`:
 - **Key Insights**: Extracts bullet points of critical information
 - **Technical Levels**: Identifies support and resistance levels mentioned in context
 - **Risk Parameters**: Optionally reports invalidation level, target level, setup type, and estimated risk/reward ratio
+- **Secondary Fallback Trade Plan**: When TradingView MCP supplies a price but its ATR-derived risk block is rejected (ATR `0`, non-finite, or a level failing the side/positivity check), the enrichment fills those three fields from the timeframe-based heuristic in `src/services/tradingview/fallbackTradePlan.js` and tags them `levelsSource: "fallback-trade-plan"`. A valid ATR-derived block always wins, and an invalid ATR is still never turned into a synthetic ATR stop. Heuristic levels are provenance-tagged precisely so downstream consumers can weigh them below real ATR levels.
 - **Verified Sources**: Extracts URLs and titles from GoogleSearch results
 - **Language Support**: Respects original language of alert text
 - **Graceful Fallback**: If enrichment fails, original alert is sent without delays

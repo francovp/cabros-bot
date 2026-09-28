@@ -279,7 +279,11 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 				? mcp.price_data.current_price
 				: null);
 
-		let levelsSource = technicalLevelsSource;
+		// GH-1229: preserve the MCP risk-level provenance tag so downstream consumers
+		// can tell a heuristic fallback block apart from real ATR-derived levels. It
+		// never overrides a Gemini-derived levelsSource, which means MCP technical
+		// levels were absent.
+		let levelsSource = technicalLevelsSource || mcp.levelsSource || undefined;
 
 		if (!hasCompleteRiskMetadata(optionalRiskMetadata) && mcpCurrentPrice) {
 			const parsed = parseTradingViewSignal(text);

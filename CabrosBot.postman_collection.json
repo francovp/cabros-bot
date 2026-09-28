@@ -859,6 +859,12 @@
               "status": "OK",
               "code": 200,
               "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"sentiment\":\"BULLISH\"}}}"
+            },
+            {
+              "name": "Dry run - secondary fallback trade plan when ATR risk block is rejected",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"current_price\":100,\"price_data\":{\"current_price\":100},\"insights\":[\"Señal detectada: COMPRA para BTCUSDT en 4h (BINANCE)\"],\"invalidation_level\":97.5,\"target_level\":105,\"risk_reward_ratio\":2,\"setup_type\":\"trend_continuation\",\"levelsSource\":\"fallback-trade-plan\"}}}"
             }
           ]
         },
