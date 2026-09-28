@@ -14,6 +14,7 @@ const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaMana
 const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
+const { getPromptService } = require('../../src/services/prompts');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -34,6 +35,7 @@ describe('Status endpoints', () => {
 	let savedTradingViewEnrichmentEvents;
 	let app;
 	let tempDir;
+	let promptStatusSpies = [];
 
 	beforeEach(() => {
 		savedEnv = saveEnv();
@@ -105,6 +107,8 @@ describe('Status endpoints', () => {
 	});
 
 	afterEach(() => {
+		promptStatusSpies.forEach((spy) => spy.mockRestore());
+		promptStatusSpies = [];
 		remoteConfigService._resetForTesting();
 		geminiQuotaManager.resetForTesting();
 		groundingMetrics.resetForTesting();
@@ -590,6 +594,162 @@ describe('Status endpoints', () => {
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.signalOutcomeTracking).toBe(true);
 		expect(response.body.dependencies.signalOutcomeWorker.enabled).toBe(true);
+	});
+
+	it('separates Langfuse configuration readiness from actual prompt serving', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+		process.env.LANGFUSE_PROMPT_LABEL = 'production';
+		process.env.LANGFUSE_PROMPT_CACHE_TTL_SECONDS = '60';
+
+		const { PromptService } = require('../../src/services/prompts');
+		// A real, never-used service yields the honest "configured but serving nothing yet" snapshot.
+		promptStatusSpies.push(
+			jest.spyOn(getPromptService(), 'getPromptResolutionStatus')
+				.mockReturnValue(new PromptService({ logger: { warn: jest.fn(), debug: jest.fn() } }).getPromptResolutionStatus()),
+		);
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		// Configuration and reachability are still reported exactly as before.
+		expect(response.body.featureFlags.langfusePrompts).toBe(true);
+		expect(response.body.dependencies.langfuse).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+		// Prompt serving is a separate, honest fact.
+		expect(response.body.dependencies.langfusePrompts).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+			servingStatus: 'no_traffic',
+			servingPrompts: false,
+			label: 'production',
+			cacheTtlSeconds: 60,
+			totalResolutions: 0,
+			langfuseResolutions: 0,
+			localResolutions: 0,
+			localResolutionRatePercent: null,
+			remoteFetchAttempts: 0,
+			remoteFetchSuccesses: 0,
+			remoteFetchFailures: 0,
+			remoteFetchSuccessRatePercent: null,
+			lastSuccessfulFetchAt: null,
+			lastErrorCategory: null,
+			consecutiveFailures: 0,
+			prompts: [],
+		}));
+		expect(JSON.stringify(response.body.dependencies.langfusePrompts)).not.toContain('sk-lf-status-secret');
+		expect(JSON.stringify(response.body.dependencies.langfusePrompts)).not.toContain('pk-lf-status-public');
+	});
+
+	it('exposes prompt-resolution telemetry on /api/capabilities with per-prompt resolved source', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+
+		const { PromptService, PromptKeys } = require('../../src/services/prompts');
+		const service = new PromptService({
+			logger: { warn: jest.fn(), debug: jest.fn() },
+			clientProvider: jest.fn().mockResolvedValue({
+				prompt: {
+					get: jest.fn().mockResolvedValue({
+						version: 12,
+						compile: jest.fn().mockReturnValue([
+							{
+								role: 'system',
+								content: 'Remote system prompt with invalidation_level, target_level, setup_type, risk_reward_ratio. 0.9+ only with corroborating sources, 0.6-0.8 partial.',
+							},
+							{ role: 'user', content: 'Context: {{alertContext}}' },
+						]),
+					}),
+				},
+			}),
+		});
+
+		await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'Bitcoin context' });
+		service.clientProvider = jest.fn().mockRejectedValue(new Error('connection reset sk-leak-me'));
+		await service.getTextPrompt(PromptKeys.MARKET_PRICE_FETCH, { symbol: 'BTCUSDT' });
+
+		promptStatusSpies.push(
+			jest.spyOn(getPromptService(), 'getPromptResolutionStatus')
+				.mockReturnValue(service.getPromptResolutionStatus()),
+		);
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.langfusePrompts).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+			servingStatus: 'degraded',
+			servingPrompts: true,
+			totalResolutions: 2,
+			langfuseResolutions: 1,
+			localResolutions: 1,
+			localResolutionRatePercent: 50,
+			remoteFetchAttempts: 2,
+			remoteFetchSuccesses: 1,
+			remoteFetchFailures: 1,
+			remoteFetchSuccessRatePercent: 50,
+			lastErrorCategory: 'request_failed',
+			consecutiveFailures: 1,
+		}));
+		expect(response.body.dependencies.langfusePrompts.prompts).toEqual(expect.arrayContaining([
+			expect.objectContaining({ name: 'alert-enrichment', lastSource: 'langfuse', lastLangfuseVersion: 12 }),
+			expect.objectContaining({ name: 'market-price-fetch', lastSource: 'local' }),
+		]));
+		// Raw provider error text must never reach the status payload.
+		expect(JSON.stringify(response.body.dependencies.langfusePrompts)).not.toContain('sk-leak-me');
+	});
+
+	it('surfaces a 100 percent local fallback regression on /api/status', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+
+		const { PromptService, PromptKeys } = require('../../src/services/prompts');
+		const service = new PromptService({
+			logger: { warn: jest.fn(), debug: jest.fn() },
+			clientProvider: jest.fn().mockResolvedValue({
+				prompt: {
+					get: jest.fn().mockRejectedValue(new Error('Langfuse prompt not found')),
+				},
+			}),
+		});
+
+		await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'Bitcoin context' });
+		await service.getChatPrompt(PromptKeys.NEWS_ANALYSIS, { symbol: 'BTCUSDT', enrichedContext: 'ctx' });
+
+		promptStatusSpies.push(
+			jest.spyOn(getPromptService(), 'getPromptResolutionStatus')
+				.mockReturnValue(service.getPromptResolutionStatus()),
+		);
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		// Langfuse still reports configured/ready — but the serving fact is now honest.
+		expect(response.body.dependencies.langfuse.ready).toBe(true);
+		expect(response.body.dependencies.langfusePrompts).toEqual(expect.objectContaining({
+			ready: true,
+			servingStatus: 'local_fallback',
+			servingPrompts: false,
+			langfuseResolutions: 0,
+			localResolutions: 2,
+			localResolutionRatePercent: 100,
+			remoteFetchSuccessRatePercent: 0,
+			lastErrorCategory: 'prompt_not_found',
+		}));
 	});
 
 	it('reports dedicated worker role and heartbeat counters', async () => {

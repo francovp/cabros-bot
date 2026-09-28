@@ -10369,7 +10369,7 @@
       },
       "Status": {
         "type": "object",
-       "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.newsMonitorClassifier reports ENABLE_NEWS_MONITOR_CLASSIFIER and defaults to false; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations.",
+       "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.newsMonitorClassifier reports ENABLE_NEWS_MONITOR_CLASSIFIER and defaults to false; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations. dependencies.langfusePrompts reports non-secret prompt-resolution telemetry that separates Langfuse configuration readiness from actual prompt serving, so a 100% local-fallback regression is detectable rather than silent; it exposes resolution counters, remote fetch success rate, the last successful fetch timestamp, per-prompt resolved source, and a closed error-category enum without returning remote prompt content, prompt variables, or credentials.",
         "properties": {
           "readiness": {
             "$ref": "#/components/schemas/BootstrapReadiness"
@@ -10399,6 +10399,9 @@
               "firebaseRemoteConfig": {
                 "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
               },
+              "langfusePrompts": {
+                "$ref": "#/components/schemas/LangfusePromptsDependency"
+              },
               "notificationRedrive": {
                 "$ref": "#/components/schemas/NotificationRedriveDependency"
               },
@@ -10413,6 +10416,219 @@
               },
               "selfTest": {
                 "$ref": "#/components/schemas/SelfTestStatus"
+              }
+            }
+          }
+        }
+      },
+      "LangfusePromptsDependency": {
+        "type": "object",
+        "description": "Non-secret prompt-resolution telemetry that separates Langfuse CONFIGURATION readiness (dependencies.langfuse) from actual PROMPT SERVING. Configuration being ready says nothing about whether prompts are actually being served remotely, so a 100% local-fallback regression is reported here as servingStatus=local_fallback instead of looking healthy. Only counts, tiers, timestamps, per-prompt resolved source, and a closed error-category enum are returned; remote prompt content, prompt variables, and credential material are never included. Counters reset on process restart. Langfuse unavailability always fails open to the local fallback and never blocks alert delivery.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "servingStatus",
+          "servingPrompts",
+          "label",
+          "cacheTtlSeconds",
+          "totalResolutions",
+          "langfuseResolutions",
+          "localResolutions",
+          "localResolutionRatePercent",
+          "remoteFetchAttempts",
+          "remoteFetchSuccesses",
+          "remoteFetchFailures",
+          "remoteFetchSuccessRatePercent",
+          "lastSuccessfulFetchAt",
+          "lastFailedFetchAt",
+          "lastErrorCategory",
+          "consecutiveFailures",
+          "prompts"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether Langfuse prompt management is enabled via ENABLE_LANGFUSE_PROMPTS."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are both present."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "Configuration readiness only, identical to dependencies.langfuse.ready. It does NOT mean prompts are being served from Langfuse; read servingStatus and servingPrompts for that."
+          },
+          "servingStatus": {
+            "type": "string",
+            "description": "Actual prompt serving state. no_traffic means configured and reachable but nothing has been resolved yet, so serving is genuinely unknown rather than healthy. local_fallback means remote is enabled and reachable but every fetch has failed, so no prompt has ever been served from Langfuse. degraded means at least one resolution came from Langfuse and at least one fell back. unknown is the fail-open value used when telemetry itself is unavailable.",
+            "enum": [
+              "disabled",
+              "unconfigured",
+              "no_traffic",
+              "serving",
+              "degraded",
+              "local_fallback",
+              "unknown"
+            ]
+          },
+          "servingPrompts": {
+            "type": "boolean",
+            "description": "True only when at least one prompt has actually been served from Langfuse in this process. This is the fact that makes a 100% local-fallback regression detectable."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Effective Langfuse prompt label, or null when prompt management is disabled."
+          },
+          "cacheTtlSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Effective SDK prompt cache TTL in seconds, or null when prompt management is disabled."
+          },
+          "totalResolutions": {
+            "type": "integer",
+            "description": "Total prompt resolutions in this process, from either source."
+          },
+          "langfuseResolutions": {
+            "type": "integer",
+            "description": "Resolutions actually served from Langfuse."
+          },
+          "localResolutions": {
+            "type": "integer",
+            "description": "Resolutions served from the local file-backed fallback."
+          },
+          "localResolutionRatePercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Percentage of resolutions served from the local fallback, or null when no resolution has been recorded. 100 means Langfuse served nothing."
+          },
+          "remoteFetchAttempts": {
+            "type": "integer",
+            "description": "Remote prompt fetch attempts, including client-unavailable paths."
+          },
+          "remoteFetchSuccesses": {
+            "type": "integer",
+            "description": "Remote prompt fetch successes."
+          },
+          "remoteFetchFailures": {
+            "type": "integer",
+            "description": "Remote prompt fetch failures."
+          },
+          "remoteFetchSuccessRatePercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Remote prompt fetch success rate, or null when no attempt has been recorded. 0 means every fetch failed."
+          },
+          "lastSuccessfulFetchAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Timestamp of the last successful remote prompt fetch, or null if none has ever succeeded. Null is the direct signal that Langfuse has never served a prompt.",
+            "format": "date-time"
+          },
+          "lastFailedFetchAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Timestamp of the last failed remote prompt fetch, or null.",
+            "format": "date-time"
+          },
+          "lastErrorCategory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sanitized category of the last remote prompt failure, or null. Raw provider error text is never returned because it can embed request context or credential fragments.",
+            "enum": [
+              "client_unavailable",
+              "prompt_not_found",
+              "unauthorized",
+              "rate_limited",
+              "timeout",
+              "compile_failed",
+              "request_failed",
+              "unknown",
+              null
+            ]
+          },
+          "consecutiveFailures": {
+            "type": "integer",
+            "description": "Consecutive remote prompt fetch failures; reset to 0 on the first success."
+          },
+          "prompts": {
+            "type": "array",
+            "description": "Per-prompt resolution counters, present only for prompts resolved in this process.",
+            "items": {
+              "type": "object",
+              "description": "Per-registered-prompt resolution counters and last observed resolved source. Contains no prompt content, no prompt variables, and no key material.",
+              "required": [
+                "name",
+                "type",
+                "langfuseResolutions",
+                "localResolutions",
+                "lastSource",
+                "lastLangfuseVersion",
+                "lastResolvedAt"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Langfuse prompt name, for example alert-enrichment."
+                },
+                "type": {
+                  "type": "string",
+                  "description": "Registered prompt type: chat or text.",
+                  "enum": [
+                    "chat",
+                    "text"
+                  ]
+                },
+                "langfuseResolutions": {
+                  "type": "integer",
+                  "description": "Resolutions of this prompt served from Langfuse."
+                },
+                "localResolutions": {
+                  "type": "integer",
+                  "description": "Resolutions of this prompt served from the local file-backed fallback in src/services/prompts/defaults/."
+                },
+                "lastSource": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Resolved source of the most recent resolution: langfuse, local, or null when never resolved.",
+                  "enum": [
+                    "langfuse",
+                    "local",
+                    null
+                  ]
+                },
+                "lastLangfuseVersion": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Version of the last Langfuse prompt actually served for this prompt, or null when the last resolution used the local fallback."
+                },
+                "lastResolvedAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Timestamp of the most recent resolution for this prompt.",
+                  "format": "date-time"
+                }
               }
             }
           }

@@ -6,9 +6,11 @@ const {
 const {
 	getLangfuseClient,
 	getLangfuseDisabledReason,
+	isLangfuseConfigured,
 } = require('./langfuseClient');
 const {
 	PromptKeys,
+	PROMPT_DEFINITIONS,
 	getPromptDefinition,
 } = require('./promptRegistry');
 
@@ -23,6 +25,88 @@ const REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE = Object.freeze([
 	'0.6-0.8',
 	'corroborating sources',
 ]);
+
+/**
+ * Closed enum of prompt-fetch error categories exposed on /api/status.
+ * Raw provider error messages are deliberately never surfaced: they can embed
+ * request context or credential fragments, and the operational question an
+ * operator needs answered is "which failure mode", not "what did it say".
+ */
+const PROMPT_FETCH_ERROR_CATEGORIES = Object.freeze({
+	CLIENT_UNAVAILABLE: 'client_unavailable',
+	PROMPT_NOT_FOUND: 'prompt_not_found',
+	UNAUTHORIZED: 'unauthorized',
+	RATE_LIMITED: 'rate_limited',
+	TIMEOUT: 'timeout',
+	COMPILE_FAILED: 'compile_failed',
+	REQUEST_FAILED: 'request_failed',
+	UNKNOWN: 'unknown',
+});
+
+function classifyPromptFetchError(error) {
+	const message = (error?.message || '').toLowerCase();
+
+	if (!message) {
+		return PROMPT_FETCH_ERROR_CATEGORIES.UNKNOWN;
+	}
+	if (message.startsWith(`${PROMPT_FETCH_ERROR_CATEGORIES.CLIENT_UNAVAILABLE}:`)) {
+		return PROMPT_FETCH_ERROR_CATEGORIES.CLIENT_UNAVAILABLE;
+	}
+	if (message.includes('prompt not found') || message.includes('langfusepromptnotfounderror') || message.includes('prompt_not_found')) {
+		return PROMPT_FETCH_ERROR_CATEGORIES.PROMPT_NOT_FOUND;
+	}
+	if (message.includes('401') || message.includes('unauthorized') || message.includes('403') || message.includes('forbidden')) {
+		return PROMPT_FETCH_ERROR_CATEGORIES.UNAUTHORIZED;
+	}
+	if (message.includes('429') || message.includes('rate limit') || message.includes('too many requests') || message.includes('resource_exhausted')) {
+		return PROMPT_FETCH_ERROR_CATEGORIES.RATE_LIMITED;
+	}
+	if (message.includes('timeout') || message.includes('timed out') || message.includes('etimedout') || message.includes('aborted')) {
+		return PROMPT_FETCH_ERROR_CATEGORIES.TIMEOUT;
+	}
+	if (message.includes('compile') || message.includes('template')) {
+		return PROMPT_FETCH_ERROR_CATEGORIES.COMPILE_FAILED;
+	}
+	if (
+		message.includes('econnrefused')
+		|| message.includes('econnreset')
+		|| message.includes('enotfound')
+		|| message.includes('fetch failed')
+		|| message.includes('socket hang up')
+		|| message.includes('connection reset')
+		|| message.includes('connection closed')
+		|| message.includes('network')
+		|| message.includes('eai_again')
+	) {
+		return PROMPT_FETCH_ERROR_CATEGORIES.REQUEST_FAILED;
+	}
+
+	return PROMPT_FETCH_ERROR_CATEGORIES.UNKNOWN;
+}
+
+function roundPercent(numerator, denominator) {
+	if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) {
+		return null;
+	}
+
+	return Math.round((numerator / denominator) * 1000) / 10;
+}
+
+function createEmptyTelemetry() {
+	return {
+		totalResolutions: 0,
+		langfuseResolutions: 0,
+		localResolutions: 0,
+		remoteFetchAttempts: 0,
+		remoteFetchSuccesses: 0,
+		remoteFetchFailures: 0,
+		lastSuccessfulFetchAt: null,
+		lastFailedFetchAt: null,
+		lastErrorCategory: null,
+		consecutiveFailures: 0,
+		prompts: new Map(),
+	};
+}
 
 function inspectAlertEnrichmentRiskSchema(promptName, content) {
 	if (promptName !== 'alert-enrichment' && promptName !== PromptKeys.ALERT_ENRICHMENT) {
@@ -114,6 +198,7 @@ class PromptService {
 		this.logger = logger;
 		this.warningCache = new Set();
 		this.schemaDriftStatus = new Map();
+		this.telemetry = createEmptyTelemetry();
 	}
 
 	getSchemaDriftStatus() {
@@ -122,6 +207,163 @@ class PromptService {
 			result[key] = { ...value };
 		}
 		return result;
+	}
+
+	/**
+	 * Non-secret prompt-resolution telemetry.
+	 *
+	 * "Langfuse is configured and reachable" (dependencies.langfuse) and
+	 * "prompts are actually being served from Langfuse" (this) are different
+	 * facts. Without the second one, a 100%-local-fallback regression is
+	 * invisible: readiness stays green while every published prompt change is
+	 * silently ignored. Everything returned here is counts, tiers, timestamps
+	 * and a closed error-category enum — never prompt content or key material.
+	 */
+	getPromptResolutionStatus() {
+		const telemetry = this.telemetry || createEmptyTelemetry();
+		const enabled = isLangfusePromptManagementEnabled();
+		const configured = isLangfuseConfigured();
+
+		let servingStatus;
+		if (!enabled) {
+			servingStatus = 'disabled';
+		} else if (!configured) {
+			servingStatus = 'unconfigured';
+		} else if (telemetry.totalResolutions === 0) {
+			// Configured and reachable, but nothing has been resolved yet, so
+			// serving is genuinely unknown rather than healthy.
+			servingStatus = 'no_traffic';
+		} else if (telemetry.langfuseResolutions === 0) {
+			// Every remote fetch failed: Langfuse answers, but serves no prompt.
+			servingStatus = 'local_fallback';
+		} else if (telemetry.localResolutions > 0) {
+			servingStatus = 'degraded';
+		} else {
+			servingStatus = 'serving';
+		}
+
+		return {
+			enabled,
+			configured,
+			// Configuration readiness only — kept identical to dependencies.langfuse.ready.
+			ready: enabled && configured,
+			servingStatus,
+			servingPrompts: telemetry.langfuseResolutions > 0,
+			label: enabled ? getLangfusePromptLabel() : null,
+			cacheTtlSeconds: enabled ? getLangfusePromptCacheTtlSeconds() : null,
+			totalResolutions: telemetry.totalResolutions,
+			langfuseResolutions: telemetry.langfuseResolutions,
+			localResolutions: telemetry.localResolutions,
+			localResolutionRatePercent: roundPercent(
+				telemetry.localResolutions,
+				telemetry.totalResolutions,
+			),
+			remoteFetchAttempts: telemetry.remoteFetchAttempts,
+			remoteFetchSuccesses: telemetry.remoteFetchSuccesses,
+			remoteFetchFailures: telemetry.remoteFetchFailures,
+			remoteFetchSuccessRatePercent: roundPercent(
+				telemetry.remoteFetchSuccesses,
+				telemetry.remoteFetchAttempts,
+			),
+			lastSuccessfulFetchAt: telemetry.lastSuccessfulFetchAt,
+			lastFailedFetchAt: telemetry.lastFailedFetchAt,
+			lastErrorCategory: telemetry.lastErrorCategory,
+			consecutiveFailures: telemetry.consecutiveFailures,
+			prompts: [...telemetry.prompts.values()].map((entry) => ({ ...entry })),
+		};
+	}
+
+	resetTelemetryForTesting() {
+		this.telemetry = createEmptyTelemetry();
+	}
+
+	_getPromptTelemetry(promptName, type) {
+		if (!this.telemetry) {
+			this.telemetry = createEmptyTelemetry();
+		}
+
+		let entry = this.telemetry.prompts.get(promptName);
+		if (!entry) {
+			entry = {
+				name: promptName,
+				type,
+				langfuseResolutions: 0,
+				localResolutions: 0,
+				lastSource: null,
+				lastLangfuseVersion: null,
+				lastResolvedAt: null,
+			};
+			this.telemetry.prompts.set(promptName, entry);
+		}
+
+		entry.type = type;
+		return entry;
+	}
+
+	/**
+	 * Fail-open by contract: telemetry must never be able to break prompt
+	 * resolution, because prompt resolution feeds live alert delivery.
+	 */
+	_recordResolution(promptName, type, source, { version = null } = {}) {
+		try {
+			if (!this.telemetry) {
+				return;
+			}
+
+			this.telemetry.totalResolutions += 1;
+			const entry = this._getPromptTelemetry(promptName, type);
+			entry.lastSource = source;
+			entry.lastResolvedAt = new Date().toISOString();
+
+			if (source === 'langfuse') {
+				this.telemetry.langfuseResolutions += 1;
+				entry.langfuseResolutions += 1;
+				entry.lastLangfuseVersion = version ?? null;
+			} else {
+				this.telemetry.localResolutions += 1;
+				entry.localResolutions += 1;
+			}
+		} catch (error) {
+			this.logger.warn?.(`[PromptService] Failed to record prompt-resolution telemetry: ${error.message}`);
+		}
+	}
+
+	_recordFetchAttempt() {
+		try {
+			if (!this.telemetry) {
+				return;
+			}
+			this.telemetry.remoteFetchAttempts += 1;
+		} catch (error) {
+			this.logger.warn?.(`[PromptService] Failed to record prompt-fetch attempt: ${error.message}`);
+		}
+	}
+
+	_recordFetchSuccess() {
+		try {
+			if (!this.telemetry) {
+				return;
+			}
+			this.telemetry.remoteFetchSuccesses += 1;
+			this.telemetry.consecutiveFailures = 0;
+			this.telemetry.lastSuccessfulFetchAt = new Date().toISOString();
+		} catch (error) {
+			this.logger.warn?.(`[PromptService] Failed to record prompt-fetch success: ${error.message}`);
+		}
+	}
+
+	_recordFetchFailure(error) {
+		try {
+			if (!this.telemetry) {
+				return;
+			}
+			this.telemetry.remoteFetchFailures += 1;
+			this.telemetry.consecutiveFailures += 1;
+			this.telemetry.lastFailedFetchAt = new Date().toISOString();
+			this.telemetry.lastErrorCategory = classifyPromptFetchError(error);
+		} catch (recordingError) {
+			this.logger.warn?.(`[PromptService] Failed to record prompt-fetch failure: ${recordingError.message}`);
+		}
 	}
 
 	warnOnce(cacheKey, message) {
@@ -139,11 +381,30 @@ class PromptService {
 		if (isLangfusePromptManagementEnabled()) {
 			const remotePrompt = await this.resolveRemotePrompt(definition, variables, options);
 			if (remotePrompt) {
+				this._recordResolutionFailOpen(definition.name, definition.type, 'langfuse', {
+					version: remotePrompt.version ?? null,
+				});
 				return remotePrompt;
 			}
 		}
 
-		return this.resolveLocalPrompt(definition, variables, options);
+		const localPrompt = this.resolveLocalPrompt(definition, variables, options);
+		this._recordResolutionFailOpen(definition.name, definition.type, 'local');
+		return localPrompt;
+	}
+
+	/**
+	 * Telemetry is observability, never a delivery dependency. The recorder
+	 * already swallows its own errors; this wrapper additionally guarantees the
+	 * resolved prompt is returned even if the recorder itself is broken or has
+	 * been tampered with, so a telemetry defect can never fail a live alert.
+	 */
+	_recordResolutionFailOpen(promptName, type, source, metadata) {
+		try {
+			this._recordResolution(promptName, type, source, metadata);
+		} catch (error) {
+			this.logger.warn?.(`[PromptService] Prompt-resolution telemetry unavailable: ${error.message}`);
+		}
 	}
 
 	async getChatPrompt(promptKey, variables = {}, options = {}) {
@@ -181,6 +442,17 @@ class PromptService {
 			const disabledReason = usingDefaultClientProvider
 				? getLangfuseDisabledReason() || error.message
 				: error.message;
+			// Reaching the provider at all is a fetch attempt; not being able to
+			// is a fetch failure, so `local_fallback` also covers credential and
+			// client-construction outages rather than fetch errors alone. Only a
+			// provider we could not construct is `client_unavailable`; any other
+			// rejection is classified on its own merits (network, auth, ...).
+			this._recordFetchAttempt();
+			this._recordFetchFailure(
+				usingDefaultClientProvider
+					? new Error(`${PROMPT_FETCH_ERROR_CATEGORIES.CLIENT_UNAVAILABLE}: ${disabledReason}`)
+					: error,
+			);
 			this.warnOnce(
 				`langfuse-disabled:${disabledReason}`,
 				`[PromptService] Langfuse prompt management unavailable, using local fallbacks: ${disabledReason}`,
@@ -191,6 +463,8 @@ class PromptService {
 		if (usingDefaultClientProvider) {
 			const disabledReason = getLangfuseDisabledReason();
 			if (disabledReason) {
+				this._recordFetchAttempt();
+				this._recordFetchFailure(new Error(`${PROMPT_FETCH_ERROR_CATEGORIES.CLIENT_UNAVAILABLE}: ${disabledReason}`));
 				this.warnOnce(
 					`langfuse-disabled:${disabledReason}`,
 					`[PromptService] Langfuse prompt management unavailable, using local fallbacks: ${disabledReason}`,
@@ -203,11 +477,13 @@ class PromptService {
 		const cacheTtlSeconds = options.cacheTtlSeconds ?? getLangfusePromptCacheTtlSeconds();
 
 		try {
+			this._recordFetchAttempt();
 			const prompt = await fetchPromptFromClient(client, definition.name, {
 				type: definition.type,
 				label,
 				cacheTtlSeconds,
 			});
+			this._recordFetchSuccess();
 			this.logger.debug?.(`[PromptService] Fetched Langfuse prompt "${definition.name}" successfully`);
 
 			const compiledPrompt = prompt.compile(variables);
@@ -250,6 +526,7 @@ class PromptService {
 				...metadata,
 			};
 		} catch (error) {
+			this._recordFetchFailure(error);
 			this.warnOnce(
 				`langfuse-fetch:${definition.name}:${error.message}`,
 				`[PromptService] Failed to fetch Langfuse prompt "${definition.name}", using local fallback: ${error.message}`,
@@ -330,8 +607,11 @@ function resetPromptServiceForTests() {
 module.exports = {
 	REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS,
 	REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE,
+	PROMPT_FETCH_ERROR_CATEGORIES,
+	classifyPromptFetchError,
 	inspectAlertEnrichmentRiskSchema,
 	PromptKeys,
+	PROMPT_DEFINITIONS,
 	PromptService,
 	getPromptService,
 	resetPromptServiceForTests,

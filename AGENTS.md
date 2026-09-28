@@ -393,6 +393,36 @@ Runtime LLM prompts are centrally managed through `src/services/prompts/`.
 - confidence enrichment
 - Gemini market price fetch query
 
+## Langfuse Prompt-Resolution Telemetry (Issue #1030)
+
+Langfuse configuration readiness and actual prompt serving are **two separate facts** and `/api/status` reports them separately. Previously only configuration readiness was exposed, so a 100% local-fallback regression was invisible: readiness stayed green, `/api/status` looked healthy, and a prompt improvement published to Langfuse would appear to succeed while changing nothing in production.
+
+- `dependencies.langfuse` — **unchanged**. Configuration/reachability only (`ENABLE_LANGFUSE_PROMPTS` plus both key variables).
+- `dependencies.langfusePrompts` — **new** non-secret prompt-resolution telemetry: `servingStatus`, `servingPrompts`, `label`, `cacheTtlSeconds`, `totalResolutions`, `langfuseResolutions`, `localResolutions`, `localResolutionRatePercent`, `remoteFetchAttempts`/`Successes`/`Failures`, `remoteFetchSuccessRatePercent`, `lastSuccessfulFetchAt`, `lastFailedFetchAt`, `lastErrorCategory`, `consecutiveFailures`, and per-prompt `prompts[]` (`name`, `type`, `lastSource`, `lastLangfuseVersion`).
+
+`servingStatus` enum:
+- `disabled` — prompt management off; local fallbacks expected.
+- `unconfigured` — enabled without both credentials.
+- `no_traffic` — configured/reachable but nothing resolved yet, so serving is **unknown**, not healthy.
+- `serving` — every resolution came from Langfuse.
+- `degraded` — at least one from Langfuse and at least one fell back.
+- `local_fallback` — reachable but **every** fetch failed; no prompt has ever been served remotely.
+- `unknown` — fail-open value when telemetry itself is unavailable.
+
+`lastErrorCategory` is a closed enum: `client_unavailable`, `prompt_not_found`, `unauthorized`, `rate_limited`, `timeout`, `compile_failed`, `request_failed`, `unknown`. Raw provider error text is never surfaced because it can embed request context or credential fragments.
+
+**Core components**:
+- `src/services/prompts/PromptService.js` — in-process telemetry, `classifyPromptFetchError`, `_recordResolutionFailOpen` wrapper so a telemetry defect can never fail a live alert, and `resetTelemetryForTesting`.
+- `src/services/prompts/index.js` — barrel re-exports.
+- `src/controllers/status.js` — `dependencies.langfusePrompts` with a fail-open `unknown` fallback.
+- `src/openapi/openapi.json` (`LangfusePromptsDependency`) and `CabrosBot.postman_collection.json` ("Get Status - langfuse prompt resolution").
+
+**Coverage**: `tests/unit/prompt-service.test.js` (telemetry, fail-open, error-category enum, no-leak) and `tests/integration/status-endpoint.test.js` (configuration vs. serving separation, degraded and 100%-local-fallback reporting, secret redaction).
+
+**Rollout check**: verify in preview that `servingStatus` reaches `serving` and `servingPrompts` is `true`, confirm the `production` label exists, and align the remote `alert-enrichment` prompt with the local optional-risk schema **before** trusting any prompt-driven change. See `docs/ai-grounding.md`.
+
+No new environment variable or Remote Config key was added; the existing `schemaDriftDetected` provenance contract and `/api/alerts/summary` `riskMetadataCoverage` shape are unchanged. Fail-open everywhere: Langfuse unavailability keeps falling back to `src/services/prompts/defaults/*.txt` and never blocks alert delivery.
+
 
 ## Enriched Webhook Alert Output (004-enrich-alert-output)
 
