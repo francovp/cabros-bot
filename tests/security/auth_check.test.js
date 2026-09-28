@@ -273,7 +273,7 @@ describe('Security: list-only WEBHOOK_API_KEYS configuration (issue #692 review)
 			adminApp = express();
 			adminApp.use(express.json());
 			adminApp.post('/admin', requireConfiguredAdminAccess, (req, res) => {
-				res.status(200).json({ success: true, role: req.adminRole });
+				res.status(200).json({ success: true });
 			});
 		});
 
