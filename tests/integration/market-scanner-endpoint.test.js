@@ -104,6 +104,8 @@ describe('Market Scanner Alert endpoint', () => {
 				unknown: 0,
 			},
 		});
+		expect(res.body.processingTimeMs).toEqual(expect.any(Number));
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.deliveryResults).toEqual([
 			expect.objectContaining({ success: true, channel: 'telegram', messageId: 'scan-msg-id' }),
 		]);

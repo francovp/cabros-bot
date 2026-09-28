@@ -282,6 +282,11 @@ class GenaiClient {
 			return this._executeBraveSearch(query, maxResults, signal);
 		}
 
+		// Tracks whether quota exhaustion (rather than an empty result set or a
+		// non-quota error) is what actually selected the Brave fallback, so the
+		// first quota-triggered fallback is counted too (#718).
+		let braveFallbackCausedByQuota = false;
+
 		try {
 			const googleResult = await this._executeGoogleSearch(query, model, maxResults, textWithCitations, signal);
 			if (googleResult.results && googleResult.results.length > 0) {
@@ -294,6 +299,7 @@ class GenaiClient {
 			}
 			if (isGeminiQuotaError(error)) {
 				geminiQuotaManager.triggerQuotaCooldown(error);
+				braveFallbackCausedByQuota = true;
 			}
 			if (rethrowQuotaErrors && isGeminiQuotaError(error)) {
 				throw error;
@@ -306,6 +312,9 @@ class GenaiClient {
 		}
 
 		// Fallback to Brave
+		if (braveFallbackCausedByQuota) {
+			geminiQuotaManager.recordBraveFallbackDuringCooldown();
+		}
 		return this._executeBraveSearch(query, maxResults, signal);
 	}
 

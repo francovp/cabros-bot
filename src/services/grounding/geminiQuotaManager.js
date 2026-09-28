@@ -69,6 +69,28 @@ class GeminiQuotaManager {
 	}
 
 	/**
+	 * Extend process-level quota cooldown without recording a new incident.
+	 *
+	 * Used by layers that observe a provider rejection that has already been
+	 * counted elsewhere in the same call chain. Extending the cooldown keeps the
+	 * fail-safe behaviour intact while ensuring one rejection yields exactly one
+	 * `triggersTotal` increment (issue #718).
+	 * @param {Error|object} error
+	 * @param {number} attempt
+	 * @param {number} baseDelayMs
+	 * @returns {number} Cooldown delay in milliseconds
+	 */
+	extendQuotaCooldown(error, attempt = 1, baseDelayMs = 1000) {
+		const delayMs = this.extractRetryDelayMs(error, attempt, baseDelayMs);
+		const newCooldownUntil = Date.now() + delayMs;
+
+		if (newCooldownUntil > this.quotaCooldownUntil) {
+			this.quotaCooldownUntil = newCooldownUntil;
+		}
+		return delayMs;
+	}
+
+	/**
 	 * Trigger or extend process-level quota cooldown
 	 * @param {Error|object} error
 	 * @param {number} attempt

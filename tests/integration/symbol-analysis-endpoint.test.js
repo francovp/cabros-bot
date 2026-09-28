@@ -3,6 +3,7 @@ const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const sentryService = require('../../src/services/monitoring/SentryService');
+const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
@@ -16,6 +17,7 @@ describe('Symbol analysis endpoint', () => {
 	let savedEnv;
 
 	beforeEach(() => {
+		idempotencyService.clear();
 		savedEnv = saveEnv();
 		process.env.WEBHOOK_API_KEY = 'test-key';
 		process.env.TRADINGVIEW_MCP_DEFAULT_TIMEFRAME = '1D';
@@ -119,6 +121,8 @@ describe('Symbol analysis endpoint', () => {
 		expect(res.body).not.toHaveProperty('deliveryResults');
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.alertText).toContain('*Target sugerido:*');
 		expect(res.body.alertText).toContain('*Risk/Reward:*');
@@ -145,6 +149,8 @@ describe('Symbol analysis endpoint', () => {
 		expect(res.body).toEqual(expect.objectContaining({ code: 'INVALID_REQUEST' }));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
 	});
@@ -164,6 +170,8 @@ describe('Symbol analysis endpoint', () => {
 		}));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(sentryService.captureRuntimeError).toHaveBeenCalledWith(expect.objectContaining({
 			http: expect.objectContaining({ endpoint: '/api/webhook/symbol-analysis', statusCode: 502 }),
@@ -227,6 +235,8 @@ describe('Symbol analysis endpoint', () => {
 		}));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(sentryService.captureRuntimeError).toHaveBeenCalledWith(expect.objectContaining({
 			http: expect.objectContaining({ endpoint: '/api/webhook/symbol-analysis', statusCode: 504 }),
@@ -508,5 +518,169 @@ describe('Symbol analysis endpoint', () => {
 		expect(res.body).not.toHaveProperty('multiAgent');
 		expect(res.body.analysis.decision.action).toBe('BUY');
 		expect(res.body.analysis.decision.warnings).not.toContain('Consenso multi-agente no confirma la señal');
+	});
+	describe('Idempotency handling', () => {
+		it('replays cached symbol analysis response on identical request with Idempotency-Key without re-calling MCP service', async () => {
+			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValue({
+				technical: {
+					price_data: { current_price: 100 },
+					technical_indicators: { RSI: 50, ATR: 4 },
+				},
+				confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+			});
+
+			const payload = {
+				symbol: 'BINANCE:BTCUSDT',
+				timeframe: '1D',
+				analysisMode: 'combined',
+			};
+
+			const first = await request(app)
+				.post('/api/webhook/symbol-analysis')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'sym-key-1')
+				.send(payload)
+				.expect(200);
+
+			expect(first.headers['idempotency-replay']).toBe('false');
+			expect(first.body.success).toBe(true);
+			expect(tradingViewMcpService.analyzeSymbolIdentifier).toHaveBeenCalledTimes(1);
+
+			const second = await request(app)
+				.post('/api/webhook/symbol-analysis')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'sym-key-1')
+				.send(payload)
+				.expect(200);
+
+			expect(second.headers['idempotency-replay']).toBe('true');
+			expect(second.body).toEqual({
+				...first.body,
+				idempotencyReplayed: true,
+			});
+			expect(tradingViewMcpService.analyzeSymbolIdentifier).toHaveBeenCalledTimes(1);
+		});
+
+		it('returns 409 IDEMPOTENCY_CONFLICT when Idempotency-Key is reused with a different payload', async () => {
+			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValue({
+				technical: {
+					price_data: { current_price: 100 },
+					technical_indicators: { RSI: 50, ATR: 4 },
+				},
+				confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+			});
+
+			await request(app)
+				.post('/api/webhook/symbol-analysis')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'sym-key-conflict')
+				.send({ symbol: 'BINANCE:BTCUSDT' })
+				.expect(200);
+
+			const conflictRes = await request(app)
+				.post('/api/webhook/symbol-analysis')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'sym-key-conflict')
+				.send({ symbol: 'BINANCE:SOLUSDT' })
+				.expect(409);
+
+			expect(conflictRes.body).toEqual({
+				error: 'Idempotency key was reused with a different payload',
+				code: 'IDEMPOTENCY_CONFLICT',
+			});
+		});
+
+		it('returns 400 INVALID_REQUEST when Idempotency-Key is invalid', async () => {
+			const res = await request(app)
+				.post('/api/webhook/symbol-analysis')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', '   ')
+				.send({ symbol: 'BINANCE:BTCUSDT' })
+				.expect(400);
+
+			expect(res.body).toEqual({
+				error: 'Idempotency key must be a non-empty string',
+				code: 'INVALID_REQUEST',
+			});
+			expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
+		});
+
+		it('executes MCP service on every request when no Idempotency-Key is provided', async () => {
+			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValue({
+				technical: {
+					price_data: { current_price: 100 },
+					technical_indicators: { RSI: 50, ATR: 4 },
+				},
+				confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+			});
+
+			await request(app)
+				.post('/api/webhook/symbol-analysis')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BINANCE:BTCUSDT' })
+				.expect(200);
+
+			await request(app)
+				.post('/api/webhook/symbol-analysis')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BINANCE:BTCUSDT' })
+				.expect(200);
+
+			expect(tradingViewMcpService.analyzeSymbolIdentifier).toHaveBeenCalledTimes(2);
+		});
+	});
+	it('short-circuits to a dryRun response without calling TradingView MCP when dryRun query is set', async () => {
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis?dryRun=true')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BINANCE:BTCUSDT',
+				timeframe: '1D',
+				analysisMode: 'combined',
+				includeMultiTimeframe: true,
+			})
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: true,
+			dryRun: true,
+			symbol: 'BINANCE:BTCUSDT',
+			exchange: 'BINANCE',
+			asset: 'BTCUSDT',
+			timeframe: '1D',
+			analysisMode: 'combined',
+			includeMultiTimeframe: true,
+			side: null,
+			analysis: null,
+			analysisStatus: 'dry-run',
+		}));
+		expect(res.body).not.toHaveProperty('alertText');
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
+		expect(tradingViewMcpService.callMultiTimeframeAnalysis).not.toHaveBeenCalled();
+	});
+	it('short-circuits to a dryRun response when dryRun body field is true', async () => {
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', dryRun: true })
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: true,
+			dryRun: true,
+			analysisStatus: 'dry-run',
+			analysis: null,
+		}));
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
+	});
+	it('still rejects malformed symbols on the dryRun path before any MCP call', async () => {
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis?dryRun=true')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BTCUSDT' })
+			.expect(400);
+
+		expect(res.body).toEqual(expect.objectContaining({ code: 'INVALID_REQUEST' }));
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
 	});
 });

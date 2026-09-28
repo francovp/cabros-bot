@@ -111,6 +111,18 @@ class DiscordService extends NotificationChannel {
 		return this.enabled;
 	}
 
+	/**
+	 * Check if Discord is configured for alert delivery by operator intent.
+	 * Requires the ENABLE_DISCORD_ALERTS flag and a webhook URL.
+	 * @returns {boolean}
+	 */
+	isConfigured() {
+		return (
+			process.env.ENABLE_DISCORD_ALERTS === 'true' &&
+			Boolean(this.webhookUrl || process.env.DISCORD_WEBHOOK_URL)
+		);
+	}
+
 	async send(alert = {}, options = {}) {
 		const startedAt = Date.now();
 		try {
@@ -126,17 +138,42 @@ class DiscordService extends NotificationChannel {
 
 			const content = await this.formatAlert(alert);
 			const chunks = splitMessageIntoChunks(content, DISCORD_MESSAGE_LIMIT);
+			const isChunked = chunks.length > 1;
+			const resumeFromChunk = Number.isInteger(options.startChunk) && options.startChunk > 0
+				? Math.min(options.startChunk, chunks.length - 1)
+				: 0;
 			const messageIds = [];
 			let totalAttempts = 0;
 
-			for (const chunk of chunks) {
-				const result = await this.sendChunk(chunk, webhookUrl, options.signal);
+			for (let index = resumeFromChunk; index < chunks.length; index += 1) {
+				const result = await this.sendChunk(chunks[index], webhookUrl, options.signal);
 				totalAttempts += result.attemptCount || 0;
 				if (!result.success) {
 					if (result.statusCode === 429) {
-						return { ...result, attemptCount: totalAttempts, durationMs: Date.now() - startedAt };
+						return {
+							...result,
+							attemptCount: totalAttempts,
+							durationMs: Date.now() - startedAt,
+							messageIds,
+							messageCount: messageIds.length,
+							...(isChunked ? {
+								splitMessageCount: chunks.length,
+								failedPart: index + 1,
+								resumedFromChunk: resumeFromChunk,
+							} : {}),
+						};
 					}
-					return { ...result, durationMs: Date.now() - startedAt };
+					return {
+						...result,
+						durationMs: Date.now() - startedAt,
+						messageIds,
+						messageCount: messageIds.length,
+						...(isChunked ? {
+							splitMessageCount: chunks.length,
+							failedPart: index + 1,
+							resumedFromChunk: resumeFromChunk,
+						} : {}),
+					};
 				}
 				messageIds.push(result.messageId);
 			}
@@ -147,7 +184,11 @@ class DiscordService extends NotificationChannel {
 				messageId: messageIds.join(','),
 				messageIds,
 				messageCount: messageIds.length,
-				durationMs: Date.now() - startedAt,
+					durationMs: Date.now() - startedAt,
+				...(isChunked ? {
+					splitMessageCount: chunks.length,
+					resumedFromChunk: resumeFromChunk,
+				} : {}),
 			};
 		} catch (error) {
 			this.logger?.error?.(`Failed to send to Discord: ${error.message}`);
@@ -169,11 +210,14 @@ class DiscordService extends NotificationChannel {
 	}
 
 	async formatAlert(alert = {}) {
+		const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
 		if (alert.enriched && typeof alert.enriched === 'object') {
-			return this.formatter.formatEnriched(alert.enriched);
+			return this.formatter.formatEnriched(alert.enriched, { signalClass });
 		}
 
-		return typeof alert.text === 'string' ? alert.text : '';
+		return typeof alert.text === 'string'
+			? this.formatter.format(alert.text, { signalClass })
+			: '';
 	}
 
 	extractRetryAfterMs(response, bodyText) {

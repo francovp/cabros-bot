@@ -99,6 +99,8 @@ When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, `/api/webhook/alert` suppres
 
 `featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
 
+`notificationChannelIntent` reports the operator-intent view of notification channel configuration (`telegram`, `whatsapp`, `discord`). It mirrors `NotificationChannel.isConfigured()`: a channel counts as `configured` when its enable flag is set **and** its required credentials/chat id/webhook are present — the same `ready` semantics `dependencyStatus` already uses. A channel with a webhook URL present but its enable flag off therefore reports as **not** configured, which is the same verdict the zero-channel admin page reaches because both call that one method. The view answers the question the zero-channel page exists to raise — a channel the operator never set up (`unconfigured`) versus one that is set up but currently failing. The page reports the same two sets, so an operator can reconcile an alert from the page and `/api/status` without inspecting credentials. Only channel names are exposed; never tokens, webhook URLs, or chat IDs.
+
 When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports Twelve Data readiness and the supported `BATS`/`NASDAQ`/`NYSE`/`AMEX`/`NYSE ARCA`/`FX_IDC`/`SPCFD` exchanges without exposing the API key. Signal outcome tracking uses `/quote` for missing entry prices and `/time_series` for bounded historical bars; provider, timeout, malformed-data, and quota failures mark equity outcomes unavailable without blocking alert delivery. Extended-hours data is excluded by default. Confirm current Twelve Data plan limits and licensing before production use: [pricing](https://twelvedata.com/pricing), [US equities coverage](https://support.twelvedata.com/en/articles/9935903-us-equities-market-data), and [commercial usage](https://support.twelvedata.com/en/articles/5332349-commercial-and-personal-usage).
 `dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, active entry-price chains, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
 
@@ -219,3 +221,20 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
   }
 }
 ```
+
+---
+
+## Trading Endpoints
+
+### POST /api/trading/binance/orders/preview
+
+`POST /api/trading/binance/orders/preview` returns a pre-trade cost preview without ever calling `submitNewOrder`. It is exposed behind the existing `admin.viewer`/`admin.operator` flow (API-key or Firebase bearer) and fails closed if neither mechanism is configured, mirroring the live endpoint.
+
+The response includes:
+- LOT_SIZE-adjusted quantity and projected notional.
+- Symbol constraints (`LOT_SIZE`, `MARKET_LOT_SIZE`, `PRICE_FILTER`, `NOTIONAL`, `MIN_NOTIONAL`) from cached exchange-info.
+- Maker/taker fee estimate derived from `account.commission` (or 10 bps default) labeled `estimate — not a Binance fill guarantee`.
+- Effective price source (`limitPrice` for LIMIT orders, `avgPrice` for MARKET orders, `quoteOrderQty` when only quote quantity is supplied).
+- 5-second `expiresAt` token so the preview cannot be replayed against a stale book.
+- MARKET BUY orders fetch `GET /api/v3/depth` with a 4-second `AbortController` deadline and expose slippage estimate in basis points; an optional `maxSlippageBps` request field causes `wouldExceedBudget: true` without rejecting the preview.
+- `BINANCE_TRADING_MAX_NOTIONAL` is enforced (`403 MAX_NOTIONAL_EXCEEDED` on breach). The preview never mutates Binance and is a no-op when `ENABLE_BINANCE_TRADING=false`.
