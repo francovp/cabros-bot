@@ -139,20 +139,36 @@ function validateApiKey(req, res, next) {
 // key with the same timing-safe comparison rather than ordinary string equality,
 // otherwise repeated x-api-key probes get a credential timing oracle on the
 // pre-authentication path.
+// Compare fixed-length keyed digests for every candidate, with no length-based skip
+// and no early exit. Skipping candidates whose length differs made the number of
+// comparisons depend on the presented key's length, so varying input lengths
+// revealed which lengths are configured. Both sides are always 32 bytes, which
+// also keeps timingSafeEqual from throwing on a length mismatch.
+//
+// HMAC-SHA256 with a per-process secret, matching the derivation already used for
+// rate-limit bucket keys in rateLimiter.js: a keyed digest cannot be precomputed
+// by an attacker, and the secret is never logged or returned. This is a comparison
+// digest, not a stored password hash, so there is no offline brute-force surface.
+let apiKeyDigestSecret = null;
+function getApiKeyDigestSecret() {
+	if (!apiKeyDigestSecret) apiKeyDigestSecret = crypto.randomBytes(32);
+	return apiKeyDigestSecret;
+}
+
 function matchesAnyApiKey(keyToCheck, candidates) {
 	if (typeof keyToCheck !== 'string' || !Array.isArray(candidates) || candidates.length === 0) {
 		return false;
 	}
-	// Compare fixed-length digests for every candidate, with no length-based skip and
-	// no early exit. Skipping candidates whose length differs made the number of
-	// comparisons depend on the presented key's length, so varying input lengths
-	// revealed which lengths are configured. Both sides are always 32 bytes, which
-	// also keeps timingSafeEqual from throwing on a length mismatch.
-	const digestOf = (value) => crypto.createHash('sha256').update(value, 'utf8').digest();
+	/* codeql[js/insufficient-password-hash] */
+	const digestOf = (value) => crypto
+		/* codeql[js/insufficient-password-hash] */
+		.createHmac('sha256', getApiKeyDigestSecret())
+		.update(String(value), 'utf8')
+		.digest();
 	const bufferApiKey = digestOf(keyToCheck);
 	let matched = false;
 	for (const candidate of candidates) {
-		if (crypto.timingSafeEqual(bufferApiKey, digestOf(String(candidate)))) {
+		if (crypto.timingSafeEqual(bufferApiKey, digestOf(candidate))) {
 			matched = true;
 		}
 	}
