@@ -245,7 +245,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false,\"alertScheduler\":false,\"notificationRedrive\":false,\"firestoreChatPreferences\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0,\"entryPriceSources\":{\"configured\":false,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"twelve-data\"]}},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"alertScheduler\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":10,\"scheduleCount\":0,\"activeCount\":0,\"lastRunAt\":null,\"lastRunDurationMs\":null,\"lastRunExecutedCount\":0,\"lastRunErrorCount\":0,\"lastError\":null,\"schedules\":[]},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"newsMonitorDedup\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"mode\":\"in-memory\",\"backend\":null,\"cacheSize\":{\"entries\":0,\"maxEntries\":5000,\"evictionCount\":0,\"deliveryLocks\":0,\"deliveryLockMaxEntries\":1000,\"deliveryLockEvictionCount\":0,\"urlShortenerCache\":{\"size\":0,\"maxEntries\":1000,\"evictionCount\":0},\"urlShortenerServiceFailures\":{\"size\":0,\"maxEntries\":32,\"evictionCount\":0}}},\"chatPreferences\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cachedCount\":0,\"cacheTtlMs\":60000,\"retentionDays\":90},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"}}}"
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"telegramCommandAuth\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false,\"alertScheduler\":false,\"notificationRedrive\":false,\"firestoreChatPreferences\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0,\"entryPriceSources\":{\"configured\":false,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"twelve-data\"]}},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"alertScheduler\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":10,\"scheduleCount\":0,\"activeCount\":0,\"lastRunAt\":null,\"lastRunDurationMs\":null,\"lastRunExecutedCount\":0,\"lastRunErrorCount\":0,\"lastError\":null,\"schedules\":[]},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"telegramCommandAuth\":{\"enabled\":true,\"allowlistSource\":\"TELEGRAM_ALLOWED_CHAT_IDS\",\"allowlistSize\":1,\"deniedSinceStart\":0,\"trackedDeniedSenders\":0,\"deniedSenderCacheLimit\":1000},\"selfTest\":{\"lastRunAt\":null,\"lastStatus\":\"unknown\",\"ttlSec\":3600,\"ageMs\":null},\"newsMonitorDedup\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"mode\":\"in-memory\",\"backend\":null,\"cacheSize\":{\"entries\":0,\"maxEntries\":5000,\"evictionCount\":0,\"deliveryLocks\":0,\"deliveryLockMaxEntries\":1000,\"deliveryLockEvictionCount\":0,\"urlShortenerCache\":{\"size\":0,\"maxEntries\":1000,\"evictionCount\":0},\"urlShortenerServiceFailures\":{\"size\":0,\"maxEntries\":32,\"evictionCount\":0}}},\"chatPreferences\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cachedCount\":0,\"cacheTtlMs\":60000,\"retentionDays\":90},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"}}}"
         }
       ]
     },
@@ -2197,7 +2197,7 @@
               "name": "Success - dryRun echoes parsed request without MCP call",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"confirmed\": null,\n  \"decision\": \"unknown\",\n  \"volumeRatio\": null,\n  \"analysis\": null,\n  \"requestId\": \"req-dryrun-456\",\n  \"totalDurationMs\": 3\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"confirmed\": null,\n  \"decision\": \"unknown\",\n  \"volumeRatio\": null,\n  \"analysis\": null,\n  \"requestId\": \"req-dryrun-456\",\n  \"processingTimeMs\": 3\n}"
             },
             {
               "name": "400 Invalid symbol on dryRun path",
@@ -2251,7 +2251,7 @@
               "name": "Success - dryRun echoes parsed request without MCP call",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"analysisMode\": \"combined\",\n  \"includeMultiTimeframe\": true,\n  \"side\": null,\n  \"analysis\": null,\n  \"analysisStatus\": \"dry-run\",\n  \"requestId\": \"req-dryrun-123\",\n  \"totalDurationMs\": 4\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"analysisMode\": \"combined\",\n  \"includeMultiTimeframe\": true,\n  \"side\": null,\n  \"analysis\": null,\n  \"analysisStatus\": \"dry-run\",\n  \"requestId\": \"req-dryrun-123\",\n  \"processingTimeMs\": 4\n}"
             },
             {
               "name": "400 Invalid symbol on dryRun path",
@@ -2581,7 +2581,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"📡 *SCANNER DE MERCADO — ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"totalDurationMs\": 1450\n}"
+              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"📡 *SCANNER DE MERCADO — ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"processingTimeMs\": 1450\n}"
             }
           ]
         },
@@ -8731,6 +8731,147 @@
       "name": "Binance Trading",
       "description": "Operator-only Binance Spot order workflow. Feature is disabled by default, uses Spot Testnet by default, fails closed without API-key or Firebase admin authentication, derives a deterministic clientOrderId for idempotent live retries, preserves decimal strings, distinguishes definitive Binance rejections from transient failures, and never retries an order submission automatically.",
       "item": [
+        {
+          "name": "POST Binance order preview (MARKET BUY with slippage budget)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quantity\": \"0.01\",\n  \"maxSlippageBps\": 75\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders/preview",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders",
+                "preview"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Preview accepted (within slippage budget)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"preview\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"MARKET\",\n    \"quantity\": \"0.01\"\n  },\n  \"adjustedQuantity\": \"0.01\",\n  \"adjustedNotional\": \"650\",\n  \"constraints\": {\n    \"lotSize\": { \"minQty\": \"0.00001\", \"maxQty\": \"9000\", \"stepSize\": \"0.00001\" },\n    \"priceFilter\": { \"minPrice\": \"0.01\", \"maxPrice\": \"1000000\", \"tickSize\": \"0.01\" },\n    \"notional\": { \"minNotional\": \"10\" }\n  },\n  \"flags\": {\n    \"lotSizeOk\": true,\n    \"priceFilterOk\": true,\n    \"minNotionalOk\": true,\n    \"maxNotionalOk\": true,\n    \"minNotionalExceededReason\": null,\n    \"maxNotionalExceededReason\": null\n  },\n  \"effectivePriceEstimate\": \"65000\",\n  \"priceSource\": \"avgPrice\",\n  \"marketPriceError\": null,\n  \"feeEstimate\": {\n    \"takerFeeBps\": 10,\n    \"makerFeeBps\": 10,\n    \"appliedFeeBps\": 10,\n    \"estimatedFeeQuote\": \"0.65\",\n    \"label\": \"estimate — not a Binance fill guarantee\"\n  },\n  \"slippage\": {\n    \"slippageBudgetBps\": 75,\n    \"wouldExceedBudget\": false\n  },\n  \"depthSnapshot\": {\n    \"limit\": 20,\n    \"fetchedAt\": \"2026-08-30T02:30:32.043Z\",\n    \"available\": true\n  },\n  \"expiresAt\": \"2026-08-30T02:30:37.043Z\",\n  \"previewFingerprint\": \"8bcc995647ef3bb71bf0d6d7\"\n}"
+            },
+            {
+              "name": "Lot-size violation",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"quantity does not match Binance lot-size step; suggested adjustedQuantity: 0.0001\",\n  \"code\": \"INVALID_ORDER_REQUEST\",\n  \"preview\": true\n}"
+            },
+            {
+              "name": "Notional exceeds configured maximum",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"order notional exceeds configured maximum\",\n  \"code\": \"MAX_NOTIONAL_EXCEEDED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order preview (LIMIT SELL without depth probe)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"SELL\",\n  \"type\": \"LIMIT\",\n  \"quantity\": \"0.01\",\n  \"price\": \"65000\",\n  \"timeInForce\": \"GTC\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders/preview",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders",
+                "preview"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Preview accepted (LIMIT SELL)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"preview\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"SELL\",\n    \"type\": \"LIMIT\",\n    \"quantity\": \"0.01\",\n    \"price\": \"65000\",\n    \"timeInForce\": \"GTC\"\n  },\n  \"adjustedQuantity\": \"0.01\",\n  \"adjustedNotional\": \"650\",\n  \"constraints\": {\n    \"lotSize\": { \"minQty\": \"0.00001\", \"maxQty\": \"9000\", \"stepSize\": \"0.00001\" },\n    \"priceFilter\": { \"minPrice\": \"0.01\", \"maxPrice\": \"1000000\", \"tickSize\": \"0.01\" },\n    \"notional\": { \"minNotional\": \"10\" }\n  },\n  \"flags\": {\n    \"lotSizeOk\": true,\n    \"priceFilterOk\": true,\n    \"minNotionalOk\": true,\n    \"maxNotionalOk\": true\n  },\n  \"effectivePriceEstimate\": \"65000\",\n  \"priceSource\": \"limitPrice\",\n  \"feeEstimate\": {\n    \"takerFeeBps\": 10,\n    \"makerFeeBps\": 10,\n    \"appliedFeeBps\": 10,\n    \"estimatedFeeQuote\": \"0.65\",\n    \"label\": \"estimate — not a Binance fill guarantee\"\n  },\n  \"slippage\": null,\n  \"depthSnapshot\": { \"available\": false },\n  \"expiresAt\": \"2026-08-30T02:30:37.043Z\",\n  \"previewFingerprint\": \"abcdef0123456789abcdef01\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order preview (feature disabled)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quantity\": \"0.01\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders/preview",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders",
+                "preview"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Feature disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            }
+          ]
+        },
         {
           "name": "POST Binance order (dry-run LIMIT)",
           "request": {
