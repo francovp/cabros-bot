@@ -399,6 +399,8 @@ describe('Scanner presets API integration tests', () => {
 		expect(runResponse.body.requestedChannels).toEqual(['telegram']);
 		expect(runResponse.body.deliveredChannels).toEqual(['telegram']);
 		expect(runResponse.body.deliveryResults).toHaveLength(1);
+		expect(runResponse.body.processingTimeMs).toEqual(expect.any(Number));
+		expect(runResponse.body).not.toHaveProperty('totalDurationMs');
 		expect(mockTelegramSendMessage).toHaveBeenCalledWith(
 			'-100999888777',
 			expect.any(String),

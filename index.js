@@ -36,6 +36,7 @@ const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
 const { launchTelegramBot } = require('./src/lib/telegramCommandMenu');
 const { attachTelegramErrorBoundary, handlePollingError, startTelegramHealthProbe, stopTelegramHealthProbe } = require('./src/lib/telegramErrorBoundary');
 const { registerAlertActionHandlers } = require('./src/lib/telegramAlertActions');
+const { registerAuthMiddleware: registerTelegramCommandAuth } = require('./src/lib/telegramCommandAuth');
 const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
@@ -137,6 +138,7 @@ async function bootstrapApplication() {
 		console.log('Telegram Bot is enabled');
 		bot = new Telegraf(token);
 		bot.use(telegramMaintenanceMode);
+		registerTelegramCommandAuth(bot);
 		bot.use(telegramCommandRateLimiter);
 		bot.command(['precio'], getPrice);
 		bot.command(['cryptobot'], cryptoBotCmd);
