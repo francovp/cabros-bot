@@ -682,6 +682,85 @@ describe('UserPriceAlertService - Unit Tests', () => {
 			expect(stored).toHaveProperty('deliveredAt');
 		});
 
+		it('never re-notifies when the Telegram bot flaps across sweeps', async () => {
+			// The re-arm is the one place that could resurrect a trigger. Drive the
+			// bot through an unavailable -> available -> unavailable -> available
+			// cycle and assert the user is notified exactly once in total.
+			const alertId = 'alert_flap';
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					[alertId]: { chatId: 'chat-flap', symbol: 'BTCUSDT', operator: '>', targetPrice: 100, status: 'armed' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			const sendMessage = jest.fn().mockResolvedValue({ message_id: 11 });
+			const bot = { telegram: { sendMessage } };
+			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'BTCUSDT', price: 150, assetClass: 'crypto' });
+
+			service.setBotGetter(null);
+			await service.evaluateAlerts();
+			service.setBotGetter(bot);
+			await service.evaluateAlerts();
+			service.setBotGetter(null);
+			await service.evaluateAlerts();
+			service.setBotGetter(bot);
+			await service.evaluateAlerts();
+			await service.evaluateAlerts();
+
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+		});
+
+		it('does not re-arm an alert whose delivery attempt was already recorded', async () => {
+			// The double-notify window: delivery succeeded, but recording it failed.
+			// The attempt marker (written before the send) must still block the
+			// re-arm, so a later bot-less sweep cannot resurrect the alert.
+			const alertId = 'alert_attempted';
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					[alertId]: { chatId: 'chat-att', symbol: 'BTCUSDT', operator: '>', targetPrice: 100, status: 'armed' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			const sendMessage = jest.fn().mockResolvedValue({ message_id: 21 });
+			service.setBotGetter({ telegram: { sendMessage } });
+			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'BTCUSDT', price: 150, assetClass: 'crypto' });
+
+			await service.evaluateAlerts();
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+
+			// Simulate the `deliveredAt` write being lost: drop it, keep the attempt.
+			const stored = db.store.get('userPriceAlerts').get(alertId);
+			delete stored.deliveredAt;
+			expect(stored.deliveryAttemptedAt).toBeDefined();
+
+			await service._rearmUndelivered(alertId);
+			expect(db.store.get('userPriceAlerts').get(alertId).status).toBe('triggered');
+		});
+
+		it('does not start sweeping in a process that can never deliver', async () => {
+			// A web replica with no Telegram bot must defer rather than claim and
+			// re-arm the same alert every cycle.
+			process.env.USER_PRICE_ALERT_EVALUATION_INTERVAL_MS = '1000';
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					alert_nobot2: { chatId: 'c', symbol: 'BTCUSDT', operator: '>', targetPrice: 100, status: 'armed' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			service.setBotGetter(null);
+			jest.spyOn(service, 'evaluateAlerts').mockResolvedValue({
+				evaluatedCount: 1, triggeredCount: 0, errorsCount: 0, skipped: 'no-bot',
+			});
+
+			expect(service.startWorker()).toBe(true);
+			await new Promise((resolve) => { setTimeout(resolve, 1400); });
+
+			expect(service.evaluateAlerts).not.toHaveBeenCalled();
+			expect(service.lastRunSkippedNoBot).toBeGreaterThan(0);
+			// The armed row is untouched.
+			expect(db.store.get('userPriceAlerts').get('alert_nobot2').status).toBe('armed');
+		});
+
 		it('keeps an alert triggered when a prior delivery succeeded', async () => {
 			// The re-arm rollback must never resurrect an alert that really fired.
 			const alertId = 'alert_fired1';

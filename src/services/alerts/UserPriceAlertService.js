@@ -329,12 +329,26 @@ class UserPriceAlertService {
 		);
 	}
 
+	// Whether this process can actually deliver a triggered notification. The
+	// dedicated worker and any web replica without a launched bot cannot.
+	hasBot() {
+		const bot = typeof this.botGetter === 'function' ? this.botGetter() : this.botGetter;
+		return Boolean(bot && bot.telegram);
+	}
+
 	getStatus() {
 		const enabled = this.isEnabled();
 		const role = this.getWorkerRole();
 		// Without Firestore the alerts are process-local and are lost on every
 		// deploy, so an operator must not read `ready: true` as "durable".
-		const durable = Boolean(this._getFirestore());
+		// Guard the lazy Firebase handle: this aggregate must never be the reason
+		// `/api/status` fails for every other feature.
+		let durable = false;
+		try {
+			durable = Boolean(this._getFirestore());
+		} catch (err) {
+			console.warn('[UserPriceAlertService] Firestore readiness check failed:', err.message);
+		}
 		const ready = enabled && durable && role !== 'disabled';
 
 		return {
@@ -562,10 +576,16 @@ class UserPriceAlertService {
 	 * Return a claimed `triggered` alert to `armed` when the notification could
 	 * not be delivered at all (no Telegram bot available).
 	 *
-	 * The rollback is conditional on the document still being `triggered` and
-	 * never having recorded a `deliveredAt`, so it can never resurrect an alert a
-	 * replica really delivered. It is best-effort and fail-open: if the write
-	 * fails the alert simply stays `triggered`.
+	 * The rollback requires positive proof that delivery never happened:
+	 *   - the document is still `triggered`, and
+	 *   - it carries no `deliveryAttemptedAt` marker.
+	 *
+	 * `_markDelivered` writes that marker, and it is written *before* the send is
+	 * treated as final, so a Firestore error while recording a successful send
+	 * can no longer leave the alert looking undelivered. This matters because the
+	 * re-arm is the one path that could resurrect a real notification, so it must
+	 * be conservative: when in doubt the alert stays `triggered` and the user is
+	 * never notified twice.
 	 */
 	async _rearmUndelivered(alertId) {
 		const firestore = this._getFirestore();
@@ -576,7 +596,8 @@ class UserPriceAlertService {
 					const doc = await tx.get(ref);
 					if (!doc.exists) return;
 					const data = doc.data() || {};
-					if (data.status !== 'triggered' || data.deliveredAt) return;
+					if (data.status !== 'triggered') return;
+					if (data.deliveryAttemptedAt || data.deliveredAt) return;
 					tx.update(ref, { status: 'armed', triggeredPrice: null, triggeredAt: null });
 				});
 			} catch (err) {
@@ -584,8 +605,37 @@ class UserPriceAlertService {
 			}
 		}
 		const local = this._memoryAlerts.get(alertId);
-		if (local && local.status === 'triggered' && !local.deliveredAt) {
+		if (local && local.status === 'triggered' && !local.deliveryAttemptedAt && !local.deliveredAt) {
 			this._memoryAlerts.set(alertId, { ...local, status: 'armed', triggeredPrice: undefined, triggeredAt: undefined });
+		}
+	}
+
+	/**
+	 * Record that delivery was attempted, before the send is issued.
+	 *
+	 * This is the durable guard against re-notifying: once a replica has tried to
+	 * deliver, the alert is never re-armed, even if the send or the subsequent
+	 * `deliveredAt` write fails. Failures here are tolerated — the worst case is
+	 * the historical behaviour of consuming the trigger without notifying.
+	 */
+	async _markDeliveryAttempted(alertId) {
+		const firestore = this._getFirestore();
+		if (firestore && typeof firestore.runTransaction === 'function') {
+			try {
+				await firestore.runTransaction(async (tx) => {
+					const ref = firestore.collection(COLLECTION_NAME).doc(alertId);
+					const doc = await tx.get(ref);
+					if (!doc.exists) return;
+					if ((doc.data() || {}).status !== 'triggered') return;
+					tx.update(ref, { deliveryAttemptedAt: admin.firestore.FieldValue.serverTimestamp() });
+				});
+			} catch (err) {
+				console.warn('[UserPriceAlertService] Failed to record delivery attempt:', err.message);
+			}
+		}
+		const local = this._memoryAlerts.get(alertId);
+		if (local) {
+			this._memoryAlerts.set(alertId, { ...local, deliveryAttemptedAt: new Date().toISOString() });
 		}
 	}
 
@@ -668,8 +718,10 @@ class UserPriceAlertService {
 			}
 		}
 
-		// Mirror the transition locally on both paths: `getAlert` is memory-first,
-		// so skipping this would leave a stale `armed` record for this replica.
+		// Keep the process-local mirror in step with the durable transition. It is
+		// only authoritative in ephemeral mode, but keeping it current avoids a
+		// stale `armed` record in this process and keeps the mirror's guards
+		// (re-arm, delivery markers) meaningful.
 		this._memoryAlerts.set(alertId, updatedData);
 
 		return updatedData;
@@ -952,6 +1004,10 @@ class UserPriceAlertService {
 				}
 
 				try {
+					// Record the attempt BEFORE the send. If the send or the delivery
+					// marker write then fails, the alert must still look "delivered or
+					// attempted" so the re-arm can never resurrect a real notification.
+					await this._markDeliveryAttempted(alert.id);
 					await bot.telegram.sendMessage(alert.chatId, lines.join('\n'), sendOptions);
 					// Only a real send makes the trigger final. Anything that leaves the
 					// alert undelivered keeps it re-armable so a later sweep retries.
@@ -1119,6 +1175,18 @@ class UserPriceAlertService {
 		}
 		this.timer = setTimeout(async () => {
 			if (!this.running || this.shutdownRequested) return;
+			// A replica that can never deliver must not claim triggers. Re-arming
+			// each cycle would re-price, re-report and re-arm the same alert
+			// indefinitely, and the lease guarantees this bot-less replica wins
+			// every round. Defer so a replica with a bot can pick the work up.
+			if (!this.hasBot()) {
+				this.lastRunSkippedNoBot = (this.lastRunSkippedNoBot || 0) + 1;
+				console.debug(
+					'[UserPriceAlertService] Skipping sweep: no Telegram bot is available in this process.',
+				);
+				this._scheduleNextSweep(this.getIntervalMs());
+				return;
+			}
 			try {
 				this.activeSweepPromise = this.evaluateAlerts();
 				await this.activeSweepPromise;
