@@ -23,8 +23,7 @@
 #   deploy warning and exits non-zero, which routes issue-automator to Step 6.5.
 #   Obtain the PR head SHA with: gh pr view <N> --json headRefOid --jq .headRefOid
 #
-# Render is no longer used — Railway and platform-agnostic GitHub Deployments
-# API are the supported paths.
+# Railway and GitHub Deployments are the supported preview-status sources.
 
 set -euo pipefail
 
