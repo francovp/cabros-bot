@@ -194,18 +194,22 @@ function parseTimeout(value) {
 }
 
 // Remote Config mirrors the non-credential Binance trading knobs so operators can retune a
-// deployed environment without a redeploy. Only genuinely-remote values are honoured:
-// getRuntimeConfig() also materialises schema defaults, and applying those here would
-// silently turn an unset BINANCE_TRADING_MAX_NOTIONAL into 1000 and report the deployment
-// as `configured`. Gating on source === 'remote' keeps the env/default path byte-for-byte
-// unchanged when Remote Config is disabled, unavailable, or still on its last known source.
+// deployed environment without a redeploy.
+//
+// Only genuinely-remote values are honoured. Two traps make this subtler than it looks:
+//   1. getRuntimeConfig() materialises a schema default for every key, so an absent remote
+//      key is indistinguishable from a remote one — reading it would turn an unset
+//      BINANCE_TRADING_MAX_NOTIONAL into 1000, flip `configured` to true, and enable
+//      trading that should have stayed closed.
+//   2. getStatus().source is 'remote' when *any* schema key was published remotely, so it
+//      cannot be used to tell whether these four keys were actually set either.
+// getRemoteOverrides() returns only the values present in a fresh remote template, so
+// absence is meaningful and the environment path is used exactly as before.
 function getRemoteOverride(key) {
 	try {
-		// Resolved through the module object so a broken/partial mock cannot throw here.
-		const status = RemoteConfigService.getStatus?.();
-		if (status?.source !== 'remote') return undefined;
-		const value = RemoteConfigService.getRuntimeConfig?.()?.[key];
-		return value === undefined ? undefined : value;
+		const overrides = RemoteConfigService.getRemoteOverrides?.();
+		if (!overrides || !Object.prototype.hasOwnProperty.call(overrides, key)) return undefined;
+		return overrides[key];
 	} catch {
 		// Remote Config is a fail-open side effect: never let it break order execution.
 		return undefined;

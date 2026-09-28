@@ -306,6 +306,17 @@ function getRuntimeConfig() {
 	return config;
 }
 
+// Provenance-accurate accessor: returns only parameters that were genuinely published in a
+// fresh remote template, with no environment value and no schema default filled in.
+// getRuntimeConfig() cannot be used to detect this because it materialises defaults for
+// every schema key, so an absent remote key is indistinguishable from a remote one.
+function getRemoteOverrides() {
+	if (!isEnabled() || !hasFreshRemoteConfig()) {
+		return {};
+	}
+	return { ...remoteOverrides };
+}
+
 function getSource() {
 	if (!isEnabled()) {
 		return 'disabled';
@@ -524,6 +535,7 @@ function resetForTesting() {
 module.exports = {
 	PARAMETER_SCHEMA,
 	getRuntimeConfig,
+	getRemoteOverrides,
 	getStatus,
 	loadNow,
 	start,

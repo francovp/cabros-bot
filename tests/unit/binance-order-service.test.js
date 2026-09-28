@@ -1874,22 +1874,44 @@ describe('BinanceOrderService', () => {
 	describe('Firebase Remote Config overrides', () => {
 		const remoteConfig = require('../../src/services/remoteConfig/RemoteConfigService');
 
+		// Only genuinely-published remote values may reach BinanceOrderService. This suite
+		// therefore drives getRemoteOverrides() (provenance), not getRuntimeConfig(), which
+		// materialises schema defaults and would mask the bug this gate exists to prevent.
+		const setRemoteOverrides = (overrides) => {
+			jest.spyOn(remoteConfig, 'getRemoteOverrides').mockReturnValue(overrides);
+		};
+
 		beforeEach(() => {
-			jest.spyOn(remoteConfig, 'getStatus').mockReturnValue({ source: 'remote' });
-			jest.spyOn(remoteConfig, 'getRuntimeConfig').mockReturnValue({
-				BINANCE_TRADING_ENV: 'testnet',
-				BINANCE_TRADING_ALLOWED_SYMBOLS: '',
-				BINANCE_TRADING_MAX_NOTIONAL: 1000,
-				BINANCE_TRADING_TIMEOUT_MS: 10000,
-			});
+			setRemoteOverrides({});
 		});
 
 		afterEach(() => {
 			jest.restoreAllMocks();
 		});
 
+		// Regression: getStatus().source is 'remote' as soon as ANY schema key is published
+		// remotely. A deployment with an unrelated remote key and no BINANCE_TRADING_MAX_NOTIONAL
+		// must still report configured:false instead of inheriting the 1000 schema default.
+		it('ignores schema defaults when the remote template omits the Binance keys', () => {
+			jest.spyOn(remoteConfig, 'getStatus').mockReturnValue({ source: 'remote' });
+			setRemoteOverrides({ NEWS_ALERT_THRESHOLD: 0.9 });
+			delete process.env.BINANCE_TRADING_MAX_NOTIONAL;
+
+			const config = getConfig();
+			expect(config.maxNotional).toBeNull();
+			expect(config.configured).toBe(false);
+		});
+
+		it('does not silently tighten a deliberately higher env cap via an unrelated remote key', () => {
+			jest.spyOn(remoteConfig, 'getStatus').mockReturnValue({ source: 'remote' });
+			setRemoteOverrides({ NEWS_ALERT_THRESHOLD: 0.9 });
+			process.env.BINANCE_TRADING_MAX_NOTIONAL = '50000';
+
+			expect(getConfig().maxNotional).toBe(50000);
+		});
+
 		it('applies remote environment, allow-list, notional cap, and timeout', () => {
-			remoteConfig.getRuntimeConfig.mockReturnValue({
+			setRemoteOverrides({
 				BINANCE_TRADING_ENV: 'demo',
 				BINANCE_TRADING_ALLOWED_SYMBOLS: 'ethusdt, solusdt',
 				BINANCE_TRADING_MAX_NOTIONAL: 250,
@@ -1903,19 +1925,15 @@ describe('BinanceOrderService', () => {
 			expect(config.timeoutMs).toBe(15000);
 		});
 
-		it('ignores remote values entirely when the source is not remote', () => {
-			remoteConfig.getStatus.mockReturnValue({ source: 'environment' });
+		it('uses the environment entirely when Remote Config is disabled', () => {
+			// Disabled Remote Config publishes no overrides, so env wins even where a stale
+			// template previously carried different values.
 			process.env.BINANCE_TRADING_ENV = 'live';
 			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'ETHUSDT';
 			process.env.BINANCE_TRADING_MAX_NOTIONAL = '777';
 			process.env.BINANCE_TRADING_TIMEOUT_MS = '12000';
 
-			remoteConfig.getRuntimeConfig.mockReturnValue({
-				BINANCE_TRADING_ENV: 'demo',
-				BINANCE_TRADING_ALLOWED_SYMBOLS: 'BTCUSDT',
-				BINANCE_TRADING_MAX_NOTIONAL: 1,
-				BINANCE_TRADING_TIMEOUT_MS: 1000,
-			});
+			setRemoteOverrides({});
 
 			const config = getConfig();
 			expect(config.environment).toBe('live');
@@ -1924,11 +1942,11 @@ describe('BinanceOrderService', () => {
 			expect(config.timeoutMs).toBe(12000);
 		});
 
-		// Regression: getRuntimeConfig() also materialises schema defaults. Applying an
-		// unset BINANCE_TRADING_MAX_NOTIONAL's 1000 default would report a deployment with
-		// no configured cap as `configured` and enable trading that should stay closed.
+		// Regression: getRemoteOverrides() only reports keys genuinely published remotely, so
+		// an absent BINANCE_TRADING_MAX_NOTIONAL never inherits the schema's 1000 default —
+		// that would report a deployment with no cap as `configured` and enable trading.
 		it('keeps maxNotional null when neither remote nor env sets a cap', () => {
-			remoteConfig.getStatus.mockReturnValue({ source: 'disabled' });
+			// Remote Config disabled or unavailable -> no overrides at all.
 			delete process.env.BINANCE_TRADING_MAX_NOTIONAL;
 
 			const config = getConfig();
@@ -1937,7 +1955,7 @@ describe('BinanceOrderService', () => {
 		});
 
 		it('falls back to env for an explicitly empty remote allow-list', () => {
-			remoteConfig.getRuntimeConfig.mockReturnValue({
+			setRemoteOverrides({
 				BINANCE_TRADING_ALLOWED_SYMBOLS: '',
 				BINANCE_TRADING_MAX_NOTIONAL: 1000,
 				BINANCE_TRADING_TIMEOUT_MS: 10000,
@@ -1947,7 +1965,7 @@ describe('BinanceOrderService', () => {
 		});
 
 		it('caps a remote timeout at the service ceiling', () => {
-			remoteConfig.getRuntimeConfig.mockReturnValue({
+			setRemoteOverrides({
 				BINANCE_TRADING_MAX_NOTIONAL: 1000,
 				BINANCE_TRADING_TIMEOUT_MS: 60000,
 			});
@@ -1959,7 +1977,7 @@ describe('BinanceOrderService', () => {
 			process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
 
 			for (const bad of [0, -50, NaN, null, 'abc', {}]) {
-				remoteConfig.getRuntimeConfig.mockReturnValue({ BINANCE_TRADING_MAX_NOTIONAL: bad });
+				setRemoteOverrides({ BINANCE_TRADING_MAX_NOTIONAL: bad });
 				expect(getConfig().maxNotional).toBe(1000);
 			}
 		});
@@ -1968,23 +1986,23 @@ describe('BinanceOrderService', () => {
 			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'BTCUSDT';
 
 			for (const bad of [12345, {}, ['A'], true]) {
-				remoteConfig.getRuntimeConfig.mockReturnValue({ BINANCE_TRADING_ALLOWED_SYMBOLS: bad });
+				setRemoteOverrides({ BINANCE_TRADING_ALLOWED_SYMBOLS: bad });
 				expect(getConfig().allowedSymbols).toEqual(['BTCUSDT']);
 			}
 		});
 
 		it('accepts a numeric-string remote timeout and ignores non-numeric ones', () => {
-			remoteConfig.getRuntimeConfig.mockReturnValue({ BINANCE_TRADING_TIMEOUT_MS: '15000' });
+			setRemoteOverrides({ BINANCE_TRADING_TIMEOUT_MS: '15000' });
 			expect(getConfig().timeoutMs).toBe(15000);
 
 			for (const bad of ['abc', null, {}, NaN, 0, -1]) {
-				remoteConfig.getRuntimeConfig.mockReturnValue({ BINANCE_TRADING_TIMEOUT_MS: bad });
+				setRemoteOverrides({ BINANCE_TRADING_TIMEOUT_MS: bad });
 				expect(getConfig().timeoutMs).toBe(10000);
 			}
 		});
 
 		it('fails open to env values when Remote Config throws', () => {
-			remoteConfig.getStatus.mockImplementation(() => {
+			jest.spyOn(remoteConfig, 'getRemoteOverrides').mockImplementation(() => {
 				throw new Error('remote config unavailable');
 			});
 			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'ETHUSDT';
@@ -1996,7 +2014,7 @@ describe('BinanceOrderService', () => {
 		});
 
 		it('never exposes credentials through the remote config path', () => {
-			remoteConfig.getRuntimeConfig.mockReturnValue({
+			setRemoteOverrides({
 				BINANCE_TRADING_MAX_NOTIONAL: 1000,
 				BINANCE_TRADING_TIMEOUT_MS: 10000,
 			});
