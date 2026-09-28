@@ -14,6 +14,7 @@ const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 const { getRoutes } = require('../../src/routes');
+const { assertWithinBudget } = require('../helpers/perfBudget');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
 	type: 'pkcs1',
@@ -127,9 +128,12 @@ describe('Status endpoints', () => {
 	});
 
 	it('returns machine-readable status on /api/status', async () => {
+		const start = process.hrtime.bigint();
 		const response = await request(app)
 			.get('/api/status')
 			.set('x-api-key', 'status-key');
+		const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+		assertWithinBudget('/api/status', durationMs);
 
 		expect(response.status).toBe(200);
 		expect(response.body.service).toEqual({
