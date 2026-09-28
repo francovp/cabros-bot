@@ -3,6 +3,7 @@
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 const alertStorageService = require('../storage/AlertStorageService');
+const { parseEntryPriceSources } = require('../../lib/signalOutcomeEntryPriceSources');
 
 const DEFAULT_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const DEFAULT_LOAD_TIMEOUT_MS = 10 * 1000;
@@ -17,6 +18,9 @@ const PARAMETER_SCHEMA = Object.freeze({
 	NEWS_GEMINI_CONCURRENCY: { type: 'number', defaultValue: Infinity, integer: true, min: 1, max: 50 },
 	NEWS_GEMINI_QUOTA_MAX_RETRIES: { type: 'number', defaultValue: 2, integer: true, min: 1, max: 5 },
 	NEWS_GEMINI_QUOTA_RETRY_BASE_MS: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 60000 },
+	NEWS_MAX_ALERTS_PER_BATCH: { type: 'number', defaultValue: 10, integer: true, min: 1, max: 50 },
+	NEWS_MAX_ALERTS_PER_WINDOW: { type: 'number', defaultValue: 20, integer: true, min: 1, max: 200 },
+	NEWS_MAX_ALERTS_PER_WINDOW_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 3600000 },
 	TRADINGVIEW_MCP_TIMEOUT_MS: { type: 'number', defaultValue: 12000, integer: true, min: 1000, max: 120000 },
 	TRADINGVIEW_MCP_MAX_RETRIES: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 5 },
 	TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: { type: 'number', defaultValue: 12000, integer: true, min: 1000, max: 120000 },
@@ -29,6 +33,10 @@ const PARAMETER_SCHEMA = Object.freeze({
 	GROUNDING_MAX_LENGTH: { type: 'number', defaultValue: 2000, integer: true, min: 1, max: 10000 },
 	ALERT_GROUNDING_COALESCE_MS: { type: 'number', defaultValue: 0, integer: true, min: 0, max: 60000 },
 	NEWS_CACHE_TTL_HOURS: { type: 'number', defaultValue: 6, min: 0, max: 720 },
+	NEWS_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 1000000 },
+	NEWS_DELIVERY_LOCK_MAX_ENTRIES: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 100000 },
+	URL_SHORTENER_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 100000 },
+	URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: { type: 'number', defaultValue: 32, integer: true, min: 1, max: 1024 },
 	BINANCE_FETCH_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
 	TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: {
 		type: 'string',
@@ -48,6 +56,19 @@ const PARAMETER_SCHEMA = Object.freeze({
 	SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 300000 },
 	SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	SIGNAL_OUTCOME_MAX_RETRY_AGE_MS: { type: 'number', defaultValue: 604800000, integer: true, min: 60000, max: 2592000000 },
+	SIGNAL_OUTCOME_RETENTION_DAYS: { type: 'number', defaultValue: 365, integer: true, min: 1, max: 3650 },
+	SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES: {
+		type: 'string',
+		defaultValue: '',
+		validate: (value) => {
+			try {
+				parseEntryPriceSources(value);
+				return true;
+			} catch (error) {
+				return false;
+			}
+		},
+	},
 	EQUITY_MARKET_DATA_RPM: { type: 'number', defaultValue: 8, integer: true, min: 0, max: 1200 },
 	NOTIFICATION_REDRIVE_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
 	NOTIFICATION_REDRIVE_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
@@ -55,6 +76,10 @@ const PARAMETER_SCHEMA = Object.freeze({
 	NOTIFICATION_REDRIVE_MAX_AGE_MS: { type: 'number', defaultValue: 3600000, integer: true, min: 60000, max: 86400000 },
 	SCANNER_PRESET_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
 	SCANNER_PRESET_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
+	NEWS_MONITOR_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 10000, max: 3600000 },
+	NEWS_MONITOR_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
+	ALERT_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	ALERT_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 10, integer: true, min: 1, max: 100 },
 	ENABLE_GEMINI_GROUNDING: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_MCP_ENRICHMENT: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION: { type: 'boolean', defaultValue: false },
@@ -63,6 +88,32 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ZERO_CHANNEL_ALERT_COOLDOWN_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 86400000 },
 	ENABLE_API_ONLY_MODE: { type: 'boolean', defaultValue: false },
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
+	ENABLE_SIGNAL_CLASS_MARKER: { type: 'boolean', defaultValue: true },
+	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
+	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	REQUEST_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },
+	ENABLE_BINANCE_ORDER_AUDIT: { type: 'boolean', defaultValue: false },
+	BINANCE_ORDER_AUDIT_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
+	ENABLE_SYMBOL_ANALYSIS_STORAGE: { type: 'boolean', defaultValue: false },
+	SYMBOL_ANALYSIS_RETENTION_DAYS: { type: 'number', defaultValue: 7, integer: true, min: 1, max: 365 },
+	ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT: { type: 'boolean', defaultValue: false },
+	ENABLE_FIRESTORE_NEWS_ANALYSIS: { type: 'boolean', defaultValue: false },
+	NEWS_ANALYSIS_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
+	ENABLE_FIRESTORE_CHAT_PREFERENCES: { type: 'boolean', defaultValue: false },
+	CHAT_PREFERENCES_RETENTION_DAYS: { type: 'number', defaultValue: 90, integer: true, min: 1, max: 365 },
+	CHAT_PREFERENCES_CACHE_TTL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
+	// notification destinations — must remain deployment-controlled.
+	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
+	// ENABLE_TEST_ALERT, TEST_ALERT_DAILY_LIMIT, ENABLE_ADMIN_SSE excluded:
+	// route-enablement gates and abuse rate-limiting controls must remain deployment-controlled.
+	ADMIN_SSE_MAX_CLIENT_CONNECTIONS: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 20 },
+	ADMIN_SSE_MAX_TOTAL_CONNECTIONS: { type: 'number', defaultValue: 100, integer: true, min: 10, max: 1000 },
+	ADMIN_SSE_HEARTBEAT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 5000, max: 120000 },
+	ENABLE_TOKEN_COST_BUDGET: { type: 'boolean', defaultValue: false },
+	TOKEN_COST_DAILY_BUDGET_USD: { type: 'number', defaultValue: 5.0, min: 0.01, max: 10000 },
+	TOKEN_COST_WARN_THRESHOLD_PCT: { type: 'number', defaultValue: 80, integer: true, min: 1, max: 100 },
+	ENABLE_MAINTENANCE_MODE: { type: 'boolean', defaultValue: false },
 });
 
 let remoteOverrides = {};
@@ -72,6 +123,27 @@ let lastSuccessfulLoad = null;
 let lastErrorCategory = null;
 let refreshTimer = null;
 let loadingPromise = null;
+let consecutiveFailures = 0;
+const changeListeners = new Set();
+
+function addChangeListener(fn) {
+	if (typeof fn === 'function') {
+		changeListeners.add(fn);
+	}
+	return () => {
+		changeListeners.delete(fn);
+	};
+}
+
+function notifyChangeListeners(prevOverrides, nextOverrides, version) {
+	for (const fn of changeListeners) {
+		try {
+			fn({ prevOverrides, nextOverrides, templateVersion: version });
+		} catch (err) {
+			console.warn('[RemoteConfigService] Change listener failed:', err?.message);
+		}
+	}
+}
 
 function isEnabled() {
 	return process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true';
@@ -123,6 +195,9 @@ function parseString(value, schema, fallback) {
 	}
 	const str = String(value).trim();
 	if (Array.isArray(schema.allowedValues) && !schema.allowedValues.includes(str)) {
+		return fallback;
+	}
+	if (typeof schema.validate === 'function' && !schema.validate(str)) {
 		return fallback;
 	}
 	return str;
@@ -231,15 +306,32 @@ function getStatus() {
 	const enabled = isEnabled();
 	const configured = isFirestoreConfigured();
 	const stale = remoteLoadedAt !== null && !hasFreshRemoteConfig();
+	const effectiveErrorCategory = stale ? 'stale' : lastErrorCategory;
+	const isReady = enabled && configured && lastSuccessfulLoad !== null && hasFreshRemoteConfig() && !stale;
+
+	let status;
+	if (!enabled) {
+		status = 'disabled';
+	} else if (!configured) {
+		status = 'misconfigured';
+	} else if (isReady) {
+		status = 'ready';
+	} else if (lastSuccessfulLoad === null && effectiveErrorCategory === null) {
+		status = 'unknown';
+	} else {
+		status = 'degraded';
+	}
+
 	return {
 		enabled,
 		configured,
-		ready: enabled && configured,
-		status: !enabled ? 'disabled' : configured ? 'ready' : 'misconfigured',
+		ready: isReady,
+		status,
 		source: getSource(),
 		templateVersion,
 		lastSuccessfulLoad,
-		lastErrorCategory: stale ? 'stale' : lastErrorCategory,
+		lastErrorCategory: effectiveErrorCategory,
+		consecutiveFailures,
 		refreshIntervalMs: getRefreshIntervalMs(),
 		maxAgeMs: getMaxAgeMs(),
 	};
@@ -351,20 +443,26 @@ async function loadNow(options = {}) {
 				}
 			});
 
+			const prevOverrides = remoteOverrides;
 			remoteOverrides = nextOverrides;
 			remoteLoadedAt = Date.now();
 			templateVersion = getTemplateVersion(template);
 			lastSuccessfulLoad = new Date(remoteLoadedAt).toISOString();
 			lastErrorCategory = invalidValue ? 'invalid_value' : null;
+			consecutiveFailures = 0;
 			if (invalidValue) {
 				console.warn('[RemoteConfigService] Ignored invalid allow-listed value');
 			}
+			notifyChangeListeners(prevOverrides, remoteOverrides, templateVersion);
 			return true;
 		} catch (error) {
+			const prevOverrides = remoteOverrides;
 			remoteOverrides = {};
 			remoteLoadedAt = null;
 			lastErrorCategory = getErrorCategory(error);
+			consecutiveFailures += 1;
 			console.warn('[RemoteConfigService] Remote Config load failed:', lastErrorCategory);
+			notifyChangeListeners(prevOverrides, remoteOverrides, null);
 			return false;
 		} finally {
 			loadingPromise = null;
@@ -404,6 +502,7 @@ function resetForTesting() {
 	lastSuccessfulLoad = null;
 	lastErrorCategory = null;
 	loadingPromise = null;
+	consecutiveFailures = 0;
 }
 
 module.exports = {
@@ -413,9 +512,16 @@ module.exports = {
 	loadNow,
 	start,
 	stop,
+	addChangeListener,
 	_resetForTesting: resetForTesting,
-	_setRemoteOverridesForTesting(overrides, loadedAt = Date.now()) {
+	_setRemoteOverridesForTesting(overrides, loadedAt = Date.now(), version = 'test') {
+		const prevOverrides = remoteOverrides;
 		remoteOverrides = { ...overrides };
 		remoteLoadedAt = loadedAt;
+		templateVersion = version;
+		lastSuccessfulLoad = new Date(loadedAt).toISOString();
+		lastErrorCategory = null;
+		consecutiveFailures = 0;
+		notifyChangeListeners(prevOverrides, remoteOverrides, templateVersion);
 	},
 };

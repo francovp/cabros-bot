@@ -47,6 +47,24 @@ describe('WhatsAppCommandBridgeService', () => {
 			});
 			expect(service.getBaseUrl()).toBe('https://api.green-api.com/waInstance123456/');
 		});
+
+		test('pollIntervalMs defaults to 3000 when env var is unset', () => {
+			delete process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS;
+			const service = new WhatsAppCommandBridgeService();
+			expect(service.pollIntervalMs).toBe(3000);
+		});
+
+		test('pollIntervalMs reads from WHATSAPP_COMMAND_POLL_INTERVAL_MS env var', () => {
+			process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '5000';
+			const service = new WhatsAppCommandBridgeService();
+			expect(service.pollIntervalMs).toBe(5000);
+		});
+
+		test('pollIntervalMs prefers constructor option over env var', () => {
+			process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '5000';
+			const service = new WhatsAppCommandBridgeService({ pollIntervalMs: 1500 });
+			expect(service.pollIntervalMs).toBe(1500);
+		});
 	});
 
 	describe('Command Handling', () => {

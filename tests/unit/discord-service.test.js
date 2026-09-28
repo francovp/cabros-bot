@@ -74,7 +74,9 @@ describe('DiscordService', () => {
 				messageId: 'discord-msg-123',
 				messageIds: ['discord-msg-123'],
 				messageCount: 1,
+				durationMs: expect.any(Number),
 			});
+			expect(result.durationMs).toBeGreaterThanOrEqual(0);
 			expect(global.fetch).toHaveBeenCalledWith(
 				'https://discord.com/api/webhooks/123/token?wait=true',
 				expect.objectContaining({
@@ -101,7 +103,9 @@ describe('DiscordService', () => {
 				messageId: 'discord-msg-override',
 				messageIds: ['discord-msg-override'],
 				messageCount: 1,
+				durationMs: expect.any(Number),
 			});
+			expect(result.durationMs).toBeGreaterThanOrEqual(0);
 			expect(global.fetch).toHaveBeenCalledWith(
 				'https://discord.com/api/webhooks/999/override-token?wait=true',
 				expect.objectContaining({
@@ -125,6 +129,8 @@ describe('DiscordService', () => {
 			expect(result.success).toBe(false);
 			expect(result.channel).toBe('discord');
 			expect(result.error).toContain('Discord webhook 400');
+			expect(typeof result.durationMs).toBe('number');
+			expect(result.durationMs).toBeGreaterThanOrEqual(0);
 			expect(global.fetch).toHaveBeenCalledTimes(1);
 		});
 
@@ -158,7 +164,9 @@ describe('DiscordService', () => {
 				messageId: 'discord-msg-retried',
 				messageIds: ['discord-msg-retried'],
 				messageCount: 1,
+				durationMs: expect.any(Number),
 			});
+			expect(result.durationMs).toBeGreaterThanOrEqual(0);
 			expect(global.fetch).toHaveBeenCalledTimes(2);
 			expect(mockLogger.warn).toHaveBeenCalledWith(
 				expect.stringContaining('429'),
@@ -179,7 +187,7 @@ describe('DiscordService', () => {
 					ok: false,
 					status: 429,
 					headers: new Map(),
-					text: async () => JSON.stringify({ message: 'You are being rate limited.', retry_after: 0.01 }),
+					text: async () => JSON.stringify({ retry_after: 0.01 }),
 				})
 				.mockResolvedValueOnce({
 					ok: true,
@@ -194,7 +202,9 @@ describe('DiscordService', () => {
 				messageId: 'discord-msg-body-retried',
 				messageIds: ['discord-msg-body-retried'],
 				messageCount: 1,
+				durationMs: expect.any(Number),
 			});
+			expect(result.durationMs).toBeGreaterThanOrEqual(0);
 			expect(global.fetch).toHaveBeenCalledTimes(2);
 		});
 
@@ -330,6 +340,7 @@ describe('DiscordService', () => {
 			expect(result.success).toBe(false);
 			expect(result.statusCode).toBe(429);
 			expect(result.error).toContain('Discord webhook 429');
+			expect(result.attemptCount).toBe(1);
 			expect(global.fetch).toHaveBeenCalledTimes(1);
 			expect(mockLogger.warn).toHaveBeenCalledWith(
 				expect.stringContaining('exceeds max retry delay limit'),
@@ -356,6 +367,7 @@ describe('DiscordService', () => {
 
 			expect(result.success).toBe(false);
 			expect(result.statusCode).toBe(429);
+			expect(result.attemptCount).toBe(1);
 			expect(global.fetch).toHaveBeenCalledTimes(1);
 		});
 
@@ -372,6 +384,8 @@ describe('DiscordService', () => {
 			expect(result.success).toBe(false);
 			expect(result.channel).toBe('discord');
 			expect(result.error).toContain('Discord webhook request timeout');
+			expect(typeof result.durationMs).toBe('number');
+			expect(result.durationMs).toBeGreaterThanOrEqual(0);
 		});
 
 		it('splits long messages into multiple Discord webhook deliveries', async () => {
@@ -399,7 +413,9 @@ describe('DiscordService', () => {
 				messageId: 'discord-msg-1,discord-msg-2',
 				messageIds: ['discord-msg-1', 'discord-msg-2'],
 				messageCount: 2,
+				durationMs: expect.any(Number),
 			});
+			expect(result.durationMs).toBeGreaterThanOrEqual(0);
 			expect(global.fetch).toHaveBeenCalledTimes(2);
 			global.fetch.mock.calls.forEach((call) => {
 				const payload = JSON.parse(call[1].body);
@@ -407,4 +423,29 @@ describe('DiscordService', () => {
 			});
 		});
 	});
+
+	describe('isConfigured', () => {
+		const originalEnv = { ...process.env };
+
+		afterEach(() => {
+			process.env = { ...originalEnv };
+		});
+
+		it('returns true only when ENABLE_DISCORD_ALERTS and webhookUrl are present', () => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/abc';
+
+			const service = new DiscordService();
+			expect(service.isConfigured()).toBe(true);
+
+			process.env.ENABLE_DISCORD_ALERTS = 'false';
+			expect(service.isConfigured()).toBe(false);
+
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			delete process.env.DISCORD_WEBHOOK_URL;
+			const missingUrlService = new DiscordService();
+			expect(missingUrlService.isConfigured()).toBe(false);
+		});
+	});
 });
+

@@ -49,8 +49,9 @@ describe('Security: API Key Validation', () => {
 		expect(res.body.success).toBe(true);
 	});
 
-	it('should allow requests (insecure mode) when WEBHOOK_API_KEY is not set', async () => {
+	it('should allow requests (insecure mode) when WEBHOOK_API_KEY is not set in development or test mode', async () => {
 		delete process.env.WEBHOOK_API_KEY;
+		process.env.NODE_ENV = 'development';
 
 		// Suppress console.warn during this test
 		const originalConsoleWarn = console.warn;
@@ -65,5 +66,77 @@ describe('Security: API Key Validation', () => {
 		expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('insecure'));
 
 		console.warn = originalConsoleWarn;
+	});
+
+	it.each([
+		['NODE_ENV=production', { NODE_ENV: 'production' }],
+		['RENDER=true', { NODE_ENV: '', RENDER: 'true', IS_PULL_REQUEST: 'false' }],
+		['VERCEL_ENV=production', { NODE_ENV: '', VERCEL_ENV: 'production' }],
+		['RAILWAY_ENVIRONMENT_NAME=production', { NODE_ENV: '', RAILWAY_ENVIRONMENT_NAME: 'production' }],
+	])('should reject requests with 503 when WEBHOOK_API_KEY is unset in production-like environment (%s)', async (_, envVars) => {
+		delete process.env.WEBHOOK_API_KEY;
+		Object.assign(process.env, envVars);
+
+		const originalConsoleError = console.error;
+		console.error = jest.fn();
+
+		const res = await request(app)
+			.post('/protected')
+			.send({});
+
+		expect(res.status).toBe(503);
+		expect(res.body.code).toBe('WEBHOOK_API_KEY_UNSET');
+		expect(res.body.error).toContain('WEBHOOK_API_KEY is not set in production');
+		expect(console.error).toHaveBeenCalledWith(expect.stringContaining('ERROR: WEBHOOK_API_KEY is not set in production environment'));
+
+		console.error = originalConsoleError;
+	});
+
+	it.each([
+		['VERCEL_ENV=preview', { NODE_ENV: '', VERCEL_ENV: 'preview' }],
+		['RENDER preview PR', { NODE_ENV: '', RENDER: 'true', IS_PULL_REQUEST: 'true' }],
+		['Railway PR number', { NODE_ENV: '', RAILWAY_ENVIRONMENT_NAME: 'production', RAILWAY_GIT_PULL_REQUEST_NUMBER: '42' }],
+		['Railway PR env name', { NODE_ENV: '', RAILWAY_ENVIRONMENT_NAME: 'pr-42' }],
+	])('should allow bypass when WEBHOOK_API_KEY is unset in preview environment (%s)', async (_, envVars) => {
+		delete process.env.WEBHOOK_API_KEY;
+		Object.assign(process.env, envVars);
+
+		const originalConsoleWarn = console.warn;
+		console.warn = jest.fn();
+
+		const res = await request(app)
+			.post('/protected')
+			.send({});
+
+		expect(res.status).toBe(200);
+		expect(res.body.success).toBe(true);
+
+		console.warn = originalConsoleWarn;
+	});
+
+	it('should capture a Sentry error event when WEBHOOK_API_KEY is unset in production', async () => {
+		delete process.env.WEBHOOK_API_KEY;
+		process.env.NODE_ENV = 'production';
+
+		const sentryService = require('../../src/services/monitoring/SentryService');
+		const spy = jest.spyOn(sentryService, 'captureRuntimeError').mockImplementation(() => ({ captured: true }));
+
+		const originalConsoleError = console.error;
+		console.error = jest.fn();
+
+		const res = await request(app)
+			.post('/protected')
+			.send({});
+
+		expect(res.status).toBe(503);
+		expect(spy).toHaveBeenCalledWith(expect.objectContaining({
+			channel: 'api',
+			feature: 'auth',
+			http: expect.objectContaining({ statusCode: 503 }),
+			extra: expect.objectContaining({ type: 'auth-fail-open' }),
+		}));
+
+		spy.mockRestore();
+		console.error = originalConsoleError;
 	});
 });

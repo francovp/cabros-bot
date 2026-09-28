@@ -1,4 +1,5 @@
 require('dotenv').config();
+const crypto = require('crypto');
 const { enrichAlert } = require('./grounding');
 const { validateAlert } = require('../../../../lib/validation');
 const { v4: uuidv4 } = require('uuid');
@@ -11,16 +12,30 @@ const NotificationManager = require('../../../../services/notification/Notificat
 const { getURLShortener } = require('../../handlers/newsMonitor/urlShortener');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
+const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
 const {
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
+	validateNotificationRouting,
+	assertChannelsAvailable,
 	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
-const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
+const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
+const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
+const { alertModeration } = require('../../../../services/alerts/alertModeration');
+const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
+const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
+const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
+const {
+	buildErrorEnvelope,
+	sendError,
+	STANDARD_ERROR_CODES,
+} = require('../../../../lib/errorEnvelope');
 
 // Initialize services
 let notificationManager = null;
@@ -72,6 +87,37 @@ function resolveBot(botOrGetter) {
 	}
 
 	return botOrGetter || null;
+}
+
+function getFirstTelegramMessageId(result) {
+	const rawMessageId = Array.isArray(result?.messageIds)
+		? result.messageIds[0]
+		: (typeof result?.messageId === 'string' ? result.messageId.split(',')[0] : result?.messageId);
+	if (rawMessageId === undefined || rawMessageId === null || rawMessageId === '') return null;
+	const numericMessageId = Number(rawMessageId);
+	return Number.isSafeInteger(numericMessageId) ? numericMessageId : rawMessageId;
+}
+
+async function attachInlineKeyboardAfterPersistence({ manager, results, routing, replyMarkup }) {
+	if (!replyMarkup || !Array.isArray(results)) return;
+	const telegramResult = results.find((result) => result?.channel === 'telegram' && result.success);
+	const messageId = getFirstTelegramMessageId(telegramResult);
+	const telegramService = manager?.channels?.get?.('telegram');
+	const editMessageReplyMarkup = telegramService?.bot?.telegram?.editMessageReplyMarkup;
+	const chatId = routing?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+	if (!messageId || !chatId || typeof editMessageReplyMarkup !== 'function') return;
+
+	try {
+		await editMessageReplyMarkup.call(
+			telegramService.bot.telegram,
+			chatId,
+			messageId,
+			undefined,
+			replyMarkup,
+		);
+	} catch (error) {
+		console.warn('[Alert] Failed to attach inline keyboard after persistence:', error.message);
+	}
 }
 
 async function processEnrichment(alert, options) {
@@ -132,21 +178,67 @@ async function processEnrichment(alert, options) {
 	return enriched;
 }
 
-function resolveRequestId(req) {
-	const raw = req && req.headers && (req.headers['x-request-id'] || req.headers['X-Request-Id'] || req.headers['x-request-ID']);
-	if (typeof raw === 'string') {
-		const trimmed = raw.trim();
-		if (trimmed.length > 0 && trimmed.length <= 128 && /^[\x21-\x7E]+$/.test(trimmed)) {
-			return trimmed;
-		}
-	}
-	return uuidv4();
-}
-
 function resolveDryRun(req) {
 	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
 	const bodyFlag = req.body && typeof req.body === 'object' && (req.body.dryRun === true || req.body.dryRun === 'true');
 	return queryFlag || bodyFlag;
+}
+
+function getCooldownDestination(channel, routing = {}) {
+	const defaultTelegramChatId = process.env.TELEGRAM_CHAT_ID;
+	const telegramChatId = routing.telegramChatId || defaultTelegramChatId;
+	const telegramThreadId = (typeof routing.telegramThreadId === 'number' && Number.isSafeInteger(routing.telegramThreadId))
+		? routing.telegramThreadId
+		: undefined;
+	const telegramDestination = telegramChatId
+		? (telegramThreadId !== undefined ? `${telegramChatId}:${telegramThreadId}` : telegramChatId)
+		: undefined;
+
+	const overrideByChannel = {
+		telegram: telegramDestination,
+		whatsapp: routing.whatsappChatId,
+		discord: routing.discordWebhookUrl,
+	};
+	const envByChannel = {
+		telegram: defaultTelegramChatId,
+		whatsapp: (isPreviewEnvironment() && process.env.WHATSAPP_PREVIEW_CHAT_ID) || process.env.WHATSAPP_CHAT_ID,
+		discord: process.env.DISCORD_WEBHOOK_URL,
+	};
+	return overrideByChannel[channel] || envByChannel[channel] || 'default';
+}
+
+function getCooldownChannelIdentity(channel, routing) {
+	const destination = String(getCooldownDestination(channel, routing));
+	return getCooldownChannelIdentityForDestination(channel, destination);
+}
+
+function getCooldownChannelIdentityForDestination(channel, destination) {
+	const fingerprint = crypto.createHash('sha256').update(destination).digest('hex').slice(0, 16);
+	return `${channel}:${fingerprint}`;
+}
+
+function getChannelName(identity) {
+	return String(identity).split(':', 1)[0];
+}
+
+function resolveSignalOutcomePriceSource(enriched, parsed) {
+	const explicitSource = typeof enriched?.priceSource === 'string'
+		? enriched.priceSource.trim().toLowerCase()
+		: '';
+	if (explicitSource && explicitSource !== 'derived-quote') {
+		return explicitSource;
+	}
+
+	if (enriched?.tradingViewEnrichmentApplied === true
+		|| ['full', 'partial'].includes(enriched?.tradingViewEnrichmentStatus)) {
+		return 'tradingview-mcp';
+	}
+
+	if (enriched?.levelsSource === 'derived-quote') {
+		return (parsed?.exchange || 'BINANCE') === 'BINANCE' ? 'binance' : 'twelve-data';
+	}
+
+	return enriched?.levelsSource === 'gemini-grounding' ? 'gemini-grounding' : 'tradingview-mcp';
 }
 
 function postAlert(botOrGetter) {
@@ -170,8 +262,48 @@ function postAlert(botOrGetter) {
 				alertText = body;
 			}
 
-			const { text } = validateAlert(alertText);
-			alert = { text };
+			const rawSignalClass = (typeof body === 'object' && body && 'signalClass' in body)
+				? body.signalClass
+				: req.query?.signalClass;
+
+			const { text, signalClass } = validateAlert(
+				alertText,
+				typeof body === 'object' ? body.metadata : undefined,
+				rawSignalClass,
+			);
+			const source = (typeof body === 'object' && body && typeof body.source === 'string' && body.source.trim())
+				? body.source.trim()
+				: 'webhook-alert';
+			alert = { text, source, signalClass };
+
+			if (alertModeration.isEnabled()) {
+				alertModeration.refreshConfig();
+				const verdict = alertModeration.evaluate(alert.text, { requestId });
+				if (verdict && verdict.rejected === true) {
+					console.warn(`[Alert] Moderation rejected payload (reason=${verdict.reason}, requestId=${requestId})`);
+					return res.json({
+						success: true,
+						delivered: false,
+						reason: 'moderation_rejected',
+						moderationReason: verdict.reason,
+						requestId,
+					});
+				}
+		}
+
+			// Fail-fast channel availability check (GH-854): when the caller
+			// explicitly requests channels, validate they are enabled and
+			// configured BEFORE spending Gemini/TradingView MCP enrichment
+			// budget. The notification manager is initialized eagerly here so
+			// the availability check can resolve the enabled-channel set;
+			// delivery still uses the same singleton.
+			if (routing.channels) {
+				const bot = resolveBot(botOrGetter);
+				if (!notificationManager) {
+					await initializeNotificationServices(bot);
+				}
+				assertChannelsAvailable(notificationManager, routing);
+			}
 
 			const tokenUsage = new TokenUsageTracker();
 			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan });
@@ -188,6 +320,7 @@ function postAlert(botOrGetter) {
 					payload: {
 						text: alert.text,
 						enrichedData: alert.enriched || null,
+						signalClass: alert.signalClass,
 					},
 					tokenUsage: tokenUsageJSON,
 					requestId,
@@ -199,11 +332,188 @@ function postAlert(botOrGetter) {
 			if (!notificationManager) {
 				await initializeNotificationServices(bot);
 			}
-
-			// NotificationManager owns the custom dispatch spans.
-			const results = await sendWithNotificationRouting(notificationManager, alert, routing, { parentSpan: requestSpan });
+			validateNotificationRouting(notificationManager, routing);
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
-			const deliveredChannels = getDeliveredChannels(results);
+
+			// Opt-in repeat suppression: same (exchange, symbol, timeframe, side)
+			// inside its cooldown window skips channel delivery but is still
+			// persisted with a marker below. Storage errors fail open. The
+			// reservation is made before delivery so overlapping requests cannot
+			// both send; failed channels remain retryable.
+			let suppressedRepeat = false;
+			let reservation = null;
+			let deliveryRouting = routing;
+			let repeatCooldownOptions;
+			if (signalRepeatCooldown.isEnabled()) {
+				const parsedSignal = parseTradingViewSignal(alert.text);
+				// Unsupported timeframes normalize to the default timeframe, so
+				// they must never enter the cooldown store: a raw token like
+				// "3M" collapses to "1h" and stays unsuppressed, while "4H"
+				// legitimately maps to the 4h bar via the TIMEFRAME_MAP.
+				const hasUsableTimeframe = Boolean(
+					parsedSignal
+					&& parsedSignal.rawTimeframe
+					&& Object.prototype.hasOwnProperty.call(TIMEFRAME_MAP, parsedSignal.rawTimeframe)
+					&& TIMEFRAME_MAP[parsedSignal.rawTimeframe] === parsedSignal.timeframe,
+				);
+				const cooldownChannelNames = requestedChannels.length > 0
+					? requestedChannels
+					: ['telegram', 'whatsapp', 'discord'];
+				if (parsedSignal && hasUsableTimeframe) {
+					const cooldownChannels = cooldownChannelNames.map((channel) => getCooldownChannelIdentity(channel, routing));
+					await notificationRedriveService.reconcileRepeatCooldown(buildSignalKey(parsedSignal), cooldownChannels);
+					const verdict = signalRepeatCooldown.reserve(
+						{ ...parsedSignal, timeframe: parsedSignal.timeframe },
+						cooldownChannels,
+					);
+					if (verdict.suppressed) {
+						suppressedRepeat = true;
+						signalRepeatCooldown.recordSuppression();
+						console.log(
+							`[Alert] Repeat suppressed for ${verdict.key} (${Math.round(verdict.elapsedMs / 1000)}s elapsed, retry in ${Math.round(verdict.retryInMs / 1000)}s)`,
+						);
+					} else if (verdict.key) {
+						reservation = verdict;
+						repeatCooldownOptions = {
+							key: verdict.key,
+							reservedAt: verdict.reservedAt,
+							generation: verdict.generation,
+							channelsByName: Object.fromEntries(verdict.channels.map((channel) => [getChannelName(channel), channel])),
+							destinationsByName: Object.fromEntries(verdict.channels.map((channel) => {
+								const channelName = getChannelName(channel);
+								return [channelName, getCooldownDestination(channelName, routing)];
+							})),
+							defaultChannelsByName: Object.fromEntries(verdict.channels.map((channel) => {
+								const channelName = getChannelName(channel);
+								return [channelName, getCooldownChannelIdentityForDestination(channelName, 'default')];
+							})),
+						};
+						if (verdict.channels.length < requestedChannels.length) {
+							deliveryRouting = { ...routing, channels: verdict.channels.map(getChannelName) };
+						}
+					}
+				}
+			}
+
+			let results;
+			// Inline keyboard markup is opt-in: only when alert storage is
+			// enabled (so /api/alerts/:alertId/replay can resolve the alert
+			// after the user clicks "Replay") and the Telegram channel is
+			// actually selected for delivery. The alertId is generated
+			// synchronously so it can be embedded in the markup callback_data
+			// before the message is sent.
+			let inlineAlertId = null;
+			let inlineReplyMarkup = null;
+			try {
+				const storageEnabled = typeof alertStorageService.isEnabled === 'function'
+					&& alertStorageService.isEnabled();
+				const telegramEnabled = process.env.ENABLE_TELEGRAM_BOT === 'true';
+				const telegramRequested = requestedChannels.length === 0
+					|| requestedChannels.includes('telegram');
+				if (storageEnabled && telegramEnabled && telegramRequested && !suppressedRepeat) {
+					inlineAlertId = uuidv4();
+					const replyMarkup = buildReplyMarkup({
+						alertId: inlineAlertId,
+						hasEnrichment: Boolean(alert.enriched),
+						includeReplay: true,
+					});
+					if (replyMarkup) {
+						inlineReplyMarkup = replyMarkup;
+					}
+				}
+			} catch (error) {
+				console.warn('[Alert] Failed to attach inline keyboard markup:', error.message);
+				inlineAlertId = null;
+			}
+			try {
+				results = suppressedRepeat
+					? []
+					: await sendWithNotificationRouting(notificationManager, alert, deliveryRouting, {
+						parentSpan: requestSpan,
+						repeatCooldown: repeatCooldownOptions,
+					});
+			} catch (error) {
+				if (reservation) {
+					signalRepeatCooldown.finalize(reservation.key, reservation.channels, [], [], reservation.generation);
+				}
+				throw error;
+			}
+			const deliveredChannels = suppressedRepeat ? [] : getDeliveredChannels(results);
+			if (reservation) {
+				const failedChannelNames = new Set(
+					results.filter((result) => result && !result.success).map((result) => result.channel),
+				);
+				const supersededReservationChannels = new Set();
+				if (notificationRedriveService.isEnabled() && failedChannelNames.size > 0) {
+					await Promise.all(reservation.channels
+						.filter((channel) => failedChannelNames.has(getChannelName(channel)))
+						.map(async (channel) => {
+							const superseded = await notificationRedriveService.isRepeatCooldownSuperseded({
+								id: `${requestId}_${getChannelName(channel)}`,
+								repeatCooldown: {
+									key: reservation.key,
+									channel,
+									reservedAt: reservation.reservedAt,
+									generation: reservation.generation,
+								},
+							});
+							if (superseded) {
+								supersededReservationChannels.add(channel);
+							}
+						}));
+				}
+				const zeroChannelRedriveExpected = requestedChannels.length === 0
+					&& !notificationManager.isIntentionalApiOnly();
+				const deliveredReservationChannels = reservation.channels.filter((channel) => (
+					deliveredChannels.includes(getChannelName(channel))
+				));
+				const keepFailedForRedrive = notificationRedriveService.isEnabled()
+					&& notificationRedriveService.getWorkerRole() !== 'disabled'
+					&& (notificationRedriveService.getWorkerRole() === 'web' || notificationRedriveService.hasDurableStore())
+					&& (results.some((result) => result && !result.success) || zeroChannelRedriveExpected);
+				const redriveReservationChannels = reservation.channels.filter((channel) => (
+					!supersededReservationChannels.has(channel)
+				));
+				const finalizationChannels = keepFailedForRedrive
+					? redriveReservationChannels
+					: deliveredReservationChannels;
+				signalRepeatCooldown.finalize(
+					reservation.key,
+					reservation.channels,
+					finalizationChannels,
+					deliveredReservationChannels,
+					reservation.generation,
+				);
+				if (notificationRedriveService.isEnabled() && deliveredReservationChannels.length > 0) {
+					const defaultDestinationChannels = deliveredReservationChannels
+						.map((channel) => repeatCooldownOptions?.defaultChannelsByName?.[getChannelName(channel)])
+						.filter(Boolean);
+					if (defaultDestinationChannels.length > 0) {
+						const cancellation = notificationRedriveService.cancelPendingRepeatCooldowns(
+							reservation.key,
+							defaultDestinationChannels,
+						);
+						await Promise.race([
+							cancellation,
+							new Promise((resolve) => setTimeout(resolve, 500)),
+						]);
+						trackBackgroundTask(cancellation).catch(() => {});
+					}
+					const oppositeKey = oppositeKeyOf(reservation.key);
+					if (oppositeKey) {
+						const oppositeChannels = [...new Set([
+							...deliveredReservationChannels,
+							...defaultDestinationChannels,
+						])];
+						const cancellation = notificationRedriveService.cancelPendingRepeatCooldowns(oppositeKey, oppositeChannels);
+						await Promise.race([
+							cancellation,
+							new Promise((resolve) => setTimeout(resolve, 500)),
+						]);
+						trackBackgroundTask(cancellation).catch(() => {});
+					}
+				}
+			}
 			const processingTimeMs = Math.max(0, Date.now() - startTime);
 
 			// Return 200 OK regardless of delivery success (fail-open pattern)
@@ -211,6 +521,7 @@ function postAlert(botOrGetter) {
 				success: true,
 				results,
 				enriched,
+				suppressedRepeat: suppressedRepeat || undefined,
 				tokenUsage: tokenUsageJSON,
 				requestedChannels,
 				deliveredChannels,
@@ -233,7 +544,7 @@ function postAlert(botOrGetter) {
 
 			// Fire-and-forget: persist alert to Firestore after responding to the caller.
 			// Errors are caught inside saveAlert — delivery is never blocked by storage.
-			alertStorageService.saveAlert({
+			const saveAlertPromise = alertStorageService.saveAlert({
 				requestId,
 				text: alert.text,
 				symbol: extracted.symbol !== 'unknown' ? extracted.symbol : null,
@@ -247,10 +558,28 @@ function postAlert(botOrGetter) {
 				processingTimeMs,
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
-			}).catch(() => {}); // errors already logged inside AlertStorageService
+				suppressedRepeat,
+				signalClass: alert.signalClass,
+				source: body.source || 'webhook-alert',
+				telegramChatId: routing.telegramChatId,
+				telegramThreadId: routing.telegramThreadId,
+				whatsappChatId: routing.whatsappChatId,
+				discordWebhookUrl: routing.discordWebhookUrl,
+				alertId: inlineAlertId || undefined,
+			});
+			Promise.resolve(saveAlertPromise)
+				.then((storedAlertId) => {
+					if (!storedAlertId) return null;
+					return attachInlineKeyboardAfterPersistence({
+						manager: notificationManager,
+						results,
+						routing,
+						replyMarkup: inlineReplyMarkup,
+					});
+				})
+				.catch(() => {}); // errors already logged inside AlertStorageService
 
-			if (signalOutcomeService.isEnabled()) {
-				const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
+			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
 				const parsed = parseTradingViewSignal(alert.text);
 				if (parsed) {
 					const mcpPrice = (alert.enriched && typeof alert.enriched.current_price === 'number' && Number.isFinite(alert.enriched.current_price) && alert.enriched.current_price > 0)
@@ -271,9 +600,8 @@ function postAlert(botOrGetter) {
 							? Number(alert.enriched.target_level)
 							: null);
 
-					const levelsSource = alert.enriched && alert.enriched.levelsSource;
 					const priceSource = mcpPrice !== null
-						? (levelsSource === 'derived-quote' ? 'derived-quote' : (levelsSource === 'gemini-grounding' ? 'gemini-grounding' : 'tradingview-mcp'))
+						? resolveSignalOutcomePriceSource(alert.enriched, parsed)
 						: null;
 
 					signalOutcomeService.recordSignal({
@@ -284,6 +612,11 @@ function postAlert(botOrGetter) {
 						timeframe: parsed.timeframe,
 						setupType: (alert.enriched && alert.enriched.setup_type) || 'tradingview-enrichment',
 						score: alert.enriched ? alert.enriched.sentiment_score : null,
+						confidenceScore: (typeof alert.enriched?.confidence === 'number' && Number.isFinite(alert.enriched.confidence) && alert.enriched.confidence >= 0 && alert.enriched.confidence <= 1)
+							? alert.enriched.confidence
+							: (typeof alert.enriched?.sentiment_score === 'number' && Number.isFinite(alert.enriched.sentiment_score) && Math.abs(alert.enriched.sentiment_score) <= 1
+								? Math.abs(alert.enriched.sentiment_score)
+								: null),
 						side: parsed.side,
 						price: mcpPrice,
 						stop: stopLevel,
@@ -297,37 +630,50 @@ function postAlert(botOrGetter) {
 			}
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(error.statusCode).json({
-					success: false,
+				return sendError(res, error.statusCode, {
 					error: error.message,
-					details: error.details,
+					code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 					requestId,
+					details: error.details,
 				});
 			}
 
-			console.error('[Alert] Request failed:', error.message);
+			const status = (error.response && error.response.error_code) || error.statusCode || 500;
+			const isClientError = status >= 400 && status < 500;
 
-			// Capture runtime error to Sentry (T012)
-			sentryService.captureRuntimeError({
-				channel: 'http-alert',
-				error,
-				http: {
-					endpoint: '/api/webhook/alert',
-					method: 'POST',
-					statusCode: (error.response && error.response.error_code) || 500,
-					requestId,
-				},
-				alert: {
-					textLength: alertText ? alertText.length : 0,
-					hasEnrichment: !!(alert && alert.enriched),
-					enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
-					truncated: false,
-				},
+			if (!isClientError) {
+				console.error('[Alert] Request failed:', error.message);
+
+				// Capture runtime error to Sentry (T012)
+				sentryService.captureRuntimeError({
+					channel: 'http-alert',
+					error,
+					http: {
+						endpoint: '/api/webhook/alert',
+						method: 'POST',
+						statusCode: status,
+						requestId,
+					},
+					alert: {
+						textLength: alertText ? alertText.length : 0,
+						hasEnrichment: !!(alert && alert.enriched),
+						enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
+						truncated: false,
+					},
+				});
+			}
+
+			const upstreamEnvelope = error.response && typeof error.response === 'object'
+				? error.response
+				: null;
+			const envelope = buildErrorEnvelope({
+				error: (upstreamEnvelope && upstreamEnvelope.error) || error.message || 'Internal server error',
+				code: (upstreamEnvelope && upstreamEnvelope.code) || (status < 500 ? STANDARD_ERROR_CODES.INVALID_REQUEST : STANDARD_ERROR_CODES.INTERNAL_ERROR),
+				requestId,
+				statusCode: status,
+				details: (upstreamEnvelope && upstreamEnvelope.details) || undefined,
 			});
-
-			const status = (error.response && error.response.error_code) || 500;
-			const errorResponse = error.response || { error: 'Internal server error', details: error.message, requestId };
-			res.status(status).send(errorResponse);
+			res.status(status).json(envelope);
 		}
 	};
 }
@@ -336,5 +682,10 @@ module.exports = {
 	postAlert,
 	resolveRequestId,
 	initializeNotificationServices,
+	__resetNotificationManagerForTesting: () => {
+		notificationManager = null;
+	},
 	getNotificationManager,
+	getCooldownChannelIdentity,
+	processEnrichment,
 };
