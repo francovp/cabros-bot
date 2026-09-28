@@ -50,6 +50,7 @@ const {
 } = require('./admin/testAlert');
 const { tokenCostBudgetService } = require('../lib/tokenUsage');
 const { isMaintenanceModeEnabled } = require('../lib/maintenanceMode');
+const { getValidApiKeys } = require('../lib/auth');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
 const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
@@ -359,7 +360,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 
 	const webhookAuth = dependencyStatus({
 		enabled: true,
-		configured: hasValue(process.env.WEBHOOK_API_KEY),
+		configured: getValidApiKeys().length > 0,
 	});
 
 	return {

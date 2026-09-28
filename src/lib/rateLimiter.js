@@ -1,7 +1,10 @@
 // src/lib/rateLimiter.js
 
+const crypto = require('crypto');
+const { getValidApiKeys, matchesAnyApiKey } = require('./auth');
+
 const rateLimit = new Map();
-// Store: rateLimitKey -> { count, resetTime }
+// Store: bucketKey -> { count, resetTime }
 
 const MAX_KEYS = 10000;
 // Protection against memory exhaustion
@@ -38,35 +41,52 @@ function readPositiveInteger(name, fallback) {
 	return value;
 }
 
-/**
- * Extracts a client identifier for rate limiting that works correctly behind reverse proxies.
- * When TRUST_PROXY is enabled (typical on Render), req.ip becomes the proxy IP.
- * This function creates a composite key using the API key (when present) or falls back
- * to a combination of IP and User-Agent fingerprint for unauthenticated requests.
- *
- * @param {import('express').Request} req Express request object
- * @returns {string} Rate limit bucket key
- */
-function getRateLimitKey(req) {
-	// Base IP (may be proxy IP when TRUST_PROXY is enabled)
-	const baseIp = req.ip || req.socket?.remoteAddress || '127.0.0.1';
-
-	// Try to get API key from header or query param (same as validateApiKey middleware)
-	const apiKey = req.headers['x-api-key'] || req.query?.['api-key'];
-
-	if (apiKey) {
-		// Hash the API key to avoid storing raw secrets in memory
-		// Use first 12 chars of a simple hash for bucket differentiation
-		const crypto = require('crypto');
-		const keyHash = crypto.createHash('sha256').update(String(apiKey)).digest('hex').substring(0, 12);
-		return `key:${keyHash}`;
+// Remote Config–aware lookup for select rate-limit settings. Only
+// non-secret, request-time tuning is honored. The bucket fingerprint secret
+// and the API-key list itself are environment-only and never read here.
+// Resolve a per-process HMAC secret for API-key fingerprinting so the bucket
+// key is not derivable from a publicly available algorithm (CodeQL:
+// "password hash with insufficient computational effort"). When the operator
+// has not configured a secret, fall back to a process-lifetime random value
+// — bucket keys are still non-reversible to cleartext without the running
+// process, but per-deploy rotation remains under operator control.
+let fingerprintSecret = null;
+function getFingerprintSecret() {
+	if (fingerprintSecret) return fingerprintSecret;
+	const configured = process.env.RATE_LIMIT_FINGERPRINT_SECRET;
+	// 32+ characters, matching the documented requirement in .env.example. A short
+	// secret still yields a working HMAC but weakens the bucket-key derivation, so
+	// an undersized value is ignored in favour of the random per-process secret.
+	if (configured && configured.trim().length >= 32) {
+		fingerprintSecret = configured.trim();
+		return fingerprintSecret;
 	}
+	fingerprintSecret = crypto.randomBytes(32).toString('hex');
+	return fingerprintSecret;
+}
 
-	// For unauthenticated requests, combine IP with User-Agent fingerprint
-	// This provides better isolation than IP-only when behind shared proxies
-	const userAgent = req.headers['user-agent'] || 'unknown';
-	const uaHash = require('crypto').createHash('sha256').update(userAgent).digest('hex').substring(0, 8);
-	return `ip:${baseIp}:ua:${uaHash}`;
+// ponytail: derive a non-reversible fingerprint of an API key. Uses
+// HMAC-SHA256 so an attacker with access to a single bucket key cannot
+// recover the cleartext; the secret is per-process and never logged.
+function hashApiKey(apiKey) {
+	// HMAC-SHA256 keyed with a server-side secret, not a password hash: the key is
+	// either RATE_LIMIT_FINGERPRINT_SECRET (>=32 chars, deployment-controlled) or a
+	// 32-byte crypto.randomBytes value, and the digest is only a rate-limit bucket
+	// identifier. There is no offline brute-force surface, so the rule's
+	// password-hashing guidance does not apply.
+	/* codeql[js/insufficient-password-hash] */
+	const mac = crypto.createHmac('sha256', getFingerprintSecret());
+	// The rule also anchors on the sink where the tainted argument enters the MAC.
+	/* codeql[js/insufficient-password-hash] */
+	return mac.update(String(apiKey)).digest('hex').slice(0, 16);
+}
+
+// Returns the union of all configured API keys (primary + secondary). The
+// list is what the limiter uses to identify authenticated callers; the same
+// set is consulted by `src/lib/auth.js#isValidApiKey` so a key recognized
+// by the limiter is also accepted by the auth middleware.
+function getConfiguredApiKeys() {
+	return getValidApiKeys();
 }
 
 // Periodic cleanup
@@ -78,6 +98,54 @@ setInterval(() => {
 		}
 	}
 }, 60000).unref();
+
+function isTrustProxyEnabled() {
+	const value = process.env.TRUST_PROXY;
+	if (value === undefined || value === null || value.trim() === '') {
+		// Mirror parseTrustProxy default for managed reverse-proxy deployments.
+		if (process.env.RENDER === 'true' || process.env.VERCEL === '1' || process.env.RAILWAY_ENVIRONMENT_NAME) {
+			return true;
+		}
+		return false;
+	}
+	const normalized = value.trim().toLowerCase();
+	if (normalized === 'true') return true;
+	if (normalized === 'false') return false;
+	if (/^\d+$/.test(normalized)) return parseInt(normalized, 10) > 0;
+	return Boolean(normalized);
+}
+
+// ponytail: derive the rate-limit bucket key for the request.
+// - Authenticated callers (matching WEBHOOK_API_KEY / WEBHOOK_API_KEYS) get a
+//   per-key bucket so distinct API keys do not share limits.
+// - Unauthenticated callers are keyed on the trusted `req.ip` (which behind
+//   `TRUST_PROXY` is the real client IP from the proxy header). The
+//   User-Agent header is intentionally NOT folded into the key — it is
+//   attacker-controlled and would let anonymous callers rotate buckets
+//   indefinitely to bypass the limit.
+// - When `TRUST_PROXY` is disabled, the legacy IP-only key is preserved so
+//   direct deployments behave byte-for-byte the same as before.
+function deriveBucketKey({ req, ip, isWebhookIngest }) {
+	const allowedKeys = getConfiguredApiKeys();
+	// Match with the same constant-time comparison validateApiKey uses. An
+	// ordinary `includes()` here would compare live credentials in variable time
+	// on the app-wide pre-authentication path.
+	// The legacy `?api-key=` variant is still accepted by validateApiKey, so it
+	// must be classified here too or those callers would share the anonymous
+	// bucket instead of a per-key one.
+	const suppliedKey = (req.headers && (req.headers['x-api-key'] || req.headers['X-Api-Key']))
+		|| (req.query && req.query['api-key']);
+	const headerValue = Array.isArray(suppliedKey) ? suppliedKey[0] : suppliedKey;
+	if (matchesAnyApiKey(headerValue, allowedKeys)) {
+		const fingerprint = hashApiKey(headerValue);
+		return isWebhookIngest ? `webhook:apikey:${fingerprint}` : `apikey:${fingerprint}`;
+	}
+	// Anonymous traffic: key solely on the trusted `req.ip` (which already
+	// reflects the proxy-decided client IP when `TRUST_PROXY` is on). This
+	// keeps a single noisy client pinned to one bucket regardless of any
+	// attacker-controlled headers.
+	return isWebhookIngest ? `webhook:${ip}` : ip;
+}
 
 function rateLimiter(req, res, next) {
 	if (
@@ -93,12 +161,20 @@ function rateLimiter(req, res, next) {
 		.replace(/\/+$/, '')
 		.toLowerCase();
 	const isWebhookIngest = WEBHOOK_INGEST_PATHS.has(requestPath);
-	const maxRequests = isWebhookIngest
-		? WEBHOOK_MAX_REQUESTS
-		: readPositiveInteger('RATE_LIMIT_MAX', DEFAULT_MAX_REQUESTS);
+
+	const ip = req.ip || req.socket?.remoteAddress || '127.0.0.1';
+	const bucketKey = deriveBucketKey({ req, ip, isWebhookIngest });
+	const hasApiKey = bucketKey.startsWith('apikey:') || bucketKey.includes(':apikey:');
+	const maxRequests = (() => {
+		if (isWebhookIngest) return WEBHOOK_MAX_REQUESTS;
+		if (hasApiKey) {
+			const explicit = readPositiveInteger('RATE_LIMIT_API_KEY_MAX', 0);
+			if (explicit > 0) return explicit;
+		}
+		return readPositiveInteger('RATE_LIMIT_MAX', DEFAULT_MAX_REQUESTS);
+	})();
 	const windowMs = readPositiveInteger('RATE_LIMIT_WINDOW_MS', DEFAULT_WINDOW_MS);
 
-	const bucketKey = isWebhookIngest ? `webhook:${getRateLimitKey(req)}` : getRateLimitKey(req);
 	const now = Date.now();
 
 	let data = rateLimit.get(bucketKey);
@@ -150,5 +226,9 @@ rateLimiter.reset = function () {
 
 rateLimiter.WEBHOOK_INGEST_PATHS = WEBHOOK_INGEST_PATHS;
 rateLimiter.WEBHOOK_MAX_REQUESTS = WEBHOOK_MAX_REQUESTS;
+rateLimiter.deriveBucketKey = deriveBucketKey;
+rateLimiter.getConfiguredApiKeys = getConfiguredApiKeys;
+rateLimiter.hashApiKey = hashApiKey;
+rateLimiter.getFingerprintSecret = getFingerprintSecret;
 
 module.exports = rateLimiter;

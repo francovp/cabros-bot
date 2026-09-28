@@ -6,6 +6,7 @@ function resetEnv() {
 	delete process.env.BOT_TOKEN;
 	delete process.env.TELEGRAM_CHAT_ID;
 	delete process.env.WEBHOOK_API_KEY;
+	delete process.env.WEBHOOK_API_KEYS;
 	delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
 	delete process.env.ENABLE_GEMINI_GROUNDING;
 	delete process.env.GEMINI_API_KEY;
@@ -56,6 +57,18 @@ describe('SelfTestService', () => {
 		expect(telegramEnv.status).toBe('fail');
 		expect(auth.status).toBe('fail');
 		expect(result.status).toBe('fail');
+	});
+
+	// The auth.api_key check read process.env.WEBHOOK_API_KEY alone, so a
+	// list-only deployment was reported as having no auth configured at all.
+	it('treats a list-only WEBHOOK_API_KEYS configuration as configured', async () => {
+		process.env.WEBHOOK_API_KEYS = 'key-one,key-two';
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'auth.api_key' });
+
+		const auth = result.checks.find((c) => c.id === 'auth.api_key');
+		expect(auth.status).toBe('pass');
 	});
 
 	it('skips optional features when their gates are disabled', async () => {

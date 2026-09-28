@@ -61,9 +61,12 @@ function warnQueryApiKeyDeprecationOnce(req) {
  * reached or passed, query-parameter auth is rejected with `401 API_KEY_QUERY_REMOVED`.
  */
 function validateApiKey(req, res, next) {
-	const validApiKey = process.env.WEBHOOK_API_KEY;
+	// A list-only configuration is valid: WEBHOOK_API_KEYS alone must not look
+	// unconfigured, or the documented multi-key deployment 503s before
+	// isValidApiKey can consult the list.
+	const validApiKey = getValidApiKeys();
 
-	if (!validApiKey) {
+	if (validApiKey.length === 0) {
 		const isProdLike = isProductionLikeEnvironment(process.env);
 		const isPreview = isPreviewEnvironment(process.env);
 		const isDevOrTest = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
@@ -131,19 +134,75 @@ function validateApiKey(req, res, next) {
 	next();
 }
 
+// Constant-time membership test shared with the rate limiter. The limiter runs
+// app-wide before any route runs validateApiKey, so it must classify an incoming
+// key with the same timing-safe comparison rather than ordinary string equality,
+// otherwise repeated x-api-key probes get a credential timing oracle on the
+// pre-authentication path.
+// Compare fixed-length keyed digests for every candidate, with no length-based skip
+// and no early exit. Skipping candidates whose length differs made the number of
+// comparisons depend on the presented key's length, so varying input lengths
+// revealed which lengths are configured. Both sides are always 32 bytes, which
+// also keeps timingSafeEqual from throwing on a length mismatch.
+//
+// HMAC-SHA256 with a per-process secret, matching the derivation already used for
+// rate-limit bucket keys in rateLimiter.js: a keyed digest cannot be precomputed
+// by an attacker, and the secret is never logged or returned. This is a comparison
+// digest, not a stored password hash, so there is no offline brute-force surface.
+let apiKeyDigestSecret = null;
+function getApiKeyDigestSecret() {
+	if (!apiKeyDigestSecret) apiKeyDigestSecret = crypto.randomBytes(32);
+	return apiKeyDigestSecret;
+}
+
+function digestOf(value) {
+	const mac = crypto.createHmac('sha256', getApiKeyDigestSecret());
+	/* codeql[js/insufficient-password-hash] */
+	return mac.update(String(value), 'utf8').digest();
+}
+
+function matchesAnyApiKey(keyToCheck, candidates) {
+	if (typeof keyToCheck !== 'string' || !Array.isArray(candidates) || candidates.length === 0) {
+		return false;
+	}
+	const bufferApiKey = digestOf(keyToCheck);
+	let matched = false;
+	for (const candidate of candidates) {
+		if (crypto.timingSafeEqual(bufferApiKey, digestOf(candidate))) {
+			matched = true;
+		}
+	}
+	return matched;
+}
+
+function getValidApiKeys() {
+	const keys = new Set();
+	const single = process.env.WEBHOOK_API_KEY;
+	if (single && single.trim()) keys.add(single.trim());
+	const list = process.env.WEBHOOK_API_KEYS;
+	if (list && list.trim()) {
+		for (const entry of list.split(',')) {
+			const trimmed = entry.trim();
+			if (trimmed) keys.add(trimmed);
+		}
+	}
+	return Array.from(keys);
+}
+
 function isValidApiKey(req) {
-	const validApiKey = process.env.WEBHOOK_API_KEY;
-	if (!validApiKey) return false;
+	const validApiKeys = getValidApiKeys();
+	if (validApiKeys.length === 0) return false;
 
 	const apiKey = req && req.headers && (req.headers['x-api-key'] || req.headers['X-API-Key'])
 		|| req && req.query && req.query['api-key'];
 	const keyToCheck = Array.isArray(apiKey) ? apiKey[0] : apiKey;
 	if (typeof keyToCheck !== 'string') return false;
 
-	const bufferApiKey = Buffer.from(keyToCheck);
-	const bufferValidApiKey = Buffer.from(validApiKey);
-	return bufferApiKey.length === bufferValidApiKey.length
-		&& crypto.timingSafeEqual(bufferApiKey, bufferValidApiKey);
+	// Timing-safe comparison against every configured key. A request is
+	// accepted when it matches any of the configured keys; the constant-time
+	// comparison is performed against each candidate so the check does not
+	// leak which key matched through timing.
+	return matchesAnyApiKey(keyToCheck, validApiKeys);
 }
 
 function _resetQueryDeprecationFlagForTests() {
@@ -157,4 +216,6 @@ module.exports = {
 	_resetQueryDeprecationFlagForTests,
 	isValidApiKey,
 	validateApiKey,
+	getValidApiKeys,
+	matchesAnyApiKey,
 };
