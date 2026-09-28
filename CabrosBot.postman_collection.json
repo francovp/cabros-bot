@@ -435,6 +435,72 @@
       ]
     },
     {
+      "name": "Get Status - chart attachments",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing the opt-in chart attachment renderer. featureFlags.chartAttachments reports the effective ENABLE_CHART_ATTACHMENTS flag after Remote Config resolution; dependencies.chartRenderer reports non-sensitive readiness, the render/cache/failure counters (reset on process restart), and a per-channel inline-image support map. Discord always reports false because webhooks accept only remote image URLs. Counters start at zero on a fresh process and never expose alert content or credentials."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('exposes featureFlags.chartAttachments boolean', () => {",
+              "  pm.expect(body.featureFlags).to.have.property('chartAttachments');",
+              "  pm.expect(body.featureFlags.chartAttachments).to.be.a('boolean');",
+              "});",
+              "pm.test('exposes dependencies.chartRenderer with counters and channel map', () => {",
+              "  const cr = body.dependencies && body.dependencies.chartRenderer;",
+              "  pm.expect(cr).to.be.an('object');",
+              "  ['ready','cacheEntries','renders','cacheHits','cacheMisses','failures','timeouts'].forEach((k) => pm.expect(cr).to.have.property(k));",
+              "  pm.expect(cr.channels).to.have.property('discord', false);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 OK - chartRenderer populated (flag enabled)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"chartAttachments\":true},\"dependencies\":{\"chartRenderer\":{\"enabled\":true,\"ready\":true,\"provider\":\"builtin-raster\",\"timeoutMs\":5000,\"cacheTtlSeconds\":300,\"cacheEntries\":3,\"renders\":12,\"cacheHits\":9,\"cacheMisses\":3,\"failures\":1,\"timeouts\":0,\"skippedDisabled\":0,\"lastErrorCategory\":\"render_error\",\"lastRenderedAt\":\"2026-09-28T05:10:00.000Z\",\"channels\":{\"telegram\":true,\"whatsapp\":true,\"discord\":false},\"note\":\"Discord webhooks have no inline image upload path; Discord always falls back to text.\"}}}"
+        },
+        {
+          "name": "200 OK - chartAttachments disabled by default",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"chartAttachments\":false},\"dependencies\":{\"chartRenderer\":{\"enabled\":false,\"ready\":false,\"provider\":\"builtin-raster\",\"timeoutMs\":5000,\"cacheTtlSeconds\":300,\"cacheEntries\":0,\"renders\":0,\"cacheHits\":0,\"cacheMisses\":0,\"failures\":0,\"timeouts\":0,\"skippedDisabled\":0,\"lastErrorCategory\":null,\"lastRenderedAt\":null,\"channels\":{\"telegram\":true,\"whatsapp\":true,\"discord\":false}}}}"
+        },
+        {
+          "name": "401 Unauthorized (missing API key)",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\"error\":\"Unauthorized: Missing API key\"}"
+        }
+      ]
+    },
+    {
       "name": "Run Self-Test",
       "request": {
         "method": "POST",

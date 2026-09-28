@@ -427,6 +427,27 @@
       "description": "Enable rendering signal classification marker prefix on alert notifications",
       "valueType": "BOOLEAN"
     },
+    "ENABLE_CHART_ATTACHMENTS": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable attaching a rendered chart PNG to alert notifications on channels that support inline image delivery",
+      "valueType": "BOOLEAN"
+    },
+    "CHART_RENDER_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Wall-clock budget for a single chart render before falling back to text-only delivery",
+      "valueType": "NUMBER"
+    },
+    "CHART_CACHE_TTL_SECONDS": {
+      "defaultValue": {
+        "value": "300"
+      },
+      "description": "TTL for the in-process chart render cache keyed by symbol, timeframe and range key",
+      "valueType": "NUMBER"
+    },
     "ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION": {
       "defaultValue": {
         "value": "false"

@@ -127,6 +127,7 @@ class DiscordService extends NotificationChannel {
 		const startedAt = Date.now();
 		try {
 			const webhookUrl = alert.discordWebhookUrl || this.webhookUrl;
+			this._logChartAttachmentSkipped(alert);
 			if (!webhookUrl) {
 				return {
 					success: false,
@@ -178,6 +179,20 @@ class DiscordService extends NotificationChannel {
 		return targetUrl.includes('?')
 			? `${targetUrl}&wait=true`
 			: `${targetUrl}?wait=true`;
+	}
+
+	/**
+	 * Discord webhooks accept only remote image URLs in `embeds[].image`; there is
+	 * no inline-upload path. Rather than inventing a temporary-bucket dependency
+	 * for one notification channel, chart attachments are explicitly skipped here
+	 * and the text-only payload is delivered unchanged. This log line is the
+	 * documented "chart attachment skipped: discord" behavior.
+	 * @private
+	 */
+	_logChartAttachmentSkipped(alert = {}) {
+		if (alert.chartBars?.length && process.env.ENABLE_CHART_ATTACHMENTS === 'true') {
+			this.logger?.debug?.('chart attachment skipped: discord has no inline image upload path');
+		}
 	}
 
 	async formatAlert(alert = {}) {

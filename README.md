@@ -214,7 +214,7 @@ When signal-outcome tracking is disabled, or when no measurements exist in the r
 - `FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS` - Maximum template-load wait (default: `10000`, maximum: `30000`)
 - `FIREBASE_REMOTE_CONFIG_MAX_AGE_MS` - Maximum age of a successful template before environment/default fallback (default: `3600000`, maximum: `604800000`)
 
-The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), `ENABLE_SIGNAL_CLASS_MARKER` (notification classification markers), and per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
+The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), `ENABLE_SIGNAL_CLASS_MARKER` (notification classification markers), chart-attachment tuning (`ENABLE_CHART_ATTACHMENTS`, `CHART_RENDER_TIMEOUT_MS` between `100` and `60000`, `CHART_CACHE_TTL_SECONDS` between `0` and `86400`), and per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
 
 The service loads once at startup and refreshes on the bounded cadence; it does not fetch Remote Config per alert. `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS` remains environment-only because the worker timer is created during process startup and is not a request-time setting. Disabled, unavailable, timed-out, stale, malformed, or invalid values fail open to the current environment/default behavior. The server-side Remote Config API is currently a Firebase Preview feature, so monitor its quota and error rate before enabling it in production. `firebase-admin` is upgraded to the Node 24-compatible 12.x line (`^12.1.0`, lockfile resolution `12.7.0`).
 
@@ -508,6 +508,32 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
 `featureFlags.newsMonitorTestMode` reports `ENABLE_NEWS_MONITOR_TEST_MODE` without changing the news monitor's existing test-mode behavior.
 
 `featureFlags.messageFooterMetadata` reports the `ENABLE_MESSAGE_FOOTER_METADATA` setting. It defaults to `true` and is disabled only when the environment variable is explicitly set to `false`.
+
+## Chart attachments (opt-in)
+
+`ENABLE_CHART_ATTACHMENTS=true` attaches a rendered chart PNG next to alert notifications so traders can see the setup without leaving chat. It is **disabled by default**; with the flag off, delivery is identical to the existing text-only path.
+
+**Requirements.** A chart is only drawn when the alert payload carries renderable OHLCV bars (`chartBars`, an array of `{open, high, low, close, volume}`) **and** a `symbol`. Alerts without them — and any series with non-finite or internally inconsistent OHLC values — fall through to text-only delivery. Up to 5 series of 5 candles render as a 220×60 sparkline; 6 or more render as a 600×400 candlestick chart with an optional volume strip and dashed entry/target/stop overlays.
+
+**No native dependency.** Charts are encoded with a built-in `zlib` PNG encoder (`src/services/notification/charts/pngEncoder.js`) plus a small raster canvas. Nothing is installed: unlike the `chartjs-node-canvas` sketch in the original issue, this adds no cairo/pango build step, so the production image is unaffected and rendering cannot fail for native-binding reasons.
+
+**Channel support:**
+
+| Channel | Delivery | Caption limit | Failure behavior |
+|---|---|---|---|
+| Telegram | `sendPhoto` with the report as caption | 1024 chars | Overflow sends as follow-up `sendMessage` parts; a MarkdownV2 parse error retries once as plain text |
+| WhatsApp | GreenAPI `sendFileByUpload` with the report as caption | 1024 chars | **Single try only** — uploads have no idempotency key, so a retry could duplicate the attachment. On failure the text-only path runs |
+| Discord | Not supported | — | Discord webhooks accept only remote image URLs, so Discord always falls back to text and logs `chart attachment skipped: discord` |
+
+**Fail-open guarantee.** Every failure mode — unusable data, render error, budget exceeded, upload rejection, chart disabled — resolves to a `console.warn` plus the unchanged text-only delivery. A chart can never block or fail an alert.
+
+**Render budget.** Rendering is CPU-bound, so `CHART_RENDER_TIMEOUT_MS` (default `5000`, integer `100`–`60000`) is enforced both by a timer and by a cooperative deadline polled between bars; exceeding it aborts the draw rather than emitting a truncated chart. Malformed tuning values fall back to the documented defaults.
+
+**Cache.** Rendered buffers are cached in-process by `(symbol, timeframe, rangeKey)` for `CHART_CACHE_TTL_SECONDS` (default `300`, integer `0`–`86400`; `0` disables caching) and bounded to 200 entries, so a 30-item scan repeating a symbol renders once. `rangeKey` folds in the risk levels, so an entry/target/stop change produces a new render.
+
+**Status.** `/api/status` and `/api/capabilities` expose `featureFlags.chartAttachments` and a `dependencies.chartRenderer` block with `ready`, `lastErrorCategory` (`timeout`, `render_error`, `insufficient_data`), and render/cache/failure counters plus a `channels` map. Counters reset on process restart and expose no alert content or credentials.
+
+`ENABLE_CHART_ATTACHMENTS`, `CHART_RENDER_TIMEOUT_MS`, and `CHART_CACHE_TTL_SECONDS` are all Firebase Remote Config eligible.
 
 When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, `/api/webhook/alert` suppresses duplicate channel delivery for the same `(exchange, symbol, timeframe, side)` signal within a cooldown window of `ALERT_SIGNAL_COOLDOWN_BARS` bars (default `1`). Suppressed requests still return 200 with `suppressedRepeat: true`, empty `results`/`deliveredChannels`, and remain persisted with a suppression marker so replay and audit stay complete. Opposite-side flips always deliver; storage failures fail open to normal delivery. `featureFlags.alertSignalRepeatSuppression` reports the gate and `dependencies.alertSignalRepeatSuppression` exposes non-sensitive counters (`suppressedCount`, `lastSuppressedAt`, `activeTrackedSignals`).
 
