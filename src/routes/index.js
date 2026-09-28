@@ -44,6 +44,7 @@ const {
 	getBinanceOrders,
 	deleteBinanceOrder,
 	getBinanceOrderAudit,
+	postBinanceOrderPreview,
 } = require('../controllers/trading/binanceOrders');
 const { postTestAlert } = require('../controllers/admin/testAlert');
 const { handleSseStream } = require('../controllers/admin/sseEvents');
@@ -117,6 +118,7 @@ function getRoutes(botOrGetter) {
 	router.post('/jobs/:jobId/retry-failed', ...adminWrite, idempotencyMiddleware, postRetryFailedJob(botOrGetter));
 	router.get('/trading/binance/orders', ...binanceOrderRead, getBinanceOrders);
 	router.get('/trading/binance/orders/audit', ...binanceOrderRead, getBinanceOrderAudit);
+	router.post('/trading/binance/orders/preview', ...binanceOrderRead, postBinanceOrderPreview);
 	router.post('/trading/binance/orders', ...binanceOrderWrite, idempotencyMiddleware, postBinanceOrder);
 	router.delete('/trading/binance/orders', ...binanceOrderWrite, deleteBinanceOrder);
 
