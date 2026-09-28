@@ -6,6 +6,8 @@ const {
 	BinanceOrderRequestError,
 	createBinanceOrderService,
 	binanceOrderService,
+	getConfig,
+	MAX_TIMEOUT_MS,
 } = require('../../src/services/trading/BinanceOrderService');
 const { MainClient } = require('binance');
 
@@ -1866,6 +1868,118 @@ describe('BinanceOrderService', () => {
 				symbol: 'BTCUSDT',
 				orderId: 42,
 			})).rejects.toMatchObject({ code: 'BINANCE_QUERY_FAILED', statusCode: 502 });
+		});
+	});
+
+	describe('Firebase Remote Config overrides', () => {
+		const remoteConfig = require('../../src/services/remoteConfig/RemoteConfigService');
+
+		beforeEach(() => {
+			jest.spyOn(remoteConfig, 'getStatus').mockReturnValue({ source: 'remote' });
+			jest.spyOn(remoteConfig, 'getRuntimeConfig').mockReturnValue({
+				BINANCE_TRADING_ENV: 'testnet',
+				BINANCE_TRADING_ALLOWED_SYMBOLS: '',
+				BINANCE_TRADING_MAX_NOTIONAL: 1000,
+				BINANCE_TRADING_TIMEOUT_MS: 10000,
+			});
+		});
+
+		afterEach(() => {
+			jest.restoreAllMocks();
+		});
+
+		it('applies remote environment, allow-list, notional cap, and timeout', () => {
+			remoteConfig.getRuntimeConfig.mockReturnValue({
+				BINANCE_TRADING_ENV: 'demo',
+				BINANCE_TRADING_ALLOWED_SYMBOLS: 'ethusdt, solusdt',
+				BINANCE_TRADING_MAX_NOTIONAL: 250,
+				BINANCE_TRADING_TIMEOUT_MS: 15000,
+			});
+
+			const config = getConfig();
+			expect(config.environment).toBe('demo');
+			expect(config.allowedSymbols).toEqual(['ETHUSDT', 'SOLUSDT']);
+			expect(config.maxNotional).toBe(250);
+			expect(config.timeoutMs).toBe(15000);
+		});
+
+		it('ignores remote values entirely when the source is not remote', () => {
+			remoteConfig.getStatus.mockReturnValue({ source: 'environment' });
+			process.env.BINANCE_TRADING_ENV = 'live';
+			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'ETHUSDT';
+			process.env.BINANCE_TRADING_MAX_NOTIONAL = '777';
+			process.env.BINANCE_TRADING_TIMEOUT_MS = '12000';
+
+			remoteConfig.getRuntimeConfig.mockReturnValue({
+				BINANCE_TRADING_ENV: 'demo',
+				BINANCE_TRADING_ALLOWED_SYMBOLS: 'BTCUSDT',
+				BINANCE_TRADING_MAX_NOTIONAL: 1,
+				BINANCE_TRADING_TIMEOUT_MS: 1000,
+			});
+
+			const config = getConfig();
+			expect(config.environment).toBe('live');
+			expect(config.allowedSymbols).toEqual(['ETHUSDT']);
+			expect(config.maxNotional).toBe(777);
+			expect(config.timeoutMs).toBe(12000);
+		});
+
+		// Regression: getRuntimeConfig() also materialises schema defaults. Applying an
+		// unset BINANCE_TRADING_MAX_NOTIONAL's 1000 default would report a deployment with
+		// no configured cap as `configured` and enable trading that should stay closed.
+		it('keeps maxNotional null when neither remote nor env sets a cap', () => {
+			remoteConfig.getStatus.mockReturnValue({ source: 'disabled' });
+			delete process.env.BINANCE_TRADING_MAX_NOTIONAL;
+
+			const config = getConfig();
+			expect(config.maxNotional).toBeNull();
+			expect(config.configured).toBe(false);
+		});
+
+		it('falls back to env for an explicitly empty remote allow-list', () => {
+			remoteConfig.getRuntimeConfig.mockReturnValue({
+				BINANCE_TRADING_ALLOWED_SYMBOLS: '',
+				BINANCE_TRADING_MAX_NOTIONAL: 1000,
+				BINANCE_TRADING_TIMEOUT_MS: 10000,
+			});
+
+			expect(getConfig().allowedSymbols).toEqual(['BTCUSDT']);
+		});
+
+		it('caps a remote timeout at the service ceiling', () => {
+			remoteConfig.getRuntimeConfig.mockReturnValue({
+				BINANCE_TRADING_MAX_NOTIONAL: 1000,
+				BINANCE_TRADING_TIMEOUT_MS: 60000,
+			});
+
+			expect(getConfig().timeoutMs).toBe(MAX_TIMEOUT_MS);
+		});
+
+		it('fails open to env values when Remote Config throws', () => {
+			remoteConfig.getStatus.mockImplementation(() => {
+				throw new Error('remote config unavailable');
+			});
+			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'ETHUSDT';
+
+			const config = getConfig();
+			expect(config.environment).toBe('testnet');
+			expect(config.allowedSymbols).toEqual(['ETHUSDT']);
+			expect(config.maxNotional).toBe(1000);
+		});
+
+		it('never exposes credentials through the remote config path', () => {
+			remoteConfig.getRuntimeConfig.mockReturnValue({
+				BINANCE_TRADING_MAX_NOTIONAL: 1000,
+				BINANCE_TRADING_TIMEOUT_MS: 10000,
+			});
+
+			const config = getConfig();
+			expect(config).not.toHaveProperty('apiKey');
+			expect(config).not.toHaveProperty('apiSecret');
+			expect(Object.keys(config).sort()).toEqual([
+				'allowedSymbols', 'baseUrl', 'configured', 'enabled',
+				'environment', 'maxNotional', 'timeoutMs',
+			]);
 		});
 	});
 });

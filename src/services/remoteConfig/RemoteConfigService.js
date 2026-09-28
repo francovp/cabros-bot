@@ -44,8 +44,12 @@ const PARAMETER_SCHEMA = Object.freeze({
 		allowedValues: ['testnet', 'demo', 'live'],
 	},
 	BINANCE_TRADING_ALLOWED_SYMBOLS: { type: 'string', defaultValue: '' },
-	BINANCE_TRADING_MAX_NOTIONAL: { type: 'number', defaultValue: 1000, integer: true, min: 0, max: 1000000 },
-	BINANCE_TRADING_TIMEOUT_MS: { type: 'number', defaultValue: 10000, integer: true, min: 1000, max: 60000 },
+	// min 1, not 0: a remote 0 would resolve to a null cap at the consumer and silently
+	// report the deployment as `configured` (see BinanceOrderService.resolveMaxNotional).
+	BINANCE_TRADING_MAX_NOTIONAL: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 1000000 },
+	// max 30000 matches BinanceOrderService.MAX_TIMEOUT_MS, the real service ceiling —
+	// a higher remote value would be accepted here and then clamped to the default.
+	BINANCE_TRADING_TIMEOUT_MS: { type: 'number', defaultValue: 10000, integer: true, min: 1000, max: 30000 },
 	// NOTE: BINANCE_API_KEY and BINANCE_API_SECRET are intentionally excluded from
 	// Remote Config. They are secrets/credentials and the agents.md Firebase Remote
 	// Config parity policy classifies credentials as environment-only so they never

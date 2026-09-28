@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { MainClient } = require('binance');
+const RemoteConfigService = require('../remoteConfig/RemoteConfigService');
 
 const TESTNET_BASE_URL = 'https://testnet.binance.vision';
 const DEMO_BASE_URL = 'https://demo-api.binance.com';
@@ -192,6 +193,56 @@ function parseTimeout(value) {
 	return Math.min(parsed, MAX_TIMEOUT_MS);
 }
 
+// Remote Config mirrors the non-credential Binance trading knobs so operators can retune a
+// deployed environment without a redeploy. Only genuinely-remote values are honoured:
+// getRuntimeConfig() also materialises schema defaults, and applying those here would
+// silently turn an unset BINANCE_TRADING_MAX_NOTIONAL into 1000 and report the deployment
+// as `configured`. Gating on source === 'remote' keeps the env/default path byte-for-byte
+// unchanged when Remote Config is disabled, unavailable, or still on its last known source.
+function getRemoteOverride(key) {
+	try {
+		// Resolved through the module object so a broken/partial mock cannot throw here.
+		const status = RemoteConfigService.getStatus?.();
+		if (status?.source !== 'remote') return undefined;
+		const value = RemoteConfigService.getRuntimeConfig?.()?.[key];
+		return value === undefined ? undefined : value;
+	} catch {
+		// Remote Config is a fail-open side effect: never let it break order execution.
+		return undefined;
+	}
+}
+
+function resolveTradingEnvironment() {
+	const remote = getRemoteOverride('BINANCE_TRADING_ENV');
+	const source = typeof remote === 'string' ? remote : process.env.BINANCE_TRADING_ENV;
+	return (source || 'testnet').trim().toLowerCase();
+}
+
+function resolveAllowedSymbols() {
+	const remote = getRemoteOverride('BINANCE_TRADING_ALLOWED_SYMBOLS');
+	// An empty remote string is indistinguishable from "unset" in the Remote Config
+	// validation layer, so it falls back to the environment value rather than meaning
+	// "allow nothing". Clearing an allow-list remotely is therefore not supported.
+	const source = hasValue(remote) ? remote : process.env.BINANCE_TRADING_ALLOWED_SYMBOLS;
+	return parseAllowedSymbols(source);
+}
+
+function resolveMaxNotional() {
+	const remote = getRemoteOverride('BINANCE_TRADING_MAX_NOTIONAL');
+	if (Number.isFinite(remote)) return remote;
+	return hasValue(process.env.BINANCE_TRADING_MAX_NOTIONAL)
+		? Number(process.env.BINANCE_TRADING_MAX_NOTIONAL)
+		: null;
+}
+
+function resolveTimeoutMs() {
+	const remote = getRemoteOverride('BINANCE_TRADING_TIMEOUT_MS');
+	if (Number.isFinite(remote) && remote > 0) {
+		return Math.min(remote, MAX_TIMEOUT_MS);
+	}
+	return parseTimeout(process.env.BINANCE_TRADING_TIMEOUT_MS);
+}
+
 function resolveLiveBaseUrl() {
 	const configured = process.env.BINANCE_DATA_BASE_URL;
 	if (typeof configured === 'string' && configured.trim() !== '') {
@@ -207,11 +258,9 @@ function resolveLiveBaseUrl() {
 }
 
 function getConfig() {
-	const environment = (process.env.BINANCE_TRADING_ENV || 'testnet').trim().toLowerCase();
-	const allowedSymbols = parseAllowedSymbols(process.env.BINANCE_TRADING_ALLOWED_SYMBOLS);
-	const maxNotional = hasValue(process.env.BINANCE_TRADING_MAX_NOTIONAL)
-		? Number(process.env.BINANCE_TRADING_MAX_NOTIONAL)
-		: null;
+	const environment = resolveTradingEnvironment();
+	const allowedSymbols = resolveAllowedSymbols();
+	const maxNotional = resolveMaxNotional();
 	const enabled = process.env.ENABLE_BINANCE_TRADING === 'true';
 	const configured = hasValue(process.env.BINANCE_API_KEY)
 		&& hasValue(process.env.BINANCE_API_SECRET)
@@ -227,7 +276,7 @@ function getConfig() {
 		baseUrl: environment === 'live' ? resolveLiveBaseUrl() : environment === 'demo' ? DEMO_BASE_URL : TESTNET_BASE_URL,
 		allowedSymbols,
 		maxNotional,
-		timeoutMs: parseTimeout(process.env.BINANCE_TRADING_TIMEOUT_MS),
+		timeoutMs: resolveTimeoutMs(),
 	};
 }
 
@@ -941,6 +990,7 @@ module.exports = {
 	BinanceOrderServiceError,
 	TESTNET_BASE_URL,
 	LIVE_BASE_URL,
+	MAX_TIMEOUT_MS,
 	createBinanceOrderService,
 	binanceOrderService,
 	getConfig,

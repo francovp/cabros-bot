@@ -279,7 +279,11 @@ pnpm test:firebase
 - `BINANCE_TRADING_BASE_URL` - Optional custom base URL for Binance trading endpoints in live mode (default: unset / `https://api.binance.com`)
 - `BINANCE_TRADING_ALLOWED_SYMBOLS` - Comma-separated Spot symbol allow-list, for example `BTCUSDT,ETHUSDT`
 - `BINANCE_TRADING_MAX_NOTIONAL` - Maximum order notional in quote asset, enforced before submission
-- `BINANCE_TRADING_TIMEOUT_MS` - Signed request timeout (default `10000` ms, capped at `30000` ms)
+- `BINANCE_TRADING_TIMEOUT_MS` - Signed request timeout (default `10000` ms, range `1000`-`30000` ms)
+
+`BINANCE_TRADING_ENV`, `BINANCE_TRADING_ALLOWED_SYMBOLS`, `BINANCE_TRADING_MAX_NOTIONAL`, and `BINANCE_TRADING_TIMEOUT_MS` are also available through Firebase Remote Config, so a deployed environment can be retuned without a redeploy. Remote values apply **only** while `dependencies.firebaseRemoteConfig.source` is `remote`; when Remote Config is disabled, unavailable, or still serving the environment, `process.env` is used unchanged. Out-of-bounds remote values fail open to the environment value, and the schema bounds match the real service ceilings (`MAX_NOTIONAL` `1`-`1000000`, `TIMEOUT_MS` `1000`-`30000`) so an accepted value is never silently clamped. `BINANCE_API_KEY` and `BINANCE_API_SECRET` are **environment-only** — credentials never enter the server-side template, the `/api/status` response, or logs.
+
+Two deliberate limitations: an empty remote `BINANCE_TRADING_ALLOWED_SYMBOLS` is indistinguishable from "unset" in the Remote Config validation layer, so it falls back to the environment value and the allow-list cannot be cleared remotely; and a `0` notional is rejected in favour of the default rather than accepted as an emergency kill switch (use `ENABLE_BINANCE_TRADING=false` instead).
 
 `POST /api/trading/binance/orders` requires `admin.operator` access through the existing API-key or Firebase admin authentication flow, and fails closed if neither mechanism is configured. It supports `MARKET` and `LIMIT` `BUY`/`SELL` orders, validates the live Binance symbol status and filters, and uses the existing `binance` `MainClient`. MARKET orders accept either `quoteOrderQty` or base asset `quantity` (evaluated using average price against the configured notional cap). Quantity-based MARKET BUYs are converted to an exchange-enforced `quoteOrderQty` at the estimated average price so Binance itself caps the realized quote spend at `BINANCE_TRADING_MAX_NOTIONAL`; quantity-based MARKET SELLs keep base-quantity sizing.
 

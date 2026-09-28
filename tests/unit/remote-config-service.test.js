@@ -2,6 +2,7 @@ const admin = require('firebase-admin');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const { isFirestoreConfigured } = require('../../src/services/storage/firestoreConfig');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+const binanceOrderServiceConstants = require('../../src/services/trading/BinanceOrderService');
 
 jest.mock('firebase-admin', () => ({
 	remoteConfig: jest.fn(),
@@ -551,6 +552,23 @@ describe('RemoteConfigService', () => {
 		expect(config.BINANCE_TRADING_ALLOWED_SYMBOLS).toBe(''); // default empty
 		expect(config.BINANCE_TRADING_MAX_NOTIONAL).toBe(1000); // fallback to default
 		expect(config.BINANCE_TRADING_TIMEOUT_MS).toBe(10000); // fallback to default
+	});
+
+	// The Binance trading bounds must match BinanceOrderService's real ceilings, otherwise
+	// a remote value is accepted here and then clamped or discarded at the consumer.
+	it('bounds Binance Spot trading parameters to the service ceilings', () => {
+		const schema = remoteConfigService.PARAMETER_SCHEMA;
+		expect(schema.BINANCE_TRADING_MAX_NOTIONAL.min).toBe(1);
+		expect(schema.BINANCE_TRADING_MAX_NOTIONAL.max).toBe(1000000);
+		expect(schema.BINANCE_TRADING_TIMEOUT_MS.min).toBe(1000);
+		expect(schema.BINANCE_TRADING_TIMEOUT_MS.max).toBe(binanceOrderServiceConstants.MAX_TIMEOUT_MS);
+
+		process.env.BINANCE_TRADING_MAX_NOTIONAL = '0'; // min 1 — 0 would disable trading silently
+		process.env.BINANCE_TRADING_TIMEOUT_MS = '60000'; // max 30000 — the service ceiling
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.BINANCE_TRADING_MAX_NOTIONAL).toBe(1000);
+		expect(config.BINANCE_TRADING_TIMEOUT_MS).toBe(10000);
 	});
 
 	it('keeps BINANCE_API_KEY and BINANCE_API_SECRET out of the Remote Config schema', () => {

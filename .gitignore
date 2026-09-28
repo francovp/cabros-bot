@@ -129,3 +129,6 @@ docs/antigravity/
 
 docs/superpowers/
 .omo/
+
+# issue-automator run-scoped claim session state
+.automator-state/
