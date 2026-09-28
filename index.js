@@ -47,6 +47,7 @@ const { alertSchedulerService } = require('./src/services/scheduler');
 const { adminSseService } = require('./src/services/sse/AdminSseService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
+const { configureServerTimeouts } = require('./src/lib/serverTimeouts');
 const Sentry = require('@sentry/node');
 
 const { token, shouldStartTelegramBot } = getTelegramBootstrapConfig();
@@ -58,7 +59,7 @@ bootstrapReadiness.begin({
 let bot;
 let botLaunchPromise;
 let bootstrapPromise;
-let server;
+
 
 const port = process.env.PORT || 80;
 const now = new Date();
@@ -194,12 +195,17 @@ async function bootstrapApplication() {
 	}
 }
 
-server = app.listen(port, () => {
+const server = app.listen(port, () => {
 	bootstrapPromise = bootstrapApplication();
 	void bootstrapPromise.catch((error) => {
 		bootstrapReadiness.fail(error);
 		console.error('[index] Application bootstrap failed:', error.message);
 	});
 });
+
+// Bound slow clients before the 'listening' event, not inside the listen callback:
+// the server already accepts connections by then, which would leave a window where
+// headersTimeout/requestTimeout are still Node's unbounded defaults.
+configureServerTimeouts(server);
 
 module.exports = { bot };
