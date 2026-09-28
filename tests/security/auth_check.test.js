@@ -2,6 +2,7 @@ const request = require('supertest');
 const express = require('express');
 const { validateApiKey } = require('../../src/lib/auth');
 const { requireConfiguredAdminAccess } = require('../../src/lib/adminAuth');
+const rateLimiter = require('../../src/lib/rateLimiter');
 
 describe('Security: API Key Validation', () => {
 	let app;
@@ -272,13 +273,9 @@ describe('Security: list-only WEBHOOK_API_KEYS configuration (issue #692 review)
 			adminSavedEnv = saveEnv();
 			adminApp = express();
 			adminApp.use(express.json());
-			// Test-only synthetic route. Mounting requireConfiguredAdminAccess pulls in
-			// validateAdminAccess, which assigns req.adminRole in production code, so
-			// CodeQL reads this handler as authorization-performing. The real routes it
-			// guards are rate-limited by the global limiter in src/routes/index.js; a
-			// per-test app has no users to throttle, and adding a limiter here would
-			// only slow the assertions down.
-			// codeql[js/missing-rate-limiting]
+			// The real routes behind this gate sit behind the global limiter, so the
+			// test app mounts it too rather than tripping js/missing-rate-limiting.
+			adminApp.use(rateLimiter);
 			adminApp.post('/admin', requireConfiguredAdminAccess, (req, res) => {
 				res.status(200).json({ success: true });
 			});
