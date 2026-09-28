@@ -435,6 +435,56 @@
       ]
     },
     {
+      "name": "Get Status - signal classification population",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing the in-memory signal classification population rate for the webhook ingest path. `featureFlags.signalClassMarker: true` only states that the badge marker is allowed to render; this block states whether alerts are actually being classified, so a silent regression back to 100% `unknown` is detectable instead of looking healthy. Counters reset on process restart and the dependencies.signalClassClassification key is omitted entirely until at least one alert has been classified. Contains only enum class names and counts, never alert text, symbols, or chat ids. No backfill of historical records is performed."
+      },
+      "response": [
+        {
+          "name": "200 OK - signalClassClassification populated",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"signalClassClassification\":{\"window\":{\"startedAt\":\"2026-09-28T04:00:00.000Z\",\"durationMs\":3600000},\"totalAlerts\":148,\"classifiedAlerts\":137,\"unknownAlerts\":11,\"populationRate\":0.9257,\"byClass\":{\"breakout\":61,\"mean_reversion\":24,\"trend_continuation\":19,\"reversal\":12,\"volume_spike\":9,\"news_event\":7,\"manual\":5,\"unknown\":11}}}}"
+        },
+        {
+          "name": "200 OK - populationRate 0 (every alert unknown)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"signalClassMarker\":true},\"dependencies\":{\"signalClassClassification\":{\"window\":{\"startedAt\":\"2026-09-28T04:00:00.000Z\",\"durationMs\":3600000},\"totalAlerts\":10,\"classifiedAlerts\":0,\"unknownAlerts\":10,\"populationRate\":0,\"byClass\":{\"unknown\":10}}}}"
+        },
+        {
+          "name": "200 OK - signalClassClassification omitted (before first classified alert)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"signalClassMarker\":true},\"dependencies\":{}}"
+        },
+        {
+          "name": "401 Unauthorized (missing API key)",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\"error\":\"Unauthorized: Missing API key\"}"
+        }
+      ]
+    },
+    {
       "name": "Run Self-Test",
       "request": {
         "method": "POST",

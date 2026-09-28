@@ -28,6 +28,7 @@ const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
 const { alertModeration } = require('../../../../services/alerts/alertModeration');
+const { classifySignal } = require('../../../../services/alerts/signalClassifier');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
 const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
@@ -266,11 +267,21 @@ function postAlert(botOrGetter) {
 				? body.signalClass
 				: req.query?.signalClass;
 
-			const { text, signalClass } = validateAlert(
+			const { text } = validateAlert(
 				alertText,
 				typeof body === 'object' ? body.metadata : undefined,
 				rawSignalClass,
 			);
+			// `validateAlert` returns 'unknown' whenever the caller did not send
+			// an explicit signalClass, which left the badge markers rendering
+			// for a class nothing ever populated (issue #858). Derive the class
+			// from the alert text instead, and keep any caller-supplied value
+			// authoritative. We pass the RAW value, not the validated one:
+			// validation collapses "absent" into the string 'unknown', which
+			// would then always win over derivation. An explicit 'unknown' from
+			// the caller is still honored. Classification is deterministic,
+			// channel neutral, and fails open to 'unknown'.
+			const signalClass = classifySignal(text, { explicit: rawSignalClass });
 			const source = (typeof body === 'object' && body && typeof body.source === 'string' && body.source.trim())
 				? body.source.trim()
 				: 'webhook-alert';

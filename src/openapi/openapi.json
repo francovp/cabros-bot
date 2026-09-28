@@ -6493,6 +6493,55 @@
           }
         }
       },
+      "SignalClassClassification": {
+        "type": "object",
+        "description": "In-memory counters for signal classification on the webhook ingest path. `featureFlags.signalClassMarker` only states that the badge marker is allowed to render; this block states whether alerts are actually being classified, so a silent regression back to 100% `unknown` is detectable instead of looking healthy. Counters reset on process restart, never block delivery or persistence, and the field is omitted entirely from /api/status when no alert has been classified yet. Contains only enum class names and counts — never alert text, symbols, or chat ids.",
+        "required": ["window", "totalAlerts", "classifiedAlerts", "unknownAlerts", "populationRate", "byClass"],
+        "properties": {
+          "window": {
+            "type": "object",
+            "required": ["startedAt", "durationMs"],
+            "properties": {
+              "startedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "durationMs": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          },
+          "totalAlerts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "classifiedAlerts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Alerts that resolved to a class other than `unknown`."
+          },
+          "unknownAlerts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "populationRate": {
+            "type": "number",
+            "format": "double",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "classifiedAlerts / totalAlerts. A sustained 0 means no alert is being classified."
+          },
+          "byClass": {
+            "type": "object",
+            "description": "Per-class counts keyed by the signalClass enum.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      },
       "FirestoreWriteMetrics": {
         "type": "object",
         "description": "In-memory counters for Firestore persistence attempts on alert storage, alert replays, and tradingviewJobs. Counters reset on process restart, never block delivery, and the field is omitted entirely from /api/status when nothing has been recorded yet. Mirrors DeliveryMetricsService for write-path observability so silent persistence failures cannot masquerade as 'Firestore ready'.",
@@ -10395,6 +10444,9 @@
             "properties": {
               "firestoreWriteMetrics": {
                 "$ref": "#/components/schemas/FirestoreWriteMetrics"
+              },
+              "signalClassClassification": {
+                "$ref": "#/components/schemas/SignalClassClassification"
               },
               "firebaseRemoteConfig": {
                 "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
