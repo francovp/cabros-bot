@@ -10425,6 +10425,7 @@
           "enabled",
           "configured",
           "ready",
+          "templatePublished",
           "status",
           "source",
           "templateVersion",
@@ -10445,7 +10446,11 @@
           },
           "ready": {
             "type": "boolean",
-            "description": "True only after a successful, fresh server template load; false if uninitialized, disabled, misconfigured, failed, or stale."
+            "description": "True only after a successful, fresh server template load; false if uninitialized, disabled, misconfigured, failed, or stale. `enabled` and `configured` being true does NOT imply readiness."
+          },
+          "templatePublished": {
+            "type": "boolean",
+            "description": "True only when the `firebase-server` namespace template has been fetched successfully at least once. Distinguishes 'wired up' (enabled + configured) from 'actually serving remote values' (issue #598)."
           },
           "status": {
             "type": "string",
@@ -10494,9 +10499,18 @@
               "unsupported_sdk",
               "load_failed",
               "stale",
+              "template_not_published",
+              "permission_denied",
+              "unauthenticated",
+              "failed_precondition",
+              "internal_error",
+              "aborted",
+              "resource_exhausted",
+              "invalid_argument",
+              "unknown_error",
               null
             ],
-            "description": "Sanitized error category if the last load failed or values are stale (timeout, credentials, unsupported_sdk, load_failed, stale), or null."
+            "description": "Sanitized error category if the last load failed or values are stale, or null. `template_not_published` means the `firebase-server` namespace has no template yet and must be published (see the deploy:firebase-remote-config:server workflow); it is distinct from a transient `load_failed`."
           },
           "consecutiveFailures": {
             "type": "integer",

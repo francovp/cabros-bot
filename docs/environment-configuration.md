@@ -203,6 +203,27 @@ The allow-list contains news thresholds, timeouts, concurrency, quota retries, T
 
 The service loads once at startup and refreshes on the bounded cadence; it does not fetch Remote Config per alert. `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS` remains environment-only because the worker timer is created during process startup and is not a request-time setting. Disabled, unavailable, timed-out, stale, malformed, or invalid values fail open to the current environment/default behavior. The server-side Remote Config API is currently a Firebase Preview feature, so monitor its quota and error rate before enabling it in production. `firebase-admin` is upgraded to the Node 24-compatible 12.x line (`^12.1.0`, lockfile resolution `12.7.0`).
 
+##### Publishing the server template (`firebase-server` namespace)
+
+Enabling `ENABLE_FIREBASE_REMOTE_CONFIG` alone does **not** activate remote tuning: the flag and valid credentials only mean the loader is *wired up*. A template must also be published to the **`firebase-server`** namespace, which is the exact namespace `admin.remoteConfig().initServerTemplate()` reads.
+
+- Publish with `pnpm run deploy:firebase-remote-config:server` locally, or by running the **Deploy Firebase Remote Config Server Template** workflow (`.github/workflows/firebase-remote-config.yml`, `workflow_dispatch`) against `master`. The workflow uses the `FIREBASE_SERVICE_ACCOUNT_JSON` Actions secret and the `FIREBASE_PROJECT_ID` repository variable (default `cabros-bot`).
+- **Namespace contract**: the publish target is `projects/{projectId}/namespaces/firebase-server/serverRemoteConfig`. Publishing to the default/client namespace (`/remoteConfig`) is a silent no-op for this loader — the template appears in the console while the service keeps reading an empty server template forever.
+- The `firebase-server` namespace does not exist until the first publish, so the script bootstraps it with `If-Match: *`. A pre-publish `getServerTemplate()` that returns `remote-config/not-found` is the expected bootstrap state, not a failure.
+
+Verify activation through `GET /api/status` → `dependencies.firebaseRemoteConfig`:
+
+| Field | Meaning |
+| --- | --- |
+| `enabled` / `configured` | The loader is wired up. Neither implies remote values are being served. |
+| `templatePublished` | `true` only after at least one successful template load. `false` means nothing was ever fetched. |
+| `ready` | `true` only after a **successful and still-fresh** load. |
+| `source` | `remote` only when live remote overrides are in use; `environment`/`default` mean they are not. |
+| `lastErrorCategory` | `template_not_published` means the `firebase-server` namespace has no template and must be published. This is distinct from a transient `load_failed`; `permission_denied` and `unauthenticated` mean the service account lacks the server-template permission. |
+| `consecutiveFailures` | Consecutive failed loads; reset to `0` on success. |
+
+An inert feature looks like `enabled: true, configured: true, templatePublished: false, ready: false, source: "environment", lastErrorCategory: "template_not_published"`. In that state every value comes from the environment fallback, which is the intended fail-open behavior — the alert path is never blocked.
+
 #### Firestore Emulator Integration Tests
 
 The optional `pnpm test:firebase` command runs the Firestore-backed integration suite against the local Firebase emulator using the `demo-cabros` project ID. It covers the Admin SDK storage paths, idempotency transactions, async jobs, scanner presets, signal outcomes, and deny-by-default client rules.
