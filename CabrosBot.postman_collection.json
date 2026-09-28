@@ -64,6 +64,11 @@
       "key": "secondaryApiKey",
       "value": "your-secondary-key-here",
       "type": "string"
+    },
+    {
+      "key": "unlistedApiKey",
+      "value": "not-a-configured-key",
+      "type": "string"
     }
   ],
   "item": [
@@ -742,7 +747,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{secondaryApiKey}}",
+                    "value": "{{unlistedApiKey}}",
                     "type": "text"
                   },
                   {
@@ -791,7 +796,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"error\": \"Forbidden: Invalid API key\",\n  \"code\": \"INVALID_API_KEY\"\n}"
+              "body": "{\n  \"error\": \"Forbidden: Invalid API key\"\n}"
             }
           ]
         },
