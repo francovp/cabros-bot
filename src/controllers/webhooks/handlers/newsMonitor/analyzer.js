@@ -31,6 +31,7 @@ const {
 } = require('../../../../services/notification/requestRouting');
 const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 
+
 const promptService = getPromptService();
 const CLASSIFIER_EVENT_INSTRUCTIONS = [
 	'Classify whether this asset headline describes a specific, material financial event.',
@@ -39,6 +40,8 @@ const CLASSIFIER_EVENT_INSTRUCTIONS = [
 	'regulatory means a law, regulator, or policy action affecting the asset or market.',
 	'none means the headline does not describe a material financial event.',
 ].join(' ');
+
+const markdownV2Formatter = new MarkdownV2Formatter();
 
 // Placeholder for NotificationManager - will be injected
 let notificationManager = null;
@@ -1959,7 +1962,7 @@ class NewsAnalyzer {
 		}
 
 		if (analysis.invalidation_hint && typeof analysis.invalidation_hint === 'string' && analysis.invalidation_hint.trim()) {
-			message += `Invalidación: ${analysis.invalidation_hint.trim()}\n`;
+			message += `Invalidación: ${markdownV2Formatter.format(analysis.invalidation_hint.trim())}\n`;
 		}
 
 		if (analysis.sources && Array.isArray(analysis.sources) && analysis.sources.length > 0) {
