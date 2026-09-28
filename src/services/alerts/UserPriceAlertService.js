@@ -220,6 +220,20 @@ function escapeMarkdownV2(text) {
 	return smartEscapeMarkdownV2(text);
 }
 
+// Accept a Firestore `Timestamp`, a `Date`, or an ISO string and return an ISO
+// string, so every read path exposes one consistent shape.
+function normalizeFirestoreTimestamp(value) {
+	if (value === undefined || value === null) return null;
+	if (typeof value === 'string') return value;
+	if (value instanceof Date) return value.toISOString();
+	if (typeof value.toDate === 'function') {
+		const date = value.toDate();
+		return date instanceof Date ? date.toISOString() : null;
+	}
+	const parsed = new Date(value);
+	return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
 class UserPriceAlertService {
 	constructor(options = {}) {
 		this.botGetter = options.botGetter || null;
@@ -529,9 +543,13 @@ class UserPriceAlertService {
 				const doc = await firestore.collection(COLLECTION_NAME).doc(alertId).get();
 				if (doc.exists) {
 					const data = doc.data() || {};
+					// Project timestamps to ISO strings, matching `listAlerts`, so
+					// callers never have to handle two different shapes.
 					return {
 						...data,
 						id: doc.id,
+						createdAt: normalizeFirestoreTimestamp(data.createdAt) || new Date().toISOString(),
+						expiresAt: normalizeFirestoreTimestamp(data.expiresAt),
 					};
 				}
 			} catch (err) {
@@ -593,9 +611,11 @@ class UserPriceAlertService {
 					'USER_PRICE_ALERT_PERSIST_UNAVAILABLE',
 				);
 			}
-		} else {
-			this._memoryAlerts.set(alertId, updatedData);
 		}
+
+		// Mirror the transition locally on both paths: `getAlert` is memory-first,
+		// so skipping this would leave a stale `armed` record for this replica.
+		this._memoryAlerts.set(alertId, updatedData);
 
 		return updatedData;
 	}
@@ -1058,13 +1078,20 @@ class UserPriceAlertService {
 			const sweep = this.activeSweepPromise;
 			const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 30000;
 			// Bound the drain so shutdown cannot hang on a stalled provider call.
-			await Promise.race([
-				sweep.catch(() => undefined),
-				new Promise((resolve) => {
-					const handle = setTimeout(resolve, timeoutMs);
-					if (typeof handle.unref === 'function') handle.unref();
-				}),
-			]);
+			let drainTimeout;
+			try {
+				await Promise.race([
+					sweep.catch(() => undefined),
+					new Promise((resolve) => {
+						drainTimeout = setTimeout(resolve, timeoutMs);
+						if (typeof drainTimeout.unref === 'function') drainTimeout.unref();
+					}),
+				]);
+			} finally {
+				// Clear the timer when the sweep wins the race, otherwise every
+				// shutdown leaves a dangling handle armed for the full budget.
+				clearTimeout(drainTimeout);
+			}
 		}
 	}
 }

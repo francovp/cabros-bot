@@ -570,13 +570,81 @@ describe('UserPriceAlertService - Unit Tests', () => {
 			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
 			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'X', price: 1, assetClass: 'crypto' });
 
+			// Track which document each sweep actually scanned.
+			const scanned = [];
+			const fetchSpy = jest.spyOn(service, '_fetchCurrentPrice').mockImplementation(async (query) => {
+				scanned.push(query.symbol);
+				return { symbol: query.symbol, price: 1, assetClass: 'crypto' };
+			});
+			void fetchSpy;
+
 			const first = await service.evaluateAlerts();
+			const cursorAfterFirst = service._lastScannedDocId;
 			const second = await service.evaluateAlerts();
+			const cursorAfterSecond = service._lastScannedDocId;
 
 			expect(first.evaluatedCount).toBe(1);
 			expect(second.evaluatedCount).toBe(1);
-			// Each sweep must advance to a different document.
-			expect(service._lastScannedDocId).not.toBe(null);
+			// The cursor must ADVANCE, not merely be non-null: a fixed `.limit()`
+			// without rotation would return the same document forever.
+			expect(cursorAfterFirst).toBe('alert_aaa');
+			expect(cursorAfterSecond).toBe('alert_bbb');
+			expect(scanned).toEqual(['BTCUSDT', 'ETHUSDT']);
+		});
+
+		it('wraps the cursor back to the start after reaching the end of the collection', async () => {
+			process.env.USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT = '1';
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					alert_aaa: { chatId: 'c', symbol: 'BTCUSDT', operator: '>', targetPrice: 1e12, status: 'armed' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			jest.spyOn(service, '_fetchCurrentPrice').mockResolvedValue({ symbol: 'X', price: 1, assetClass: 'crypto' });
+
+			await service.evaluateAlerts();
+			expect(service._lastScannedDocId).toBe('alert_aaa');
+			// Nothing after the cursor: the next sweep must restart the rotation
+			// instead of spinning forever on an exhausted cursor.
+			await service.evaluateAlerts();
+			expect(service._lastScannedDocId).toBeNull();
+		});
+
+		it('mirrors a durable cancel into memory so getAlert is not stale', async () => {
+			const alertId = 'alert_cancel1';
+			const db = createMockFirestore({
+				userPriceAlerts: {
+					[alertId]: { chatId: 'chat-cancel', symbol: 'BTCUSDT', operator: '>', targetPrice: 100, status: 'armed' },
+				},
+			});
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+
+			await service.cancelAlert({ chatId: 'chat-cancel', alertId });
+
+			// getAlert is memory-first; a stale `armed` mirror would re-report a
+			// cancelled alert as active.
+			const after = await service.getAlert(alertId);
+			expect(after.status).toBe('cancelled');
+			expect(after.cancelledAt).toBeDefined();
+		});
+
+		it('projects durable timestamps to ISO strings in getAlert', async () => {
+			const alertId = 'alert_ts01';
+			const db = createMockFirestore();
+			jest.spyOn(alertStorageService, 'getFirestore').mockReturnValue(db);
+			const created = await service.createAlert({
+				chatId: 'chat-ts',
+				symbol: 'BTCUSDT',
+				operator: '<',
+				targetPrice: 60000,
+			});
+			// Drop the local mirror so getAlert must read the durable record.
+			service._memoryAlerts.delete(created.id);
+
+			const read = await service.getAlert(created.id);
+			expect(typeof read.expiresAt).toBe('string');
+			expect(Number.isNaN(new Date(read.expiresAt).getTime())).toBe(false);
+			expect(typeof read.createdAt).toBe('string');
 		});
 
 		it('escapes MarkdownV2 reserved characters in the delivered notification', async () => {
