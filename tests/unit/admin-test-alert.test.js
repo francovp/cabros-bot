@@ -84,10 +84,15 @@ describe('Admin Test Alert Controller Unit Tests', () => {
 		await handler(req, res);
 
 		expect(res.status).toHaveBeenCalledWith(403);
-		expect(res.data).toEqual({
+		expect(res.data).toEqual(expect.objectContaining({
 			error: 'Test alert endpoint is disabled',
 			code: 'FEATURE_DISABLED',
-		});
+		}));
+		expect(res.data).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('enforces 60-second rate limit per admin caller with Retry-After header', async () => {
@@ -386,10 +391,15 @@ describe('Admin Test Alert Controller Unit Tests', () => {
 			await handler(req, invalidRes);
 
 			expect(invalidRes.status).toHaveBeenCalledWith(400);
-			expect(invalidRes.data).toEqual({
+			expect(invalidRes.data).toEqual(expect.objectContaining({
 				error: 'dryRun must be a boolean',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(invalidRes.data).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		}
 	});
 
@@ -399,10 +409,15 @@ describe('Admin Test Alert Controller Unit Tests', () => {
 		await handler(req, res);
 
 		expect(res.status).toHaveBeenCalledWith(400);
-		expect(res.data).toEqual({
+		expect(res.data).toEqual(expect.objectContaining({
 			error: 'includeEnrichment must be a boolean',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(res.data).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('rejects invalid dryRun query parameters with 400 Bad Request', async () => {
@@ -412,10 +427,15 @@ describe('Admin Test Alert Controller Unit Tests', () => {
 		await handler(req, res);
 
 		expect(res.status).toHaveBeenCalledWith(400);
-		expect(res.data).toEqual({
+		expect(res.data).toEqual(expect.objectContaining({
 			error: 'dryRun query parameter must be a boolean',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(res.data).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('marks live probe delivery as ineligible for redrive to prevent duplicate stale deliveries', async () => {

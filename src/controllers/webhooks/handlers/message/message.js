@@ -1,4 +1,5 @@
 require('dotenv').config();
+const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const {
 	getNotificationManager,
@@ -61,7 +62,7 @@ function postMessage(botOrGetter) {
 				}
 
 				if (!notificationManager) {
-					return res.status(503).json({
+					return sendErrorFrom(res, 503, {
 						success: false,
 						error: 'Notification services not initialized',
 						requestId,
@@ -101,7 +102,7 @@ function postMessage(botOrGetter) {
 			}).catch(() => {});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(error.statusCode).json({
+				return sendErrorFrom(res, error.statusCode, {
 					success: false,
 					error: error.message,
 					details: error.details,

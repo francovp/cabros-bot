@@ -2,6 +2,7 @@
 
 const sentryService = require('../../services/monitoring/SentryService');
 const { chatPreferenceService } = require('../../services/preferences/ChatPreferenceService');
+const { sendErrorFrom, STANDARD_ERROR_CODES } = require('../../lib/errorEnvelope');
 
 const VALID_CHANNELS = new Set(['telegram', 'whatsapp', 'discord']);
 
@@ -29,7 +30,7 @@ async function getPreferencesHandler(req, res) {
 	try {
 		const { channel, chatId, error } = validateChannelAndChatId(req.params);
 		if (error) {
-			return res.status(400).json({ success: false, error });
+			return sendErrorFrom(res, 400, { error, code: STANDARD_ERROR_CODES.INVALID_REQUEST });
 		}
 
 		const data = await chatPreferenceService.getPreferences(chatId, channel);
@@ -41,7 +42,7 @@ async function getPreferencesHandler(req, res) {
 			error: err,
 			extra: { endpoint: 'getPreferencesHandler', params: req.params },
 		});
-		return res.status(500).json({ success: false, error: 'Error al obtener preferencias.' });
+		return sendErrorFrom(res, 500, { error: 'Error al obtener preferencias.', code: STANDARD_ERROR_CODES.INTERNAL_ERROR });
 	} finally {
 		sentryService.endSpan(span);
 	}
@@ -56,11 +57,14 @@ async function putPreferencesHandler(req, res) {
 	try {
 		const { channel, chatId, error } = validateChannelAndChatId(req.params);
 		if (error) {
-			return res.status(400).json({ success: false, error });
+			return sendErrorFrom(res, 400, { error, code: STANDARD_ERROR_CODES.INVALID_REQUEST });
 		}
 
 		if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
-			return res.status(400).json({ success: false, error: 'El cuerpo de la petición debe ser un objeto JSON.' });
+			return sendErrorFrom(res, 400, {
+				error: 'El cuerpo de la petición debe ser un objeto JSON.',
+				code: STANDARD_ERROR_CODES.INVALID_REQUEST,
+			});
 		}
 
 		const data = await chatPreferenceService.setPreferences(chatId, channel, req.body);
@@ -72,7 +76,7 @@ async function putPreferencesHandler(req, res) {
 			error: err,
 			extra: { endpoint: 'putPreferencesHandler', params: req.params },
 		});
-		return res.status(500).json({ success: false, error: 'Error al actualizar preferencias.' });
+		return sendErrorFrom(res, 500, { error: 'Error al actualizar preferencias.', code: STANDARD_ERROR_CODES.INTERNAL_ERROR });
 	} finally {
 		sentryService.endSpan(span);
 	}
@@ -87,7 +91,7 @@ async function deletePreferencesHandler(req, res) {
 	try {
 		const { channel, chatId, error } = validateChannelAndChatId(req.params);
 		if (error) {
-			return res.status(400).json({ success: false, error });
+			return sendErrorFrom(res, 400, { error, code: STANDARD_ERROR_CODES.INVALID_REQUEST });
 		}
 
 		await chatPreferenceService.deletePreferences(chatId, channel);
@@ -102,7 +106,7 @@ async function deletePreferencesHandler(req, res) {
 			error: err,
 			extra: { endpoint: 'deletePreferencesHandler', params: req.params },
 		});
-		return res.status(500).json({ success: false, error: 'Error al eliminar preferencias.' });
+		return sendErrorFrom(res, 500, { error: 'Error al eliminar preferencias.', code: STANDARD_ERROR_CODES.INTERNAL_ERROR });
 	} finally {
 		sentryService.endSpan(span);
 	}

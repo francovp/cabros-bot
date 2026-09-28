@@ -5,6 +5,7 @@
  * 003-news-monitor: User Story 1 (endpoint & analysis), User Story 2 (alert delivery)
  */
 
+const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { getAnalyzer, setNotificationManager } = require('./analyzer');
 const { getCacheInstance } = require('./cache');
 const { AnalysisStatus } = require('./constants');
@@ -69,7 +70,7 @@ class NewsMonitorHandler {
 
 			// Check feature flag
 			if (process.env.ENABLE_NEWS_MONITOR !== 'true') {
-				return res.status(403).json({
+				return sendErrorFrom(res, 403, {
 					error: 'News monitor feature is disabled. Set ENABLE_NEWS_MONITOR=true to enable.',
 					code: 'FEATURE_DISABLED',
 					requestId,
@@ -78,7 +79,7 @@ class NewsMonitorHandler {
 
 			if (isNewsMonitorPaused()) {
 				const pauseState = getNewsMonitorPauseState();
-				return res.status(503).json({
+				return sendErrorFrom(res, 503, {
 					error: pauseState.reason
 						? `News monitor analysis is temporarily paused: ${pauseState.reason}`
 						: 'News monitor analysis is temporarily paused.',
@@ -103,7 +104,7 @@ class NewsMonitorHandler {
 				: allSymbols;
 			const validationError = this.validateRequest(symbolsToAnalyze);
 			if (validationError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: validationError,
 					code: 'INVALID_REQUEST',
 					requestId,
@@ -114,7 +115,7 @@ class NewsMonitorHandler {
 
 			console.info('[NewsMonitor] Analyzing symbols:', symbolsToAnalyze);
 			if (symbolsToAnalyze.length === 0) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: 'No symbols to analyze. Provide crypto/stocks or set env defaults.',
 					code: 'NO_SYMBOLS',
 					requestId,
@@ -292,7 +293,7 @@ class NewsMonitorHandler {
 			return;
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: 'INVALID_REQUEST',
 					requestId,
@@ -316,7 +317,7 @@ class NewsMonitorHandler {
 				},
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',
 				requestId,
@@ -472,7 +473,7 @@ class NewsMonitorHandler {
 	async handleSummary(req, res) {
 		try {
 			if (!newsAnalysisStorageService.isEnabled()) {
-				return res.status(403).json({
+				return sendErrorFrom(res, 403, {
 					error: 'News analysis storage feature is disabled. Set ENABLE_FIRESTORE_NEWS_ANALYSIS=true to enable.',
 					code: 'FEATURE_DISABLED',
 				});
@@ -483,7 +484,7 @@ class NewsMonitorHandler {
 			let parsedFrom;
 			if (from !== undefined) {
 				if (typeof from !== 'string' || !from.trim() || Number.isNaN(Date.parse(from))) {
-					return res.status(400).json({
+					return sendErrorFrom(res, 400, {
 						error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
 						code: 'INVALID_REQUEST',
 					});
@@ -494,7 +495,7 @@ class NewsMonitorHandler {
 			let parsedTo;
 			if (to !== undefined) {
 				if (typeof to !== 'string' || !to.trim() || Number.isNaN(Date.parse(to))) {
-					return res.status(400).json({
+					return sendErrorFrom(res, 400, {
 						error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
 						code: 'INVALID_REQUEST',
 					});
@@ -506,7 +507,7 @@ class NewsMonitorHandler {
 			if (limit !== undefined) {
 				const n = Number(limit);
 				if (!Number.isInteger(n) || n < 1 || n > 1000) {
-					return res.status(400).json({
+					return sendErrorFrom(res, 400, {
 						error: 'Invalid limit. Use an integer between 1 and 1000.',
 						code: 'INVALID_REQUEST',
 					});
@@ -518,7 +519,7 @@ class NewsMonitorHandler {
 			if (threshold !== undefined) {
 				const th = Number(threshold);
 				if (!Number.isFinite(th) || th < 0 || th > 1) {
-					return res.status(400).json({
+					return sendErrorFrom(res, 400, {
 						error: 'Invalid threshold. Use a number between 0 and 1.',
 						code: 'INVALID_REQUEST',
 					});
@@ -539,19 +540,19 @@ class NewsMonitorHandler {
 			return res.status(200).json(summary);
 		} catch (error) {
 			if (error && error.code === 'FEATURE_DISABLED') {
-				return res.status(403).json({
+				return sendErrorFrom(res, 403, {
 					error: error.message,
 					code: 'FEATURE_DISABLED',
 				});
 			}
 			if (error && error.code === 'STORAGE_UNAVAILABLE') {
-				return res.status(503).json({
+				return sendErrorFrom(res, 503, {
 					error: error.message,
 					code: 'STORAGE_UNAVAILABLE',
 				});
 			}
 			console.error('[NewsMonitor] Error in handleSummary:', error);
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error while summarizing news analyses.',
 				code: 'INTERNAL_ERROR',
 			});
@@ -564,7 +565,7 @@ class NewsMonitorHandler {
 	async handleListAnalyses(req, res) {
 		try {
 			if (!newsAnalysisStorageService.isEnabled()) {
-				return res.status(403).json({
+				return sendErrorFrom(res, 403, {
 					error: 'News analysis storage feature is disabled. Set ENABLE_FIRESTORE_NEWS_ANALYSIS=true to enable.',
 					code: 'FEATURE_DISABLED',
 				});
@@ -575,7 +576,7 @@ class NewsMonitorHandler {
 			let parsedFrom;
 			if (from !== undefined) {
 				if (typeof from !== 'string' || !from.trim() || Number.isNaN(Date.parse(from))) {
-					return res.status(400).json({
+					return sendErrorFrom(res, 400, {
 						error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
 						code: 'INVALID_REQUEST',
 					});
@@ -586,7 +587,7 @@ class NewsMonitorHandler {
 			let parsedTo;
 			if (to !== undefined) {
 				if (typeof to !== 'string' || !to.trim() || Number.isNaN(Date.parse(to))) {
-					return res.status(400).json({
+					return sendErrorFrom(res, 400, {
 						error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
 						code: 'INVALID_REQUEST',
 					});
@@ -598,7 +599,7 @@ class NewsMonitorHandler {
 			if (limit !== undefined) {
 				const n = Number(limit);
 				if (!Number.isInteger(n) || n < 1 || n > 100) {
-					return res.status(400).json({
+					return sendErrorFrom(res, 400, {
 						error: 'Invalid limit. Use an integer between 1 and 100.',
 						code: 'INVALID_REQUEST',
 					});
@@ -622,19 +623,19 @@ class NewsMonitorHandler {
 			return res.status(200).json(result);
 		} catch (error) {
 			if (error && error.code === 'FEATURE_DISABLED') {
-				return res.status(403).json({
+				return sendErrorFrom(res, 403, {
 					error: error.message,
 					code: 'FEATURE_DISABLED',
 				});
 			}
 			if (error && error.code === 'STORAGE_UNAVAILABLE') {
-				return res.status(503).json({
+				return sendErrorFrom(res, 503, {
 					error: error.message,
 					code: 'STORAGE_UNAVAILABLE',
 				});
 			}
 			console.error('[NewsMonitor] Error in handleListAnalyses:', error);
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error while listing news analyses.',
 				code: 'INTERNAL_ERROR',
 			});

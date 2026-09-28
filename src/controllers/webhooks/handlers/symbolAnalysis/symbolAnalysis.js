@@ -1,5 +1,6 @@
 /* global AbortController */
 
+const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
@@ -172,7 +173,7 @@ function postSymbolAnalysis() {
 				} catch (monitoringError) {
 					console.warn('[SymbolAnalysis] Sentry timeout capture failed:', monitoringError.message);
 				}
-				return res.status(504).json({
+				return sendErrorFrom(res, 504, {
 					success: false,
 					error: 'Symbol analysis timed out.',
 					code: 'SYMBOL_ANALYSIS_TIMEOUT',
@@ -193,7 +194,7 @@ function postSymbolAnalysis() {
 				} catch (monitoringError) {
 					console.warn('[SymbolAnalysis] Sentry capture failed:', monitoringError.message);
 				}
-				return res.status(502).json({
+				return sendErrorFrom(res, 502, {
 					success: false,
 					error: error.message,
 					code: 'SYMBOL_ANALYSIS_FAILED',
@@ -207,7 +208,7 @@ function postSymbolAnalysis() {
 				error,
 				http: { endpoint: '/api/webhook/symbol-analysis', method: 'POST', statusCode: 500, requestId },
 			});
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				success: false,
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',

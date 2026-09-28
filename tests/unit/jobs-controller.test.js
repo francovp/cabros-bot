@@ -111,11 +111,16 @@ describe('Jobs Controller Unit Tests', () => {
 			await postCreateJob(null)(req, res);
 
 			expect(res.statusCode).toBe(503);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Queue acceptance is unknown',
 				code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
 				jobId: 'job-123',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 500 and records error to Sentry on unexpected throw', async () => {
@@ -167,10 +172,15 @@ describe('Jobs Controller Unit Tests', () => {
 			await getJobStatus(req, res);
 
 			expect(res.statusCode).toBe(404);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				success: false,
 				error: 'Job not found',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 200 and job details if job exists', async () => {
