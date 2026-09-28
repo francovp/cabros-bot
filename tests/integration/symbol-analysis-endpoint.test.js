@@ -121,6 +121,8 @@ describe('Symbol analysis endpoint', () => {
 		expect(res.body).not.toHaveProperty('deliveryResults');
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.alertText).toContain('*Target sugerido:*');
 		expect(res.body.alertText).toContain('*Risk/Reward:*');
@@ -147,6 +149,8 @@ describe('Symbol analysis endpoint', () => {
 		expect(res.body).toEqual(expect.objectContaining({ code: 'INVALID_REQUEST' }));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
 	});
@@ -166,6 +170,8 @@ describe('Symbol analysis endpoint', () => {
 		}));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(sentryService.captureRuntimeError).toHaveBeenCalledWith(expect.objectContaining({
 			http: expect.objectContaining({ endpoint: '/api/webhook/symbol-analysis', statusCode: 502 }),
@@ -229,6 +235,8 @@ describe('Symbol analysis endpoint', () => {
 		}));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(sentryService.captureRuntimeError).toHaveBeenCalledWith(expect.objectContaining({
 			http: expect.objectContaining({ endpoint: '/api/webhook/symbol-analysis', statusCode: 504 }),

@@ -36,6 +36,7 @@ const {
 } = require('./webhooks/handlers/newsMonitor/pauseState');
 const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTracker');
 const { getSelfTestService } = require('./diagnostics/selftest');
+const telegramCommandAuth = require('../lib/telegramCommandAuth');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -416,6 +417,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			tokenCostBudget: tokenCostBudgetService.isEnabled(),
 			signalClassMarker: signalClassMarkerEnabled,
 			maintenanceMode: isMaintenanceModeEnabled(),
+			telegramCommandAuth: telegramCommandAuth.getStatus().enabled,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -536,6 +538,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			},
 			tokenCostBudget: tokenCostBudgetService.getBudgetStatus(),
 			selfTest: getSelfTestService().getStatus(),
+			telegramCommandAuth: telegramCommandAuth.getStatus(),
 		},
 	};
 }

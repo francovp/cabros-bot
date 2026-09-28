@@ -64,6 +64,8 @@ describe('Volume confirmation endpoint', () => {
 		}));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(tradingViewMcpService.callVolumeConfirmation).toHaveBeenCalledWith({
 			symbol: 'BTCUSDT',
@@ -85,6 +87,8 @@ describe('Volume confirmation endpoint', () => {
 		}));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.error).toContain('EXCHANGE:SYMBOL');
 		expect(tradingViewMcpService.callVolumeConfirmation).not.toHaveBeenCalled();
@@ -106,6 +110,8 @@ describe('Volume confirmation endpoint', () => {
 		}));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 	});
 
