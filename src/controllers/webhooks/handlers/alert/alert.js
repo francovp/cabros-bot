@@ -18,16 +18,25 @@ const {
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
 	validateNotificationRouting,
+	assertChannelsAvailable,
 	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
 const { signalFlipGuard, buildFlipKey } = require('../../../../services/alerts/signalFlipGuard');
+const { alertModeration } = require('../../../../services/alerts/alertModeration');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
+const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
+const {
+	buildErrorEnvelope,
+	sendError,
+	STANDARD_ERROR_CODES,
+} = require('../../../../lib/errorEnvelope');
 
 // Initialize services
 let notificationManager = null;
@@ -79,6 +88,37 @@ function resolveBot(botOrGetter) {
 	}
 
 	return botOrGetter || null;
+}
+
+function getFirstTelegramMessageId(result) {
+	const rawMessageId = Array.isArray(result?.messageIds)
+		? result.messageIds[0]
+		: (typeof result?.messageId === 'string' ? result.messageId.split(',')[0] : result?.messageId);
+	if (rawMessageId === undefined || rawMessageId === null || rawMessageId === '') return null;
+	const numericMessageId = Number(rawMessageId);
+	return Number.isSafeInteger(numericMessageId) ? numericMessageId : rawMessageId;
+}
+
+async function attachInlineKeyboardAfterPersistence({ manager, results, routing, replyMarkup }) {
+	if (!replyMarkup || !Array.isArray(results)) return;
+	const telegramResult = results.find((result) => result?.channel === 'telegram' && result.success);
+	const messageId = getFirstTelegramMessageId(telegramResult);
+	const telegramService = manager?.channels?.get?.('telegram');
+	const editMessageReplyMarkup = telegramService?.bot?.telegram?.editMessageReplyMarkup;
+	const chatId = routing?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+	if (!messageId || !chatId || typeof editMessageReplyMarkup !== 'function') return;
+
+	try {
+		await editMessageReplyMarkup.call(
+			telegramService.bot.telegram,
+			chatId,
+			messageId,
+			undefined,
+			replyMarkup,
+		);
+	} catch (error) {
+		console.warn('[Alert] Failed to attach inline keyboard after persistence:', error.message);
+	}
 }
 
 async function processEnrichment(alert, options) {
@@ -137,17 +177,6 @@ async function processEnrichment(alert, options) {
 	}
 
 	return enriched;
-}
-
-function resolveRequestId(req) {
-	const raw = req && req.headers && (req.headers['x-request-id'] || req.headers['X-Request-Id'] || req.headers['x-request-ID']);
-	if (typeof raw === 'string') {
-		const trimmed = raw.trim();
-		if (trimmed.length > 0 && trimmed.length <= 128 && /^[\x21-\x7E]+$/.test(trimmed)) {
-			return trimmed;
-		}
-	}
-	return uuidv4();
 }
 
 function resolveDryRun(req) {
@@ -239,6 +268,26 @@ function getChannelName(identity) {
 	return String(identity).split(':', 1)[0];
 }
 
+function resolveSignalOutcomePriceSource(enriched, parsed) {
+	const explicitSource = typeof enriched?.priceSource === 'string'
+		? enriched.priceSource.trim().toLowerCase()
+		: '';
+	if (explicitSource && explicitSource !== 'derived-quote') {
+		return explicitSource;
+	}
+
+	if (enriched?.tradingViewEnrichmentApplied === true
+		|| ['full', 'partial'].includes(enriched?.tradingViewEnrichmentStatus)) {
+		return 'tradingview-mcp';
+	}
+
+	if (enriched?.levelsSource === 'derived-quote') {
+		return (parsed?.exchange || 'BINANCE') === 'BINANCE' ? 'binance' : 'twelve-data';
+	}
+
+	return enriched?.levelsSource === 'gemini-grounding' ? 'gemini-grounding' : 'tradingview-mcp';
+}
+
 function postAlert(botOrGetter) {
 	return async (req, res) => {
 		const requestId = resolveRequestId(req);
@@ -260,11 +309,48 @@ function postAlert(botOrGetter) {
 				alertText = body;
 			}
 
-			const { text } = validateAlert(alertText);
+			const rawSignalClass = (typeof body === 'object' && body && 'signalClass' in body)
+				? body.signalClass
+				: req.query?.signalClass;
+
+			const { text, signalClass } = validateAlert(
+				alertText,
+				typeof body === 'object' ? body.metadata : undefined,
+				rawSignalClass,
+			);
 			const source = (typeof body === 'object' && body && typeof body.source === 'string' && body.source.trim())
 				? body.source.trim()
 				: 'webhook-alert';
-			alert = { text, source };
+			alert = { text, source, signalClass };
+
+			if (alertModeration.isEnabled()) {
+				alertModeration.refreshConfig();
+				const verdict = alertModeration.evaluate(alert.text, { requestId });
+				if (verdict && verdict.rejected === true) {
+					console.warn(`[Alert] Moderation rejected payload (reason=${verdict.reason}, requestId=${requestId})`);
+					return res.json({
+						success: true,
+						delivered: false,
+						reason: 'moderation_rejected',
+						moderationReason: verdict.reason,
+						requestId,
+					});
+				}
+		}
+
+			// Fail-fast channel availability check (GH-854): when the caller
+			// explicitly requests channels, validate they are enabled and
+			// configured BEFORE spending Gemini/TradingView MCP enrichment
+			// budget. The notification manager is initialized eagerly here so
+			// the availability check can resolve the enabled-channel set;
+			// delivery still uses the same singleton.
+			if (routing.channels) {
+				const bot = resolveBot(botOrGetter);
+				if (!notificationManager) {
+					await initializeNotificationServices(bot);
+				}
+				assertChannelsAvailable(notificationManager, routing);
+			}
 
 			const tokenUsage = new TokenUsageTracker();
 			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan });
@@ -289,6 +375,7 @@ function postAlert(botOrGetter) {
 					payload: {
 						text: alert.text,
 						enrichedData: alert.enriched || null,
+						signalClass: alert.signalClass,
 					},
 					flipContext: alert.flipContext || undefined,
 					tokenUsage: tokenUsageJSON,
@@ -382,6 +469,35 @@ function postAlert(botOrGetter) {
 			}
 
 			let results;
+			// Inline keyboard markup is opt-in: only when alert storage is
+			// enabled (so /api/alerts/:alertId/replay can resolve the alert
+			// after the user clicks "Replay") and the Telegram channel is
+			// actually selected for delivery. The alertId is generated
+			// synchronously so it can be embedded in the markup callback_data
+			// before the message is sent.
+			let inlineAlertId = null;
+			let inlineReplyMarkup = null;
+			try {
+				const storageEnabled = typeof alertStorageService.isEnabled === 'function'
+					&& alertStorageService.isEnabled();
+				const telegramEnabled = process.env.ENABLE_TELEGRAM_BOT === 'true';
+				const telegramRequested = requestedChannels.length === 0
+					|| requestedChannels.includes('telegram');
+				if (storageEnabled && telegramEnabled && telegramRequested && !suppressedRepeat) {
+					inlineAlertId = uuidv4();
+					const replyMarkup = buildReplyMarkup({
+						alertId: inlineAlertId,
+						hasEnrichment: Boolean(alert.enriched),
+						includeReplay: true,
+					});
+					if (replyMarkup) {
+						inlineReplyMarkup = replyMarkup;
+					}
+				}
+			} catch (error) {
+				console.warn('[Alert] Failed to attach inline keyboard markup:', error.message);
+				inlineAlertId = null;
+			}
 			try {
 				results = suppressedRepeat
 					? []
@@ -502,7 +618,7 @@ function postAlert(botOrGetter) {
 
 			// Fire-and-forget: persist alert to Firestore after responding to the caller.
 			// Errors are caught inside saveAlert — delivery is never blocked by storage.
-			alertStorageService.saveAlert({
+			const saveAlertPromise = alertStorageService.saveAlert({
 				requestId,
 				text: alert.text,
 				symbol: extracted.symbol !== 'unknown' ? extracted.symbol : null,
@@ -518,15 +634,27 @@ function postAlert(botOrGetter) {
 				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
 				suppressedRepeat,
 				flipContext: alert.flipContext || undefined,
+				signalClass: alert.signalClass,
 				source: body.source || 'webhook-alert',
 				telegramChatId: routing.telegramChatId,
 				telegramThreadId: routing.telegramThreadId,
 				whatsappChatId: routing.whatsappChatId,
 				discordWebhookUrl: routing.discordWebhookUrl,
-			}).catch(() => {}); // errors already logged inside AlertStorageService
+				alertId: inlineAlertId || undefined,
+			});
+			Promise.resolve(saveAlertPromise)
+				.then((storedAlertId) => {
+					if (!storedAlertId) return null;
+					return attachInlineKeyboardAfterPersistence({
+						manager: notificationManager,
+						results,
+						routing,
+						replyMarkup: inlineReplyMarkup,
+					});
+				})
+				.catch(() => {}); // errors already logged inside AlertStorageService
 
 			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
-				const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
 				const parsed = parseTradingViewSignal(alert.text);
 				if (parsed) {
 					const mcpPrice = (alert.enriched && typeof alert.enriched.current_price === 'number' && Number.isFinite(alert.enriched.current_price) && alert.enriched.current_price > 0)
@@ -547,9 +675,8 @@ function postAlert(botOrGetter) {
 							? Number(alert.enriched.target_level)
 							: null);
 
-					const levelsSource = alert.enriched && alert.enriched.levelsSource;
 					const priceSource = mcpPrice !== null
-						? (levelsSource === 'derived-quote' ? 'derived-quote' : (levelsSource === 'gemini-grounding' ? 'gemini-grounding' : 'tradingview-mcp'))
+						? resolveSignalOutcomePriceSource(alert.enriched, parsed)
 						: null;
 
 					signalOutcomeService.recordSignal({
@@ -560,6 +687,11 @@ function postAlert(botOrGetter) {
 						timeframe: parsed.timeframe,
 						setupType: (alert.enriched && alert.enriched.setup_type) || 'tradingview-enrichment',
 						score: alert.enriched ? alert.enriched.sentiment_score : null,
+						confidenceScore: (typeof alert.enriched?.confidence === 'number' && Number.isFinite(alert.enriched.confidence) && alert.enriched.confidence >= 0 && alert.enriched.confidence <= 1)
+							? alert.enriched.confidence
+							: (typeof alert.enriched?.sentiment_score === 'number' && Number.isFinite(alert.enriched.sentiment_score) && Math.abs(alert.enriched.sentiment_score) <= 1
+								? Math.abs(alert.enriched.sentiment_score)
+								: null),
 						side: parsed.side,
 						price: mcpPrice,
 						stop: stopLevel,
@@ -573,37 +705,50 @@ function postAlert(botOrGetter) {
 			}
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(error.statusCode).json({
-					success: false,
+				return sendError(res, error.statusCode, {
 					error: error.message,
-					details: error.details,
+					code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 					requestId,
+					details: error.details,
 				});
 			}
 
-			console.error('[Alert] Request failed:', error.message);
+			const status = (error.response && error.response.error_code) || error.statusCode || 500;
+			const isClientError = status >= 400 && status < 500;
 
-			// Capture runtime error to Sentry (T012)
-			sentryService.captureRuntimeError({
-				channel: 'http-alert',
-				error,
-				http: {
-					endpoint: '/api/webhook/alert',
-					method: 'POST',
-					statusCode: (error.response && error.response.error_code) || 500,
-					requestId,
-				},
-				alert: {
-					textLength: alertText ? alertText.length : 0,
-					hasEnrichment: !!(alert && alert.enriched),
-					enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
-					truncated: false,
-				},
+			if (!isClientError) {
+				console.error('[Alert] Request failed:', error.message);
+
+				// Capture runtime error to Sentry (T012)
+				sentryService.captureRuntimeError({
+					channel: 'http-alert',
+					error,
+					http: {
+						endpoint: '/api/webhook/alert',
+						method: 'POST',
+						statusCode: status,
+						requestId,
+					},
+					alert: {
+						textLength: alertText ? alertText.length : 0,
+						hasEnrichment: !!(alert && alert.enriched),
+						enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
+						truncated: false,
+					},
+				});
+			}
+
+			const upstreamEnvelope = error.response && typeof error.response === 'object'
+				? error.response
+				: null;
+			const envelope = buildErrorEnvelope({
+				error: (upstreamEnvelope && upstreamEnvelope.error) || error.message || 'Internal server error',
+				code: (upstreamEnvelope && upstreamEnvelope.code) || (status < 500 ? STANDARD_ERROR_CODES.INVALID_REQUEST : STANDARD_ERROR_CODES.INTERNAL_ERROR),
+				requestId,
+				statusCode: status,
+				details: (upstreamEnvelope && upstreamEnvelope.details) || undefined,
 			});
-
-			const status = (error.response && error.response.error_code) || 500;
-			const errorResponse = error.response || { error: 'Internal server error', details: error.message, requestId };
-			res.status(status).send(errorResponse);
+			res.status(status).json(envelope);
 		}
 	};
 }
@@ -612,6 +757,10 @@ module.exports = {
 	postAlert,
 	resolveRequestId,
 	initializeNotificationServices,
+	__resetNotificationManagerForTesting: () => {
+		notificationManager = null;
+	},
 	getNotificationManager,
 	getCooldownChannelIdentity,
+	processEnrichment,
 };

@@ -39,14 +39,25 @@ describe('News Monitor - Binance Integration (US4)', () => {
 
 		// Mock Gemini for symbol analysis
 		const gemini = require('../../src/services/grounding/gemini');
-		gemini.analyzeNewsForSymbol = jest.fn().mockResolvedValue({
-			event_category: 'price_surge',
-			event_significance: 0.7,
-			sentiment_score: 0.8,
-			headline: 'Bitcoin surges on positive news',
-			confidence: 0.74,
-			sources: ['https://example.com/news'],
-		});
+		if (typeof gemini.analyzeNewsForSymbol?.mockResolvedValue === 'function') {
+			gemini.analyzeNewsForSymbol.mockReset().mockResolvedValue({
+				event_category: 'price_surge',
+				event_significance: 0.7,
+				sentiment_score: 0.8,
+				headline: 'Bitcoin surges on positive news',
+				confidence: 0.74,
+				sources: ['https://example.com/news'],
+			});
+		} else {
+			gemini.analyzeNewsForSymbol = jest.fn().mockResolvedValue({
+				event_category: 'price_surge',
+				event_significance: 0.7,
+				sentiment_score: 0.8,
+				headline: 'Bitcoin surges on positive news',
+				confidence: 0.74,
+				sources: ['https://example.com/news'],
+			});
+		}
 
 		mockBot = {
 			telegram: {
