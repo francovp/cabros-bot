@@ -108,6 +108,29 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('documents valid and invalid per-symbol alert routing variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const valid = findItem(collection.item, 'POST Send Alert (per-symbol routing)');
+		const invalid = findItem(collection.item, 'POST Send Alert (invalid symbol route)');
+
+		expect(valid).toBeDefined();
+		expect(JSON.parse(valid.request.body.raw).symbolRoutes).toEqual({
+			BTCUSDT: { channels: ['telegram'] },
+			NVDA: { channels: ['discord'] },
+		});
+		expect(valid.response[0].body).toContain('"symbol":"BTCUSDT"');
+		expect(invalid).toBeDefined();
+		expect(JSON.parse(invalid.request.body.raw).symbolRoutes.BTCUSDT.channels).toEqual(['slack']);
+		expect(invalid.response[0].code).toBe(400);
+		// The nested channel validation reports `field: "channels"` (plus the unknown
+		// channel list), not the outer `symbolRoutes` field. This mirrors the real
+		// NotificationRoutingValidationError raised by normalizeChannels.
+		expect(JSON.parse(invalid.response[0].body).details).toEqual({
+			field: 'channels',
+			unknownChannels: ['slack'],
+		});
+	});
+
 	it('makes the oversized webhook example generate padding in Postman', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const oversized = findItem(collection.item, 'POST Send Message (oversized body)');
@@ -120,6 +143,7 @@ describe('Postman collection contract', () => {
 		expect(script).toContain('pm.variables.set(\'oversizedWebhookPadding\'');
 		expect(oversized.request.body.raw).toContain('{{oversizedWebhookPadding}}');
 		expect(oversized.request.body.raw).not.toContain('{{$padString}}');
+
 	});
 
 	it('uses distinct demo keys for middleware-backed scanner requests', () => {
@@ -657,43 +681,43 @@ describe('Postman collection contract', () => {
 });
 
 describe('news-monitor stop/target example (GH-712)', () => {
-		it('POST News Monitor success example includes a populated stop/target alert', () => {
-			const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
-			const postItem = findItem(collection.item, 'POST News Monitor');
-			expect(postItem).toBeDefined();
+	it('POST News Monitor success example includes a populated stop/target alert', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const postItem = findItem(collection.item, 'POST News Monitor');
+		expect(postItem).toBeDefined();
 
-			const successExample = postItem.response.find(
-				(response) => response.name === '200 OK - Analysis summary',
-			);
-			expect(successExample).toBeDefined();
+		const successExample = postItem.response.find(
+			(response) => response.name === '200 OK - Analysis summary',
+		);
+		expect(successExample).toBeDefined();
 
-			const body = JSON.parse(successExample.body);
-			const resultsWithBarriers = body.results.filter(
-				(result) => result.alert && typeof result.alert.stop === 'number' && typeof result.alert.target === 'number',
-			);
-			expect(resultsWithBarriers.length).toBeGreaterThanOrEqual(1);
+		const body = JSON.parse(successExample.body);
+		const resultsWithBarriers = body.results.filter(
+			(result) => result.alert && typeof result.alert.stop === 'number' && typeof result.alert.target === 'number',
+		);
+		expect(resultsWithBarriers.length).toBeGreaterThanOrEqual(1);
 
-			resultsWithBarriers.forEach((result) => {
-				expect(result.alert.stop).toBeGreaterThan(0);
-				expect(result.alert.target).toBeGreaterThan(result.alert.stop);
-			});
-
-			const resultsWithoutBarriers = body.results.filter(
-				(result) => result.alert && (result.alert.stop === undefined || result.alert.target === undefined),
-			);
-			expect(resultsWithoutBarriers.length).toBeGreaterThanOrEqual(1);
+		resultsWithBarriers.forEach((result) => {
+			expect(result.alert.stop).toBeGreaterThan(0);
+			expect(result.alert.target).toBeGreaterThan(result.alert.stop);
 		});
 
-		it('POST News Monitor (dry run) example includes a populated stop/target alert', () => {
-			const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
-			const dryRunItem = findItem(collection.item, 'POST News Monitor (dry run)');
-			expect(dryRunItem).toBeDefined();
-
-			const body = JSON.parse(dryRunItem.response[0].body);
-			const alert = body.results[0].alert;
-			expect(typeof alert.stop).toBe('number');
-			expect(typeof alert.target).toBe('number');
-			expect(alert.stop).toBeGreaterThan(0);
-			expect(alert.target).toBeGreaterThan(alert.stop);
-		});
+		const resultsWithoutBarriers = body.results.filter(
+			(result) => result.alert && (result.alert.stop === undefined || result.alert.target === undefined),
+		);
+		expect(resultsWithoutBarriers.length).toBeGreaterThanOrEqual(1);
 	});
+
+	it('POST News Monitor (dry run) example includes a populated stop/target alert', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const dryRunItem = findItem(collection.item, 'POST News Monitor (dry run)');
+		expect(dryRunItem).toBeDefined();
+
+		const body = JSON.parse(dryRunItem.response[0].body);
+		const alert = body.results[0].alert;
+		expect(typeof alert.stop).toBe('number');
+		expect(typeof alert.target).toBe('number');
+		expect(alert.stop).toBeGreaterThan(0);
+		expect(alert.target).toBeGreaterThan(alert.stop);
+	});
+});

@@ -1,4 +1,4 @@
-/* global jest, describe, it, beforeEach, afterEach, expect */
+/* global jest, describe, it, beforeEach, afterEach, expect, saveEnv, restoreEnv */
 
 const request = require('supertest');
 const app = require('../../app');
@@ -95,6 +95,53 @@ describe('Alert repeat suppression endpoint behavior', () => {
 
 		const stats = signalRepeatCooldown.getStats();
 		expect(stats.suppressedCount).toBe(1);
+	});
+
+	it('narrows symbol routes to the channels repeat suppression kept', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		// Two channels so repeat suppression narrows the request set instead of
+		// suppressing everything: the first request fails telegram (leaving it
+		// retryable) and succeeds on discord (reserving it), so on the retry
+		// telegram is available and discord is still cooling down.
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+		const mockFetch = jest.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ id: 'discord-message-id' }),
+		});
+		global.fetch = mockFetch;
+		// Telegram fails on the first request, then succeeds.
+		mockTelegramSendMessage
+			.mockRejectedValueOnce(new Error('telegram unavailable'))
+			.mockResolvedValue({ message_id: 'test-msg-id' });
+		await initializeNotificationServices(mockBot);
+
+		const body = {
+			text: SIGNAL_TEXT,
+			channels: ['telegram', 'discord'],
+			symbolRoutes: { ETHUSDT: { channels: ['telegram', 'discord'] } },
+		};
+
+		await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send(body)
+			.expect(200);
+
+		// Retry: discord is reserved, so only telegram is deliverable. The symbol
+		// route must be narrowed to that same subset; otherwise its own channel list
+		// re-sends to the cooling-down discord channel.
+		const second = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send(body)
+			.expect(200);
+
+		const discordSends = mockFetch.mock.calls.length;
+		expect(second.body.results.some((result) => result.channel === 'discord' && result.success))
+			.toBe(false);
+		// Only the first request's discord delivery should exist.
+		expect(discordSends).toBe(1);
 	});
 
 	it('keeps cooldown reservations independent for destination overrides', async () => {
