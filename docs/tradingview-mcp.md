@@ -32,6 +32,25 @@ When TradingView data is requested, `alert.enriched.tradingViewEnrichmentApplied
 - `W/1W -> 1W`
 - `M/1M -> 1M`
 
+### Exchange Alias Resolution (GH-591)
+
+The MCP server only resolves a fixed set of venues (crypto: `KUCOIN`, `BINANCE`, `BYBIT`, `MEXC`; stocks: `EGX`, `BIST`, `NASDAQ`, `NYSE`, `AMEX`, `NYSEARCA`, `PCX`, `BURSA`, `HKEX`, `SSE`, `SZSE`, `TWSE`, `TPEX`). Any other prefix is silently resolved to a crypto venue and the call answers `No data found for <SYMBOL> on KUCOIN` — a deterministic miss, not a transport failure.
+
+`resolveMcpExchange()` in `src/services/tradingview/parseTradingViewSignal.js` maps alert exchange prefixes to a venue the server actually serves. It is a closed, probe-verified lookup table evaluated **before** any suffix-shape inference, and it applies to **outbound MCP calls only**:
+
+| Alert prefix | Venue sent to MCP | Basis |
+| --- | --- | --- |
+| `BATS` | `NASDAQ` | `BATS:*` answers "no data on KUCOIN"; the same US large-cap symbols resolve on `NASDAQ` |
+| `NASDAQ_DLY` | `NASDAQ` | Same venue under the screener's delayed-data suffix |
+
+Two prefixes are deliberately **not** aliased. `FX_IDC` (FX spot) and `SPCFD` (index/CFD) have no equivalent venue on the MCP server — every candidate was probed live and all returned the same KUCOIN miss — so they keep the original prefix and degrade through the normal fail-open path rather than inventing a market.
+
+Alias resolution **never rewrites stored metadata**. The parsed signal, `deriveAssetContext()` classification (including the `FX_IDC`/futures neutrality the parser asserts), and every persisted `exchange` value keep the venue the screener actually sent. Only the outbound call argument changes, and the enrichment payload records it as `alert.enriched.exchange` (original), `alert.enriched.requestedExchange` (original), and `alert.enriched.requestedExchangeMappedTo` (alias target, omitted when no alias was applied).
+
+A `no data` / `symbol not found` response is treated as **terminal for that attempt**: `sendWithRetry()` receives a `shouldRetry` hook and the base analysis stops after a single attempt instead of burning the remaining `TRADINGVIEW_MCP_MAX_RETRIES` backoff. Genuine transport errors, timeouts, and HTTP 5xx responses still retry as before, and circuit-breaker semantics are unchanged.
+
+No new environment variable was added — the table is a code-level contract, not runtime tuning.
+
 ### Example Enrichment Flow
 
 **Request:**

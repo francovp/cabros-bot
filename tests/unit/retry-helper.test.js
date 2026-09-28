@@ -154,6 +154,49 @@ describe('retryHelper', () => {
 		});
 	});
 
+	describe('shouldRetry option', () => {
+		it('stops retrying when shouldRetry returns false and reports the attempts that ran', async () => {
+			const sendFn = jest.fn().mockResolvedValue({ success: false, channel: 'test', error: 'deterministic miss' });
+
+			const result = await sendWithRetry(sendFn, 3, null, {
+				shouldRetry: attemptResult => attemptResult?.deterministicNoData !== true,
+			});
+
+			expect(sendFn).toHaveBeenCalledTimes(3);
+			expect(result).toEqual(expect.objectContaining({
+				success: false,
+				attemptCount: 3,
+				error: 'deterministic miss',
+			}));
+		});
+
+		it('stops after the first attempt for a terminal result', async () => {
+			const sendFn = jest.fn().mockResolvedValue({ success: false, channel: 'test', error: 'no data', deterministicNoData: true });
+
+			const result = await sendWithRetry(sendFn, 3, null, {
+				shouldRetry: attemptResult => attemptResult?.deterministicNoData !== true,
+			});
+
+			expect(sendFn).toHaveBeenCalledTimes(1);
+			expect(result).toEqual(expect.objectContaining({
+				success: false,
+				attemptCount: 1,
+				error: 'no data',
+			}));
+		});
+
+		it('preserves default retry behavior when shouldRetry is omitted', async () => {
+			const sendFn = jest.fn()
+				.mockResolvedValueOnce({ success: false, channel: 'test', error: 'transient' })
+				.mockResolvedValue({ success: true, channel: 'test', data: 'ok' });
+
+			const result = await sendWithRetry(sendFn, 3, null, { maxRetryDelayMs: 0 });
+
+			expect(sendFn).toHaveBeenCalledTimes(2);
+			expect(result).toEqual(expect.objectContaining({ success: true, attemptCount: 2 }));
+		});
+	});
+
 	describe('sleep', () => {
 		it('should sleep for specified milliseconds', async () => {
 			const start = Date.now();

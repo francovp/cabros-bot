@@ -794,6 +794,63 @@
           }
         },
         {
+          "name": "POST Send Alert Dry Run (BATS exchange alias)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BATS:TSLA(D) cambió a señal de COMPRA\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert?useTradingViewData=true&dryRun=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ],
+              "query": [
+                {
+                  "key": "useTradingViewData",
+                  "value": "true"
+                },
+                {
+                  "key": "dryRun",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "BATS aliased to NASDAQ (200)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BATS:TSLA(D) cambi\\u00f3 a se\\u00f1al de COMPRA\",\"enrichedData\":{\"original_text\":\"BATS:TSLA(D) cambi\\u00f3 a se\\u00f1al de COMPRA\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"exchange\":\"BATS\",\"requestedExchange\":\"BATS\",\"requestedExchangeMappedTo\":\"NASDAQ\",\"current_price\":372.11,\"invalidation_level\":\"$340.00\",\"target_level\":\"$430.00\",\"setup_type\":\"trend_continuation\",\"risk_reward_ratio\":1.61,\"insights\":[\"Se\\u00f1al detectada: COMPRA para TSLA en 1D (NASDAQ)\"],\"sources\":[]}}}"
+            },
+            {
+              "name": "FX_IDC unsupported venue degrades (200)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"requestId\":\"req-12346\",\"dryRun\":true,\"enriched\":false,\"payload\":{\"text\":\"FX_IDC:USDCLP(D) cambi\\u00f3 a se\\u00f1al de VENTA\",\"enrichedData\":null},\"note\":\"FX_IDC has no equivalent venue on the MCP server, so it is not aliased; the request still returns 200 and delivery is unaffected.\"}"
+            }
+          ]
+        },
+        {
           "name": "POST Send Alert Dry Run (TradingView confluence)",
           "request": {
             "method": "POST",
