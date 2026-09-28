@@ -1083,9 +1083,9 @@ class NewsAnalyzer {
 					signal: options.signal,
 					deadline: options.analysisDeadline ?? options.deadline,
 				});
-				classifierDevChecked = Boolean(classified);
-				if (classified
-					&& Object.values(EventCategory).includes(classified.label)
+				const recognizedLabel = classified && Object.values(EventCategory).includes(classified.label);
+				classifierDevChecked = Boolean(recognizedLabel);
+				if (recognizedLabel
 					&& classified.label !== EventCategory.NONE
 					&& classified.confidence >= this.alertThreshold) {
 					geminiAnalysis.event_category = classified.label;
