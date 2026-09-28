@@ -155,16 +155,16 @@ function getApiKeyDigestSecret() {
 	return apiKeyDigestSecret;
 }
 
+function digestOf(value) {
+	const mac = crypto.createHmac('sha256', getApiKeyDigestSecret());
+	/* codeql[js/insufficient-password-hash] */
+	return mac.update(String(value), 'utf8').digest();
+}
+
 function matchesAnyApiKey(keyToCheck, candidates) {
 	if (typeof keyToCheck !== 'string' || !Array.isArray(candidates) || candidates.length === 0) {
 		return false;
 	}
-	/* codeql[js/insufficient-password-hash] */
-	const digestOf = (value) => crypto
-		/* codeql[js/insufficient-password-hash] */
-		.createHmac('sha256', getApiKeyDigestSecret())
-		.update(String(value), 'utf8')
-		.digest();
 	const bufferApiKey = digestOf(keyToCheck);
 	let matched = false;
 	for (const candidate of candidates) {
