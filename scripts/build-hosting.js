@@ -5,13 +5,13 @@
 const fs = require('fs');
 const path = require('path');
 
-const srcAdminDir = path.join(__dirname, '../src/admin');
-const publicDir = path.join(__dirname, '../public');
-const publicAdminDir = path.join(publicDir, 'admin');
+const defaultSrcAdminDir = path.join(__dirname, '../src/admin');
+const defaultPublicDir = path.join(__dirname, '../public');
 
-function buildHosting() {
+function buildHosting({ sourceAdminDir = defaultSrcAdminDir, publicDir = defaultPublicDir } = {}) {
+	const publicAdminDir = path.join(publicDir, 'admin');
 	// Pin the self-hosted runtime to the lockfile for Express and Firebase parity.
-	fs.copyFileSync(require.resolve('vue/dist/vue.runtime.global.prod.js'), path.join(srcAdminDir, 'vue.runtime.global.prod.js'));
+	fs.copyFileSync(require.resolve('vue/dist/vue.runtime.global.prod.js'), path.join(sourceAdminDir, 'vue.runtime.global.prod.js'));
 	if (!fs.existsSync(publicDir)) {
 		fs.mkdirSync(publicDir, { recursive: true });
 	}
@@ -19,9 +19,9 @@ function buildHosting() {
 		fs.mkdirSync(publicAdminDir, { recursive: true });
 	}
 
-	const files = fs.readdirSync(srcAdminDir);
+	const files = fs.readdirSync(sourceAdminDir);
 	for (const file of files) {
-		const srcFile = path.join(srcAdminDir, file);
+		const srcFile = path.join(sourceAdminDir, file);
 		const destFile = path.join(publicAdminDir, file);
 		if (fs.statSync(srcFile).isFile()) {
 			fs.copyFileSync(srcFile, destFile);
