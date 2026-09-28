@@ -196,12 +196,16 @@ async function bootstrapApplication() {
 }
 
 server = app.listen(port, () => {
-	configureServerTimeouts(server);
 	bootstrapPromise = bootstrapApplication();
 	void bootstrapPromise.catch((error) => {
 		bootstrapReadiness.fail(error);
 		console.error('[index] Application bootstrap failed:', error.message);
 	});
 });
+
+// Bound slow clients before the 'listening' event, not inside the listen callback:
+// the server already accepts connections by then, which would leave a window where
+// headersTimeout/requestTimeout are still Node's unbounded defaults.
+configureServerTimeouts(server);
 
 module.exports = { bot };
