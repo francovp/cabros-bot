@@ -229,7 +229,10 @@ function resolveAllowedSymbols() {
 
 function resolveMaxNotional() {
 	const remote = getRemoteOverride('BINANCE_TRADING_MAX_NOTIONAL');
-	if (Number.isFinite(remote)) return remote;
+	// Schema bounds already reject a non-positive remote value; guard again so a malformed
+	// template falls back to the environment cap instead of parking a negative/NaN cap that
+	// would disable trading through `configured`. Zero is likewise not a usable "stop".
+	if (Number.isFinite(remote) && remote > 0) return remote;
 	return hasValue(process.env.BINANCE_TRADING_MAX_NOTIONAL)
 		? Number(process.env.BINANCE_TRADING_MAX_NOTIONAL)
 		: null;
@@ -237,6 +240,9 @@ function resolveMaxNotional() {
 
 function resolveTimeoutMs() {
 	const remote = getRemoteOverride('BINANCE_TRADING_TIMEOUT_MS');
+	if (typeof remote === 'string' && remote.trim() !== '' && Number.isFinite(Number(remote))) {
+		return parseTimeout(remote);
+	}
 	if (Number.isFinite(remote) && remote > 0) {
 		return Math.min(remote, MAX_TIMEOUT_MS);
 	}

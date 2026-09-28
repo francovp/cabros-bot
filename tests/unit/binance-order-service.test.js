@@ -1955,6 +1955,34 @@ describe('BinanceOrderService', () => {
 			expect(getConfig().timeoutMs).toBe(MAX_TIMEOUT_MS);
 		});
 
+		it('falls back to the env cap for a non-positive or non-numeric remote notional', () => {
+			process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
+
+			for (const bad of [0, -50, NaN, null, 'abc', {}]) {
+				remoteConfig.getRuntimeConfig.mockReturnValue({ BINANCE_TRADING_MAX_NOTIONAL: bad });
+				expect(getConfig().maxNotional).toBe(1000);
+			}
+		});
+
+		it('ignores a malformed remote allow-list type and keeps the env list', () => {
+			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'BTCUSDT';
+
+			for (const bad of [12345, {}, ['A'], true]) {
+				remoteConfig.getRuntimeConfig.mockReturnValue({ BINANCE_TRADING_ALLOWED_SYMBOLS: bad });
+				expect(getConfig().allowedSymbols).toEqual(['BTCUSDT']);
+			}
+		});
+
+		it('accepts a numeric-string remote timeout and ignores non-numeric ones', () => {
+			remoteConfig.getRuntimeConfig.mockReturnValue({ BINANCE_TRADING_TIMEOUT_MS: '15000' });
+			expect(getConfig().timeoutMs).toBe(15000);
+
+			for (const bad of ['abc', null, {}, NaN, 0, -1]) {
+				remoteConfig.getRuntimeConfig.mockReturnValue({ BINANCE_TRADING_TIMEOUT_MS: bad });
+				expect(getConfig().timeoutMs).toBe(10000);
+			}
+		});
+
 		it('fails open to env values when Remote Config throws', () => {
 			remoteConfig.getStatus.mockImplementation(() => {
 				throw new Error('remote config unavailable');
