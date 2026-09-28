@@ -187,6 +187,19 @@ The news monitor endpoint reports volume throttling status in its response paylo
 ```
 - `throttled` - The number of symbols skipped during the execution sweep because the rate limit window was reached. See [News Monitoring Guide](docs/news-monitor.md).
 
+### Inline Chart Attachments (opt-in)
+`ENABLE_CHART_ATTACHMENTS=true` attaches a rendered chart PNG next to alert notifications so traders can see the setup without leaving chat. **Disabled by default**; with the flag off, delivery is unchanged.
+
+- **Requirements** — a chart renders only when the alert carries `chartBars` (finite, OHLC-consistent `{open,high,low,close,volume}` bars) plus a `symbol`. Anything else falls through to text-only delivery. ≤5 bars render a 220×60 sparkline; ≥6 render a 600×400 candlestick chart with a volume strip and dashed entry/target/stop overlays.
+- **No native dependency** — charts are encoded with a PNG writer over Node's built-in `zlib` plus a small raster canvas, so **nothing is added to `package.json`**. Note that `chartjs-node-canvas`, suggested in the original proposal, is a *native* binding requiring cairo/pango and would add a build step to the production image.
+- **Channel support** — Telegram uses `sendPhoto` (1024-char caption; overflow becomes follow-up messages). WhatsApp uses GreenAPI `sendFileByUpload` with a **single attempt only**, since uploads have no idempotency key and a retry could duplicate the attachment. Discord webhooks accept only remote image URLs, so Discord always falls back to text and logs `chart attachment skipped: discord`.
+- **Fail-open** — every failure mode (feature off, unusable data, render error, budget exceeded, upload rejection) logs a `console.warn` and delivers the unchanged text. A chart can never block or fail an alert.
+- **Render budget** — `CHART_RENDER_TIMEOUT_MS` (default `5000`) is enforced by a cooperative deadline polled between bars, not only a timer, because a `setTimeout` cannot preempt synchronous drawing.
+- **Cache** — buffers are cached by `(symbol, timeframe, rangeKey)` for `CHART_CACHE_TTL_SECONDS` (default `300`, bounded to 200 entries; `0` disables).
+- **Status** — `/api/status` and `/api/capabilities` expose `featureFlags.chartAttachments` and `dependencies.chartRenderer` (`ready`, `lastErrorCategory`, render/cache/failure counters, `channels` map). Counters reset on process restart.
+
+All three variables (`ENABLE_CHART_ATTACHMENTS`, `CHART_RENDER_TIMEOUT_MS`, `CHART_CACHE_TTL_SECONDS`) are Firebase Remote Config eligible.
+
 ---
 
 ## Running Tests

@@ -8,8 +8,12 @@ const { sendWithRetry } = require('../../lib/retryHelper');
 const { splitMessageIntoChunks } = require('../../lib/messageHelper');
 const WhatsAppMarkdownFormatter = require('./formatters/whatsappMarkdownFormatter');
 const { isPreviewEnvironment } = require('../../lib/deploymentEnvironment');
+const { renderAlertChart } = require('./charts/chartAttachment');
 
 const GREEN_API_MESSAGE_LIMIT = 20000;
+// GreenAPI renders a file caption as regular WhatsApp text; keeping it well under
+// the message limit avoids a provider-side truncation surprise.
+const MAX_FILE_CAPTION_LENGTH = 1024;
 
 // GreenAPI /sendTemplate 4xx error bodies that indicate the template is definitively broken.
 // On these, we fall back to freeform; other 4xx (auth, rate-limit) remain non-fallback failures.
@@ -390,6 +394,35 @@ class WhatsAppService extends NotificationChannel {
 			const formattedText = await this._formatAlert(alert);
 			const messageChunks = splitMessageIntoChunks(formattedText, GREEN_API_MESSAGE_LIMIT);
 
+			// Chart attachment is strictly additive. When the upload fails or the
+			// feature is off, the text-only chunks below are sent unchanged.
+			const chart = await renderAlertChart(alert);
+			if (chart?.buffer) {
+				// A file upload has no idempotency key, so a retry could duplicate
+				// the attachment. `maxRetries` is the total attempt count, so 1 means
+				// a single try: on failure we fall back to text rather than risk a
+				// double-send.
+				const chartResult = await sendWithRetry(
+					({ signal } = {}) => this._sendChartFile(chart.buffer, formattedText, {
+						chatId,
+						signal,
+					}),
+					1,
+					this.logger,
+					{ signal: options.signal },
+				);
+				if (chartResult.success) {
+					// The caption already carried the first chunk; send only the overflow.
+					if (messageChunks.length > 1) {
+						return this._sendChunkedMessage(messageChunks.slice(1), chatId, options);
+					}
+					return chartResult;
+				}
+				console.warn('chart-attachments: WhatsApp file upload failed; sending text only', {
+					error: chartResult.error,
+				});
+			}
+
 			if (messageChunks.length > 1) {
 				this.logger?.warn?.(
 					`WhatsApp message exceeded ${GREEN_API_MESSAGE_LIMIT} characters; sending ${messageChunks.length} parts instead of truncating`,
@@ -410,6 +443,81 @@ class WhatsAppService extends NotificationChannel {
 		} catch (error) {
 			const errorMsg = this._sanitizeText((error && error.message) || String(error));
 			this.logger?.error?.(`Failed to send to WhatsApp: ${errorMsg}`);
+			return {
+				success: false,
+				channel: 'whatsapp',
+				error: errorMsg,
+				category: 'PROVIDER_ERROR',
+			};
+		}
+	}
+
+	/**
+	 * Upload a chart PNG through GreenAPI with the report as its caption.
+	 *
+	 * Fail-open: any provider error resolves to `{ success: false }` so the caller
+	 * keeps the text-only delivery path. No side effect is retried blindly — the
+	 * caller's bounded retry budget decides, since a non-idempotent upload cannot
+	 * be assumed safe to repeat.
+	 * @private
+	 * @returns {Promise<{success: boolean, channel: string, messageId?: string, error?: string, category?: string, statusCode?: number}>}
+	 */
+	async _sendChartFile(buffer, caption, { chatId = this.chatId, signal } = {}) {
+		try {
+			if (!this.apiUrl || !this.apiKey) {
+				return { success: false, channel: 'whatsapp', error: 'WhatsApp not configured', category: 'CLIENT_ERROR' };
+			}
+			// GreenAPI file endpoint mirrors the template endpoint: the key is a
+			// path segment, not a header, matching _buildTemplateUrl's convention.
+			const uploadUrl = `${this.apiUrl
+				.replace(/\/sendMessage\/?$/i, '')
+				.replace(/\/+$/, '')}/sendFileByUpload/${this.apiKey}`;
+			const truncatedCaption = caption.length > MAX_FILE_CAPTION_LENGTH
+				? `${caption.slice(0, MAX_FILE_CAPTION_LENGTH)}…`
+				: caption;
+
+			const form = new FormData();
+			form.append('chatId', chatId);
+			if (truncatedCaption) {
+				form.append('caption', truncatedCaption);
+			}
+			form.append('file', new Blob([buffer], { type: 'image/png' }), 'chart.png');
+
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+			const forwardAbort = () => controller.abort(signal.reason);
+			signal?.addEventListener('abort', forwardAbort, { once: true });
+
+			try {
+				const response = await fetch(uploadUrl, {
+					method: 'POST',
+					body: form,
+					signal: controller.signal,
+				});
+				if (!response.ok) {
+					const rawText = await response.text().catch(() => '');
+					const { category, sanitizedMessage } = this._classifyAndSanitizeHttpError(response.status, rawText);
+					this.logger?.error?.(`GreenAPI file upload error: ${response.status} ${category}`);
+					return {
+						success: false,
+						channel: 'whatsapp',
+						error: sanitizedMessage,
+						category,
+						statusCode: response.status,
+					};
+				}
+				const data = await response.json().catch(() => null);
+				return {
+					success: true,
+					channel: 'whatsapp',
+					messageId: data?.idFile || data?.messageId || undefined,
+				};
+			} finally {
+				clearTimeout(timeoutId);
+				signal?.removeEventListener('abort', forwardAbort);
+			}
+		} catch (error) {
+			const errorMsg = this._sanitizeText((error && error.message) || String(error));
 			return {
 				success: false,
 				channel: 'whatsapp',

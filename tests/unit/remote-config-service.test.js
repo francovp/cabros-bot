@@ -476,6 +476,54 @@ describe('RemoteConfigService', () => {
 		expect(config.URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES).toBe(32); // fallback to default
 	});
 
+	it('validates chart attachment parameters and falls back on out-of-range values', () => {
+		process.env.CHART_RENDER_TIMEOUT_MS = '50'; // min 100
+		process.env.CHART_CACHE_TTL_SECONDS = '999999'; // max 86400
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.CHART_RENDER_TIMEOUT_MS).toBe(5000); // fallback to default
+		expect(config.CHART_CACHE_TTL_SECONDS).toBe(300); // fallback to default
+	});
+
+	it('accepts in-range chart attachment environment values including the boundaries', () => {
+		process.env.CHART_RENDER_TIMEOUT_MS = '100'; // min boundary
+		process.env.CHART_CACHE_TTL_SECONDS = '0'; // 0 disables caching
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.CHART_RENDER_TIMEOUT_MS).toBe(100);
+		expect(config.CHART_CACHE_TTL_SECONDS).toBe(0);
+	});
+
+	it('supports chart attachment tuning via Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({
+			ENABLE_CHART_ATTACHMENTS: true,
+			CHART_RENDER_TIMEOUT_MS: 2500,
+			CHART_CACHE_TTL_SECONDS: 60,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.ENABLE_CHART_ATTACHMENTS).toBe(true);
+		expect(config.CHART_RENDER_TIMEOUT_MS).toBe(2500);
+		expect(config.CHART_CACHE_TTL_SECONDS).toBe(60);
+	});
+
+	it('rejects out-of-range chart overrides from Remote Config and keeps the environment value', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.CHART_RENDER_TIMEOUT_MS = '4000';
+		mockTemplate({ CHART_RENDER_TIMEOUT_MS: 10, CHART_CACHE_TTL_SECONDS: 999999 });
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.CHART_RENDER_TIMEOUT_MS).toBe(4000); // invalid override rejected
+		expect(config.CHART_CACHE_TTL_SECONDS).toBe(300); // invalid override rejected
+	});
+
 	it('supports ZERO_CHANNEL_ALERT_COOLDOWN_MS and ENABLE_API_ONLY_MODE via Remote Config', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 		mockTemplate({

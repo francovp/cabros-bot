@@ -6,8 +6,12 @@
 const NotificationChannel = require('./NotificationChannel');
 const MarkdownV2Formatter = require('./formatters/markdownV2Formatter');
 const { parseTelegramTopicRoutes, resolveTelegramThreadId } = require('./telegramTopicRouting');
+const { renderAlertChart } = require('./charts/chartAttachment');
 
 const DEFAULT_MAX_MESSAGE_LENGTH = 4000;
+// Telegram rejects photo captions longer than this; longer reports still ship the
+// remaining text as follow-up messages, exactly as the text-only path does.
+const MAX_PHOTO_CAPTION_LENGTH = 1024;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_FALLBACK_RETRY_DELAY_MS = 500;
 const DEFAULT_MAX_RETRY_DELAY_MS = 5000;
@@ -288,26 +292,52 @@ class TelegramService extends NotificationChannel {
 			const messageIds = [];
 			let attemptCount = 0;
 			const retryState = { totalWaitMs: 0 };
-			for (let index = 0; index < messageParts.length; index += 1) {
-			const messagePart = messageParts[index];
-			if (signal?.aborted) {
-				return buildResult({
-					success: false,
-					channel: 'telegram',
-					error: signal.reason?.message || signal.reason || 'Operation aborted',
-					category: 'TIMEOUT',
-					attemptCount,
-					messageIds,
-					messageId: messageIds.join(','),
-					messageCount: messageIds.length,
-					aborted: true,
-					threadId,
-				});
+
+			// Chart attachment is strictly additive: when it is unavailable the loop
+			// below sends the exact same text-only messages as before.
+			const chart = await renderAlertChart(alert);
+			if (chart?.buffer) {
+				const [photoCaption, ...remainder] = splitTelegramMessage(
+					formattedText,
+					Math.min(MAX_PHOTO_CAPTION_LENGTH, this.maxMessageLength),
+				);
+				const photoResult = await this.sendChartPhoto(
+					chatId, chart.buffer, photoCaption, !!alert.enriched, threadId, replyMarkup, signal,
+				);
+				attemptCount += photoResult.attemptCount;
+				if (photoResult.success) {
+					messageIds.push(String(photoResult.response.message_id));
+					// Text beyond the caption limit follows as normal messages.
+					messageParts.length = 0;
+					messageParts.push(...remainder);
+				} else {
+					// Photo delivery failed: keep the original text-only parts intact.
+					console.warn('chart-attachments: Telegram photo delivery failed; sending text only', {
+						error: photoResult.error,
+					});
+				}
 			}
-			const result = await this.sendMessagePart(sendMessage, chatId, messagePart, !!alert.enriched, signal, retryState, threadId, {
-				replyMarkup,
-				attachReplyMarkup: index === 0,
-			});
+
+			for (let index = 0; index < messageParts.length; index += 1) {
+				const messagePart = messageParts[index];
+				if (signal?.aborted) {
+					return buildResult({
+						success: false,
+						channel: 'telegram',
+						error: signal.reason?.message || signal.reason || 'Operation aborted',
+						category: 'TIMEOUT',
+						attemptCount,
+						messageIds,
+						messageId: messageIds.join(','),
+						messageCount: messageIds.length,
+						aborted: true,
+						threadId,
+					});
+				}
+				const result = await this.sendMessagePart(sendMessage, chatId, messagePart, !!alert.enriched, signal, retryState, threadId, {
+					replyMarkup,
+					attachReplyMarkup: index === 0,
+				});
 				attemptCount += result.attemptCount;
 				if (!result.success) {
 					if (result.aborted) {
@@ -361,6 +391,92 @@ class TelegramService extends NotificationChannel {
 				statusCode: getStatusCode(error),
 				category: getCategory(error, getStatusCode(error)),
 			});
+		}
+	}
+
+	/**
+	 * Send a chart PNG as a Telegram photo with the report as its caption.
+	 *
+	 * MarkdownV2 is attempted first with the same plain-text fallback the text
+	 * path uses, and the whole call is bounded by the same per-attempt deadline.
+	 * Callers treat a failure here as "no chart" and keep the text-only path.
+	 *
+	 * @returns {Promise<{success: boolean, response?: object, error?: unknown, attemptCount: number}>}
+	 */
+	async sendChartPhoto(chatId, photo, caption, enriched, threadId, replyMarkup, signal) {
+		if (typeof this.bot.telegram.callApi !== 'function') {
+			return { success: false, error: new Error('Telegram callApi unavailable'), attemptCount: 0 };
+		}
+		const buildPayload = (text) => ({
+			chat_id: chatId,
+			photo,
+			...(text ? { caption: text } : {}),
+			parse_mode: 'MarkdownV2',
+			...(enriched ? { disable_web_page_preview: true } : {}),
+			...(threadId ? { message_thread_id: threadId } : {}),
+			...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+		});
+
+		let attemptCount = 0;
+		try {
+			const response = await this._callTelegramWithDeadline((signalArg) => {
+				attemptCount += 1;
+				return this.bot.telegram.callApi('sendPhoto', buildPayload(caption), { signal: signalArg });
+			}, signal);
+			return { success: true, response, attemptCount };
+		} catch (error) {
+			if (signal?.aborted) {
+				return { success: false, error, attemptCount, aborted: true };
+			}
+			const errorMessage = getErrorMessage(error);
+			if (!errorMessage.includes('can\'t parse entities')) {
+				return { success: false, error, attemptCount };
+			}
+
+			this.logger?.warn?.(`Telegram chart caption parse failed, retrying as plain text: ${errorMessage}`);
+			try {
+				const plainPayload = buildPayload(stripMarkdownV2Escapes(caption));
+				delete plainPayload.parse_mode;
+				const response = await this._callTelegramWithDeadline((signalArg) => {
+					attemptCount += 1;
+					return this.bot.telegram.callApi('sendPhoto', plainPayload, { signal: signalArg });
+				}, signal);
+				return { success: true, response, attemptCount };
+			} catch (plainError) {
+				return { success: false, error: plainError, attemptCount };
+			}
+		}
+	}
+
+	/**
+	 * Run one Telegram API call under the standard per-attempt abort deadline,
+	 * linked to the caller's signal when present.
+	 */
+	async _callTelegramWithDeadline(invoke, signal) {
+		const attemptController = new AbortController();
+		const forwardAbort = signal
+			? () => attemptController.abort(signal.reason || new Error('Operation aborted'))
+			: null;
+		if (signal) {
+			if (signal.aborted) forwardAbort();
+			else signal.addEventListener('abort', forwardAbort, { once: true });
+		}
+		const timeoutId = setTimeout(
+			() => attemptController.abort(new Error('Telegram request timeout')),
+			this.requestTimeoutMs,
+		);
+		let abortListener;
+		const abortPromise = new Promise((resolve, reject) => {
+			abortListener = () => reject(attemptController.signal.reason || new Error('Operation aborted'));
+			if (attemptController.signal.aborted) abortListener();
+			else attemptController.signal.addEventListener('abort', abortListener, { once: true });
+		});
+		try {
+			return await Promise.race([invoke(attemptController.signal), abortPromise]);
+		} finally {
+			clearTimeout(timeoutId);
+			attemptController.signal.removeEventListener('abort', abortListener);
+			if (signal && forwardAbort) signal.removeEventListener('abort', forwardAbort);
 		}
 	}
 
@@ -464,7 +580,7 @@ class TelegramService extends NotificationChannel {
 				return { success: false, error: getAbortError(), attemptCount: 1, aborted: true };
 			}
 			const errorMessage = getErrorMessage(error);
-			if (!errorMessage.includes("can't parse entities")) {
+			if (!errorMessage.includes('can\'t parse entities')) {
 				return { success: false, error, attemptCount: 1 };
 			}
 

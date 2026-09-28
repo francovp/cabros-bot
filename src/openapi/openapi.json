@@ -5515,6 +5515,7 @@
             "example": {
               "featureFlags": {
                 "alertScheduler": false,
+                "chartAttachments": false,
                 "equityMarketData": false,
                 "firebaseRemoteConfig": false,
                 "maintenanceMode": false,
@@ -6365,6 +6366,103 @@
             "description": "Formatted text previews per channel when dryRun is true."
           }
         }
+      },
+      "ChartRendererDependency": {
+        "type": "object",
+        "description": "Non-sensitive readiness and counters for the opt-in chart attachment renderer. Rendered in-process by a built-in zlib PNG encoder, so no native canvas dependency is installed. Counters reset on process restart and expose no alert content or credentials.",
+        "required": [
+          "enabled",
+          "ready",
+          "provider",
+          "timeoutMs",
+          "cacheTtlSeconds",
+          "cacheEntries",
+          "renders",
+          "cacheHits",
+          "cacheMisses",
+          "failures",
+          "timeouts",
+          "skippedDisabled",
+          "lastErrorCategory",
+          "lastRenderedAt",
+          "channels"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Effective ENABLE_CHART_ATTACHMENTS flag after Remote Config resolution."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True when the feature is enabled and the most recent render did not fail with render_error."
+          },
+          "provider": {
+            "type": "string",
+            "enum": ["builtin-raster"],
+            "description": "Chart rendering backend."
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "description": "Effective CHART_RENDER_TIMEOUT_MS render budget in milliseconds."
+          },
+          "cacheTtlSeconds": {
+            "type": "integer",
+            "description": "Effective CHART_CACHE_TTL_SECONDS buffer cache TTL; 0 disables caching."
+          },
+          "cacheEntries": {
+            "type": "integer",
+            "description": "Number of currently cached chart buffers."
+          },
+          "renders": {
+            "type": "integer",
+            "description": "Count of completed chart renders."
+          },
+          "cacheHits": {
+            "type": "integer",
+            "description": "Count of renders served from the buffer cache."
+          },
+          "cacheMisses": {
+            "type": "integer",
+            "description": "Count of renders that required a draw."
+          },
+          "failures": {
+            "type": "integer",
+            "description": "Count of renders that failed and fell back to text-only delivery."
+          },
+          "timeouts": {
+            "type": "integer",
+            "description": "Count of renders aborted by the render budget."
+          },
+          "skippedDisabled": {
+            "type": "integer",
+            "description": "Count of chart requests skipped because the feature flag was off."
+          },
+          "lastErrorCategory": {
+            "type": ["string", "null"],
+            "enum": ["timeout", "render_error", "insufficient_data", null],
+            "description": "Sanitized category of the most recent failure."
+          },
+          "lastRenderedAt": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "Timestamp of the most recent successful render."
+          },
+          "channels": {
+            "type": "object",
+            "description": "Per-channel inline image delivery support. Discord webhooks accept only remote image URLs, so Discord always falls back to text.",
+            "properties": {
+              "telegram": { "type": "boolean" },
+              "whatsapp": { "type": "boolean" },
+              "discord": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          },
+          "note": {
+            "type": "string",
+            "description": "Human-readable explanation of the Discord text-only fallback."
+          }
+        },
+        "additionalProperties": false
       },
       "DeliveryMetrics": {
         "type": "object",
@@ -10393,6 +10491,9 @@
             "type": "object",
             "additionalProperties": true,
             "properties": {
+              "chartRenderer": {
+                "$ref": "#/components/schemas/ChartRendererDependency"
+              },
               "firestoreWriteMetrics": {
                 "$ref": "#/components/schemas/FirestoreWriteMetrics"
               },
