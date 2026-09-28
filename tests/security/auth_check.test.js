@@ -272,12 +272,13 @@ describe('Security: list-only WEBHOOK_API_KEYS configuration (issue #692 review)
 			adminSavedEnv = saveEnv();
 			adminApp = express();
 			adminApp.use(express.json());
-			// codeql[js/missing-rate-limiting] -- test-only synthetic route. Mounting
-			// requireConfiguredAdminAccess pulls in validateAdminAccess, which assigns
-			// req.adminRole in production code, so CodeQL reads this handler as
-			// authorization-performing. The real routes it guards are rate-limited by
-			// the global limiter in src/routes/index.js; a per-test app has no users to
-			// throttle, and adding a limiter here would only slow the assertions down.
+			// Test-only synthetic route. Mounting requireConfiguredAdminAccess pulls in
+			// validateAdminAccess, which assigns req.adminRole in production code, so
+			// CodeQL reads this handler as authorization-performing. The real routes it
+			// guards are rate-limited by the global limiter in src/routes/index.js; a
+			// per-test app has no users to throttle, and adding a limiter here would
+			// only slow the assertions down.
+			// codeql[js/missing-rate-limiting]
 			adminApp.post('/admin', requireConfiguredAdminAccess, (req, res) => {
 				res.status(200).json({ success: true });
 			});
