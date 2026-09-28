@@ -2751,3 +2751,4 @@ The application logs to stdout:
 - `ALERT_FLIP_COOLDOWN_HOURS` - Cooldown length in hours for opposite-flip annotation (`1`-`168`, default: `24`)
 
 When `ENABLE_ALERT_FLIP_GUARD=true`, `/api/webhook/alert` annotates opposite-direction flips for the same `(exchange, symbol, timeframe)` inside `ALERT_FLIP_COOLDOWN_HOURS` (default `24`) with a `⚠️ señal opuesta hace Xh` line and stores a `flipContext` (`previousDirection`, `previousAt`, `hoursDelta`) on the persisted alert. Delivery is never blocked (fail-open); cache errors degrade to a non-annotated delivery. `GET /api/alerts/summary` exposes `enrichment.flipRate` (`totalAlerts`, `flippedAlerts`, `flipRatePercent`, `byPreviousDirection`) so the rate can be observed end-to-end. `featureFlags.alertFlipGuard` reports the gate and `dependencies.alertFlipGuard` exposes non-sensitive counters (`annotatedCount`, `lastAnnotatedAt`, `activeTrackedKeys`, `cooldownHours`).
+
