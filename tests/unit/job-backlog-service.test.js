@@ -1000,8 +1000,159 @@ describe('JobBacklogService', () => {
 		expect(notifyAdmin.mock.calls[1][0].type).toBe('backlog_recovery');
 	});
 
-	it('reports an unknown durable depth when the durable probe failed', async () => {
-		// Publishing zero for an unreadable backlog is indistinguishable from a
+	it('preserves the null durable depth through getStatus after a failed probe', async () => {
+		// getStatus() fell back to the memory mirror with `|| 0` whenever
+		// lastProbe existed, so a failed probe published 0 next to
+		// durableProbeSucceeded:false — claiming an unreadable backlog was empty.
+		const repository = {
+			getBacklogDepth: jest.fn().mockResolvedValue({
+				durableQueuedCount: null,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+				truncated: false,
+				source: 'firestore-unavailable',
+				probeFailed: true,
+			}),
+		};
+		const service = new JobBacklogService({ repository });
+
+		await service.probe();
+		const status = service.getStatus();
+
+		expect(status.durableQueuedCount).toBeNull();
+		expect(status.durableProbeSucceeded).toBe(false);
+	});
+
+	it('keeps the memory-mirror depth in getStatus before any probe has run', () => {
+		// The mirror fallback is only for a never-probed service; it must not mask
+		// the null a failed probe deliberately reports.
+		const repository = {
+			getMemoryBacklogDepth: jest.fn(() => ({
+				durableQueuedCount: 7,
+				oldestQueuedAgeMs: 60000,
+				oldestCreatedAt: new Date().toISOString(),
+			})),
+		};
+
+		const status = new JobBacklogService({ repository }).getStatus();
+
+		expect(status.durableQueuedCount).toBe(7);
+		expect(status.durableProbeSucceeded).toBeNull();
+	});
+
+	it('clears the latch once a capped front sweep and its tail sweep are both quiet', async () => {
+		// A collection larger than the page cap can never produce a single complete
+		// sweep: the front sweep is capped and every later sweep resumes from its
+		// cursor. Without accumulating evidence across that pair, the incident could
+		// never clear.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const quietCappedFront = {
+			durableQueuedCount: 3,
+			oldestQueuedAgeMs: 1000,
+			oldestCreatedAt: new Date(Date.now() - 1000).toISOString(),
+			truncated: true,
+			scanRotated: false,
+			cycleComplete: false,
+		};
+		const quietTail = {
+			durableQueuedCount: 0,
+			oldestQueuedAgeMs: null,
+			oldestCreatedAt: null,
+			truncated: false,
+			scanRotated: true,
+			cycleComplete: true,
+		};
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce(quietCappedFront)
+				.mockResolvedValue(quietTail),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		// The capped front sweep is quiet but partial, so it cannot clear by itself.
+		const front = await service.probe();
+		expect(front.durableCycleComplete).toBe(false);
+		expect(front.durableRecoveryProven).toBe(false);
+		expect(service.hasActiveAlert).toBe(true);
+
+		// The tail sweep resumed from the front sweep's cursor and reached the end,
+		// so the pair tiles the whole collection.
+		const tail = await service.probe();
+
+		expect(tail.durableCycleComplete).toBe(true);
+		expect(tail.durableRecoveryProven).toBe(true);
+		expect(service.hasActiveAlert).toBe(false);
+		expect(notifyAdmin.mock.calls[0][0].type).toBe('backlog_recovery');
+	});
+
+	it('does not clear on a tail sweep that follows an uncapped front sweep', async () => {
+		// An uncapped front sweep read the whole collection rather than stopping at
+		// a page boundary, so it did not start a two-window cycle. Pairing it with a
+		// tail sweep would assert complementary coverage that never happened.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce({
+					durableQueuedCount: 5,
+					oldestQueuedAgeMs: 7200000,
+					oldestCreatedAt: new Date(Date.now() - 7200000).toISOString(),
+					truncated: false,
+					scanRotated: false,
+				})
+				.mockResolvedValue({
+					durableQueuedCount: 0,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: false,
+					scanRotated: true,
+					cycleComplete: true,
+				}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+
+		await service.probe();
+		await service.probe();
+		await service.probe();
+
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
+	it('does not clear on a cycle-complete sweep when the capped front sweep was still aged', async () => {
+		// The tail is quiet but the head it never re-read is still over the
+		// threshold, so the cycle is not evidence of recovery.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce({
+					durableQueuedCount: 400,
+					oldestQueuedAgeMs: 7200000,
+					oldestCreatedAt: new Date(Date.now() - 7200000).toISOString(),
+					truncated: true,
+					cycleComplete: false,
+				})
+				.mockResolvedValue({
+					durableQueuedCount: 0,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: false,
+					scanRotated: true,
+					cycleComplete: true,
+				}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+
+		await service.probe();
+		await service.probe();
+		await service.probe();
+
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
+	it('reports an unknown durable depth when the durable probe failed', async () => {		// Publishing zero for an unreadable backlog is indistinguishable from a
 		// drained one, so the unknown must survive into the status payload.
 		const repository = {
 			getBacklogDepth: jest.fn().mockResolvedValue({

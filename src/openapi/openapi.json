@@ -11830,7 +11830,11 @@
           },
           "durableScanRotated": {
             "type": "boolean",
-            "description": "True when the durable scan resumed from a rotation cursor left by a previous capped sweep, so it covered only part of the collection and durableQueuedCount and oldestQueuedAgeMs are lower bounds."
+            "description": "True when the durable scan resumed from a rotation cursor, so it covered only part of the collection and durableQueuedCount and oldestQueuedAgeMs are lower bounds."
+          },
+          "durableCycleComplete": {
+            "type": "boolean",
+            "description": "True when this sweep resumed from the cursor left by a capped front sweep and then reached the end of the collection, so the pair tiles the whole collection. Recovery requires the front sweep to have been capped and quiet as well."
           },
           "oldestQueuedAgeMs": {
             "type": [

@@ -824,6 +824,13 @@ class JobRepository {
 				// lastDocId hold a real document, so no extra guard is needed. A sweep
 				// that reached the end of the collection clears the cursor so the next
 				// probe re-reads from the oldest document.
+				//
+				// A sweep that both resumed from a cursor and then reached the end has
+				// covered the whole collection across two sweeps, so it reports
+				// cycleComplete. Without it, a collection larger than the page cap
+				// could never produce a sweep that proves recovery and the operator
+				// incident would never clear.
+				const cycleComplete = !truncated && rotatedFromCursor;
 				if (truncated) {
 					this._backlogScanCursor = lastDoc;
 					this._backlogScanCursorId = lastDocId;
@@ -849,6 +856,7 @@ class JobRepository {
 					oldestCreatedAt,
 					truncated,
 					scanRotated: rotatedFromCursor,
+					cycleComplete,
 					source: 'firestore',
 				};
 			} catch (error) {

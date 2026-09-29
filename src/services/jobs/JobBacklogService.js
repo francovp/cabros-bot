@@ -57,25 +57,53 @@ function trackOutstanding(promise, outstanding) {
 //     in the unscanned prefix, and a sweep that reached the end from a cursor
 //     reports truncated:false, so the cap check above does not catch it. An empty
 //     rotated sweep is a gap in coverage, not an empty queue.
+//
+// A sweep that closed a rotation cycle is the exception: it resumed from the
+// cursor left by the front sweep and then reached the end, so the two windows
+// tile the whole collection. It is a real observation, so the empty case above
+// does not apply.
 function isDurableResultConclusive(durable) {
 	if (!durable) return false;
 	if (durable.probeFailed === true) return false;
+	if (durable.cycleComplete === true) return true;
 	if (durable.scanRotated === true && !(durable.durableQueuedCount > 0)) return false;
 	if (durable.truncated === true && !(durable.durableQueuedCount > 0)) return false;
 	return true;
 }
 
-// Whether this sweep can prove the backlog is gone.
+// Whether a sweep can vouch for the region it read.
 //
-// A partial sweep — truncated, or resumed from a rotation cursor — observed only
-// a window of the collection. It can still be trusted to page (a job it saw is
-// real), but it cannot clear an active alert: an older stalled job may sit in
-// the region it never read, and a partial sweep that finds only young queued
-// jobs is exactly that case. Only a complete sweep establishes recovery.
-function isRecoveryProven(durable) {
+// A sweep that did not resume from a cursor and did not hit the page cap covered
+// the entire collection on its own, so it alone can prove the backlog is gone.
+//
+// A sweep that did hit the page cap (truncated) is different: it read the head of
+// the collection completely, and left a cursor marking where it stopped. A later
+// sweep that resumes from that cursor and reaches the end reads the remainder, so
+// the two together tile the whole collection. A truncated sweep is therefore
+// sound evidence of its own prefix — but only for a later sweep that resumes
+// from the cursor it left, never on its own.
+//
+// A sweep that resumed from a cursor reads a middle or tail window. It can still
+// be trusted to page (a job it saw is real), but it cannot clear an active alert
+// on its own: an older stalled job may sit in the region it never read, and a
+// partial sweep that finds only young queued jobs is exactly that case.
+function isSweepComplete(durable) {
 	if (!durable) return false;
 	if (durable.probeFailed === true) return false;
 	if (durable.scanRotated === true || durable.truncated === true) return false;
+	return true;
+}
+
+// Whether a truncated front sweep and a later tail sweep together cover the whole
+// collection, so the pair can prove recovery.
+function isCycleProven(durable, priorWindow) {
+	if (!durable) return false;
+	if (durable.probeFailed === true) return false;
+	if (durable.cycleComplete !== true) return false;
+	// The front sweep must have been the immediately preceding one, must have
+	// stopped on the page cap rather than at the end, and must have been quiet.
+	// Anything else leaves a window unexamined.
+	if (!priorWindow || priorWindow.capped !== true || priorWindow.quiet !== true) return false;
 	return true;
 }
 
@@ -105,6 +133,10 @@ class JobBacklogService {
 		// effective cadence changes.
 		this._scheduledIntervalMs = null;
 		this._unsubscribeRemoteConfig = null;
+		// The previously read scan window: whether it was below the alert threshold,
+		// and when. A cycle-complete sweep reads the tail, so it needs this to know
+		// the head was quiet too before treating the two as proof of recovery.
+		this._cyclePriorWindow = null;
 		// Operations started by a probe that has not settled, tracked per
 		// dependency. A timed-out probe is abandoned rather than cancelled, so
 		// this keeps the next sweep from stacking another call on unfinished work.
@@ -204,7 +236,7 @@ class JobBacklogService {
 							);
 							durable = await withTimeout(pending, timeoutMs, 'Durable backlog probe');
 							durableProbeSucceeded = isDurableResultConclusive(durable);
-							recoveryProven = isRecoveryProven(durable);
+							recoveryProven = isSweepComplete(durable);
 						} else {
 							this.logger.warn?.('[JobBacklogService] Skipping durable probe: a previous probe is still outstanding');
 						}
@@ -223,7 +255,7 @@ class JobBacklogService {
 						);
 						durable = await withTimeout(pending, timeoutMs, 'Durable backlog probe');
 						durableProbeSucceeded = isDurableResultConclusive(durable);
-						recoveryProven = isRecoveryProven(durable);
+						recoveryProven = isSweepComplete(durable);
 					} else {
 						// No result was produced, so this sweep stays indeterminate.
 						// Falling through here would mark the untouched default as a
@@ -267,7 +299,23 @@ class JobBacklogService {
 		// this sweep so a transient storage error cannot emit a false all-clear
 		// and then re-page on the next successful probe.
 		probeResult.durableProbeSucceeded = durableProbeSucceeded;
-		probeResult.durableRecoveryProven = recoveryProven;
+		probeResult.durableCycleComplete = durable?.cycleComplete === true;
+		// A sweep that closed a rotation cycle is not partial after all: it resumed
+		// from the front sweep's cursor and reached the end, so together the two
+		// windows tile the whole collection. The front sweep must therefore have
+		// been capped (not merely quiet) and the immediately preceding one.
+		const priorWindow = this._cyclePriorWindow;
+		this._cyclePriorWindow = {
+			// A capped sweep read its prefix completely and left a cursor, so it is
+			// usable evidence for the sweep that finishes the cycle. A sweep that ran
+			// off the end is not capped but needs no partner.
+			capped: durableProbeSucceeded && durable?.truncated === true,
+			quiet: ((durable?.oldestQueuedAgeMs ?? null) === null
+				|| (durable?.oldestQueuedAgeMs ?? 0) < this.getConfig().alertThresholdMs),
+		};
+		const cycleProven = probeResult.durableCycleComplete === true
+			&& isCycleProven(durable, priorWindow);
+		probeResult.durableRecoveryProven = recoveryProven || cycleProven;
 
 		await this._evaluateAlert(probeResult, now);
 		this.lastProbe = probeResult;
@@ -311,7 +359,10 @@ class JobBacklogService {
 		// Below the threshold (or nothing observed) is not enough on its own, and a
 		// partial sweep cannot prove the unscanned region is empty. A probe that
 		// failed, hit its page cap, or resumed from a rotation cursor therefore holds
-		// the latch until a complete sweep confirms the backlog is gone.
+		// the latch until a complete sweep confirms the backlog is gone. A sweep
+		// that completed a rotation cycle counts as complete coverage, but only
+		// together with a quiet preceding window, since the two windows tile the
+		// whole collection. Both are folded into durableRecoveryProven above.
 		if (probeResult.durableProbeSucceeded === false || probeResult.durableRecoveryProven === false) {
 			return;
 		}
@@ -492,7 +543,13 @@ class JobBacklogService {
 		const delayedCount = this.lastProbe?.delayedCount ?? 0;
 		const failedCount = this.lastProbe?.failedCount ?? 0;
 		const activeCount = this.lastProbe?.activeCount ?? 0;
-		const durableQueuedCount = this.lastProbe?.durableQueuedCount ?? (durable?.durableQueuedCount || 0);
+		// A failed durable probe records durableQueuedCount:null, and ?? is needed
+		// rather than || so that explicit unknown survives. It is the mirror only
+		// when no probe has run yet, so a null from a failed probe is not replaced
+		// with 0 and the payload does not claim an unreadable backlog is empty.
+		const durableQueuedCount = this.lastProbe
+			? this.lastProbe.durableQueuedCount
+			: (durable?.durableQueuedCount || 0);
 		const oldestQueuedAgeMs = this.lastProbe?.oldestQueuedAgeMs ?? (durable?.oldestQueuedAgeMs ?? null);
 		const oldestCreatedAt = this.lastProbe?.oldestCreatedAt ?? (durable?.oldestCreatedAt ?? null);
 		// True when the bounded durable scan hit maxPages, so durableQueuedCount is
@@ -625,6 +682,7 @@ class JobBacklogService {
 		this.lastPagedAt = null;
 		this.lastRecoveryAt = null;
 		this.lastProbe = null;
+		this._cyclePriorWindow = null;
 	}
 }
 
