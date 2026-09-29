@@ -25,6 +25,7 @@ describe('JobBacklogService', () => {
 			durableQueuedCount: 0,
 			durableQueuedTruncated: false,
 			durableScanRotated: false,
+			durableCycleComplete: false,
 			durableProbeSucceeded: null,
 			oldestQueuedAgeMs: null,
 			oldestCreatedAt: null,
@@ -1150,6 +1151,452 @@ describe('JobBacklogService', () => {
 
 		expect(service.hasActiveAlert).toBe(true);
 		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
+	it('does not clear the latch when an aged front window is forgotten by a quiet middle window', async () => {
+		// Three consecutive windows tile a collection larger than two page caps: an
+		// AGED front, a quiet middle, and a tail that closes the cycle. Evidence must
+		// accumulate across every window in the cycle, not only the one immediately
+		// before the closing sweep, or the aged prefix is forgotten and the latch is
+		// cleared while a real stall is still queued in the unscanned head.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const agedFront = {
+			durableQueuedCount: 400,
+			oldestQueuedAgeMs: 7200000,
+			oldestCreatedAt: new Date(Date.now() - 7200000).toISOString(),
+			truncated: true,
+			scanRotated: false,
+			cycleComplete: false,
+		};
+		const quietMiddle = {
+			durableQueuedCount: 6,
+			oldestQueuedAgeMs: 1000,
+			oldestCreatedAt: new Date(Date.now() - 1000).toISOString(),
+			truncated: true,
+			scanRotated: true,
+			cycleComplete: false,
+		};
+		const quietTail = {
+			durableQueuedCount: 0,
+			oldestQueuedAgeMs: null,
+			oldestCreatedAt: null,
+			truncated: false,
+			scanRotated: true,
+			cycleComplete: true,
+		};
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce(agedFront)
+				.mockResolvedValueOnce(quietMiddle)
+				.mockResolvedValue(quietTail),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		await service.probe(); // aged front window: latches the alert
+		await service.probe(); // quiet middle window
+		expect(service.hasActiveAlert).toBe(true);
+
+		const tail = await service.probe();
+
+		// The cycle closed, but the aged front window is part of the same cycle, so
+		// the cycle does not prove a drained backlog.
+		expect(tail.durableCycleComplete).toBe(true);
+		expect(tail.durableRecoveryProven).toBe(false);
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
+	it('re-evaluates the front window age at the closing sweep before sending an all-clear', async () => {
+		// A front window sitting just under the threshold is latched as quiet, but it
+		// keeps ageing. When the tail sweep closes the cycle later, the front job may
+		// already be over the threshold, and an all-clear then a re-page is exactly the
+		// false-recovery sequence this must avoid. The front window keeps its creation
+		// time so the closing sweep can recompute the age against its own clock.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		process.env.JOB_BACKLOG_ALERT_THRESHOLD_MS = '600000'; // 10m
+		const frontCreatedAt = new Date(Date.now() - 540000).toISOString(); // 9m old
+		const agedFront = {
+			durableQueuedCount: 2,
+			oldestQueuedAgeMs: 540000,
+			oldestCreatedAt: frontCreatedAt,
+			truncated: true,
+			scanRotated: false,
+			cycleComplete: false,
+		};
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce(agedFront)
+				.mockResolvedValue({
+					durableQueuedCount: 0,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: false,
+					scanRotated: true,
+					cycleComplete: true,
+				}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		await service.probe();
+
+		// Advance well past the threshold so the same front job is now aged by the
+		// time the tail sweep closes the cycle.
+		const tail = await service.probe({ now: Date.now() + 600000 });
+
+		expect(tail.durableCycleComplete).toBe(true);
+		expect(tail.durableRecoveryProven).toBe(false);
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
+	it('does not pair buffered windows across a rotation cursor reset', async () => {
+		// The arrangement where a stale buffer would actually pair windows from two
+		// different cycles: two capped windows accumulate, then an uncapped sweep
+		// resets the rotation cursor, and a later closing sweep must not be credited
+		// with the discarded windows' coverage. The reset sweep itself still holds
+		// the latch because it observed a queued job, so the buffer clearing is what
+		// the final closing sweep has to cope with.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const cappedAged = {
+			durableQueuedCount: 2,
+			oldestQueuedAgeMs: 7200000,
+			oldestCreatedAt: new Date(Date.now() - 7200000).toISOString(),
+			truncated: true,
+			scanRotated: false,
+			cycleComplete: false,
+		};
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce(cappedAged)
+				.mockResolvedValueOnce(cappedAged)
+				// Uncapped: read the whole collection, reset the cursor, but still
+				// observed an aged queued job, so this sweep is not a recovery proof.
+				.mockResolvedValueOnce({
+					durableQueuedCount: 4,
+					oldestQueuedAgeMs: 7200000,
+					oldestCreatedAt: new Date(Date.now() - 7200000).toISOString(),
+					truncated: false,
+					scanRotated: false,
+					cycleComplete: false,
+				})
+				.mockResolvedValue({
+					durableQueuedCount: 0,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: false,
+					scanRotated: true,
+					cycleComplete: true,
+				}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		await service.probe(); // capped, opens the cycle
+		await service.probe(); // capped, extends the cycle
+		expect(service._cycleOldestQueuedCreatedAtMs).not.toBeNull();
+		await service.probe(); // uncapped, resets the cursor and drops the evidence
+		expect(service._cycleOldestQueuedCreatedAtMs).toBeNull();
+		expect(service.hasActiveAlert).toBe(true);
+
+		const tail = await service.probe();
+
+		// The closing sweep has no buffered partner from its own cycle, so the
+		// discarded windows cannot vouch for the collection.
+		expect(tail.durableCycleComplete).toBe(true);
+		expect(tail.durableRecoveryProven).toBe(false);
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
+	it('does not clear on a window that held queued work of unknown age', async () => {
+		// Queued work was observed, but with no usable creation time the window cannot
+		// be shown to be under the threshold. Reading that as quiet is the unsafe
+		// direction, so it must hold the latch rather than emit a false all-clear.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const unageable = {
+			durableQueuedCount: 5,
+			oldestQueuedAgeMs: null,
+			oldestCreatedAt: null,
+			truncated: true,
+			scanRotated: false,
+			cycleComplete: false,
+		};
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce(unageable)
+				.mockResolvedValue({
+					durableQueuedCount: 0,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: false,
+					scanRotated: true,
+					cycleComplete: true,
+				}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		await service.probe();
+		const tail = await service.probe();
+
+		expect(tail.durableRecoveryProven).toBe(false);
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
+	it('still clears for a three-window cycle that is quiet throughout', async () => {
+		// The unknown-age guard must not make recovery unreachable. A collection
+		// larger than two page caps is tiled by three windows, and once the backlog
+		// has genuinely drained every one of them is below the threshold, so the
+		// closing sweep must still be able to prove recovery.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const quietWindow = (overrides = {}) => ({
+			durableQueuedCount: 2,
+			oldestQueuedAgeMs: 1000,
+			oldestCreatedAt: new Date(Date.now() - 1000).toISOString(),
+			truncated: true,
+			scanRotated: true,
+			cycleComplete: false,
+			...overrides,
+		});
+		const repository = {
+			getBacklogDepth: jest.fn()
+				// Front window opens the cycle.
+				.mockResolvedValueOnce(quietWindow({ scanRotated: false }))
+				// Middle window extends it.
+				.mockResolvedValueOnce(quietWindow())
+				// Tail window reaches the end and closes it.
+				.mockResolvedValue({
+					durableQueuedCount: 0,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: false,
+					scanRotated: true,
+					cycleComplete: true,
+				}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		await service.probe();
+		await service.probe();
+		expect(service.hasActiveAlert).toBe(true);
+
+		const tail = await service.probe();
+
+		expect(tail.durableCycleComplete).toBe(true);
+		expect(tail.durableRecoveryProven).toBe(true);
+		expect(service.hasActiveAlert).toBe(false);
+		expect(notifyAdmin.mock.calls[0][0].type).toBe('backlog_recovery');
+	});
+
+	it('resets the cycle buffer when the monitor state is reset', async () => {
+		// _resetForTesting is a real method on the exported singleton, and buffered
+		// cycle evidence is per-rotation state: leaving it behind would let a reset
+		// service pair windows with a cycle its cursor no longer points at.
+		const repository = {
+			getBacklogDepth: jest.fn().mockResolvedValue({
+				durableQueuedCount: 1,
+				oldestQueuedAgeMs: 1000,
+				oldestCreatedAt: new Date(Date.now() - 1000).toISOString(),
+				truncated: true,
+				scanRotated: false,
+				cycleComplete: false,
+			}),
+		};
+		const service = new JobBacklogService({ repository });
+
+		await service.probe();
+		expect(service._cycleOldestQueuedCreatedAtMs).not.toBeNull();
+
+		service._resetForTesting();
+		expect(service._cycleOldestQueuedCreatedAtMs).toBeNull();
+	});
+
+	it('clears a drained collection larger than one page cap', async () => {
+		// A capped front sweep that observed nothing queued still proves its own
+		// prefix empty — it read that window's documents completely. If such a window
+		// is not buffered as evidence, a backlog that has genuinely drained can never
+		// be proven recovered: every cycle-completion is rejected, the latch sticks
+		// forever, and the operator is paged every cooldown for an empty queue.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce({
+					durableQueuedCount: 0,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: true,
+					scanRotated: false,
+					cycleComplete: false,
+				})
+				.mockResolvedValue({
+					durableQueuedCount: 0,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: false,
+					scanRotated: true,
+					cycleComplete: true,
+				}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		const front = await service.probe();
+		expect(front.durableProbeSucceeded).toBe(false); // cannot report a total depth
+		expect(front.durableQueuedCount).toBe(0);
+
+		const tail = await service.probe();
+
+		expect(tail.durableCycleComplete).toBe(true);
+		expect(tail.durableRecoveryProven).toBe(true);
+		expect(service.hasActiveAlert).toBe(false);
+		expect(notifyAdmin.mock.calls[0][0].type).toBe('backlog_recovery');
+	});
+
+	it('keeps buffered cycle evidence through a mid-cycle storage error', async () => {
+		// The buffer must survive an indeterminate sweep. Dropping it on a storage
+		// error — the moment the accumulated evidence is most valuable — would let
+		// the next successful sweep pair an unrelated closing sweep with windows
+		// whose region was never re-observed after the outage.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const frontCreatedAt = new Date(Date.now() - 540000).toISOString(); // 9m old
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce({
+					durableQueuedCount: 1,
+					oldestQueuedAgeMs: 540000,
+					oldestCreatedAt: frontCreatedAt,
+					truncated: true,
+					scanRotated: false,
+					cycleComplete: false,
+				})
+				.mockResolvedValueOnce({
+					durableQueuedCount: null,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: false,
+					probeFailed: true,
+				})
+				.mockResolvedValue({
+					durableQueuedCount: 0,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: false,
+					scanRotated: true,
+					cycleComplete: true,
+				}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		await service.probe();
+		const evidenceAfterFront = service._cycleOldestQueuedCreatedAtMs;
+		expect(evidenceAfterFront).not.toBeNull();
+
+		const outage = await service.probe();
+		expect(outage.durableProbeSucceeded).toBe(false);
+		expect(service.hasActiveAlert).toBe(true);
+		// A storage blip must not discard the evidence gathered so far.
+		expect(service._cycleOldestQueuedCreatedAtMs).toBe(evidenceAfterFront);
+
+		// The front job has now aged past the default 15m threshold, and the front
+		// region was never re-read, so recovery must not be claimed.
+		const tail = await service.probe({ now: Date.now() + 600000 });
+
+		expect(tail.durableCycleComplete).toBe(true);
+		expect(tail.durableRecoveryProven).toBe(false);
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
+	it('clears a drained backlog when the repository falls back to the memory mirror', async () => {
+		// A memory read is total: nothing is truncated and no cursor is carried, so
+		// it is conclusive about the whole collection. It must therefore report a
+		// successful durable probe — otherwise a drained local-mode backlog reports
+		// durableProbeSucceeded:false next to a real count and the latch can never
+		// clear, re-paging the operator every cooldown for a queue that already
+		// drained.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const repository = {
+			isConfigured: jest.fn(() => false),
+			getMemoryBacklogDepth: jest.fn(() => ({
+				durableQueuedCount: 0,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+			})),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		const probe = await service.probe();
+
+		expect(probe.durableProbeSucceeded).toBe(true);
+		expect(probe.durableQueuedCount).toBe(0);
+		expect(probe.durableRecoveryProven).toBe(true);
+		expect(service.hasActiveAlert).toBe(false);
+		expect(notifyAdmin.mock.calls[0][0].type).toBe('backlog_recovery');
+	});
+
+	it('keeps cycle evidence bounded when rotation never reaches the end', async () => {
+		// The evidence is a single number rather than a per-window buffer, so a
+		// collection that stays capped indefinitely cannot grow anything per probe,
+		// and the oldest observation is sticky however long the rotation takes.
+		const oldestCreatedAt = new Date(Date.now() - 3600000).toISOString(); // 1h old
+		const repository = {
+			getBacklogDepth: jest.fn().mockResolvedValue({
+				durableQueuedCount: 1,
+				oldestQueuedAgeMs: 3600000,
+				oldestCreatedAt,
+				truncated: true,
+				scanRotated: true,
+				cycleComplete: false,
+			}),
+		};
+		const service = new JobBacklogService({ repository });
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		service.notifyAdmin = notifyAdmin;
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		for (let i = 0; i < 400; i += 1) {
+			await service.probe();
+		}
+
+		// One scalar: nothing accumulates, and the oldest observation survives.
+		expect(typeof service._cycleOldestQueuedCreatedAtMs).toBe('number');
+		expect(service._cycleOldestQueuedCreatedAtMs).toBe(Date.parse(oldestCreatedAt));
+	});
+
+	it('projects durableCycleComplete through getStatus for a closing sweep', async () => {
+		// The field has to reach the status layers, not just the probe result, or the
+		// documented status contract advertises a field no endpoint returns. The
+		// endpoint-level shape is asserted in tests/integration/status-endpoint.test.js.
+		const repository = {
+			getBacklogDepth: jest.fn().mockResolvedValue({
+				durableQueuedCount: 0,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+				truncated: false,
+				scanRotated: true,
+				cycleComplete: true,
+			}),
+		};
+		const service = new JobBacklogService({ repository });
+
+		await service.probe();
+
+		expect(service.getStatus().durableCycleComplete).toBe(true);
 	});
 
 	it('reports an unknown durable depth when the durable probe failed', async () => {		// Publishing zero for an unreadable backlog is indistinguishable from a

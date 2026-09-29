@@ -94,17 +94,67 @@ function isSweepComplete(durable) {
 	return true;
 }
 
-// Whether a truncated front sweep and a later tail sweep together cover the whole
-// collection, so the pair can prove recovery.
-function isCycleProven(durable, priorWindow) {
+// Parse a Firestore/Timestamp/ISO creation time into epoch milliseconds, so a
+// buffered cycle window can have its age re-evaluated later against a fresh clock.
+// Anything unparseable yields null rather than a number that would silently
+// compare as fresh.
+function parseTimestampMs(value) {
+	if (value === null || value === undefined) return null;
+	if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+	// Firestore Timestamp and Date both expose toMillis()/getTime(); an ISO string
+	// is covered by Date.parse below.
+	if (typeof value.toMillis === 'function') {
+		const millis = value.toMillis();
+		return Number.isFinite(millis) ? millis : null;
+	}
+	if (value instanceof Date) {
+		const millis = value.getTime();
+		return Number.isFinite(millis) ? millis : null;
+	}
+	const parsed = Date.parse(value);
+	return Number.isFinite(parsed) ? parsed : null;
+}
+
+// Whether the rotation cycle that has just closed proves the backlog is drained.
+//
+// A collection larger than one page cap is tiled by consecutive windows, and the
+// cycle closes on whichever sweep first reaches the end from a cursor. Recovery
+// therefore has to account for every window since the cycle opened, not only the
+// one immediately before the closing sweep: with three windows (aged front, quiet
+// middle, closing tail), considering only the last forgets the aged front and
+// reads as recovered while a stall is still queued in the unscanned head.
+//
+// The cycle's evidence is therefore the OLDEST queued job observed anywhere in it,
+// plus the fact that the cycle opened at all. That single value is equivalent to
+// checking every window, because "below threshold" is monotone in creation time:
+// the windows that observed no queued work at all proved their own prefixes empty
+// and contribute nothing, and among the rest only the oldest can be over the
+// threshold. Accumulating a minimum is order-independent, needs no per-window
+// storage, and cannot grow.
+//
+// cycleOldestQueuedCreatedAtMs is null until a capped sweep opens a cycle,
+// +Infinity for an open cycle that has seen no queued work, -Infinity for one that
+// saw queued work it could not date (unprovable, and it stays that way), and
+// otherwise a creation time in epoch milliseconds.
+//
+// The age is recomputed from that creation time against the CLOSING sweep's clock
+// and the current threshold, never frozen at read time: a window just under the
+// threshold keeps ageing, and a frozen verdict is how a 14m30s job gets declared
+// recovered at 15m30s and pages again one sweep later.
+function isCycleProven(durable, cycleOldestQueuedCreatedAtMs, thresholdMs, now) {
 	if (!durable) return false;
 	if (durable.probeFailed === true) return false;
 	if (durable.cycleComplete !== true) return false;
-	// The front sweep must have been the immediately preceding one, must have
-	// stopped on the page cap rather than at the end, and must have been quiet.
-	// Anything else leaves a window unexamined.
-	if (!priorWindow || priorWindow.capped !== true || priorWindow.quiet !== true) return false;
-	return true;
+	// A cycle only exists once a capped front sweep opened it. Without evidence
+	// from one, nothing tiled the collection with the closing sweep, so
+	// complementary coverage never happened.
+	if (cycleOldestQueuedCreatedAtMs === null) return false;
+	// A cycle that saw no queued work anywhere proves the collection drained.
+	if (cycleOldestQueuedCreatedAtMs === Infinity) return true;
+	if (!Number.isFinite(thresholdMs) || !Number.isFinite(now)) return false;
+	// -Infinity (queued work of unknown age) yields Infinity here and never clears,
+	// so an undatable window holds the latch instead of being assumed quiet.
+	return Math.max(0, now - cycleOldestQueuedCreatedAtMs) < thresholdMs;
 }
 
 class JobBacklogService {
@@ -133,10 +183,12 @@ class JobBacklogService {
 		// effective cadence changes.
 		this._scheduledIntervalMs = null;
 		this._unsubscribeRemoteConfig = null;
-		// The previously read scan window: whether it was below the alert threshold,
-		// and when. A cycle-complete sweep reads the tail, so it needs this to know
-		// the head was quiet too before treating the two as proof of recovery.
-		this._cyclePriorWindow = null;
+		// The oldest queued job observed anywhere in the current rotation cycle, in
+		// epoch milliseconds. null until a capped sweep opens a cycle, and
+		// -Infinity when a window observed queued work it could not date. Reset
+		// whenever the rotation cursor resets, so evidence from a finished cycle
+		// never pairs with an unrelated one.
+		this._cycleOldestQueuedCreatedAtMs = null;
 		// Operations started by a probe that has not settled, tracked per
 		// dependency. A timed-out probe is abandoned rather than cancelled, so
 		// this keeps the next sweep from stacking another call on unfinished work.
@@ -224,6 +276,12 @@ class JobBacklogService {
 
 		let durable = { durableQueuedCount: 0, oldestQueuedAgeMs: null, oldestCreatedAt: null };
 		let durableProbeSucceeded = false;
+		// Whether a durable read actually COMPLETED, which is what rotation evidence
+		// needs. Distinct from durableProbeSucceeded, which additionally asks whether
+		// the result can report a TOTAL depth: a capped sweep reads its window fully
+		// but cannot describe the collection, so it is not conclusive as a total and
+		// still is conclusive about the region it read.
+		let durableObserved = false;
 		let recoveryProven = false;
 		try {
 			if (this.repository) {
@@ -235,6 +293,7 @@ class JobBacklogService {
 								this.outstandingProbes.durable,
 							);
 							durable = await withTimeout(pending, timeoutMs, 'Durable backlog probe');
+							durableObserved = true;
 							durableProbeSucceeded = isDurableResultConclusive(durable);
 							recoveryProven = isSweepComplete(durable);
 						} else {
@@ -242,6 +301,13 @@ class JobBacklogService {
 						}
 					} else if (typeof this.repository.getMemoryBacklogDepth === 'function') {
 						durable = this.repository.getMemoryBacklogDepth(now);
+						durableObserved = true;
+						// A memory read is total: nothing is truncated and no cursor is
+						// carried, so it is conclusive about the whole collection. It
+						// must set the conclusive flag too, or a drained local-mode
+						// backlog would report an unknown depth next to a real count and
+						// the latch could never clear — re-paging the operator every
+						// cooldown for a queue that already drained.
 						durableProbeSucceeded = true;
 						recoveryProven = true;
 					}
@@ -254,6 +320,7 @@ class JobBacklogService {
 							this.outstandingProbes.durable,
 						);
 						durable = await withTimeout(pending, timeoutMs, 'Durable backlog probe');
+						durableObserved = true;
 						durableProbeSucceeded = isDurableResultConclusive(durable);
 						recoveryProven = isSweepComplete(durable);
 					} else {
@@ -264,6 +331,8 @@ class JobBacklogService {
 					}
 				} else if (typeof this.repository.getMemoryBacklogDepth === 'function') {
 					durable = this.repository.getMemoryBacklogDepth(now);
+					durableObserved = true;
+					// Total by construction — see the mirror branch above.
 					durableProbeSucceeded = true;
 					recoveryProven = true;
 				}
@@ -301,20 +370,50 @@ class JobBacklogService {
 		probeResult.durableProbeSucceeded = durableProbeSucceeded;
 		probeResult.durableCycleComplete = durable?.cycleComplete === true;
 		// A sweep that closed a rotation cycle is not partial after all: it resumed
-		// from the front sweep's cursor and reached the end, so together the two
-		// windows tile the whole collection. The front sweep must therefore have
-		// been capped (not merely quiet) and the immediately preceding one.
-		const priorWindow = this._cyclePriorWindow;
-		this._cyclePriorWindow = {
-			// A capped sweep read its prefix completely and left a cursor, so it is
-			// usable evidence for the sweep that finishes the cycle. A sweep that ran
-			// off the end is not capped but needs no partner.
-			capped: durableProbeSucceeded && durable?.truncated === true,
-			quiet: ((durable?.oldestQueuedAgeMs ?? null) === null
-				|| (durable?.oldestQueuedAgeMs ?? 0) < this.getConfig().alertThresholdMs),
-		};
+		// from a cursor left earlier in the cycle and reached the end, so together
+		// with the windows read since, it tiles the whole collection. All of them
+		// must be below the threshold when the cycle closes, so the evidence is
+		// accumulated across the whole rotation rather than the last window only.
+		const { alertThresholdMs } = this.getConfig();
 		const cycleProven = probeResult.durableCycleComplete === true
-			&& isCycleProven(durable, priorWindow);
+			&& isCycleProven(durable, this._cycleOldestQueuedCreatedAtMs, alertThresholdMs, now);
+
+		// Update the cycle evidence. A capped sweep that did not close the cycle is a
+		// mid-cycle window and extends it; a sweep that closed the cycle consumed it,
+		// and an uncapped sweep reset the rotation cursor, so both clear it. A sweep
+		// that observed no queued work still opened (and extended) the cycle, because
+		// it proved its own prefix empty.
+		//
+		// This keys on whether the durable read COMPLETED (durableObserved), not on
+		// durableProbeSucceeded. A capped sweep cannot report a TOTAL depth, so
+		// durableProbeSucceeded is false for it, yet it read its window completely and
+		// is conclusive about the region it read. Keying on the stricter flag would
+		// discard that evidence and leave a drained collection larger than the page
+		// cap permanently unprovable. A storage error leaves durableObserved false, so
+		// the evidence survives rather than being discarded at the moment a blip makes
+		// it most valuable — hence also excluding probeFailed from the reset branch.
+		if (durableObserved && durable?.truncated === true && durable?.cycleComplete !== true) {
+			const observedQueued = (durable?.durableQueuedCount ?? 0) > 0;
+			// -Infinity marks queued work whose age cannot be determined, which must
+			// hold the latch rather than be treated as quiet. +Infinity marks an open
+			// cycle that has seen no queued work at all, so it blocks nothing.
+			const createdAtMs = parseTimestampMs(durable?.oldestCreatedAt) ?? -Infinity;
+			const opened = this._cycleOldestQueuedCreatedAtMs;
+			if (opened === null) {
+				// The first capped sweep opens the cycle. A sweep that saw no queued
+				// work still opened it — it proved its own prefix empty — so the
+				// cycle exists and is recorded as +Infinity rather than left unset.
+				this._cycleOldestQueuedCreatedAtMs = observedQueued ? createdAtMs : Infinity;
+			} else if (observedQueued) {
+				this._cycleOldestQueuedCreatedAtMs = Math.min(opened, createdAtMs);
+			}
+		} else if (durableObserved && durable?.probeFailed !== true) {
+			// An uncapped sweep read the entire collection, so the rotation cursor
+			// reset and the next cycle starts from the front again. A failed sweep
+			// also reports truncated:false, but it observed nothing, so it is not
+			// evidence that the cursor was reset.
+			this._cycleOldestQueuedCreatedAtMs = null;
+		}
 		probeResult.durableRecoveryProven = recoveryProven || cycleProven;
 
 		await this._evaluateAlert(probeResult, now);
@@ -361,8 +460,9 @@ class JobBacklogService {
 		// failed, hit its page cap, or resumed from a rotation cursor therefore holds
 		// the latch until a complete sweep confirms the backlog is gone. A sweep
 		// that completed a rotation cycle counts as complete coverage, but only
-		// together with a quiet preceding window, since the two windows tile the
-		// whole collection. Both are folded into durableRecoveryProven above.
+		// together with the cycle's accumulated evidence being quiet, since the
+		// closing sweep and the windows it tiled with cover the whole collection.
+		// Both are folded into durableRecoveryProven above.
 		if (probeResult.durableProbeSucceeded === false || probeResult.durableRecoveryProven === false) {
 			return;
 		}
@@ -580,6 +680,9 @@ class JobBacklogService {
 			durableQueuedCount: this.lastProbe ? durableQueuedCount : (durableQueuedCount || 0),
 			durableQueuedTruncated: durableQueuedTruncated === true,
 			durableScanRotated: this.lastProbe?.durableScanRotated === true,
+			// Documented in the status contract alongside durableScanRotated, so it
+			// has to survive projection here or /api/status never returns it.
+			durableCycleComplete: this.lastProbe?.durableCycleComplete === true,
 			durableProbeSucceeded,
 			oldestQueuedAgeMs,
 			oldestCreatedAt,
@@ -682,7 +785,11 @@ class JobBacklogService {
 		this.lastPagedAt = null;
 		this.lastRecoveryAt = null;
 		this.lastProbe = null;
-		this._cyclePriorWindow = null;
+		// Cycle evidence is per-rotation state, so it has to be dropped with the
+		// rest of the monitor state. Left behind, a reset service would carry an
+		// observation from a cycle the repository cursor no longer points at, and
+		// the next closing sweep could credit it with unrelated coverage.
+		this._cycleOldestQueuedCreatedAtMs = null;
 	}
 }
 

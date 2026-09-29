@@ -11834,7 +11834,7 @@
           },
           "durableCycleComplete": {
             "type": "boolean",
-            "description": "True when this sweep resumed from the cursor left by a capped front sweep and then reached the end of the collection, so the pair tiles the whole collection. Recovery requires the front sweep to have been capped and quiet as well."
+            "description": "True when this sweep resumed from a cursor left by an earlier capped sweep and then reached the end of the collection, so the closing sweep and the windows it tiled with cover the whole collection. Recovery additionally requires every window in that cycle to be below the alert threshold, re-evaluated at the closing sweep's own clock."
           },
           "oldestQueuedAgeMs": {
             "type": [

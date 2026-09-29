@@ -308,6 +308,10 @@ class JobQueue {
 			// True when the durable scan resumed from a rotation cursor, so it saw
 			// only part of the collection and the depth and age are lower bounds.
 			durableScanRotated: resolvedBacklog?.durableScanRotated ?? false,
+			// True when this sweep closed a rotation cycle, so the buffered windows
+			// and the tail together tile the whole collection. Part of the documented
+			// status payload, so it is projected rather than dropped.
+			durableCycleComplete: resolvedBacklog?.durableCycleComplete ?? false,
 			// False when the last sweep could not observe durable state.
 			durableProbeSucceeded: resolvedBacklog?.durableProbeSucceeded ?? null,
 			oldestQueuedAgeMs: resolvedBacklog?.oldestQueuedAgeMs ?? null,
