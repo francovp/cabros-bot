@@ -56,26 +56,28 @@ app.use(requestDeadline.guard);
 const { getDeepHealthcheckHandler } = require('./src/controllers/healthcheck');
 const { handleDependencyReadiness } = require('./src/controllers/readiness');
 
-function isDependencyReadinessRequested(req) {
-	if (req && req.query && req.query.depth === 'readiness') {
-		return true;
+function isDependencyReadinessRequested(req, path) {
+	const depth = req && req.query ? req.query.depth : undefined;
+	// Each route documents its own depth vocabulary. Matching the value without
+	// checking the path would let `?depth=readiness` hijack `/ready`, which only
+	// accepts `dependencies` and must otherwise fall through to the bootstrap gate.
+	if (path === '/healthcheck') {
+		return depth === 'readiness';
 	}
-	// /ready?depth=dependencies layers the external provider probe on top of the
-	// bootstrap gate. Bare /ready keeps the master bootstrap contract untouched.
-	return Boolean(req && req.path === '/ready' && req.query && req.query.depth === 'dependencies');
+	return path === '/ready' && depth === 'dependencies';
 }
 
 // `depth=readiness` runs external provider probes; bare requests keep the
 // legacy liveness / `?deep=true` channel contract from master.
 app.use('/healthcheck', (req, res, next) => {
-	if (isDependencyReadinessRequested(req)) {
+	if (isDependencyReadinessRequested(req, '/healthcheck')) {
 		return handleDependencyReadiness(req, res, { failClosed: false });
 	}
 	return getDeepHealthcheckHandler()(req, res, next);
 });
 
 app.get('/ready', (req, res) => {
-	if (isDependencyReadinessRequested(req)) {
+	if (isDependencyReadinessRequested(req, '/ready')) {
 		return handleDependencyReadiness(req, res, { failClosed: true });
 	}
 	const status = bootstrapReadiness.getStatus();

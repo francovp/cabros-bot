@@ -190,5 +190,31 @@ describe('healthcheck + dependency readiness', () => {
 			expect(response.body.status).toBe('ready');
 			expect(response.body).not.toHaveProperty('dependencies');
 		});
+
+		it('GET /ready?depth=readiness does NOT hijack the bootstrap gate with the healthcheck vocabulary', async () => {
+			// Regression: matching `depth` without checking the path let the
+			// /healthcheck-only value `readiness` take over /ready, turning a
+			// healthy bootstrap into a 503 dependency verdict.
+			bootstrapReadiness.begin({ telegramRequired: false, newsMonitorRequired: false });
+			bootstrapReadiness.markReady('notificationServices');
+			const response = await request(app).get('/ready?depth=readiness');
+			expect(response.status).toBe(200);
+			expect(response.body.status).toBe('ready');
+			expect(response.body).not.toHaveProperty('dependencies');
+		});
+
+		it('GET /ready?depth=dependencies does NOT hijack the healthcheck vocabulary', async () => {
+			const response = await request(app).get('/healthcheck?depth=dependencies');
+			expect(response.status).toBe(200);
+			expect(response.body).toHaveProperty('uptime');
+			expect(response.body).not.toHaveProperty('dependencies');
+		});
+
+		it('GET /healthcheck?depth=READINESS is case-sensitive and keeps the liveness payload', async () => {
+			const response = await request(app).get('/healthcheck?depth=READINESS');
+			expect(response.status).toBe(200);
+			expect(response.body).toHaveProperty('uptime');
+			expect(response.body).not.toHaveProperty('dependencies');
+		});
 	});
 });
