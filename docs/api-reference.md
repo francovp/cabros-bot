@@ -91,6 +91,12 @@ Two opt-in `depth` values add bounded external dependency probes:
 
 Both probes run the same five checks **in parallel**, each with a bounded 1–5 second timeout (default 3s, clamped). Disabled features are reported as `skipped: true` and excluded from the verdict, so the payload works unchanged in preview, development, and production. No new environment variable is required. A probe is only scheduled when its feature flag is enabled, so a deployment that does not use Gemini never pays for a Gemini probe and never fails one.
 
+`/ready?depth=dependencies` **layers** on the bootstrap gate rather than replacing it: the verdict is `bootstrap.ready AND dependencies.ready`, and the response echoes `status`, `components`, and `bootstrapReady`. A replica that has not finished bootstrapping therefore never reports 200 to a load balancer, no matter how healthy its providers are.
+
+Results are memoized for 5 seconds and concurrent requests are single-flighted, so a load balancer polling every few seconds cannot fan out to Gemini, Binance, and TradingView on every hit from every replica. A degraded dependency that is switched on but not configured (`firestore_not_configured`, an expired service account) counts as a failure rather than a skip, because the feature is supposed to be working.
+
+All surfaced `error` strings pass through the shared log redaction layer, and the Gemini key is sent in the `x-goog-api-key` header rather than the query string, so a provider error can never disclose a credential on this unauthenticated surface.
+
 **Why the advisory surface never returns 503.** A readiness probe wired into a load balancer restarts or evicts replicas that fail it. If a transient Gemini timeout or a Binance `451` flipped the HTTP status, one flaky third party would pull every healthy replica out of rotation and turn a partial degradation into a full outage — precisely the failure mode the probe exists to detect. The default surface is therefore **observability only**: it always returns `200` and reports degradation in the body's `ready` field, for alerting and dashboards. Operators who *want* dependency health to gate traffic opt into `/ready?depth=dependencies`, which fails closed. Default to alerting on `ready: false`; reserve the 503 variant for deployments that can tolerate losing all capacity when a provider is down.
 
 **Advisory response (`?depth=readiness`, always HTTP 200):**

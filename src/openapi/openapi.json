@@ -272,10 +272,23 @@
                 },
                 "examples": {
                   "dependenciesHealthy": {
-                    "summary": "Bootstrap ready and every considered dependency healthy",
+                    "summary": "/ready?depth=dependencies — bootstrap ready AND every considered dependency healthy",
                     "value": {
                       "ready": true,
                       "failClosed": true,
+                      "status": "ready",
+                      "bootstrapReady": true,
+                      "components": {
+                        "telegramBot": {
+                          "status": "disabled"
+                        },
+                        "notificationServices": {
+                          "status": "ready"
+                        },
+                        "newsMonitor": {
+                          "status": "disabled"
+                        }
+                      },
                       "checkedAt": "2026-08-31T02:30:00.000Z",
                       "latencyMs": 412,
                       "dependencies": {
@@ -306,6 +319,28 @@
                         }
                       }
                     }
+                  },
+                  "bootstrapReady": {
+                    "summary": "Bare /ready — bootstrap gate only, no provider probes",
+                    "value": {
+                      "status": "ready",
+                      "ready": true,
+                      "startedAt": "2026-08-31T02:29:52.000Z",
+                      "completedAt": "2026-08-31T02:29:53.000Z",
+                      "failedAt": null,
+                      "error": null,
+                      "components": {
+                        "telegramBot": {
+                          "status": "disabled"
+                        },
+                        "notificationServices": {
+                          "status": "ready"
+                        },
+                        "newsMonitor": {
+                          "status": "disabled"
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -327,7 +362,7 @@
                 },
                 "examples": {
                   "bootstrapPending": {
-                    "summary": "Bare /ready (bootstrap gate only) while startup is pending",
+                    "summary": "Bare /ready — bootstrap still pending (503)",
                     "value": {
                       "status": "pending",
                       "ready": false,
@@ -349,12 +384,75 @@
                     }
                   },
                   "dependenciesDegraded": {
-                    "summary": "Bootstrap ready and every considered dependency healthy",
+                    "summary": "/ready?depth=dependencies — dependency degraded (503)",
                     "value": {
-                      "ready": true,
+                      "ready": false,
                       "failClosed": true,
-                      "checkedAt": "2026-08-31T02:30:00.000Z",
-                      "latencyMs": 412,
+                      "status": "ready",
+                      "bootstrapReady": true,
+                      "components": {
+                        "telegramBot": {
+                          "status": "disabled"
+                        },
+                        "notificationServices": {
+                          "status": "ready"
+                        },
+                        "newsMonitor": {
+                          "status": "disabled"
+                        }
+                      },
+                      "checkedAt": "2026-08-31T02:30:05.000Z",
+                      "latencyMs": 3011,
+                      "dependencies": {
+                        "firestore": {
+                          "ready": true,
+                          "backend": "firestore",
+                          "latencyMs": 84
+                        },
+                        "gemini": {
+                          "ready": false,
+                          "error": "timeout_after_3000ms",
+                          "latencyMs": 3000
+                        },
+                        "tradingViewMcp": {
+                          "ready": true,
+                          "backend": "tradingview_mcp",
+                          "latencyMs": 22
+                        },
+                        "binance": {
+                          "ready": false,
+                          "error": "binance_http_451",
+                          "latencyMs": 124
+                        },
+                        "telegram": {
+                          "ready": false,
+                          "enabled": false,
+                          "skipped": true,
+                          "reason": "telegram_not_initialized"
+                        }
+                      }
+                    }
+                  },
+                  "bootstrapPendingBlocksDependencies": {
+                    "summary": "/ready?depth=dependencies — bootstrap still pending, so the gate stays 503 even though every dependency is healthy",
+                    "value": {
+                      "ready": false,
+                      "failClosed": true,
+                      "status": "pending",
+                      "bootstrapReady": false,
+                      "components": {
+                        "telegramBot": {
+                          "status": "pending"
+                        },
+                        "notificationServices": {
+                          "status": "ready"
+                        },
+                        "newsMonitor": {
+                          "status": "disabled"
+                        }
+                      },
+                      "checkedAt": "2026-08-31T02:30:06.000Z",
+                      "latencyMs": 88,
                       "dependencies": {
                         "firestore": {
                           "ready": true,
