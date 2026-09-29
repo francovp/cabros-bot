@@ -591,23 +591,55 @@ describe('JobBacklogService', () => {
 		expect(sendMessage).toHaveBeenCalledTimes(1);
 	});
 
-	it('exposes durableQueuedTruncated so a bounded scan is not read as a complete depth', () => {
-		const service = new JobBacklogService();
-		service.lastProbe = {
-			durableQueuedCount: 500,
-			durableQueuedTruncated: true,
-			waitingCount: 0,
-			delayedCount: 0,
-			failedCount: 0,
-			activeCount: 0,
-			oldestQueuedAgeMs: 900000,
-			oldestCreatedAt: null,
-			probedAt: new Date().toISOString(),
+	it('exposes durableQueuedTruncated so a bounded scan is not read as a complete depth', async () => {
+		const now = Date.now();
+		process.env = { ...savedEnv, JOB_EXECUTION_MODE: 'render-worker' };
+
+		// Drive the real projection path: the repository reports that the scan hit
+		// its page cap, and getStatus() must surface that rather than defaulting to
+		// false. Seeding lastProbe directly would bypass the naming this covers.
+		const repository = {
+			isConfigured: jest.fn(() => true),
+			getBacklogDepth: jest.fn(() => Promise.resolve({
+				durableQueuedCount: 500,
+				oldestQueuedAgeMs: 900000,
+				oldestCreatedAt: new Date(now - 900000).toISOString(),
+				truncated: true,
+			})),
 		};
+		const queue = {
+			getJobCounts: jest.fn(() => Promise.resolve({ waiting: 0, delayed: 0, failed: 0, active: 0 })),
+		};
+		const service = new JobBacklogService({ repository, queue });
+
+		const probed = await service.probe(now);
+		expect(probed.durableQueuedTruncated).toBe(true);
 
 		const status = service.getStatus();
 		expect(status.durableQueuedCount).toBe(500);
 		expect(status.durableQueuedTruncated).toBe(true);
+	});
+
+	it('reports durableQueuedTruncated false when the scan completed within its page budget', async () => {
+		const now = Date.now();
+		process.env = { ...savedEnv, JOB_EXECUTION_MODE: 'render-worker' };
+
+		const repository = {
+			isConfigured: jest.fn(() => true),
+			getBacklogDepth: jest.fn(() => Promise.resolve({
+				durableQueuedCount: 2,
+				oldestQueuedAgeMs: 1000,
+				oldestCreatedAt: new Date(now - 1000).toISOString(),
+				truncated: false,
+			})),
+		};
+		const queue = {
+			getJobCounts: jest.fn(() => Promise.resolve({ waiting: 0, delayed: 0, failed: 0, active: 0 })),
+		};
+		const service = new JobBacklogService({ repository, queue });
+
+		await service.probe(now);
+		expect(service.getStatus().durableQueuedTruncated).toBe(false);
 	});
 
 	it('fails open when Telegram sendMessage fails', async () => {

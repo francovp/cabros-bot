@@ -206,8 +206,9 @@ class JobBacklogService {
 			oldestQueuedAgeMs: durable?.oldestQueuedAgeMs ?? null,
 			oldestCreatedAt: durable?.oldestCreatedAt ?? null,
 			// True when the bounded scan hit maxPages, so durableQueuedCount is a
-			// lower bound rather than a complete depth.
-			truncated: durable?.truncated === true,
+			// lower bound rather than a complete depth. Stored under the same name
+			// getStatus() reads back, so the flag is not silently lost in projection.
+			durableQueuedTruncated: durable?.truncated === true,
 			probedAt: new Date(now).toISOString(),
 		};
 
