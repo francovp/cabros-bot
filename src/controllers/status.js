@@ -22,6 +22,7 @@ const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService } = require('../services/storage/FirestoreWriteMetricsService');
+const { getPromptService } = require('../services/prompts');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
@@ -312,6 +313,37 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		enabled: langfusePromptsEnabled,
 		configured: hasValue(process.env.LANGFUSE_PUBLIC_KEY) && hasValue(process.env.LANGFUSE_SECRET_KEY),
 	});
+	// Configuration/reachability (dependencies.langfuse) says nothing about
+	// whether prompts are actually served remotely. Keep the two facts apart so
+	// a 100% local-fallback regression is visible instead of silent.
+	let langfusePrompts;
+	try {
+		langfusePrompts = getPromptService().getPromptResolutionStatus();
+	} catch (error) {
+		console.warn(`[status] Failed to read prompt-resolution telemetry: ${error.message}`);
+		langfusePrompts = {
+			enabled: langfusePromptsEnabled,
+			configured: langfuse.configured,
+			ready: langfuse.ready,
+			servingStatus: 'unknown',
+			servingPrompts: false,
+			label: null,
+			cacheTtlSeconds: null,
+			totalResolutions: 0,
+			langfuseResolutions: 0,
+			localResolutions: 0,
+			localResolutionRatePercent: null,
+			remoteFetchAttempts: 0,
+			remoteFetchSuccesses: 0,
+			remoteFetchFailures: 0,
+			remoteFetchSuccessRatePercent: null,
+			lastSuccessfulFetchAt: null,
+			lastFailedFetchAt: null,
+			lastErrorCategory: null,
+			consecutiveFailures: 0,
+			prompts: [],
+		};
+	}
 	const braveSearch = dependencyStatus({
 		enabled: newsMonitorEnabled && forceBraveSearch,
 		configured: hasValue(process.env.BRAVE_SEARCH_API_KEY),
@@ -487,6 +519,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				: {}),
 			sentry,
 			langfuse,
+			langfusePrompts,
 			braveSearch,
 			newsMonitor: {
 				enabled: newsMonitorEnabled,
