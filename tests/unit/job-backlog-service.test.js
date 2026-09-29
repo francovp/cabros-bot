@@ -688,6 +688,90 @@ describe('JobBacklogService', () => {
 		expect(service.getStatus().backlogAlert.lastRecoveryAt).not.toBeNull();
 	});
 
+	it('keeps a truncated scan that observed no queued job indeterminate', async () => {
+		const now = Date.now();
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: 'admin-12345',
+			JOB_BACKLOG_ALERT_THRESHOLD_MS: '600000',
+		};
+
+		let truncated = false;
+		const repository = {
+			isConfigured: jest.fn(() => true),
+			getBacklogDepth: jest.fn(() => Promise.resolve({
+				durableQueuedCount: 0,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+				truncated,
+			})),
+		};
+		const queue = {
+			getJobCounts: jest.fn(() => Promise.resolve({ waiting: 0, delayed: 0, failed: 0, active: 0 })),
+		};
+		const sendMessage = jest.fn().mockResolvedValue({ message_id: 1 });
+		const service = new JobBacklogService({ repository, queue, botGetter: () => ({ telegram: { sendMessage } }) });
+
+		// Latch an alert from a healthy, non-truncated empty scan.
+		repository.getBacklogDepth = jest.fn(() => Promise.resolve({
+			durableQueuedCount: 3,
+			oldestQueuedAgeMs: 700000,
+			oldestCreatedAt: new Date(now - 700000).toISOString(),
+			truncated: false,
+		}));
+		await service.probe(now);
+		expect(service.getStatus().backlogAlert.active).toBe(true);
+
+		// The backlog drained, but the scan hit its page cap on actively leased
+		// documents and observed nothing -- queued jobs may exist beyond the cap.
+		repository.getBacklogDepth = jest.fn(() => Promise.resolve({
+			durableQueuedCount: 0,
+			oldestQueuedAgeMs: null,
+			oldestCreatedAt: null,
+			truncated,
+		}));
+		truncated = true;
+		await service.probe(now + 60000);
+
+		// Unknown, not drained: the latch must survive and no all-clear is sent.
+		expect(service.getStatus().backlogAlert.active).toBe(true);
+		expect(service.getStatus().backlogAlert.lastRecoveryAt).toBeNull();
+		expect(sendMessage).toHaveBeenCalledTimes(1);
+	});
+
+	it('treats a truncated scan that did observe queued jobs as conclusive', async () => {
+		const now = Date.now();
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: 'admin-12345',
+			JOB_BACKLOG_ALERT_THRESHOLD_MS: '600000',
+		};
+
+		const repository = {
+			isConfigured: jest.fn(() => true),
+			getBacklogDepth: jest.fn(() => Promise.resolve({
+				durableQueuedCount: 500,
+				oldestQueuedAgeMs: 700000,
+				oldestCreatedAt: new Date(now - 700000).toISOString(),
+				truncated: true,
+			})),
+		};
+		const queue = {
+			getJobCounts: jest.fn(() => Promise.resolve({ waiting: 0, delayed: 0, failed: 0, active: 0 })),
+		};
+		const sendMessage = jest.fn().mockResolvedValue({ message_id: 1 });
+		const service = new JobBacklogService({ repository, queue, botGetter: () => ({ telegram: { sendMessage } }) });
+
+		await service.probe(now);
+		// A truncated scan that observed an aged job is still real evidence, so it
+		// must page and latch rather than be treated as indeterminate.
+		expect(service.getStatus().durableQueuedTruncated).toBe(true);
+		expect(sendMessage).toHaveBeenCalledTimes(1);
+		expect(service.getStatus().backlogAlert.active).toBe(true);
+	});
+
 	it('fails open when Telegram sendMessage fails', async () => {
 		const now = Date.now();
 		process.env = {

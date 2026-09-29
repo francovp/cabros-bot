@@ -46,6 +46,19 @@ function trackOutstanding(promise, outstanding) {
 	return promise;
 }
 
+// A durable result is conclusive only when the scan actually observed the state
+// it reports. Two cases are indeterminate, not evidence of recovery:
+//   - probeFailed: the Firestore read failed and fell back to memory.
+//   - truncated with nothing observed: the scan hit its page cap, so queued
+//     jobs may exist beyond it. Reporting that as an empty backlog would clear a
+//     real alert while an aged backlog sits in the unscanned suffix.
+function isDurableResultConclusive(durable) {
+	if (!durable) return false;
+	if (durable.probeFailed === true) return false;
+	if (durable.truncated === true && !(durable.durableQueuedCount > 0)) return false;
+	return true;
+}
+
 class JobBacklogService {
 	constructor({
 		jobQueue = null,
@@ -164,7 +177,7 @@ class JobBacklogService {
 								this.outstandingProbes.durable,
 							);
 							durable = await withTimeout(pending, timeoutMs, 'Durable backlog probe');
-							durableProbeSucceeded = durable?.probeFailed !== true;
+							durableProbeSucceeded = isDurableResultConclusive(durable);
 						} else {
 							this.logger.warn?.('[JobBacklogService] Skipping durable probe: a previous probe is still outstanding');
 						}
@@ -181,7 +194,7 @@ class JobBacklogService {
 							this.outstandingProbes.durable,
 						);
 						durable = await withTimeout(pending, timeoutMs, 'Durable backlog probe');
-						durableProbeSucceeded = durable?.probeFailed !== true;
+						durableProbeSucceeded = isDurableResultConclusive(durable);
 					} else {
 						// No result was produced, so this sweep stays indeterminate.
 						// Falling through here would mark the untouched default as a
