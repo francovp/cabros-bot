@@ -11774,6 +11774,21 @@
             "minimum": 0,
             "description": "Process-local failure counter."
           },
+          "lastErrorCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sanitized last queue error code, or null. Never contains credentials."
+          },
+          "lastEnqueuedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this process last enqueued a job, or null."
+          },
           "waitingCount": {
             "type": "integer",
             "minimum": 0,
@@ -11800,10 +11815,23 @@
             "description": "Non-terminal durable jobs in a queued state. Reported as a lower bound when the bounded probe truncates its scan."
           },
           "oldestQueuedAgeMs": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "minimum": 0,
-            "nilable": true,
             "description": "Age in milliseconds of the oldest queued job, or null when the backlog is empty or the probe failed."
+          },
+          "backlogMonitorEnabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether ENABLE_JOB_BACKLOG_MONITOR permits backlog probing. Null before the monitor reports. False means depth is not being observed."
+          },
+          "backlogMonitorRunning": {
+            "type": "boolean",
+            "description": "Whether this process has an active backlog probe timer."
           },
           "backlogAlert": {
             "type": "object",
@@ -11819,12 +11847,18 @@
                 "description": "Configured oldest-queued-age threshold in milliseconds."
               },
               "pagedAt": {
-                "type": "string",
+                "type": [
+                  "string",
+                  "null"
+                ],
                 "format": "date-time",
                 "description": "When the current alert was last paged, or null."
               },
               "lastRecoveryAt": {
-                "type": "string",
+                "type": [
+                  "string",
+                  "null"
+                ],
                 "format": "date-time",
                 "description": "When the last all-clear was paged, or null."
               }

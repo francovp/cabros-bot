@@ -6,6 +6,7 @@ const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const DEFAULT_ALERT_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
 const DEFAULT_PAGE_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
 const DEFAULT_PROBE_INTERVAL_MS = 60 * 1000; // 1 minute
+const DEFAULT_PROBE_OPERATION_TIMEOUT_MS = 10 * 1000; // 10 seconds per external probe
 
 function parsePositiveInteger(value, fallback, min = 1000, max = 86400000) {
 	const parsed = Number(value);
@@ -13,6 +14,19 @@ function parsePositiveInteger(value, fallback, min = 1000, max = 86400000) {
 		return fallback;
 	}
 	return parsed;
+}
+
+// Bound each external probe so a half-open broker connection or a stalled
+// Firestore read cannot pin probe() open forever. probe() only reschedules once
+// it settles, so one hung dependency would otherwise silently disable backlog
+// reporting and operator pages for the whole process lifetime.
+function withTimeout(promise, timeoutMs, label) {
+	let timer;
+	const timeout = new Promise((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+		if (typeof timer.unref === 'function') timer.unref();
+	});
+	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 class JobBacklogService {
@@ -82,20 +96,32 @@ class JobBacklogService {
 			1000,
 			3600000,
 		);
+		const probeOperationTimeoutMs = parsePositiveInteger(
+			process.env.JOB_BACKLOG_PROBE_TIMEOUT_MS,
+			DEFAULT_PROBE_OPERATION_TIMEOUT_MS,
+			1000,
+			300000,
+		);
 
 		return {
 			alertThresholdMs,
 			pageCooldownMs,
 			probeIntervalMs,
+			probeOperationTimeoutMs,
 		};
 	}
 
 	async probe(options = {}) {
 		const now = typeof options === 'number' ? options : (options?.now ?? Date.now());
+		const { probeOperationTimeoutMs: timeoutMs } = this.getConfig();
 		let brokerCounts = { waiting: 0, delayed: 0, failed: 0, active: 0, paused: 0 };
 		try {
 			if (this.jobQueue && typeof this.jobQueue.getJobCounts === 'function') {
-				brokerCounts = await this.jobQueue.getJobCounts();
+				brokerCounts = await withTimeout(
+					this.jobQueue.getJobCounts(),
+					timeoutMs,
+					'Broker count probe',
+				);
 			}
 		} catch (error) {
 			this.logger.warn?.('[JobBacklogService] Broker count probe failed:', error.message);
@@ -107,14 +133,22 @@ class JobBacklogService {
 			if (this.repository) {
 				if (typeof this.repository.isConfigured === 'function') {
 					if (this.repository.isConfigured()) {
-						durable = await this.repository.getBacklogDepth({ maxScan: 100, now });
+						durable = await withTimeout(
+							this.repository.getBacklogDepth({ maxScan: 100, now }),
+							timeoutMs,
+							'Durable backlog probe',
+						);
 						durableProbeSucceeded = true;
 					} else if (typeof this.repository.getMemoryBacklogDepth === 'function') {
 						durable = this.repository.getMemoryBacklogDepth(now);
 						durableProbeSucceeded = true;
 					}
 				} else if (typeof this.repository.getBacklogDepth === 'function') {
-					durable = await this.repository.getBacklogDepth({ maxScan: 100, now });
+					durable = await withTimeout(
+						this.repository.getBacklogDepth({ maxScan: 100, now }),
+						timeoutMs,
+						'Durable backlog probe',
+					);
 					durableProbeSucceeded = true;
 				} else if (typeof this.repository.getMemoryBacklogDepth === 'function') {
 					durable = this.repository.getMemoryBacklogDepth(now);
@@ -175,9 +209,14 @@ class JobBacklogService {
 				}
 			}
 		} else if (this.hasActiveAlert && (oldestAge === null || oldestAge < alertThresholdMs || totalQueued === 0)) {
-			this.hasActiveAlert = false;
-			this.lastRecoveryAt = now;
-			await this._notifyAdminRecovery(probeResult);
+			// Only clear the latch once the all-clear is actually delivered. If the
+			// send fails, keep the alert active so a later probe retries instead of
+			// leaving the operator with a stale incident and no notification.
+			const recovered = await this._notifyAdminRecovery(probeResult);
+			if (recovered) {
+				this.hasActiveAlert = false;
+				this.lastRecoveryAt = now;
+			}
 		}
 	}
 
@@ -215,7 +254,11 @@ class JobBacklogService {
 		}
 
 		const telegramService = this._getTelegramService();
-		if (!telegramService || !telegramService.isEnabled()) {
+		// Backlog pages are admin notifications, not user broadcasts. A deployment
+		// that sets only TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID (no default
+		// TELEGRAM_CHAT_ID) legitimately has the broadcast channel disabled, so gate
+		// on admin-delivery eligibility rather than broadcast enablement.
+		if (!telegramService || !this._isAdminDeliveryEligible(telegramService)) {
 			return false;
 		}
 
@@ -231,6 +274,13 @@ class JobBacklogService {
 			this.logger.warn?.('[JobBacklogService] Failed to send Telegram backlog alert (fail-open)', { error: error.message });
 			return false;
 		}
+	}
+
+	_isAdminDeliveryEligible(telegramService) {
+		if (typeof telegramService.isAdminDeliveryEligible === 'function') {
+			return telegramService.isAdminDeliveryEligible() !== false;
+		}
+		return telegramService.isEnabled?.() !== false;
 	}
 
 	async _notifyAdminRecovery(probeResult) {
@@ -255,27 +305,34 @@ class JobBacklogService {
 				});
 			} catch (err) {
 				this.logger?.warn?.(`[JobBacklogService] notifyAdmin callback failed: ${err.message}`);
+				return false;
 			}
-			return;
+			return true;
 		}
 
 		if (!adminChatId) {
-			return;
+			return false;
 		}
 
 		const telegramService = this._getTelegramService();
-		if (!telegramService || !telegramService.isEnabled()) {
-			return;
+		if (!telegramService || !this._isAdminDeliveryEligible(telegramService)) {
+			return false;
 		}
 
 		try {
-			await telegramService.send({
+			const result = await telegramService.send({
 				text: message,
 				telegramChatId: adminChatId,
 			});
+			if (result?.success === false) {
+				this.logger.warn?.('[JobBacklogService] Admin recovery notification was not delivered (fail-open)');
+				return false;
+			}
 			this.logger.info?.('[JobBacklogService] Sent admin recovery notification for async job backlog');
+			return true;
 		} catch (error) {
 			this.logger.warn?.('[JobBacklogService] Failed to send Telegram backlog recovery notification (fail-open)', { error: error.message });
+			return false;
 		}
 	}
 
@@ -325,6 +382,10 @@ class JobBacklogService {
 		const lastProbedAt = this.lastProbe?.probedAt ?? null;
 
 		return {
+			// Without this, a monitor disabled via ENABLE_JOB_BACKLOG_MONITOR is
+			// indistinguishable from a running monitor observing an empty queue.
+			enabled: this.isEnabled(),
+			running: this.running,
 			waitingCount,
 			delayedCount,
 			failedCount,
@@ -357,9 +418,14 @@ class JobBacklogService {
 		const { probeIntervalMs } = this.getConfig();
 		this.timer = setTimeout(() => {
 			this.timer = null;
-			Promise.resolve(this.probe())
+			// Track the in-flight probe so stop() can await it during shutdown
+			// instead of abandoning a half-finished Firestore read or page.
+			this.inFlightProbe = this.probe()
 				.catch((error) => this.logger.warn?.('[JobBacklogService] Probe failed (fail-open):', error.message))
-				.finally(() => this._scheduleProbe());
+				.finally(() => {
+					this.inFlightProbe = null;
+					this._scheduleProbe();
+				});
 		}, probeIntervalMs);
 		// Unref here, not only on the first timer: every self-rescheduled timer must
 		// inherit the flag or a rescheduled probe holds the process open.
@@ -368,11 +434,22 @@ class JobBacklogService {
 		}
 	}
 
-	stop() {
+	async stop({ drain = false, timeoutMs = 5000 } = {}) {
 		this.running = false;
 		if (this.timer) {
 			clearTimeout(this.timer);
 			this.timer = null;
+		}
+		// Only drain on the explicit shutdown path. Callers that just want to stop
+		// the timer (tests, restarts) must not have to await an external probe.
+		if (drain && this.inFlightProbe) {
+			await Promise.race([
+				this.inFlightProbe,
+				new Promise((resolve) => {
+					const timer = setTimeout(resolve, timeoutMs);
+					if (typeof timer.unref === 'function') timer.unref();
+				}),
+			]);
 		}
 	}
 

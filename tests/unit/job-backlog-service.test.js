@@ -15,6 +15,8 @@ describe('JobBacklogService', () => {
 		const status = service.getStatus();
 
 		expect(status).toEqual({
+			enabled: true,
+			running: false,
 			waitingCount: 0,
 			delayedCount: 0,
 			failedCount: 0,
@@ -296,6 +298,157 @@ describe('JobBacklogService', () => {
 		await service.probe(now + 120000);
 		expect(sendMessage).toHaveBeenCalledTimes(1);
 		expect(service.getStatus().backlogAlert.active).toBe(true);
+	});
+
+	it('keeps the alert active and retries the all-clear when the recovery send reports an unsuccessful delivery', async () => {
+		const now = Date.now();
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: 'admin-12345',
+			JOB_BACKLOG_ALERT_THRESHOLD_MS: '600000',
+			JOB_BACKLOG_PAGE_COOLDOWN_MS: '900000',
+		};
+
+		let currentAgeMs = 700000;
+		let currentDurable = 3;
+		let recoveryShouldSucceed = true;
+
+		const repository = {
+			isConfigured: jest.fn(() => true),
+			getBacklogDepth: jest.fn(() => Promise.resolve({
+				durableQueuedCount: currentDurable,
+				oldestQueuedAgeMs: currentAgeMs,
+				oldestCreatedAt: currentAgeMs ? new Date(now - currentAgeMs).toISOString() : null,
+			})),
+		};
+		const queue = {
+			getJobCounts: jest.fn(() => Promise.resolve({
+				waiting: currentDurable, delayed: 0, failed: 0, active: 0,
+			})),
+		};
+
+		const sendMessage = jest.fn()
+			.mockResolvedValueOnce({ message_id: 1 })
+			// First recovery attempt resolves { success: false } rather than rejecting.
+			.mockResolvedValueOnce({ success: false })
+			.mockResolvedValueOnce({ message_id: 3 });
+
+		const service = new JobBacklogService({ repository, queue, botGetter: () => ({ telegram: { sendMessage } }) });
+
+		await service.probe(now);
+		expect(service.getStatus().backlogAlert.active).toBe(true);
+
+		// Backlog drains, but the recovery notification fails to deliver.
+		currentAgeMs = null;
+		currentDurable = 0;
+		recoveryShouldSucceed = false;
+		await service.probe(now + 60000);
+
+		// The latch must survive: clearing it would strand the incident silently.
+		expect(service.getStatus().backlogAlert.active).toBe(true);
+		expect(service.getStatus().backlogAlert.lastRecoveryAt).toBeNull();
+
+		// The next probe retries the all-clear and only then clears the latch.
+		recoveryShouldSucceed = true;
+		await service.probe(now + 120000);
+		expect(sendMessage).toHaveBeenCalledTimes(3);
+		expect(service.getStatus().backlogAlert.active).toBe(false);
+		expect(service.getStatus().backlogAlert.lastRecoveryAt).not.toBeNull();
+	});
+
+	it('pages when only the admin chat is configured and the broadcast channel is disabled', async () => {
+		const now = Date.now();
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: 'admin-12345',
+			// No TELEGRAM_CHAT_ID: the broadcast channel is legitimately disabled.
+			TELEGRAM_CHAT_ID: '',
+			JOB_BACKLOG_ALERT_THRESHOLD_MS: '600000',
+		};
+
+		const repository = {
+			isConfigured: jest.fn(() => true),
+			getBacklogDepth: jest.fn(() => Promise.resolve({
+				durableQueuedCount: 5,
+				oldestQueuedAgeMs: 700000,
+				oldestCreatedAt: new Date(now - 700000).toISOString(),
+			})),
+		};
+		const queue = {
+			getJobCounts: jest.fn(() => Promise.resolve({ waiting: 5, delayed: 0, failed: 0, active: 0 })),
+		};
+
+		const sendMessage = jest.fn().mockResolvedValue({ message_id: 1 });
+		// isEnabled() is false (no broadcast chat), but admin delivery is eligible.
+		const telegramService = {
+			isEnabled: () => false,
+			isAdminDeliveryEligible: () => true,
+			send: sendMessage,
+		};
+
+		const service = new JobBacklogService({
+			repository,
+			queue,
+			telegramServiceGetter: () => telegramService,
+		});
+
+		await service.probe(now);
+
+		expect(sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				telegramChatId: 'admin-12345',
+				text: expect.stringContaining('Job Backlog Alert'),
+			}),
+		);
+		expect(service.getStatus().backlogAlert.active).toBe(true);
+	});
+
+	it('bounds a hung broker probe so backlog reporting keeps running fail-open', async () => {
+		const now = Date.now();
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			JOB_BACKLOG_PROBE_TIMEOUT_MS: '1000',
+		};
+
+		// Simulates a half-open broker connection: getJobCounts() never settles.
+		const queue = {
+			getJobCounts: jest.fn(() => new Promise(() => {})),
+		};
+		const repository = {
+			isConfigured: jest.fn(() => true),
+			getBacklogDepth: jest.fn(() => Promise.resolve({
+				durableQueuedCount: 2,
+				oldestQueuedAgeMs: 120000,
+				oldestCreatedAt: new Date(now - 120000).toISOString(),
+			})),
+		};
+
+		const service = new JobBacklogService({ repository, queue });
+		const started = Date.now();
+		const status = await service.probe(now);
+		const elapsed = Date.now() - started;
+
+		// The hung broker call is abandoned, and the durable probe still completes.
+		expect(elapsed).toBeLessThan(5000);
+		expect(status.durableQueuedCount).toBe(2);
+		expect(status.oldestQueuedAgeMs).toBe(120000);
+	});
+
+	it('reports backlogMonitorEnabled false so a disabled monitor is distinguishable from a healthy queue', () => {
+		const saved = process.env.ENABLE_JOB_BACKLOG_MONITOR;
+		process.env = { ...savedEnv, ENABLE_JOB_BACKLOG_MONITOR: 'false' };
+		try {
+			const service = new JobBacklogService();
+			const status = service.getStatus();
+			expect(status.enabled).toBe(false);
+			expect(status.durableQueuedCount).toBe(0);
+		} finally {
+			if (saved === undefined) delete process.env.ENABLE_JOB_BACKLOG_MONITOR;
+			else process.env.ENABLE_JOB_BACKLOG_MONITOR = saved;
+		}
 	});
 
 	it('fails open when Telegram sendMessage fails', async () => {

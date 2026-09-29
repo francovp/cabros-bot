@@ -226,6 +226,22 @@ Alerts are stored in the server-side-only `userPriceAlerts` Firestore collection
 | `USER_PRICE_ALERT_LEASE_MS` | `120000` | Distributed sweep lease duration. |
 | `USER_PRICE_ALERT_PRICE_FETCH_CONCURRENCY` | `3` | Concurrent price lookups per sweep. |
 
+### Async Job Backlog Depth & Operator Paging
+
+A background probe reports durable async-job backlog depth on `GET /api/status` and `GET /api/capabilities` under `dependencies.jobExecutionQueue`, and pages `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` when non-terminal queued jobs accumulate while workers are stalled or offline. Broker readiness alone cannot distinguish a *ready but undrained* queue from a healthy one, which is why queue "ready" is reported alongside depth rather than instead of it.
+
+`durableQueuedCount` is a **lower bound**: the probe scans at most `5` pages of `100` documents and sets `truncated` when it stops early, so it never overstates what it observed. `oldestQueuedAgeMs` is `null` when the backlog is empty **or** when the durable probe failed — a failed probe never clears an active alert or emits a false all-clear, because an indeterminate result is not evidence of recovery. `backlogMonitorEnabled` is `false` when the monitor is switched off, so disabled monitoring is never read as a healthy empty queue.
+
+Paging is deduplicated by cooldown and only latches after confirmed delivery; a failed page or a failed all-clear is retried on the next probe. All probing and paging is fail-open — it never blocks job intake or alert delivery — and each external probe is individually bounded so a half-open broker connection cannot silently stop backlog reporting for the process lifetime.
+
+| Variable | Default | Bounds | Purpose |
+| :--- | :--- | :--- | :--- |
+| `JOB_BACKLOG_ALERT_THRESHOLD_MS` | `900000` | `1000`–`86400000` | Oldest-queued age that triggers an operator page. Remote Config eligible. |
+| `JOB_BACKLOG_PAGE_COOLDOWN_MS` | `900000` | `1000`–`86400000` | Minimum gap between repeat pages, so a sustained stall cannot storm the operator. Remote Config eligible. |
+| `JOB_BACKLOG_PROBE_INTERVAL_MS` | `60000` | `1000`–`3600000` | Background probe cadence. Remote Config eligible. |
+| `JOB_BACKLOG_PROBE_TIMEOUT_MS` | `10000` | `1000`–`300000` | Per-dependency probe deadline. Environment-only. |
+| `ENABLE_JOB_BACKLOG_MONITOR` | `true` | — | Master monitor gate. **Environment-only** — a process-startup gate, deliberately excluded from Remote Config. |
+
 ---
 
 ## Running Tests

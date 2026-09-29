@@ -302,6 +302,10 @@ class JobQueue {
 			activeCount: resolvedBacklog?.activeCount ?? 0,
 			durableQueuedCount: resolvedBacklog?.durableQueuedCount ?? 0,
 			oldestQueuedAgeMs: resolvedBacklog?.oldestQueuedAgeMs ?? null,
+			// Surfaces ENABLE_JOB_BACKLOG_MONITOR so a disabled monitor is not read
+			// as a running monitor observing an empty queue.
+			backlogMonitorEnabled: resolvedBacklog?.enabled ?? null,
+			backlogMonitorRunning: resolvedBacklog?.running ?? false,
 			backlogAlert: resolvedBacklog?.backlogAlert ?? {
 				active: false,
 				thresholdMs: 900000,

@@ -191,7 +191,7 @@ function createProcessLifecycle(options = {}) {
 					safelyRun(logger, 'notification redrive worker', () => stopNotificationRedriveWorker({ drain: true })),
 					safelyRun(logger, 'whatsapp command bridge', () => stopWhatsAppCommandBridge({ drain: true })),
 					safelyRun(logger, 'scanner preset scheduler', () => stopScannerPresetScheduler({ drain: true })),
-					safelyRun(logger, 'job backlog monitor', stopJobBacklogMonitor),
+					safelyRun(logger, 'job backlog monitor', () => stopJobBacklogMonitor({ drain: true })),
 					safelyRun(logger, 'user price alert worker', () => stopUserPriceAlertWorker({ drain: true })),
 					safelyRun(logger, 'news monitor scheduler', () => stopNewsMonitorScheduler({ drain: true })),
 					safelyRun(logger, 'alert scheduler', () => stopAlertScheduler({ drain: true })),
