@@ -435,11 +435,10 @@ describe('JobBacklogService', () => {
 		// The probe returns within its deadline instead of hanging forever.
 		expect(elapsed).toBeLessThan(5000);
 		expect(status.waitingCount).toBe(0);
-		// The durable result is unknown, not drained: the still-outstanding broker
-		// call blocks a second durable query, so no depth is asserted as recovered.
-		expect(status.durableQueuedCount).toBe(0);
-		expect(status.backlogAlert.active).toBe(false);
-		expect(status.backlogAlert.lastRecoveryAt).toBeNull();
+		// The broker slot is wedged, but the durable slot is independent, so depth
+		// is still reported from Firestore.
+		expect(status.durableQueuedCount).toBe(2);
+		expect(status.oldestQueuedAgeMs).toBe(120000);
 	});
 
 	it('reports backlogMonitorEnabled false so a disabled monitor is distinguishable from a healthy queue', () => {
@@ -513,11 +512,43 @@ describe('JobBacklogService', () => {
 		await service.probe(now);
 		// The broker call timed out but is still pending internally.
 		expect(getJobCounts).toHaveBeenCalledTimes(1);
-		expect(service.outstandingProbes.size).toBe(1);
+		expect(service.outstandingProbes.broker.size).toBe(1);
 
 		await service.probe(now + 60000);
 		// The second sweep must not open a second connection for the same work.
 		expect(getJobCounts).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps the durable probe observable while the broker call is still outstanding', async () => {
+		const now = Date.now();
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			JOB_BACKLOG_PROBE_TIMEOUT_MS: '1000',
+		};
+
+		const queue = { getJobCounts: jest.fn(() => new Promise(() => {})) };
+		const repository = {
+			isConfigured: jest.fn(() => true),
+			getBacklogDepth: jest.fn(() => Promise.resolve({
+				durableQueuedCount: 7,
+				oldestQueuedAgeMs: 900000,
+				oldestCreatedAt: new Date(now - 900000).toISOString(),
+			})),
+		};
+		const service = new JobBacklogService({ repository, queue });
+
+		const status = await service.probe(now);
+
+		// The broker is wedged, but backlog depth is still reported from Firestore.
+		expect(getBacklogCalls()).toBe(1);
+		expect(status.durableQueuedCount).toBe(7);
+		expect(status.oldestQueuedAgeMs).toBe(900000);
+		expect(status.waitingCount).toBe(0);
+
+		function getBacklogCalls() {
+			return repository.getBacklogDepth.mock.calls.length;
+		}
 	});
 
 	it('keeps a skipped durable probe indeterminate so it cannot clear an active alert', async () => {

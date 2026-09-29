@@ -67,10 +67,13 @@ class JobBacklogService {
 		this.timer = null;
 		this.running = false;
 		this.unrefTimers = true;
-		// Operations started by a probe that has not settled. A timed-out probe is
-		// abandoned rather than cancelled, so this keeps the next sweep from
-		// stacking another call on unfinished work.
-		this.outstandingProbes = new Set();
+		// Operations started by a probe that has not settled, tracked per
+		// dependency. A timed-out probe is abandoned rather than cancelled, so
+		// this keeps the next sweep from stacking another call on unfinished work.
+		// The slots are separate on purpose: a half-open broker connection must not
+		// blind the Firestore read, or backlog reporting would stay dark for as long
+		// as the broker promise never settles.
+		this.outstandingProbes = { broker: new Set(), durable: new Set() };
 		this.hasActiveAlert = false;
 		this.lastPagedAt = null;
 		this.lastRecoveryAt = null;
@@ -138,8 +141,8 @@ class JobBacklogService {
 		let brokerCounts = { waiting: 0, delayed: 0, failed: 0, active: 0, paused: 0 };
 		try {
 			if (this.jobQueue && typeof this.jobQueue.getJobCounts === 'function') {
-				if (this.outstandingProbes.size === 0) {
-					const pending = trackOutstanding(this.jobQueue.getJobCounts(), this.outstandingProbes);
+				if (this.outstandingProbes.broker.size === 0) {
+					const pending = trackOutstanding(this.jobQueue.getJobCounts(), this.outstandingProbes.broker);
 					brokerCounts = await withTimeout(pending, timeoutMs, 'Broker count probe');
 				} else {
 					this.logger.warn?.('[JobBacklogService] Skipping broker probe: a previous probe is still outstanding');
@@ -155,10 +158,10 @@ class JobBacklogService {
 			if (this.repository) {
 				if (typeof this.repository.isConfigured === 'function') {
 					if (this.repository.isConfigured()) {
-						if (this.outstandingProbes.size === 0) {
+						if (this.outstandingProbes.durable.size === 0) {
 							const pending = trackOutstanding(
 								this.repository.getBacklogDepth({ maxScan: 100, now }),
-								this.outstandingProbes,
+								this.outstandingProbes.durable,
 							);
 							durable = await withTimeout(pending, timeoutMs, 'Durable backlog probe');
 							durableProbeSucceeded = durable?.probeFailed !== true;
@@ -172,10 +175,10 @@ class JobBacklogService {
 				} else if (typeof this.repository.getBacklogDepth === 'function') {
 					// This is the branch the real JobRepository takes: it has no
 					// isConfigured() method, so the guard must live here too.
-					if (this.outstandingProbes.size === 0) {
+					if (this.outstandingProbes.durable.size === 0) {
 						const pending = trackOutstanding(
 							this.repository.getBacklogDepth({ maxScan: 100, now }),
-							this.outstandingProbes,
+							this.outstandingProbes.durable,
 						);
 						durable = await withTimeout(pending, timeoutMs, 'Durable backlog probe');
 						durableProbeSucceeded = durable?.probeFailed !== true;
