@@ -35,6 +35,7 @@ class JobBacklogService {
 		this.logger = logger;
 		this.timer = null;
 		this.running = false;
+		this.unrefTimers = true;
 		this.hasActiveAlert = false;
 		this.lastPagedAt = null;
 		this.lastRecoveryAt = null;
@@ -101,18 +102,23 @@ class JobBacklogService {
 		}
 
 		let durable = { durableQueuedCount: 0, oldestQueuedAgeMs: null, oldestCreatedAt: null };
+		let durableProbeSucceeded = false;
 		try {
 			if (this.repository) {
 				if (typeof this.repository.isConfigured === 'function') {
 					if (this.repository.isConfigured()) {
 						durable = await this.repository.getBacklogDepth({ maxScan: 100, now });
+						durableProbeSucceeded = true;
 					} else if (typeof this.repository.getMemoryBacklogDepth === 'function') {
 						durable = this.repository.getMemoryBacklogDepth(now);
+						durableProbeSucceeded = true;
 					}
 				} else if (typeof this.repository.getBacklogDepth === 'function') {
 					durable = await this.repository.getBacklogDepth({ maxScan: 100, now });
+					durableProbeSucceeded = true;
 				} else if (typeof this.repository.getMemoryBacklogDepth === 'function') {
 					durable = this.repository.getMemoryBacklogDepth(now);
+					durableProbeSucceeded = true;
 				}
 			}
 		} catch (error) {
@@ -130,6 +136,12 @@ class JobBacklogService {
 			probedAt: new Date(now).toISOString(),
 		};
 
+		// A failed durable probe leaves oldestQueuedAgeMs null, which is
+		// indistinguishable from a drained backlog. Suppress alert evaluation for
+		// this sweep so a transient storage error cannot emit a false all-clear
+		// and then re-page on the next successful probe.
+		probeResult.durableProbeSucceeded = durableProbeSucceeded;
+
 		await this._evaluateAlert(probeResult, now);
 		this.lastProbe = probeResult;
 		return {
@@ -145,6 +157,11 @@ class JobBacklogService {
 
 	async _evaluateAlert(probeResult, now = Date.now()) {
 		const { alertThresholdMs, pageCooldownMs } = this.getConfig();
+		// An indeterminate probe is not evidence of recovery. Hold the current
+		// latch so a storage blip cannot clear an active alert and re-page.
+		if (probeResult.durableProbeSucceeded === false) {
+			return;
+		}
 		const oldestAge = probeResult.oldestQueuedAgeMs;
 		const totalQueued = (probeResult.durableQueuedCount || 0) + (probeResult.waitingCount || 0);
 
@@ -331,11 +348,8 @@ class JobBacklogService {
 		}
 
 		this.running = true;
+		this.unrefTimers = unref;
 		this._scheduleProbe();
-
-		if (unref && this.timer && typeof this.timer.unref === 'function') {
-			this.timer.unref();
-		}
 	}
 
 	_scheduleProbe() {
@@ -347,6 +361,11 @@ class JobBacklogService {
 				.catch((error) => this.logger.warn?.('[JobBacklogService] Probe failed (fail-open):', error.message))
 				.finally(() => this._scheduleProbe());
 		}, probeIntervalMs);
+		// Unref here, not only on the first timer: every self-rescheduled timer must
+		// inherit the flag or a rescheduled probe holds the process open.
+		if (this.unrefTimers && this.timer && typeof this.timer.unref === 'function') {
+			this.timer.unref();
+		}
 	}
 
 	stop() {

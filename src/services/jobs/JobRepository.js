@@ -747,7 +747,7 @@ class JobRepository {
 		return [...memoryJobs.entries()].map(([id, job]) => [id, cloneJob(job)]);
 	}
 
-	async getBacklogDepth({ maxScan = 100, now = Date.now() } = {}) {
+	async getBacklogDepth({ maxScan = 100, maxPages = 5, now = Date.now() } = {}) {
 		const firestore = this._getFirestore();
 
 		if (firestore) {
@@ -757,8 +757,9 @@ class JobRepository {
 				let lastDocId;
 				let durableQueuedCount = 0;
 				let oldestCreatedAt = null;
+				let truncated = false;
 
-				while (true) {
+				for (let page = 0; page < maxPages; page += 1) {
 					let pageQuery = query;
 					if (typeof pageQuery.where === 'function') {
 						pageQuery = pageQuery.where('status', '==', 'processing');
@@ -797,6 +798,9 @@ class JobRepository {
 					if (!nextDoc || !nextDoc.id || nextDoc.id === lastDocId) break;
 					lastDoc = nextDoc;
 					lastDocId = nextDoc.id;
+					// A full page was scanned and more may remain; keep the counts a
+					// lower bound rather than paginating the whole collection.
+					if (page === maxPages - 1) truncated = true;
 				}
 
 				const oldestCreatedAtMs = oldestCreatedAt ? Date.parse(oldestCreatedAt) : null;
@@ -808,6 +812,7 @@ class JobRepository {
 					durableQueuedCount,
 					oldestQueuedAgeMs,
 					oldestCreatedAt,
+					truncated,
 				};
 			} catch (error) {
 				console.warn('[JobRepository] Failed to probe durable backlog depth from Firestore:', error.message);

@@ -996,5 +996,39 @@ describe('JobRepository durable claims', () => {
 		expect(depth.durableQueuedCount).toBe(1);
 		expect(depth.oldestQueuedAgeMs).toBe(700000);
 	});
+
+	it('bounds the number of Firestore pages scanned so a large backlog cannot drive an unbounded read loop', async () => {
+		const now = Date.now();
+		// Every page is completely full, so the loop would only stop via the page cap.
+		const fullPage = Array.from({ length: 50 }, (_, index) => ({
+			id: `job-${index}`,
+			data: () => ({
+				status: 'processing',
+				execution: { status: 'queued' },
+				createdAt: new Date(now - 900000 - index * 1000).toISOString(),
+			}),
+		}));
+
+		const query = {
+			where: jest.fn(() => query),
+			orderBy: jest.fn(() => query),
+			limit: jest.fn(() => query),
+			startAfter: jest.fn(() => query),
+			get: jest.fn(() => Promise.resolve({ docs: fullPage })),
+		};
+		const firestore = { collection: jest.fn(() => query) };
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		const depth = await repository.getBacklogDepth({ maxScan: 50, now });
+
+		// Without a hard page cap this loops forever, since each page is full and
+		// every document is a queued job.
+		expect(query.get).toHaveBeenCalled();
+		expect(query.get.mock.calls.length).toBeLessThanOrEqual(5);
+		// Every page is identical, so the oldest scanned job is the last index.
+		expect(depth.durableQueuedCount).toBe(50 * query.get.mock.calls.length);
+		expect(depth.oldestQueuedAgeMs).toBe(900000 + 49000);
+	});
 });
 

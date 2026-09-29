@@ -244,6 +244,60 @@ describe('JobBacklogService', () => {
 		expect(service.getStatus().backlogAlert.lastRecoveryAt).toBe(new Date(now + 60000).toISOString());
 	});
 
+	it('does not send a false recovery page when a probe fails transiently after an active alert', async () => {
+		const now = Date.now();
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: 'admin-12345',
+			JOB_BACKLOG_ALERT_THRESHOLD_MS: '600000',
+			JOB_BACKLOG_PAGE_COOLDOWN_MS: '900000',
+		};
+
+		let probeShouldFail = false;
+
+		const repository = {
+			isConfigured: jest.fn(() => true),
+			getBacklogDepth: jest.fn(() => (probeShouldFail
+				? Promise.reject(new Error('firestore blip'))
+				: Promise.resolve({
+					durableQueuedCount: 3,
+					oldestQueuedAgeMs: 700000,
+					oldestCreatedAt: new Date(now - 700000).toISOString(),
+				}))),
+		};
+
+		const queue = {
+			getJobCounts: jest.fn(() => Promise.resolve({ waiting: 3, delayed: 0, failed: 0, active: 0 })),
+		};
+
+		const sendMessage = jest.fn().mockResolvedValue({ message_id: 1 });
+		const service = new JobBacklogService({ repository, queue, botGetter: () => ({ telegram: { sendMessage } }) });
+
+		await service.probe(now);
+		expect(sendMessage).toHaveBeenCalledTimes(1);
+		expect(service.getStatus().backlogAlert.active).toBe(true);
+
+		// Transient probe failure must NOT be read as "backlog drained".
+		probeShouldFail = true;
+		await service.probe(now + 60000);
+
+		expect(sendMessage).toHaveBeenCalledTimes(1);
+		expect(sendMessage).not.toHaveBeenLastCalledWith(
+			expect.anything(),
+			expect.stringContaining('Job Backlog Cleared'),
+			expect.anything(),
+		);
+		expect(service.getStatus().backlogAlert.active).toBe(true);
+		expect(service.getStatus().backlogAlert.lastRecoveryAt).toBeNull();
+
+		// Once the probe recovers, the alert is still latched — no re-page inside cooldown.
+		probeShouldFail = false;
+		await service.probe(now + 120000);
+		expect(sendMessage).toHaveBeenCalledTimes(1);
+		expect(service.getStatus().backlogAlert.active).toBe(true);
+	});
+
 	it('fails open when Telegram sendMessage fails', async () => {
 		const now = Date.now();
 		process.env = {
@@ -342,6 +396,71 @@ describe('JobBacklogService', () => {
 			expect(service.timer).toBeNull();
 		} finally {
 			jest.useRealTimers();
+		}
+	});
+
+	it('keeps every rescheduled probe timer unref\'d so it cannot hold the process open', async () => {
+		const refStates = [];
+		const realSetTimeout = global.setTimeout;
+		jest.spyOn(global, 'setTimeout').mockImplementation((fn, ms, ...args) => {
+			const timer = realSetTimeout(fn, ms, ...args);
+			if (ms === 1000) refStates.push(timer.hasRef());
+			return timer;
+		});
+
+		try {
+			process.env.JOB_BACKLOG_PROBE_INTERVAL_MS = '1000';
+			const service = new JobBacklogService();
+			service.probe = jest.fn().mockResolvedValue({});
+
+			service.startMonitor();
+
+			// Let the first timer fire and self-reschedule into a second 1s timer.
+			await new Promise((resolve) => realSetTimeout(resolve, 1300));
+			await Promise.resolve();
+			await Promise.resolve();
+			await Promise.resolve();
+
+			// Only the *currently live* timer matters for process-exit behaviour;
+			// the first already fired and was replaced.
+			expect(service.timer).not.toBeNull();
+			expect(service.timer.hasRef()).toBe(false);
+			expect(refStates.length).toBeGreaterThanOrEqual(2);
+
+			service.stop();
+		} finally {
+			jest.restoreAllMocks();
+		}
+	});
+
+	it('keeps rescheduled probe timers referenced when unref is disabled', async () => {
+		const refStates = [];
+		const realSetTimeout = global.setTimeout;
+		jest.spyOn(global, 'setTimeout').mockImplementation((fn, ms, ...args) => {
+			const timer = realSetTimeout(fn, ms, ...args);
+			if (ms === 1000) refStates.push(timer.hasRef());
+			return timer;
+		});
+
+		try {
+			process.env.JOB_BACKLOG_PROBE_INTERVAL_MS = '1000';
+			const service = new JobBacklogService();
+			service.probe = jest.fn().mockResolvedValue({});
+
+			service.startMonitor({ unref: false });
+
+			await new Promise((resolve) => realSetTimeout(resolve, 1300));
+			await Promise.resolve();
+			await Promise.resolve();
+			await Promise.resolve();
+
+			expect(service.timer).not.toBeNull();
+			expect(service.timer.hasRef()).toBe(true);
+			expect(refStates.length).toBeGreaterThanOrEqual(2);
+
+			service.stop();
+		} finally {
+			jest.restoreAllMocks();
 		}
 	});
 });
