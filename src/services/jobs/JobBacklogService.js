@@ -170,11 +170,17 @@ class JobBacklogService {
 						durableProbeSucceeded = true;
 					}
 				} else if (typeof this.repository.getBacklogDepth === 'function') {
-					durable = await withTimeout(
-						this.repository.getBacklogDepth({ maxScan: 100, now }),
-						timeoutMs,
-						'Durable backlog probe',
-					);
+					// This is the branch the real JobRepository takes: it has no
+					// isConfigured() method, so the guard must live here too.
+					if (this.outstandingProbes.size === 0) {
+						const pending = trackOutstanding(
+							this.repository.getBacklogDepth({ maxScan: 100, now }),
+							this.outstandingProbes,
+						);
+						durable = await withTimeout(pending, timeoutMs, 'Durable backlog probe');
+					} else {
+						this.logger.warn?.('[JobBacklogService] Skipping durable probe: a previous probe is still outstanding');
+					}
 					durableProbeSucceeded = durable?.probeFailed !== true;
 				} else if (typeof this.repository.getMemoryBacklogDepth === 'function') {
 					durable = this.repository.getMemoryBacklogDepth(now);
