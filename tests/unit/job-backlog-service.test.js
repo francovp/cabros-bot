@@ -642,6 +642,52 @@ describe('JobBacklogService', () => {
 		expect(service.getStatus().durableQueuedTruncated).toBe(false);
 	});
 
+	it('keeps the alert active when an injected notifyAdmin callback reports an unsuccessful recovery', async () => {
+		const now = Date.now();
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			JOB_BACKLOG_ALERT_THRESHOLD_MS: '600000',
+		};
+
+		let age = 700000;
+		let recoveryDelivered = true;
+		const repository = {
+			isConfigured: jest.fn(() => true),
+			getBacklogDepth: jest.fn(() => Promise.resolve({
+				durableQueuedCount: age ? 3 : 0,
+				oldestQueuedAgeMs: age,
+				oldestCreatedAt: age ? new Date(now - age).toISOString() : null,
+			})),
+		};
+		const queue = {
+			getJobCounts: jest.fn(() => Promise.resolve({ waiting: age ? 3 : 0, delayed: 0, failed: 0, active: 0 })),
+		};
+
+		// The callback resolves { success: false } rather than rejecting.
+		const notifyAdmin = jest.fn(async (payload) => (
+			payload.type === 'backlog_recovery' && !recoveryDelivered ? { success: false } : { success: true }
+		));
+
+		const service = new JobBacklogService({ repository, queue, notifyAdmin });
+
+		await service.probe(now);
+		expect(service.getStatus().backlogAlert.active).toBe(true);
+
+		age = null;
+		recoveryDelivered = false;
+		await service.probe(now + 60000);
+
+		// A callback that reported failure must not clear the latch.
+		expect(service.getStatus().backlogAlert.active).toBe(true);
+		expect(service.getStatus().backlogAlert.lastRecoveryAt).toBeNull();
+
+		recoveryDelivered = true;
+		await service.probe(now + 120000);
+		expect(service.getStatus().backlogAlert.active).toBe(false);
+		expect(service.getStatus().backlogAlert.lastRecoveryAt).not.toBeNull();
+	});
+
 	it('fails open when Telegram sendMessage fails', async () => {
 		const now = Date.now();
 		process.env = {

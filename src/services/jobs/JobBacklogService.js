@@ -340,11 +340,18 @@ class JobBacklogService {
 
 		if (typeof this.notifyAdmin === 'function') {
 			try {
-				await this.notifyAdmin({
+				const result = await this.notifyAdmin({
 					type: 'backlog_recovery',
 					message,
 					probeResult,
 				});
+				// A callback can resolve with { success: false } just like the direct
+				// Telegram path. Honour it, or the latch clears on an all-clear that
+				// was never delivered and the operator keeps a stale incident.
+				if (result?.success === false) {
+					this.logger.warn?.('[JobBacklogService] Admin recovery callback reported an unsuccessful delivery (fail-open)');
+					return false;
+				}
 			} catch (err) {
 				this.logger?.warn?.(`[JobBacklogService] notifyAdmin callback failed: ${err.message}`);
 				return false;
