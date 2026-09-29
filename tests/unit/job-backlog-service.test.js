@@ -1,6 +1,7 @@
 'use strict';
 
 const { JobBacklogService } = require('../../src/services/jobs/JobBacklogService');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 describe('JobBacklogService', () => {
 	const savedEnv = process.env;
@@ -23,6 +24,7 @@ describe('JobBacklogService', () => {
 			activeCount: 0,
 			durableQueuedCount: 0,
 			durableQueuedTruncated: false,
+			durableScanRotated: false,
 			oldestQueuedAgeMs: null,
 			oldestCreatedAt: null,
 			lastProbedAt: null,
@@ -870,6 +872,159 @@ describe('JobBacklogService', () => {
 			expect(service.timer).toBeNull();
 		} finally {
 			jest.useRealTimers();
+		}
+	});
+
+	it('never treats a rotated sweep that saw nothing as evidence of recovery', async () => {
+		// A rotation sweep that observed no queued job covered only a window of the
+		// collection: queued jobs can sit in the unscanned prefix. A sweep that
+		// reached the end from a cursor reports truncated:false, so the cap check
+		// does not catch it. Treating it as conclusive emitted a false "Backlog
+		// Cleared" page and then re-paged the same incident.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const agedBacklog = {
+			durableQueuedCount: 20,
+			oldestQueuedAgeMs: 7200000,
+			oldestCreatedAt: new Date(Date.now() - 7200000).toISOString(),
+		};
+		const rotatedEmpty = {
+			durableQueuedCount: 0,
+			oldestQueuedAgeMs: null,
+			oldestCreatedAt: null,
+			truncated: false,
+			scanRotated: true,
+		};
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce(agedBacklog)
+				.mockResolvedValue(rotatedEmpty),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+
+		await service.probe();
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin).toHaveBeenCalledTimes(1);
+
+		// The rotated empty sweep must not clear the latch.
+		await service.probe();
+		await service.probe();
+
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin).toHaveBeenCalledTimes(1);
+		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
+	it('reports a consistent durable depth before the first probe', () => {
+		// getStatus() falls back to the memory mirror before any probe runs. Reading
+		// durableQueuedCount from a different source made it report 0 while
+		// oldestQueuedAgeMs reported the real age, so /api/status contradicted
+		// itself on the same object.
+		const repository = {
+			getMemoryBacklogDepth: jest.fn(() => ({
+				durableQueuedCount: 42,
+				oldestQueuedAgeMs: 5000,
+				oldestCreatedAt: new Date(Date.now() - 5000).toISOString(),
+			})),
+		};
+
+		const status = new JobBacklogService({ repository }).getStatus();
+
+		expect(status.durableQueuedCount).toBe(42);
+		expect(status.oldestQueuedAgeMs).toBe(5000);
+	});
+
+	it('applies a Remote Config interval change to the sweep that follows an in-flight probe', async () => {
+		jest.useFakeTimers();
+		try {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			process.env.JOB_BACKLOG_PROBE_INTERVAL_MS = '3600000';
+			let releaseProbe;
+			const service = new JobBacklogService();
+			service.probe = jest.fn(() => new Promise((resolve) => { releaseProbe = resolve; }));
+
+			service.startMonitor({ unref: false });
+			jest.advanceTimersByTime(3600000);
+			expect(service.probe).toHaveBeenCalledTimes(1);
+			expect(service.timer).toBeNull();
+
+			// The interval changes while a probe is running, so there is no pending
+			// timer to re-arm.
+			remoteConfigService._setRemoteOverridesForTesting({ JOB_BACKLOG_PROBE_INTERVAL_MS: 60000 });
+
+			releaseProbe();
+			await Promise.resolve();
+			await Promise.resolve();
+			await Promise.resolve();
+			await Promise.resolve();
+
+			// The next sweep uses the new cadence, not the original hour.
+			expect(service._scheduledIntervalMs).toBe(60000);
+			jest.advanceTimersByTime(60000);
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(service.probe).toHaveBeenCalledTimes(2);
+
+			service.stop();
+		} finally {
+			delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+			jest.useRealTimers();
+			remoteConfigService._resetForTesting();
+		}
+	});
+
+	it('reschedules a pending probe when Remote Config lowers the interval', async () => {
+		jest.useFakeTimers();
+		try {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			process.env.JOB_BACKLOG_PROBE_INTERVAL_MS = '3600000';
+			const service = new JobBacklogService();
+			service.probe = jest.fn().mockResolvedValue({});
+
+			service.startMonitor({ unref: false });
+			expect(service.timer).not.toBeNull();
+			expect(service._scheduledIntervalMs).toBe(3600000);
+
+			// The interval is lowered remotely. The pending hour-long timer would
+			// otherwise keep its original delay, so the new cadence only took
+			// effect an hour later.
+			remoteConfigService._setRemoteOverridesForTesting({ JOB_BACKLOG_PROBE_INTERVAL_MS: 60000 });
+
+			// The re-armed timer fires on the new cadence, not the old one.
+			jest.advanceTimersByTime(59999);
+			expect(service.probe).not.toHaveBeenCalled();
+			jest.advanceTimersByTime(1);
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(service.probe).toHaveBeenCalledTimes(1);
+
+			service.stop();
+		} finally {
+			delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+			jest.useRealTimers();
+			remoteConfigService._resetForTesting();
+		}
+	});
+
+	it('unsubscribes the Remote Config listener when the monitor stops', () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.JOB_BACKLOG_PROBE_INTERVAL_MS = '3600000';
+		const service = new JobBacklogService();
+		service.probe = jest.fn().mockResolvedValue({});
+
+		try {
+			service.startMonitor({ unref: false });
+			expect(service._unsubscribeRemoteConfig).toEqual(expect.any(Function));
+
+			service.stop();
+			expect(service._unsubscribeRemoteConfig).toBeNull();
+
+			// A later Remote Config change must not re-arm a stopped monitor.
+			remoteConfigService._setRemoteOverridesForTesting({ JOB_BACKLOG_PROBE_INTERVAL_MS: 1000 });
+			expect(service.timer).toBeNull();
+			expect(service.running).toBe(false);
+		} finally {
+			delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+			remoteConfigService._resetForTesting();
 		}
 	});
 

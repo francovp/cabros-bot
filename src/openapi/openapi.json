@@ -11818,6 +11818,10 @@
             "type": "boolean",
             "description": "True when the bounded durable scan reached its page cap, meaning durableQueuedCount is a lower bound and additional queued jobs may exist."
           },
+          "durableScanRotated": {
+            "type": "boolean",
+            "description": "True when the durable scan resumed from a rotation cursor left by a previous capped sweep, so it covered only part of the collection and durableQueuedCount and oldestQueuedAgeMs are lower bounds."
+          },
           "oldestQueuedAgeMs": {
             "type": [
               "integer",

@@ -1,7 +1,7 @@
 'use strict';
 
 const { jobRepository } = require('./JobRepository');
-const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { getRuntimeConfig, addChangeListener } = require('../remoteConfig/RemoteConfigService');
 
 const DEFAULT_ALERT_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
 const DEFAULT_PAGE_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
@@ -52,9 +52,15 @@ function trackOutstanding(promise, outstanding) {
 //   - truncated with nothing observed: the scan hit its page cap, so queued
 //     jobs may exist beyond it. Reporting that as an empty backlog would clear a
 //     real alert while an aged backlog sits in the unscanned suffix.
+//   - scanRotated with nothing observed: the sweep resumed from a rotation
+//     cursor, so it covered only a window of the collection. Queued jobs can sit
+//     in the unscanned prefix, and a sweep that reached the end from a cursor
+//     reports truncated:false, so the cap check above does not catch it. An empty
+//     rotated sweep is a gap in coverage, not an empty queue.
 function isDurableResultConclusive(durable) {
 	if (!durable) return false;
 	if (durable.probeFailed === true) return false;
+	if (durable.scanRotated === true && !(durable.durableQueuedCount > 0)) return false;
 	if (durable.truncated === true && !(durable.durableQueuedCount > 0)) return false;
 	return true;
 }
@@ -80,6 +86,11 @@ class JobBacklogService {
 		this.timer = null;
 		this.running = false;
 		this.unrefTimers = true;
+		// Interval the currently armed timer was scheduled with, and the
+		// unsubscribe for the Remote Config listener that re-arms it when the
+		// effective cadence changes.
+		this._scheduledIntervalMs = null;
+		this._unsubscribeRemoteConfig = null;
 		// Operations started by a probe that has not settled, tracked per
 		// dependency. A timed-out probe is abandoned rather than cancelled, so
 		// this keeps the next sweep from stacking another call on unfinished work.
@@ -222,6 +233,10 @@ class JobBacklogService {
 			// lower bound rather than a complete depth. Stored under the same name
 			// getStatus() reads back, so the flag is not silently lost in projection.
 			durableQueuedTruncated: durable?.truncated === true,
+			// True when the durable scan resumed from a rotation cursor, so this
+			// sweep covered only part of the collection and the reported depth and
+			// age are lower bounds rather than a complete view.
+			durableScanRotated: durable?.scanRotated === true,
 			probedAt: new Date(now).toISOString(),
 		};
 
@@ -457,8 +472,12 @@ class JobBacklogService {
 			delayedCount,
 			failedCount,
 			activeCount,
+			// Read from the same resolved source as the other durable fields, so a
+			// getStatus() before the first probe still reports the memory depth
+			// rather than a 0 that contradicts oldestQueuedAgeMs.
 			durableQueuedCount,
 			durableQueuedTruncated: durableQueuedTruncated === true,
+			durableScanRotated: this.lastProbe?.durableScanRotated === true,
 			oldestQueuedAgeMs,
 			oldestCreatedAt,
 			lastProbedAt,
@@ -478,12 +497,41 @@ class JobBacklogService {
 
 		this.running = true;
 		this.unrefTimers = unref;
+		this._subscribeRemoteConfigChanges();
 		this._scheduleProbe();
+	}
+
+	// A pending timer keeps the interval it was scheduled with until it fires, so
+	// lowering JOB_BACKLOG_PROBE_INTERVAL_MS in Remote Config would otherwise take
+	// effect only after the old, longer wait elapsed. Re-arm the pending timer when
+	// the effective interval actually changes so an operator lowering the cadence
+	// sees it take effect on the next sweep.
+	_subscribeRemoteConfigChanges() {
+		if (this._unsubscribeRemoteConfig) {
+			return;
+		}
+		this._unsubscribeRemoteConfig = addChangeListener(() => {
+			if (!this.running) return;
+			const { probeIntervalMs } = this.getConfig();
+			if (probeIntervalMs === this._scheduledIntervalMs) return;
+			if (this.timer) {
+				clearTimeout(this.timer);
+				this.timer = null;
+				this._scheduleProbe();
+			} else if (this.inFlightProbe) {
+				// A probe is running, so there is no timer to re-arm. It schedules
+				// the next sweep from the current config once it settles, so simply
+				// record the new interval; arming a timer now would race that
+				// reschedule and could fire two sweeps back to back.
+				this._scheduledIntervalMs = probeIntervalMs;
+			}
+		});
 	}
 
 	_scheduleProbe() {
 		if (!this.running) return;
 		const { probeIntervalMs } = this.getConfig();
+		this._scheduledIntervalMs = probeIntervalMs;
 		this.timer = setTimeout(() => {
 			this.timer = null;
 			// Track the in-flight probe so stop() can await it during shutdown
@@ -507,6 +555,10 @@ class JobBacklogService {
 		if (this.timer) {
 			clearTimeout(this.timer);
 			this.timer = null;
+		}
+		if (this._unsubscribeRemoteConfig) {
+			this._unsubscribeRemoteConfig();
+			this._unsubscribeRemoteConfig = null;
 		}
 		// Only drain on the explicit shutdown path. Callers that just want to stop
 		// the timer (tests, restarts) must not have to await an external probe.

@@ -1030,5 +1030,103 @@ describe('JobRepository durable claims', () => {
 		expect(depth.durableQueuedCount).toBe(50 * query.get.mock.calls.length);
 		expect(depth.oldestQueuedAgeMs).toBe(900000 + 49000);
 	});
+
+	it('rotates the capped scan across probes so a backlog past the cap is eventually observed', async () => {
+		const now = Date.now();
+		// The first maxScan*maxPages documents are all actively leased, so every
+		// page of the first sweep is full and the cap is hit before any queued job.
+		const activePrefix = Array.from({ length: 250 }, (_, index) => ({
+			id: `active-${index}`,
+			data: () => ({
+				status: 'processing',
+				execution: { status: 'running', leaseUntil: new Date(now + 600000).toISOString() },
+				createdAt: new Date(now - 900000 - index * 1000).toISOString(),
+			}),
+		}));
+		const hiddenQueued = Array.from({ length: 5 }, (_, index) => ({
+			id: `hidden-queued-${index}`,
+			data: () => ({
+				status: 'processing',
+				execution: { status: 'queued' },
+				// Index 0 is the oldest of the hidden queued jobs.
+				createdAt: new Date(now - 804000 + index * 1000).toISOString(),
+			}),
+		}));
+
+		const allDocs = [...activePrefix, ...hiddenQueued];
+		const firestore = {
+			collection: jest.fn(() => {
+				let offset = 0;
+				const query = {
+					where: jest.fn(() => query),
+					orderBy: jest.fn(() => query),
+					limit: jest.fn(() => query),
+					startAfter: jest.fn((doc) => {
+						offset = allDocs.findIndex((candidate) => candidate.id === doc.id) + 1;
+						return query;
+					}),
+					get: jest.fn(() => Promise.resolve({ docs: allDocs.slice(offset, offset + 50) })),
+				};
+				return query;
+			}),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		// First sweep: capped at 250 documents, all of them actively leased.
+		const first = await repository.getBacklogDepth({ maxScan: 50, maxPages: 5, now });
+		expect(first.truncated).toBe(true);
+		expect(first.durableQueuedCount).toBe(0);
+		expect(first.scanRotated).toBe(false);
+
+		// Second sweep resumes after the cursor and reaches the queued suffix.
+		const second = await repository.getBacklogDepth({ maxScan: 50, maxPages: 5, now });
+		expect(second.durableQueuedCount).toBe(5);
+		expect(second.oldestQueuedAgeMs).toBe(804000);
+		expect(second.scanRotated).toBe(true);
+		// The suffix is short, so the sweep reached the end of the collection.
+		expect(second.truncated).toBe(false);
+
+		// A sweep that reached the end clears the cursor, so the next probe
+		// re-reads from the front instead of permanently skipping the prefix.
+		const third = await repository.getBacklogDepth({ maxScan: 50, maxPages: 5, now });
+		expect(third.scanRotated).toBe(false);
+		expect(third.durableQueuedCount).toBe(0);
+	});
+
+	it('reports an indeterminate result when Firestore job storage is enabled but the client is unavailable', async () => {
+		process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => null);
+
+		try {
+			const depth = await repository.getBacklogDepth({ now: Date.now() });
+
+			// The process-local map is empty on a freshly restarted replica, so
+			// reporting it here would expose an unreadable backlog as zero and
+			// never page.
+			expect(depth.probeFailed).toBe(true);
+			expect(depth.source).toBe('firestore-unavailable');
+			expect(depth.durableQueuedCount).toBeNull();
+			expect(depth.oldestQueuedAgeMs).toBeNull();
+		} finally {
+			delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+			_resetForTesting();
+		}
+	});
+
+	it('still uses the process-local map when durable job storage is intentionally disabled', async () => {
+		delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => null);
+
+		const depth = await repository.getBacklogDepth({ now: Date.now() });
+
+		// Disabled storage means an empty map really is an empty backlog.
+		expect(depth.probeFailed).toBe(false);
+		expect(depth.source).toBe('memory');
+		expect(depth.durableQueuedCount).toBe(0);
+	});
 });
 

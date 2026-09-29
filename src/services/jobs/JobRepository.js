@@ -114,6 +114,15 @@ function createCallbackStatusUnavailableError(cause) {
 }
 
 class JobRepository {
+	// Rotation cursor for the bounded durable backlog scan. Held on the instance
+	// so a sweep that hit its page cap resumes where the previous one stopped,
+	// instead of re-reading the same prefix and never reaching a backlog that
+	// sorts after it. Cleared when a sweep reaches the end of the collection.
+	constructor() {
+		this._backlogScanCursor = null;
+		this._backlogScanCursorId = null;
+	}
+
 	async save(job, { required = false } = {}) {
 		const sanitized = sanitizeJob(job);
 		if (!sanitized || !sanitized.jobId) {
@@ -753,8 +762,15 @@ class JobRepository {
 		if (firestore) {
 			try {
 				let query = firestore.collection(COLLECTION_NAME);
-				let lastDoc;
-				let lastDocId;
+				// The page cap only bounds one sweep. Carry the last scanned document
+				// across probes so a backlog sitting past the cap is not invisible
+				// forever: the next sweep resumes after it, and once the suffix is
+				// reached the cursor resets and the scan starts over from the front.
+				// Without this, the oldest N documents would be rescanned every
+				// probe and any queued job ordered after them would never be seen.
+				let lastDoc = this._backlogScanCursor;
+				let lastDocId = this._backlogScanCursorId;
+				let rotatedFromCursor = Boolean(lastDoc);
 				let durableQueuedCount = 0;
 				let oldestCreatedAt = null;
 				let truncated = false;
@@ -803,16 +819,36 @@ class JobRepository {
 					if (page === maxPages - 1) truncated = true;
 				}
 
+				// Persist the rotation cursor for the next probe. truncated is only set
+				// on the last allowed page, which is only reached once lastDoc and
+				// lastDocId hold a real document, so no extra guard is needed. A sweep
+				// that reached the end of the collection clears the cursor so the next
+				// probe re-reads from the oldest document.
+				if (truncated) {
+					this._backlogScanCursor = lastDoc;
+					this._backlogScanCursorId = lastDocId;
+				} else {
+					this._backlogScanCursor = null;
+					this._backlogScanCursorId = null;
+				}
+
 				const oldestCreatedAtMs = oldestCreatedAt ? Date.parse(oldestCreatedAt) : null;
 				const oldestQueuedAgeMs = Number.isFinite(oldestCreatedAtMs)
 					? Math.max(0, now - oldestCreatedAtMs)
 					: null;
 
+				// A sweep that started past the front of the collection sees only part
+				// of the backlog, so the reported age is a lower bound: an older
+				// queued job may sit in the unscanned prefix and this probe cannot
+				// see it. The age is never inflated (that would page on no evidence),
+				// and the rotation flag makes the partial view explicit instead of
+				// letting it read as a complete depth.
 				return {
 					durableQueuedCount,
 					oldestQueuedAgeMs,
 					oldestCreatedAt,
 					truncated,
+					scanRotated: rotatedFromCursor,
 					source: 'firestore',
 				};
 			} catch (error) {
@@ -827,6 +863,24 @@ class JobRepository {
 					probeFailed: true,
 				};
 			}
+		}
+
+		// Firestore job storage is enabled but the client is unavailable: bad
+		// credentials, a failed admin init, or a dependency that never resolved.
+		// That is a broken dependency, not a drained queue. Falling through to the
+		// process-local map would report zero on a freshly restarted web replica
+		// and silently suppress the page for an unreadable backlog, so report an
+		// indeterminate result instead. Intentionally disabled storage keeps using
+		// the map, where an empty result really does mean empty.
+		if (isFirestoreEnabled()) {
+			return {
+				durableQueuedCount: null,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+				truncated: false,
+				source: 'firestore-unavailable',
+				probeFailed: true,
+			};
 		}
 
 		return { ...this.getMemoryBacklogDepth(now), source: 'memory', probeFailed: false };
@@ -886,5 +940,7 @@ module.exports = {
 		saveVersions.clear();
 		pendingSaves.clear();
 		firestoreWriteMetricsService.resetForTesting();
+		jobRepository._backlogScanCursor = null;
+		jobRepository._backlogScanCursorId = null;
 	},
 };
