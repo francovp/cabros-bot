@@ -11810,9 +11810,19 @@
             "description": "Broker jobs currently being processed."
           },
           "durableQueuedCount": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "minimum": 0,
-            "description": "Non-terminal durable jobs in a queued state. Reported as a lower bound when the bounded probe truncates its scan."
+            "description": "Non-terminal durable jobs in a queued state. Reported as a lower bound when the bounded probe truncates or rotates its scan, and null when the last sweep could not observe durable state."
+          },
+          "durableProbeSucceeded": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the last sweep actually observed durable state. False means the durable depth is unknown rather than zero, so an unreadable backlog is not read as a drained one. Null before the first probe."
           },
           "durableQueuedTruncated": {
             "type": "boolean",

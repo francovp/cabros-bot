@@ -300,12 +300,16 @@ class JobQueue {
 			delayedCount: resolvedBacklog?.delayedCount ?? 0,
 			failedCount: resolvedBacklog?.failedCount ?? 0,
 			activeCount: resolvedBacklog?.activeCount ?? 0,
+			// Null when the durable depth is unknown rather than zero, so a reader
+			// can tell an unreadable backlog from an empty one.
 			durableQueuedCount: resolvedBacklog?.durableQueuedCount ?? 0,
 			// True when the bounded durable scan hit its page cap.
 			durableQueuedTruncated: resolvedBacklog?.durableQueuedTruncated ?? false,
 			// True when the durable scan resumed from a rotation cursor, so it saw
 			// only part of the collection and the depth and age are lower bounds.
 			durableScanRotated: resolvedBacklog?.durableScanRotated ?? false,
+			// False when the last sweep could not observe durable state.
+			durableProbeSucceeded: resolvedBacklog?.durableProbeSucceeded ?? null,
 			oldestQueuedAgeMs: resolvedBacklog?.oldestQueuedAgeMs ?? null,
 			// Surfaces ENABLE_JOB_BACKLOG_MONITOR so a disabled monitor is not read
 			// as a running monitor observing an empty queue.

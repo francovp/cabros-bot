@@ -25,6 +25,7 @@ describe('JobBacklogService', () => {
 			durableQueuedCount: 0,
 			durableQueuedTruncated: false,
 			durableScanRotated: false,
+			durableProbeSucceeded: null,
 			oldestQueuedAgeMs: null,
 			oldestCreatedAt: null,
 			lastProbedAt: null,
@@ -912,6 +913,113 @@ describe('JobBacklogService', () => {
 		expect(service.hasActiveAlert).toBe(true);
 		expect(notifyAdmin).toHaveBeenCalledTimes(1);
 		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
+	it('does not clear an active alert when a rotated sweep sees only young queued jobs', async () => {
+		// The rotated sweep found queued work, but none aged past the threshold, so
+		// the old below-threshold branch cleared the latch and paged an all-clear.
+		// A stalled job in the unscanned prefix could still be over the threshold, so
+		// a partial sweep must never clear an incident.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce({
+					durableQueuedCount: 8,
+					oldestQueuedAgeMs: 7200000,
+					oldestCreatedAt: new Date(Date.now() - 7200000).toISOString(),
+					truncated: false,
+				})
+				.mockResolvedValue({
+					durableQueuedCount: 3,
+					oldestQueuedAgeMs: 5000,
+					oldestCreatedAt: new Date(Date.now() - 5000).toISOString(),
+					truncated: false,
+					scanRotated: true,
+				}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+
+		await service.probe();
+		expect(service.hasActiveAlert).toBe(true);
+
+		await service.probe();
+
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
+	it('still pages from a partial sweep that observed an aged job', async () => {
+		// Paging is fail-safe, so a rotated sweep that sees an aged job must still
+		// alert. Only the recovery direction is gated on conclusive coverage.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const repository = {
+			getBacklogDepth: jest.fn().mockResolvedValue({
+				durableQueuedCount: 2,
+				oldestQueuedAgeMs: 3600000,
+				oldestCreatedAt: new Date(Date.now() - 3600000).toISOString(),
+				truncated: true,
+				scanRotated: true,
+			}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+
+		await service.probe();
+
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin).toHaveBeenCalledTimes(1);
+		expect(notifyAdmin.mock.calls[0][0].type).toBe('backlog_alert');
+	});
+
+	it('clears the latch once a complete sweep confirms the backlog is drained', async () => {
+		// The held latch must not become permanent: a conclusive empty sweep is the
+		// only thing that proves the unscanned region is clear.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce({
+					durableQueuedCount: 4,
+					oldestQueuedAgeMs: 7200000,
+					oldestCreatedAt: new Date(Date.now() - 7200000).toISOString(),
+				})
+				.mockResolvedValue({
+					durableQueuedCount: 0,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: false,
+				}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+
+		await service.probe();
+		expect(service.hasActiveAlert).toBe(true);
+
+		await service.probe();
+
+		expect(service.hasActiveAlert).toBe(false);
+		expect(notifyAdmin).toHaveBeenCalledTimes(2);
+		expect(notifyAdmin.mock.calls[1][0].type).toBe('backlog_recovery');
+	});
+
+	it('reports an unknown durable depth when the durable probe failed', async () => {
+		// Publishing zero for an unreadable backlog is indistinguishable from a
+		// drained one, so the unknown must survive into the status payload.
+		const repository = {
+			getBacklogDepth: jest.fn().mockResolvedValue({
+				durableQueuedCount: null,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+				truncated: false,
+				source: 'firestore-unavailable',
+				probeFailed: true,
+			}),
+		};
+		const service = new JobBacklogService({ repository });
+
+		const status = await service.probe();
+
+		expect(status.durableQueuedCount).toBeNull();
+		expect(status.durableProbeSucceeded).toBe(false);
+		expect(service.getStatus().durableProbeSucceeded).toBe(false);
 	});
 
 	it('reports a consistent durable depth before the first probe', () => {

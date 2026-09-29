@@ -65,6 +65,20 @@ function isDurableResultConclusive(durable) {
 	return true;
 }
 
+// Whether this sweep can prove the backlog is gone.
+//
+// A partial sweep — truncated, or resumed from a rotation cursor — observed only
+// a window of the collection. It can still be trusted to page (a job it saw is
+// real), but it cannot clear an active alert: an older stalled job may sit in
+// the region it never read, and a partial sweep that finds only young queued
+// jobs is exactly that case. Only a complete sweep establishes recovery.
+function isRecoveryProven(durable) {
+	if (!durable) return false;
+	if (durable.probeFailed === true) return false;
+	if (durable.scanRotated === true || durable.truncated === true) return false;
+	return true;
+}
+
 class JobBacklogService {
 	constructor({
 		jobQueue = null,
@@ -178,6 +192,7 @@ class JobBacklogService {
 
 		let durable = { durableQueuedCount: 0, oldestQueuedAgeMs: null, oldestCreatedAt: null };
 		let durableProbeSucceeded = false;
+		let recoveryProven = false;
 		try {
 			if (this.repository) {
 				if (typeof this.repository.isConfigured === 'function') {
@@ -189,12 +204,14 @@ class JobBacklogService {
 							);
 							durable = await withTimeout(pending, timeoutMs, 'Durable backlog probe');
 							durableProbeSucceeded = isDurableResultConclusive(durable);
+							recoveryProven = isRecoveryProven(durable);
 						} else {
 							this.logger.warn?.('[JobBacklogService] Skipping durable probe: a previous probe is still outstanding');
 						}
 					} else if (typeof this.repository.getMemoryBacklogDepth === 'function') {
 						durable = this.repository.getMemoryBacklogDepth(now);
 						durableProbeSucceeded = true;
+						recoveryProven = true;
 					}
 				} else if (typeof this.repository.getBacklogDepth === 'function') {
 					// This is the branch the real JobRepository takes: it has no
@@ -206,6 +223,7 @@ class JobBacklogService {
 						);
 						durable = await withTimeout(pending, timeoutMs, 'Durable backlog probe');
 						durableProbeSucceeded = isDurableResultConclusive(durable);
+						recoveryProven = isRecoveryProven(durable);
 					} else {
 						// No result was produced, so this sweep stays indeterminate.
 						// Falling through here would mark the untouched default as a
@@ -215,6 +233,7 @@ class JobBacklogService {
 				} else if (typeof this.repository.getMemoryBacklogDepth === 'function') {
 					durable = this.repository.getMemoryBacklogDepth(now);
 					durableProbeSucceeded = true;
+					recoveryProven = true;
 				}
 			}
 		} catch (error) {
@@ -226,7 +245,10 @@ class JobBacklogService {
 			delayedCount: brokerCounts?.delayed || 0,
 			failedCount: brokerCounts?.failed || 0,
 			activeCount: brokerCounts?.active || 0,
-			durableQueuedCount: durable?.durableQueuedCount || 0,
+			// An indeterminate durable probe reports a null count. Coercing it to 0
+			// would publish the same zero-depth payload for an unreadable backlog as
+			// for a genuinely empty one, so the unknown is preserved as null.
+			durableQueuedCount: durable?.durableQueuedCount ?? null,
 			oldestQueuedAgeMs: durable?.oldestQueuedAgeMs ?? null,
 			oldestCreatedAt: durable?.oldestCreatedAt ?? null,
 			// True when the bounded scan hit maxPages, so durableQueuedCount is a
@@ -245,6 +267,7 @@ class JobBacklogService {
 		// this sweep so a transient storage error cannot emit a false all-clear
 		// and then re-page on the next successful probe.
 		probeResult.durableProbeSucceeded = durableProbeSucceeded;
+		probeResult.durableRecoveryProven = recoveryProven;
 
 		await this._evaluateAlert(probeResult, now);
 		this.lastProbe = probeResult;
@@ -261,14 +284,14 @@ class JobBacklogService {
 
 	async _evaluateAlert(probeResult, now = Date.now()) {
 		const { alertThresholdMs, pageCooldownMs } = this.getConfig();
-		// An indeterminate probe is not evidence of recovery. Hold the current
-		// latch so a storage blip cannot clear an active alert and re-page.
-		if (probeResult.durableProbeSucceeded === false) {
-			return;
-		}
 		const oldestAge = probeResult.oldestQueuedAgeMs;
-		const totalQueued = (probeResult.durableQueuedCount || 0) + (probeResult.waitingCount || 0);
-
+		// Paging is a fail-safe action: a sweep that observes an aged job is
+		// sufficient evidence even when it only covered part of the collection, so
+		// a rotated or truncated sweep may still page. Clearing the latch is the
+		// opposite: a partial sweep cannot prove the unscanned region is empty, so
+		// it is never evidence of recovery. Without this split, a rotated sweep that
+		// saw only young queued jobs sent a false "Backlog Cleared" page while a
+		// stalled job remained in the unscanned prefix.
 		if (oldestAge !== null && oldestAge >= alertThresholdMs) {
 			const shouldPage = !this.hasActiveAlert || (now - (this.lastPagedAt || 0) >= pageCooldownMs);
 			if (shouldPage) {
@@ -278,15 +301,31 @@ class JobBacklogService {
 					this.lastPagedAt = now;
 				}
 			}
-		} else if (this.hasActiveAlert && (oldestAge === null || oldestAge < alertThresholdMs || totalQueued === 0)) {
-			// Only clear the latch once the all-clear is actually delivered. If the
-			// send fails, keep the alert active so a later probe retries instead of
-			// leaving the operator with a stale incident and no notification.
-			const recovered = await this._notifyAdminRecovery(probeResult);
-			if (recovered) {
-				this.hasActiveAlert = false;
-				this.lastRecoveryAt = now;
-			}
+			return;
+		}
+
+		if (!this.hasActiveAlert) {
+			return;
+		}
+
+		// Below the threshold (or nothing observed) is not enough on its own, and a
+		// partial sweep cannot prove the unscanned region is empty. A probe that
+		// failed, hit its page cap, or resumed from a rotation cursor therefore holds
+		// the latch until a complete sweep confirms the backlog is gone.
+		if (probeResult.durableProbeSucceeded === false || probeResult.durableRecoveryProven === false) {
+			return;
+		}
+
+		// Reaching here means the latch is set, the sweep is below the threshold or
+		// saw nothing, and the sweep was conclusive. A conclusive sweep is the only
+		// thing that proves the unscanned region is clear, so the incident is over.
+		// Only clear the latch once the all-clear is actually delivered. If the send
+		// fails, keep the alert active so a later probe retries instead of leaving
+		// the operator with a stale incident and no notification.
+		const recovered = await this._notifyAdminRecovery(probeResult);
+		if (recovered) {
+			this.hasActiveAlert = false;
+			this.lastRecoveryAt = now;
 		}
 	}
 
@@ -462,6 +501,12 @@ class JobBacklogService {
 			?? durable?.truncated
 			?? false;
 		const lastProbedAt = this.lastProbe?.probedAt ?? null;
+		// Null before the first probe, otherwise whether the last sweep actually
+		// observed durable state. False means the durable depth is unknown, not
+		// zero, so a reader can tell an unreadable backlog from an empty one.
+		const durableProbeSucceeded = this.lastProbe
+			? this.lastProbe.durableProbeSucceeded !== false
+			: null;
 
 		return {
 			// Without this, a monitor disabled via ENABLE_JOB_BACKLOG_MONITOR is
@@ -475,9 +520,10 @@ class JobBacklogService {
 			// Read from the same resolved source as the other durable fields, so a
 			// getStatus() before the first probe still reports the memory depth
 			// rather than a 0 that contradicts oldestQueuedAgeMs.
-			durableQueuedCount,
+			durableQueuedCount: this.lastProbe ? durableQueuedCount : (durableQueuedCount || 0),
 			durableQueuedTruncated: durableQueuedTruncated === true,
 			durableScanRotated: this.lastProbe?.durableScanRotated === true,
+			durableProbeSucceeded,
 			oldestQueuedAgeMs,
 			oldestCreatedAt,
 			lastProbedAt,
