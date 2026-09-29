@@ -253,7 +253,7 @@
           "Operations"
         ],
         "summary": "Get bootstrap readiness",
-        "description": "Returns 200 only after required startup components have completed bootstrap. Returns 503 while pending or after a bootstrap failure. This endpoint checks bootstrap completion, not continuous external provider health. Add `?depth=dependencies` to additionally validate Firestore, Gemini, TradingView MCP, Binance, and Telegram connectivity with bounded per-dependency timeouts; that variant fails closed (503 on a degraded considered dependency) while bare `/ready` keeps its bootstrap-only contract.",
+        "description": "Two shapes, selected by `depth`. Without it, the bootstrap gate: 200 only after required startup components have completed bootstrap, 503 while pending or failed (`BootstrapReadiness`). With `?depth=dependencies`, the bootstrap verdict is ANDed with bounded external dependency probes for Firestore, Gemini, TradingView MCP, Binance, and Telegram, returning 503 when either the bootstrap is not ready or a considered dependency is unhealthy (`ReadinessReport`, which also echoes `status`, `components` and `bootstrapReady`). This endpoint checks neither continuous external provider health by default nor anything else implicitly. For an advisory, always-200 dependency report use `/healthcheck?depth=readiness`.",
         "operationId": "getReadiness",
         "responses": {
           "200": {
@@ -261,10 +261,17 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ReadinessReport"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/BootstrapReadiness"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReadinessReport"
+                    }
+                  ]
                 },
                 "examples": {
-                  "allHealthy": {
+                  "dependenciesHealthy": {
                     "summary": "Bootstrap ready and every considered dependency healthy",
                     "value": {
                       "ready": true,
@@ -299,7 +306,26 @@
                         }
                       }
                     }
-                  },
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "At least one considered dependency is unhealthy (fail-closed variant only).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/BootstrapReadiness"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReadinessReport"
+                    }
+                  ]
+                },
+                "examples": {
                   "bootstrapPending": {
                     "summary": "Bare /ready (bootstrap gate only) while startup is pending",
                     "value": {
@@ -321,26 +347,14 @@
                         }
                       }
                     }
-                  }
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "At least one considered dependency is unhealthy (fail-closed variant only).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReadinessReport"
-                },
-                "examples": {
-                  "dependencyDegraded": {
-                    "summary": "A considered dependency is degraded — fail-closed 503",
+                  },
+                  "dependenciesDegraded": {
+                    "summary": "Bootstrap ready and every considered dependency healthy",
                     "value": {
-                      "ready": false,
+                      "ready": true,
                       "failClosed": true,
                       "checkedAt": "2026-08-31T02:30:00.000Z",
-                      "latencyMs": 3011,
+                      "latencyMs": 412,
                       "dependencies": {
                         "firestore": {
                           "ready": true,
@@ -348,9 +362,9 @@
                           "latencyMs": 53
                         },
                         "gemini": {
-                          "ready": false,
-                          "latencyMs": 3001,
-                          "error": "timeout_after_3000ms"
+                          "ready": true,
+                          "backend": "gemini",
+                          "latencyMs": 124
                         },
                         "tradingViewMcp": {
                           "ready": true,
@@ -363,32 +377,9 @@
                           "latencyMs": 36
                         },
                         "telegram": {
-                          "ready": false,
-                          "enabled": false,
-                          "skipped": true,
-                          "reason": "telegram_disabled"
-                        }
-                      }
-                    }
-                  },
-                  "bootstrapPending": {
-                    "summary": "Bare /ready while startup is pending",
-                    "value": {
-                      "status": "pending",
-                      "ready": false,
-                      "startedAt": "2026-08-31T02:29:50.000Z",
-                      "completedAt": null,
-                      "failedAt": null,
-                      "error": null,
-                      "components": {
-                        "telegramBot": {
-                          "status": "pending"
-                        },
-                        "notificationServices": {
-                          "status": "pending"
-                        },
-                        "newsMonitor": {
-                          "status": "pending"
+                          "ready": true,
+                          "backend": "telegram",
+                          "latencyMs": 22
                         }
                       }
                     }
@@ -12188,6 +12179,18 @@
                 "$ref": "#/components/schemas/ReadinessDependencyStatus"
               }
             }
+          },
+          "status": {
+            "type": "string",
+            "description": "Bootstrap status. Only present on the `/ready?depth=dependencies` variant."
+          },
+          "components": {
+            "type": "object",
+            "description": "Per-component bootstrap state. Only present on the `/ready?depth=dependencies` variant."
+          },
+          "bootstrapReady": {
+            "type": "boolean",
+            "description": "Bootstrap gate verdict, ANDed with the dependency verdict. Only present on the `/ready?depth=dependencies` variant."
           }
         }
       }

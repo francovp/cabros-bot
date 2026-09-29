@@ -189,7 +189,10 @@ describe('createReadinessService', () => {
 		}
 	});
 
-	it('marks telegram as unavailable when the bot instance is missing', async () => {
+	it('reports telegram as not-initialized (skipped) when the bot instance is missing', async () => {
+		// The bot is constructed after the probe can first run, so an absent
+		// instance is a startup state, not a dependency failure. Reporting it as
+		// a hard error held the fail-closed gate at 503 for the whole process life.
 		const restore = setEnv({ ENABLE_TELEGRAM_BOT: 'true' });
 		try {
 			const service = createReadinessService({
@@ -199,7 +202,8 @@ describe('createReadinessService', () => {
 			});
 			const report = await service.collectReadiness();
 			expect(report.dependencies.telegram.ready).toBe(false);
-			expect(report.dependencies.telegram.error).toBe('telegram_bot_unavailable');
+			expect(report.dependencies.telegram.skipped).toBe(true);
+			expect(report.dependencies.telegram.reason).toBe('telegram_not_initialized');
 		} finally {
 			restore();
 		}
@@ -219,7 +223,9 @@ describe('createReadinessService', () => {
 			});
 			const report = await service.collectReadiness();
 			expect(report.dependencies.tradingViewMcp.ready).toBe(false);
-			expect(report.dependencies.tradingViewMcp.error).toBe('circuit_open');
+			// The status is surfaced, not the raw lastError, so an unverified or
+			// provider-specific string never reaches the public probe surface.
+			expect(report.dependencies.tradingViewMcp.error).toBe('tradingview_degraded');
 		} finally {
 			restore();
 		}
@@ -253,6 +259,123 @@ describe('createReadinessService', () => {
 			const report = await service.collectReadiness();
 			expect(report.dependencies.tradingViewMcp.ready).toBe(true);
 			expect(global.fetch).not.toHaveBeenCalled();
+			global.fetch = originalFetch;
+		} finally {
+			restore();
+		}
+	});
+	it('does not report an unverified TradingView status as healthy', async () => {
+		const restore = setEnv({ ENABLE_TRADINGVIEW_MCP_ENRICHMENT: 'true' });
+		try {
+			// 'unknown' means the provider was never contacted; it must not pass
+			// a fail-closed gate the same way an explicit 'ready' does.
+			const service = createReadinessService({
+				timeoutMs: 1500,
+				getTradingViewReadiness: () => ({ status: 'unknown' }),
+			});
+			const report = await service.collectReadiness();
+			expect(report.dependencies.tradingViewMcp.ready).toBe(false);
+			expect(report.dependencies.tradingViewMcp.error).toBe('tradingview_unknown');
+		} finally {
+			restore();
+		}
+	});
+
+	it('reports enabled-but-unconfigured Firestore as a failure, not a skip', async () => {
+		const restore = setEnv({ ENABLE_FIRESTORE_ALERT_STORAGE: 'true' });
+		try {
+			// The feature is switched on but its credentials are unusable. Treating
+			// this as 'skipped' excluded it from the verdict and returned 200 from
+			// the traffic-gating surface.
+			const service = createReadinessService({
+				timeoutMs: 1500,
+				isFirestoreConfigured: () => false,
+				getFirestoreClient: () => null,
+			});
+			const report = await service.collectReadiness();
+			expect(report.dependencies.firestore.ready).toBe(false);
+			expect(report.dependencies.firestore.skipped).toBeUndefined();
+			expect(report.dependencies.firestore.enabled).toBe(true);
+			expect(report.dependencies.firestore.error).toBe('firestore_not_configured');
+		} finally {
+			restore();
+		}
+	});
+
+	it('redacts credentials that leak through provider fetch error messages', async () => {
+		const restore = setEnv({ ENABLE_BINANCE_PRICE_CHECK: 'true' });
+		try {
+			const originalFetch = global.fetch;
+			// undici embeds the full failing URL in its error message, and
+			// TRADINGVIEW_MCP_URL routinely carries a token.
+			global.fetch = jest.fn().mockRejectedValue(
+				new Error('fetch failed for https://mcp.example.com/mcp?api-key=SUPERSECRET123'),
+			);
+			const service = createReadinessService({
+				timeoutMs: 1500,
+				getTradingViewReadiness: () => ({ status: 'degraded' }),
+			});
+			const report = await service.collectReadiness();
+			const serialized = JSON.stringify(report);
+			expect(serialized).not.toContain('SUPERSECRET123');
+			global.fetch = originalFetch;
+		} finally {
+			restore();
+		}
+	});
+
+	it('coalesces concurrent probe runs into a single outbound fan-out', async () => {
+		const restore = setEnv({
+			ENABLE_BINANCE_PRICE_CHECK: 'true',
+			ENABLE_FIRESTORE_ALERT_STORAGE: 'false',
+			ENABLE_FIRESTORE_IDEMPOTENCY: 'false',
+			ENABLE_FIRESTORE_SCANNER_PRESETS: 'false',
+			ENABLE_FIRESTORE_JOB_STORAGE: 'false',
+			ENABLE_GEMINI_GROUNDING: 'false',
+			ENABLE_NEWS_MONITOR: 'false',
+			ENABLE_TELEGRAM_BOT: 'false',
+		});
+		try {
+			const originalFetch = global.fetch;
+			global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+			const service = createReadinessService({ timeoutMs: 1500 });
+			await Promise.all([
+				service.collectReadiness(),
+				service.collectReadiness(),
+				service.collectReadiness(),
+			]);
+			// A load balancer polling every few seconds would otherwise fan out to
+			// every provider on every hit.
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+			global.fetch = originalFetch;
+		} finally {
+			restore();
+		}
+	});
+
+	it('reuses the cached report within the TTL instead of re-probing', async () => {
+		const restore = setEnv({
+			ENABLE_BINANCE_PRICE_CHECK: 'true',
+			ENABLE_FIRESTORE_ALERT_STORAGE: 'false',
+			ENABLE_FIRESTORE_IDEMPOTENCY: 'false',
+			ENABLE_FIRESTORE_SCANNER_PRESETS: 'false',
+			ENABLE_FIRESTORE_JOB_STORAGE: 'false',
+			ENABLE_GEMINI_GROUNDING: 'false',
+			ENABLE_NEWS_MONITOR: 'false',
+			ENABLE_TELEGRAM_BOT: 'false',
+		});
+		try {
+			const originalFetch = global.fetch;
+			global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+			const service = createReadinessService({ timeoutMs: 1500 });
+			await service.collectReadiness();
+			await service.collectReadiness();
+			await service.collectReadiness();
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+			// cacheTtlMs: 0 opts out of caching for callers that need a fresh read.
+			await service.collectReadiness({ cacheTtlMs: 0 });
+			await service.collectReadiness({ cacheTtlMs: 0 });
+			expect(global.fetch).toHaveBeenCalledTimes(3);
 			global.fetch = originalFetch;
 		} finally {
 			restore();

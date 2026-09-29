@@ -182,6 +182,40 @@ describe('healthcheck + dependency readiness', () => {
 			}
 		});
 
+		it('GET /ready?depth=dependencies must NOT return 200 while bootstrap is still pending', async () => {
+			// Regression: the dependency probe used to REPLACE the bootstrap gate,
+			// so a replica stuck in `pending` bootstrap answered 200 to a load
+			// balancer and received traffic it could not serve — reintroducing the
+			// exact cutover failure #956 exists to prevent.
+			bootstrapReadiness.begin({ telegramRequired: true, newsMonitorRequired: true });
+			applyOverrides(app, {
+				isFirestoreConfigured: () => true,
+				getFirestoreClient: () => ({ listCollections: async () => [] }),
+			});
+			const restoreFlags = setEnv({ ENABLE_FIRESTORE_ALERT_STORAGE: 'true' });
+			try {
+				const response = await request(app).get('/ready?depth=dependencies');
+				expect(response.status).toBe(503);
+				expect(response.body.ready).toBe(false);
+				expect(response.body.bootstrapReady).toBe(false);
+				expect(response.body.status).toBe('pending');
+				// The dependency verdict was healthy; bootstrap must still gate.
+				expect(response.body.dependencies.firestore.ready).toBe(true);
+			} finally {
+				restoreFlags();
+				applyOverrides(app);
+			}
+		});
+
+		it('GET /ready?depth=dependencies echoes bootstrap state so the gate stays diagnosable', async () => {
+			bootstrapReadiness.begin({ telegramRequired: false, newsMonitorRequired: false });
+			bootstrapReadiness.markReady('notificationServices');
+			const response = await request(app).get('/ready?depth=dependencies');
+			expect(response.body).toHaveProperty('components');
+			expect(response.body.bootstrapReady).toBe(true);
+			expect(response.body.status).toBe('ready');
+		});
+
 		it('GET /ready?depth=report is not a recognized depth and keeps the bootstrap contract', async () => {
 			bootstrapReadiness.begin({ telegramRequired: false, newsMonitorRequired: false });
 			bootstrapReadiness.markReady('notificationServices');

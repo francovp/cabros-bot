@@ -68,17 +68,25 @@ function isDependencyReadinessRequested(req, path) {
 }
 
 // `depth=readiness` runs external provider probes; bare requests keep the
-// legacy liveness / `?deep=true` channel contract from master.
+// legacy liveness / `?deep=true` channel contract from master. The deep
+// handler is built once at mount time, not per request.
+const deepHealthcheckHandler = getDeepHealthcheckHandler();
 app.use('/healthcheck', (req, res, next) => {
 	if (isDependencyReadinessRequested(req, '/healthcheck')) {
 		return handleDependencyReadiness(req, res, { failClosed: false });
 	}
-	return getDeepHealthcheckHandler()(req, res, next);
+	return deepHealthcheckHandler(req, res, next);
 });
 
 app.get('/ready', (req, res) => {
 	if (isDependencyReadinessRequested(req, '/ready')) {
-		return handleDependencyReadiness(req, res, { failClosed: true });
+		// Layer the dependency verdict on top of the bootstrap gate rather than
+		// replacing it, so a pending or failed bootstrap can never be reported
+		// as a healthy 200 to a load balancer.
+		return handleDependencyReadiness(req, res, {
+			failClosed: true,
+			bootstrap: () => bootstrapReadiness.getStatus(),
+		});
 	}
 	const status = bootstrapReadiness.getStatus();
 	return res.status(status.ready ? 200 : 503).json(status);
