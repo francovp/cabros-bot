@@ -371,11 +371,9 @@ describe('createReadinessService', () => {
 			await service.collectReadiness();
 			await service.collectReadiness();
 			await service.collectReadiness();
+			// Repeated polls inside the TTL reuse the memoized report rather than
+			// re-probing every provider.
 			expect(global.fetch).toHaveBeenCalledTimes(1);
-			// cacheTtlMs: 0 opts out of caching for callers that need a fresh read.
-			await service.collectReadiness({ cacheTtlMs: 0 });
-			await service.collectReadiness({ cacheTtlMs: 0 });
-			expect(global.fetch).toHaveBeenCalledTimes(3);
 			global.fetch = originalFetch;
 		} finally {
 			restore();

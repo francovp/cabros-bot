@@ -61,18 +61,6 @@ function isEnabled(value) {
 }
 
 const DEFAULT_CACHE_TTL_MS = 5000;
-const MAX_CACHE_TTL_MS = 30000;
-
-function resolveCacheTtlMs(options) {
-	if (!options || !('cacheTtlMs' in options)) {
-		return DEFAULT_CACHE_TTL_MS;
-	}
-	const parsed = Number.parseInt(options.cacheTtlMs, 10);
-	if (!Number.isFinite(parsed) || parsed < 0) {
-		return 0;
-	}
-	return Math.min(parsed, MAX_CACHE_TTL_MS);
-}
 
 function hasValue(value) {
 	return typeof value === 'string' ? value.trim().length > 0 : value != null;
@@ -260,9 +248,6 @@ function buildBinanceProbe(opts) {
 			return skippedResult('binance_disabled');
 		}
 		const baseUrl = process.env.BINANCE_DATA_BASE_URL || 'https://api.binance.com';
-		if (!hasValue(baseUrl)) {
-			return { ready: false, error: 'binance_url_missing' };
-		}
 		return timed(async () => {
 			const response = await fetch(baseUrl.replace(/\/$/, '') + '/api/v3/ping');
 			if (!response.ok) {
@@ -339,7 +324,7 @@ function createReadinessService(overrides) {
 		}),
 	};
 
-	async function runProbe(name, fn) {
+	async function runProbe(fn) {
 		try {
 			return await fn();
 		} catch (error) {
@@ -353,18 +338,13 @@ function createReadinessService(overrides) {
 	}
 
 	async function runAllProbes() {
-		const startedAt = Date.now();
 		const entries = await Promise.all(
-			Object.entries(probes).map(async (entry) => [entry[0], await runProbe(entry[0], entry[1])]),
+			Object.entries(probes).map(async (entry) => [entry[0], await runProbe(entry[1])]),
 		);
 		const dependencies = Object.fromEntries(entries);
 		const considered = Object.values(dependencies).filter((dep) => dep && dep.skipped !== true);
 		const ready = considered.length > 0 && considered.every((dep) => dep.ready === true);
-		return {
-			ready,
-			latencyMs: Date.now() - startedAt,
-			dependencies,
-		};
+		return { ready, dependencies };
 	}
 
 	// A load balancer or uptime monitor polling every few seconds would
@@ -375,10 +355,9 @@ function createReadinessService(overrides) {
 	let cachedAt = 0;
 	let inFlight = null;
 
-	async function collectReadiness(options) {
+	async function collectReadiness() {
 		const now = Date.now();
-		const ttlMs = resolveCacheTtlMs(options);
-		if (ttlMs > 0 && cachedReport && now - cachedAt < ttlMs) {
+		if (cachedReport && now - cachedAt < DEFAULT_CACHE_TTL_MS) {
 			return cachedReport;
 		}
 		if (inFlight) {
@@ -396,11 +375,7 @@ function createReadinessService(overrides) {
 		return inFlight;
 	}
 
-	return {
-		collectReadiness,
-		probes,
-		timeoutMs,
-	};
+	return { collectReadiness };
 }
 
 module.exports = {

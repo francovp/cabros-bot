@@ -4,38 +4,31 @@ const { createReadinessService } = require('../lib/readiness');
 const { redactString } = require('../lib/logging');
 
 let cachedService = null;
-let cachedServiceKey = null;
+let cachedOverrides = undefined;
 
-function buildServiceKey(overrides) {
-	if (!overrides) {
-		return 'default';
-	}
-	return [
-		overrides.timeoutMs === undefined ? 'auto' : String(overrides.timeoutMs),
-		typeof overrides.getTradingViewReadiness === 'function' ? 'tv:fn' : 'tv:none',
-		typeof overrides.getBot === 'function' ? 'bot:fn' : 'bot:none',
-		typeof overrides.isBotEnabled === 'function' ? 'enabled:fn' : 'enabled:none',
-	].join('|');
-}
-
+// Keyed on the overrides object's identity rather than a hand-maintained
+// projection of it. The previous string key had to be edited whenever an
+// override was added and silently omitted `isFirestoreConfigured` /
+// `getFirestoreClient`, which could return a service built for stale
+// dependencies. `attachReadinessOverrides` installs exactly one object per
+// process, so identity is the correct key.
 function getReadinessService(overrides) {
-	const key = buildServiceKey(overrides);
-	if (cachedService && cachedServiceKey === key) {
+	if (cachedService && cachedOverrides === overrides) {
 		return cachedService;
 	}
 	cachedService = createReadinessService(overrides || {});
-	cachedServiceKey = key;
+	cachedOverrides = overrides;
 	return cachedService;
 }
 
 function resetReadinessService() {
 	cachedService = null;
-	cachedServiceKey = null;
+	cachedOverrides = undefined;
 }
 
-async function collectReadiness(overrides, options) {
+async function collectReadiness(overrides) {
 	const service = getReadinessService(overrides);
-	return service.collectReadiness(options);
+	return service.collectReadiness();
 }
 
 /**
@@ -66,7 +59,7 @@ async function handleDependencyReadiness(req, res, options) {
 		: body);
 
 	try {
-		const report = await collectReadiness(overrides, options);
+		const report = await collectReadiness(overrides);
 		const bootstrapReady = bootstrap ? bootstrap.ready === true : true;
 		const ready = report.ready && bootstrapReady;
 		respond(failClosed && !ready ? 503 : 200, withBootstrap({
