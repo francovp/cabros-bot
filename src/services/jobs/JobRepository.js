@@ -813,13 +813,23 @@ class JobRepository {
 					oldestQueuedAgeMs,
 					oldestCreatedAt,
 					truncated,
+					source: 'firestore',
 				};
 			} catch (error) {
 				console.warn('[JobRepository] Failed to probe durable backlog depth from Firestore:', error.message);
+				// Report the failure instead of silently degrading to the process-local
+				// map. On a web replica that map is empty, so an empty result would be
+				// indistinguishable from a genuinely drained backlog and could clear a
+				// real active alert. The caller decides how to fail open.
+				return {
+					...this.getMemoryBacklogDepth(now),
+					source: 'firestore-error',
+					probeFailed: true,
+				};
 			}
 		}
 
-		return this.getMemoryBacklogDepth(now);
+		return { ...this.getMemoryBacklogDepth(now), source: 'memory', probeFailed: false };
 	}
 
 	getMemoryBacklogDepth(now = Date.now()) {

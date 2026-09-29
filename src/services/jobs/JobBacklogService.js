@@ -20,13 +20,30 @@ function parsePositiveInteger(value, fallback, min = 1000, max = 86400000) {
 // Firestore read cannot pin probe() open forever. probe() only reschedules once
 // it settles, so one hung dependency would otherwise silently disable backlog
 // reporting and operator pages for the whole process lifetime.
+//
+// The race abandons the underlying request rather than cancelling it, so a
+// timed-out operation may still be outstanding. Callers register the operation
+// with trackOutstanding() and skip starting another call while one is
+// unresolved, so repeated sweeps cannot leak one orphaned request per interval.
 function withTimeout(promise, timeoutMs, label) {
 	let timer;
 	const timeout = new Promise((_, reject) => {
 		timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
 		if (typeof timer.unref === 'function') timer.unref();
 	});
-	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+	return Promise.race([promise, timeout])
+		.finally(() => clearTimeout(timer));
+}
+
+// Register a probe operation as outstanding until it genuinely settles, so a
+// timed-out call blocks the next sweep instead of stacking on top of it.
+function trackOutstanding(promise, outstanding) {
+	if (!outstanding) return promise;
+	outstanding.add(promise);
+	Promise.resolve(promise)
+		.catch(() => undefined)
+		.finally(() => outstanding.delete(promise));
+	return promise;
 }
 
 class JobBacklogService {
@@ -50,6 +67,10 @@ class JobBacklogService {
 		this.timer = null;
 		this.running = false;
 		this.unrefTimers = true;
+		// Operations started by a probe that has not settled. A timed-out probe is
+		// abandoned rather than cancelled, so this keeps the next sweep from
+		// stacking another call on unfinished work.
+		this.outstandingProbes = new Set();
 		this.hasActiveAlert = false;
 		this.lastPagedAt = null;
 		this.lastRecoveryAt = null;
@@ -117,11 +138,12 @@ class JobBacklogService {
 		let brokerCounts = { waiting: 0, delayed: 0, failed: 0, active: 0, paused: 0 };
 		try {
 			if (this.jobQueue && typeof this.jobQueue.getJobCounts === 'function') {
-				brokerCounts = await withTimeout(
-					this.jobQueue.getJobCounts(),
-					timeoutMs,
-					'Broker count probe',
-				);
+				if (this.outstandingProbes.size === 0) {
+					const pending = trackOutstanding(this.jobQueue.getJobCounts(), this.outstandingProbes);
+					brokerCounts = await withTimeout(pending, timeoutMs, 'Broker count probe');
+				} else {
+					this.logger.warn?.('[JobBacklogService] Skipping broker probe: a previous probe is still outstanding');
+				}
 			}
 		} catch (error) {
 			this.logger.warn?.('[JobBacklogService] Broker count probe failed:', error.message);
@@ -133,12 +155,16 @@ class JobBacklogService {
 			if (this.repository) {
 				if (typeof this.repository.isConfigured === 'function') {
 					if (this.repository.isConfigured()) {
-						durable = await withTimeout(
-							this.repository.getBacklogDepth({ maxScan: 100, now }),
-							timeoutMs,
-							'Durable backlog probe',
-						);
-						durableProbeSucceeded = true;
+						if (this.outstandingProbes.size === 0) {
+							const pending = trackOutstanding(
+								this.repository.getBacklogDepth({ maxScan: 100, now }),
+								this.outstandingProbes,
+							);
+							durable = await withTimeout(pending, timeoutMs, 'Durable backlog probe');
+						} else {
+							this.logger.warn?.('[JobBacklogService] Skipping durable probe: a previous probe is still outstanding');
+						}
+						durableProbeSucceeded = durable?.probeFailed !== true;
 					} else if (typeof this.repository.getMemoryBacklogDepth === 'function') {
 						durable = this.repository.getMemoryBacklogDepth(now);
 						durableProbeSucceeded = true;
@@ -149,7 +175,7 @@ class JobBacklogService {
 						timeoutMs,
 						'Durable backlog probe',
 					);
-					durableProbeSucceeded = true;
+					durableProbeSucceeded = durable?.probeFailed !== true;
 				} else if (typeof this.repository.getMemoryBacklogDepth === 'function') {
 					durable = this.repository.getMemoryBacklogDepth(now);
 					durableProbeSucceeded = true;

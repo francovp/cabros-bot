@@ -431,10 +431,14 @@ describe('JobBacklogService', () => {
 		const status = await service.probe(now);
 		const elapsed = Date.now() - started;
 
-		// The hung broker call is abandoned, and the durable probe still completes.
+		// The probe returns within its deadline instead of hanging forever.
 		expect(elapsed).toBeLessThan(5000);
-		expect(status.durableQueuedCount).toBe(2);
-		expect(status.oldestQueuedAgeMs).toBe(120000);
+		expect(status.waitingCount).toBe(0);
+		// The durable result is unknown, not drained: the still-outstanding broker
+		// call blocks a second durable query, so no depth is asserted as recovered.
+		expect(status.durableQueuedCount).toBe(0);
+		expect(status.backlogAlert.active).toBe(false);
+		expect(status.backlogAlert.lastRecoveryAt).toBeNull();
 	});
 
 	it('reports backlogMonitorEnabled false so a disabled monitor is distinguishable from a healthy queue', () => {
@@ -449,6 +453,70 @@ describe('JobBacklogService', () => {
 			if (saved === undefined) delete process.env.ENABLE_JOB_BACKLOG_MONITOR;
 			else process.env.ENABLE_JOB_BACKLOG_MONITOR = saved;
 		}
+	});
+
+	it('treats a durable probe that fell back to memory as indeterminate, not drained', async () => {
+		const now = Date.now();
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: 'admin-12345',
+			JOB_BACKLOG_ALERT_THRESHOLD_MS: '600000',
+		};
+
+		// getBacklogDepth() swallows its Firestore error and returns an empty
+		// memory result, flagged via probeFailed. A web replica's process-local
+		// map is empty, so this must not read as "backlog drained".
+		const repository = {
+			isConfigured: jest.fn(() => true),
+			getBacklogDepth: jest.fn(() => Promise.resolve({
+				durableQueuedCount: 0,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+				source: 'firestore-error',
+				probeFailed: true,
+			})),
+		};
+		const queue = {
+			getJobCounts: jest.fn(() => Promise.resolve({ waiting: 0, delayed: 0, failed: 0, active: 0 })),
+		};
+		const sendMessage = jest.fn().mockResolvedValue({ message_id: 1 });
+		const service = new JobBacklogService({ repository, queue, botGetter: () => ({ telegram: { sendMessage } }) });
+
+		await service.probe(now);
+
+		expect(service.getStatus().backlogAlert.active).toBe(false);
+		expect(sendMessage).not.toHaveBeenCalled();
+		expect(service.getStatus().backlogAlert.lastRecoveryAt).toBeNull();
+	});
+
+	it('does not stack a new probe on top of a timed-out one that is still outstanding', async () => {
+		const now = Date.now();
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			JOB_BACKLOG_PROBE_TIMEOUT_MS: '1000',
+		};
+
+		const getJobCounts = jest.fn(() => new Promise(() => {}));
+		const repository = {
+			isConfigured: jest.fn(() => true),
+			getBacklogDepth: jest.fn(() => Promise.resolve({
+				durableQueuedCount: 0,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+			})),
+		};
+		const service = new JobBacklogService({ repository, queue: { getJobCounts } });
+
+		await service.probe(now);
+		// The broker call timed out but is still pending internally.
+		expect(getJobCounts).toHaveBeenCalledTimes(1);
+		expect(service.outstandingProbes.size).toBe(1);
+
+		await service.probe(now + 60000);
+		// The second sweep must not open a second connection for the same work.
+		expect(getJobCounts).toHaveBeenCalledTimes(1);
 	});
 
 	it('fails open when Telegram sendMessage fails', async () => {
