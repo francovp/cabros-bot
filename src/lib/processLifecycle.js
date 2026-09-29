@@ -84,6 +84,7 @@ function createProcessLifecycle(options = {}) {
 		stopNotificationRedriveWorker = () => undefined,
 		stopWhatsAppCommandBridge = () => undefined,
 		stopScannerPresetScheduler = () => undefined,
+		stopJobBacklogMonitor = () => undefined,
 		stopUserPriceAlertWorker = () => undefined,
 		stopNewsMonitorScheduler = () => undefined,
 		stopAlertScheduler = () => undefined,
@@ -177,10 +178,18 @@ function createProcessLifecycle(options = {}) {
 
 			const cleanup = async () => {
 				const sseCleanup = safelyRun(logger, 'admin SSE streams', closeAllSseConnections);
+				// Stop the backlog monitor's timer before anything awaits: it pages
+				// through Telegram, so a probe armed during the shutdown window would
+				// read Firestore/Redis and try to notify an operator through a bot
+				// that is already stopping. Clearing the timer first stops new work
+				// from starting; the drain below still waits for a probe already in
+				// flight, and now runs before the bot itself is torn down.
+				const backlogMonitorCleanup = safelyRun(logger, 'job backlog monitor', () => stopJobBacklogMonitor({ drain: true }));
 				const telegramCleanup = safelyRun(logger, 'Telegram bot', stopBot);
 				const bootstrapCleanup = safelyRun(logger, 'application bootstrap', getBootstrapPromise);
 				await closeServer(server, logger);
 				await sseCleanup;
+				await backlogMonitorCleanup;
 				await telegramCleanup;
 				await bootstrapCleanup;
 				await safelyRun(logger, 'background jobs', waitForBackgroundJobs);

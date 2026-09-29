@@ -44,7 +44,7 @@
     }
   ],
   "paths": {
-"/api/public/status": {
+    "/api/public/status": {
       "get": {
         "tags": [
           "Operations"
@@ -53,9 +53,6 @@
         "description": "Returns a redacted, secrets-free snapshot of service name/version, uptime, enabled notification channels, and dependency readiness booleans. No API key required. Cached for 30 seconds per process. Returns 503 when the process is still bootstrapping or shutting down.",
         "operationId": "getPublicStatus",
         "responses": {
-                "408": {
-                  "$ref": "#/components/responses/RequestTimeout"
-                },
           "200": {
             "description": "Public status snapshot",
             "content": {
@@ -75,16 +72,27 @@
                     "shuttingDown": false
                   },
                   "channels": {
-                    "enabled": ["telegram"]
+                    "enabled": [
+                      "telegram"
+                    ]
                   },
                   "dependencies": {
-                    "gemini": { "ready": true },
-                    "tradingview": { "ready": true },
-                    "firestore": { "ready": true }
+                    "gemini": {
+                      "ready": true
+                    },
+                    "tradingview": {
+                      "ready": true
+                    },
+                    "firestore": {
+                      "ready": true
+                    }
                   }
                 }
               }
             }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "description": "Service is not yet ready (bootstrap pending or shutdown draining)",
@@ -444,11 +452,11 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
-          "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
-          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -487,11 +495,11 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
-          "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
-          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -3392,14 +3400,27 @@
               "application/json": {
                 "schema": {
                   "oneOf": [
-                    { "$ref": "#/components/schemas/SelfTestResult" },
+                    {
+                      "$ref": "#/components/schemas/SelfTestResult"
+                    },
                     {
                       "type": "object",
                       "properties": {
-                        "status": { "type": "string", "enum": ["unknown"] },
-                        "message": { "type": "string" },
-                        "requestId": { "type": "string" },
-                        "cached": { "type": "boolean" }
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "unknown"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "cached": {
+                          "type": "boolean"
+                        }
                       }
                     }
                   ]
@@ -3418,9 +3439,15 @@
           }
         },
         "security": [
-          { "ApiKeyHeader": [] },
-          { "ApiKeyQuery": [] },
-          { "FirebaseBearerAuth": [] }
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
         ],
         "x-admin-role": "admin.viewer"
       }
@@ -3438,7 +3465,9 @@
             "name": "only",
             "in": "query",
             "required": false,
-            "schema": { "type": "string" },
+            "schema": {
+              "type": "string"
+            },
             "description": "Comma-separated check ids to scope the run to. Unknown ids return a fail result."
           }
         ],
@@ -3449,7 +3478,9 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "only": { "type": "string" }
+                  "only": {
+                    "type": "string"
+                  }
                 }
               }
             }
@@ -3460,7 +3491,9 @@
             "description": "Self-test result.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/SelfTestResult" }
+                "schema": {
+                  "$ref": "#/components/schemas/SelfTestResult"
+                }
               }
             }
           },
@@ -3478,9 +3511,15 @@
           }
         },
         "security": [
-          { "ApiKeyHeader": [] },
-          { "ApiKeyQuery": [] },
-          { "FirebaseBearerAuth": [] }
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
         ],
         "x-admin-role": "admin.operator"
       }
@@ -5334,14 +5373,14 @@
                         "formattedMessage": "BTCUSDT breakout above resistance (confidence 0.85).",
                         "timestamp": 1724745600000,
                         "marketContext": {
-                          "price": 68500.0,
+                          "price": 68500,
                           "change24h": 2.4,
                           "volume24h": 18500000000,
                           "source": "binance",
                           "timestamp": 1724745599000
                         },
-                        "stop": 67130.0,
-                        "target": 71925.0
+                        "stop": 67130,
+                        "target": 71925
                       },
                       "deliveryResults": [],
                       "cached": false,
@@ -5957,56 +5996,102 @@
       }
     },
     "schemas": {
-"PublicStatus": {
+      "PublicStatus": {
         "type": "object",
         "description": "Public, unauthenticated service status snapshot. Intentionally omits credentials, configuration details, per-channel counters, feature flags, and operator identifiers.",
-        "required": ["service", "status", "channels", "dependencies"],
+        "required": [
+          "service",
+          "status",
+          "channels",
+          "dependencies"
+        ],
         "properties": {
-          "service": { "$ref": "#/components/schemas/PublicStatusService" },
-          "status": { "$ref": "#/components/schemas/PublicStatusBody" },
-          "channels": { "$ref": "#/components/schemas/PublicStatusChannels" },
-          "dependencies": { "$ref": "#/components/schemas/PublicStatusDependencies" }
+          "service": {
+            "$ref": "#/components/schemas/PublicStatusService"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PublicStatusBody"
+          },
+          "channels": {
+            "$ref": "#/components/schemas/PublicStatusChannels"
+          },
+          "dependencies": {
+            "$ref": "#/components/schemas/PublicStatusDependencies"
+          }
         }
       },
-"PublicStatusBody": {
+      "PublicStatusBody": {
         "type": "object",
         "description": "Process lifecycle signal reported in the public snapshot.",
-        "required": ["ok", "uptimeSeconds", "lastUpdated", "shuttingDown"],
+        "required": [
+          "ok",
+          "uptimeSeconds",
+          "lastUpdated",
+          "shuttingDown"
+        ],
         "properties": {
-          "ok": { "type": "boolean" },
-          "uptimeSeconds": { "type": "integer", "minimum": 0 },
-          "lastUpdated": { "type": "string", "format": "date-time" },
-          "shuttingDown": { "type": "boolean" }
+          "ok": {
+            "type": "boolean"
+          },
+          "uptimeSeconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastUpdated": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "shuttingDown": {
+            "type": "boolean"
+          }
         }
       },
-"PublicStatusChannels": {
+      "PublicStatusChannels": {
         "type": "object",
         "description": "Notification channels currently enabled and ready. Order is not significant.",
-        "required": ["enabled"],
+        "required": [
+          "enabled"
+        ],
         "properties": {
           "enabled": {
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["telegram", "whatsapp", "discord"]
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
             }
           }
         }
       },
-"PublicStatusDependencies": {
+      "PublicStatusDependencies": {
         "type": "object",
         "description": "Subset of dependency readiness flags safe for public, unauthenticated consumption.",
-        "required": ["gemini", "tradingview", "firestore"],
+        "required": [
+          "gemini",
+          "tradingview",
+          "firestore"
+        ],
         "properties": {
-          "gemini": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" },
-          "tradingview": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" },
-          "firestore": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" }
+          "gemini": {
+            "$ref": "#/components/schemas/PublicStatusDependencyFlag"
+          },
+          "tradingview": {
+            "$ref": "#/components/schemas/PublicStatusDependencyFlag"
+          },
+          "firestore": {
+            "$ref": "#/components/schemas/PublicStatusDependencyFlag"
+          }
         }
       },
-"PublicStatusDependencyFlag": {
+      "PublicStatusDependencyFlag": {
         "type": "object",
         "description": "Boolean readiness flag for a single dependency in the public, unauthenticated status snapshot. No credentials, configuration details, or provider metadata are exposed.",
-        "required": ["ready"],
+        "required": [
+          "ready"
+        ],
         "properties": {
           "ready": {
             "type": "boolean",
@@ -6014,26 +6099,58 @@
           }
         }
       },
-"PublicStatusNotReady": {
+      "PublicStatusNotReady": {
         "type": "object",
         "description": "Returned with HTTP 503 when the public snapshot cannot be served because the process is still bootstrapping or shutting down.",
-        "required": ["service", "status", "channels", "dependencies", "error", "code"],
+        "required": [
+          "service",
+          "status",
+          "channels",
+          "dependencies",
+          "error",
+          "code"
+        ],
         "properties": {
-          "service": { "$ref": "#/components/schemas/PublicStatusService" },
-          "status": { "$ref": "#/components/schemas/PublicStatusBody" },
-          "channels": { "$ref": "#/components/schemas/PublicStatusChannels" },
-          "dependencies": { "$ref": "#/components/schemas/PublicStatusDependencies" },
-          "error": { "type": "string" },
-          "code": { "type": "string", "enum": ["SERVICE_NOT_READY"] }
+          "service": {
+            "$ref": "#/components/schemas/PublicStatusService"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PublicStatusBody"
+          },
+          "channels": {
+            "$ref": "#/components/schemas/PublicStatusChannels"
+          },
+          "dependencies": {
+            "$ref": "#/components/schemas/PublicStatusDependencies"
+          },
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "SERVICE_NOT_READY"
+            ]
+          }
         }
       },
-"PublicStatusService": {
+      "PublicStatusService": {
         "type": "object",
         "description": "Service identity exposed in the public snapshot. Build commit and environment are intentionally omitted.",
-        "required": ["name", "version"],
+        "required": [
+          "name",
+          "version"
+        ],
         "properties": {
-          "name": { "type": "string" },
-          "version": { "type": ["string", "null"] }
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       },
       "JsonObject": {
@@ -6510,11 +6627,21 @@
       "FirestoreWriteMetrics": {
         "type": "object",
         "description": "In-memory counters for Firestore persistence attempts on alert storage, alert replays, and tradingviewJobs. Counters reset on process restart, never block delivery, and the field is omitted entirely from /api/status when nothing has been recorded yet. Mirrors DeliveryMetricsService for write-path observability so silent persistence failures cannot masquerade as 'Firestore ready'.",
-        "required": ["window", "writesAttempted", "writesSucceeded", "writesFailed", "successRate", "byDomain"],
+        "required": [
+          "window",
+          "writesAttempted",
+          "writesSucceeded",
+          "writesFailed",
+          "successRate",
+          "byDomain"
+        ],
         "properties": {
           "window": {
             "type": "object",
-            "required": ["startedAt", "durationMs"],
+            "required": [
+              "startedAt",
+              "durationMs"
+            ],
             "properties": {
               "startedAt": {
                 "type": "string",
@@ -6556,7 +6683,12 @@
       },
       "FirestoreWriteDomainMetrics": {
         "type": "object",
-        "required": ["success", "failure", "total", "successRate"],
+        "required": [
+          "success",
+          "failure",
+          "total",
+          "successRate"
+        ],
         "properties": {
           "success": {
             "type": "integer",
@@ -6582,68 +6714,173 @@
       "SelfTestResult": {
         "type": "object",
         "description": "Self-test diagnostic suite result. Sensitive evidence is redacted server-side; secrets are never returned.",
-        "required": ["status", "summary", "checks", "startedAt", "finishedAt", "durationMs", "requestId"],
+        "required": [
+          "status",
+          "summary",
+          "checks",
+          "startedAt",
+          "finishedAt",
+          "durationMs",
+          "requestId"
+        ],
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["pass", "warn", "fail"]
+            "enum": [
+              "pass",
+              "warn",
+              "fail"
+            ]
           },
           "summary": {
             "type": "object",
-            "required": ["pass", "warn", "fail", "skipped"],
+            "required": [
+              "pass",
+              "warn",
+              "fail",
+              "skipped"
+            ],
             "properties": {
-              "pass": { "type": "integer", "format": "int64" },
-              "warn": { "type": "integer", "format": "int64" },
-              "fail": { "type": "integer", "format": "int64" },
-              "skipped": { "type": "integer", "format": "int64" }
+              "pass": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "warn": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "fail": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "skipped": {
+                "type": "integer",
+                "format": "int64"
+              }
             }
           },
           "checks": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/SelfTestCheck" }
+            "items": {
+              "$ref": "#/components/schemas/SelfTestCheck"
+            }
           },
           "service": {
             "type": "object",
             "nullable": true,
             "properties": {
-              "name": { "type": "string" },
-              "version": { "type": "string" },
-              "commit": { "type": "string", "nullable": true },
-              "uptimeSec": { "type": "integer" },
-              "nodeVersion": { "type": "string" }
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "commit": {
+                "type": "string",
+                "nullable": true
+              },
+              "uptimeSec": {
+                "type": "integer"
+              },
+              "nodeVersion": {
+                "type": "string"
+              }
             }
           },
-          "startedAt": { "type": "string", "format": "date-time" },
-          "finishedAt": { "type": "string", "format": "date-time" },
-          "durationMs": { "type": "integer", "format": "int64" },
-          "requestId": { "type": "string" },
-          "cached": { "type": "boolean" },
-          "expired": { "type": "boolean" }
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "durationMs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "cached": {
+            "type": "boolean"
+          },
+          "expired": {
+            "type": "boolean"
+          }
         }
       },
       "SelfTestCheck": {
         "type": "object",
-        "required": ["id", "status", "message", "durationMs"],
+        "required": [
+          "id",
+          "status",
+          "message",
+          "durationMs"
+        ],
         "properties": {
-          "id": { "type": "string" },
+          "id": {
+            "type": "string"
+          },
           "status": {
             "type": "string",
-            "enum": ["pass", "warn", "fail", "skipped"]
+            "enum": [
+              "pass",
+              "warn",
+              "fail",
+              "skipped"
+            ]
           },
-          "message": { "type": "string" },
-          "durationMs": { "type": "integer", "format": "int64" },
-          "evidence": { "nullable": true }
+          "message": {
+            "type": "string"
+          },
+          "durationMs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "evidence": {
+            "nullable": true
+          }
         }
       },
       "SelfTestStatus": {
         "type": "object",
         "description": "Self-test dependency status surfaced under /api/status.dependencies.selfTest.",
-        "required": ["lastStatus", "ttlSec"],
+        "required": [
+          "lastStatus",
+          "ttlSec"
+        ],
         "properties": {
-          "lastRunAt": { "type": ["string", "null"], "format": "date-time" },
-          "lastStatus": { "type": ["string", "null"], "enum": ["pass", "warn", "fail", "unknown", null] },
-          "ttlSec": { "type": "integer" },
-          "ageMs": { "type": ["integer", "null"], "format": "int64" }
+          "lastRunAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastStatus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "pass",
+              "warn",
+              "fail",
+              "unknown",
+              null
+            ]
+          },
+          "ttlSec": {
+            "type": "integer"
+          },
+          "ageMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
         }
       },
       "BootstrapReadiness": {
@@ -10417,7 +10654,7 @@
       },
       "Status": {
         "type": "object",
-       "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.newsMonitorClassifier reports ENABLE_NEWS_MONITOR_CLASSIFIER and defaults to false; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations.",
+        "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.newsMonitorClassifier reports ENABLE_NEWS_MONITOR_CLASSIFIER and defaults to false; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations.",
         "properties": {
           "readiness": {
             "$ref": "#/components/schemas/BootstrapReadiness"
@@ -10446,6 +10683,9 @@
               },
               "firebaseRemoteConfig": {
                 "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
+              },
+              "jobExecutionQueue": {
+                "$ref": "#/components/schemas/JobExecutionQueueDependency"
               },
               "notificationRedrive": {
                 "$ref": "#/components/schemas/NotificationRedriveDependency"
@@ -10570,12 +10810,26 @@
           "configured": {
             "type": "array",
             "description": "Channel names the operator configured, regardless of runtime readiness.",
-            "items": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] }
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
           },
           "unconfigured": {
             "type": "array",
             "description": "Channel names the operator never configured (missing credentials, webhook URL, or chat id).",
-            "items": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] }
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
           }
         },
         "additionalProperties": false
@@ -10593,16 +10847,37 @@
         ],
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean", "description": "True when at least one chat id is authorized." },
+          "enabled": {
+            "type": "boolean",
+            "description": "True when at least one chat id is authorized."
+          },
           "allowlistSource": {
             "type": "string",
-            "enum": ["TELEGRAM_ALLOWED_CHAT_IDS", "TELEGRAM_CHAT_ID"],
+            "enum": [
+              "TELEGRAM_ALLOWED_CHAT_IDS",
+              "TELEGRAM_CHAT_ID"
+            ],
             "description": "Which variable supplied the allowlist; falls back to TELEGRAM_CHAT_ID when the explicit list is unset."
           },
-          "allowlistSize": { "type": "integer", "minimum": 0 },
-          "deniedSinceStart": { "type": "integer", "minimum": 0, "description": "Lifetime count of denied commands that produced a log line; cooldown-suppressed repeats are not counted." },
-          "trackedDeniedSenders": { "type": "integer", "minimum": 0, "description": "Chat ids currently held in the bounded log-cooldown cache." },
-          "deniedSenderCacheLimit": { "type": "integer", "minimum": 1, "description": "Maximum entries retained in the cooldown cache; oldest entries are evicted first." }
+          "allowlistSize": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deniedSinceStart": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Lifetime count of denied commands that produced a log line; cooldown-suppressed repeats are not counted."
+          },
+          "trackedDeniedSenders": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Chat ids currently held in the bounded log-cooldown cache."
+          },
+          "deniedSenderCacheLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum entries retained in the cooldown cache; oldest entries are evicted first."
+          }
         }
       },
       "NotificationRedriveDependency": {
@@ -11443,6 +11718,173 @@
           },
           "processingTimeMs": {
             "type": "integer"
+          }
+        }
+      },
+      "JobExecutionQueueDependency": {
+        "type": "object",
+        "description": "Async job execution queue readiness plus durable backlog depth. Reports bounded broker counts and non-terminal durable queued rows so an operator can tell a ready-but-undrained queue apart from a healthy one. No Redis URL, broker credential, or chat destination is ever exposed.",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "local",
+              "render-worker",
+              "firestore-poller"
+            ],
+            "description": "Active job execution mode."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether a broker-backed queue is enabled for this process."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether the queue transport is configured."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "Whether the queue can currently accept work."
+          },
+          "status": {
+            "type": "string",
+            "description": "Coarse queue state (for example ready, degraded, disabled)."
+          },
+          "queueName": {
+            "type": "string",
+            "description": "BullMQ queue name. Never contains credentials."
+          },
+          "enqueued": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Process-local enqueue counter."
+          },
+          "claimed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Process-local claim counter."
+          },
+          "completed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Process-local completion counter."
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Process-local failure counter."
+          },
+          "lastErrorCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sanitized last queue error code, or null. Never contains credentials."
+          },
+          "lastEnqueuedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this process last enqueued a job, or null."
+          },
+          "waitingCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Broker jobs waiting to be processed."
+          },
+          "delayedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Broker jobs in a delayed state."
+          },
+          "failedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Broker jobs in a failed state."
+          },
+          "activeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Broker jobs currently being processed."
+          },
+          "durableQueuedCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Non-terminal durable jobs in a queued state. Reported as a lower bound when the bounded probe truncates or rotates its scan, and null when the last sweep could not observe durable state."
+          },
+          "durableProbeSucceeded": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the last sweep actually observed durable state. False means the durable depth is unknown rather than zero, so an unreadable backlog is not read as a drained one. Null before the first probe."
+          },
+          "durableQueuedTruncated": {
+            "type": "boolean",
+            "description": "True when the bounded durable scan reached its page cap, meaning durableQueuedCount is a lower bound and additional queued jobs may exist."
+          },
+          "durableScanRotated": {
+            "type": "boolean",
+            "description": "True when the durable scan resumed from a rotation cursor, so it covered only part of the collection and durableQueuedCount and oldestQueuedAgeMs are lower bounds."
+          },
+          "durableCycleComplete": {
+            "type": "boolean",
+            "description": "True when this sweep resumed from a cursor left by an earlier capped sweep and then reached the end of the collection, so the closing sweep and the windows it tiled with cover the whole collection. Recovery additionally requires every window in that cycle to be below the alert threshold, re-evaluated at the closing sweep's own clock."
+          },
+          "oldestQueuedAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Age in milliseconds of the oldest queued job, or null when the backlog is empty or the probe failed."
+          },
+          "backlogMonitorEnabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether ENABLE_JOB_BACKLOG_MONITOR permits backlog probing. Null before the monitor reports. False means depth is not being observed."
+          },
+          "backlogMonitorRunning": {
+            "type": "boolean",
+            "description": "Whether this process has an active backlog probe timer."
+          },
+          "backlogAlert": {
+            "type": "object",
+            "description": "Operator paging state for the durable backlog. A failed probe never clears this latch, so a transient storage error cannot emit a false all-clear.",
+            "properties": {
+              "active": {
+                "type": "boolean",
+                "description": "Whether a backlog alert is currently latched."
+              },
+              "thresholdMs": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Configured oldest-queued-age threshold in milliseconds."
+              },
+              "pagedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "description": "When the current alert was last paged, or null."
+              },
+              "lastRecoveryAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "description": "When the last all-clear was paged, or null."
+              }
+            }
           }
         }
       }
