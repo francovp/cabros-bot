@@ -327,6 +327,11 @@ class JobQueue {
 			backlogMonitorRunning: resolvedBacklog?.running ?? false,
 			backlogAlert: resolvedBacklog?.backlogAlert ?? {
 				active: false,
+				// Mirrors JobBacklogService.DEFAULT_ALERT_THRESHOLD_MS, inlined
+				// rather than imported because the two modules already reference each
+				// other lazily to avoid a require cycle (see the backlogService lookup
+				// below and the jobQueue getter in JobBacklogService). Keep the two
+				// values in sync.
 				thresholdMs: 900000,
 				pagedAt: null,
 				lastRecoveryAt: null,

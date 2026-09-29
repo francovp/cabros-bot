@@ -1554,11 +1554,10 @@ describe('JobBacklogService', () => {
 		expect(notifyAdmin.mock.calls[0][0].type).toBe('backlog_recovery');
 	});
 
-	it('holds the latch when the front revalidation is itself truncated', async () => {
-		// The revalidation reads one bounded window, so it can hit its own page cap.
-		// A row just past that window can be a claim that expires after the window
-		// which read it — the same hazard the revalidation exists to close, so a
-		// truncated re-read proves nothing and must not read as "prefix is empty".
+	it('holds the latch when the front revalidation stops at a live claim', async () => {
+		// The re-read stops at a row that is still claimed, so a row just past it can
+		// still expire into newly-queued work — the hazard the re-read exists to
+		// catch — so it proves nothing about the prefix and must not read as empty.
 		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
 		const repository = {
 			getBacklogDepth: jest.fn()
@@ -1850,6 +1849,62 @@ describe('JobBacklogService', () => {
 		// One scalar: nothing accumulates, and the oldest observation survives.
 		expect(typeof service._cycleOldestQueuedCreatedAtMs).toBe('number');
 		expect(service._cycleOldestQueuedCreatedAtMs).toBe(Date.parse(oldestCreatedAt));
+	});
+
+	// End-to-end against the REAL JobRepository: the recovery gate must not depend
+	// on how many rows a page happens to hold. Every queued job is also
+	// `status == 'processing'`, so a collection well past the page cap would fill
+	// the front window with ordinary finished jobs; treating "page full" as
+	// indeterminate would veto recovery forever on any large collection.
+	it('clears a drained backlog larger than the page cap, end to end', async () => {
+		process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+		const { JobRepository } = require('../../src/services/jobs/JobRepository');
+		const repository = new JobRepository();
+		const now = Date.now();
+		// 1200 finished processing rows: five page caps, so the rotation needs
+		// several sweeps to close and the front window is always full.
+		const docs = Array.from({ length: 1200 }, (_, i) => ({
+			id: `doc${String(i).padStart(5, '0')}`,
+			data: () => ({
+				createdAt: new Date(now - 1000 * (i + 1)).toISOString(),
+				execution: { status: 'completed' },
+			}),
+		}));
+		const collection = (startAfter) => {
+			let start = 0;
+			if (startAfter) start = docs.findIndex((d) => d.id === startAfter.id) + 1;
+			const query = {
+				where() { return query; },
+				orderBy() { return query; },
+				limit(limit) {
+					return {
+						startAfter: (cursor) => collection(cursor),
+						get: async () => ({ docs: docs.slice(start, start + limit) }),
+					};
+				},
+				get: async () => ({ docs: docs.slice(start) }),
+			};
+			return query;
+		};
+		repository._getFirestore = jest.fn(() => ({ collection: () => collection(null) }));
+
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		try {
+			let cleared = false;
+			for (let i = 0; i < 12 && !cleared; i += 1) {
+				await service.probe();
+				cleared = !service.hasActiveAlert;
+			}
+
+			expect(cleared).toBe(true);
+			expect(notifyAdmin.mock.calls.map(([payload]) => payload.type)).toContain('backlog_recovery');
+		} finally {
+			delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+		}
 	});
 
 	it('projects durableCycleComplete through getStatus for a closing sweep', async () => {

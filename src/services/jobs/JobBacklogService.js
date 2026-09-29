@@ -411,19 +411,14 @@ class JobBacklogService {
 				this._cycleOldestQueuedCreatedAtMs = Math.min(opened, createdAtMs);
 			}
 		} else if (durableObserved && durable?.cycleComplete === true) {
-			// A cycle can span several probe intervals, so reaching the end does not
-			// establish a consistent view: a claimed job in the already-scanned prefix
-			// can have its lease expire while the later windows are read, which makes
-			// it a newly queued job in a region believed drained. The cursor is also
-			// already cleared, so nothing re-reads that prefix before recovery is
-			// claimed. Revalidating the front closes the gap: the decision is never
-			// taken from windows that are not contemporaneous.
-			//
 			// A sweep that closed the cycle is not partial after all — it resumed from
 			// a cursor left earlier in the cycle and reached the end, so together with
 			// the windows read since it tiles the whole collection. All of them must be
-			// below the threshold when the cycle closes, which is why the decision is
-			// taken here, after the revalidation has had its say.
+			// below the threshold when the cycle closes.
+			//
+			// Reaching the end is not on its own a consistent view, so the front is
+			// revalidated first — see _revalidateCycleFront() for why, and the
+			// decision is taken here only after it has had its say.
 			const frontUnproven = await this._revalidateCycleFront();
 			cycleProven = !frontUnproven && isCycleProven(
 				durable,
@@ -490,7 +485,10 @@ class JobBacklogService {
 		let front;
 		try {
 			const pending = trackOutstanding(
-				this.repository.getFrontBacklogDepth(),
+				// The same probe clock, so a lease that expires is evaluated against
+				// the instant the decision is being taken rather than a second,
+				// slightly different reading of "now".
+				this.repository.getFrontBacklogDepth({ now: Date.now() }),
 				this.outstandingProbes.durable,
 			);
 			front = await withTimeout(pending, this.getConfig().probeOperationTimeoutMs, 'Cycle front revalidation');
@@ -501,11 +499,12 @@ class JobBacklogService {
 		if (!front || front.probeFailed === true) {
 			return true;
 		}
-		// A re-read that hit its own page cap only covered the head of the prefix.
-		// A row just past it can be a claim that expires after the window that read
-		// it, which is the same hazard this revalidation exists to close — so a
-		// truncated re-read proves nothing and must hold the latch rather than be
-		// read as "the prefix is empty".
+		// A truncated re-read stopped at a row that is still a live claim, so a row
+		// just past it can expire into newly-queued work — the hazard this re-read
+		// exists to catch. It proves nothing and holds the latch. Note this is about
+		// the boundary row's state, not the page filling: an ordinary running or
+		// finished tail row is conclusive, so a large collection is not vetoed
+		// forever just for being large.
 		if (front.truncated === true) {
 			return true;
 		}

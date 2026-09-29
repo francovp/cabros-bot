@@ -933,12 +933,12 @@ class JobRepository {
 	// Reads a single window rather than the whole collection: the point is to detect
 	// that the prefix is no longer empty, not to re-derive a total depth, so a
 	// `truncated` result here is expected and not an error.
-	async getFrontBacklogDepth({ maxScan = 100 } = {}) {
+	async getFrontBacklogDepth({ maxScan = 100, now = Date.now() } = {}) {
 		const firestore = this._getFirestore();
 		if (!firestore) {
 			// Without Firestore the process-local map is the whole truth, and the
 			// in-memory sweep that just ran already read all of it.
-			return this.getMemoryBacklogDepth();
+			return this.getMemoryBacklogDepth(now);
 		}
 		try {
 			let query = firestore.collection(COLLECTION_NAME);
@@ -955,23 +955,40 @@ class JobRepository {
 			const docs = snapshot?.docs || [];
 			let durableQueuedCount = 0;
 			let oldestCreatedAt = null;
+			// Whether the last row read is a claim that is still live. Rows sort by
+			// createdAt ascending, so anything beyond this page is strictly newer —
+			// and a live claim there could still expire into newly-queued work, which
+			// is the hazard this re-read exists to catch. A last row that is finished
+			// (or queued) cannot grow into anything, so the read is conclusive even
+			// though the page was full.
+			//
+			// Note this is deliberately NOT `docs.length >= maxScan`: the query filters
+			// on the top-level `status == 'processing'`, and every queued job is also
+			// `processing`, so a full page of ordinary running jobs would otherwise
+			// veto recovery permanently on any collection that big.
+			let mayHideUnexpiredClaim = false;
 			for (const doc of docs) {
 				const data = doc.data() || {};
 				const execution = data.execution || {};
-				if (!isQueuedExecution(execution)) continue;
-				durableQueuedCount += 1;
-				if (data.createdAt && (!oldestCreatedAt || Date.parse(data.createdAt) < Date.parse(oldestCreatedAt))) {
-					oldestCreatedAt = data.createdAt;
+				if (isQueuedExecution(execution, now)) {
+					durableQueuedCount += 1;
+					if (data.createdAt && (!oldestCreatedAt || Date.parse(data.createdAt) < Date.parse(oldestCreatedAt))) {
+						oldestCreatedAt = data.createdAt;
+					}
 				}
+				const leaseUntilMs = Date.parse(execution.leaseUntil || '');
+				mayHideUnexpiredClaim = ['claimed', 'running'].includes(execution.status)
+					&& Number.isFinite(leaseUntilMs)
+					&& leaseUntilMs > now;
 			}
 			const oldestCreatedAtMs = oldestCreatedAt ? Date.parse(oldestCreatedAt) : null;
 			return {
 				durableQueuedCount,
 				oldestCreatedAt,
 				oldestQueuedAgeMs: Number.isFinite(oldestCreatedAtMs)
-					? Math.max(0, Date.now() - oldestCreatedAtMs)
+					? Math.max(0, now - oldestCreatedAtMs)
 					: null,
-				truncated: docs.length >= maxScan,
+				truncated: mayHideUnexpiredClaim,
 				source: 'firestore',
 			};
 		} catch (error) {

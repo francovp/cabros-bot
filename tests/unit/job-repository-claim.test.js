@@ -1128,5 +1128,64 @@ describe('JobRepository durable claims', () => {
 		expect(depth.source).toBe('memory');
 		expect(depth.durableQueuedCount).toBe(0);
 	});
-});
+	// A front re-read is conclusive even when the page is full, as long as its
+	// boundary row is not a live claim. `truncated` is about the boundary row's
+	// state, not the page filling, because the query filters on the top-level
+	// `status == 'processing'` and every queued job is also `processing` — a full
+	// page of ordinary jobs would otherwise veto recovery on any large collection.
+	it('reports a full front page as conclusive when the boundary row is not a live claim', async () => {
+		process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+		const repository = new JobRepository();
+		const now = Date.now();
+		// 150 processing rows, every one finished: the page fills at 100 and the
+		// boundary row cannot grow into queued work.
+		repository._getFirestore = jest.fn(() => firestoreOf(150, () => ({ status: 'completed' }), now));
 
+		try {
+			const front = await repository.getFrontBacklogDepth({ maxScan: 100, now });
+			expect(front.truncated).toBe(false);
+			expect(front.durableQueuedCount).toBe(0);
+
+			// A live claim at the boundary is the one case that can still become
+			// queued, so it must block a recovery claim.
+			repository._getFirestore = jest.fn(() => firestoreOf(150, () => ({
+				status: 'claimed',
+				leaseUntil: new Date(now + 60000).toISOString(),
+			}), now));
+			const liveClaim = await repository.getFrontBacklogDepth({ maxScan: 100, now });
+			expect(liveClaim.truncated).toBe(true);
+			expect(liveClaim.durableQueuedCount).toBe(0);
+		} finally {
+			delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+		}
+	});
+
+	// Builds a Firestore double holding `count` processing documents with the given
+	// execution shape, ordered by createdAt ascending.
+	function firestoreOf(count, executionAt, now) {
+		const docs = Array.from({ length: count }, (_, i) => ({
+			id: `doc${String(i).padStart(5, '0')}`,
+			data: () => ({
+				createdAt: new Date(now - 1000 * (i + 1)).toISOString(),
+				execution: executionAt(i),
+			}),
+		}));
+		const collection = (startAfter) => {
+			let start = 0;
+			if (startAfter) start = docs.findIndex((d) => d.id === startAfter.id) + 1;
+			const query = {
+				where() { return query; },
+				orderBy() { return query; },
+				limit(limit) {
+					return {
+						startAfter: (cursor) => collection(cursor),
+						get: async () => ({ docs: docs.slice(start, start + limit) }),
+					};
+				},
+				get: async () => ({ docs: docs.slice(start) }),
+			};
+			return query;
+		};
+		return { collection: () => collection(null) };
+	}
+});
