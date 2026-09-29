@@ -1067,6 +1067,13 @@ describe('JobBacklogService', () => {
 			getBacklogDepth: jest.fn()
 				.mockResolvedValueOnce(quietCappedFront)
 				.mockResolvedValue(quietTail),
+			// The real repository re-reads the front when a cycle closes, since a
+			// claim in the scanned prefix can expire mid-cycle.
+			getFrontBacklogDepth: jest.fn().mockResolvedValue({
+				durableQueuedCount: 0,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+			}),
 		};
 		const service = new JobBacklogService({ repository, notifyAdmin });
 		service.hasActiveAlert = true;
@@ -1380,6 +1387,13 @@ describe('JobBacklogService', () => {
 					scanRotated: true,
 					cycleComplete: true,
 				}),
+			// The real repository re-reads the front when a cycle closes, since a
+			// claim in the scanned prefix can expire mid-cycle.
+			getFrontBacklogDepth: jest.fn().mockResolvedValue({
+				durableQueuedCount: 0,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+			}),
 		};
 		const service = new JobBacklogService({ repository, notifyAdmin });
 		service.hasActiveAlert = true;
@@ -1420,6 +1434,214 @@ describe('JobBacklogService', () => {
 		expect(service._cycleOldestQueuedCreatedAtMs).toBeNull();
 	});
 
+	it('does not clear on queued work whose age cannot be determined', async () => {
+		// A complete scan that counts queued jobs but cannot date them reports
+		// oldestQueuedAgeMs:null. _evaluateAlert reads a null age as "below
+		// threshold", so without this guard the sweep would be treated as conclusive,
+		// the latch would clear, and the operator would get a false all-clear while
+		// real queued work was still waiting.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const repository = {
+			getBacklogDepth: jest.fn().mockResolvedValue({
+				durableQueuedCount: 3,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: 'not-a-date',
+				truncated: false,
+				scanRotated: false,
+				cycleComplete: false,
+			}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		const probe = await service.probe();
+
+		expect(probe.durableQueuedCount).toBe(3);
+		expect(probe.durableProbeSucceeded).toBe(false);
+		expect(probe.durableRecoveryProven).toBe(false);
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
+	it('revalidates the front of the collection when a rotation cycle closes', async () => {
+		// A cycle spanning several probe intervals is not a consistent snapshot: a
+		// claimed job in the already-scanned prefix can have its lease expire while
+		// the later windows are read, making it an AGED queued job in a region
+		// believed drained. The cursor is cleared on completion, so nothing else
+		// re-reads that prefix before recovery is claimed.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce({
+					durableQueuedCount: 2,
+					oldestQueuedAgeMs: 1000,
+					oldestCreatedAt: new Date(Date.now() - 1000).toISOString(),
+					truncated: true,
+					scanRotated: false,
+					cycleComplete: false,
+				})
+				.mockResolvedValue({
+					durableQueuedCount: 0,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: false,
+					scanRotated: true,
+					cycleComplete: true,
+				}),
+			// The prefix is not empty after all: a claim in it expired mid-cycle and
+			// is now an aged queued job.
+			getFrontBacklogDepth: jest.fn().mockResolvedValue({
+				durableQueuedCount: 1,
+				oldestQueuedAgeMs: 7200000,
+				oldestCreatedAt: new Date(Date.now() - 7200000).toISOString(),
+			}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		await service.probe();
+		const tail = await service.probe();
+
+		expect(tail.durableCycleComplete).toBe(true);
+		expect(repository.getFrontBacklogDepth).toHaveBeenCalled();
+		// The re-read found queued work, so the cycle does not prove a drained
+		// collection even though every window it read was quiet.
+		expect(tail.durableRecoveryProven).toBe(false);
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
+	it('still clears when the front revalidation confirms the prefix is drained', async () => {
+		// The revalidation is the added gate, so recovery has to remain reachable
+		// once it actually confirms the prefix is empty.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce({
+					durableQueuedCount: 2,
+					oldestQueuedAgeMs: 1000,
+					oldestCreatedAt: new Date(Date.now() - 1000).toISOString(),
+					truncated: true,
+					scanRotated: false,
+					cycleComplete: false,
+				})
+				.mockResolvedValue({
+					durableQueuedCount: 0,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: false,
+					scanRotated: true,
+					cycleComplete: true,
+				}),
+			getFrontBacklogDepth: jest.fn().mockResolvedValue({
+				durableQueuedCount: 0,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+			}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		await service.probe();
+		const tail = await service.probe();
+
+		expect(tail.durableCycleComplete).toBe(true);
+		expect(tail.durableRecoveryProven).toBe(true);
+		expect(service.hasActiveAlert).toBe(false);
+		expect(notifyAdmin.mock.calls[0][0].type).toBe('backlog_recovery');
+	});
+
+	it('holds the latch when the front revalidation cannot be read', async () => {
+		// Fail-safe: an unreadable front is not a drained front. Holding costs a later
+		// recovery, whereas clearing on a read failure would be a false all-clear.
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce({
+					durableQueuedCount: 2,
+					oldestQueuedAgeMs: 1000,
+					oldestCreatedAt: new Date(Date.now() - 1000).toISOString(),
+					truncated: true,
+					scanRotated: false,
+					cycleComplete: false,
+				})
+				.mockResolvedValue({
+					durableQueuedCount: 0,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: false,
+					scanRotated: true,
+					cycleComplete: true,
+				}),
+			getFrontBacklogDepth: jest.fn().mockResolvedValue({
+				durableQueuedCount: null,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+				probeFailed: true,
+			}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		await service.probe();
+		const tail = await service.probe();
+
+		expect(tail.durableRecoveryProven).toBe(false);
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
+	it('advances the rotation cursor only for a result it accepted', async () => {
+		// A scan abandoned at the probe deadline still resolves, but its result was
+		// discarded, so it must not move the shared cursor. If it did, the window it
+		// covered would be skipped and the next sweep could close a cycle on evidence
+		// with a hole in it.
+		const { jobRepository } = require('../../src/services/jobs/JobRepository');
+		const repository = jobRepository;
+		repository._backlogScanEpoch = 0;
+		repository._backlogScanCursor = null;
+		repository._backlogScanCursorId = null;
+
+		const doc = (id) => ({
+			id,
+			data: () => ({
+				createdAt: new Date(Date.now() - 1000).toISOString(),
+				execution: { status: 'queued' },
+			}),
+		});
+		const firestore = {
+			collection: () => ({
+				where: () => firestore.collection(),
+				orderBy: () => firestore.collection(),
+				limit: (n) => ({
+					startAfter: () => {},
+					get: async () => ({ docs: Array.from({ length: n }, (_, i) => doc(`d${i}`)) }),
+				}),
+			}),
+		};
+		repository._getFirestore = () => firestore;
+
+		// A result the caller accepts moves the cursor: the scan observed the epoch
+		// and nothing has bumped it since.
+		const accepted = await repository.getBacklogDepth({ maxScan: 2, maxPages: 1, now: Date.now() });
+		expect(accepted.truncated).toBe(true);
+		expect(repository._backlogScanCursor).not.toBeNull();
+
+		// Now a scan is abandoned: the caller rejects it at the probe deadline and
+		// commits the rejection, so the late resolution must not move the cursor.
+		repository._backlogScanCursor = null;
+		repository._backlogScanCursorId = null;
+		const abandoned = repository.getBacklogDepth({ maxScan: 2, maxPages: 1, now: Date.now() });
+		repository.commitBacklogScan(); // the rejection bump, before the scan resolves
+		const discarded = await abandoned;
+		expect(discarded.truncated).toBe(true);
+		expect(repository._backlogScanCursor).toBeNull();
+	});
+
 	it('clears a drained collection larger than one page cap', async () => {
 		// A capped front sweep that observed nothing queued still proves its own
 		// prefix empty — it read that window's documents completely. If such a window
@@ -1445,6 +1667,13 @@ describe('JobBacklogService', () => {
 					scanRotated: true,
 					cycleComplete: true,
 				}),
+			// The real repository re-reads the front when a cycle closes, since a
+			// claim in the scanned prefix can expire mid-cycle.
+			getFrontBacklogDepth: jest.fn().mockResolvedValue({
+				durableQueuedCount: 0,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+			}),
 		};
 		const service = new JobBacklogService({ repository, notifyAdmin });
 		service.hasActiveAlert = true;

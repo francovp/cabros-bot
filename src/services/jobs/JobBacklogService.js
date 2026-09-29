@@ -65,6 +65,11 @@ function trackOutstanding(promise, outstanding) {
 function isDurableResultConclusive(durable) {
 	if (!durable) return false;
 	if (durable.probeFailed === true) return false;
+	// Queued work was observed but none of it could be dated, so the sweep cannot
+	// say whether it is above the threshold. Treating the null age as "below
+	// threshold" would let _evaluateAlert read it as drained and clear the latch
+	// while real queued work is still waiting.
+	if (durable.durableQueuedCount > 0 && !Number.isFinite(durable.oldestQueuedAgeMs)) return false;
 	if (durable.cycleComplete === true) return true;
 	if (durable.scanRotated === true && !(durable.durableQueuedCount > 0)) return false;
 	if (durable.truncated === true && !(durable.durableQueuedCount > 0)) return false;
@@ -90,6 +95,9 @@ function isDurableResultConclusive(durable) {
 function isSweepComplete(durable) {
 	if (!durable) return false;
 	if (durable.probeFailed === true) return false;
+	// Same undated-queued-work guard: covering the whole collection is not proof of
+	// a drained backlog when the observed queued jobs cannot be aged.
+	if (durable.durableQueuedCount > 0 && !Number.isFinite(durable.oldestQueuedAgeMs)) return false;
 	if (durable.scanRotated === true || durable.truncated === true) return false;
 	return true;
 }
@@ -341,6 +349,7 @@ class JobBacklogService {
 			this.logger.warn?.('[JobBacklogService] Durable backlog probe failed:', error.message);
 		}
 
+
 		const probeResult = {
 			waitingCount: brokerCounts?.waiting || 0,
 			delayedCount: brokerCounts?.delayed || 0,
@@ -369,14 +378,7 @@ class JobBacklogService {
 		// and then re-page on the next successful probe.
 		probeResult.durableProbeSucceeded = durableProbeSucceeded;
 		probeResult.durableCycleComplete = durable?.cycleComplete === true;
-		// A sweep that closed a rotation cycle is not partial after all: it resumed
-		// from a cursor left earlier in the cycle and reached the end, so together
-		// with the windows read since, it tiles the whole collection. All of them
-		// must be below the threshold when the cycle closes, so the evidence is
-		// accumulated across the whole rotation rather than the last window only.
 		const { alertThresholdMs } = this.getConfig();
-		const cycleProven = probeResult.durableCycleComplete === true
-			&& isCycleProven(durable, this._cycleOldestQueuedCreatedAtMs, alertThresholdMs, now);
 
 		// Update the cycle evidence. A capped sweep that did not close the cycle is a
 		// mid-cycle window and extends it; a sweep that closed the cycle consumed it,
@@ -392,6 +394,7 @@ class JobBacklogService {
 		// cap permanently unprovable. A storage error leaves durableObserved false, so
 		// the evidence survives rather than being discarded at the moment a blip makes
 		// it most valuable — hence also excluding probeFailed from the reset branch.
+		let cycleProven = false;
 		if (durableObserved && durable?.truncated === true && durable?.cycleComplete !== true) {
 			const observedQueued = (durable?.durableQueuedCount ?? 0) > 0;
 			// -Infinity marks queued work whose age cannot be determined, which must
@@ -407,6 +410,28 @@ class JobBacklogService {
 			} else if (observedQueued) {
 				this._cycleOldestQueuedCreatedAtMs = Math.min(opened, createdAtMs);
 			}
+		} else if (durableObserved && durable?.cycleComplete === true) {
+			// A cycle can span several probe intervals, so reaching the end does not
+			// establish a consistent view: a claimed job in the already-scanned prefix
+			// can have its lease expire while the later windows are read, which makes
+			// it a newly queued job in a region believed drained. The cursor is also
+			// already cleared, so nothing re-reads that prefix before recovery is
+			// claimed. Revalidating the front closes the gap: the decision is never
+			// taken from windows that are not contemporaneous.
+			//
+			// A sweep that closed the cycle is not partial after all — it resumed from
+			// a cursor left earlier in the cycle and reached the end, so together with
+			// the windows read since it tiles the whole collection. All of them must be
+			// below the threshold when the cycle closes, which is why the decision is
+			// taken here, after the revalidation has had its say.
+			const frontUnproven = await this._revalidateCycleFront();
+			cycleProven = !frontUnproven && isCycleProven(
+				durable,
+				this._cycleOldestQueuedCreatedAtMs,
+				alertThresholdMs,
+				now,
+			);
+			this._cycleOldestQueuedCreatedAtMs = null;
 		} else if (durableObserved && durable?.probeFailed !== true) {
 			// An uncapped sweep read the entire collection, so the rotation cursor
 			// reset and the next cycle starts from the front again. A failed sweep
@@ -415,6 +440,13 @@ class JobBacklogService {
 			this._cycleOldestQueuedCreatedAtMs = null;
 		}
 		probeResult.durableRecoveryProven = recoveryProven || cycleProven;
+		// This result is accepted, so the repository may advance its rotation
+		// cursor. A sweep abandoned at the probe deadline never reaches here, which
+		// is what stops its late resolution from skipping a window this service
+		// never folded into the cycle evidence.
+		if (typeof this.repository?.commitBacklogScan === 'function') {
+			this.repository.commitBacklogScan();
+		}
 
 		await this._evaluateAlert(probeResult, now);
 		this.lastProbe = probeResult;
@@ -427,6 +459,55 @@ class JobBacklogService {
 				lastRecoveryAt: this.lastRecoveryAt ? new Date(this.lastRecoveryAt).toISOString() : null,
 			},
 		};
+	}
+
+	// Re-read the front of the collection when a rotation cycle closes.
+	//
+	// A cycle that spans more than one probe interval is not a consistent snapshot.
+	// The scan treats a `claimed`/`running` job whose lease has expired as queued, so
+	// a job in the already-scanned prefix can become queued while the later windows
+	// are still being read — and by the time the tail reaches the end, that prefix is
+	// believed drained. The cursor is cleared on completion, so nothing re-reads it.
+	//
+	// Returns true when the prefix could NOT be confirmed drained, which the caller
+	// treats as "not proven" rather than "empty". This is fail-safe by construction:
+	// any failure, timeout, skip, or absent capability holds the latch instead of
+	// clearing it, because the only cost of an unnecessary hold is a later recovery
+	// whereas the cost of clearing is a false all-clear.
+	async _revalidateCycleFront() {
+		if (typeof this.repository?.getFrontBacklogDepth !== 'function') {
+			// Nothing to re-read against. A repository that never supported rotation
+			// also never opens a cycle, so this is not reachable in practice; treat it
+			// as unproven rather than silently trusting the earlier windows.
+			return true;
+		}
+		// The outstanding-probe guard keeps a revalidation from stacking on top of
+		// the sweep that just finished, which may still be settling at the probe
+		// deadline.
+		if (this.outstandingProbes.durable.size > 0) {
+			return true;
+		}
+		let front;
+		try {
+			const pending = trackOutstanding(
+				this.repository.getFrontBacklogDepth(),
+				this.outstandingProbes.durable,
+			);
+			front = await withTimeout(pending, this.getConfig().probeOperationTimeoutMs, 'Cycle front revalidation');
+		} catch (error) {
+			this.logger.warn?.('[JobBacklogService] Cycle front revalidation failed (holding the latch):', error.message);
+			return true;
+		}
+		if (!front || front.probeFailed === true) {
+			return true;
+		}
+		if ((front.durableQueuedCount ?? 0) > 0) {
+			// Something is queued in the prefix the cycle believed drained. It has to
+			// keep being aged, so it becomes the cycle's evidence rather than being
+			// compared once and discarded.
+			this._cycleOldestQueuedCreatedAtMs = parseTimestampMs(front.oldestCreatedAt) ?? -Infinity;
+		}
+		return false;
 	}
 
 	async _evaluateAlert(probeResult, now = Date.now()) {
