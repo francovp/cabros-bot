@@ -301,6 +301,8 @@ class JobQueue {
 			failedCount: resolvedBacklog?.failedCount ?? 0,
 			activeCount: resolvedBacklog?.activeCount ?? 0,
 			durableQueuedCount: resolvedBacklog?.durableQueuedCount ?? 0,
+			// True when the bounded durable scan hit its page cap.
+			durableQueuedTruncated: resolvedBacklog?.durableQueuedTruncated ?? false,
 			oldestQueuedAgeMs: resolvedBacklog?.oldestQueuedAgeMs ?? null,
 			// Surfaces ENABLE_JOB_BACKLOG_MONITOR so a disabled monitor is not read
 			// as a running monitor observing an empty queue.

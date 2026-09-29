@@ -22,6 +22,7 @@ describe('JobBacklogService', () => {
 			failedCount: 0,
 			activeCount: 0,
 			durableQueuedCount: 0,
+			durableQueuedTruncated: false,
 			oldestQueuedAgeMs: null,
 			oldestCreatedAt: null,
 			lastProbedAt: null,
@@ -517,6 +518,65 @@ describe('JobBacklogService', () => {
 		await service.probe(now + 60000);
 		// The second sweep must not open a second connection for the same work.
 		expect(getJobCounts).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps a skipped durable probe indeterminate so it cannot clear an active alert', async () => {
+		const now = Date.now();
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: 'admin-12345',
+			JOB_BACKLOG_ALERT_THRESHOLD_MS: '600000',
+			JOB_BACKLOG_PROBE_TIMEOUT_MS: '1000',
+		};
+
+		const sendMessage = jest.fn().mockResolvedValue({ message_id: 1 });
+		const healthyRepository = {
+			isConfigured: jest.fn(() => true),
+			getBacklogDepth: jest.fn(() => Promise.resolve({
+				durableQueuedCount: 3,
+				oldestQueuedAgeMs: 700000,
+				oldestCreatedAt: new Date(now - 700000).toISOString(),
+			})),
+		};
+		const queue = {
+			getJobCounts: jest.fn(() => Promise.resolve({ waiting: 3, delayed: 0, failed: 0, active: 0 })),
+		};
+		const service = new JobBacklogService({ repository: healthyRepository, queue, botGetter: () => ({ telegram: { sendMessage } }) });
+
+		// Establish a latched alert from a healthy probe.
+		await service.probe(now);
+		expect(service.getStatus().backlogAlert.active).toBe(true);
+		expect(sendMessage).toHaveBeenCalledTimes(1);
+
+		// The broker now hangs and stays outstanding, so the durable read is skipped.
+		// A skipped probe produced no result and must stay indeterminate -- it is
+		// unknown, not drained.
+		queue.getJobCounts = jest.fn(() => new Promise(() => {}));
+		await service.probe(now + 60000);
+
+		expect(service.getStatus().backlogAlert.active).toBe(true);
+		expect(service.getStatus().backlogAlert.lastRecoveryAt).toBeNull();
+		expect(sendMessage).toHaveBeenCalledTimes(1);
+	});
+
+	it('exposes durableQueuedTruncated so a bounded scan is not read as a complete depth', () => {
+		const service = new JobBacklogService();
+		service.lastProbe = {
+			durableQueuedCount: 500,
+			durableQueuedTruncated: true,
+			waitingCount: 0,
+			delayedCount: 0,
+			failedCount: 0,
+			activeCount: 0,
+			oldestQueuedAgeMs: 900000,
+			oldestCreatedAt: null,
+			probedAt: new Date().toISOString(),
+		};
+
+		const status = service.getStatus();
+		expect(status.durableQueuedCount).toBe(500);
+		expect(status.durableQueuedTruncated).toBe(true);
 	});
 
 	it('fails open when Telegram sendMessage fails', async () => {

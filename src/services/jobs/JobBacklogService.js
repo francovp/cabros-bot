@@ -161,10 +161,10 @@ class JobBacklogService {
 								this.outstandingProbes,
 							);
 							durable = await withTimeout(pending, timeoutMs, 'Durable backlog probe');
+							durableProbeSucceeded = durable?.probeFailed !== true;
 						} else {
 							this.logger.warn?.('[JobBacklogService] Skipping durable probe: a previous probe is still outstanding');
 						}
-						durableProbeSucceeded = durable?.probeFailed !== true;
 					} else if (typeof this.repository.getMemoryBacklogDepth === 'function') {
 						durable = this.repository.getMemoryBacklogDepth(now);
 						durableProbeSucceeded = true;
@@ -178,10 +178,13 @@ class JobBacklogService {
 							this.outstandingProbes,
 						);
 						durable = await withTimeout(pending, timeoutMs, 'Durable backlog probe');
+						durableProbeSucceeded = durable?.probeFailed !== true;
 					} else {
+						// No result was produced, so this sweep stays indeterminate.
+						// Falling through here would mark the untouched default as a
+						// success and let a null age read as "backlog drained".
 						this.logger.warn?.('[JobBacklogService] Skipping durable probe: a previous probe is still outstanding');
 					}
-					durableProbeSucceeded = durable?.probeFailed !== true;
 				} else if (typeof this.repository.getMemoryBacklogDepth === 'function') {
 					durable = this.repository.getMemoryBacklogDepth(now);
 					durableProbeSucceeded = true;
@@ -199,6 +202,9 @@ class JobBacklogService {
 			durableQueuedCount: durable?.durableQueuedCount || 0,
 			oldestQueuedAgeMs: durable?.oldestQueuedAgeMs ?? null,
 			oldestCreatedAt: durable?.oldestCreatedAt ?? null,
+			// True when the bounded scan hit maxPages, so durableQueuedCount is a
+			// lower bound rather than a complete depth.
+			truncated: durable?.truncated === true,
 			probedAt: new Date(now).toISOString(),
 		};
 
@@ -411,6 +417,11 @@ class JobBacklogService {
 		const durableQueuedCount = this.lastProbe?.durableQueuedCount ?? (durable?.durableQueuedCount || 0);
 		const oldestQueuedAgeMs = this.lastProbe?.oldestQueuedAgeMs ?? (durable?.oldestQueuedAgeMs ?? null);
 		const oldestCreatedAt = this.lastProbe?.oldestCreatedAt ?? (durable?.oldestCreatedAt ?? null);
+		// True when the bounded durable scan hit maxPages, so durableQueuedCount is
+		// a lower bound rather than a complete depth.
+		const durableQueuedTruncated = this.lastProbe?.durableQueuedTruncated
+			?? durable?.truncated
+			?? false;
 		const lastProbedAt = this.lastProbe?.probedAt ?? null;
 
 		return {
@@ -423,6 +434,7 @@ class JobBacklogService {
 			failedCount,
 			activeCount,
 			durableQueuedCount,
+			durableQueuedTruncated: durableQueuedTruncated === true,
 			oldestQueuedAgeMs,
 			oldestCreatedAt,
 			lastProbedAt,

@@ -11814,6 +11814,10 @@
             "minimum": 0,
             "description": "Non-terminal durable jobs in a queued state. Reported as a lower bound when the bounded probe truncates its scan."
           },
+          "durableQueuedTruncated": {
+            "type": "boolean",
+            "description": "True when the bounded durable scan reached its page cap, meaning durableQueuedCount is a lower bound and additional queued jobs may exist."
+          },
           "oldestQueuedAgeMs": {
             "type": [
               "integer",
