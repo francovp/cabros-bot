@@ -37,21 +37,31 @@ async function collectReadiness(overrides) {
 	return service.collectReadiness();
 }
 
-async function handleReadiness(req, res) {
+/**
+ * `failClosed: true`  -> degraded dependencies produce 503 (traffic-gating).
+ * `failClosed: false` -> degraded dependencies still return 200 and only the
+ *   body reports `ready: false`. A flaky third-party provider must never pull
+ *   a healthy replica out of load-balancer rotation, so the report surface is
+ *   advisory while the gate surface keeps 503 semantics.
+ */
+async function handleDependencyReadiness(req, res, options) {
 	const startedAt = Date.now();
+	const failClosed = Boolean(options && options.failClosed);
 	const overrides = (req && req.app && req.app.locals && req.app.locals.readinessOverrides) || undefined;
+	const respond = (statusCode, body) => res.status(statusCode).json(body);
 	try {
 		const report = await collectReadiness(overrides);
-		const status = report.ready ? 200 : 503;
-		res.status(status).json({
+		respond(failClosed && !report.ready ? 503 : 200, {
 			ready: report.ready,
+			failClosed,
 			checkedAt: new Date(startedAt).toISOString(),
 			latencyMs: Date.now() - startedAt,
 			dependencies: report.dependencies,
 		});
 	} catch (error) {
-		res.status(503).json({
+		respond(failClosed ? 503 : 200, {
 			ready: false,
+			failClosed,
 			checkedAt: new Date(startedAt).toISOString(),
 			latencyMs: Date.now() - startedAt,
 			error: error && error.message ? error.message : String(error),
@@ -69,7 +79,7 @@ function attachReadinessOverrides(app, overrides) {
 
 module.exports = {
 	collectReadiness,
-	handleReadiness,
+	handleDependencyReadiness,
 	attachReadinessOverrides,
 	getReadinessService,
 	resetReadinessService,

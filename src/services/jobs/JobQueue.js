@@ -231,15 +231,56 @@ class JobQueue {
 		this.queueConnection = null;
 		this.queueReady = false;
 		this.readyPromise = null;
+		this.backlogService = null;
 	}
 
-	getStatus() {
+	setBacklogService(backlogService) {
+		this.backlogService = backlogService;
+	}
+
+	async getJobCounts() {
+		if (!this.isEnabled() || !this.isConfigured()) {
+			return { waiting: 0, delayed: 0, failed: 0, active: 0, paused: 0 };
+		}
+
+		try {
+			const queue = await this._getQueue();
+			if (typeof queue.getJobCounts === 'function') {
+				const counts = await queue.getJobCounts('waiting', 'delayed', 'failed', 'active', 'paused');
+				return {
+					waiting: counts?.waiting || 0,
+					delayed: counts?.delayed || 0,
+					failed: counts?.failed || 0,
+					active: counts?.active || 0,
+					paused: counts?.paused || 0,
+				};
+			}
+		} catch (error) {
+			this._recordError(error);
+		}
+
+		return { waiting: 0, delayed: 0, failed: 0, active: 0, paused: 0 };
+	}
+
+	getStatus(backlog = null) {
 		const mode = process.env.JOB_EXECUTION_MODE || 'local';
 		const enabled = this.isEnabled();
 		const configured = this.isConfigured();
 		let status = 'disabled';
 		if (enabled) {
 			status = configured ? (this.queueReady ? 'ready' : 'not_started') : 'misconfigured';
+		}
+
+		let resolvedBacklog = backlog;
+		if (!resolvedBacklog) {
+			try {
+				const service = this.backlogService || require('./JobBacklogService').jobBacklogService;
+				if (service && typeof service.getStatus === 'function') {
+					resolvedBacklog = service.getStatus();
+				}
+			} catch (error) {
+				// fail-open
+			}
 		}
 
 		return {
@@ -255,6 +296,46 @@ class JobQueue {
 			failed: this.metrics.failed,
 			lastErrorCode: this.metrics.lastErrorCode,
 			lastEnqueuedAt: this.metrics.lastEnqueuedAt,
+			waitingCount: resolvedBacklog?.waitingCount ?? 0,
+			delayedCount: resolvedBacklog?.delayedCount ?? 0,
+			failedCount: resolvedBacklog?.failedCount ?? 0,
+			activeCount: resolvedBacklog?.activeCount ?? 0,
+			// Null when the durable depth is unknown rather than zero, so a reader
+			// can tell an unreadable backlog from an empty one.
+			// Default to 0 only when the field is ABSENT (no backlog service ran). An
+			// explicit null means the last sweep could not observe durable state, and
+			// `?? 0` would collapse that unknown into an apparently empty backlog
+			// published next to durableProbeSucceeded: false.
+			durableQueuedCount: resolvedBacklog?.durableQueuedCount === undefined
+				? 0
+				: resolvedBacklog.durableQueuedCount,
+			// True when the bounded durable scan hit its page cap.
+			durableQueuedTruncated: resolvedBacklog?.durableQueuedTruncated ?? false,
+			// True when the durable scan resumed from a rotation cursor, so it saw
+			// only part of the collection and the depth and age are lower bounds.
+			durableScanRotated: resolvedBacklog?.durableScanRotated ?? false,
+			// True when this sweep closed a rotation cycle, so the buffered windows
+			// and the tail together tile the whole collection. Part of the documented
+			// status payload, so it is projected rather than dropped.
+			durableCycleComplete: resolvedBacklog?.durableCycleComplete ?? false,
+			// False when the last sweep could not observe durable state.
+			durableProbeSucceeded: resolvedBacklog?.durableProbeSucceeded ?? null,
+			oldestQueuedAgeMs: resolvedBacklog?.oldestQueuedAgeMs ?? null,
+			// Surfaces ENABLE_JOB_BACKLOG_MONITOR so a disabled monitor is not read
+			// as a running monitor observing an empty queue.
+			backlogMonitorEnabled: resolvedBacklog?.enabled ?? null,
+			backlogMonitorRunning: resolvedBacklog?.running ?? false,
+			backlogAlert: resolvedBacklog?.backlogAlert ?? {
+				active: false,
+				// Mirrors JobBacklogService.DEFAULT_ALERT_THRESHOLD_MS, inlined
+				// rather than imported because the two modules already reference each
+				// other lazily to avoid a require cycle (see the backlogService lookup
+				// below and the jobQueue getter in JobBacklogService). Keep the two
+				// values in sync.
+				thresholdMs: 900000,
+				pagedAt: null,
+				lastRecoveryAt: null,
+			},
 		};
 	}
 

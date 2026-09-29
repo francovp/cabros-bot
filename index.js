@@ -7,6 +7,7 @@ printWarnings(validateEnv());
 
 const {
 	getPrice,
+	userPriceAlertCmd,
 	cryptoBotCmd,
 	expandedAnalysisCmd,
 	marketScannerCmd,
@@ -14,6 +15,12 @@ const {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	preferenciasCmd,
+	filtroCmd,
+	silencioCmd,
+	umbralCmd,
+	categoriasCmd,
+	telegramCommandRateLimiter,
 } = require('./src/controllers/commands');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
@@ -22,27 +29,40 @@ const { initializeNotificationServices } = require('./src/controllers/webhooks/h
 const { getNewsMonitor } = require('./src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
 const { getCacheInstance } = require('./src/controllers/webhooks/handlers/newsMonitor/cache');
 const { registerDebugSentryRoute } = require('./src/lib/debugSentryRoute');
+const { telegramMaintenanceMode } = require('./src/lib/maintenanceMode');
 const { createProcessLifecycle } = require('./src/lib/processLifecycle');
 const { waitForBackgroundTasks } = require('./src/lib/backgroundTaskTracker');
 const { getTelegramBootstrapConfig, sendStartupDeploymentNotification } = require('./src/lib/telegramBootstrap');
+const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
 const { launchTelegramBot } = require('./src/lib/telegramCommandMenu');
-const { attachTelegramErrorBoundary, handlePollingError } = require('./src/lib/telegramErrorBoundary');
+const { attachTelegramErrorBoundary, handlePollingError, startTelegramHealthProbe, stopTelegramHealthProbe } = require('./src/lib/telegramErrorBoundary');
+const { registerAlertActionHandlers } = require('./src/lib/telegramAlertActions');
+const { registerAuthMiddleware: registerTelegramCommandAuth } = require('./src/lib/telegramCommandAuth');
 const { jobService } = require('./src/services/jobs/JobService');
+const { jobBacklogService } = require('./src/services/jobs/JobBacklogService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
 const { whatsAppCommandBridgeService } = require('./src/services/notification/WhatsAppCommandBridgeService');
 const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
+const { userPriceAlertService } = require('./src/services/alerts/UserPriceAlertService');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
+const { alertSchedulerService } = require('./src/services/scheduler');
+const { adminSseService } = require('./src/services/sse/AdminSseService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
+const { configureServerTimeouts } = require('./src/lib/serverTimeouts');
 const Sentry = require('@sentry/node');
 
-const { token } = getTelegramBootstrapConfig();
+const { token, shouldStartTelegramBot } = getTelegramBootstrapConfig();
+bootstrapReadiness.begin({
+	telegramRequired: shouldStartTelegramBot,
+	newsMonitorRequired: process.env.ENABLE_NEWS_MONITOR === 'true',
+});
 
 let bot;
 let botLaunchPromise;
 let bootstrapPromise;
-let server;
+
 
 const port = process.env.PORT || 80;
 const now = new Date();
@@ -76,8 +96,13 @@ const lifecycle = createProcessLifecycle({
 	stopNotificationRedriveWorker: (options) => notificationRedriveService.stopWorker(options),
 	stopWhatsAppCommandBridge: (options) => whatsAppCommandBridgeService.stop(options),
 	stopScannerPresetScheduler: (options) => scannerPresetSchedulerService.stopWorker(options),
+	stopJobBacklogMonitor: (options) => jobBacklogService.stop(options),
+	stopUserPriceAlertWorker: (options) => userPriceAlertService.stopWorker(options),
 	stopNewsMonitorScheduler: (options) => newsMonitorSchedulerService.stopWorker(options),
+	stopAlertScheduler: (options) => alertSchedulerService.stopWorker(options),
 	stopRemoteConfig: () => remoteConfigService.stop(),
+	closeAllSseConnections: () => adminSseService.closeAll(),
+	stopTelegramHealthProbe: () => stopTelegramHealthProbe(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
 	flushSentry: (timeout) => sentryService.flush(timeout),
 	timeoutMs: process.env.SHUTDOWN_TIMEOUT_MS,
@@ -97,44 +122,73 @@ async function bootstrapApplication() {
 	// Start background scanner preset scheduler if enabled
 	scannerPresetSchedulerService.botGetter = () => bot;
 	scannerPresetSchedulerService.startWorker();
+	// Start background job backlog monitor if enabled
+	jobBacklogService.startMonitor();
+	// Start background user price alert worker if enabled
+	userPriceAlertService.setBotGetter(() => bot);
+	userPriceAlertService.startWorker({ source: 'web' });
 	// Start background news-monitor scheduler if enabled
 	newsMonitorSchedulerService.startWorker({ source: 'web' });
+	// Start background alert scheduler (JSON-defined news + scanner schedules) if enabled
+	alertSchedulerService.botGetter = () => bot;
+	alertSchedulerService.startWorker({ source: 'web' });
 	// Start WhatsApp inbound command bridge if enabled
 	if (whatsAppCommandBridgeService.isEnabled()) {
 		whatsAppCommandBridgeService.start();
 	}
 	if (process.env.ENABLE_NEWS_MONITOR === 'true') {
 		getNewsMonitor().initialize();
+		bootstrapReadiness.markReady('newsMonitor');
 	}
 
-	const { telegramBotIsEnabled, isPreviewEnv, shouldStartTelegramBot } = getTelegramBootstrapConfig();
+	const { telegramBotIsEnabled, isPreviewEnv, shouldStartTelegramBot: shouldLaunchTelegramBot } = getTelegramBootstrapConfig();
 	console.debug('telegramBotIsEnabled:', telegramBotIsEnabled);
 	console.debug('isPreviewEnv:', isPreviewEnv);
 
-	if (shouldStartTelegramBot) {
+	if (shouldLaunchTelegramBot) {
 		console.log('Telegram Bot is enabled');
 		bot = new Telegraf(token);
+		bot.use(telegramMaintenanceMode);
+		registerTelegramCommandAuth(bot);
+		bot.use(telegramCommandRateLimiter);
 		bot.command(['precio'], getPrice);
+		bot.command(['alerta', 'alert'], userPriceAlertCmd);
 		bot.command(['cryptobot'], cryptoBotCmd);
 		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);
 		bot.command(['scanner'], marketScannerCmd);
 		bot.command(['jobs', 'trabajos'], jobsCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
+		bot.command(['preferencias', 'preferences'], preferenciasCmd);
+		bot.command(['filtro', 'filter'], filtroCmd);
+		bot.command(['silencio', 'quiet'], silencioCmd);
+		bot.command(['umbral', 'threshold'], umbralCmd);
+		bot.command(['categorias', 'categories'], categoriasCmd);
 		bot.command(['help', 'start'], helpCmd);
+
+		// Register inline keyboard action handlers for Telegram alerts.
+		registerAlertActionHandlers(bot);
 
 		// Attach Telegram error boundary
 		attachTelegramErrorBoundary(bot);
 
 		// Initialize notification services
 		await initializeNotificationServices(bot);
+		bootstrapReadiness.markReady('notificationServices');
 		if (lifecycle.isShuttingDown()) return;
 
 		// Start polling without blocking the rest of bootstrap.
 		botLaunchPromise = launchTelegramBot(bot, (error) => {
 			console.error('[index] Failed to launch Telegram bot:', error.message);
 			void handlePollingError(error, { bot });
-		});
+		}, () => bootstrapReadiness.markReady('telegramBot'));
+		void botLaunchPromise.catch((error) => bootstrapReadiness.markFailed('telegramBot', error));
+
+		// Telegraf v4 has no polling-success event, so without an external
+		// signal the consecutive-failures counter is monotonic for the
+		// process lifetime. A periodic getMe probe (default 30s) lets
+		// recordPollingSuccess() reset the streak on a healthy round-trip.
+		startTelegramHealthProbe(bot);
 
 		if (!lifecycle.isShuttingDown()) {
 			await sendStartupDeploymentNotification({
@@ -148,14 +202,21 @@ async function bootstrapApplication() {
 		console.log('Telegram Bot is disabled');
 		// Initialize notification services
 		await initializeNotificationServices(null);
+		bootstrapReadiness.markReady('notificationServices');
 	}
 }
 
-server = app.listen(port, () => {
+const server = app.listen(port, () => {
 	bootstrapPromise = bootstrapApplication();
 	void bootstrapPromise.catch((error) => {
+		bootstrapReadiness.fail(error);
 		console.error('[index] Application bootstrap failed:', error.message);
 	});
 });
+
+// Bound slow clients before the 'listening' event, not inside the listen callback:
+// the server already accepts connections by then, which would leave a window where
+// headersTimeout/requestTimeout are still Node's unbounded defaults.
+configureServerTimeouts(server);
 
 module.exports = { bot };
