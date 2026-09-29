@@ -1554,6 +1554,50 @@ describe('JobBacklogService', () => {
 		expect(notifyAdmin.mock.calls[0][0].type).toBe('backlog_recovery');
 	});
 
+	it('holds the latch when the front revalidation is itself truncated', async () => {
+		// The revalidation reads one bounded window, so it can hit its own page cap.
+		// A row just past that window can be a claim that expires after the window
+		// which read it — the same hazard the revalidation exists to close, so a
+		// truncated re-read proves nothing and must not read as "prefix is empty".
+		const notifyAdmin = jest.fn().mockResolvedValue({ success: true });
+		const repository = {
+			getBacklogDepth: jest.fn()
+				.mockResolvedValueOnce({
+					durableQueuedCount: 2,
+					oldestQueuedAgeMs: 1000,
+					oldestCreatedAt: new Date(Date.now() - 1000).toISOString(),
+					truncated: true,
+					scanRotated: false,
+					cycleComplete: false,
+				})
+				.mockResolvedValue({
+					durableQueuedCount: 0,
+					oldestQueuedAgeMs: null,
+					oldestCreatedAt: null,
+					truncated: false,
+					scanRotated: true,
+					cycleComplete: true,
+				}),
+			getFrontBacklogDepth: jest.fn().mockResolvedValue({
+				durableQueuedCount: 0,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+				truncated: true,
+			}),
+		};
+		const service = new JobBacklogService({ repository, notifyAdmin });
+		service.hasActiveAlert = true;
+		service.lastPagedAt = Date.now();
+
+		await service.probe();
+		const tail = await service.probe();
+
+		expect(tail.durableCycleComplete).toBe(true);
+		expect(tail.durableRecoveryProven).toBe(false);
+		expect(service.hasActiveAlert).toBe(true);
+		expect(notifyAdmin.mock.calls.every(([payload]) => payload.type === 'backlog_alert')).toBe(true);
+	});
+
 	it('holds the latch when the front revalidation cannot be read', async () => {
 		// Fail-safe: an unreadable front is not a drained front. Holding costs a later
 		// recovery, whereas clearing on a read failure would be a false all-clear.
@@ -1600,11 +1644,12 @@ describe('JobBacklogService', () => {
 		// discarded, so it must not move the shared cursor. If it did, the window it
 		// covered would be skipped and the next sweep could close a cycle on evidence
 		// with a hole in it.
+		// Uses a private instance rather than the shared singleton: this stubs
+		// _getFirestore, and leaking that onto the singleton would silently change
+		// behaviour for every later test in the run.
 		const { jobRepository } = require('../../src/services/jobs/JobRepository');
-		const repository = jobRepository;
-		repository._backlogScanEpoch = 0;
-		repository._backlogScanCursor = null;
-		repository._backlogScanCursorId = null;
+		const Repository = jobRepository.constructor;
+		const repository = new Repository();
 
 		const doc = (id) => ({
 			id,

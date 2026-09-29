@@ -302,7 +302,13 @@ class JobQueue {
 			activeCount: resolvedBacklog?.activeCount ?? 0,
 			// Null when the durable depth is unknown rather than zero, so a reader
 			// can tell an unreadable backlog from an empty one.
-			durableQueuedCount: resolvedBacklog?.durableQueuedCount ?? 0,
+			// Default to 0 only when the field is ABSENT (no backlog service ran). An
+			// explicit null means the last sweep could not observe durable state, and
+			// `?? 0` would collapse that unknown into an apparently empty backlog
+			// published next to durableProbeSucceeded: false.
+			durableQueuedCount: resolvedBacklog?.durableQueuedCount === undefined
+				? 0
+				: resolvedBacklog.durableQueuedCount,
 			// True when the bounded durable scan hit its page cap.
 			durableQueuedTruncated: resolvedBacklog?.durableQueuedTruncated ?? false,
 			// True when the durable scan resumed from a rotation cursor, so it saw

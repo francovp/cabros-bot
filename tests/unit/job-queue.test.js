@@ -253,4 +253,26 @@ describe('JobQueue', () => {
 			lastRecoveryAt: null,
 		});
 	});
+
+	it('preserves an unknown durable depth through the queue projection', () => {
+		// An explicit null means the last sweep could not observe durable state.
+		// Defaulting it to 0 would publish an apparently empty backlog next to
+		// durableProbeSucceeded: false, so a client reading the count would see a
+		// drained queue that was never actually read.
+		const queue = new JobQueue();
+		const status = queue.getStatus({ durableQueuedCount: null, durableProbeSucceeded: false });
+
+		expect(status.durableQueuedCount).toBeNull();
+		expect(status.durableProbeSucceeded).toBe(false);
+	});
+
+	it('defaults the durable depth to zero only when no backlog service reported', () => {
+		// Absent is different from explicitly unknown: with no service at all there
+		// is genuinely nothing to observe, and the documented schema allows null
+		// for the unknown case.
+		const queue = new JobQueue();
+		const status = queue.getStatus({});
+
+		expect(status.durableQueuedCount).toBe(0);
+	});
 });

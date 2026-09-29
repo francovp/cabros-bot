@@ -501,6 +501,14 @@ class JobBacklogService {
 		if (!front || front.probeFailed === true) {
 			return true;
 		}
+		// A re-read that hit its own page cap only covered the head of the prefix.
+		// A row just past it can be a claim that expires after the window that read
+		// it, which is the same hazard this revalidation exists to close — so a
+		// truncated re-read proves nothing and must hold the latch rather than be
+		// read as "the prefix is empty".
+		if (front.truncated === true) {
+			return true;
+		}
 		if ((front.durableQueuedCount ?? 0) > 0) {
 			// Something is queued in the prefix the cycle believed drained. It has to
 			// keep being aged, so it becomes the cycle's evidence rather than being
