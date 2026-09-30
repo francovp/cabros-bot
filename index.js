@@ -34,6 +34,7 @@ const { createProcessLifecycle } = require('./src/lib/processLifecycle');
 const { waitForBackgroundTasks } = require('./src/lib/backgroundTaskTracker');
 const { getTelegramBootstrapConfig, sendStartupDeploymentNotification } = require('./src/lib/telegramBootstrap');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
+const { attachReadinessOverrides } = require('./src/controllers/readiness');
 const { launchTelegramBot } = require('./src/lib/telegramCommandMenu');
 const { attachTelegramErrorBoundary, handlePollingError, startTelegramHealthProbe, stopTelegramHealthProbe } = require('./src/lib/telegramErrorBoundary');
 const { registerAlertActionHandlers } = require('./src/lib/telegramAlertActions');
@@ -148,6 +149,13 @@ async function bootstrapApplication() {
 	if (shouldLaunchTelegramBot) {
 		console.log('Telegram Bot is enabled');
 		bot = new Telegraf(token);
+		// Give the readiness probe a live handle on the bot so its Telegram check
+		// performs a real getMe round-trip instead of reporting a permanent
+		// `telegram_bot_unavailable`. Registered before the probe can ever run.
+		attachReadinessOverrides(app, {
+			getBot: () => bot,
+			isBotEnabled: () => Boolean(bot) && !lifecycle.isShuttingDown(),
+		});
 		bot.use(telegramMaintenanceMode);
 		registerTelegramCommandAuth(bot);
 		bot.use(telegramCommandRateLimiter);

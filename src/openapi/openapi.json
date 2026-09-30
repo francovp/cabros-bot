@@ -113,7 +113,7 @@
           "Operations"
         ],
         "summary": "Service healthcheck",
-        "description": "Default behavior returns 200 with `uptime` JSON only. With `?deep=true`, the endpoint reuses the existing channel readiness logic from `/api/status` dependencies and returns 200 when every enabled channel is ready, 503 when any enabled channel is degraded (with `degradedChannels` and per-channel readiness). The endpoint is never API-key protected.",
+        "description": "Default behavior returns 200 with `uptime` JSON only. With `?deep=true`, the endpoint reuses the existing channel readiness logic from `/api/status` dependencies and returns 200 when every enabled channel is ready, 503 when any enabled channel is degraded. With `?depth=readiness`, it runs bounded external dependency probes (Firestore, Gemini, TradingView MCP, Binance, Telegram) and always returns 200 with the dependency report. The endpoint is never API-key protected.",
         "operationId": "getHealthcheck",
         "parameters": [
           {
@@ -124,6 +124,18 @@
               "type": "boolean"
             },
             "description": "When `true`, include channel readiness and return 503 if any enabled channel is degraded."
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "readiness"
+              ]
+            },
+            "description": "Set to `readiness` to receive the external dependency validation report. This surface is advisory: it always returns HTTP 200 and reports degradation in the body's `ready` field, so a flaky third-party provider can never pull a healthy replica out of load-balancer rotation. Use `/ready?depth=dependencies` when you need a traffic-gating 503."
           }
         ],
         "responses": {
@@ -138,14 +150,92 @@
                     },
                     {
                       "$ref": "#/components/schemas/DeepHealthcheck"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReadinessReport"
                     }
                   ]
+                },
+                "examples": {
+                  "depthReadiness": {
+                    "summary": "?depth=readiness — always 200; degradation is reported in the body",
+                    "value": {
+                      "ready": true,
+                      "failClosed": false,
+                      "checkedAt": "2026-08-31T02:30:00.000Z",
+                      "latencyMs": 412,
+                      "dependencies": {
+                        "firestore": {
+                          "ready": true,
+                          "backend": "firestore",
+                          "latencyMs": 53
+                        },
+                        "gemini": {
+                          "ready": true,
+                          "backend": "gemini",
+                          "latencyMs": 124
+                        },
+                        "tradingViewMcp": {
+                          "ready": true,
+                          "backend": "tradingview_mcp",
+                          "latencyMs": 18
+                        },
+                        "binance": {
+                          "ready": true,
+                          "backend": "binance",
+                          "latencyMs": 36
+                        },
+                        "telegram": {
+                          "ready": true,
+                          "backend": "telegram",
+                          "latencyMs": 22
+                        }
+                      }
+                    }
+                  },
+                  "depthReadinessDegraded": {
+                    "summary": "?depth=readiness with a degraded provider — still 200 (advisory)",
+                    "value": {
+                      "ready": false,
+                      "failClosed": false,
+                      "checkedAt": "2026-08-31T02:30:00.000Z",
+                      "latencyMs": 3011,
+                      "dependencies": {
+                        "firestore": {
+                          "ready": true,
+                          "backend": "firestore",
+                          "latencyMs": 53
+                        },
+                        "gemini": {
+                          "ready": false,
+                          "latencyMs": 3001,
+                          "error": "timeout_after_3000ms"
+                        },
+                        "tradingViewMcp": {
+                          "ready": true,
+                          "backend": "tradingview_mcp",
+                          "latencyMs": 18
+                        },
+                        "binance": {
+                          "ready": true,
+                          "backend": "binance",
+                          "latencyMs": 36
+                        },
+                        "telegram": {
+                          "ready": false,
+                          "enabled": false,
+                          "skipped": true,
+                          "reason": "telegram_disabled"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "503": {
-            "description": "One or more enabled channels are degraded, or readiness evaluation failed.",
+            "description": "Only `?deep=true` returns 503: one or more enabled notification channels are degraded, or readiness evaluation failed. The `?depth=readiness` variant never returns 503.",
             "content": {
               "application/json": {
                 "schema": {
@@ -163,30 +253,254 @@
           "Operations"
         ],
         "summary": "Get bootstrap readiness",
-        "description": "Returns 200 only after required startup components have completed bootstrap. Returns 503 while pending or after a bootstrap failure. This endpoint checks bootstrap completion, not continuous external provider health.",
+        "description": "Two shapes, selected by `depth`. Without it, the bootstrap gate: 200 only after required startup components have completed bootstrap, 503 while pending or failed (`BootstrapReadiness`). With `?depth=dependencies`, the bootstrap verdict is ANDed with bounded external dependency probes for Firestore, Gemini, TradingView MCP, Binance, and Telegram, returning 503 when either the bootstrap is not ready or a considered dependency is unhealthy (`ReadinessReport`, which also echoes `status`, `components` and `bootstrapReady`). This endpoint checks neither continuous external provider health by default nor anything else implicitly. For an advisory, always-200 dependency report use `/healthcheck?depth=readiness`.",
         "operationId": "getReadiness",
         "responses": {
           "200": {
-            "description": "Bootstrap completed successfully.",
+            "description": "Dependency report produced.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BootstrapReadiness"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/BootstrapReadiness"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReadinessReport"
+                    }
+                  ]
+                },
+                "examples": {
+                  "dependenciesHealthy": {
+                    "summary": "/ready?depth=dependencies — bootstrap ready AND every considered dependency healthy",
+                    "value": {
+                      "ready": true,
+                      "failClosed": true,
+                      "status": "ready",
+                      "bootstrapReady": true,
+                      "components": {
+                        "telegramBot": {
+                          "status": "disabled"
+                        },
+                        "notificationServices": {
+                          "status": "ready"
+                        },
+                        "newsMonitor": {
+                          "status": "disabled"
+                        }
+                      },
+                      "checkedAt": "2026-08-31T02:30:00.000Z",
+                      "latencyMs": 412,
+                      "dependencies": {
+                        "firestore": {
+                          "ready": true,
+                          "backend": "firestore",
+                          "latencyMs": 53
+                        },
+                        "gemini": {
+                          "ready": true,
+                          "backend": "gemini",
+                          "latencyMs": 124
+                        },
+                        "tradingViewMcp": {
+                          "ready": true,
+                          "backend": "tradingview_mcp",
+                          "latencyMs": 18
+                        },
+                        "binance": {
+                          "ready": true,
+                          "backend": "binance",
+                          "latencyMs": 36
+                        },
+                        "telegram": {
+                          "ready": true,
+                          "backend": "telegram",
+                          "latencyMs": 22
+                        }
+                      }
+                    }
+                  },
+                  "bootstrapReady": {
+                    "summary": "Bare /ready — bootstrap gate only, no provider probes",
+                    "value": {
+                      "status": "ready",
+                      "ready": true,
+                      "startedAt": "2026-08-31T02:29:52.000Z",
+                      "completedAt": "2026-08-31T02:29:53.000Z",
+                      "failedAt": null,
+                      "error": null,
+                      "components": {
+                        "telegramBot": {
+                          "status": "disabled"
+                        },
+                        "notificationServices": {
+                          "status": "ready"
+                        },
+                        "newsMonitor": {
+                          "status": "disabled"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "503": {
-            "description": "Bootstrap is pending or failed.",
+            "description": "At least one considered dependency is unhealthy (fail-closed variant only).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BootstrapReadiness"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/BootstrapReadiness"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReadinessReport"
+                    }
+                  ]
+                },
+                "examples": {
+                  "bootstrapPending": {
+                    "summary": "Bare /ready — bootstrap still pending (503)",
+                    "value": {
+                      "status": "pending",
+                      "ready": false,
+                      "startedAt": "2026-08-31T02:29:50.000Z",
+                      "completedAt": null,
+                      "failedAt": null,
+                      "error": null,
+                      "components": {
+                        "telegramBot": {
+                          "status": "pending"
+                        },
+                        "notificationServices": {
+                          "status": "pending"
+                        },
+                        "newsMonitor": {
+                          "status": "pending"
+                        }
+                      }
+                    }
+                  },
+                  "dependenciesDegraded": {
+                    "summary": "/ready?depth=dependencies — dependency degraded (503)",
+                    "value": {
+                      "ready": false,
+                      "failClosed": true,
+                      "status": "ready",
+                      "bootstrapReady": true,
+                      "components": {
+                        "telegramBot": {
+                          "status": "disabled"
+                        },
+                        "notificationServices": {
+                          "status": "ready"
+                        },
+                        "newsMonitor": {
+                          "status": "disabled"
+                        }
+                      },
+                      "checkedAt": "2026-08-31T02:30:05.000Z",
+                      "latencyMs": 3011,
+                      "dependencies": {
+                        "firestore": {
+                          "ready": true,
+                          "backend": "firestore",
+                          "latencyMs": 84
+                        },
+                        "gemini": {
+                          "ready": false,
+                          "error": "timeout_after_3000ms",
+                          "latencyMs": 3000
+                        },
+                        "tradingViewMcp": {
+                          "ready": true,
+                          "backend": "tradingview_mcp",
+                          "latencyMs": 22
+                        },
+                        "binance": {
+                          "ready": false,
+                          "error": "binance_http_451",
+                          "latencyMs": 124
+                        },
+                        "telegram": {
+                          "ready": false,
+                          "enabled": false,
+                          "skipped": true,
+                          "reason": "telegram_not_initialized"
+                        }
+                      }
+                    }
+                  },
+                  "bootstrapPendingBlocksDependencies": {
+                    "summary": "/ready?depth=dependencies — bootstrap still pending, so the gate stays 503 even though every dependency is healthy",
+                    "value": {
+                      "ready": false,
+                      "failClosed": true,
+                      "status": "pending",
+                      "bootstrapReady": false,
+                      "components": {
+                        "telegramBot": {
+                          "status": "pending"
+                        },
+                        "notificationServices": {
+                          "status": "ready"
+                        },
+                        "newsMonitor": {
+                          "status": "disabled"
+                        }
+                      },
+                      "checkedAt": "2026-08-31T02:30:06.000Z",
+                      "latencyMs": 88,
+                      "dependencies": {
+                        "firestore": {
+                          "ready": true,
+                          "backend": "firestore",
+                          "latencyMs": 53
+                        },
+                        "gemini": {
+                          "ready": true,
+                          "backend": "gemini",
+                          "latencyMs": 124
+                        },
+                        "tradingViewMcp": {
+                          "ready": true,
+                          "backend": "tradingview_mcp",
+                          "latencyMs": 18
+                        },
+                        "binance": {
+                          "ready": true,
+                          "backend": "binance",
+                          "latencyMs": 36
+                        },
+                        "telegram": {
+                          "ready": true,
+                          "backend": "telegram",
+                          "latencyMs": 22
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "dependencies"
+              ]
+            },
+            "description": "Set to `dependencies` to layer external provider probes on top of the bootstrap gate. This variant fails closed: it returns 503 when any considered dependency is unhealthy, so it is suitable as a load-balancer readiness gate."
+          }
+        ]
       }
     },
     "/api/webhook/alert": {
@@ -11885,6 +12199,96 @@
                 "description": "When the last all-clear was paged, or null."
               }
             }
+          }
+        }
+      },
+      "ReadinessDependencyStatus": {
+        "type": "object",
+        "description": "Per-dependency status block. Disabled dependencies are reported as `skipped: true`; failing dependencies include a sanitized `error` string and the per-dep latency.",
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "skipped": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "backend": {
+            "type": "string"
+          },
+          "latencyMs": {
+            "type": "number"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "ReadinessReport": {
+        "type": "object",
+        "description": "Structured dependency validation report returned by `/ready` and `/healthcheck?depth=readiness`. Disabled features are reported as `skipped: true` and do not count toward the overall `ready` verdict. No environment variable changes are required to enable the probe.",
+        "required": [
+          "ready",
+          "checkedAt",
+          "latencyMs",
+          "dependencies"
+        ],
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "description": "True when every considered (non-skipped) dependency reports `ready: true`."
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "latencyMs": {
+            "type": "number",
+            "description": "Total wall-clock time spent running all probes in parallel."
+          },
+          "dependencies": {
+            "type": "object",
+            "required": [
+              "firestore",
+              "gemini",
+              "tradingViewMcp",
+              "binance",
+              "telegram"
+            ],
+            "properties": {
+              "firestore": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              },
+              "gemini": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              },
+              "tradingViewMcp": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              },
+              "binance": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              },
+              "telegram": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              }
+            }
+          },
+          "status": {
+            "type": "string",
+            "description": "Bootstrap status. Only present on the `/ready?depth=dependencies` variant."
+          },
+          "components": {
+            "type": "object",
+            "description": "Per-component bootstrap state. Only present on the `/ready?depth=dependencies` variant."
+          },
+          "bootstrapReady": {
+            "type": "boolean",
+            "description": "Bootstrap gate verdict, ANDed with the dependency verdict. Only present on the `/ready?depth=dependencies` variant."
           }
         }
       }

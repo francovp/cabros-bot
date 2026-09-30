@@ -156,6 +156,86 @@
       ]
     },
     {
+      "name": "Healthcheck (readiness depth)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "description": "ADVISORY dependency probe. Runs bounded Firestore / Gemini / TradingView MCP / Binance / Telegram probes in parallel. ALWAYS returns HTTP 200: degradation is reported in the body as `ready: false` so a flaky third-party provider can never evict healthy replicas from load-balancer rotation. Alert on `ready: false`; use `GET /ready?depth=dependencies` when you want a traffic-gating 503.",
+        "url": {
+          "raw": "{{baseUrl}}/healthcheck?depth=readiness",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "healthcheck"
+          ],
+          "query": [
+            { "key": "depth", "value": "readiness" }
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "200 All dependencies healthy",
+          "status": "OK",
+          "code": 200,
+          "header": [
+            { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+          ],
+          "body": "{\"ready\":true,\"failClosed\":false,\"checkedAt\":\"2026-08-31T02:30:00.000Z\",\"latencyMs\":412,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":53},\"gemini\":{\"ready\":true,\"backend\":\"gemini\",\"latencyMs\":124},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":18},\"binance\":{\"ready\":true,\"backend\":\"binance\",\"latencyMs\":36},\"telegram\":{\"ready\":true,\"backend\":\"telegram\",\"latencyMs\":22}}}"
+        },
+        {
+          "name": "200 Degraded dependency (still 200 by design)",
+          "status": "OK",
+          "code": 200,
+          "header": [
+            { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+          ],
+          "body": "{\"ready\":false,\"failClosed\":false,\"checkedAt\":\"2026-08-31T02:30:05.000Z\",\"latencyMs\":3011,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":84},\"gemini\":{\"ready\":false,\"error\":\"timeout_after_3000ms\",\"latencyMs\":3000},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":22},\"binance\":{\"ready\":false,\"error\":\"binance_http_451\",\"latencyMs\":124},\"telegram\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"telegram_disabled\"}}}"
+        }
+      ]
+    },
+    {
+      "name": "Get Ready - Dependencies (fail-closed)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "description": "Traffic-gating readiness. Runs the bootstrap gate AND bounded external dependency probes (Firestore, Gemini, TradingView MCP, Binance, Telegram) in parallel. Returns 503 when any considered dependency is unhealthy. Only opt in when the deployment can tolerate losing all capacity on provider failure; otherwise alert on `/healthcheck?depth=readiness` instead.",
+        "url": {
+          "raw": "{{baseUrl}}/ready?depth=dependencies",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "ready"
+          ],
+          "query": [
+            { "key": "depth", "value": "dependencies" }
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "200 Bootstrap ready and all dependencies healthy",
+          "status": "OK",
+          "code": 200,
+          "header": [
+            { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+          ],
+          "body": "{\"ready\":true,\"failClosed\":true,\"status\":\"ready\",\"bootstrapReady\":true,\"components\":{\"telegramBot\":{\"status\":\"disabled\"},\"notificationServices\":{\"status\":\"ready\"},\"newsMonitor\":{\"status\":\"disabled\"}},\"checkedAt\":\"2026-08-31T02:30:00.000Z\",\"latencyMs\":412,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":53},\"gemini\":{\"ready\":true,\"backend\":\"gemini\",\"latencyMs\":124},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":18},\"binance\":{\"ready\":true,\"backend\":\"binance\",\"latencyMs\":36},\"telegram\":{\"ready\":true,\"backend\":\"telegram\",\"latencyMs\":22}}}"
+        },
+        {
+          "name": "503 Dependency degraded (fail-closed)",
+          "status": "Service Unavailable",
+          "code": 503,
+          "header": [
+            { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+          ],
+          "body": "{\"ready\":false,\"failClosed\":true,\"status\":\"ready\",\"bootstrapReady\":true,\"components\":{\"telegramBot\":{\"status\":\"disabled\"},\"notificationServices\":{\"status\":\"ready\"},\"newsMonitor\":{\"status\":\"disabled\"}},\"checkedAt\":\"2026-08-31T02:30:05.000Z\",\"latencyMs\":3011,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":84},\"gemini\":{\"ready\":false,\"error\":\"timeout_after_3000ms\",\"latencyMs\":3000},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":22},\"binance\":{\"ready\":false,\"error\":\"binance_http_451\",\"latencyMs\":124},\"telegram\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"telegram_not_initialized\"}}}"
+        }
+      ]
+    },
+    {
       "name": "Get OpenAPI Contract",
       "request": {
         "method": "GET",

@@ -115,6 +115,8 @@ Verify service readiness:
 ```bash
 curl http://localhost:3000/healthcheck
 curl http://localhost:3000/ready
+curl "http://localhost:3000/healthcheck?depth=readiness"
+curl "http://localhost:3000/ready?depth=dependencies"
 ```
 
 ---
@@ -125,8 +127,8 @@ All webhook and mutation endpoints require the `x-api-key` header (configured vi
 
 | Method | Path | Description | Documentation |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/healthcheck` | Fast process liveness probe | [API Reference](docs/api-reference.md#get-healthcheck) |
-| `GET` | `/ready` | Deep dependency readiness probe (Redis, Firestore, MCP) | [API Reference](docs/api-reference.md#get-ready) |
+| `GET` | `/healthcheck` | Process liveness probe; `?deep=true` = channel readiness, `?depth=readiness` = dependency report (advisory, always 200) | [API Reference](docs/api-reference.md#get-healthcheck) |
+| `GET` | `/ready` | Bootstrap gate; `?depth=dependencies` adds a fail-closed dependency probe | [API Reference](docs/api-reference.md#get-ready) |
 | `GET` | `/api/status` | Comprehensive system capabilities & dependency matrix | [API Reference](docs/api-reference.md#get-apistatus) |
 | `GET` | `/api/public/status` | Safe public subset of capabilities & channel statuses | [API Reference](docs/api-reference.md#get-apipublicstatus) |
 | `POST` | `/api/webhook/alert` | Ingest and dispatch alert to configured channels | [Webhook Alerts](docs/webhooks.md#post-apiwebhookalert) |
