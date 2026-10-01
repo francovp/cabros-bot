@@ -10078,6 +10078,18 @@
                     ],
                     "description": "Sanitized TradingView MCP outcome for this alert."
                   },
+                  "exchange": {
+                    "type": "string",
+                    "description": "Exchange prefix reported by the upstream screener, unchanged by outbound MCP venue aliasing (GH-591)."
+                  },
+                  "requestedExchange": {
+                    "type": "string",
+                    "description": "Exchange prefix that was requested by the screener for the outbound TradingView MCP call. Alias resolution never rewrites this value (GH-591)."
+                  },
+                  "requestedExchangeMappedTo": {
+                    "type": "string",
+                    "description": "Venue the outbound TradingView MCP call was actually sent to when the screener's exchange prefix had no equivalent venue on the MCP server (for example 'BATS' -> 'NASDAQ'). Omitted when no alias was applied (GH-591)."
+                  },
                   "levelsSource": {
                     "type": "string",
                     "enum": [

@@ -1,7 +1,26 @@
 /* global fetch, AbortController */
 
 const { sendWithRetry } = require('../../lib/retryHelper');
-const { parseTradingViewSignal, normalizeTradingViewTimeframe } = require('./parseTradingViewSignal');
+const {
+	parseTradingViewSignal,
+	normalizeTradingViewTimeframe,
+	resolveMcpExchange,
+} = require('./parseTradingViewSignal');
+
+// The MCP server answers an unresolvable symbol/venue pair with a "no data"
+// payload naming the venue it silently fell back to. That answer is a property
+// of the (symbol, exchange) pair, not of the transport, so retrying it can
+// never succeed (#591).
+const DETERMINISTIC_NO_DATA_PATTERN = /\bno data found for\b|\bsymbol not found\b|\bunknown symbol\b|\binvalid symbol\b|\bticker not found\b/i;
+
+/**
+ * @param {Error|unknown} error
+ * @returns {boolean} True when the MCP response is a deterministic symbol/venue miss.
+ */
+function isDeterministicNoDataError(error) {
+	const message = error && typeof error.message === 'string' ? error.message : '';
+	return DETERMINISTIC_NO_DATA_PATTERN.test(message);
+}
 const {
 	getStopLossMeta,
 	getTakeProfitTarget,
@@ -486,7 +505,17 @@ class TradingViewMcpService {
 			: null;
 		const baseDeadlineAt = budgetDeadlineAt ? Math.min(budgetDeadlineAt, budgetStartedAt + baseBudgetMs) : null;
 		const symbol = parsedSignal.symbol.toUpperCase();
-		const exchange = (parsedSignal.exchange || cfg.defaultExchange).toUpperCase();
+		const requestedExchange = (parsedSignal.exchange || cfg.defaultExchange).toUpperCase();
+		// #591: the MCP server cannot resolve several TradingView exchange prefixes
+		// and silently falls back to a crypto venue. Resolving the outbound venue
+		// here fixes the call without touching the exchange recorded on the alert.
+		const resolvedExchange = resolveMcpExchange(requestedExchange);
+		const exchange = resolvedExchange.mappedExchange || requestedExchange;
+		if (resolvedExchange.mapped && this.logger?.debug) {
+			this.logger.debug(`[TradingViewMcpService] ${resolvedExchange.reason} (${requestedExchange} -> ${exchange})`);
+		} else if (resolvedExchange.unsupported && this.logger?.debug) {
+			this.logger.debug(`[TradingViewMcpService] ${resolvedExchange.reason} for ${symbol}; attempting original venue and failing open if unresolvable`);
+		}
 		const timeframe = normalizeTradingViewTimeframe(parsedSignal.timeframe || parsedSignal.rawTimeframe, cfg.defaultTimeframe);
 
 		// Create an overall budget controller for the enrichment timeout.
@@ -541,11 +570,23 @@ class TradingViewMcpService {
 				const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe, signal: combinedSignal });
 				return { success: true, channel: 'tradingview-mcp', analysis };
 			} catch (error) {
-				return { success: false, channel: 'tradingview-mcp', error: error.message };
+				// A "no data for this symbol/venue" answer is deterministic, not
+				// transient (#591): retrying it only burns the enrichment budget.
+				const terminal = isDeterministicNoDataError(error);
+				return {
+					success: false,
+					channel: 'tradingview-mcp',
+					error: error.message,
+					...(terminal ? { deterministicNoData: true } : {}),
+				};
 			} finally {
 				clearTimeout(attemptTimeoutId);
 			}
-		}, cfg.maxRetries, this.logger, { signal: baseSignal, maxRetryDelayMs: retryDelayCapMs });
+		}, cfg.maxRetries, this.logger, {
+			signal: baseSignal,
+			maxRetryDelayMs: retryDelayCapMs,
+			shouldRetry: attemptResult => attemptResult?.deterministicNoData !== true,
+		});
 		cleanBaseBudget();
 
 		// Budget still applies for volume confirmation, but the budget timer
@@ -640,7 +681,10 @@ class TradingViewMcpService {
 		cleanBudget();
 		const enrichmentStatus = optionalEnrichmentPartial ? 'partial' : 'full';
 		this._recordEnrichmentStatus(enrichmentStatus);
-		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis, confluenceAnalysis, multiTimeframeAnalysis, enrichmentStatus);
+		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis, confluenceAnalysis, multiTimeframeAnalysis, enrichmentStatus, {
+			requestedExchange,
+			requestedExchangeMappedTo: resolvedExchange.mapped ? exchange : null,
+		});
 	}
 
 	async callCoinAnalysis({ symbol, exchange, timeframe, signal }) {
@@ -1041,7 +1085,7 @@ class TradingViewMcpService {
 		return parsedPayloads[0];
 	}
 
-	_toEnrichedAlert(originalText, signal, analysis = {}, volumeAnalysis = null, confluenceAnalysis = null, multiTimeframeAnalysis = null, tradingViewEnrichmentStatus = 'full') {
+	_toEnrichedAlert(originalText, signal, analysis = {}, volumeAnalysis = null, confluenceAnalysis = null, multiTimeframeAnalysis = null, tradingViewEnrichmentStatus = 'full', exchangeResolution = {}) {
 		const { side, symbol, exchange, timeframe } = signal;
 		const sideLabel = side === 'SELL' ? 'VENTA' : 'COMPRA';
 		const sideSentiment = side === 'SELL' ? -0.55 : 0.55;
@@ -1205,6 +1249,13 @@ class TradingViewMcpService {
 			extraText,
 			confluenceData: confluenceAnalysis || null,
 			multiTimeframeData: multiTimeframeAnalysis || null,
+			// Exchange metadata always reports the venue the screener sent; the
+			// MCP-only alias target is surfaced separately (#591).
+			exchange: exchangeResolution.requestedExchange || exchange,
+			requestedExchange: exchangeResolution.requestedExchange || exchange,
+			...(exchangeResolution.requestedExchangeMappedTo
+				? { requestedExchangeMappedTo: exchangeResolution.requestedExchangeMappedTo }
+				: {}),
 			...riskMetadata,
 		};
 	}
@@ -1589,4 +1640,5 @@ module.exports = {
 	DEFAULT_TRADINGVIEW_MCP_URL,
 	HEARTBEAT_COLLECTION_NAME,
 	TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID,
+	isDeterministicNoDataError,
 };

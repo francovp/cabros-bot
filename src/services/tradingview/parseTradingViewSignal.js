@@ -100,6 +100,91 @@ const CRYPTO_EXCHANGES = new Set(['BINANCE', 'BYBIT', 'COINBASE', 'OKX', 'KRAKEN
 const CRYPTO_SUFFIXES = ['USDT', 'BUSD', 'USDC', 'BTC', 'ETH', 'SOL', 'PERP'];
 const BARE_CRYPTO_SYMBOLS = ['BTC', 'ETH', 'SOL', 'PERP'];
 
+/**
+ * Venues the TradingView MCP server resolves, taken from its own advertised
+ * support string plus the `combined_analysis` venue list. Anything outside this
+ * set is resolved by the server to KUCOIN and every call answers
+ * "No data found for <SYMBOL> on KUCOIN".
+ */
+const MCP_SUPPORTED_EXCHANGES = new Set([
+	'KUCOIN', 'BINANCE', 'BYBIT', 'MEXC', 'OKX', 'KUCOINSPOT',
+	'EGX', 'BIST', 'NASDAQ', 'NYSE', 'AMEX', 'NYSEARCA', 'PCX',
+	'BURSA', 'HKEX', 'SSE', 'SZSE', 'TWSE', 'TPEX',
+]);
+
+/**
+ * Explicit, probe-verified venue aliases for OUTBOUND MCP calls only.
+ *
+ * Every entry was confirmed live against the configured MCP host: the source
+ * venue answers "No data found for <SYMBOL> on KUCOIN" while the target venue
+ * returns a full indicator payload. This is a closed lookup table on purpose —
+ * suffix-shape or fuzzy-regex inference would remap venues that already work
+ * and could route an unverified symbol to a wrong market.
+ */
+const MCP_EXCHANGE_ALIASES = new Map([
+	// BATS (Cboe BZX) is not a venue the server knows; its US large-cap names
+	// resolve on NASDAQ, which the server does support.
+	['BATS', 'NASDAQ'],
+	// Same NASDAQ venue under the delayed-data suffix used by the screener.
+	['NASDAQ_DLY', 'NASDAQ'],
+]);
+
+/**
+ * Venues the server has no equivalent for. Aliasing them would mean inventing a
+ * market, so they stay unmapped and degrade through the normal fail-open path.
+ */
+const MCP_UNSUPPORTED_EXCHANGES = new Map([
+	['FX_IDC', 'FX/spot feed with no supported MCP venue'],
+	['SPCFD', 'index/CFD feed with no supported MCP venue'],
+]);
+
+/**
+ * Resolve the venue to send to the MCP server for an alert's exchange prefix.
+ *
+ * This never touches the exchange recorded on the parsed signal or on stored
+ * alert metadata: it only answers "which venue should the outbound call use".
+ *
+ * @param {string} exchange Raw exchange prefix from the alert.
+ * @returns {{mapped: boolean, mappedExchange: string|null, unsupported: boolean, reason: string|null}}
+ */
+function resolveMcpExchange(exchange) {
+	if (typeof exchange !== 'string') {
+		return { mapped: false, mappedExchange: null, unsupported: false, reason: null };
+	}
+
+	const normalized = exchange.trim().toUpperCase();
+	if (!normalized) {
+		return { mapped: false, mappedExchange: null, unsupported: false, reason: null };
+	}
+
+	if (MCP_EXCHANGE_ALIASES.has(normalized)) {
+		return {
+			mapped: true,
+			mappedExchange: MCP_EXCHANGE_ALIASES.get(normalized),
+			unsupported: false,
+			reason: `TradingView MCP cannot resolve ${normalized}; using the verified equivalent venue`,
+		};
+	}
+
+	if (MCP_UNSUPPORTED_EXCHANGES.has(normalized)) {
+		return {
+			mapped: false,
+			mappedExchange: normalized,
+			unsupported: true,
+			reason: `TradingView MCP has no venue for ${normalized} (${MCP_UNSUPPORTED_EXCHANGES.get(normalized)})`,
+		};
+	}
+
+	return {
+		mapped: false,
+		mappedExchange: normalized,
+		unsupported: !MCP_SUPPORTED_EXCHANGES.has(normalized),
+		reason: MCP_SUPPORTED_EXCHANGES.has(normalized)
+			? null
+			: `TradingView MCP venue ${normalized} is not in the server's advertised support list`,
+	};
+}
+
 function deriveAssetContext(text) {
 	if (!text || typeof text !== 'string') {
 		return null;
@@ -219,6 +304,10 @@ module.exports = {
 	normalizeSignalSide,
 	deriveAssetContext,
 	deriveCleanSearchQuery,
+	resolveMcpExchange,
+	MCP_EXCHANGE_ALIASES,
+	MCP_SUPPORTED_EXCHANGES,
+	MCP_UNSUPPORTED_EXCHANGES,
 	SUPPORTED_MCP_TIMEFRAMES,
 	TIMEFRAME_MAP,
 };

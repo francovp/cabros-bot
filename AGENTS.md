@@ -1233,6 +1233,28 @@ TradingView alert enrichment now exposes an in-process rolling 24-hour `dependen
 
 No new environment variable or Remote Config key was added; the 24-hour window is a fixed operational reporting boundary and existing circuit-breaker controls already provide deduplicated paging.
 
+## TradingView MCP Exchange Alias Resolution (Issue #591)
+
+`resolveMcpExchange()` in `src/services/tradingview/parseTradingViewSignal.js` maps an alert's exchange prefix to a venue the TradingView MCP server actually serves. It runs inside `TradingViewMcpService.enrichFromSignal()` before `coin_analysis` and is a **closed, probe-verified lookup table** with higher priority than suffix-shape inference — never a broadened fuzzy regex, which would remap venues that already work.
+
+- `MCP_EXCHANGE_ALIASES` — `BATS → NASDAQ`, `NASDAQ_DLY → NASDAQ`. Each entry was confirmed live: the source prefix answers `No data found for <SYMBOL> on KUCOIN` while the target returns a full indicator payload.
+- `MCP_UNSUPPORTED_EXCHANGES` — `FX_IDC` and `SPCFD` are deliberately **not** aliased. Every candidate venue was probed and all returned the same KUCOIN miss, so aliasing would fabricate a market. They keep the original prefix and degrade through the normal fail-open path.
+- `MCP_SUPPORTED_EXCHANGES` — The server's advertised venue list, used to flag an unknown-but-unsupported prefix for debug logging only.
+
+**Outbound only.** Alias resolution never rewrites stored metadata. The parsed signal, `deriveAssetContext()` classification (including the GH-320 `FX_IDC`/futures neutrality), and every persisted `exchange` keep the venue the screener sent. The enrichment payload adds `exchange`, `requestedExchange` (both the original) and `requestedExchangeMappedTo` (alias target, omitted when no alias applied).
+
+**Fast-fail.** `isDeterministicNoDataError()` classifies a `no data`/`symbol not found` MCP response as terminal for that attempt, and `sendWithRetry()` gained a `shouldRetry(result)` hook so the base analysis stops after one attempt instead of burning the remaining `TRADINGVIEW_MCP_MAX_RETRIES` backoff. Transport errors, timeouts, HTTP 5xx, and circuit-breaker semantics are unchanged.
+
+**Failure mode addressed.** This change fixes **symbol/exchange resolution**, not transport. A healthy MCP host still returned `No data found for TSLA on KUCOIN` because the exchange argument was unresolvable. See #630 for the complementary MCP handshake defect. Probe evidence (2026-09-28): `BATS:TSLA`/`NASDAQ:TSLA` → fails/succeeds respectively; `GLD:AMEX` and `SPY:NYSEARCA` succeed while `SPY:NASDAQ` does not, confirming the miss is venue-scoped and not a blanket symbol gap.
+
+**Coverage**:
+- `tests/unit/tradingview-signal-parser.test.js` — Alias table, case/padding normalization, supported-venue passthrough, unresolvable-venue degradation, non-string safety, and the guarantee that stored/parsed exchanges are untouched.
+- `tests/unit/tradingview-mcp-service.test.js` — Outbound argument mapping with original-exchange reporting, byte-for-byte pass-through for supported venues, single-attempt spend on a deterministic miss, retry preservation for transport errors, and graceful degradation.
+- `tests/unit/retry-helper.test.js` — `shouldRetry` terminal-result, terminal-from-first-attempt, and default-behavior regression.
+- `docs/tradingview-mcp.md`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` — Contract documentation and dry-run examples.
+
+No new environment variable or Remote Config key was added: the alias table is a code-level contract, not runtime tuning.
+
 ### Testing Patterns
 
 **Test locations**:
