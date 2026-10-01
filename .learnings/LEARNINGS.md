@@ -404,3 +404,39 @@ PR #1083 green CI is misleading — branch would 500 every live replay due to pr
 - Last-Seen: 2026-09-29
 
 ---
+## [LRN-20261001-001] correction
+
+**Logged**: 2026-10-01T10:40:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: infra
+
+### Summary
+Cleanup preview channels script default `--max-age-days 3` deletes 0 channels; only `--max-age-days 1` frees quota.
+
+### Details
+In comment on issue #1269, @francovp corrected his earlier remediation suggestion for firebase-hosting preview channel quota exhaustion. The recommended `node scripts/cleanup-preview-channels.js --apply --max-age-days 3` would delete **0 of 51 channels**. Measured thresholds:
+- `--max-age-days 1`: deletes 16 channels (created in ~19-min burst on 2026-09-27)
+- `--max-age-days 2, 3, 7`: delete 0 channels
+- `--max-age-days 0`: rejected as invalid
+
+The 35 remaining channels are all under 24 hours old, created by current PR burst. The workflow mints a channel per branch, so every push to a renamed/force-pushed branch consumes a new slot, outpacing the 7-day TTL decay. Default of 3 days is misleading — useful value today is 1.
+
+### Suggested Action
+1. When documenting cleanup commands, verify the actual deletion count with dry-run against current state before recommending.
+2. Address recurrence: reuse single channel per PR number (not per branch name) to prevent rebase/rename from consuming new slots.
+3. Consider shortening 7-day TTL and making preview deploy non-blocking so channel exhaustion cannot block merges.
+4. For immediate backlog, run `node scripts/cleanup-preview-channels.js --apply --max-age-days 1` and verify with dry run.
+5. Wire the script into `package.json` (#1268) but note the default of 3 days is misleading; update documentation accordingly.
+
+### Metadata
+- Source: user_feedback
+- Related Files: scripts/cleanup-preview-channels.js, .github/workflows/firebase-hosting-preview.yml, Issue #1269
+- Tags: firebase-hosting, preview-channels, quota, cleanup-script, documentation-accuracy
+- See Also: LRN-20260929-001
+- Pattern-Key: harden.verify_cleanup_dryrun_before_recommending
+- Recurrence-Count: 1
+- First-Seen: 2026-10-01
+- Last-Seen: 2026-10-01
+
+---
