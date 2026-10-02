@@ -34,6 +34,10 @@ const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
 const { adminSseService } = require('../sse/AdminSseService');
 const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
+const {
+	toPositiveFiniteNumber,
+	computeDeterministicRiskReward,
+} = require('../tradingview/riskRewardMath');
 
 function createEmptySignalClassCounts() {
 	return {
@@ -369,59 +373,6 @@ function sanitizeEnrichmentData(enrichmentData) {
 	}
 
 	return sanitized;
-}
-
-function toPositiveFiniteNumber(value) {
-	if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-		return value;
-	}
-	if (typeof value === 'string') {
-		const trimmed = value.trim();
-		if (!trimmed) {
-			return null;
-		}
-		const numeric = Number(trimmed.replace(/[$,]/g, ''));
-		return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
-	}
-	return null;
-}
-
-// Direction-aware R:R helper. Re-introduced by GH-599 / CB-XXX.
-// When the LLM/MCP supplies invalidation_level, target_level, and current_price
-// (entry), we derive risk_reward_ratio deterministically instead of trusting
-// the model's arithmetic. The computation is purely additive: existing valid
-// values are preserved, only null/missing R:R is filled in.
-function computeDeterministicRiskReward({ entry, invalidation, target, side }) {
-	if (!Number.isFinite(entry) || !(entry > 0)) {
-		return null;
-	}
-	if (!Number.isFinite(invalidation) || !(invalidation > 0)) {
-		return null;
-	}
-	if (!Number.isFinite(target) || !(target > 0)) {
-		return null;
-	}
-
-	const upperSide = typeof side === 'string' ? side.trim().toUpperCase() : '';
-	if (upperSide === 'BUY' || upperSide === 'LONG') {
-		const reward = target - entry;
-		const risk = entry - invalidation;
-		if (reward > 0 && risk > 0) {
-			const ratio = reward / risk;
-			return Number.isFinite(ratio) ? ratio : null;
-		}
-		return null;
-	}
-	if (upperSide === 'SELL' || upperSide === 'SHORT') {
-		const reward = entry - target;
-		const risk = invalidation - entry;
-		if (reward > 0 && risk > 0) {
-			const ratio = reward / risk;
-			return Number.isFinite(ratio) ? ratio : null;
-		}
-		return null;
-	}
-	return null;
 }
 
 function applyDeterministicRiskReward(enrichmentData, side) {
@@ -2184,7 +2135,7 @@ async function getAlertsByIds(alertIds) {
 	let snapshots;
 	try {
 		snapshots = await Promise.all(
-			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get())
+			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get()),
 		);
 	} catch (error) {
 		console.warn('[AlertStorageService] Failed to read alert batch from Firestore:', error.message);
@@ -2249,7 +2200,7 @@ async function deleteAlerts(alertIds) {
 	let snapshots;
 	try {
 		snapshots = await Promise.all(
-			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get())
+			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get()),
 		);
 	} catch (error) {
 		console.warn('[AlertStorageService] Failed to read alert batch before delete from Firestore:', error.message);

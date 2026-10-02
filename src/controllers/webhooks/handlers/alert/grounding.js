@@ -8,6 +8,10 @@ const {
 	deriveFallbackTradePlan,
 	calculateFallbackRiskLevels,
 } = require('../../../../services/tradingview/fallbackTradePlan');
+const {
+	toPositiveFiniteNumber,
+	computeDeterministicRiskReward,
+} = require('../../../../services/tradingview/riskRewardMath');
 const { tokenCostBudgetService } = require('../../../../lib/tokenUsage');
 
 function mergeUnique(first = [], second = [], maxItems = 6) {
@@ -65,6 +69,40 @@ function pickSetupType(...values) {
 function hasCompleteRiskMetadata(value = {}) {
 	return ['invalidation_level', 'target_level', 'risk_reward_ratio']
 		.every(field => isOptionalRiskValue(value[field]));
+}
+
+// GH-599: `risk_reward_ratio` is the one optional-risk field the provider is allowed
+// to omit, and it is pure arithmetic over fields we already have. Treating its absence
+// as "the whole block is unusable" made the fallback path discard real grounded entry
+// prices and levels — the precise data loss this issue exists to prevent. So compute
+// the ratio from the grounded entry/levels instead of throwing them away.
+//
+// A returned `side: null` means the block is NOT salvageable and the caller must fall
+// back to a derived plan: the entry price is missing/non-positive, or the levels are
+// not on the correct side of entry (a BUY whose stop sits above entry has no R:R).
+// `computeDeterministicRiskReward` already encodes exactly those rejections.
+function completeGroundedRiskMetadata(value = {}, parsedSignal) {
+	const side = parsedSignal && parsedSignal.side ? parsedSignal.side : null;
+	if (!side) {
+		return { side: null };
+	}
+
+	const riskRewardRatio = computeDeterministicRiskReward({
+		entry: value.current_price,
+		invalidation: value.invalidation_level,
+		target: value.target_level,
+		side,
+	});
+	if (riskRewardRatio === null || !(riskRewardRatio > 0)) {
+		return { side: null };
+	}
+
+	return {
+		side,
+		invalidation_level: value.invalidation_level,
+		target_level: value.target_level,
+		risk_reward_ratio: riskRewardRatio,
+	};
 }
 
 // GH-1229: a heuristic per-timeframe percentage plan is NOT a provider-derived level.
@@ -333,12 +371,12 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 			original_text: text,
 			tradingViewEnrichmentApplied: mcp.tradingViewEnrichmentApplied === true,
 			...(mcp.tradingViewEnrichmentStatus ? { tradingViewEnrichmentStatus: mcp.tradingViewEnrichmentStatus } : {}),
-				sentiment,
-				sentiment_score,
-				...(typeof gemini.sentiment_score_raw === 'number' && Number.isFinite(gemini.sentiment_score_raw)
-					? { sentiment_score_raw: gemini.sentiment_score_raw }
-					: {}),
-				...(sentimentConflict ? { sentimentConflict: true } : {}),
+			sentiment,
+			sentiment_score,
+			...(typeof gemini.sentiment_score_raw === 'number' && Number.isFinite(gemini.sentiment_score_raw)
+				? { sentiment_score_raw: gemini.sentiment_score_raw }
+				: {}),
+			...(sentimentConflict ? { sentimentConflict: true } : {}),
 			current_price: mcpCurrentPrice ?? gemini.current_price ?? null,
 			...(mcpCurrentPrice !== null
 				? { priceSource: mcp.priceSource || (mcp.levelsSource === 'derived-quote' ? 'derived-quote' : 'tradingview-mcp'), ...(mcp.price_currency ? { price_currency: mcp.price_currency } : {}) }
@@ -564,20 +602,31 @@ async function enrichAlert(alert, options = {}) {
 			};
 
 			if (!hasCompleteRiskMetadata(geminiEnrichedAlert)) {
-				const fallbackPlan = await deriveFallbackTradePlan(text).catch(() => null);
-				if (fallbackPlan) {
-					result = {
-						...result,
-						current_price: fallbackPlan.current_price,
-						priceSource: 'derived-quote',
-						price_data: fallbackPlan.price_data,
-						invalidation_level: fallbackPlan.invalidation_level,
-						target_level: fallbackPlan.target_level,
-						risk_reward_ratio: fallbackPlan.risk_reward_ratio,
-						setup_type: result.setup_type || fallbackPlan.setup_type,
-						levelsSource: 'derived-quote',
-					};
-					delete result.price_currency;
+				// A grounded block missing ONLY the optional ratio is completed arithmetically
+				// so the grounded entry price and levels survive (GH-599). Only a block that
+				// is genuinely unusable (no usable entry, or levels on the wrong side of it)
+				// falls through to the derived-quote heuristic plan below.
+				const grounded = completeGroundedRiskMetadata(geminiEnrichedAlert, parseTradingViewSignal(text));
+				if (grounded.side) {
+					// Only the ratio is new here: the levels came from the same object
+					// `result` was spread from, so they are already in place.
+					result = { ...result, risk_reward_ratio: grounded.risk_reward_ratio };
+				} else {
+					const fallbackPlan = await deriveFallbackTradePlan(text).catch(() => null);
+					if (fallbackPlan) {
+						result = {
+							...result,
+							current_price: fallbackPlan.current_price,
+							priceSource: 'derived-quote',
+							price_data: fallbackPlan.price_data,
+							invalidation_level: fallbackPlan.invalidation_level,
+							target_level: fallbackPlan.target_level,
+							risk_reward_ratio: fallbackPlan.risk_reward_ratio,
+							setup_type: result.setup_type || fallbackPlan.setup_type,
+							levelsSource: 'derived-quote',
+						};
+						delete result.price_currency;
+					}
 				}
 			}
 

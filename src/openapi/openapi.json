@@ -8178,7 +8178,54 @@
               "object",
               "null"
             ],
-            "additionalProperties": true
+            "additionalProperties": true,
+            "description": "Persisted enrichment payload. Unlike the dry-run response, this is the document written by `AlertStorageService.saveAlert()`, so it additionally carries the GH-599 computed-provenance fields that are only added at persist time.",
+            "properties": {
+              "current_price": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "Persisted entry-price context. Sourced from TradingView MCP when tradingViewEnrichmentApplied is true, from the alert-enrichment model response over grounded context when only Gemini enrichment ran, or from a derived quote when neither provider supplied a usable price (GH-599). Omitted entirely when no provider returned a finite positive price. Note: this is the model's reading of grounded context, not a snippet-level price extraction, so it carries no field-level citation."
+              },
+              "price_currency": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Uppercased ISO-4217-style currency code declared by the provider alongside current_price (e.g. \"USD\", \"USDT\"). Omitted when current_price is absent, when the derived-quote fallback supplied the price, or when the code fails the 2-5 uppercase-letter validation (GH-599)."
+              },
+              "risk_reward_ratio_source": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "computed",
+                  null
+                ],
+                "description": "Set to 'computed' on the stored document when risk_reward_ratio was deterministically derived at persist time from current_price / invalidation_level / target_level / side, because the provider omitted it or reported a non-positive value that could not be used. Absent (or null) when the value came from the LLM or MCP provider, or when the deterministic computation could not run (GH-599). This field exists only on the persisted document: the dry-run response returns before `applyDeterministicRiskReward()` runs, so a dry-run payload never carries it."
+              },
+              "levelsSource": {
+                "type": "string",
+                "enum": [
+                  "tradingview-mcp",
+                  "gemini-grounding",
+                  "fallback-trade-plan",
+                  "derived-quote"
+                ],
+                "description": "Provenance of the emitted risk levels. 'tradingview-mcp' when the MCP ATR-derived block won (the default for MCP-sourced alerts); 'gemini-grounding' when Gemini-parsed levels were emitted because TradingView MCP data was absent or failed (GH-509 / CB-226); 'fallback-trade-plan' when MCP supplied the price but its ATR-derived block was rejected as zero, non-finite, or failing the side/positivity checks and the secondary heuristic timeframe risk plan was used instead (GH-1229); 'derived-quote' when levels were derived from a fetched quote because neither provider returned a usable block (GH-599)."
+              },
+              "priceSource": {
+                "type": "string",
+                "description": "Provider that supplied the emitted current_price. 'tradingview-mcp' from the MCP quote, 'gemini-grounding' from the alert-enrichment model response over grounded context, 'derived-quote' from a fetched quote fallback.",
+                "enum": [
+                  "tradingview-mcp",
+                  "gemini-grounding",
+                  "derived-quote"
+                ]
+              }
+            }
           },
           "tokenUsage": {
             "type": [
@@ -10159,17 +10206,6 @@
                       "null"
                     ],
                     "description": "ISO-4217-style currency code paired with current_price when supplied by Gemini grounding (e.g. \"USD\", \"USDT\"); null when current_price is absent or currency is not declared (GH-599 / CB-XXX)."
-                  },
-                  "risk_reward_ratio_source": {
-                    "type": [
-                      "string",
-                      "null"
-                    ],
-                    "enum": [
-                      "computed",
-                      null
-                    ],
-                    "description": "Set to 'computed' when risk_reward_ratio was deterministically derived from current_price / invalidation_level / target_level / side. Absent (or null) when the value came from the LLM or MCP provider (GH-599 / CB-XXX)."
                   },
                   "sentiment_score_raw": {
                     "type": "number",

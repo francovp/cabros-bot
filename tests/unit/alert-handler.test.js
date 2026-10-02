@@ -94,6 +94,132 @@ describe('Alert Handler', () => {
 		expect(result).not.toHaveProperty('price_currency');
 	});
 
+	// GH-599: `hasCompleteRiskMetadata` also requires `risk_reward_ratio`, so a grounded
+	// block that supplies a usable entry price plus BOTH directional levels but omits the
+	// optional ratio used to be thrown away wholesale and replaced with a derived-quote
+	// heuristic plan. That discarded real grounding data — the exact regression this issue
+	// exists to prevent. The ratio is arithmetic, so it must be computed from the grounded
+	// levels instead of discarding them.
+	const withGroundingOnly = (gemini) => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		tradingViewMcpService.isEnabled.mockReturnValue(false);
+		groundAlert.mockResolvedValue({ insights: [], sources: [], ...gemini });
+		// A heuristic plan that would be preferred if the grounded block were discarded.
+		deriveFallbackTradePlan.mockResolvedValue({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			current_price: 110,
+			price_data: { current_price: 110 },
+			invalidation_level: 107.25,
+			target_level: 115.5,
+			risk_reward_ratio: 2,
+			setup_type: 'trend_continuation',
+			levelsSource: 'derived-quote',
+		});
+	};
+
+	const HEURISTIC_PLAN = {
+		current_price: 110,
+		price_data: { current_price: 110 },
+		invalidation_level: 107.25,
+		target_level: 115.5,
+		priceSource: 'derived-quote',
+		levelsSource: 'derived-quote',
+	};
+
+	it.each([
+		[
+			'BUY', 'BINANCE:BTCUSDT(60) pasó una señal de COMPRA',
+			{ sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100, price_currency: 'USD', invalidation_level: 90, target_level: 120, technical_levels: { supports: ['90'], resistances: ['120'] } },
+			{ invalidation_level: 90, target_level: 120 },
+		],
+		[
+			'SELL', 'BINANCE:BTCUSDT(60) pasó una señal de VENTA',
+			{ sentiment: 'BEARISH', sentiment_score: -0.6, current_price: 100, price_currency: 'USD', invalidation_level: 110, target_level: 80, technical_levels: { supports: ['80'], resistances: ['110'] } },
+			{ invalidation_level: 110, target_level: 80 },
+		],
+	])('preserves grounded entry price and %s levels when only risk_reward_ratio is missing', async (_side, text, gemini, expectedLevels) => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		withGroundingOnly(gemini);
+
+		const result = await enrichAlert({ text });
+
+		// Grounded levels win over the heuristic plan even though the ratio is absent.
+		expect(result.current_price).toBe(100);
+		expect(result.invalidation_level).toBe(expectedLevels.invalidation_level);
+		expect(result.target_level).toBe(expectedLevels.target_level);
+		expect(result.price_currency).toBe('USD');
+		expect(result.levelsSource).toBe('gemini-grounding');
+		// The missing ratio is derived arithmetically from the grounded levels:
+		// BUY (120-100)/(100-90) = 2, SELL (100-80)/(110-100) = 2.
+		expect(result.risk_reward_ratio).toBeCloseTo(2, 4);
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it('keeps grounded levels for free-text alerts that carry no parseable signal', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		// Free text has no symbol/side, so the real deriveFallbackTradePlan returns null.
+		withGroundingOnly({
+			sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100,
+			invalidation_level: 90, target_level: 120,
+			technical_levels: { supports: ['90'], resistances: ['120'] },
+		});
+		deriveFallbackTradePlan.mockResolvedValue(null);
+
+		const result = await enrichAlert({ text: 'Bitcoin is breaking out above 100k resistance' });
+
+		// Without a side the ratio cannot be computed, but the grounded entry price and
+		// levels must still survive rather than be discarded.
+		expect(result.current_price).toBe(100);
+		expect(result.invalidation_level).toBe(90);
+		expect(result.target_level).toBe(120);
+		expect(result).not.toHaveProperty('risk_reward_ratio');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	// Wrong-side levels have no R:R to express: a BUY whose stop sits above entry has
+	// negative risk. Rather than divide anyway and emit an inverted ratio, fall back to
+	// the heuristic plan, which is directionally correct by construction.
+	it.each([
+		['BUY stop above entry', 'BINANCE:BTCUSDT(60) pasó una señal de COMPRA', { invalidation_level: 110, target_level: 120 }],
+		['BUY target below entry', 'BINANCE:BTCUSDT(60) pasó una señal de COMPRA', { invalidation_level: 90, target_level: 95 }],
+		['SELL stop below entry', 'BINANCE:BTCUSDT(60) pasó una señal de VENTA', { invalidation_level: 90, target_level: 80 }],
+	])('falls back to the heuristic plan for wrong-side levels (%s)', async (_label, text, levels) => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		withGroundingOnly({
+			sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100,
+			technical_levels: { supports: ['90'], resistances: ['120'] },
+			...levels,
+		});
+
+		const result = await enrichAlert({ text });
+
+		expect(result.levelsSource).toBe('derived-quote');
+		expect(result.current_price).toBe(110);
+	});
+
+	it.each([
+		[
+			'omits the levels entirely',
+			{ sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100, price_currency: 'USD' },
+		],
+		[
+			'returns non-positive levels',
+			{ sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100, invalidation_level: 0, target_level: -5 },
+		],
+	])('still derives a heuristic plan when Gemini %s', async (_label, gemini) => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		withGroundingOnly(gemini);
+
+		const result = await enrichAlert({ text: 'BINANCE:BTCUSDT(60) pasó una señal de COMPRA' });
+
+		expect(result).toMatchObject(HEURISTIC_PLAN);
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
 	it('should preserve the raw Gemini sentiment score in the mapped alert', async () => {
 		groundAlert.mockResolvedValue({
 			sentiment: 'BULLISH',

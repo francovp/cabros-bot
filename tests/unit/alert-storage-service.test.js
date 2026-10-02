@@ -3809,4 +3809,52 @@ describe('AlertStorageService', () => {
 			expect(mockBatchSet).toHaveBeenCalledTimes(2);
 		});
 	});
+
+	// GH-599: `risk_reward_ratio_source` is added by `saveAlertInternal()` via
+	// `applyDeterministicRiskReward()`, so it exists ONLY on the persisted document. The
+	// dry-run branch returns `enrichedData` before persistence and never gains the field,
+	// so documenting it solely under the dry-run `DeliveryResult` payload published a
+	// provenance tag on a response that cannot contain it, while the stored-alert contract
+	// that CAN contain it stayed undocumented. Anchor the GH-599 fields on `StoredAlert`.
+	describe('GH-599 persisted entry-price contract', () => {
+		const openapi = require('../../src/openapi/openapi.json');
+		const storedAlertEnrichment = openapi.components.schemas.StoredAlert.properties.enrichmentData;
+
+		it('documents current_price and price_currency on stored alert enrichment data', () => {
+			expect(storedAlertEnrichment.properties).toHaveProperty('current_price');
+			expect(storedAlertEnrichment.properties).toHaveProperty('price_currency');
+			// The price is the model's reading of grounded context, not a snippet-level
+			// extraction, so the contract must not imply field-level citation.
+			expect(storedAlertEnrichment.properties.current_price.description).toMatch(/no field-level citation/i);
+		});
+
+		it('documents risk_reward_ratio_source provenance on stored alert enrichment data', () => {
+			expect(storedAlertEnrichment.properties).toHaveProperty('risk_reward_ratio_source');
+			expect(storedAlertEnrichment.properties.risk_reward_ratio_source.description).toMatch(/computed/i);
+			expect(storedAlertEnrichment.properties.risk_reward_ratio_source.description).toMatch(/persist|stored|Firestore/i);
+		});
+
+		it('enumerates every levelsSource and priceSource value the merge path can emit', () => {
+			// `selectRiskMetadata()` falls back to `mcp.levelsSource || 'tradingview-mcp'`,
+			// so `tradingview-mcp` is the value most MCP-sourced alerts actually persist.
+			// An enum missing it marks the commonest production shape invalid.
+			expect(storedAlertEnrichment.properties.levelsSource.enum).toEqual([
+				'tradingview-mcp',
+				'gemini-grounding',
+				'fallback-trade-plan',
+				'derived-quote',
+			]);
+			expect(storedAlertEnrichment.properties.priceSource.enum).toEqual([
+				'tradingview-mcp',
+				'gemini-grounding',
+				'derived-quote',
+			]);
+		});
+
+		it('does not advertise risk_reward_ratio_source as a dry-run response field', () => {
+			const dryRunEnrichment = openapi.components.schemas.DeliveryResult
+				.properties.payload.properties.enrichedData.properties;
+			expect(dryRunEnrichment).not.toHaveProperty('risk_reward_ratio_source');
+		});
+	});
 });
