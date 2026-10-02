@@ -77,6 +77,18 @@ describe('Request Logger Middleware', () => {
 			if (event === 'close') res._closeCb = cb;
 			return res;
 		});
+		// Real Node initializes `headersSent` to false and flips it once headers
+		// are written; `node-mocks-http` declares it as a plain writable `false`
+		// and never updates it. The logger relies on it to report 0 for a response
+		// that never began, so drive it from the mocked write/end.
+		for (const method of ['write', 'end', 'send', 'json']) {
+			const original = res[method];
+			res[method] = jest.fn((...args) => {
+				res.headersSent = true;
+				return typeof original === 'function' ? original.apply(res, args) : res;
+			});
+		}
+		res.headersSent = false;
 		return res;
 	}
 
@@ -91,6 +103,7 @@ describe('Request Logger Middleware', () => {
 
 		middleware(req, res, jest.fn());
 		res.statusCode = 200;
+		res.end();
 		triggerFinish(res);
 
 		const log = parseLast(output.info);
@@ -114,6 +127,7 @@ describe('Request Logger Middleware', () => {
 
 		middleware(req, res, jest.fn());
 		res.statusCode = 200;
+		res.end();
 		triggerFinish(res);
 		res._closeCb();
 
@@ -141,6 +155,7 @@ describe('Request Logger Middleware', () => {
 
 		middleware(req, res, jest.fn());
 		res.statusCode = 404;
+		res.end();
 		triggerFinish(res);
 
 		expect(output.warn).toHaveBeenCalled();
@@ -156,6 +171,7 @@ describe('Request Logger Middleware', () => {
 
 		middleware(req, res, jest.fn());
 		res.statusCode = 500;
+		res.end();
 		triggerFinish(res);
 
 		expect(output.error).toHaveBeenCalled();
@@ -171,6 +187,7 @@ describe('Request Logger Middleware', () => {
 
 		middleware(req, res, jest.fn());
 		res.statusCode = 200;
+		res.end();
 		triggerFinish(res);
 
 		const log = parseLast(output.info);
@@ -184,6 +201,7 @@ describe('Request Logger Middleware', () => {
 
 		middleware(req, res, jest.fn());
 		res.statusCode = 200;
+		res.end();
 		triggerFinish(res);
 
 		const log = parseLast(output.info);
@@ -199,6 +217,7 @@ describe('Request Logger Middleware', () => {
 		const before = Date.now();
 		middleware(req, res, jest.fn());
 		res.statusCode = 200;
+		res.end();
 		triggerFinish(res);
 		const after = Date.now();
 
@@ -292,21 +311,48 @@ describe('Request Logger Middleware', () => {
 	});
 
 	// Express routing is case-insensitive, so `/HEALTHCHECK` reaches the
-	// healthcheck handler. It must not re-enter the logs as a way around the
+	// healthcheck handler and must not re-enter the logs as a way around the
 	// probe skip list.
-	it('normalizes the path to lower case when matching and logging', () => {
+	it('matches the exemption set case-insensitively', () => {
 		const middleware = createRequestLogger();
 
 		const probeRes = buildRes();
 		middleware(buildReq({ url: '/HEALTHCHECK' }), probeRes, jest.fn());
 		triggerFinish(probeRes);
 		expect(output.info).not.toHaveBeenCalled();
+	});
 
-		const apiRes = buildRes();
-		middleware(buildReq({ url: '/API/Test' }), apiRes, jest.fn());
-		triggerFinish(apiRes);
-		const log = parseLast(output.info);
-		expect(log.attributes.path).toBe('/api/test');
+	// Firestore document ids are mixed case and case-sensitive, so the emitted
+	// path must preserve case. Lower-casing it would make /api/alerts/:alertId
+	// unsearchable — an operator could not match the log line against the id they
+	// saw in a 404 body or a Firestore doc.
+	it('preserves path case in the emitted line', () => {
+		const middleware = createRequestLogger();
+		const res = buildRes();
+		middleware(buildReq({ url: '/api/alerts/aB3xK9mQ2pL7zR4tY8wC' }), res, jest.fn());
+		triggerFinish(res);
+
+		expect(parseLast(output.info).attributes.path).toBe('/api/alerts/aB3xK9mQ2pL7zR4tY8wC');
+	});
+
+	// A response that never began must not report Node's default 200.
+	it('reports statusCode 0 when no response was ever sent', () => {
+		const middleware = createRequestLogger();
+		const req = buildReq();
+		const res = buildRes();
+
+		middleware(req, res, jest.fn());
+		res.headersSent = false;
+		res.statusCode = 200;
+		res._closeCb();
+
+		const log = parseLast(output.warn);
+		expect(log.message).toBe('Request aborted');
+		expect(log.attributes).toEqual(expect.objectContaining({
+			aborted: true,
+			outcome: 'aborted',
+			statusCode: 0,
+		}));
 	});
 
 	it('never lets a throwing log sink escape into the request lifecycle', () => {

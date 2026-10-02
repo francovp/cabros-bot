@@ -642,6 +642,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -702,6 +705,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -786,6 +792,11 @@
           {
             "ApiKeyQuery": []
           }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
         ]
       }
     },
@@ -831,6 +842,11 @@
           },
           {
             "ApiKeyQuery": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ]
       }
@@ -2411,6 +2427,9 @@
           },
           {
             "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -2451,6 +2470,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -4289,7 +4311,7 @@
           "minLength": 1,
           "maxLength": 128
         },
-        "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Echoed in the response and persisted on stored alerts."
+        "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Echoed in the response body and the X-Request-Id response header, included in structured request logs, and persisted on stored alerts."
       },
       "NewsAnalysisSymbol": {
         "name": "symbol",

@@ -158,7 +158,7 @@ to the free-form application logs above. Each line records:
 | Field | Meaning |
 |---|---|
 | `method` | HTTP method |
-| `path` | Request path with the query string and trailing slash stripped |
+| `path` | Request path with the query string and trailing slash stripped (case preserved) |
 | `statusCode` | Final response status (`0` when the response never started) |
 | `durationMs` | Time from middleware entry to response end (excludes connection setup and TLS) |
 | `requestId` | Correlation id, shared with the `X-Request-Id` response header |
@@ -188,6 +188,10 @@ grep '"requestId":"3f1c' logs.json | jq -c '{path:.attributes.path,status:.attri
 `/docs` — the same list the request deadline exempts) are silent, and query
 strings are stripped so request parameters never reach the log. Request and
 response bodies are never logged.
+
+Path **case is preserved** in `path`, so an id can be searched exactly as it
+appeared in the request — Firestore document ids are mixed case. Probe-path
+exemption is matched case-insensitively, so `/HEALTHCHECK` is silent too.
 
 **Tuning.** The middleware has no configuration of its own. Raise or lower
 verbosity with `LOG_LEVEL`, and exempt additional probe paths with

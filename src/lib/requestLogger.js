@@ -24,11 +24,22 @@ function normalizeRequestPath(rawPath) {
 	}
 	const queryIndex = rawPath.indexOf('?');
 	const pathOnly = queryIndex >= 0 ? rawPath.slice(0, queryIndex) : rawPath;
-	// Lower-cased to match `requestDeadline.normalizePath`. Express routing is
-	// case-insensitive by default, so without this `/HEALTHCHECK` would be
-	// deadline-exempt yet still logged — letting a probe flood the log with one
-	// character of variation per request.
-	return pathOnly.replace(/\/+$/, '').toLowerCase() || '/';
+	// Case is preserved for the emitted line: Firestore document ids are mixed
+	// case and case-sensitive, so lower-casing here would make `/api/alerts/:id`
+	// unsearchable — an operator could not match the logged path against the id
+	// they saw in a 404 body. Exemption matching lower-cases separately.
+	return pathOnly.replace(/\/+$/, '') || '/';
+}
+
+/**
+ * Express routing is case-insensitive by default, so `/HEALTHCHECK` reaches the
+ * healthcheck handler. Match the exemption set case-insensitively (mirroring
+ * `requestDeadline.normalizePath`) or a probe could flood the logs by varying
+ * one character per request.
+ */
+function matchesExemptPath(path, exemptPaths) {
+	if (exemptPaths.has(path)) return true;
+	return exemptPaths.has(path.toLowerCase());
 }
 
 /**
@@ -48,7 +59,7 @@ function resolveRequestId(req) {
  * request logging at the same time, with no reload.
  */
 function isExemptPath(path) {
-	return requestDeadline.resolveExemptPaths().has(path);
+	return matchesExemptPath(path, requestDeadline.resolveExemptPaths());
 }
 
 function sanitizeClientIp(ip) {
@@ -110,7 +121,13 @@ function createRequestLogger() {
 			if (finalized) return;
 			finalized = true;
 			const durationMs = Math.max(0, Date.now() - startTime);
-			const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 0;
+			// Node initializes `res.statusCode` to 200 even when nothing was ever
+			// written, so an early client disconnect would otherwise be logged as a
+			// phantom success. Report 0 when no response actually began, so a
+			// dashboard grouping by status does not invent 200s.
+			const statusCode = res.headersSent && typeof res.statusCode === 'number'
+				? res.statusCode
+				: 0;
 			const level = aborted ? 'warn' : resolveLogLevel(statusCode);
 			// Fail open: `console.*` is globally replaceable (the logging wrapper,
 			// Sentry, or a test double), and this runs from a Node event emitter
