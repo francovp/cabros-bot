@@ -21,6 +21,7 @@ const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../.
 const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
 const geminiPriceService = require('../../../../services/grounding/geminiPriceService');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
+const { smartEscapeMarkdownV2 } = require('../../../../services/notification/formatters/markdownV2Formatter');
 const { MainClient } = require('binance');
 const { createHash } = require('node:crypto');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
@@ -1790,6 +1791,17 @@ class NewsAnalyzer {
 			calibrationFields.grounding_calibration = geminiAnalysis.calibration;
 		}
 
+		// Issue #1230: surface the source-quality tier so an operator can audit
+		// WHY an alert cleared the threshold. Unresolved tier => omitted.
+		// NOTE: deliberately NOT written into `calibrationFields` — that object is
+		// never spread into the returned alert, so a write there is inert. The value
+		// is surfaced via the `sourceQualityTier` shorthand on the alert instead.
+		const sourceQualityTier = (geminiAnalysis.calibration
+			&& typeof geminiAnalysis.calibration.qualityTier === 'string'
+			&& geminiAnalysis.calibration.qualityTier.trim())
+			? geminiAnalysis.calibration.qualityTier.trim()
+			: undefined;
+
 		// Build the title/original text
 		const eventLabel = this.eventCategoryLabel(geminiAnalysis.event_category);
 		const headline = (geminiAnalysis.headline && geminiAnalysis.headline.trim())
@@ -1861,9 +1873,23 @@ class NewsAnalyzer {
 		const confidenceProvenance = geminiAnalysis.confidence_source
 			? `_Confidence source: ${geminiAnalysis.confidence_source}_`
 			: `_Model used: ${GROUNDING_MODEL_NAME}_`;
-		const enrichedExtraText = confidenceReason
-			? `_Model Confidence: ${confidense}%_\n_Reason: ${confidenceReason}_\n${confidenceProvenance}`
-			: `_Model Confidence: ${confidense}%_\n${confidenceProvenance}`;
+		// Issue #1230: the tier is appended to `extraText` because that is what
+		// `formatEnriched()` actually renders to the trader. `formatAlertMessage()`
+		// has no production call site, so a line added only there would never be seen.
+		// `extraText` is emitted verbatim by MarkdownV2Formatter, so the penalty value
+		// must be escaped — `(` `)` and `.` are MarkdownV2-reserved and would make
+		// Telegram reject the entire message.
+		const qualityAuditLine = sourceQualityTier
+			? (typeof geminiAnalysis.calibration?.qualityPenalty === 'number'
+				? `_Source Quality: ${smartEscapeMarkdownV2(sourceQualityTier)} (x${smartEscapeMarkdownV2(String(geminiAnalysis.calibration.qualityPenalty))})_`
+				: `_Source Quality: ${smartEscapeMarkdownV2(sourceQualityTier)}_`)
+			: '';
+		const enrichedExtraText = [
+			confidenceReason
+				? `_Model Confidence: ${confidense}%_\n_Reason: ${confidenceReason}_\n${confidenceProvenance}`
+				: `_Model Confidence: ${confidense}%_\n${confidenceProvenance}`,
+			qualityAuditLine,
+		].filter(Boolean).join('\n');
 		const enriched = {
 			originalText: alertTitle,
 			summary: context,
@@ -1896,6 +1922,7 @@ class NewsAnalyzer {
 			uncertainty_reason: geminiAnalysis.uncertainty_reason,
 			invalidation_hint: geminiAnalysis.invalidation_hint,
 			calibration: geminiAnalysis.calibration || undefined,
+			sourceQualityTier,
 			promptVersion: geminiAnalysis.promptVersion || undefined,
 			timestamp: Date.now(),
 			marketContext: marketContext || undefined,
@@ -1939,6 +1966,23 @@ class NewsAnalyzer {
 		const reason = analysis.confidence_reason || '';
 		if (reason) {
 			message += `Reason: ${reason}\n`;
+		}
+
+		// Issue #1230: make the source-quality tier auditable in the delivered
+		// message, not just in logs. Read from `calibration` rather than
+		// `sourceQualityTier`: this formatter is also called with analysis objects
+		// that were not produced by `buildAlert` (see tests/unit/news-alert-formatting.test.js),
+		// where the shorthand is absent but the calibration block is present.
+		const qualityTier = (analysis.calibration
+			&& typeof analysis.calibration.qualityTier === 'string'
+			&& analysis.calibration.qualityTier.trim())
+			? analysis.calibration.qualityTier.trim()
+			: '';
+		if (qualityTier) {
+			const qualityPenalty = typeof analysis.calibration.qualityPenalty === 'number'
+				? ` (x${analysis.calibration.qualityPenalty})`
+				: '';
+			message += `Source Quality: ${qualityTier}${qualityPenalty}\n`;
 		}
 
 		if (marketContext) {
