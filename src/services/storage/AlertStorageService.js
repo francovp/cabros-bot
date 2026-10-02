@@ -767,8 +767,16 @@ function isValidExtractedSymbol(value) {
 	if (candidate.includes('/') && !SLASH_PAIR_PATTERN.test(candidate)) {
 		return false;
 	}
-	// Numeric-only values are never tickers.
-	if (/^\d+$/.test(candidate)) {
+	// Numeric-only values are never tickers. `\p{Nd}` is used rather than `\d` so
+	// non-ASCII digits (Arabic-Indic ٥٣, fullwidth ５３) cannot slip through as a
+	// symbol, which is the exact bug class this guard exists to prevent.
+	if (/^\p{Nd}+$/u.test(candidate)) {
+		return false;
+	}
+
+	// Astral characters (emoji, some scripts) count as 2 UTF-16 units, so a
+	// length-based check alone can admit a single "character" symbol.
+	if (/[\u{10000}-\u{10FFFF}]/u.test(candidate)) {
 		return false;
 	}
 
@@ -831,10 +839,21 @@ function parseSymbolFromText(text) {
 
 	try {
 		const context = deriveAssetContext(cleaned);
-		if (context && context.symbol && isValidExtractedSymbol(context.symbol)) {
+		// Only trust the context when the text actually carries an exchange or a
+		// slash pair. `deriveAssetContext` matches on crypto SUFFIXES, so an
+		// uppercase prose word like AEROSOL/PARASOL/BTC otherwise reads as a ticker —
+		// and a plausible-looking fake is worse than `unknown`, because it silently
+		// corrupts bySymbol analytics. A real alert names its venue or quotes a pair.
+		const hasExplicitVenue = typeof context?.exchange === 'string' && context.exchange.trim()
+			|| cleaned.includes('/');
+		if (context && context.symbol && hasExplicitVenue && isValidExtractedSymbol(context.symbol)) {
 			return {
 				symbol: context.symbol.trim().toUpperCase(),
+				// Use only an exchange that was actually present in the text.
+				// `deriveAssetContext` synthesises "BINANCE" for any USDT pair, which
+				// would fabricate venue attribution on alerts that named none.
 				exchange: typeof context.exchange === 'string' && context.exchange.trim()
+					&& /[A-Z_]+:/i.test(cleaned)
 					? context.exchange.trim().toUpperCase()
 					: null,
 			};

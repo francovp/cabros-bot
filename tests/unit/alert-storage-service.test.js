@@ -268,7 +268,7 @@ describe('AlertStorageService', () => {
 			mockAdd.mockResolvedValueOnce({ id: docId });
 
 			const params = buildParams({
-				text: 'ETH breakout',
+				text: 'BINANCE:ETHUSDT(4h) breakout',
 				enriched: true,
 				enrichmentData: { sentiment: 'bullish', insights: ['RSI > 70'] },
 				tokenUsage: { total: 500, formattedSummary: '500 tokens' },
@@ -287,8 +287,9 @@ describe('AlertStorageService', () => {
 			expect(mockAdd).toHaveBeenCalledWith({
 				receivedAt: expect.anything(), // serverTimestamp sentinel
 				expiresAt: expect.anything(),
-				text: 'ETH breakout',
-				symbol: 'ETH',
+				text: 'BINANCE:ETHUSDT(4h) breakout',
+				symbol: 'ETHUSDT',
+				exchange: 'BINANCE',
 				signalClass: 'unknown',
 				enriched: true,
 				enrichmentData: { sentiment: 'bullish', insights: ['RSI > 70'] },
@@ -321,7 +322,41 @@ describe('AlertStorageService', () => {
 		});
 
 		// Regression (issue #222): "53" reached bySymbol in production analytics.
-		it('never persists a numeric-only or single-character symbol at write time', async () => {
+		it('rejects non-ASCII digits and astral characters as symbols', () => {
+		// `\d` is ASCII-only, so Arabic-Indic / fullwidth digits used to pass the
+		// numeric guard and become symbols - the exact bug class it exists to stop.
+		expect(AlertStorageService.extractSymbolAndExchange({ symbol: '٥٣' }).symbol).toBe('unknown');
+		expect(AlertStorageService.extractSymbolAndExchange({ symbol: '５３' }).symbol).toBe('unknown');
+		// A single astral character counts as 2 UTF-16 units, so a length check
+		// alone would admit it as a "2 character" symbol.
+		expect(AlertStorageService.extractSymbolAndExchange({ symbol: '𝔅' }).symbol).toBe('unknown');
+	});
+
+	it('does not extract uppercase prose words that merely end in a crypto suffix', () => {
+		// deriveAssetContext matches on crypto SUFFIXES. A plausible-looking fake
+		// ticker is worse than `unknown` because it silently corrupts bySymbol.
+		for (const text of [
+			'AEROSOL prices rose after the announcement',
+			'PARASOL broke out to new highs',
+			'CARETH broke resistance',
+			'CoinDesk says BTC dominance rising',
+		]) {
+			expect(AlertStorageService.extractSymbolAndExchange({ text }).symbol).toBe('unknown');
+		}
+	});
+
+	it('does not fabricate an exchange for alerts that named no venue', () => {
+		// deriveAssetContext synthesises "BINANCE" for any USDT pair; persisting that
+		// would attribute an alert to a venue that was never stated.
+		const parsed = AlertStorageService.extractSymbolAndExchange({ text: 'ETHUSDT(1h) BUY' });
+		expect(parsed.exchange).toBeNull();
+
+		// A real venue prefix is still captured.
+		const explicit = AlertStorageService.extractSymbolAndExchange({ text: 'BINANCE:ETHUSDT(4h)' });
+		expect(explicit).toEqual({ symbol: 'ETHUSDT', exchange: 'BINANCE' });
+	});
+
+	it('never persists a numeric-only or single-character symbol at write time', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockAdd.mockResolvedValueOnce({ id: 'doc-numeric' });
 
@@ -769,7 +804,7 @@ describe('AlertStorageService', () => {
 				docs: [
 					buildQueryDoc('alert-1', {
 						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
-						text: 'BTC alert',
+						text: 'BINANCE:BTCUSDT(1h) alert',
 						enriched: true,
 						enrichmentData: { sentiment: 'bullish' },
 						tokenUsage: { totalTokens: 42 },
@@ -802,8 +837,9 @@ describe('AlertStorageService', () => {
 				{
 					id: 'alert-1',
 					receivedAt: '2026-06-06T12:00:00.000Z',
-					text: 'BTC alert',
-					symbol: 'BTC',
+					text: 'BINANCE:BTCUSDT(1h) alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
 					signalClass: 'unknown',
 					enriched: true,
 					enrichmentData: { sentiment: 'bullish' },
@@ -3636,7 +3672,7 @@ describe('AlertStorageService', () => {
 				exists: true,
 				id: 'alert-1',
 				data: () => ({
-					text: 'BTC alert',
+					text: 'BINANCE:BTCUSDT(1h) alert',
 					receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
 					expiresAt: buildTimestamp('2026-12-31T00:00:00.000Z'),
 				}),
