@@ -1519,6 +1519,25 @@ The grounding asset-context fallback no longer classifies lowercase ordinary pro
 - `pnpm test -- tests/unit/grounding.test.js`
 - `pnpm test -- tests/unit/ --testTimeout=5000`
 
+## Deterministic Symbol Extraction (Issue #222)
+
+Stored alerts are now indexed by a validated symbol captured at **write time** by `saveAlert()`, so new documents no longer fall back to `unknown` for ordinary TradingView alert text. Production analytics over a 72h window showed 7 of 10 alerts (70%) bucketed as `unknown` plus a bare integer `"53"` and the parse artifact `MASTER` — the integer in particular could have been made "worse-looking-but-better" by loosening extraction, which would have silently corrupted the same `bySymbol` surface this work exists to fix.
+
+- `parseSymbolFromText()` reuses the hardened `deriveAssetContext()` from `src/services/tradingview/parseTradingViewSignal.js` first, rather than adding a parallel regex, so the `aerosol` / `teeth` lowercase-prose guards and `BTC/USDT` slash-pair preservation stay in one place. Because `deriveAssetContext()` intentionally returns null for non-crypto shapes it does not own (a bare `EXCHANGE:SYMBOL`, a 2-character ticker), the pre-existing TradingView patterns are retained as a second, now-validated pass so coverage is not reduced. `deriveAssetContext()`'s own explicit-exchange pattern was widened to `[A-Z_]+` so underscore venues (`FX_IDC`, `CME_MINI`, `CBOT_MINI`) resolve through that shared path instead of the extra regex.
+- `isValidExtractedSymbol()` is the single guard applied to every candidate from every source (`symbol`, `ticker`, `enrichmentData.*`, and text parsing). It rejects non-strings, the `unknown` sentinel, values under 2 characters, numeric-only values, whitespace, backslashes, and malformed slash usage. A single well-formed slash pair (`BTC/USDT`, both sides ≥2 chars) is allowed.
+- An invalid explicit property no longer short-circuits: `extractSymbolAndExchange()` falls through to the remaining sources, so `{ symbol: '53', text: 'BINANCE:ETHUSDT(D)…' }` still yields `ETHUSDT`/`BINANCE`.
+- Extraction never throws — `parseSymbolFromText()` wraps `deriveAssetContext()` in try/catch and returns the unknown sentinel, preserving the fail-open storage path so persistence can never block alert delivery.
+- `unknown` remains the honest fallback for genuinely unparseable text. A symbol is never invented, and a numeric-only or single-character value is never emitted.
+
+**No contract change**: no new environment variable, Remote Config key, endpoint, OpenAPI schema, or Postman variant. Read filtering (`source`, `symbol`, `exchange`, `eventCategory`, `signalClass`) still runs in memory after `receivedAt`-ordered batches, so no new composite Firestore index requirement is introduced. Historical `unknown` documents stay `unknown` — there is no retroactive backfill.
+
+**Coverage**:
+- `tests/unit/alert-storage-service.test.js` — Rejects bare integers, single characters, and numeric-only `EXCHANGE:SYMBOL` values; asserts write-time capture of the symbol; asserts a numeric-only symbol is never persisted; asserts no regression for 2-character tickers, `BTC/USDT`, `aerosol`, and `teeth`; asserts the `bySymbol` summary no longer indexes numeric-only or single-character keys.
+- `tests/unit/tradingview-signal-parser.test.js` — Unchanged and still green; the shared normalizer was not modified.
+
+**Testing**:
+- `pnpm test -- tests/unit/alert-storage-service.test.js tests/integration/alerts-endpoint.test.js --testTimeout=10000`
+
 ## Admin Recent Job Discovery (CB-117 / Issue #283)
 
 The in-app `/admin` Jobs view consumes the existing protected `GET /api/jobs` endpoint with contract-derived status/type filters and the bounded `limit` range. It renders only safe summary fields with DOM text nodes, keeps the API key in the existing `x-api-key` header path, and lets operators pre-fill the existing job-status workflow without bypassing its cancel/retry confirmations.
