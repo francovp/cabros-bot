@@ -40,7 +40,7 @@ The base score above is then calibrated against the actual grounding sources bef
 | `high` | `×1` (baseline) | Reuters, Bloomberg, CNBC, SEC, Binance |
 | `medium` | `×0.95` | Forbes, MarketWatch, Investopedia, Decrypt |
 | `low` | `×0.85` | Medium, Substack, Reddit, `.blog` / `.buzz` / `.xyz` TLDs |
-| `unknown` | `×0.7` | Grounding results with no resolvable domain |
+| `unknown` | `×1` (no penalty) | Domain not in the classification lists — unclassified rather than judged weak |
 
 3. The result is clamped into `[0, 1]`.
 

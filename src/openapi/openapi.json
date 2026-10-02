@@ -10107,7 +10107,7 @@
               "low",
               "unknown"
             ],
-            "description": "Weakest domain-quality tier resolved from the grounding sources (issue #1230). Present only when grounding returned at least one source. The tier drives a bounded multiplicative confidence penalty (`high` x1, `medium` x0.95, `low` x0.85, `unknown` x0.7) applied after the additive source-count, freshness, and authority penalties. Omitted when no tier was resolved (no grounding, or zero grounding sources), in which case no quality penalty is applied."
+            "description": "Weakest domain-quality tier resolved from the grounding sources (issue #1230). Present only when grounding returned at least one source. The tier drives a bounded multiplicative confidence penalty (`high` x1, `medium` x0.95, `low` x0.85, `unknown` x1). `unknown` is reported for auditing but applies no penalty: it means the domain is not in the classification lists, which cover only ~56 domains, so penalizing it would reduce confidence whenever a reputable outlet is added to an otherwise well-sourced set. applied after the additive source-count, freshness, and authority penalties. Omitted when no tier was resolved (no grounding, or zero grounding sources), in which case no quality penalty is applied."
           },
           "calibration": {
             "$ref": "#/components/schemas/NewsGroundingCalibration"

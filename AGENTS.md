@@ -721,7 +721,7 @@ Previously the `domainQuality` tier classifier (`src/services/grounding/domainQu
 | `high` | `×1` | Reputable wire/financial press, regulators, exchange disclosures — baseline, no penalty |
 | `medium` | `×0.95` | Recognizable finance/crypto outlets |
 | `low` | `×0.85` | Aggregator/UGC platforms and low-editorial-control TLDs (`.blog`, `.buzz`, `.xyz`, …) |
-| `unknown` | `×0.7` | No resolvable domain on the grounding result |
+| `unknown` | `×1` (no penalty) | Domain absent from the classification lists (~56 domains total) — unclassified, not judged weak |
 
 **Safety properties** (all covered by tests):
 - **Monotonicity**: every multiplier is `<= 1`, so the calibrated result is **non-increasing** vs. the pre-#1230 value for every input. This is a false-positive *reduction* feature; it can never inflate a score. `tests/unit/event-detection.test.js` asserts this against a fixed matrix of pre-change oracle values.

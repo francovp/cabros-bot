@@ -884,16 +884,36 @@ Some text after...`;
 			expect(blogSpam.confidence).toBeCloseTo(0.646, 6);
 		});
 
-		it('returns a lower confidence for UNKNOWN quality tiers at identical signal inputs', () => {
-			const reputable = calibrateNewsConfidence(STRONG_SIGNAL, [
+		it('does not penalize UNKNOWN quality tiers, which only mean "not in the classification lists"', () => {
+			// `unknown` is the modal outcome for most real outlets: only ~56 domains
+			// are enumerated. Penalizing it would mean adding one extra reputable
+			// source (here: a Reuters+Bloomberg set plus an unlisted outlet) LOWERS
+			// confidence and can push a genuine alert under the threshold.
+			const twoSources = calibrateNewsConfidence(STRONG_SIGNAL, [
 				makeSource('reuters.com'),
 				makeSource('bloomberg.com'),
-				makeSource('coindesk.com'),
 			], { now: NOW });
-			const unknownTier = calibrateNewsConfidence(STRONG_SIGNAL, NO_DOMAIN_SOURCES, { now: NOW });
+			const threeSources = calibrateNewsConfidence(STRONG_SIGNAL, [
+				makeSource('reuters.com'),
+				makeSource('bloomberg.com'),
+				makeSource('investing.com'),
+			], { now: NOW });
 
-			expect(unknownTier.confidence).toBeLessThan(reputable.confidence);
-			expect(unknownTier.confidence).toBeCloseTo(0.448, 6);
+			// Adding a legitimate third source must not reduce confidence.
+			expect(threeSources.confidence).toBeGreaterThanOrEqual(twoSources.confidence);
+			expect(threeSources.calibration.qualityPenalty).toBe(1);
+			expect(threeSources.confidence).toBeCloseTo(0.86, 6);
+		});
+
+		it('still penalizes a genuinely LOW tier even when HIGH and UNKNOWN sources are present', () => {
+			const result = calibrateNewsConfidence(STRONG_SIGNAL, [
+				makeSource('reuters.com'),
+				makeSource('bloomberg.com'),
+				makeSource('medium.com'),
+			], { now: NOW });
+
+			expect(result.calibration.qualityTier).toBe('low');
+			expect(result.calibration.qualityPenalty).toBe(0.85);
 		});
 
 		it('returns a lower confidence for MEDIUM quality tiers at identical signal inputs', () => {
@@ -941,9 +961,10 @@ Some text after...`;
 			expect(low.calibration).toHaveProperty('qualityTier', 'low');
 			expect(low.calibration).toHaveProperty('qualityPenalty', 0.85);
 
+			// `unknown` is reported for auditing but applies no penalty.
 			const unknown = calibrateNewsConfidence(STRONG_SIGNAL, [{}], { now: NOW });
 			expect(unknown.calibration).toHaveProperty('qualityTier', 'unknown');
-			expect(unknown.calibration).toHaveProperty('qualityPenalty', 0.7);
+			expect(unknown.calibration).toHaveProperty('qualityPenalty', 1);
 		});
 
 		it('is a no-op when grounding sources are absent (model-only path)', () => {

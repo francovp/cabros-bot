@@ -1792,14 +1792,14 @@ class NewsAnalyzer {
 
 		// Issue #1230: surface the source-quality tier so an operator can audit
 		// WHY an alert cleared the threshold. Unresolved tier => omitted.
+		// NOTE: deliberately NOT written into `calibrationFields` — that object is
+		// never spread into the returned alert, so a write there is inert. The value
+		// is surfaced via the `sourceQualityTier` shorthand on the alert instead.
 		const sourceQualityTier = (geminiAnalysis.calibration
 			&& typeof geminiAnalysis.calibration.qualityTier === 'string'
 			&& geminiAnalysis.calibration.qualityTier.trim())
 			? geminiAnalysis.calibration.qualityTier.trim()
 			: undefined;
-		if (sourceQualityTier) {
-			calibrationFields.source_quality_tier = sourceQualityTier;
-		}
 
 		// Build the title/original text
 		const eventLabel = this.eventCategoryLabel(geminiAnalysis.event_category);

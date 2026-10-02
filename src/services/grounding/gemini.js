@@ -565,17 +565,38 @@ function deriveGroundingCalibration(groundingSources, options = {}) {
  *
  * HIGH is the baseline and never penalizes. The multipliers are all <= 1 so the
  * quality penalty can only ever reduce a calibrated score — never inflate it.
+ *
+ * `unknown` deliberately does NOT penalize. It is not a judgment that a source is
+ * low quality: it means the domain is absent from the classification lists, which
+ * cover only ~56 domains in total (31 high / 20 medium / 5 low). Any reputable
+ * outlet that is not enumerated lands here — investing.com, barrons.com,
+ * fxstreet.com and kitco.com all classify as `unknown`. Because the weakest tier
+ * present wins, a 0.7 multiplier on `unknown` meant that adding ONE extra,
+ * perfectly legitimate source to a Reuters+Bloomberg set dropped the alert from
+ * 0.60 to 0.42 and pushed it under the alert threshold: more evidence produced
+ * less confidence, and the feature penalized the exact signals it exists to
+ * promote. Penalty is therefore reserved for tiers positively identified as weak.
  */
 const QUALITY_TIER_PENALTIES = Object.freeze({
-	high: 1,
-	medium: 0.95,
+	unknown: 1,
 	low: 0.85,
-	unknown: 0.7,
+	medium: 0.95,
+	high: 1,
 });
 
 /**
  * Resolve the weakest (most penalty-bearing) quality tier present in a source
  * set, so a single blog-spam source cannot be masked by reputable ones.
+ *
+ * The iteration order is DERIVED from the multiplier table rather than declared
+ * separately, so there is exactly one source of truth for the tier set. A tier
+ * added to only one of the two used to fail silently: missing from the order it
+ * was skipped entirely, and missing from the table it produced an `undefined`
+ * multiplier that quietly applied no penalty while still reporting the tier.
+ *
+ * Tiers whose multiplier is 1 are skipped when they are the only match: an
+ * unclassified `unknown` alongside a `low` blog must still resolve to `low`,
+ * otherwise the no-op tier would mask the real finding.
  *
  * Fails open: any malformed input yields `null`, which callers treat as
  * "no tier resolved" and therefore apply no penalty.
@@ -587,13 +608,25 @@ function resolveWeakestQualityTier(tierCounts) {
 	if (!tierCounts || typeof tierCounts !== 'object') {
 		return null;
 	}
-	for (const tier of ['unknown', 'low', 'medium', 'high']) {
+	let weakest = null;
+	let sawPenalisedTier = false;
+	for (const [tier, penalty] of Object.entries(QUALITY_TIER_PENALTIES)) {
 		const count = tierCounts[tier];
-		if (Number.isFinite(count) && count > 0) {
-			return { tier, penalty: QUALITY_TIER_PENALTIES[tier] };
+		if (!Number.isFinite(count) || count <= 0) {
+			continue;
+		}
+		if (penalty < 1) {
+			sawPenalisedTier = true;
+		}
+		if (weakest === null || penalty < weakest.penalty) {
+			weakest = { tier, penalty };
 		}
 	}
-	return null;
+	// Only an unpenalised tier was present -> no penalty is warranted.
+	if (weakest !== null && !sawPenalisedTier && weakest.penalty >= 1) {
+		return { ...weakest, appliesPenalty: false };
+	}
+	return weakest === null ? null : { ...weakest, appliesPenalty: true };
 }
 
 function calibrateNewsConfidence(analysisResult, groundingSources = null, options = {}) {
@@ -651,8 +684,10 @@ function calibrateNewsConfidence(analysisResult, groundingSources = null, option
 		try {
 			const resolved = resolveWeakestQualityTier(actualCalibration.actual_quality_tiers);
 			if (resolved) {
+				// The tier is always reported for auditability; the multiplier is only
+				// applied when it actually penalizes.
 				qualityTier = resolved.tier;
-				qualityPenalty = resolved.penalty;
+				qualityPenalty = resolved.appliesPenalty ? resolved.penalty : 1;
 			}
 		} catch (error) {
 			// Fail open: an unresolvable tier is a no-op, never a crash.
