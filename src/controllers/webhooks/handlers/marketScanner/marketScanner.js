@@ -1,15 +1,12 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	MarketScannerRequestError,
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
-	getRiskLevelsForSide,
-	getScanItemSide,
-	pickLevel,
 	recordMarketScannerOutcomes,
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
@@ -27,6 +24,11 @@ const {
 const { enrichScannerItemsWithTrendConfluence } = require('../../../../services/tradingview/marketScannerConfluence');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const {
+	classifyScannerError,
+	emptyScannerErrorCategoryCounts,
+	incrementScannerErrorCategoryCount,
+} = require('../../../../services/tradingview/marketScannerErrorCategories');
 
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
@@ -46,7 +48,7 @@ function resolveDryRun(req) {
 
 function postMarketScannerAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 
 		try {
@@ -61,7 +63,7 @@ function postMarketScannerAlert(botOrGetter) {
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseMarketScannerRequest(req);
 			const timeoutMs = getMarketScannerTimeoutMs();
-			const deadline = createScannerDeadline(timeoutMs);
+			const deadline = createScannerDeadline(timeoutMs, req.requestDeadlineSignal);
 			let scanResults;
 
 			try {
@@ -88,7 +90,7 @@ function postMarketScannerAlert(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -113,7 +115,7 @@ function postMarketScannerAlert(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -143,6 +145,9 @@ function postMarketScannerAlert(botOrGetter) {
 							.filter(Boolean),
 					))
 					: [];
+				const scannerErrorCategories = scanResults
+					.filter((r) => r.status === 'error' && r.errorCategory)
+					.map((r) => r.errorCategory);
 				alertStorageService.saveAlert({
 					requestId,
 					text: alertText,
@@ -159,6 +164,7 @@ function postMarketScannerAlert(botOrGetter) {
 					whatsappChatId: routing.whatsappChatId,
 					discordWebhookUrl: routing.discordWebhookUrl,
 					processingTimeMs: Date.now() - startTime,
+					scannerErrorCategories,
 				}).catch(() => {});
 			}
 
@@ -181,7 +187,7 @@ function postMarketScannerAlert(botOrGetter) {
 				timedOut,
 				timeoutMs,
 				requestId,
-				totalDurationMs: Date.now() - startTime,
+				processingTimeMs: Math.max(0, Date.now() - startTime),
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
@@ -277,11 +283,23 @@ async function runScans(parsed, options = {}) {
 			}
 
 			console.warn('[MarketScanner] Scan failed:', scanType, error.message);
+			const errorCategory = classifyScannerError(error);
+			sentryService.captureRuntimeError({
+				channel: 'market-scanner',
+				feature: 'market-scanner',
+				error,
+				extra: {
+					mcp_error_category: errorCategory,
+					scan_type: scanType,
+					source: 'market-scanner',
+				},
+			});
 			results.push({
 				scan: scanType,
 				status: 'error',
 				items: [],
 				error: error.message,
+				errorCategory,
 			});
 		}
 	}
@@ -297,6 +315,14 @@ function buildScanArgs(parsed, scanType) {
 	};
 	if (scanType === 'bollinger_scan') {
 		args.bbw_threshold = parsed.bbwThreshold;
+	} else if (scanType === 'rating_filter') {
+		args.rating = parsed.rating;
+	} else if (scanType === 'consecutive_candles_scan') {
+		args.pattern_type = parsed.consecutiveCandlesPatternType;
+		args.candle_count = parsed.candleCount;
+		if (parsed.minGrowth !== undefined) {
+			args.min_growth = parsed.minGrowth;
+		}
 	}
 	return args;
 }
@@ -308,6 +334,7 @@ function compactScanResults(results, includeScores = false) {
 				scan: result.scan,
 				status: result.status,
 				error: result.error,
+				errorCategory: result.errorCategory || null,
 			};
 		}
 
@@ -331,6 +358,12 @@ function compactScanResults(results, includeScores = false) {
 }
 
 function buildSummary(scanResults, deliveryResults) {
+	const errorCategories = emptyScannerErrorCategoryCounts();
+	for (const result of scanResults) {
+		if (result.status === 'error' && result.errorCategory) {
+			incrementScannerErrorCategoryCount(errorCategories, result.errorCategory);
+		}
+	}
 	return {
 		totalScans: scanResults.length,
 		success: scanResults.filter((r) => r.status === 'success').length,
@@ -338,6 +371,7 @@ function buildSummary(scanResults, deliveryResults) {
 		timeout: scanResults.filter((r) => r.status === 'timeout').length,
 		totalItems: scanResults.reduce((sum, r) => sum + r.items.length, 0),
 		delivered: deliveryResults.filter((r) => r.success).length,
+		errorCategoryCounts: errorCategories,
 	};
 }
 
@@ -351,14 +385,14 @@ function getMarketScannerTimeoutMs() {
 	return Math.min(parsedTimeout, MAX_SCANNER_TIMEOUT_MS);
 }
 
-function createScannerDeadline(timeoutMs) {
+function createScannerDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => {
 		controller.abort(new Error(`Market scanner timeout after ${timeoutMs}ms`));
 	}, timeoutMs);
 
 	return {
-		signal: controller.signal,
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
 		clear: () => clearTimeout(timeoutId),
 	};
 }

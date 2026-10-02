@@ -1,8 +1,33 @@
 'use strict';
 
 const { JobRepository, _resetForTesting } = require('../../src/services/jobs/JobRepository');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 
 describe('JobRepository durable claims', () => {
+	it('records a failed durable write when Firestore is unavailable', async () => {
+		process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => null);
+
+		try {
+			await expect(repository.save({
+				jobId: 'job-init-failure',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+			})).resolves.toBe('job-init-failure');
+
+			expect(firestoreWriteMetricsService.getSnapshot()).toMatchObject({
+				writesAttempted: 1,
+				writesSucceeded: 0,
+				writesFailed: 1,
+				byDomain: { jobs: { failure: 1 } },
+			});
+		} finally {
+			delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+			_resetForTesting();
+		}
+	});
+
 	it('stores a one-hour expiry for terminal durable jobs only', async () => {
 		const terminalCreatedAt = new Date(Date.now() - 1000).toISOString();
 		const activeCreatedAt = new Date(Date.now() - 1000).toISOString();
@@ -848,7 +873,319 @@ describe('JobRepository durable claims', () => {
 				&& fields.some(f => f.fieldPath === 'createdAt' && f.order === 'DESCENDING');
 		});
 		expect(hasChatScopeIndex).toBe(true);
+
+		const hasBacklogIndex = jobIndexes.some(idx => {
+			const fields = idx.fields || [];
+			return fields.some(f => f.fieldPath === 'status' && f.order === 'ASCENDING')
+				&& fields.some(f => f.fieldPath === 'createdAt' && f.order === 'ASCENDING');
+		});
+		expect(hasBacklogIndex).toBe(true);
 	});
+
+	it('computes memory backlog depth accurately', async () => {
+		const now = Date.now();
+		const repository = new JobRepository();
+		_resetForTesting();
+
+		try {
+			await repository.save({
+				jobId: 'job-1',
+				status: 'processing',
+				execution: { status: 'queued' },
+				createdAt: new Date(now - 300000).toISOString(),
+			});
+			await repository.save({
+				jobId: 'job-2',
+				status: 'processing',
+				execution: { status: 'queued' },
+				createdAt: new Date(now - 100000).toISOString(),
+			});
+			await repository.save({
+				jobId: 'job-3',
+				status: 'completed',
+				execution: { status: 'completed' },
+				createdAt: new Date(now - 500000).toISOString(),
+			});
+
+			const depth = repository.getMemoryBacklogDepth(now);
+			expect(depth.durableQueuedCount).toBe(2);
+			expect(depth.oldestQueuedAgeMs).toBe(300000);
+			expect(depth.oldestCreatedAt).toBe(new Date(now - 300000).toISOString());
+		} finally {
+			_resetForTesting();
+		}
+	});
+
+	it('computes firestore backlog depth from non-terminal queued jobs', async () => {
+		const now = Date.now();
+		const docs = [
+			{
+				data: () => ({
+					jobId: 'job-fs-1',
+					status: 'processing',
+					execution: { status: 'queued' },
+					createdAt: new Date(now - 500000).toISOString(),
+				}),
+			},
+			{
+				data: () => ({
+					jobId: 'job-fs-2',
+					status: 'processing',
+					execution: { status: 'queued' },
+					createdAt: new Date(now - 200000).toISOString(),
+				}),
+			},
+		];
+
+		const get = jest.fn().mockResolvedValue({ docs });
+		const limit = jest.fn(() => ({ get }));
+		const orderBy = jest.fn(() => ({ limit }));
+		const where = jest.fn(() => ({ orderBy }));
+		const firestore = {
+			collection: jest.fn(() => ({ where })),
+		};
+
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		const depth = await repository.getBacklogDepth({ maxScan: 50, now });
+		expect(depth.durableQueuedCount).toBe(2);
+		expect(depth.oldestQueuedAgeMs).toBe(500000);
+		expect(depth.oldestCreatedAt).toBe(new Date(now - 500000).toISOString());
+	});
+
+	it('paginates processing jobs before filtering queued work', async () => {
+		const now = Date.now();
+		const firstPage = Array.from({ length: 100 }, (_, index) => ({
+			id: `active-${index}`,
+			data: () => ({
+				status: 'processing',
+				execution: {
+					status: 'running',
+					leaseUntil: new Date(now + 600000).toISOString(),
+				},
+				createdAt: new Date(now - 900000 - index * 1000).toISOString(),
+			}),
+		}));
+		const queuedDoc = {
+			id: 'queued-after-active-page',
+			data: () => ({
+				status: 'processing',
+				execution: { status: 'queued' },
+				createdAt: new Date(now - 700000).toISOString(),
+			}),
+		};
+		let page = 0;
+		const query = {
+			where: jest.fn(() => query),
+			orderBy: jest.fn(() => query),
+			limit: jest.fn(() => query),
+			startAfter: jest.fn(() => {
+				page = 1;
+				return query;
+			}),
+			get: jest.fn(() => Promise.resolve({ docs: page === 0 ? firstPage : [queuedDoc] })),
+		};
+		const firestore = { collection: jest.fn(() => query) };
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		const depth = await repository.getBacklogDepth({ maxScan: 100, now });
+
+		expect(query.startAfter).toHaveBeenCalledWith(firstPage[firstPage.length - 1]);
+		expect(depth.durableQueuedCount).toBe(1);
+		expect(depth.oldestQueuedAgeMs).toBe(700000);
+	});
+
+	it('bounds the number of Firestore pages scanned so a large backlog cannot drive an unbounded read loop', async () => {
+		const now = Date.now();
+		// Every page is completely full, so the loop would only stop via the page cap.
+		const fullPage = Array.from({ length: 50 }, (_, index) => ({
+			id: `job-${index}`,
+			data: () => ({
+				status: 'processing',
+				execution: { status: 'queued' },
+				createdAt: new Date(now - 900000 - index * 1000).toISOString(),
+			}),
+		}));
+
+		const query = {
+			where: jest.fn(() => query),
+			orderBy: jest.fn(() => query),
+			limit: jest.fn(() => query),
+			startAfter: jest.fn(() => query),
+			get: jest.fn(() => Promise.resolve({ docs: fullPage })),
+		};
+		const firestore = { collection: jest.fn(() => query) };
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		const depth = await repository.getBacklogDepth({ maxScan: 50, now });
+
+		// Without a hard page cap this loops forever, since each page is full and
+		// every document is a queued job.
+		expect(query.get).toHaveBeenCalled();
+		expect(query.get.mock.calls.length).toBeLessThanOrEqual(5);
+		// Every page is identical, so the oldest scanned job is the last index.
+		expect(depth.durableQueuedCount).toBe(50 * query.get.mock.calls.length);
+		expect(depth.oldestQueuedAgeMs).toBe(900000 + 49000);
+	});
+
+	it('rotates the capped scan across probes so a backlog past the cap is eventually observed', async () => {
+		const now = Date.now();
+		// The first maxScan*maxPages documents are all actively leased, so every
+		// page of the first sweep is full and the cap is hit before any queued job.
+		const activePrefix = Array.from({ length: 250 }, (_, index) => ({
+			id: `active-${index}`,
+			data: () => ({
+				status: 'processing',
+				execution: { status: 'running', leaseUntil: new Date(now + 600000).toISOString() },
+				createdAt: new Date(now - 900000 - index * 1000).toISOString(),
+			}),
+		}));
+		const hiddenQueued = Array.from({ length: 5 }, (_, index) => ({
+			id: `hidden-queued-${index}`,
+			data: () => ({
+				status: 'processing',
+				execution: { status: 'queued' },
+				// Index 0 is the oldest of the hidden queued jobs.
+				createdAt: new Date(now - 804000 + index * 1000).toISOString(),
+			}),
+		}));
+
+		const allDocs = [...activePrefix, ...hiddenQueued];
+		const firestore = {
+			collection: jest.fn(() => {
+				let offset = 0;
+				const query = {
+					where: jest.fn(() => query),
+					orderBy: jest.fn(() => query),
+					limit: jest.fn(() => query),
+					startAfter: jest.fn((doc) => {
+						offset = allDocs.findIndex((candidate) => candidate.id === doc.id) + 1;
+						return query;
+					}),
+					get: jest.fn(() => Promise.resolve({ docs: allDocs.slice(offset, offset + 50) })),
+				};
+				return query;
+			}),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		// First sweep: capped at 250 documents, all of them actively leased.
+		const first = await repository.getBacklogDepth({ maxScan: 50, maxPages: 5, now });
+		expect(first.truncated).toBe(true);
+		expect(first.durableQueuedCount).toBe(0);
+		expect(first.scanRotated).toBe(false);
+
+		// Second sweep resumes after the cursor and reaches the queued suffix.
+		const second = await repository.getBacklogDepth({ maxScan: 50, maxPages: 5, now });
+		expect(second.durableQueuedCount).toBe(5);
+		expect(second.oldestQueuedAgeMs).toBe(804000);
+		expect(second.scanRotated).toBe(true);
+		// The suffix is short, so the sweep reached the end of the collection.
+		expect(second.truncated).toBe(false);
+
+		// A sweep that reached the end clears the cursor, so the next probe
+		// re-reads from the front instead of permanently skipping the prefix.
+		const third = await repository.getBacklogDepth({ maxScan: 50, maxPages: 5, now });
+		expect(third.scanRotated).toBe(false);
+		expect(third.durableQueuedCount).toBe(0);
+	});
+
+	it('reports an indeterminate result when Firestore job storage is enabled but the client is unavailable', async () => {
+		process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => null);
+
+		try {
+			const depth = await repository.getBacklogDepth({ now: Date.now() });
+
+			// The process-local map is empty on a freshly restarted replica, so
+			// reporting it here would expose an unreadable backlog as zero and
+			// never page.
+			expect(depth.probeFailed).toBe(true);
+			expect(depth.source).toBe('firestore-unavailable');
+			expect(depth.durableQueuedCount).toBeNull();
+			expect(depth.oldestQueuedAgeMs).toBeNull();
+		} finally {
+			delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+			_resetForTesting();
+		}
+	});
+
+	it('still uses the process-local map when durable job storage is intentionally disabled', async () => {
+		delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => null);
+
+		const depth = await repository.getBacklogDepth({ now: Date.now() });
+
+		// Disabled storage means an empty map really is an empty backlog.
+		expect(depth.probeFailed).toBe(false);
+		expect(depth.source).toBe('memory');
+		expect(depth.durableQueuedCount).toBe(0);
+	});
+	// A front re-read is conclusive even when the page is full, as long as its
+	// boundary row is not a live claim. `truncated` is about the boundary row's
+	// state, not the page filling, because the query filters on the top-level
+	// `status == 'processing'` and every queued job is also `processing` — a full
+	// page of ordinary jobs would otherwise veto recovery on any large collection.
+	it('reports a full front page as conclusive when the boundary row is not a live claim', async () => {
+		process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+		const repository = new JobRepository();
+		const now = Date.now();
+		// 150 processing rows, every one finished: the page fills at 100 and the
+		// boundary row cannot grow into queued work.
+		repository._getFirestore = jest.fn(() => firestoreOf(150, () => ({ status: 'completed' }), now));
+
+		try {
+			const front = await repository.getFrontBacklogDepth({ maxScan: 100, now });
+			expect(front.truncated).toBe(false);
+			expect(front.durableQueuedCount).toBe(0);
+
+			// A live claim at the boundary is the one case that can still become
+			// queued, so it must block a recovery claim.
+			repository._getFirestore = jest.fn(() => firestoreOf(150, () => ({
+				status: 'claimed',
+				leaseUntil: new Date(now + 60000).toISOString(),
+			}), now));
+			const liveClaim = await repository.getFrontBacklogDepth({ maxScan: 100, now });
+			expect(liveClaim.truncated).toBe(true);
+			expect(liveClaim.durableQueuedCount).toBe(0);
+		} finally {
+			delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+		}
+	});
+
+	// Builds a Firestore double holding `count` processing documents with the given
+	// execution shape, ordered by createdAt ascending.
+	function firestoreOf(count, executionAt, now) {
+		const docs = Array.from({ length: count }, (_, i) => ({
+			id: `doc${String(i).padStart(5, '0')}`,
+			data: () => ({
+				createdAt: new Date(now - 1000 * (i + 1)).toISOString(),
+				execution: executionAt(i),
+			}),
+		}));
+		const collection = (startAfter) => {
+			let start = 0;
+			if (startAfter) start = docs.findIndex((d) => d.id === startAfter.id) + 1;
+			const query = {
+				where() { return query; },
+				orderBy() { return query; },
+				limit(limit) {
+					return {
+						startAfter: (cursor) => collection(cursor),
+						get: async () => ({ docs: docs.slice(start, start + limit) }),
+					};
+				},
+				get: async () => ({ docs: docs.slice(start) }),
+			};
+			return query;
+		};
+		return { collection: () => collection(null) };
+	}
 });
-
-

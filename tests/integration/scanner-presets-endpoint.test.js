@@ -400,6 +400,8 @@ describe('Scanner presets API integration tests', () => {
 		expect(runResponse.body.requestedChannels).toEqual(['telegram']);
 		expect(runResponse.body.deliveredChannels).toEqual(['telegram']);
 		expect(runResponse.body.deliveryResults).toHaveLength(1);
+		expect(runResponse.body.processingTimeMs).toEqual(expect.any(Number));
+		expect(runResponse.body).not.toHaveProperty('totalDurationMs');
 		expect(mockTelegramSendMessage).toHaveBeenCalledWith(
 			'-100999888777',
 			expect.any(String),
@@ -470,6 +472,223 @@ describe('Scanner presets API integration tests', () => {
 		expect(new Date(data.nextRunAt).getTime()).toBeGreaterThan(Date.now());
 	});
 
+	it('returns ETag header and version field on GET /api/scanner-presets/:id', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'ETag preset', exchange: 'BINANCE' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+		expect(createResponse.body.preset.version).toBe(1);
+
+		const getResponse = await request(app)
+			.get(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(getResponse.headers.etag).toBe('"1"');
+		expect(getResponse.body.preset.version).toBe(1);
+	});
+
+	it('updates with a matching If-Match token and increments version', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Matched If-Match preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+		const initialVersion = createResponse.body.preset.version;
+
+		const updateResponse = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', `"${initialVersion}"`)
+			.send({ limit: 12 })
+			.expect(200);
+
+		expect(updateResponse.body.preset.version).toBe(initialVersion + 1);
+		expect(updateResponse.body.preset.limit).toBe(12);
+		expect(updateResponse.headers.etag).toBe(`"${initialVersion + 1}"`);
+	});
+
+	it('returns 412 PRECONDITION_FAILED with current preset on stale If-Match', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Stale If-Match preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const response = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', '"999"')
+			.send({ limit: 12 })
+			.expect(412);
+
+		expect(response.body.code).toBe('PRECONDITION_FAILED');
+		expect(response.body.preset).toMatchObject({
+			id: presetId,
+			version: createResponse.body.preset.version,
+		});
+	});
+
+	it('returns 409 PRESET_LOCKED when lockedUntil is in the future', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Locked preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+		const futureLock = new Date(Date.now() + 60000).toISOString();
+		await admin.firestore().collection('scannerPresets').doc(presetId).update({
+			lockedUntil: futureLock,
+			lockedBy: 'scheduler',
+			version: 2,
+		});
+
+		const response = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.send({ limit: 5 })
+			.expect(409);
+
+		expect(response.body.code).toBe('PRESET_LOCKED');
+		expect(response.body.lockedUntil).toBe(futureLock);
+	});
+
+	it('returns 412 PRECONDITION_FAILED on stale If-Match for DELETE', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Stale delete preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const response = await request(app)
+			.delete(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', '"999"')
+			.expect(412);
+
+		expect(response.body.code).toBe('PRECONDITION_FAILED');
+		expect(await admin.firestore().collection('scannerPresets').doc(presetId).get()).toBeDefined();
+	});
+
+	it('returns 400 INVALID_IF_MATCH for a malformed If-Match header', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Malformed If-Match preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const response = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', '"3", "4"')
+			.send({ limit: 7 })
+			.expect(400);
+
+		expect(response.body.code).toBe('INVALID_IF_MATCH');
+	});
+
+	it('returns 409 NAME_CONFLICT when creating a duplicate preset name', async () => {
+		await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Conflict preset' })
+			.expect(201);
+
+		const conflictResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'CONFLICT preset' })
+			.expect(409);
+
+		expect(conflictResponse.body.code).toBe('NAME_CONFLICT');
+		expect(conflictResponse.body.preset).toEqual(expect.objectContaining({
+			name: 'Conflict preset',
+		}));
+	});
+
+	it('returns 409 NAME_CONFLICT when renaming a preset onto another preset name', async () => {
+		const first = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Alpha' })
+			.expect(201);
+		const second = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Bravo' })
+			.expect(201);
+
+		const renameResponse = await request(app)
+			.put(`/api/scanner-presets/${second.body.preset.id}`)
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Alpha' })
+			.expect(409);
+
+		expect(renameResponse.body.code).toBe('NAME_CONFLICT');
+		expect(renameResponse.body.preset).toEqual(expect.objectContaining({
+			id: first.body.preset.id,
+			name: 'Alpha',
+		}));
+
+		// Bravo name preserved on the second preset.
+		const refetched = await request(app)
+			.get(`/api/scanner-presets/${second.body.preset.id}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+		expect(refetched.body.preset.name).toBe('Bravo');
+	});
+
+	it('allows a preset to rename itself with a case-only change', async () => {
+		const created = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'My Watchlist' })
+			.expect(201);
+
+		const updated = await request(app)
+			.put(`/api/scanner-presets/${created.body.preset.id}`)
+			.set('x-api-key', 'test-key')
+			.send({ name: 'my watchlist' })
+			.expect(200);
+
+		expect(updated.body.preset.name).toBe('my watchlist');
+		});
+
+			it('returns 400 without invoking MCP when a requested channel is disabled (GH-854 fail-fast)', async () => {
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		process.env.ENABLE_WHATSAPP_ALERTS = 'false';
+
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Disabled-channel preset', exchange: 'binance', timeframe: '4h', scans: ['top_gainers'] })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+		tradingViewMcpService.callScanTool.mockClear();
+
+		const response = await request(app)
+			.post(`/api/scanner-presets/${presetId}/run`)
+			.set('x-api-key', 'test-key')
+			.send({ channels: ['whatsapp'] })
+			.expect(400);
+
+		expect(response.body.error).toContain('Requested channel(s) disabled or misconfigured');
+		// Fail-fast: the TradingView MCP scan must NOT have been called.
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+	});
 	it('records signal outcomes when manual preset run succeeds and outcomes are enabled', async () => {
 		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
 		const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
@@ -516,5 +735,5 @@ describe('Scanner presets API integration tests', () => {
 		recordSpy.mockRestore();
 		signalOutcomeService.isEnabled.mockRestore();
 	});
-});
 
+});

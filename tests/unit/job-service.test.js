@@ -87,6 +87,24 @@ describe('JobService Unit Tests', () => {
 			expect(result.status).toBe('processing');
 		});
 
+		it('persists market-scanner scan-specific options for background execution', async () => {
+			const metadata = await jobService.createJob('market-scanner', {
+				scans: ['rating_filter', 'consecutive_candles_scan'],
+				rating: -2,
+				pattern_type: 'bearish',
+				candle_count: 4,
+				min_growth: 1.5,
+			});
+
+			const rawJob = await jobService.repository.get(metadata.jobId);
+			expect(rawJob.requestMetadata).toEqual(expect.objectContaining({
+				rating: -2,
+				pattern_type: 'bearish',
+				candle_count: 4,
+				min_growth: 1.5,
+			}));
+		});
+
 		it('correctly validates and parses timeoutMs string format like 1e3', async () => {
 			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
@@ -852,7 +870,8 @@ describe('JobService Unit Tests', () => {
 				symbol: 'BINANCE:BTCUSDT',
 				price_data: { close: 65000, change_percent: 2.0 },
 				rsi: { value: 50 },
-				market_sentiment: { overall_sentiment: 'Bullish', overall_rating: 0.75 },
+				atr: 500,
+				market_sentiment: { overall_sentiment: 'Bearish', overall_rating: 0.75 },
 			});
 
 			const metadata = await jobService.createJob('expanded-analysis', {
@@ -860,13 +879,8 @@ describe('JobService Unit Tests', () => {
 				timeframe: '4h',
 			});
 
-			let job = await jobService.getJob(metadata.jobId);
-			let attempts = 0;
-			while (job.status !== 'completed' && attempts < 10) {
-				await delay(20);
-				job = await jobService.getJob(metadata.jobId);
-				attempts++;
-			}
+			await jobService.waitForActiveJobs();
+			const job = await jobService.getJob(metadata.jobId);
 
 			expect(job.status).toBe('completed');
 			expect(recordSpy).toHaveBeenCalledTimes(1);
@@ -876,8 +890,10 @@ describe('JobService Unit Tests', () => {
 			expect(recorded.exchange).toBe('BINANCE');
 			expect(recorded.timeframe).toBe('4h');
 			expect(recorded.setupType).toBe('expanded-analysis');
-			expect(recorded.side).toBe('BUY');
+			expect(recorded.side).toBe('SELL');
 			expect(recorded.price).toBe(65000);
+			expect(recorded.stop).toBe(65750);
+			expect(recorded.target).toBe(63500);
 			expect(recorded.score).toBe(0.75);
 
 			recordSpy.mockRestore();
@@ -902,13 +918,8 @@ describe('JobService Unit Tests', () => {
 				exchange: 'BINANCE',
 			});
 
-			let job = await jobService.getJob(metadata.jobId);
-			let attempts = 0;
-			while (job.status !== 'completed' && attempts < 10) {
-				await delay(20);
-				job = await jobService.getJob(metadata.jobId);
-				attempts++;
-			}
+			await jobService.waitForActiveJobs();
+			const job = await jobService.getJob(metadata.jobId);
 
 			expect(job.status).toBe('completed');
 			expect(recordSpy).toHaveBeenCalledTimes(1);
@@ -2264,6 +2275,34 @@ describe('JobService Unit Tests', () => {
 			} finally {
 				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
 				lookupSpy.mockRestore();
+			}
+		});
+	});
+
+	describe('_broadcastJobProgress', () => {
+		it('broadcasts job-progress and scanner-result with persisted job.summary', () => {
+			const { adminSseService } = require('../../src/services/sse/AdminSseService');
+			const broadcastSpy = jest.spyOn(adminSseService, 'broadcast').mockImplementation(() => {});
+
+			try {
+				jobService._broadcastJobProgress({
+					jobId: 'job-summary-test',
+					type: 'market-scanner',
+					status: 'completed',
+					summary: { total: 5, passed: 3 },
+				});
+
+				expect(broadcastSpy).toHaveBeenCalledWith('job-progress', expect.objectContaining({
+					jobId: 'job-summary-test',
+					summary: { total: 5, passed: 3 },
+				}));
+
+				expect(broadcastSpy).toHaveBeenCalledWith('scanner-result', expect.objectContaining({
+					jobId: 'job-summary-test',
+					summary: { total: 5, passed: 3 },
+				}));
+			} finally {
+				broadcastSpy.mockRestore();
 			}
 		});
 	});

@@ -557,6 +557,10 @@ describe('Expanded Analysis Alert report', () => {
 	});
 
 	describe('recordExpandedAnalysisOutcomes', () => {
+		afterEach(() => {
+			jest.restoreAllMocks();
+		});
+
 		it('records signals when signalOutcomeService is enabled', () => {
 			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
 			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
@@ -565,6 +569,7 @@ describe('Expanded Analysis Alert report', () => {
 				{
 					input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
 					analysis: {
+						confidence: 0.8,
 						price_data: { close: 60000 },
 						technical: {
 							price_data: { close: 60000 },
@@ -598,6 +603,8 @@ describe('Expanded Analysis Alert report', () => {
 			expect(recorded.stop).toBe(60750); // 60000 + 500*1.5
 			expect(recorded.target).toBe(58500); // 60000 - 500*3
 			expect(recorded.score).toBe(-0.6);
+			expect(recorded.confidenceScore).toBe(0.8);
+			expect(recorded.priceSource).toBe('tradingview-mcp');
 
 			recordSpy.mockRestore();
 			signalOutcomeService.isEnabled.mockRestore();

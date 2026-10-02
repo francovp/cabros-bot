@@ -1,12 +1,11 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	ExpandedAnalysisAlertRequestError,
 	parseExpandedAnalysisAlertRequest,
 	buildExpandedAnalysisAlertReport,
-	buildReportRow,
 	deriveItemSide,
 	recordExpandedAnalysisOutcomes,
 } = require('../../../../services/tradingview/expandedAnalysisAlertReport');
@@ -45,7 +44,7 @@ function resolveDryRun(req) {
 
 function postExpandedAnalysisAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 
 		try {
@@ -53,7 +52,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseExpandedAnalysisAlertRequest(req);
 			const timeoutMs = getAlertTimeoutMs();
-			const deadline = createAlertDeadline(timeoutMs);
+			const deadline = createAlertDeadline(timeoutMs, req.requestDeadlineSignal);
 			let results;
 
 			try {
@@ -85,7 +84,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -102,7 +101,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -166,7 +165,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				timedOut,
 				timeoutMs,
 				requestId,
-				totalDurationMs: Date.now() - startTime,
+				processingTimeMs: Math.max(0, Date.now() - startTime),
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
@@ -302,14 +301,14 @@ function getAlertTimeoutMs() {
 	return Math.min(parsedTimeout, MAX_ALERT_TIMEOUT_MS);
 }
 
-function createAlertDeadline(timeoutMs) {
+function createAlertDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => {
 		controller.abort(new Error(`Expanded analysis alert timeout after ${timeoutMs}ms`));
 	}, timeoutMs);
 
 	return {
-		signal: controller.signal,
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
 		clear: () => clearTimeout(timeoutId),
 	};
 }

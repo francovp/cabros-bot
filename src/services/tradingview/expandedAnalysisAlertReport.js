@@ -716,7 +716,7 @@ function deriveItemSide(analysis = {}) {
  * Records signal outcomes for analyzed items in a fail-open manner.
  * @param {Array<Object>} analyzedItems - Array of { input, analysis, multiTimeframe, side? }
  * @param {Object} [parsed] - { timeframe, ... }
- * @param {Object} [options] - { requestId, startTime, processingTimeMs, source }
+ * @param {Object} [options] - { requestId, startTime, source }
  * @returns {void}
  */
 function recordExpandedAnalysisOutcomes(analyzedItems, parsed = {}, options = {}) {
@@ -728,18 +728,18 @@ function recordExpandedAnalysisOutcomes(analyzedItems, parsed = {}, options = {}
 
 		const requestId = options.requestId || null;
 		const source = options.source || 'expanded-analysis';
-		const processingTimeMs = typeof options.processingTimeMs === 'number'
-			? options.processingTimeMs
-			: (options.startTime ? Date.now() - options.startTime : null);
+		const processingTimeMs = options.startTime ? Date.now() - options.startTime : null;
 		const timeframe = parsed?.timeframe || null;
 
 		for (const item of analyzedItems) {
 			if (!item || !item.input) continue;
 			const itemSide = item.side || deriveItemSide(item.analysis);
-			const row = buildReportRow(item);
+			const row = buildReportRow({ ...item, side: itemSide });
 			const tech = item.analysis?.technical || item.analysis || {};
 			const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
 			const score = item.analysis?.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
+			const rawConfidence = item.analysis?.confidence ?? item.confidence ?? (typeof score === 'number' && score >= 0 && score <= 1 ? score : null);
+			const validConfidence = typeof rawConfidence === 'number' && Number.isFinite(rawConfidence) && rawConfidence >= 0 && rawConfidence <= 1 ? rawConfidence : null;
 
 			signalOutcomeService.recordSignal({
 				requestId,
@@ -749,8 +749,10 @@ function recordExpandedAnalysisOutcomes(analyzedItems, parsed = {}, options = {}
 				timeframe,
 				setupType: 'expanded-analysis',
 				score,
+				confidenceScore: validConfidence,
 				side: itemSide,
 				price: typeof closePrice === 'number' ? closePrice : null,
+				priceSource: typeof closePrice === 'number' ? 'tradingview-mcp' : null,
 				stop: typeof row.stopLoss === 'number' ? row.stopLoss : null,
 				target: typeof row.takeProfit === 'number' ? row.takeProfit : null,
 				sources: [],

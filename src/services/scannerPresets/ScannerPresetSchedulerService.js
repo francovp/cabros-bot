@@ -8,6 +8,7 @@ const {
 	COLLECTION_NAME,
 	stripUndefinedFieldsDeep,
 	_memoryPresets,
+	normalizeVersion,
 } = require('./ScannerPresetService');
 const marketScannerModule = require('../../controllers/webhooks/handlers/marketScanner/marketScanner');
 const marketScannerReportModule = require('../tradingview/marketScannerReport');
@@ -340,10 +341,12 @@ class ScannerPresetSchedulerService {
 					if (lockedUntilMs > nowMs) return false;
 
 					const lockedUntilDate = new Date(nowMs + leaseMs).toISOString();
+					const currentVersion = normalizeVersion(data.version, 1);
 					tx.update(docRef, {
 						lockedUntil: lockedUntilDate,
 						lockedBy: this.workerId,
 						updatedAt: new Date(nowMs).toISOString(),
+						version: currentVersion + 1,
 					});
 					return true;
 				});
@@ -370,10 +373,12 @@ class ScannerPresetSchedulerService {
 				if (lockedUntilMs > nowMs) return false;
 
 				const lockedUntilDate = new Date(nowMs + leaseMs).toISOString();
+				const currentVersion = normalizeVersion(data.version, 1);
 				await docRef.update({
 					lockedUntil: lockedUntilDate,
 					lockedBy: this.workerId,
 					updatedAt: new Date(nowMs).toISOString(),
+					version: currentVersion + 1,
 				});
 				return true;
 			} catch (err) {
@@ -394,6 +399,8 @@ class ScannerPresetSchedulerService {
 
 		mem.lockedUntil = new Date(nowMs + leaseMs).toISOString();
 		mem.lockedBy = this.workerId;
+		mem.version = normalizeVersion(mem.version, 1) + 1;
+		mem.updatedAt = new Date(nowMs).toISOString();
 		return true;
 	}
 
@@ -450,7 +457,8 @@ class ScannerPresetSchedulerService {
 					});
 				}
 
-				marketScannerReportModule.recordMarketScannerOutcomes(scanResults, preset, {
+				// Preset reports currently render unranked; persist the same item directions.
+				marketScannerReportModule.recordMarketScannerOutcomes(scanResults, { ...preset, ranked: false }, {
 					requestId: `preset-${preset.id}-${startTime}`,
 					startTime,
 					source: 'scanner-preset',
@@ -488,6 +496,10 @@ class ScannerPresetSchedulerService {
 		if (firestore) {
 			try {
 				const docRef = firestore.collection(COLLECTION_NAME).doc(preset.id);
+				const snapshot = await docRef.get();
+				const currentVersion = snapshot && snapshot.exists
+					? normalizeVersion(snapshot.data().version, 1)
+					: normalizeVersion(preset.version, 1);
 				const updateDoc = stripUndefinedFieldsDeep({
 					lastRunAt: updateData.lastRunAt,
 					nextRunAt: updateData.nextRunAt,
@@ -497,6 +509,7 @@ class ScannerPresetSchedulerService {
 					lockedUntil: null,
 					lockedBy: null,
 					updatedAt: new Date().toISOString(),
+					version: currentVersion + 1,
 				});
 				await docRef.update(updateDoc);
 			} catch (err) {
@@ -515,6 +528,7 @@ class ScannerPresetSchedulerService {
 				lockedUntil: null,
 				lockedBy: null,
 				updatedAt: new Date().toISOString(),
+				version: normalizeVersion(mem.version, 1) + 1,
 			});
 		}
 	}
