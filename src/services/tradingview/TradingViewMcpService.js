@@ -54,7 +54,10 @@ function awaitWithTimeout(promise, timeoutMs, message) {
 	});
 }
 
-const TERMINAL_PROVIDER_ERROR_PATTERN = /service suspended|analysis failed:|no data found/i;
+// Only definitive provider-outage signals are terminal. Tool payload errors such as
+// "Analysis failed: Expecting value: line 1 column 1" describe one bad upstream result and
+// are frequently transient, so they must stay on the retry path.
+const TERMINAL_PROVIDER_ERROR_PATTERN = /service suspended|suspended by its owner/i;
 
 function getAbortMessage(signal, fallback) {
 	const reason = signal && signal.reason;
@@ -1020,7 +1023,7 @@ class TradingViewMcpService {
 		const rpc = this._decodeRpcBody(bodyText, response.headers.get('content-type'), payload.id);
 
 		if (rpc && rpc.error) {
-			throw new Error(rpc.error.message || 'TradingView MCP returned an RPC error');
+			throw createMcpError(rpc.error.message || 'TradingView MCP returned an RPC error');
 		}
 
 		return {
@@ -1446,13 +1449,18 @@ class TradingViewMcpService {
 				} else {
 					nextCounts.request_failed = (nextCounts.request_failed || 0) + 1;
 				}
+				const previousHttpStatusCode = this[key] ? this[key].lastHttpStatusCode : null;
 				this[key] = {
 					...this[key],
 					status: 'degraded',
 					lastCheckedAt: timestamp,
 					lastFailureAt: timestamp,
-lastErrorCategory: errorCategory,
-					lastHttpStatusCode: Number.isInteger(error?.httpStatusCode) ? error.httpStatusCode : null,
+					lastErrorCategory: errorCategory,
+					// Retain the most recent observed HTTP status when a later failure carries
+					// no HTTP evidence (timeout/protocol error), so the only 5xx proof survives.
+					lastHttpStatusCode: Number.isInteger(error?.httpStatusCode)
+						? error.httpStatusCode
+						: (Number.isInteger(previousHttpStatusCode) ? previousHttpStatusCode : null),
 					failureCount: this[key].failureCount + 1,
 					errorCategoryCounts: nextCounts,
 				};
