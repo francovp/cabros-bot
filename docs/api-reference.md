@@ -75,6 +75,64 @@ The protected `/api/status` response includes the same non-sensitive state under
 
 Pending and failed bootstrap states use the same body shape with HTTP `503`; failed responses include a sanitized `error` message.
 
+### Dependency readiness probes (`?depth=readiness` / `?depth=dependencies`)
+
+Bootstrap completion only proves the process started. It says nothing about whether Firestore, Gemini, TradingView MCP, Binance, and the Telegram bot are reachable right now — so a running process with a dead Firestore connection or an expired Gemini key still passes both `/healthcheck` and `/ready` and keeps receiving traffic it cannot serve.
+
+Two opt-in `depth` values add bounded external dependency probes:
+
+| Surface | Question | Degraded result |
+| :--- | :--- | :--- |
+| `GET /healthcheck` | Is the process alive? | never |
+| `GET /healthcheck?deep=true` | Are the enabled **notification channels** ready? | `503` |
+| `GET /ready` | Did **startup bootstrap** complete? | `503` |
+| `GET /healthcheck?depth=readiness` | Are external **dependencies** healthy (advisory)? | `200` with `ready: false` |
+| `GET /ready?depth=dependencies` | Bootstrap **and** dependencies, traffic-gating? | `503` |
+
+Both probes run the same five checks **in parallel**, each with a bounded 1–5 second timeout (default 3s, clamped). Disabled features are reported as `skipped: true` and excluded from the verdict, so the payload works unchanged in preview, development, and production. No new environment variable is required. A probe is only scheduled when its feature flag is enabled, so a deployment that does not use Gemini never pays for a Gemini probe and never fails one.
+
+`/ready?depth=dependencies` **layers** on the bootstrap gate rather than replacing it: the verdict is `bootstrap.ready AND dependencies.ready`, and the response echoes `status`, `components`, and `bootstrapReady`. A replica that has not finished bootstrapping therefore never reports 200 to a load balancer, no matter how healthy its providers are.
+
+Results are memoized for 5 seconds and concurrent requests are single-flighted, so a load balancer polling every few seconds cannot fan out to Gemini, Binance, and TradingView on every hit from every replica. A degraded dependency that is switched on but not configured (`firestore_not_configured`, an expired service account) counts as a failure rather than a skip, because the feature is supposed to be working.
+
+All surfaced `error` strings pass through the shared log redaction layer, and the Gemini key is sent in the `x-goog-api-key` header rather than the query string, so a provider error can never disclose a credential on this unauthenticated surface.
+
+**Why the advisory surface never returns 503.** A readiness probe wired into a load balancer restarts or evicts replicas that fail it. If a transient Gemini timeout or a Binance `451` flipped the HTTP status, one flaky third party would pull every healthy replica out of rotation and turn a partial degradation into a full outage — precisely the failure mode the probe exists to detect. The default surface is therefore **observability only**: it always returns `200` and reports degradation in the body's `ready` field, for alerting and dashboards. Operators who *want* dependency health to gate traffic opt into `/ready?depth=dependencies`, which fails closed. Default to alerting on `ready: false`; reserve the 503 variant for deployments that can tolerate losing all capacity when a provider is down.
+
+**Advisory response (`?depth=readiness`, always HTTP 200):**
+```json
+{
+  "ready": true,
+  "failClosed": false,
+  "checkedAt": "2026-08-31T02:30:00.000Z",
+  "latencyMs": 412,
+  "dependencies": {
+    "firestore": { "ready": true, "backend": "firestore", "latencyMs": 53 },
+    "gemini": { "ready": true, "backend": "gemini", "latencyMs": 124 },
+    "tradingViewMcp": { "ready": true, "backend": "tradingview_mcp", "latencyMs": 18 },
+    "binance": { "ready": true, "backend": "binance", "latencyMs": 36 },
+    "telegram": { "ready": true, "backend": "telegram", "latencyMs": 22 }
+  }
+}
+```
+
+A degraded dependency reported alongside a disabled feature — still HTTP `200`:
+```json
+{
+  "ready": false,
+  "failClosed": false,
+  "latencyMs": 3011,
+  "dependencies": {
+    "gemini": { "ready": false, "latencyMs": 3001, "error": "timeout_after_3000ms" },
+    "telegram": { "ready": false, "enabled": false, "skipped": true, "reason": "telegram_disabled" }
+  }
+}
+```
+
+The fail-closed variant (`/ready?depth=dependencies`) returns the same body with `failClosed: true` and HTTP `503` when any considered dependency is unhealthy.
+
+Probes never throw and never block: a transient provider failure surfaces a per-dependency `error` string and a `ready: false` verdict without affecting webhook ingest, notification dispatch, or any other production path. Bare `/healthcheck` and bare `/ready` keep their existing contracts and never run provider probes.
+
 ### GET /api/status
 
 Machine-readable runtime status for operational tooling. This endpoint uses the same `WEBHOOK_API_KEY` protection as other `/api` endpoints when that environment variable is configured. Send the key with the `x-api-key` header.
@@ -85,7 +143,7 @@ For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM depende
 
 When `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION=true`, `featureFlags.tradingViewVolumeConfirmation` reports the gate value and `dependencies.tradingViewVolumeConfirmation` reports readiness only when the configured TradingView MCP endpoint and its parent MCP enrichment gate are active.
 
-TradingView dependency readiness is runtime-derived and fail-open: `configured` reflects the effective endpoint, while `status` starts as `unknown` and changes to `ready` or `degraded` after an MCP operation. `lastErrorCategory` is sanitized to categories such as `timeout`, `http_5xx`, `http_4xx`, `invalid_response`, or `request_failed`; provider response bodies and URLs are never returned by `/api/status`.
+TradingView dependency readiness is runtime-derived and fail-open: `configured` reflects the effective endpoint, while `status` starts as `unknown` and changes to `ready` or `degraded` after an MCP operation. `lastErrorCategory` is sanitized to categories such as `timeout`, `http_5xx`, `http_4xx`, `invalid_response`, `provider_unavailable`, or `request_failed`; terminal provider outages do not consume the retry chain, and `lastHttpStatusCode` exposes the last observed HTTP status without returning provider response bodies or URLs from `/api/status`.
 
 When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` reports the async-job persistence gate and `dependencies.firestoreJobStorage` reports readiness using the configured Firestore credentials. The legacy `ENABLE_FIRESTORE_ALERT_STORAGE=true` gate also reports job storage as enabled because it activates the same runtime persistence path.
 

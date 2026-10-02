@@ -280,3 +280,163 @@ Root cause: Applying operational availability gates globally before verifying cl
 - Last-Seen: 2026-09-27
 
 ---
+## [LRN-20260929-001] correction
+
+**Logged**: 2026-09-29T00:13:00Z
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+Cleanup preview channels script default `--max-age-days 3` deletes 0 channels; only `--max-age-days 1` frees quota.
+
+### Details
+In Issue #1269 (firebase-hosting preview channel quota exhausted), @francovp corrected their own earlier remediation suggestion. The recommended `node scripts/cleanup-preview-channels.js --apply --max-age-days 3` would delete **0 of 51 channels**. Measured thresholds:
+- `--max-age-days 1`: deletes 16 channels (created in ~19-min burst on 2026-09-27)
+- `--max-age-days 2, 3, 7`: delete 0 channels
+- `--max-age-days 0`: rejected as invalid
+
+The 35 remaining channels are all under 24 hours old, created by current PR burst. The workflow mints a channel per branch, so every push to a renamed/force-pushed branch consumes a new slot, outpacing the 7-day TTL decay. Default of 3 days is misleading — useful value today is 1.
+
+### Suggested Action
+1. When documenting cleanup commands, verify the actual deletion count with dry-run against current state before recommending.
+2. Address recurrence: reuse single channel per PR number (not per branch name) to prevent rebase/rename from consuming new slots.
+3. Consider shortening 7-day TTL and making preview deploy non-blocking so channel exhaustion cannot block merges.
+
+### Metadata
+- Source: user_feedback
+- Related Files: scripts/cleanup-preview-channels.js, .github/workflows/firebase-hosting-preview.yml
+- Tags: firebase-hosting, preview-channels, quota, cleanup-script, documentation-accuracy
+- See Also: LRN-20260927-004
+- Pattern-Key: harden.verify_cleanup_dryrun_before_recommending
+- Recurrence-Count: 1
+- First-Seen: 2026-09-29
+- Last-Seen: 2026-09-29
+
+---
+
+## [LRN-20260929-002] correction
+
+**Logged**: 2026-09-29T00:13:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: infra
+
+### Summary
+Documented git recovery command became invalid after master advanced.
+
+### Details
+In Issue #1228 (master force-pushed backwards, un-merging PR #924), @francovp corrected the original recovery command `git push origin cefc13ee:master` as **now wrong and should not be run**. Master had advanced 8 commits since the force-push, so it was no longer a fast-forward. The correction emphasizes that recovery commands documented in issues have a short shelf life and must be re-verified before execution.
+
+### Suggested Action
+1. Never treat documented git recovery commands as evergreen — always re-verify against current master HEAD before executing.
+2. Prefer documenting the *procedure* (fetch, reset, force-push) over specific commit SHAs that stale quickly.
+3. Add a warning note in incident runbooks that SHA-based recovery commands expire.
+
+### Metadata
+- Source: user_feedback
+- Related Files: Issue #1228
+- Tags: git, force-push, recovery, incident-response, documentation-accuracy
+- See Also: LRN-20260929-001
+- Pattern-Key: harden.git_recovery_commands_expire
+- Recurrence-Count: 1
+- First-Seen: 2026-09-29
+- Last-Seen: 2026-09-29
+
+---
+
+## [LRN-20260929-003] correction
+
+**Logged**: 2026-09-29T00:13:00Z
+**Priority**: critical
+**Status**: pending
+**Area**: backend
+
+### Summary
+Green CI on conflicting PRs is not evidence of safety — pre-existing defects survive merge conflict resolution.
+
+### Details
+In Issue #1258 (and confirmed second instance in #1079), @francovp demonstrated that merging `origin/master` into a conflicting PR branch and resolving conflicts **does not fix pre-existing defects in the branch head**. PR #1083 had green CI but would 500 on every live replay due to a defect in `src/controllers/alerts/alerts.js` that existed before the merge. The conflict resolution work itself was correct; the problem was a pre-existing bug that CI did not catch because the test environment differed from production.
+
+### Suggested Action
+1. Never assume green CI on a rebased/merged PR branch means the code is production-safe.
+2. When resolving conflicts on old branches, run the full test suite *and* manually verify critical paths against production-like conditions.
+3. For replay/redrive endpoints specifically: test against real stored payloads, not just synthetic test fixtures.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/controllers/alerts/alerts.js, PR #1083, PR #1079
+- Tags: ci, merge-conflicts, false-green, replay, alert-replay, production-parity
+- See Also: LRN-20260927-005, LRN-20260929-004
+- Pattern-Key: harden.ci_green_not_production_safe
+- Recurrence-Count: 2
+- First-Seen: 2026-09-28
+- Last-Seen: 2026-09-29
+
+---
+
+## [LRN-20260929-004] correction
+
+**Logged**: 2026-09-29T00:13:00Z
+**Priority**: critical
+**Status**: pending
+**Area**: backend
+
+### Summary
+PR #1083 green CI is misleading — branch would 500 every live replay due to pre-existing defect.
+
+### Details
+@francovp blocked PR #1083 (feat(alerts): add optional re-enrichment to alert replay endpoint) despite green CI: "This branch would 500 every live replay, and its green CI is misleading." The defect in `src/controllers/alerts/alerts.js` reproduces without the merge conflicts. The branch head `280bd297` has a pre-existing bug that the test suite does not catch because test environment differs from production (e.g., Firestore emulator vs real Firestore, missing stored alert payloads with signalClass).
+
+### Suggested Action
+1. Add integration tests for alert replay that use real stored alert payloads including `signalClass` and all top-level metadata.
+2. Ensure test fixtures cover the full payload preservation contract (LRN-20260927-005).
+3. Consider adding a "production parity" test stage that runs against a staging Firestore instance.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/controllers/alerts/alerts.js, PR #1083
+- Tags: ci, alert-replay, signalClass, payload-preservation, test-gaps, production-parity
+- See Also: LRN-20260927-005, LRN-20260929-003
+- Pattern-Key: harden.test_production_parity_for_replay
+- Recurrence-Count: 1
+- First-Seen: 2026-09-29
+- Last-Seen: 2026-09-29
+
+---
+## [LRN-20261001-001] correction
+
+**Logged**: 2026-10-01T10:40:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: infra
+
+### Summary
+Cleanup preview channels script default `--max-age-days 3` deletes 0 channels; only `--max-age-days 1` frees quota.
+
+### Details
+In comment on issue #1269, @francovp corrected his earlier remediation suggestion for firebase-hosting preview channel quota exhaustion. The recommended `node scripts/cleanup-preview-channels.js --apply --max-age-days 3` would delete **0 of 51 channels**. Measured thresholds:
+- `--max-age-days 1`: deletes 16 channels (created in ~19-min burst on 2026-09-27)
+- `--max-age-days 2, 3, 7`: delete 0 channels
+- `--max-age-days 0`: rejected as invalid
+
+The 35 remaining channels are all under 24 hours old, created by current PR burst. The workflow mints a channel per branch, so every push to a renamed/force-pushed branch consumes a new slot, outpacing the 7-day TTL decay. Default of 3 days is misleading — useful value today is 1.
+
+### Suggested Action
+1. When documenting cleanup commands, verify the actual deletion count with dry-run against current state before recommending.
+2. Address recurrence: reuse single channel per PR number (not per branch name) to prevent rebase/rename from consuming new slots.
+3. Consider shortening 7-day TTL and making preview deploy non-blocking so channel exhaustion cannot block merges.
+4. For immediate backlog, run `node scripts/cleanup-preview-channels.js --apply --max-age-days 1` and verify with dry run.
+5. Wire the script into `package.json` (#1268) but note the default of 3 days is misleading; update documentation accordingly.
+
+### Metadata
+- Source: user_feedback
+- Related Files: scripts/cleanup-preview-channels.js, .github/workflows/firebase-hosting-preview.yml, Issue #1269
+- Tags: firebase-hosting, preview-channels, quota, cleanup-script, documentation-accuracy
+- See Also: LRN-20260929-001
+- Pattern-Key: harden.verify_cleanup_dryrun_before_recommending
+- Recurrence-Count: 1
+- First-Seen: 2026-10-01
+- Last-Seen: 2026-10-01
+
+---
