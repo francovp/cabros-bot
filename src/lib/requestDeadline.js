@@ -68,13 +68,22 @@ function readPositiveInteger(name, fallback) {
 }
 
 function parseExemptPaths() {
-	const raw = process.env.REQUEST_DEADLINE_EXEMPT_PATHS;
-	if (!raw) return DEFAULT_EXEMPT_PATHS;
+	// Lower-cased so configured entries are matched by `normalizePath`, which
+	// lower-cases the request. Without this, `REQUEST_DEADLINE_EXEMPT_PATHS=
+	// /Internal/Ping` would never match `/Internal/Ping` (the request normalizes
+	// to `/internal/ping` but the set kept its original case), silently exempting
+	// nothing while an operator believed it worked.
+	const paths = new Set();
+	for (const path of DEFAULT_EXEMPT_PATHS) {
+		paths.add(path.toLowerCase());
+	}
 
-	const paths = new Set(DEFAULT_EXEMPT_PATHS);
+	const raw = process.env.REQUEST_DEADLINE_EXEMPT_PATHS;
+	if (!raw) return paths;
+
 	for (const part of String(raw).split(',')) {
 		const trimmed = part.trim();
-		if (trimmed) paths.add(trimmed.startsWith('/') ? trimmed : `/${trimmed}`);
+		if (trimmed) paths.add((trimmed.startsWith('/') ? trimmed : `/${trimmed}`).toLowerCase());
 	}
 	return paths;
 }

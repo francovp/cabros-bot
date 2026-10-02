@@ -18,6 +18,18 @@ const requestDeadline = require('./requestDeadline');
 
 const IPV4_PATTERN = /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/;
 
+// `/api/preferences/:channel/:chatId` carries a Telegram or WhatsApp chat
+// identifier — a personal destination, and the one parameterized route segment
+// that is not an opaque document or job id. The centralized logger does not
+// redact it, because the attribute is named `path` and ordinary numeric or
+// `@g.us` values do not match its secret patterns. Mask it so personally
+// identifying destinations never reach stdout or Sentry. The other `:id`
+// segments are UUIDs (alertId, jobId) or operator-chosen preset names, which
+// stay intact so a path remains searchable.
+const SENSITIVE_PATH_SEGMENTS = [
+	{ pattern: /(\/api\/preferences\/[^/]+\/)[^/]+(?=\/|$)/i, replacement: '$1:redacted' },
+];
+
 function normalizeRequestPath(rawPath) {
 	if (typeof rawPath !== 'string' || rawPath.length === 0) {
 		return '';
@@ -28,7 +40,13 @@ function normalizeRequestPath(rawPath) {
 	// case and case-sensitive, so lower-casing here would make `/api/alerts/:id`
 	// unsearchable — an operator could not match the logged path against the id
 	// they saw in a 404 body. Exemption matching lower-cases separately.
-	return pathOnly.replace(/\/+$/, '') || '/';
+	const withoutTrailingSlash = pathOnly.replace(/\/+$/, '') || '/';
+
+	let masked = withoutTrailingSlash;
+	for (const { pattern, replacement } of SENSITIVE_PATH_SEGMENTS) {
+		masked = masked.replace(pattern, replacement);
+	}
+	return masked;
 }
 
 /**
@@ -37,9 +55,23 @@ function normalizeRequestPath(rawPath) {
  * `requestDeadline.normalizePath`) or a probe could flood the logs by varying
  * one character per request.
  */
+/**
+ * `/docs` serves a Swagger UI page that then pulls `swagger-ui.css`,
+ * `swagger-ui-bundle.js`, `swagger-ui-standalone-preset.js`, and
+ * `swagger-initializer.js` from the same router. Exact set membership exempts
+ * none of those, so every documentation visit produced several low-signal
+ * records despite `/docs` being documented as a probe route. Treat these static
+ * asset roots as subtrees.
+ */
+const EXEMPT_SUBTREES = ['/docs'];
+
 function matchesExemptPath(path, exemptPaths) {
-	if (exemptPaths.has(path)) return true;
-	return exemptPaths.has(path.toLowerCase());
+	const lower = path.toLowerCase();
+	if (exemptPaths.has(lower)) return true;
+	for (const prefix of EXEMPT_SUBTREES) {
+		if (lower === prefix || lower.startsWith(`${prefix}/`)) return true;
+	}
+	return false;
 }
 
 /**

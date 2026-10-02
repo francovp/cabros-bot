@@ -335,6 +335,83 @@ describe('Request Logger Middleware', () => {
 		expect(parseLast(output.info).attributes.path).toBe('/api/alerts/aB3xK9mQ2pL7zR4tY8wC');
 	});
 
+	// `/docs` serves a Swagger UI page that then pulls several static assets from
+	// the same router. Exempting only `/docs` left every documentation visit
+	// producing multiple low-signal records.
+	it('stays silent for the whole /docs asset subtree', () => {
+		const middleware = createRequestLogger();
+		for (const url of [
+			'/docs',
+			'/docs/swagger-ui.css',
+			'/docs/swagger-ui-bundle.js',
+			'/docs/swagger-ui-standalone-preset.js',
+			'/docs/swagger-initializer.js',
+		]) {
+			const res = buildRes();
+			middleware(buildReq({ url }), res, jest.fn());
+			triggerFinish(res);
+		}
+		expect(output.info).not.toHaveBeenCalled();
+	});
+
+	// REQUEST_DEADLINE_EXEMPT_PATHS=/Internal/Ping never matched, because the
+	// request was lower-cased and the configured entry was not. Both middlewares
+	// would then disagree about what is exempt.
+	it('matches a configured exempt path regardless of the case it was declared in', () => {
+		const previous = process.env.REQUEST_DEADLINE_EXEMPT_PATHS;
+		process.env.REQUEST_DEADLINE_EXEMPT_PATHS = '/Internal/Ping';
+		try {
+			const deadline = require('../../src/lib/requestDeadline');
+			const configured = deadline.resolveExemptPaths();
+			// The deadline lower-cases the incoming request, so the set it tests
+			// membership against must be lower-cased too.
+			expect(configured.has('/internal/ping')).toBe(true);
+			expect(configured.has('/Internal/Ping')).toBe(false);
+
+			const middleware = createRequestLogger();
+			for (const url of ['/Internal/Ping', '/internal/ping']) {
+				const res = buildRes();
+				middleware(buildReq({ url }), res, jest.fn());
+				triggerFinish(res);
+			}
+			expect(output.info).not.toHaveBeenCalled();
+		} finally {
+			if (previous === undefined) delete process.env.REQUEST_DEADLINE_EXEMPT_PATHS;
+			else process.env.REQUEST_DEADLINE_EXEMPT_PATHS = previous;
+		}
+	});
+
+	// A Telegram or WhatsApp chat id is a personal destination and the only
+	// parameterized segment that is not an opaque document or job id.
+	it('redacts the chatId segment of preference routes', () => {
+		const middleware = createRequestLogger();
+		for (const url of [
+			'/api/preferences/telegram/123456789',
+			'/api/preferences/whatsapp/120363422033474991@g.us',
+		]) {
+			const res = buildRes();
+			middleware(buildReq({ url }), res, jest.fn());
+			triggerFinish(res);
+		}
+
+		for (const call of output.info.mock.calls) {
+			const entry = JSON.parse(call[0]);
+			expect(entry.attributes.path).not.toMatch(/123456789|120363422033474991/);
+		}
+		expect(parseLast(output.info).attributes.path).toBe('/api/preferences/whatsapp/:redacted');
+	});
+
+	// Masking must not make other routes unsearchable: alert ids are mixed-case
+	// Firestore document ids and job ids are UUIDs, both needed during triage.
+	it('keeps non-sensitive path parameters intact', () => {
+		const middleware = createRequestLogger();
+		const res = buildRes();
+		middleware(buildReq({ url: '/api/jobs/3f1c8e2a-0b1d-4a7e-9c11-abcdef012345' }), res, jest.fn());
+		triggerFinish(res);
+
+		expect(parseLast(output.info).attributes.path).toBe('/api/jobs/3f1c8e2a-0b1d-4a7e-9c11-abcdef012345');
+	});
+
 	// A response that never began must not report Node's default 200.
 	it('reports statusCode 0 when no response was ever sent', () => {
 		const middleware = createRequestLogger();
