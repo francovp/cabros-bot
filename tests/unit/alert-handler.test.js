@@ -675,6 +675,10 @@ describe('Alert Handler', () => {
 		expect(result.invalidation_level).toBe(88);
 		expect(result.target_level).toBe(124);
 		expect(result.risk_reward_ratio).toBe(3);
+		// The tag must describe the levels that were actually emitted, not the
+		// rejected heuristic MCP block.
+		expect(result.levelsSource).toBe('gemini-grounding');
+		expect(result).not.toHaveProperty('riskLevelsSource');
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
@@ -713,6 +717,7 @@ describe('Alert Handler', () => {
 		expect(result.invalidation_level).toBe(97.5);
 		expect(result.target_level).toBe(105);
 		expect(result.risk_reward_ratio).toBe(2);
+		expect(result.levelsSource).toBe('fallback-trade-plan');
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
