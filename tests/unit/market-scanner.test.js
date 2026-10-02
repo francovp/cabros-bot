@@ -84,6 +84,7 @@ describe('Market Scanner Handler', () => {
 
 		it('runs scans and formats report on success', async () => {
 			mockReq = {
+				headers: { 'x-request-id': 'scanner-request-id' },
 				body: {
 					exchange: 'BINANCE',
 					timeframe: '4h',
@@ -112,6 +113,7 @@ describe('Market Scanner Handler', () => {
 				expect.objectContaining({
 					success: true,
 					alertText: expect.stringContaining('GMTUSDT'),
+					requestId: 'scanner-request-id',
 				}),
 			);
 		});
@@ -137,7 +139,7 @@ describe('Market Scanner Handler', () => {
 			);
 		});
 
-		it('fails fast with skipped results when MCP is degraded', async () => {
+		it('fails fast with skipped results while the MCP circuit breaker is open', async () => {
 			mockReq = {
 				body: {
 					scans: ['top_gainers', 'top_losers'],
@@ -146,6 +148,7 @@ describe('Market Scanner Handler', () => {
 			tradingViewMcpService.getStatus.mockReturnValue({
 				status: 'degraded',
 				lastErrorCategory: 'http_5xx',
+				circuitBreaker: { state: 'open', cooldownMs: 600000 },
 			});
 
 			const handler = postMarketScannerAlert(null);
@@ -169,6 +172,83 @@ describe('Market Scanner Handler', () => {
 					},
 				],
 			}));
+		});
+
+		// Regression for the self-locking outage Codex raised on this PR: gating on the
+		// sticky `status: 'degraded'` runtime flag (which only a *successful* MCP call can
+		// clear) skips the very probe that would clear it, so a scanner-only process can
+		// never recover. Once the breaker cooldown expires it reports 'half-open', which
+		// must be allowed through as the recovery probe.
+		it('runs a recovery probe once the breaker cooldown expires (half-open) after a transient failure', async () => {
+			mockReq = { body: { scans: ['top_gainers'] } };
+
+			// Step 1: transient failure -> breaker open -> fail fast, no scan attempted.
+			tradingViewMcpService.getStatus.mockReturnValue({
+				status: 'degraded',
+				lastErrorCategory: 'request_failed',
+				circuitBreaker: { state: 'open', cooldownMs: 600000 },
+			});
+			mockRes.json.mockClear();
+			mockRes.status.mockClear();
+
+			await postMarketScannerAlert(null)(mockReq, mockRes);
+
+			expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+			expect(mockRes.status).toHaveBeenCalledWith(502);
+			expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({
+				code: 'TRADINGVIEW_MCP_UNAVAILABLE',
+			}));
+
+			// Step 2: cooldown expired -> 'half-open' -> the scanner must probe again.
+			tradingViewMcpService.getStatus.mockReturnValue({
+				status: 'degraded',
+				lastErrorCategory: 'request_failed',
+				circuitBreaker: { state: 'half-open', cooldownMs: 600000 },
+			});
+			tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+				{ symbol: 'BINANCE:BTCUSDT', changePercent: 1.5 },
+			]);
+			mockRes.json.mockClear();
+			mockRes.status.mockClear();
+
+			await postMarketScannerAlert(null)(mockReq, mockRes);
+
+			expect(tradingViewMcpService.callScanTool).toHaveBeenCalledTimes(1);
+			expect(mockRes.status).toHaveBeenCalledWith(200);
+			expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+		});
+
+		it('runs scans when degraded without a reported circuit-breaker state (unknown is probeable)', async () => {
+			mockReq = { body: { scans: ['top_gainers'] } };
+			tradingViewMcpService.getStatus.mockReturnValue({
+				status: 'degraded',
+				lastErrorCategory: 'http_5xx',
+			});
+			tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+				{ symbol: 'BINANCE:BTCUSDT', changePercent: 1.5 },
+			]);
+
+			await postMarketScannerAlert(null)(mockReq, mockRes);
+
+			expect(tradingViewMcpService.callScanTool).toHaveBeenCalledTimes(1);
+			expect(mockRes.status).toHaveBeenCalledWith(200);
+		});
+
+		it('does not fail fast for degraded states outside the provider-outage categories', async () => {
+			mockReq = { body: { scans: ['top_gainers'] } };
+			tradingViewMcpService.getStatus.mockReturnValue({
+				status: 'degraded',
+				lastErrorCategory: 'http_4xx',
+				circuitBreaker: { state: 'open', cooldownMs: 600000 },
+			});
+			tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+				{ symbol: 'BINANCE:BTCUSDT', changePercent: 1.5 },
+			]);
+
+			await postMarketScannerAlert(null)(mockReq, mockRes);
+
+			expect(tradingViewMcpService.callScanTool).toHaveBeenCalledTimes(1);
+			expect(mockRes.status).toHaveBeenCalledWith(200);
 		});
 
 		it('continues scanning when MCP readiness lookup fails', async () => {
@@ -286,6 +366,7 @@ describe('Market Scanner Handler', () => {
 				status: 'error',
 				items: [],
 				error: 'First scan failed',
+				errorCategory: 'unknown',
 			});
 			expect(results[1]).toEqual({
 				scan: 'top_losers',

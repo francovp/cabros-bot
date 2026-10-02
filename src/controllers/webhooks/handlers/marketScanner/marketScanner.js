@@ -1,7 +1,7 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	MarketScannerRequestError,
 	parseMarketScannerRequest,
@@ -26,6 +26,11 @@ const {
 const { enrichScannerItemsWithTrendConfluence } = require('../../../../services/tradingview/marketScannerConfluence');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const {
+	classifyScannerError,
+	emptyScannerErrorCategoryCounts,
+	incrementScannerErrorCategoryCount,
+} = require('../../../../services/tradingview/marketScannerErrorCategories');
 
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
@@ -45,7 +50,7 @@ function resolveDryRun(req) {
 
 function postMarketScannerAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 
 		try {
@@ -60,33 +65,25 @@ function postMarketScannerAlert(botOrGetter) {
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseMarketScannerRequest(req);
 			const timeoutMs = getMarketScannerTimeoutMs();
-			let mcpStatus = null;
-			try {
-				mcpStatus = typeof tradingViewMcpService?.getStatus === 'function'
-					? tradingViewMcpService.getStatus({ enabled: true })
-					: null;
-			} catch (error) {
-				console.debug('[MarketScanner] MCP readiness lookup failed; continuing scan:', error.message);
-			}
-			if (mcpStatus?.status === 'degraded' && ['http_5xx', 'request_failed'].includes(mcpStatus.lastErrorCategory)) {
-				const reason = `TradingView MCP is currently unavailable (status: ${mcpStatus.status}, lastError: ${mcpStatus.lastErrorCategory}). Scans skipped.`;
-				const scanResults = buildSkippedScanResults(parsed.scans, reason);
-				console.debug(`[MarketScanner] ${reason}`);
+			const mcpUnavailable = getMcpUnavailableReason();
+			if (mcpUnavailable) {
+				const scanResults = buildSkippedScanResults(parsed.scans, mcpUnavailable);
+				console.debug(`[MarketScanner] ${mcpUnavailable}`);
 				return res.status(502).json({
 					success: false,
 					ranked: parsed.ranked === true,
 					includeMultiTimeframe: parsed.includeMultiTimeframe === true,
 					code: 'TRADINGVIEW_MCP_UNAVAILABLE',
-					error: reason,
+					error: mcpUnavailable,
 					scanResults: compactScanResults(scanResults),
 					summary: buildSummary(scanResults, []),
 					timedOut: false,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
-			const deadline = createScannerDeadline(timeoutMs);
+			const deadline = createScannerDeadline(timeoutMs, req.requestDeadlineSignal);
 			let scanResults;
 
 			try {
@@ -113,7 +110,7 @@ function postMarketScannerAlert(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -138,7 +135,7 @@ function postMarketScannerAlert(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -168,6 +165,9 @@ function postMarketScannerAlert(botOrGetter) {
 							.filter(Boolean),
 					))
 					: [];
+				const scannerErrorCategories = scanResults
+					.filter((r) => r.status === 'error' && r.errorCategory)
+					.map((r) => r.errorCategory);
 				alertStorageService.saveAlert({
 					requestId,
 					text: alertText,
@@ -184,6 +184,7 @@ function postMarketScannerAlert(botOrGetter) {
 					whatsappChatId: routing.whatsappChatId,
 					discordWebhookUrl: routing.discordWebhookUrl,
 					processingTimeMs: Date.now() - startTime,
+					scannerErrorCategories,
 				}).catch(() => {});
 			}
 
@@ -243,8 +244,10 @@ function postMarketScannerAlert(botOrGetter) {
 								timeframe: parsed.timeframe,
 								setupType: scanResult.scan,
 								score: itemScore,
+								confidenceScore: typeof item.confidence === 'number' && Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1 ? item.confidence : null,
 								side: itemSide,
 								price: validPrice,
+								priceSource: validPrice !== null ? 'tradingview-mcp' : null,
 								stop: stopLoss,
 								target: takeProfit,
 								sources: [],
@@ -269,7 +272,7 @@ function postMarketScannerAlert(botOrGetter) {
 				timedOut,
 				timeoutMs,
 				requestId,
-				totalDurationMs: Date.now() - startTime,
+				processingTimeMs: Math.max(0, Date.now() - startTime),
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
@@ -365,11 +368,23 @@ async function runScans(parsed, options = {}) {
 			}
 
 			console.warn('[MarketScanner] Scan failed:', scanType, error.message);
+			const errorCategory = classifyScannerError(error);
+			sentryService.captureRuntimeError({
+				channel: 'market-scanner',
+				feature: 'market-scanner',
+				error,
+				extra: {
+					mcp_error_category: errorCategory,
+					scan_type: scanType,
+					source: 'market-scanner',
+				},
+			});
 			results.push({
 				scan: scanType,
 				status: 'error',
 				items: [],
 				error: error.message,
+				errorCategory,
 			});
 		}
 	}
@@ -385,6 +400,14 @@ function buildScanArgs(parsed, scanType) {
 	};
 	if (scanType === 'bollinger_scan') {
 		args.bbw_threshold = parsed.bbwThreshold;
+	} else if (scanType === 'rating_filter') {
+		args.rating = parsed.rating;
+	} else if (scanType === 'consecutive_candles_scan') {
+		args.pattern_type = parsed.consecutiveCandlesPatternType;
+		args.candle_count = parsed.candleCount;
+		if (parsed.minGrowth !== undefined) {
+			args.min_growth = parsed.minGrowth;
+		}
 	}
 	return args;
 }
@@ -396,6 +419,7 @@ function compactScanResults(results, includeScores = false) {
 				scan: result.scan,
 				status: result.status,
 				error: result.error,
+				errorCategory: result.errorCategory || null,
 			};
 		}
 		if (result.status === 'skipped') {
@@ -426,6 +450,12 @@ function compactScanResults(results, includeScores = false) {
 }
 
 function buildSummary(scanResults, deliveryResults) {
+	const errorCategories = emptyScannerErrorCategoryCounts();
+	for (const result of scanResults) {
+		if (result.status === 'error' && result.errorCategory) {
+			incrementScannerErrorCategoryCount(errorCategories, result.errorCategory);
+		}
+	}
 	return {
 		totalScans: scanResults.length,
 		success: scanResults.filter((r) => r.status === 'success').length,
@@ -433,6 +463,7 @@ function buildSummary(scanResults, deliveryResults) {
 		timeout: scanResults.filter((r) => r.status === 'timeout').length,
 		totalItems: scanResults.reduce((sum, r) => sum + r.items.length, 0),
 		delivered: deliveryResults.filter((r) => r.success).length,
+		errorCategoryCounts: errorCategories,
 	};
 }
 
@@ -446,14 +477,14 @@ function getMarketScannerTimeoutMs() {
 	return Math.min(parsedTimeout, MAX_SCANNER_TIMEOUT_MS);
 }
 
-function createScannerDeadline(timeoutMs) {
+function createScannerDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => {
 		controller.abort(new Error(`Market scanner timeout after ${timeoutMs}ms`));
 	}, timeoutMs);
 
 	return {
-		signal: controller.signal,
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
 		clear: () => clearTimeout(timeoutId),
 	};
 }
@@ -467,6 +498,48 @@ function appendTimeoutResults(results, scans, error) {
 			error,
 		});
 	});
+}
+
+// Fast-fail gate for a provider that is known-down, gated on the circuit breaker's
+// *recoverable* state rather than the sticky runtime status.
+//
+// `runtimeStatus.status === 'degraded'` alone is NOT a valid gate: it is only cleared
+// by a later *successful* MCP call, so gating on it skips the very calls that could
+// clear it -- a self-locking outage that never self-heals in a scanner-only process.
+// `getCircuitBreakerStatus()` is time-based: `getBreakerState()` moves open -> half-open
+// once the cooldown expires, which is exactly the "is a bounded probe allowed right now?"
+// signal we need. So fail fast only while the breaker is *still* open, and let the first
+// request after the cooldown act as the recovery probe.
+const FAIL_FAST_ERROR_CATEGORIES = ['http_5xx', 'request_failed', 'circuit_breaker_open'];
+
+function getMcpUnavailableReason() {
+	let mcpStatus = null;
+	try {
+		mcpStatus = typeof tradingViewMcpService?.getStatus === 'function'
+			? tradingViewMcpService.getStatus({ enabled: true })
+			: null;
+	} catch (error) {
+		// Fail open: an unavailable readiness lookup must not block the scanner.
+		console.debug('[MarketScanner] MCP readiness lookup failed; continuing scan:', error.message);
+		return null;
+	}
+
+	if (!mcpStatus || mcpStatus.status !== 'degraded') {
+		return null;
+	}
+	if (!FAIL_FAST_ERROR_CATEGORIES.includes(mcpStatus.lastErrorCategory)) {
+		return null;
+	}
+
+	const breakerState = mcpStatus.circuitBreaker && mcpStatus.circuitBreaker.state;
+	// No reported breaker state (e.g. a degraded status from an older/alternate
+	// implementation) means "unknown", and unknown is treated as probeable so the gate
+	// can never permanently lock the scanner out.
+	if (breakerState !== 'open') {
+		return null;
+	}
+
+	return `TradingView MCP is currently unavailable (circuit breaker: open, lastError: ${mcpStatus.lastErrorCategory}). Scans skipped.`;
 }
 
 function buildSkippedScanResults(scans, reason) {
