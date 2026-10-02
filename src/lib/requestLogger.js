@@ -109,7 +109,9 @@ function sanitizeClientIp(ip) {
 	if (match) {
 		return `${match[1]}.x`;
 	}
-	if (stripped === '::1' || stripped === '127.0.0.1') {
+	// Only reachable for IPv6: the IPv4 pattern above already consumed
+	// `127.0.0.1` (as `127.0.0.x`), so naming it here would be dead code.
+	if (stripped === '::1') {
 		return 'loopback';
 	}
 	if (stripped.includes(':')) {

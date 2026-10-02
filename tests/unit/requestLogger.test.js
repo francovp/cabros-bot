@@ -209,6 +209,27 @@ describe('Request Logger Middleware', () => {
 		expect(log.attributes.clientIp).not.toContain('203.0.113.7');
 	});
 
+	it('never emits a usable client address for any address family', () => {
+		const cases = [
+			['203.0.113.7', '203.0.113.x'],
+			['127.0.0.1', '127.0.0.x'],
+			['::ffff:203.0.113.9', '203.0.113.x'],
+			['::1', 'loopback'],
+			['2001:db8::1', 'ipv6-redacted'],
+		];
+
+		for (const [input, expected] of cases) {
+			const middleware = createRequestLogger();
+			const res = buildRes();
+			middleware(buildReq({ ip: input }), res, jest.fn());
+			res.statusCode = 200;
+			res.end();
+			triggerFinish(res);
+
+			expect(parseLast(output.info).attributes.clientIp).toBe(expected);
+		}
+	});
+
 	it('records duration in milliseconds within the request span', () => {
 		const middleware = createRequestLogger();
 		const req = buildReq();
