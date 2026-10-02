@@ -28,6 +28,10 @@ Where:
 
 Only alerts meeting `NEWS_ALERT_THRESHOLD` (default: 0.7) are sent to channels.
 
+### Optional classifier.dev fallback
+
+Set `ENABLE_NEWS_MONITOR_CLASSIFIER=true` to send Gemini `none` headlines through classifier.dev for a second-pass classification. Only recognized event categories meeting `NEWS_ALERT_THRESHOLD` are promoted; provider failures or unsupported labels leave the original `none` result unchanged. This is disabled by default and sends the symbol and generated headline to an external provider, so treat it as an environment-only privacy setting. The effective flag is exposed as `featureFlags.newsMonitorClassifier` in `/api/status`.
+
 ### Deduplication Strategy
 
 The system prevents alert fatigue using an intelligent cache:

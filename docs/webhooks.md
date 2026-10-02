@@ -233,3 +233,35 @@ BTC price is at $45,000 - breakout detected!
   "enriched": false
 }
 ```
+
+#### Per-symbol channel routing (`symbolRoutes`)
+
+`POST /api/webhook/alert` accepts an optional `symbolRoutes` object to send different
+symbols to different channels:
+
+```json
+{
+  "text": "BINANCE:BTCUSDT breakout confirmed",
+  "symbolRoutes": {
+    "BTCUSDT": { "channels": ["telegram"] },
+    "NASDAQ:NVDA": { "channels": ["discord"] }
+  }
+}
+```
+
+Keys are bare symbols (`BTCUSDT`) or exchange-qualified (`NASDAQ:NVDA`), matched
+case-insensitively against the alert text. Digit-initial symbols are supported
+(e.g. `1INCHUSDT`).
+
+A dispatch is produced **only** for a symbol that matches one of the configured keys.
+Text containing no configured route key is delivered normally through the request-level
+`channels` or the enabled-channel broadcast — indicator words and other uppercase
+tokens are not treated as symbols. Each delivery result includes the matched `symbol`
+(bare form, so a `NASDAQ:NVDA` route reports `NVDA`).
+
+When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` is enabled and it narrows the
+request-level channel set, every `symbolRoutes` entry is intersected with the same set,
+so a route cannot resurrect a channel that is still in its repeat-suppression cooldown.
+
+Omitting `symbolRoutes` preserves the existing broadcast and request-level routing
+behavior exactly.

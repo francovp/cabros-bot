@@ -289,7 +289,7 @@ function postAlert(botOrGetter) {
 						requestId,
 					});
 				}
-		}
+			}
 
 			// Fail-fast channel availability check (GH-854): when the caller
 			// explicitly requests channels, validate they are enabled and
@@ -333,7 +333,7 @@ function postAlert(botOrGetter) {
 				await initializeNotificationServices(bot);
 			}
 			validateNotificationRouting(notificationManager, routing);
-			const requestedChannels = getRequestedChannels(notificationManager, routing);
+			const requestedChannels = getRequestedChannels(notificationManager, routing, alert.text);
 
 			// Opt-in repeat suppression: same (exchange, symbol, timeframe, side)
 			// inside its cooldown window skips channel delivery but is still
@@ -389,7 +389,28 @@ function postAlert(botOrGetter) {
 							})),
 						};
 						if (verdict.channels.length < requestedChannels.length) {
-							deliveryRouting = { ...routing, channels: verdict.channels.map(getChannelName) };
+							const narrowedChannelNames = verdict.channels.map(getChannelName);
+							deliveryRouting = {
+								...routing,
+								channels: narrowedChannelNames,
+								// Repeat suppression is per (channel, destination). When it narrows
+								// the request-level channels, every symbol route must be narrowed to the
+								// same subset; otherwise a route's own channel list resurrects a channel
+								// that is still cooling down and defeats the channel-specific guarantee.
+								symbolRoutes: routing.symbolRoutes
+									? Object.fromEntries(
+										Object.entries(routing.symbolRoutes).map(([symbol, route]) => [
+											symbol,
+											{
+												...route,
+												channels: (route.channels || []).filter((channel) =>
+													narrowedChannelNames.includes(channel),
+												),
+											},
+										]),
+									)
+									: undefined,
+							};
 						}
 					}
 				}

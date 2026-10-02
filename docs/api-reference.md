@@ -75,6 +75,64 @@ The protected `/api/status` response includes the same non-sensitive state under
 
 Pending and failed bootstrap states use the same body shape with HTTP `503`; failed responses include a sanitized `error` message.
 
+### Dependency readiness probes (`?depth=readiness` / `?depth=dependencies`)
+
+Bootstrap completion only proves the process started. It says nothing about whether Firestore, Gemini, TradingView MCP, Binance, and the Telegram bot are reachable right now — so a running process with a dead Firestore connection or an expired Gemini key still passes both `/healthcheck` and `/ready` and keeps receiving traffic it cannot serve.
+
+Two opt-in `depth` values add bounded external dependency probes:
+
+| Surface | Question | Degraded result |
+| :--- | :--- | :--- |
+| `GET /healthcheck` | Is the process alive? | never |
+| `GET /healthcheck?deep=true` | Are the enabled **notification channels** ready? | `503` |
+| `GET /ready` | Did **startup bootstrap** complete? | `503` |
+| `GET /healthcheck?depth=readiness` | Are external **dependencies** healthy (advisory)? | `200` with `ready: false` |
+| `GET /ready?depth=dependencies` | Bootstrap **and** dependencies, traffic-gating? | `503` |
+
+Both probes run the same five checks **in parallel**, each with a bounded 1–5 second timeout (default 3s, clamped). Disabled features are reported as `skipped: true` and excluded from the verdict, so the payload works unchanged in preview, development, and production. No new environment variable is required. A probe is only scheduled when its feature flag is enabled, so a deployment that does not use Gemini never pays for a Gemini probe and never fails one.
+
+`/ready?depth=dependencies` **layers** on the bootstrap gate rather than replacing it: the verdict is `bootstrap.ready AND dependencies.ready`, and the response echoes `status`, `components`, and `bootstrapReady`. A replica that has not finished bootstrapping therefore never reports 200 to a load balancer, no matter how healthy its providers are.
+
+Results are memoized for 5 seconds and concurrent requests are single-flighted, so a load balancer polling every few seconds cannot fan out to Gemini, Binance, and TradingView on every hit from every replica. A degraded dependency that is switched on but not configured (`firestore_not_configured`, an expired service account) counts as a failure rather than a skip, because the feature is supposed to be working.
+
+All surfaced `error` strings pass through the shared log redaction layer, and the Gemini key is sent in the `x-goog-api-key` header rather than the query string, so a provider error can never disclose a credential on this unauthenticated surface.
+
+**Why the advisory surface never returns 503.** A readiness probe wired into a load balancer restarts or evicts replicas that fail it. If a transient Gemini timeout or a Binance `451` flipped the HTTP status, one flaky third party would pull every healthy replica out of rotation and turn a partial degradation into a full outage — precisely the failure mode the probe exists to detect. The default surface is therefore **observability only**: it always returns `200` and reports degradation in the body's `ready` field, for alerting and dashboards. Operators who *want* dependency health to gate traffic opt into `/ready?depth=dependencies`, which fails closed. Default to alerting on `ready: false`; reserve the 503 variant for deployments that can tolerate losing all capacity when a provider is down.
+
+**Advisory response (`?depth=readiness`, always HTTP 200):**
+```json
+{
+  "ready": true,
+  "failClosed": false,
+  "checkedAt": "2026-08-31T02:30:00.000Z",
+  "latencyMs": 412,
+  "dependencies": {
+    "firestore": { "ready": true, "backend": "firestore", "latencyMs": 53 },
+    "gemini": { "ready": true, "backend": "gemini", "latencyMs": 124 },
+    "tradingViewMcp": { "ready": true, "backend": "tradingview_mcp", "latencyMs": 18 },
+    "binance": { "ready": true, "backend": "binance", "latencyMs": 36 },
+    "telegram": { "ready": true, "backend": "telegram", "latencyMs": 22 }
+  }
+}
+```
+
+A degraded dependency reported alongside a disabled feature — still HTTP `200`:
+```json
+{
+  "ready": false,
+  "failClosed": false,
+  "latencyMs": 3011,
+  "dependencies": {
+    "gemini": { "ready": false, "latencyMs": 3001, "error": "timeout_after_3000ms" },
+    "telegram": { "ready": false, "enabled": false, "skipped": true, "reason": "telegram_disabled" }
+  }
+}
+```
+
+The fail-closed variant (`/ready?depth=dependencies`) returns the same body with `failClosed: true` and HTTP `503` when any considered dependency is unhealthy.
+
+Probes never throw and never block: a transient provider failure surfaces a per-dependency `error` string and a `ready: false` verdict without affecting webhook ingest, notification dispatch, or any other production path. Bare `/healthcheck` and bare `/ready` keep their existing contracts and never run provider probes.
+
 ### GET /api/status
 
 Machine-readable runtime status for operational tooling. This endpoint uses the same `WEBHOOK_API_KEY` protection as other `/api` endpoints when that environment variable is configured. Send the key with the `x-api-key` header.
@@ -154,7 +212,7 @@ The console uses self-hosted Vue 3 components for contract-driven forms and read
 The `/admin` console is deployed as a static site on Firebase Hosting for the `cabros-bot` project (`https://cabros-bot.web.app/admin`):
 
 - **Build & Artifacts**: `pnpm run build:hosting` synchronizes static console assets from `src/admin/` to `public/admin/` and generates the root redirect `public/index.html`. `firebase.json` defines the hosting root (`public`), ignore patterns, rewrite rules (`/admin/**` -> `/admin/index.html`), and `no-cache` cache-control headers.
-- **Backend API Connectivity**: When hosted on Firebase Hosting (`*.web.app` / `*.firebaseapp.com`), the admin console resolves `https://cabros-bot-production.up.railway.app` by default. `?backend=` and `cabros_backend_origin` overrides are accepted only when their exact origin is the explicit HTTPS allowlist entry `https://cabros-bot-production.up.railway.app`; arbitrary origins, wildcards, HTTP URLs, and malformed values are ignored before any credential-bearing request.
+- **Backend API Connectivity**: When hosted on Firebase Hosting (`*.web.app` / `*.firebaseapp.com`), the admin console resolves `https://openclaw.tail5e4271.ts.net` by default. The `cabros_backend_origin` localStorage override takes precedence over `?backend=`; both accept only the exact HTTPS origins `https://openclaw.tail5e4271.ts.net` and `https://cabros-bot-production.up.railway.app`; arbitrary origins, wildcards, HTTP URLs, and malformed values are ignored before any credential-bearing request.
 - **CORS & CSP Policy**: Backend CORS permits requests from the explicit allowlist (`https://cabros-bot.web.app`, `https://cabros-bot.firebaseapp.com`, `https://cabros-bot-production.up.railway.app`, `http://localhost:*`, and optional `CORS_ALLOWED_ORIGINS`), and Helmet CSP allows `connect-src` to Google Auth, Firebase Hosting origins, and the backend origin.
 - **CI/CD Deployment**: `.github/workflows/firebase-hosting.yml` automatically deploys pull requests to ephemeral Firebase preview channels and deploys the `live` channel on releases merged to `master`.
 - **Browser verification**: With the local console open in Playwright CLI, run `playwright-cli run-code --filename=scripts/check-admin-browser.js`. The check visits contract operations, edits and restores fields, submits to intercepted API responses, and checks mobile overflow. Screenshots are saved under `output/playwright/`.

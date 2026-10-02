@@ -27,6 +27,7 @@ const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsApp
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
 const { alertModeration } = require('../services/alerts/alertModeration');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
 const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStorageService');
@@ -264,6 +265,15 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		modelProvider,
 	});
 	const geminiQuota = getGeminiQuotaDependency({ gemini });
+	const grounding = geminiGroundingEnabled
+		? {
+			enabled: true,
+			configured: gemini.configured,
+			ready: gemini.ready,
+			status: gemini.status,
+			metrics: groundingMetrics.getMetrics(),
+		}
+		: null;
 	const tradingViewRuntimeStatus = tradingViewMcpService.getStatus({ enabled: tradingViewMcpEnabled });
 	const tradingViewMcp = {
 		...tradingViewRuntimeStatus,
@@ -378,6 +388,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			newsMonitor: newsMonitorEnabled,
 			newsMonitorPaused: isNewsMonitorPaused(),
 			newsMonitorTestMode: newsMonitorTestModeEnabled,
+			newsMonitorClassifier: isEnabled(process.env.ENABLE_NEWS_MONITOR_CLASSIFIER),
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
 			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationFlagEnabled,
 			tradingViewConfluenceEnrichment: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT),
@@ -409,6 +420,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			userPriceAlerts: userPriceAlertService.isEnabled(),
 			alertFeedback: alertFeedbackStorageService.isEnabled(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.isEnabled(),
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
@@ -465,6 +477,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			gemini,
 			geminiQuota,
 			groundingCoalescing: getCoalescingStatus(),
+			...(grounding ? { grounding } : {}),
 			tradingViewMcp,
 			tradingViewVolumeConfirmation,
 			firestore,
@@ -495,6 +508,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			chatPreferences: chatPreferenceService.getStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
+			userPriceAlertWorker: userPriceAlertService.getStatus(),
 			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
 			alertScheduler: alertSchedulerService.getStatus(),
 			equityMarketData: equityMarketDataStatus,
