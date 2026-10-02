@@ -1954,7 +1954,10 @@ class NewsAnalyzer {
 		}
 
 		// Issue #1230: make the source-quality tier auditable in the delivered
-		// message, not just in logs.
+		// message, not just in logs. Read from `calibration` rather than
+		// `sourceQualityTier`: this formatter is also called with analysis objects
+		// that were not produced by `buildAlert` (see tests/unit/news-alert-formatting.test.js),
+		// where the shorthand is absent but the calibration block is present.
 		const qualityTier = (analysis.calibration
 			&& typeof analysis.calibration.qualityTier === 'string'
 			&& analysis.calibration.qualityTier.trim())

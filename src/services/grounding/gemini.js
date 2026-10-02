@@ -594,9 +594,10 @@ const QUALITY_TIER_PENALTIES = Object.freeze({
  * was skipped entirely, and missing from the table it produced an `undefined`
  * multiplier that quietly applied no penalty while still reporting the tier.
  *
- * Tiers whose multiplier is 1 are skipped when they are the only match: an
- * unclassified `unknown` alongside a `low` blog must still resolve to `low`,
- * otherwise the no-op tier would mask the real finding.
+ * A tier whose multiplier is 1 is still returned as the reported tier (it remains
+ * useful for auditing), it simply carries no penalty. Because the minimum is taken
+ * across present tiers, an unclassified `unknown` never masks a genuinely `low`
+ * source sitting in the same set.
  *
  * Fails open: any malformed input yields `null`, which callers treat as
  * "no tier resolved" and therefore apply no penalty.
@@ -609,24 +610,16 @@ function resolveWeakestQualityTier(tierCounts) {
 		return null;
 	}
 	let weakest = null;
-	let sawPenalisedTier = false;
 	for (const [tier, penalty] of Object.entries(QUALITY_TIER_PENALTIES)) {
 		const count = tierCounts[tier];
 		if (!Number.isFinite(count) || count <= 0) {
 			continue;
 		}
-		if (penalty < 1) {
-			sawPenalisedTier = true;
-		}
 		if (weakest === null || penalty < weakest.penalty) {
 			weakest = { tier, penalty };
 		}
 	}
-	// Only an unpenalised tier was present -> no penalty is warranted.
-	if (weakest !== null && !sawPenalisedTier && weakest.penalty >= 1) {
-		return { ...weakest, appliesPenalty: false };
-	}
-	return weakest === null ? null : { ...weakest, appliesPenalty: true };
+	return weakest;
 }
 
 function calibrateNewsConfidence(analysisResult, groundingSources = null, options = {}) {
@@ -681,19 +674,13 @@ function calibrateNewsConfidence(analysisResult, groundingSources = null, option
 	let qualityTier = null;
 	let qualityPenalty = 1;
 	if (actualCalibration && actualCalibration.actual_source_count > 0) {
-		try {
-			const resolved = resolveWeakestQualityTier(actualCalibration.actual_quality_tiers);
-			if (resolved) {
-				// The tier is always reported for auditability; the multiplier is only
-				// applied when it actually penalizes.
-				qualityTier = resolved.tier;
-				qualityPenalty = resolved.appliesPenalty ? resolved.penalty : 1;
-			}
-		} catch (error) {
-			// Fail open: an unresolvable tier is a no-op, never a crash.
-			console.warn('[Gemini] domain quality tier resolution failed, applying no quality penalty:', error.message);
-			qualityTier = null;
-			qualityPenalty = 1;
+		// `resolveWeakestQualityTier` is a pure function over a plain object, so it
+		// cannot throw; the only real failure source (`domainQuality.scoreQuality`)
+		// is already handled by the enclosing derivation try/catch.
+		const resolved = resolveWeakestQualityTier(actualCalibration.actual_quality_tiers);
+		if (resolved) {
+			qualityTier = resolved.tier;
+			qualityPenalty = resolved.penalty;
 		}
 	}
 
@@ -763,10 +750,13 @@ function calibrateNewsConfidence(analysisResult, groundingSources = null, option
 	// this step is monotonically non-increasing.
 	const finalConfidence = Math.max(
 		0,
-		Math.min(1, qualityPenalty < 1 ? penaltyAdjustedConfidence * qualityPenalty : penaltyAdjustedConfidence),
+		Math.min(1, penaltyAdjustedConfidence * qualityPenalty),
 	);
 
-	if (qualityPenalty < 1) {
+	// Every multiplier is <= 1, so this is reached only when a penalised tier was
+	// actually resolved. Guarding on the tier keeps the reason self-consistent with
+	// the reported `qualityTier` instead of the numeric multiplier.
+	if (qualityTier && qualityPenalty < 1) {
 		reasons.push(`low source quality tier (${qualityTier}, x${qualityPenalty})`);
 	}
 
