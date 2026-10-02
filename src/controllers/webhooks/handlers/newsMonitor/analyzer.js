@@ -21,6 +21,7 @@ const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../.
 const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
 const geminiPriceService = require('../../../../services/grounding/geminiPriceService');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
+const { smartEscapeMarkdownV2 } = require('../../../../services/notification/formatters/MarkdownV2Formatter');
 const { MainClient } = require('binance');
 const { createHash } = require('node:crypto');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
@@ -1875,10 +1876,13 @@ class NewsAnalyzer {
 		// Issue #1230: the tier is appended to `extraText` because that is what
 		// `formatEnriched()` actually renders to the trader. `formatAlertMessage()`
 		// has no production call site, so a line added only there would never be seen.
+		// `extraText` is emitted verbatim by MarkdownV2Formatter, so the penalty value
+		// must be escaped — `(` `)` and `.` are MarkdownV2-reserved and would make
+		// Telegram reject the entire message.
 		const qualityAuditLine = sourceQualityTier
 			? (typeof geminiAnalysis.calibration?.qualityPenalty === 'number'
-				? `_Source Quality: ${sourceQualityTier} (x${geminiAnalysis.calibration.qualityPenalty})_`
-				: `_Source Quality: ${sourceQualityTier}_`)
+				? `_Source Quality: ${smartEscapeMarkdownV2(sourceQualityTier)} (x${smartEscapeMarkdownV2(String(geminiAnalysis.calibration.qualityPenalty))})_`
+				: `_Source Quality: ${smartEscapeMarkdownV2(sourceQualityTier)}_`)
 			: '';
 		const enrichedExtraText = [
 			confidenceReason

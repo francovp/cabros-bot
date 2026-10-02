@@ -628,7 +628,28 @@ describe('Analyzer - Grounding Calibration Surface', () => {
 		});
 		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
 
-		expect(alert.enriched.extraText).toMatch(/Source Quality: low \(x0\.85\)/);
+		expect(alert.enriched.extraText).toMatch(/Source Quality: low \(x0\\\.85\)/);
+	});
+
+	it('escapes the source quality audit line for MarkdownV2 delivery', () => {
+		// extraText is emitted verbatim by MarkdownV2Formatter, so `(` `)` and `.`
+		// are reserved characters — unescaped they make Telegram reject the whole
+		// message, not just the appended line.
+		const analysis = baseAnalysis({
+			calibration: {
+				grounding_used: true,
+				actual_source_count: 3,
+				actual_quality_tiers: { high: 0, medium: 0, low: 3, unknown: 0 },
+				qualityTier: 'low',
+				qualityPenalty: 0.85,
+			},
+		});
+		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
+		const line = alert.enriched.extraText.split('\n').find(l => l.includes('Source Quality'));
+
+		// The interpolated VALUE is escaped (`0.85` -> `0\.85`); the surrounding
+		// `_italic_` and `(x…)` parentheses are authored markup, not data.
+		expect(line).toBe('_Source Quality: low (x0\\.85)_');
 	});
 
 	it('should omit the quality tier line when no tier was resolved', () => {
