@@ -412,6 +412,25 @@ describe('Request Logger Middleware', () => {
 		expect(parseLast(output.info).attributes.path).toBe('/api/jobs/3f1c8e2a-0b1d-4a7e-9c11-abcdef012345');
 	});
 
+	// Masking must not run before exemption matching, or an operator who
+	// configured a concrete preference path would still see it logged: the
+	// masked form `:redacted` cannot match the configured entry `/123`.
+	it('matches a configured exempt path that contains a masked segment', () => {
+		const previous = process.env.REQUEST_DEADLINE_EXEMPT_PATHS;
+		process.env.REQUEST_DEADLINE_EXEMPT_PATHS = '/api/preferences/telegram/123';
+		try {
+			const middleware = createRequestLogger();
+			const res = buildRes();
+			middleware(buildReq({ url: '/api/preferences/telegram/123' }), res, jest.fn());
+			triggerFinish(res);
+
+			expect(output.info).not.toHaveBeenCalled();
+		} finally {
+			if (previous === undefined) delete process.env.REQUEST_DEADLINE_EXEMPT_PATHS;
+			else process.env.REQUEST_DEADLINE_EXEMPT_PATHS = previous;
+		}
+	});
+
 	// A response that never began must not report Node's default 200.
 	it('reports statusCode 0 when no response was ever sent', () => {
 		const middleware = createRequestLogger();

@@ -40,9 +40,15 @@ function normalizeRequestPath(rawPath) {
 	// case and case-sensitive, so lower-casing here would make `/api/alerts/:id`
 	// unsearchable — an operator could not match the logged path against the id
 	// they saw in a 404 body. Exemption matching lower-cases separately.
-	const withoutTrailingSlash = pathOnly.replace(/\/+$/, '') || '/';
+	return pathOnly.replace(/\/+$/, '') || '/';
+}
 
-	let masked = withoutTrailingSlash;
+/**
+ * Applied only to the value that reaches the log, never before exemption
+ * matching, so a configured exempt path is still recognizable as exempt.
+ */
+function maskSensitivePathSegments(path) {
+	let masked = path;
 	for (const { pattern, replacement } of SENSITIVE_PATH_SEGMENTS) {
 		masked = masked.replace(pattern, replacement);
 	}
@@ -139,10 +145,14 @@ function emit(level, attributes) {
 function createRequestLogger() {
 	return function requestLogger(req, res, next) {
 		const startTime = Date.now();
-		const path = normalizeRequestPath(req.originalUrl || req.url || req.path || '');
-		if (isExemptPath(path)) {
+		const rawPath = normalizeRequestPath(req.originalUrl || req.url || req.path || '');
+		// Exemption is decided on the unmasked path. Masking first would rewrite
+		// `/api/preferences/telegram/123` to `:redacted` and an operator who
+		// configured that exact path as exempt would still see it logged.
+		if (isExemptPath(rawPath)) {
 			return next();
 		}
+		const path = maskSensitivePathSegments(rawPath);
 
 		const requestId = resolveRequestId(req);
 		req.requestId = requestId;
