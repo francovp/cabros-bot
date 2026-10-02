@@ -267,7 +267,7 @@ describe('TradingViewMcpService', () => {
 		}));
 	});
 
-	it('omits risk metadata when ATR-derived levels are invalid', async () => {
+	it('replaces invalid ATR levels with a fallback trade plan instead of a synthetic ATR stop', async () => {
 		const service = new TradingViewMcpService({
 			maxRetries: 1,
 			defaultExchange: 'BINANCE',
@@ -282,13 +282,18 @@ describe('TradingViewMcpService', () => {
 
 		const result = await service.enrichFromAlertText('SHIBUSDT(240) pasó a señal de COMPRA');
 
-		expect(result).not.toHaveProperty('invalidation_level');
-		expect(result).not.toHaveProperty('target_level');
-		expect(result).not.toHaveProperty('risk_reward_ratio');
+		// 4h risk map on 0.01: stop 2.5% (0.00975) / target 5% (0.0105).
+		// The rejected ATR would have produced a stop below zero (0.01 - 0.03).
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 0.00975,
+			target_level: 0.0105,
+			risk_reward_ratio: 2,
+			levelsSource: 'fallback-trade-plan',
+		}));
 		expect(result).not.toHaveProperty('setup_type');
 	});
 
-	it('omits the full risk block when rejected ATR leaves a valid alternate target', async () => {
+	it('still suppresses the ATR block when rejected ATR leaves a valid alternate target', async () => {
 		const service = new TradingViewMcpService({
 			maxRetries: 1,
 			defaultExchange: 'BINANCE',
@@ -304,9 +309,11 @@ describe('TradingViewMcpService', () => {
 
 		const result = await service.enrichFromAlertText('SHIBUSDT(240) pasó a señal de COMPRA');
 
-		expect(result).not.toHaveProperty('invalidation_level');
-		expect(result).not.toHaveProperty('target_level');
-		expect(result).not.toHaveProperty('risk_reward_ratio');
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 0.00975,
+			target_level: 0.0105,
+			levelsSource: 'fallback-trade-plan',
+		}));
 		expect(result).not.toHaveProperty('setup_type');
 	});
 
@@ -326,10 +333,105 @@ describe('TradingViewMcpService', () => {
 
 		const result = await service.enrichFromAlertText('SHIBUSDT(240) pasó a señal de COMPRA');
 
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 0.00975,
+			target_level: 0.0105,
+			levelsSource: 'fallback-trade-plan',
+		}));
+		expect(result).not.toHaveProperty('setup_type');
+	});
+
+	it('derives a fallback trade plan tagged as secondary when ATR is zero', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 100 },
+			technical_indicators: { atr: 0 },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		// 4h default risk map: stop 2.5% (97.5) / target 5% (105) => R:R 2.
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 97.5,
+			target_level: 105,
+			risk_reward_ratio: 2,
+			levelsSource: 'fallback-trade-plan',
+		}));
+	});
+
+	it('derives a fallback trade plan tagged as secondary when ATR is non-finite', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 100 },
+			technical_indicators: { atr: 'not-a-number' },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de VENTA');
+
+		// 4h default risk map inverted for SELL: stop 2.5% above (102.5) / target 5% below (95).
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 102.5,
+			target_level: 95,
+			risk_reward_ratio: 2,
+			levelsSource: 'fallback-trade-plan',
+		}));
+	});
+
+	it('never downgrades a valid ATR-derived risk block to the fallback trade plan', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 100 },
+			technical_indicators: { atr: 4 },
+			support_resistance: { nearest_resistance: 112 },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 94,
+			target_level: 112,
+			risk_reward_ratio: 2,
+		}));
+		expect(result).not.toHaveProperty('levelsSource');
+	});
+
+	it('omits the fallback trade plan when MCP returns no usable current price', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 0 },
+			technical_indicators: { atr: 0 },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
 		expect(result).not.toHaveProperty('invalidation_level');
 		expect(result).not.toHaveProperty('target_level');
 		expect(result).not.toHaveProperty('risk_reward_ratio');
-		expect(result).not.toHaveProperty('setup_type');
+		expect(result).not.toHaveProperty('levelsSource');
 	});
 
 	it('only infers mean reversion when Bollinger position aligns with signal side', async () => {
@@ -361,7 +463,7 @@ describe('TradingViewMcpService', () => {
 		expect(sellResult).not.toHaveProperty('setup_type');
 	});
 
-	it('preserves an explicit setup type without complete numeric risk data', async () => {
+	it('preserves an explicit setup type while filling numeric risk levels from the fallback plan', async () => {
 		const service = new TradingViewMcpService({
 			maxRetries: 1,
 			defaultExchange: 'BINANCE',
@@ -376,10 +478,13 @@ describe('TradingViewMcpService', () => {
 
 		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
 
-		expect(result.setup_type).toBe('breakout');
-		expect(result).not.toHaveProperty('invalidation_level');
-		expect(result).not.toHaveProperty('target_level');
-		expect(result).not.toHaveProperty('risk_reward_ratio');
+		expect(result).toEqual(expect.objectContaining({
+			setup_type: 'breakout',
+			invalidation_level: 97.5,
+			target_level: 105,
+			risk_reward_ratio: 2,
+			levelsSource: 'fallback-trade-plan',
+		}));
 	});
 
 	it('suppresses the metadata footer when explicitly disabled', async () => {

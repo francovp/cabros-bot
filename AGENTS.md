@@ -1574,7 +1574,7 @@ This is test-only hardening; runtime code, endpoints, OpenAPI, Postman, and envi
 
 ## TradingView MCP Risk Metadata (CB-175 / Issue #412)
 
-TradingView MCP alert enrichment derives optional directional invalidation, target, setup, and risk/reward metadata from the MCP analysis. Numeric and numeric-string ATR values are normalized before validation. ATR-derived levels are emitted only when the supplied ATR and every resulting level are finite, positive, and on the correct side of entry; a rejected supplied ATR suppresses the entire numeric risk block instead of falling back to a synthetic stop. Setup metadata remains independently optional, uses explicit/inferred evidence only, and mean-reversion inference must align Bollinger position with signal direction. When Gemini and MCP enrichment are combined, invalidation, target, and risk/reward are selected atomically from one complete provider block to prevent inconsistent ratios.
+TradingView MCP alert enrichment derives optional directional invalidation, target, setup, and risk/reward metadata from the MCP analysis. Numeric and numeric-string ATR values are normalized before validation. ATR-derived levels are emitted only when the supplied ATR and every resulting level are finite, positive, and on the correct side of entry; a rejected supplied ATR still suppresses the entire numeric risk block instead of falling back to a synthetic ATR stop (Issue #1229 then supplies a separate, provenance-tagged secondary heuristic plan — see below). Setup metadata remains independently optional, uses explicit/inferred evidence only, and mean-reversion inference must align Bollinger position with signal direction. When Gemini and MCP enrichment are combined, invalidation, target, and risk/reward are selected atomically from one complete provider block to prevent inconsistent ratios.
 
 **Coverage**:
 - `src/services/tradingview/TradingViewMcpService.js` — MCP risk derivation, ATR rejection, standalone setup metadata, and side-aware setup inference.
@@ -1582,6 +1582,27 @@ TradingView MCP alert enrichment derives optional directional invalidation, targ
 - `tests/unit/tradingview-mcp-service.test.js` and `tests/unit/alert-handler.test.js` — Directional calculations, invalid ATR/fallback suppression, setup inference, and provider merge invariants.
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed; existing optional response fields and formatter support remain in place.
+
+## Secondary Fallback Trade Plan for Rejected ATR (Issue #1229)
+
+`TradingViewMcpService._toEnrichedAlert()` now calls `calculateFallbackRiskLevels()` from `src/services/tradingview/fallbackTradePlan.js` as a **secondary** source of risk metadata. Previously that module was dead code inside the MCP path.
+
+**Contract**:
+- The fallback runs **only** when `hasValidRiskMetadata` is false — i.e. the ATR-derived block was rejected because ATR was `0`, non-finite, or a resulting level failed the side/positivity check — **and** MCP supplied a usable `current_price`.
+- A valid ATR-derived block always wins. A real ATR level is never downgraded to a heuristic one, and `levelsSource` is omitted on that path exactly as before.
+- The ATR block itself is still suppressed: an invalid ATR never produces a synthetic ATR stop. The fallback is an additional source, not a relaxation of the ATR validation rules.
+- When the fallback supplies the levels they are tagged `levelsSource: 'fallback-trade-plan'` so dashboards and the stored-alert summary can distinguish heuristic levels from ATR-derived ones. The OpenAPI `levelsSource` enum and `EnrichedAlert.levelsSource` in `src/services/grounding/types.ts` were extended with the new value; `mergeEnrichmentData()` in `src/controllers/webhooks/handlers/alert/grounding.js` propagates the tag without ever overriding a `gemini-grounding` source.
+- `getRiskRewardRatio()` recomputes the ratio from the fallback stop/target so a fallback level is never paired with a stale ATR ratio. The fallback levels are re-validated with `isValidRiskLevel()` before use, and any failure stays fail-open (alert delivery is never blocked).
+- `setup_type` is unchanged: the fallback does not inject `trend_continuation` on its own, so setup evidence remains explicit or MCP-inferred only.
+
+**Sanity-checked risk map** (`TIMEFRAME_RISK_MAP`, nominal R:R 2.0): 5m/15m stop 1.5% / target 3%, 1h/4h stop 2.5% / target 5%, 1D/1W/1M stop 5% / target 10%, unknown timeframe falls back to the 1h defaults. Stops widen with the analysis horizon and stay strictly on the correct side of entry for both BUY and SELL.
+
+The **emitted** `risk_reward_ratio` is recomputed from the rounded levels that actually ship, so it is only *approximately* 2.0 (observed drift up to ~0.01 on non-round prices, e.g. `2.0095`). That recomputation is deliberate: it guarantees the ratio always matches the displayed stop and target rather than a stale plan constant. Consumers must not treat exactly `2` as an invariant.
+
+**Coverage**:
+- `tests/unit/tradingview-mcp-service.test.js` — Zero ATR and non-finite ATR each produce a `fallback-trade-plan` block (BUY and SELL), a valid ATR block is never downgraded, and no usable MCP price means no fallback at all.
+
+No new environment variable or Remote Config key was added. Post-merge this path sees no traffic until #630/#591 restore MCP enrichment in production; that is an independent fix and this change is correct to land first.
 
 ## Telegram Delivery Retry and Telemetry (CB-178 / Issue #415)
 

@@ -10,6 +10,16 @@ const {
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const alertStorageService = require('../storage/AlertStorageService');
 
+// GH-1229: the heuristic risk plan is a SECONDARY source only. It is loaded lazily
+// so this module never pulls in the market-data clients at require time.
+let fallbackTradePlanModule = null;
+function getFallbackTradePlan() {
+	if (!fallbackTradePlanModule) {
+		fallbackTradePlanModule = require('./fallbackTradePlan');
+	}
+	return fallbackTradePlanModule;
+}
+
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
 const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Upper bound on distinct tool names kept in toolMetrics. MCP tools are a fixed,
@@ -1131,13 +1141,37 @@ class TradingViewMcpService {
 			&& Number.isFinite(riskRewardRatio)
 			&& riskRewardRatio > 0
 			&& !(atrWasProvided && usableAtr === null);
+
+		// GH-1229: an ATR value we cannot trust (zero, non-finite, or a level that
+		// fails the side/positivity checks) suppresses the ATR-derived block, which
+		// would otherwise leave a direction-only alert with no invalidation, target,
+		// or R:R. The heuristic plan is SECONDARY ONLY: it is computed solely from the
+		// price MCP already returned, is never used to replace a valid ATR-derived
+		// level, and any failure resolving it stays fail-open.
+		let fallbackPlan = null;
+		let fallbackLevelsSource;
+		if (!hasValidRiskMetadata && validCurrentPrice !== null) {
+			const candidate = getFallbackTradePlan().calculateFallbackRiskLevels(validCurrentPrice, timeframe, side);
+			if (candidate
+				&& isValidRiskLevel(candidate.invalidation_level, validCurrentPrice, side, 'stop')
+				&& isValidRiskLevel(candidate.target_level, validCurrentPrice, side, 'target')) {
+				fallbackPlan = candidate;
+				fallbackLevelsSource = 'fallback-trade-plan';
+			}
+		}
+
 		const riskMetadata = {
 			...(hasValidRiskMetadata ? {
 				invalidation_level: stopLossMeta.value,
 				target_level: targetLevel,
 				risk_reward_ratio: riskRewardRatio,
+			} : fallbackPlan ? {
+				invalidation_level: fallbackPlan.invalidation_level,
+				target_level: fallbackPlan.target_level,
+				risk_reward_ratio: getRiskRewardRatio(validCurrentPrice, fallbackPlan.invalidation_level, fallbackPlan.target_level, side),
 			} : {}),
 			...(setupType ? { setup_type: setupType } : {}),
+			...(fallbackLevelsSource ? { levelsSource: fallbackLevelsSource } : {}),
 		};
 
 		const rating = this._firstNumber([
