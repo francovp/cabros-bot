@@ -827,6 +827,47 @@ function normalizeSymbolCandidate(candidate, exchangeFallback) {
  * coverage is not reduced. Every returned symbol is validated, so bare integers
  * and single characters can never be extracted.
  */
+/**
+ * True when `text` contains an `EXCHANGE:` prefix, using a linear scan.
+ *
+ * `/[A-Z_]+:/i` is quadratic: `_` is inside the case-insensitive character class,
+ * so a long run of underscores forces backtracking (CodeQL js/polynomial-redos).
+ * Alert text is caller-supplied and unbounded, so this walks the string instead.
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasExplicitExchangePrefix(text) {
+	if (typeof text !== 'string' || text.length < 2) {
+		return false;
+	}
+	for (let i = 0; i < text.length; i += 1) {
+		if (text[i] !== ':') {
+			continue;
+		}
+		// Walk backwards over the exchange token and require >=1 leading letter/underscore.
+		let j = i - 1;
+		let hasToken = false;
+		while (j >= 0) {
+			const code = text.charCodeAt(j);
+			const isUpper = code >= 65 && code <= 90;
+			const isLower = code >= 97 && code <= 122;
+			const isDigit = code >= 48 && code <= 57;
+			if (!isUpper && !isLower && !isDigit && text[j] !== '_') {
+				break;
+			}
+			if (!isDigit) {
+				hasToken = true;
+			}
+			j -= 1;
+		}
+		if (hasToken && j < i - 1) {
+			return true;
+		}
+	}
+	return false;
+}
+
 function parseSymbolFromText(text) {
 	if (!text || typeof text !== 'string') {
 		return null;
@@ -852,8 +893,11 @@ function parseSymbolFromText(text) {
 				// Use only an exchange that was actually present in the text.
 				// `deriveAssetContext` synthesises "BINANCE" for any USDT pair, which
 				// would fabricate venue attribution on alerts that named none.
+				// A plain scan is used instead of /[A-Z_]+:/i: `_` overlaps the
+				// case-insensitive class, making that pattern quadratic on long
+				// underscore runs (CodeQL js/polynomial-redos).
 				exchange: typeof context.exchange === 'string' && context.exchange.trim()
-					&& /[A-Z_]+:/i.test(cleaned)
+					&& hasExplicitExchangePrefix(cleaned)
 					? context.exchange.trim().toUpperCase()
 					: null,
 			};
