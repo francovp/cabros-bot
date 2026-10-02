@@ -67,8 +67,22 @@ function hasCompleteRiskMetadata(value = {}) {
 		.every(field => isOptionalRiskValue(value[field]));
 }
 
+// GH-1229: a heuristic per-timeframe percentage plan is NOT a provider-derived level.
+// It is numerically complete, so it must not outrank a real support/resistance level
+// just by virtue of filling all three fields. `levelsSource` is the provenance signal
+// that lets the merge weigh it below a genuine provider block.
+function isHeuristicRiskBlock(value = {}) {
+	return value.levelsSource === 'fallback-trade-plan';
+}
+
 function selectRiskMetadata(gemini, mcp) {
-	const source = hasCompleteRiskMetadata(mcp) ? mcp : hasCompleteRiskMetadata(gemini) ? gemini : null;
+	const mcpUsable = hasCompleteRiskMetadata(mcp) && !isHeuristicRiskBlock(mcp);
+	const heuristicMcpUsable = hasCompleteRiskMetadata(mcp) && isHeuristicRiskBlock(mcp);
+	const source = mcpUsable
+		? mcp
+		: hasCompleteRiskMetadata(gemini)
+			? gemini
+			: (heuristicMcpUsable ? mcp : null);
 	const setupType = pickSetupType(gemini.setup_type, mcp.setup_type);
 	const setupEvidence = setupType && (setupType === gemini.setup_type ? gemini.setup_evidence : mcp.setup_evidence);
 	if (!source) {

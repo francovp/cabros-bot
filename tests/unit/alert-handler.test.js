@@ -634,6 +634,89 @@ describe('Alert Handler', () => {
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
 
+	it('does not let a heuristic fallback-trade-plan MCP block outrank complete Gemini risk levels', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+
+		// Gemini produced REAL support/resistance-derived levels.
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.7,
+			insights: ['Gemini detected breakout'],
+			sources: [],
+			truncated: false,
+			invalidation_level: 88,
+			target_level: 124,
+			risk_reward_ratio: 3,
+		});
+
+		// MCP had its ATR rejected, so it fell back to the HEURISTIC plan. That block is
+		// numerically complete, but it is a per-timeframe percentage guess and must never
+		// displace a real provider level.
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.6,
+			insights: [],
+			sources: [],
+			truncated: false,
+			current_price: 100,
+			invalidation_level: 97.5,
+			target_level: 105,
+			risk_reward_ratio: 2,
+			levelsSource: 'fallback-trade-plan',
+			tradingViewEnrichmentApplied: false,
+			tradingViewEnrichmentStatus: 'failed',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.invalidation_level).toBe(88);
+		expect(result.target_level).toBe(124);
+		expect(result.risk_reward_ratio).toBe(3);
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it('uses the heuristic fallback-trade-plan MCP levels when Gemini has no complete risk block', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.7,
+			insights: [],
+			sources: [],
+			truncated: false,
+		});
+
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.6,
+			insights: [],
+			sources: [],
+			truncated: false,
+			current_price: 100,
+			invalidation_level: 97.5,
+			target_level: 105,
+			risk_reward_ratio: 2,
+			levelsSource: 'fallback-trade-plan',
+			tradingViewEnrichmentApplied: false,
+			tradingViewEnrichmentStatus: 'failed',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.invalidation_level).toBe(97.5);
+		expect(result.target_level).toBe(105);
+		expect(result.risk_reward_ratio).toBe(2);
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
 	it('derives fallback trade plan when Gemini is disabled and MCP enrichment fails', async () => {
 		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
 		process.env.ENABLE_GEMINI_GROUNDING = 'false';

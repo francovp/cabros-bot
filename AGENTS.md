@@ -1586,7 +1586,9 @@ No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract c
 - `getRiskRewardRatio()` recomputes the ratio from the fallback stop/target so a fallback level is never paired with a stale ATR ratio. The fallback levels are re-validated with `isValidRiskLevel()` before use, and any failure stays fail-open (alert delivery is never blocked).
 - `setup_type` is unchanged: the fallback does not inject `trend_continuation` on its own, so setup evidence remains explicit or MCP-inferred only.
 
-**Sanity-checked risk map** (`TIMEFRAME_RISK_MAP`, all R:R 2.0): 5m/15m stop 1.5% / target 3%, 1h/4h stop 2.5% / target 5%, 1D/1W/1M stop 5% / target 10%, unknown timeframe falls back to the 1h defaults. Stops widen with the analysis horizon and stay strictly on the correct side of entry for both BUY and SELL.
+**Sanity-checked risk map** (`TIMEFRAME_RISK_MAP`, nominal R:R 2.0): 5m/15m stop 1.5% / target 3%, 1h/4h stop 2.5% / target 5%, 1D/1W/1M stop 5% / target 10%, unknown timeframe falls back to the 1h defaults. Stops widen with the analysis horizon and stay strictly on the correct side of entry for both BUY and SELL.
+
+The **emitted** `risk_reward_ratio` is recomputed from the rounded levels that actually ship, so it is only *approximately* 2.0 (observed drift up to ~0.01 on non-round prices, e.g. `2.0095`). That recomputation is deliberate: it guarantees the ratio always matches the displayed stop and target rather than a stale plan constant. Consumers must not treat exactly `2` as an invariant.
 
 **Coverage**:
 - `tests/unit/tradingview-mcp-service.test.js` — Zero ATR and non-finite ATR each produce a `fallback-trade-plan` block (BUY and SELL), a valid ATR block is never downgraded, and no usable MCP price means no fallback at all.
