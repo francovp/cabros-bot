@@ -149,3 +149,46 @@ The application logs to stdout:
 - `DEBUG`: Detailed processing steps
 - `WARN`: Configuration warnings, retry attempts
 - `ERROR`: Delivery failures, API errors
+
+## Structured Request Logging (GH-665)
+
+Every completed HTTP request emits exactly one structured JSON line, in addition
+to the free-form application logs above. Each line records:
+
+| Field | Meaning |
+|---|---|
+| `method` | HTTP method |
+| `path` | Request path with the query string and trailing slash stripped |
+| `statusCode` | Final response status (`0` when the response never started) |
+| `durationMs` | Time from middleware entry to response end (excludes connection setup and TLS) |
+| `requestId` | Correlation id, shared with the `X-Request-Id` response header |
+| `clientIp` | Client address, truncated (`203.0.113.x`) or redacted for IPv6 |
+| `aborted` | `true` when the client disconnected before the response was fully flushed |
+| `outcome` | `completed` or `aborted` |
+
+Example line:
+
+```json
+{"timestamp":"2026-10-02T08:12:44.913Z","level":"warn","message":"Request completed","service":"cabros-bot","attributes":{"method":"POST","path":"/api/webhook/alert","statusCode":408,"durationMs":30012,"requestId":"3f1c...","clientIp":"203.0.113.x","aborted":false,"outcome":"completed"}}
+```
+
+**Log level** follows the status code: `info` for 2xx/3xx, `warn` for 4xx and
+client aborts, `error` for 5xx.
+
+**Correlating a request.** Use `requestId` to follow one request end to end. It
+is the same value the request-deadline middleware puts in its `408` payload and
+in the `X-Request-Id` response header, so a timeout in the logs lines up with the
+client's error body:
+
+```bash
+grep '"requestId":"3f1c' logs.json | jq -c '{path:.attributes.path,status:.attributes.statusCode}'
+```
+
+**What is not logged.** Probe paths (`/healthcheck`, `/ready`, `/openapi.json`,
+`/docs` — the same list the request deadline exempts) are silent, and query
+strings are stripped so request parameters never reach the log. Request and
+response bodies are never logged.
+
+**Tuning.** The middleware has no configuration of its own. Raise or lower
+verbosity with `LOG_LEVEL`, and exempt additional probe paths with
+`REQUEST_DEADLINE_EXEMPT_PATHS` — the logging skip list follows it.

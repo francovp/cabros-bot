@@ -305,5 +305,6 @@ requestDeadline.constants = Object.freeze({
 
 module.exports = requestDeadline;
 requestDeadline.resolveRequestId = resolveRequestId;
+requestDeadline.resolveExemptPaths = resolveExemptPaths;
 requestDeadline.guard = rejectExpiredRequest;
 requestDeadline.isTerminated = isRequestTerminated;

@@ -1689,6 +1689,31 @@ No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env va
 - The structured `408` timeout response (`RequestTimeoutError` schema and `RequestTimeout` response component) is formally specified in `src/openapi/openapi.json` for all non-exempt `/api` operation paths.
 - Response examples for `Request Timeout (408)` are documented in `CabrosBot.postman_collection.json` across primary webhook and job ingest operations.
 
+## Structured Request Logging Middleware (GH-665)
+
+`app.js` mounts `src/lib/requestLogger.js` as the outermost middleware so every completed HTTP request emits exactly one structured JSON line with method, path, status code, duration, and correlation id.
+
+**Behavior**
+- One line per terminal outcome, at `console.info` for 2xx/3xx, `console.warn` for 4xx and client-aborted requests, and `console.error` for 5xx. Fields: `method`, `path`, `statusCode`, `durationMs`, `requestId`, `clientIp`, `aborted`, `outcome`.
+- Mounted **before** CORS, body parsing, the request deadline, body-size limits, and the rate limiter, so parser `413`s, CORS rejections, deadline `408`s, rate-limit `429`s, and route handlers are all observed. The middleware only observes the response lifecycle and never writes a status, header, or body, so it cannot change any API contract.
+- **Correlation ids are shared, not duplicated.** The logger resolves the id through `requestDeadline.resolveRequestId(req)`, which prefers `req.requestId` before the inbound `x-request-id`. Because the deadline runs later and reuses the header, the log line and the `408` payload always carry the same id — this is the reason the logger must not mint its own id.
+- **Probe paths are skipped**, reusing the request-deadline exemption vocabulary via `requestDeadline.resolveExemptPaths()`, which already resolves `REQUEST_DEADLINE_EXEMPT_PATHS` plus its defaults (`/healthcheck`, `/ready`, `/openapi.json`, `/docs`). It is resolved **per request**, not frozen at module load, so a path an operator adds to that variable is exempt from both middlewares at once. `requestDeadline.resolveExemptPaths` was exported for this purpose; do not fork the list.
+- Paths are normalized by stripping the query string and trailing slashes, so query secrets never reach the log line and `/api/x` and `/api/x/` group together.
+- `clientIp` is truncated to `a.b.c.x` for IPv4, and IPv6 is reported as `ipv6-redacted` rather than logged in full, keeping client addresses out of logs in usable form.
+- Client aborts are distinguished from completions via `res.on('finish')` vs. `res.on('close')` and recorded as `outcome: "aborted"` at `warn` — an aborted request is an operational signal, not a client error. The `close` branch reads **`res.writableFinished`, not `res.writableEnded`**: `writableEnded` flips the moment the handler calls `res.end()`, before the bytes reach the socket, so a client disconnecting in that window would otherwise be logged as a clean completion with an understated duration. `finish` always wins the race for a clean response, so `close` seeing `writableFinished === true` implies `finish` never fired.
+- Paths are lower-cased before matching, mirroring `requestDeadline.normalizePath`. Express routing is case-insensitive by default, so `/HEALTHCHECK` reaches the healthcheck handler and must not re-enter the logs as a bypass of the probe skip list.
+- `emit()` is wrapped in `try/catch` inside `finalize`. `console.*` is globally replaceable and the listener runs from a Node event emitter outside Express's `try/catch`, so a throwing sink would otherwise crash the process from an observability path.
+
+**Core components**
+- `src/lib/requestLogger.js` — path normalization, id resolution, IP sanitization, level selection, and single-emission finalization.
+- `app.js` — mounts the logger ahead of every other response-producing middleware.
+- `tests/unit/requestLogger.test.js` and `tests/integration/request-logger.test.js` — unit coverage plus supertest coverage for parser rejections, header id reuse, 408/payload id agreement, and probe-path silence.
+
+**Configuration**
+- No new environment variable. The skip set is derived from `REQUEST_DEADLINE_EXEMPT_PATHS`, and the log level follows `LOG_LEVEL` through the existing `src/lib/logging.js` pipeline, which already applies secret redaction to every emitted line.
+
+No endpoint, OpenAPI, Postman, or Remote Config contract changed.
+
 ## Admin Status Dependency Explorer (Issue #673)
 
 The dedicated `/admin` Status view now renders the existing `/api/status` response as an operational dashboard: overview metrics, delivery-channel cards, expandable dependency cards, enabled-capability chips, and a collapsed raw JSON response with copy support. Dependency cards show safe timing, counters, configuration, provider, error-category, storage, scheduler, and worker fields using DOM text nodes only. Client-side status filters and search sort attention items ahead of healthy dependencies and provide a filtered empty state. The existing overview dashboard continues to use the shared status renderer.

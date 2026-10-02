@@ -8,7 +8,6 @@ const {
 
 const {
 	createRequestLogger,
-	resetRequestLoggerForTests,
 } = requestLogger;
 
 describe('Request Logger Middleware', () => {
@@ -243,5 +242,88 @@ describe('Request Logger Middleware', () => {
 			aborted: true,
 			outcome: 'aborted',
 		}));
+	});
+
+	// `writableEnded` flips when the handler calls res.end(), before the bytes
+	// reach the socket. A client that disconnects in that window leaves
+	// writableEnded=true but writableFinished=false. Reading writableEnded would
+	// report a truncated download as a clean completion with a short duration.
+	it('reports an abort when the handler ended but the response was never flushed', () => {
+		const middleware = createRequestLogger();
+		const req = buildReq({ headers: { 'x-request-id': 'req-truncated-1' } });
+		const res = buildRes();
+		// Exactly the state Node reports after a mid-download client disconnect.
+		res.writableEnded = true;
+		res.finished = true;
+		res.writableFinished = false;
+
+		middleware(req, res, jest.fn());
+		res._closeCb();
+
+		expect(output.info).not.toHaveBeenCalled();
+		expect(output.warn).toHaveBeenCalledTimes(1);
+		const log = parseLast(output.warn);
+		expect(log.message).toBe('Request aborted');
+		expect(log.attributes).toEqual(expect.objectContaining({
+			requestId: 'req-truncated-1',
+			aborted: true,
+			outcome: 'aborted',
+		}));
+	});
+
+	it('reports a completion when close observes an already-flushed response', () => {
+		const middleware = createRequestLogger();
+		const req = buildReq({ headers: { 'x-request-id': 'req-clean-1' } });
+		const res = buildRes();
+		res.writableEnded = true;
+		res.finished = true;
+		res.writableFinished = true;
+
+		middleware(req, res, jest.fn());
+		res._closeCb();
+
+		expect(output.warn).not.toHaveBeenCalled();
+		const log = parseLast(output.info);
+		expect(log.attributes).toEqual(expect.objectContaining({
+			requestId: 'req-clean-1',
+			aborted: false,
+			outcome: 'completed',
+		}));
+	});
+
+	// Express routing is case-insensitive, so `/HEALTHCHECK` reaches the
+	// healthcheck handler. It must not re-enter the logs as a way around the
+	// probe skip list.
+	it('normalizes the path to lower case when matching and logging', () => {
+		const middleware = createRequestLogger();
+
+		const probeRes = buildRes();
+		middleware(buildReq({ url: '/HEALTHCHECK' }), probeRes, jest.fn());
+		triggerFinish(probeRes);
+		expect(output.info).not.toHaveBeenCalled();
+
+		const apiRes = buildRes();
+		middleware(buildReq({ url: '/API/Test' }), apiRes, jest.fn());
+		triggerFinish(apiRes);
+		const log = parseLast(output.info);
+		expect(log.attributes.path).toBe('/api/test');
+	});
+
+	it('never lets a throwing log sink escape into the request lifecycle', () => {
+		const throwing = jest.fn(() => {
+			throw new Error('log sink exploded');
+		});
+		console.info = throwing;
+		console.warn = throwing;
+		console.error = throwing;
+
+		const middleware = createRequestLogger();
+		const req = buildReq();
+		const res = buildRes();
+
+		expect(() => {
+			middleware(req, res, jest.fn());
+			triggerFinish(res);
+		}).not.toThrow();
 	});
 });

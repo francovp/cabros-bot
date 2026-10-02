@@ -7,16 +7,15 @@
  * `console.*` → `src/lib/logging.js` pipeline. Captures method, path,
  * status code, duration in milliseconds, and a per-request correlation id.
  *
- * Routes that are intentionally skipped (`/healthcheck`, `/openapi.json`)
- * are high-frequency, low-signal probes — they are excluded to keep
- * production logs focused on real traffic.
+ * High-frequency, low-signal probes are excluded so production logs stay
+ * focused on real traffic. The skip set is the request deadline's own
+ * exemption list (`REQUEST_DEADLINE_EXEMPT_PATHS` plus its defaults), read per
+ * request, so a route an operator declares exempt from the deadline is also
+ * exempt from request logging — the two middlewares cannot drift apart.
  */
 
-const { randomUUID } = require('crypto');
+const requestDeadline = require('./requestDeadline');
 
-const SKIPPED_PATHS = new Set(['/healthcheck', '/openapi.json', '/docs']);
-const REQUEST_ID_PATTERN = /^[\x21-\x7E]+$/;
-const REQUEST_ID_MAX_LENGTH = 128;
 const IPV4_PATTERN = /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/;
 
 function normalizeRequestPath(rawPath) {
@@ -25,23 +24,31 @@ function normalizeRequestPath(rawPath) {
 	}
 	const queryIndex = rawPath.indexOf('?');
 	const pathOnly = queryIndex >= 0 ? rawPath.slice(0, queryIndex) : rawPath;
-	return pathOnly.replace(/\/+$/, '') || '/';
+	// Lower-cased to match `requestDeadline.normalizePath`. Express routing is
+	// case-insensitive by default, so without this `/HEALTHCHECK` would be
+	// deadline-exempt yet still logged — letting a probe flood the log with one
+	// character of variation per request.
+	return pathOnly.replace(/\/+$/, '').toLowerCase() || '/';
 }
 
+/**
+ * Reusing the deadline's resolver keeps a single validation rule for the
+ * correlation id across the request lifecycle, so the structured log line and
+ * any 408 payload always agree. It already prefers `req.requestId` over the
+ * inbound header, which is what makes the ids match.
+ */
 function resolveRequestId(req) {
-	const headers = req && req.headers ? req.headers : {};
-	const raw = headers['x-request-id'] || headers['X-Request-Id'] || headers['X-Request-ID'];
-	if (typeof raw === 'string') {
-		const trimmed = raw.trim();
-		if (
-			trimmed.length > 0 &&
-			trimmed.length <= REQUEST_ID_MAX_LENGTH &&
-			REQUEST_ID_PATTERN.test(trimmed)
-		) {
-			return trimmed;
-		}
-	}
-	return randomUUID();
+	return requestDeadline.resolveRequestId(req);
+}
+
+/**
+ * The deadline's exemption list is the single vocabulary for "probe route".
+ * It is read per request rather than captured once at module load, so an
+ * operator who adds a path to `REQUEST_DEADLINE_EXEMPT_PATHS` exempts it from
+ * request logging at the same time, with no reload.
+ */
+function isExemptPath(path) {
+	return requestDeadline.resolveExemptPaths().has(path);
 }
 
 function sanitizeClientIp(ip) {
@@ -75,25 +82,22 @@ function resolveLogLevel(statusCode) {
 	return 'info';
 }
 
-function emit(method, level, attributes) {
+function emit(level, attributes) {
 	const message = attributes.aborted ? 'Request aborted' : 'Request completed';
 	if (level === 'error') {
-		console.error(message, { ...attributes, method, path: attributes.path });
+		console.error(message, attributes);
 	} else if (level === 'warn') {
-		console.warn(message, { ...attributes, method, path: attributes.path });
+		console.warn(message, attributes);
 	} else {
-		console.info(message, { ...attributes, method, path: attributes.path });
+		console.info(message, attributes);
 	}
 }
 
-function createRequestLogger(options = {}) {
-	const skippedPaths = options.skippedPaths || SKIPPED_PATHS;
-	const now = options.now || (() => Date.now());
-
+function createRequestLogger() {
 	return function requestLogger(req, res, next) {
-		const startTime = now();
+		const startTime = Date.now();
 		const path = normalizeRequestPath(req.originalUrl || req.url || req.path || '');
-		if (skippedPaths.has(path)) {
+		if (isExemptPath(path)) {
 			return next();
 		}
 
@@ -105,32 +109,42 @@ function createRequestLogger(options = {}) {
 		const finalize = (aborted = false) => {
 			if (finalized) return;
 			finalized = true;
-			const durationMs = Math.max(0, now() - startTime);
+			const durationMs = Math.max(0, Date.now() - startTime);
 			const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 0;
 			const level = aborted ? 'warn' : resolveLogLevel(statusCode);
-			emit(req.method, level, {
-				method: req.method,
-				path,
-				statusCode,
-				durationMs,
-				requestId,
-				clientIp,
-				aborted,
-				outcome: aborted ? 'aborted' : 'completed',
-			});
+			// Fail open: `console.*` is globally replaceable (the logging wrapper,
+			// Sentry, or a test double), and this runs from a Node event emitter
+			// outside Express's try/catch. A throwing sink must never take down
+			// the process on an observability path.
+			try {
+				emit(level, {
+					method: req.method,
+					path,
+					statusCode,
+					durationMs,
+					requestId,
+					clientIp,
+					aborted,
+					outcome: aborted ? 'aborted' : 'completed',
+				});
+			} catch (_) {
+				// Observability is never allowed to break a response.
+			}
 		};
 
 		res.on('finish', () => finalize(false));
 		res.on('close', () => {
-			const finished = Boolean(res.writableEnded || res.finished);
-			finalize(!finished);
+			// `writableEnded` flips the moment the handler calls res.end(), which
+			// is before the bytes reach the socket. A client that disconnects in
+			// that window leaves `writableEnded === true` but `writableFinished ===
+			// false`, so reading `writableEnded` here would report a truncated
+			// download as a clean completion with an understated duration.
+			// `finish` always wins the race for a clean response, so `close`
+			// observing `writableFinished === true` implies `finish` never fired.
+			finalize(!res.writableFinished);
 		});
 		return next();
 	};
-}
-
-function resetRequestLoggerForTests() {
-	// No module-level mutable state currently; kept for parity with logging.js.
 }
 
 const middleware = createRequestLogger();
@@ -141,5 +155,3 @@ module.exports.normalizeRequestPath = normalizeRequestPath;
 module.exports.resolveRequestId = resolveRequestId;
 module.exports.sanitizeClientIp = sanitizeClientIp;
 module.exports.resolveLogLevel = resolveLogLevel;
-module.exports.SKIPPED_PATHS = SKIPPED_PATHS;
-module.exports.resetRequestLoggerForTests = resetRequestLoggerForTests;
