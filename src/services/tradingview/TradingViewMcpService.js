@@ -54,6 +54,11 @@ function awaitWithTimeout(promise, timeoutMs, message) {
 	});
 }
 
+// Only definitive provider-outage signals are terminal. Tool payload errors such as
+// "Analysis failed: Expecting value: line 1 column 1" describe one bad upstream result and
+// are frequently transient, so they must stay on the retry path.
+const TERMINAL_PROVIDER_ERROR_PATTERN = /service suspended|suspended by its owner/i;
+
 function getAbortMessage(signal, fallback) {
 	const reason = signal && signal.reason;
 	if (reason instanceof Error && reason.message) {
@@ -67,6 +72,14 @@ function getAbortMessage(signal, fallback) {
 	return fallback;
 }
 
+function createMcpError(message) {
+	const error = new Error(message);
+	if (TERMINAL_PROVIDER_ERROR_PATTERN.test(message)) {
+		error.category = 'provider_unavailable';
+	}
+	return error;
+}
+
 function createRuntimeStatus({ includeEnrichment = true } = {}) {
 	const status = {
 		status: 'unknown',
@@ -74,6 +87,7 @@ function createRuntimeStatus({ includeEnrichment = true } = {}) {
 		lastSuccessAt: null,
 		lastFailureAt: null,
 		lastErrorCategory: null,
+		lastHttpStatusCode: null,
 		successCount: 0,
 		failureCount: 0,
 		errorCategoryCounts: createEmptyErrorCategoryCounts(),
@@ -541,7 +555,12 @@ class TradingViewMcpService {
 				const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe, signal: combinedSignal });
 				return { success: true, channel: 'tradingview-mcp', analysis };
 			} catch (error) {
-				return { success: false, channel: 'tradingview-mcp', error: error.message };
+				return {
+					success: false,
+					channel: 'tradingview-mcp',
+					error: error.message,
+					retryable: error.category !== 'provider_unavailable',
+				};
 			} finally {
 				clearTimeout(attemptTimeoutId);
 			}
@@ -575,7 +594,12 @@ class TradingViewMcpService {
 						const volConfirm = await this.callVolumeConfirmation({ symbol, exchange, timeframe, signal: combinedSignal });
 						return { success: true, channel: 'tradingview-mcp', volConfirm };
 					} catch (error) {
-						return { success: false, channel: 'tradingview-mcp', error: error.message };
+						return {
+							success: false,
+							channel: 'tradingview-mcp',
+							error: error.message,
+							retryable: error.category !== 'provider_unavailable',
+						};
 					}
 				}, 1, this.logger, { signal: AbortSignal.any([controller.signal, budgetController.signal]) });
 
@@ -653,7 +677,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw new Error(normalizedResult.error);
+				throw createMcpError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -676,7 +700,12 @@ class TradingViewMcpService {
 				}
 				return { success: true, channel: 'tradingview-mcp', analysis };
 			} catch (error) {
-				return { success: false, channel: 'tradingview-mcp', error: error.message };
+				return {
+					success: false,
+					channel: 'tradingview-mcp',
+					error: error.message,
+					retryable: error.category !== 'provider_unavailable',
+				};
 			}
 		}, cfg.maxRetries, this.logger, { signal });
 
@@ -702,7 +731,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw new Error(normalizedResult.error);
+				throw createMcpError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -722,7 +751,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw new Error(normalizedResult.error);
+				throw createMcpError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -765,7 +794,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw new Error(normalizedResult.error);
+				throw createMcpError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -786,12 +815,22 @@ class TradingViewMcpService {
 					const rpcResult = await this._callTool(toolName, args, { signal });
 					return { success: true, channel: 'tradingview-mcp', data: rpcResult };
 				} catch (error) {
-					return { success: false, channel: 'tradingview-mcp', error: error.message };
+					return {
+						success: false,
+						channel: 'tradingview-mcp',
+						error: error.message,
+						category: error.category,
+						httpStatusCode: error.httpStatusCode,
+						retryable: error.category !== 'provider_unavailable',
+					};
 				}
 			}, cfg.maxRetries, this.logger, { signal });
 
 			if (!result.success) {
-				throw new Error(`TradingView MCP scan ${toolName} failed: ${result.error || 'unknown error'}`);
+				const error = new Error(`TradingView MCP scan ${toolName} failed: ${result.error || 'unknown error'}`);
+				error.category = result.category;
+				error.httpStatusCode = result.httpStatusCode;
+				throw error;
 			}
 
 			return this._normalizeScanResult(result.data);
@@ -875,7 +914,7 @@ class TradingViewMcpService {
 
 		if (callResult.isError) {
 			const errorMessage = this._extractContentText(callResult) || `TradingView MCP tool ${toolName} returned isError=true`;
-			throw new Error(errorMessage);
+			throw createMcpError(errorMessage);
 		}
 
 		if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
@@ -967,7 +1006,9 @@ class TradingViewMcpService {
 		const nextSessionId = response.headers.get('mcp-session-id') || sessionId;
 
 		if (!response.ok && !(response.status === 202 && !expectResponse)) {
-			throw new Error(`TradingView MCP HTTP ${response.status}: ${bodyText || 'empty response'}`);
+			const error = createMcpError(`TradingView MCP HTTP ${response.status}: ${bodyText || 'empty response'}`);
+			error.httpStatusCode = response.status;
+			throw error;
 		}
 
 		if (!expectResponse) {
@@ -982,7 +1023,7 @@ class TradingViewMcpService {
 		const rpc = this._decodeRpcBody(bodyText, response.headers.get('content-type'), payload.id);
 
 		if (rpc && rpc.error) {
-			throw new Error(rpc.error.message || 'TradingView MCP returned an RPC error');
+			throw createMcpError(rpc.error.message || 'TradingView MCP returned an RPC error');
 		}
 
 		return {
@@ -1384,6 +1425,7 @@ class TradingViewMcpService {
 					lastCheckedAt: timestamp,
 					lastSuccessAt: timestamp,
 					lastErrorCategory: null,
+					lastHttpStatusCode: null,
 					successCount: this[key].successCount + 1,
 				};
 			});
@@ -1407,12 +1449,18 @@ class TradingViewMcpService {
 				} else {
 					nextCounts.request_failed = (nextCounts.request_failed || 0) + 1;
 				}
+				const previousHttpStatusCode = this[key] ? this[key].lastHttpStatusCode : null;
 				this[key] = {
 					...this[key],
 					status: 'degraded',
 					lastCheckedAt: timestamp,
 					lastFailureAt: timestamp,
 					lastErrorCategory: errorCategory,
+					// Retain the most recent observed HTTP status when a later failure carries
+					// no HTTP evidence (timeout/protocol error), so the only 5xx proof survives.
+					lastHttpStatusCode: Number.isInteger(error?.httpStatusCode)
+						? error.httpStatusCode
+						: (Number.isInteger(previousHttpStatusCode) ? previousHttpStatusCode : null),
 					failureCount: this[key].failureCount + 1,
 					errorCategoryCounts: nextCounts,
 				};
@@ -1561,6 +1609,9 @@ class TradingViewMcpService {
 		const name = error && typeof error.name === 'string' ? error.name : '';
 		if (error && error.category === 'circuit_breaker_open') {
 			return 'circuit_breaker_open';
+		}
+		if (error && error.category === 'provider_unavailable') {
+			return 'provider_unavailable';
 		}
 		if (/circuit breaker/i.test(message)) {
 			return 'circuit_breaker_open';

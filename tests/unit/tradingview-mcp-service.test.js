@@ -713,6 +713,230 @@ describe('TradingViewMcpService', () => {
 		expect(service._getErrorCategory(new Error('TradingView MCP HTTP 408: request timeout'))).toBe('http_4xx');
 	});
 
+	it('classifies provider-level failures as terminal and preserves the HTTP status', async () => {
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: false,
+			status: 503,
+			text: async () => 'Service Suspended: this service has been suspended by its owner',
+			headers: { get: () => null },
+		});
+		const service = new TradingViewMcpService({ maxRetries: 1 });
+
+		try {
+			await expect(service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+			})).rejects.toThrow('HTTP 503');
+
+			expect(service.getStatus()).toEqual(expect.objectContaining({
+				lastHttpStatusCode: 503,
+				lastErrorCategory: 'provider_unavailable',
+			}));
+		} finally {
+			global.fetch = originalFetch;
+		}
+	});
+
+	it('does not retry terminal provider-level tool failures raised through createMcpError', async () => {
+		const originalFetch = global.fetch;
+		// HTTP 200 handshake, then an isError tool result carrying a suspension payload so the
+		// error is produced by the real createMcpError path rather than a hand-built Error.
+		const buildFetch = () => jest.fn().mockImplementation(async (_url, init) => {
+			const body = JSON.parse(init.body);
+			if (body.method === 'initialize') {
+				return {
+					ok: true,
+					status: 200,
+					text: async () => JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2024-11-05' } }),
+					headers: { get: (h) => (h === 'mcp-session-id' ? 'session-terminal' : (h === 'content-type' ? 'application/json' : null)) },
+				};
+			}
+			if (body.method === 'tools/call') {
+				return {
+					ok: true,
+					status: 200,
+					text: async () => JSON.stringify({
+						jsonrpc: '2.0',
+						id: body.id,
+						result: { isError: true, content: [{ type: 'text', text: 'Service Suspended: this service has been suspended by its owner' }] },
+					}),
+					headers: { get: (h) => (h === 'content-type' ? 'application/json' : null) },
+				};
+			}
+			return { ok: true, status: 202, text: async () => '', headers: { get: () => null } };
+		});
+		global.fetch = buildFetch();
+		const service = new TradingViewMcpService({ maxRetries: 3 });
+
+		try {
+			await expect(service.analyzeSymbolIdentifier({
+				raw: 'BINANCE:BTCUSDT',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+			})).rejects.toThrow('TradingView MCP call failed');
+
+			// Only the initialize handshake and one tool call: the suspension payload is terminal.
+			const toolCalls = global.fetch.mock.calls
+				.map(([, init]) => JSON.parse(init.body))
+				.filter((body) => body.method === 'tools/call');
+			expect(toolCalls).toHaveLength(1);
+			expect(service.getStatus()).toEqual(expect.objectContaining({
+				lastErrorCategory: 'provider_unavailable',
+			}));
+		} finally {
+			global.fetch = originalFetch;
+		}
+	});
+
+	it('retries transient tool payload errors that are not provider outages', async () => {
+		const originalFetch = global.fetch;
+		const buildFetch = () => jest.fn().mockImplementation(async (_url, init) => {
+			const body = JSON.parse(init.body);
+			if (body.method === 'initialize') {
+				return {
+					ok: true,
+					status: 200,
+					text: async () => JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2024-11-05' } }),
+					headers: { get: (h) => (h === 'mcp-session-id' ? 'session-transient' : (h === 'content-type' ? 'application/json' : null)) },
+				};
+			}
+			if (body.method === 'tools/call') {
+				return {
+					ok: true,
+					status: 200,
+					text: async () => JSON.stringify({
+						jsonrpc: '2.0',
+						id: body.id,
+						result: { isError: true, content: [{ type: 'text', text: 'Analysis failed: Expecting value: line 1 column 1' }] },
+					}),
+					headers: { get: (h) => (h === 'content-type' ? 'application/json' : null) },
+				};
+			}
+			return { ok: true, status: 202, text: async () => '', headers: { get: () => null } };
+		});
+		global.fetch = buildFetch();
+		const service = new TradingViewMcpService({ maxRetries: 3 });
+
+		try {
+			await expect(service.analyzeSymbolIdentifier({
+				raw: 'BINANCE:BTCUSDT',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+			})).rejects.toThrow('TradingView MCP call failed');
+
+			// A malformed upstream payload is not a definitive outage, so all attempts are used.
+			const toolCalls = global.fetch.mock.calls
+				.map(([, init]) => JSON.parse(init.body))
+				.filter((body) => body.method === 'tools/call');
+			expect(toolCalls).toHaveLength(3);
+			// A malformed upstream payload is not classified as a definitive provider outage.
+			expect(service.getStatus()).toEqual(expect.objectContaining({
+				lastErrorCategory: 'request_failed',
+			}));
+		} finally {
+			global.fetch = originalFetch;
+		}
+	});
+
+	it('classifies top-level JSON-RPC provider errors as terminal', async () => {
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn().mockImplementation(async (_url, init) => {
+			const body = JSON.parse(init.body);
+			return {
+				ok: true,
+				status: 200,
+				text: async () => JSON.stringify({
+					jsonrpc: '2.0',
+					id: body.id ?? null,
+					error: { code: -32000, message: 'Service Suspended' },
+				}),
+				headers: { get: (h) => (h === 'mcp-session-id' ? 'session-rpc-error' : (h === 'content-type' ? 'application/json' : null)) },
+			};
+		});
+		const service = new TradingViewMcpService({ maxRetries: 3 });
+
+		try {
+			await expect(service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+			})).rejects.toThrow('Service Suspended');
+
+			expect(service.getStatus()).toEqual(expect.objectContaining({
+				lastErrorCategory: 'provider_unavailable',
+			}));
+		} finally {
+			global.fetch = originalFetch;
+		}
+	});
+
+	it('retains the last observed HTTP status when a later failure has no HTTP status', async () => {
+		const originalFetch = global.fetch;
+		const service = new TradingViewMcpService({ maxRetries: 1 });
+
+		const http503 = () => ({
+			ok: false,
+			status: 503,
+			text: async () => 'upstream down',
+			headers: { get: () => null },
+		});
+
+		try {
+			// First operation observes an HTTP 503.
+			global.fetch = jest.fn().mockResolvedValue(http503());
+			await expect(service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+			})).rejects.toThrow();
+			expect(service.getStatus()).toEqual(expect.objectContaining({ lastHttpStatusCode: 503 }));
+
+			// A later failure with no HTTP status must not erase the only 5xx evidence.
+			global.fetch = jest.fn().mockRejectedValue(new Error('socket hang up'));
+			await expect(service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+			})).rejects.toThrow();
+			expect(service.getStatus()).toEqual(expect.objectContaining({
+				lastHttpStatusCode: 503,
+				lastErrorCategory: 'request_failed',
+			}));
+
+			// A newer HTTP response still replaces the retained value.
+			global.fetch = jest.fn().mockResolvedValue({ ...http503(), status: 502 });
+			await expect(service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+			})).rejects.toThrow();
+			expect(service.getStatus()).toEqual(expect.objectContaining({ lastHttpStatusCode: 502 }));
+		} finally {
+			global.fetch = originalFetch;
+		}
+	});
+
+	it('preserves terminal provider status when scan tools fail', async () => {
+		const service = new TradingViewMcpService({ maxRetries: 3 });
+		const error = Object.assign(new Error('TradingView MCP HTTP 503: Service Suspended'), {
+			category: 'provider_unavailable',
+			httpStatusCode: 503,
+		});
+		service._callTool = jest.fn().mockRejectedValue(error);
+
+		await expect(service.callScanTool('top_gainers')).rejects.toThrow('TradingView MCP scan top_gainers failed');
+
+		expect(service._callTool).toHaveBeenCalledTimes(1);
+		expect(service.getStatus()).toEqual(expect.objectContaining({
+			lastHttpStatusCode: 503,
+			lastErrorCategory: 'provider_unavailable',
+		}));
+	});
+
 	it('calls combined_analysis tool and unwraps result in callCombinedAnalysis', async () => {
 		const service = new TradingViewMcpService({ logger: { warn: jest.fn(), error: jest.fn() } });
 		service._callTool = jest.fn().mockResolvedValue({
@@ -1231,7 +1455,7 @@ describe('TradingViewMcpService', () => {
 					lastErrorCategory: 'http_5xx',
 					consecutiveFailures: 2,
 				}),
-				{ merge: true }
+				{ merge: true },
 			);
 		});
 
