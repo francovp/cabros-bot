@@ -535,7 +535,13 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/DeliveryResult"
+            "$ref": "#/components/responses/DeliveryResult",
+            "description": "Per-channel delivery result. When ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION is enabled and the same exchange/symbol/timeframe/side signal fires within its cooldown window, the response includes suppressedRepeat: true with empty results and deliveredChannels while the alert remains persisted with a suppression marker. Replay endpoints that run with dryRun=true return payloadPreview, alertId, channels, and idempotencyKeyHashPrefix instead of dispatching to any channel.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -595,7 +601,13 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/MessageDeliveryResult"
+            "$ref": "#/components/responses/MessageDeliveryResult",
+            "description": "Generic-message delivery response. A replay returns the cached body with idempotencyReplayed=true and Idempotency-Replay: true. The requestId field mirrors the inbound x-request-id header (sanitized) or a generated UUIDv4 so callers can correlate the response with logs, Sentry, and admin paging.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -652,7 +664,13 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/AnalysisResult"
+            "$ref": "#/components/responses/AnalysisResult",
+            "description": "Analysis and delivery result",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -715,7 +733,13 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/AnalysisResult"
+            "$ref": "#/components/responses/AnalysisResult",
+            "description": "Analysis and delivery result",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -764,7 +788,13 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/VolumeConfirmationResult"
+            "$ref": "#/components/responses/VolumeConfirmationResult",
+            "description": "Structured TradingView MCP volume confirmation data, decision, and timing metadata.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -812,7 +842,13 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/SymbolAnalysisResult"
+            "$ref": "#/components/responses/SymbolAnalysisResult",
+            "description": "Single-symbol TradingView analysis, formatted alert text, risk levels, and decision metadata.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -2434,7 +2470,13 @@
         ],
         "responses": {
           "200": {
-            "$ref": "#/components/responses/NewsMonitorAnalysisResult"
+            "$ref": "#/components/responses/NewsMonitorAnalysisResult",
+            "description": "News monitor analysis and delivery result",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -2480,7 +2522,13 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/NewsMonitorAnalysisResult"
+            "$ref": "#/components/responses/NewsMonitorAnalysisResult",
+            "description": "News monitor analysis and delivery result",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -6080,10 +6128,7 @@
         "description": "Request processing exceeded the global request-deadline ceiling",
         "headers": {
           "X-Request-Id": {
-            "description": "Unique identifier assigned to the request",
-            "schema": {
-              "type": "string"
-            }
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         },
         "content": {
@@ -12312,6 +12357,14 @@
             "type": "boolean",
             "description": "Bootstrap gate verdict, ANDed with the dependency verdict. Only present on the `/ready?depth=dependencies` variant."
           }
+        }
+      }
+    },
+    "headers": {
+      "XRequestIdResponseHeader": {
+        "description": "Unique identifier assigned to the request. Echoes the inbound `x-request-id` when supplied, and is also returned as `requestId` in JSON response bodies. Absent on routes exempted through `REQUEST_DEADLINE_EXEMPT_PATHS`.",
+        "schema": {
+          "type": "string"
         }
       }
     }

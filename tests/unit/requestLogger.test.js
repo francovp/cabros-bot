@@ -184,6 +184,35 @@ describe('Request Logger Middleware', () => {
 		jest.resetModules();
 	});
 
+	it('treats a trailing slash in a configured exemption as equivalent', () => {
+		// Both middlewares strip trailing slashes from the request, so a configured
+		// `/api/slow/` must be normalized the same way or it silently exempts
+		// nothing while the operator believes it is configured.
+		const savedExempt = process.env.REQUEST_DEADLINE_EXEMPT_PATHS;
+		process.env.REQUEST_DEADLINE_EXEMPT_PATHS = '/api/slow/';
+		jest.resetModules();
+		const middleware = require('../../src/lib/requestLogger').createRequestLogger();
+
+		for (const url of ['/api/slow', '/api/slow/']) {
+			const res = buildRes();
+			middleware(buildReq({ url }), res, jest.fn());
+			res.statusCode = 200;
+			res.end();
+			triggerFinish(res);
+		}
+
+		expect(output.info).not.toHaveBeenCalled();
+		expect(output.warn).not.toHaveBeenCalled();
+		expect(output.error).not.toHaveBeenCalled();
+
+		if (savedExempt === undefined) {
+			delete process.env.REQUEST_DEADLINE_EXEMPT_PATHS;
+		} else {
+			process.env.REQUEST_DEADLINE_EXEMPT_PATHS = savedExempt;
+		}
+		jest.resetModules();
+	});
+
 	it('uses warn level for 4xx status codes', () => {
 		const middleware = createRequestLogger();
 		const req = buildReq();

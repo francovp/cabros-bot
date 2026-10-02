@@ -293,7 +293,18 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.expect(200);
 
 		expect(first.body.success).toBe(true);
-		expect(second.body).toEqual({ ...first.body, idempotencyReplayed: true });
+		// Everything except the correlation id is replayed verbatim. The requestId
+		// is deliberately NOT: the replay is a distinct HTTP request, so the
+		// deadline, the X-Request-Id header, and the structured access log all carry
+		// the replaying request's id. Replaying the original id would advertise a
+		// correlation id that appears nowhere in the logs for this request.
+		expect(second.body).toEqual({
+			...first.body,
+			idempotencyReplayed: true,
+			requestId: second.body.requestId,
+		});
+		expect(second.body.requestId).not.toBe(first.body.requestId);
+		expect(second.body.requestId).toBe(second.headers['x-request-id']);
 		expect(second.headers['idempotency-replay']).toBe('true');
 		expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
 		expect(global.fetch).toHaveBeenCalledTimes(2);
@@ -792,6 +803,34 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 		expect(first.body.requestId).toBe('msg-replay-001');
 		expect(replay.body.requestId).toBe('msg-replay-001');
+		expect(replay.body.idempotencyReplayed).toBe(true);
+	});
+
+	it('re-correlates an idempotent replay that arrives with a different x-request-id', async () => {
+		// Request headers are not part of the idempotency fingerprint, so a retry
+		// carrying a new x-request-id is a valid replay. The response must then
+		// advertise the replaying request's id so the body's correlation id, the
+		// X-Request-Id header, and the structured access log all agree.
+		const payload = { message: 'Divergent replay id', channels: ['telegram'] };
+		const first = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('x-request-id', 'msg-original-001')
+			.set('idempotency-key', 'msg-divergent-idem-001')
+			.send(payload)
+			.expect(200);
+
+		const replay = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('x-request-id', 'msg-retry-002')
+			.set('idempotency-key', 'msg-divergent-idem-001')
+			.send(payload)
+			.expect(200);
+
+		expect(first.body.requestId).toBe('msg-original-001');
+		expect(replay.body.requestId).toBe('msg-retry-002');
+		expect(replay.headers['x-request-id']).toBe('msg-retry-002');
 		expect(replay.body.idempotencyReplayed).toBe(true);
 	});
 

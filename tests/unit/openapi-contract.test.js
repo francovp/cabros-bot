@@ -200,12 +200,46 @@ describe('OpenAPI contract', () => {
 		expect(contract.components.responses.AnalysisResult.content['application/json'].schema).toEqual({
 			$ref: '#/components/schemas/JsonObject',
 		});
-		expect(contract.paths['/api/news-monitor'].get.responses['200']).toEqual({
+		// The response body schema stays generic; only the correlation response
+		// header is added alongside the `$ref` (OpenAPI 3.1 sibling keys).
+		const expectedNewsMonitorResponse = {
 			$ref: '#/components/responses/NewsMonitorAnalysisResult',
+			description: expect.any(String),
+			headers: {
+				'X-Request-Id': { $ref: '#/components/headers/XRequestIdResponseHeader' },
+			},
+		};
+		expect(contract.paths['/api/news-monitor'].get.responses['200']).toEqual(expectedNewsMonitorResponse);
+		expect(contract.paths['/api/news-monitor'].post.responses['200']).toEqual(expectedNewsMonitorResponse);
+	});
+
+	it('declares the X-Request-Id response header on every operation documenting the request id', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+		expect(contract.components.headers.XRequestIdResponseHeader).toBeDefined();
+		expect(contract.components.responses.RequestTimeout.headers['X-Request-Id']).toEqual({
+			$ref: '#/components/headers/XRequestIdResponseHeader',
 		});
-		expect(contract.paths['/api/news-monitor'].post.responses['200']).toEqual({
-			$ref: '#/components/responses/NewsMonitorAnalysisResult',
-		});
+
+		let documented = 0;
+		for (const [path, ops] of Object.entries(contract.paths)) {
+			for (const [method, op] of Object.entries(ops)) {
+				if (!op || typeof op !== 'object' || !op.parameters) continue;
+				if (!JSON.stringify(op.parameters).includes('XRequestIdHeader')) continue;
+				for (const [code, response] of Object.entries(op.responses || {})) {
+					if (!/^[23]/.test(code)) continue;
+					expect(
+						{ path, method, code, header: response.headers?.['X-Request-Id']?.$ref },
+					).toEqual({
+						path, method, code,
+						header: '#/components/headers/XRequestIdResponseHeader',
+					});
+					documented += 1;
+				}
+			}
+		}
+		expect(documented).toBeGreaterThanOrEqual(8);
 	});
 
 	it('documents the summary shadow metrics object and no-measurements string forms', () => {
@@ -253,6 +287,14 @@ describe('OpenAPI contract', () => {
 		]));
 		expect(operation.responses['200']).toEqual({
 			$ref: '#/components/responses/MessageDeliveryResult',
+			// `$ref` plus siblings: the referenced description is duplicated because
+			// OpenAPI 3.1 no longer implies it once a sibling key is present, and the
+			// correlation header the parameter description promises must be declared
+			// on the response object for generated clients to discover it.
+			description: expect.any(String),
+			headers: {
+				'X-Request-Id': { $ref: '#/components/headers/XRequestIdResponseHeader' },
+			},
 		});
 		expect(operation.responses['409']).toEqual({
 			$ref: '#/components/responses/MessageIdempotencyConflict',

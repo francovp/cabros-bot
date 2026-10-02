@@ -56,32 +56,7 @@ function maskSensitivePathSegments(path) {
 }
 
 /**
- * Express routing is case-insensitive by default, so `/HEALTHCHECK` reaches the
- * healthcheck handler. Match the exemption set case-insensitively (mirroring
- * `requestDeadline.normalizePath`) or a probe could flood the logs by varying
- * one character per request.
- */
-/**
- * `/docs` serves a Swagger UI page that then pulls `swagger-ui.css`,
- * `swagger-ui-bundle.js`, `swagger-ui-standalone-preset.js`, and
- * `swagger-initializer.js` from the same router. Exact set membership exempts
- * none of those, so every documentation visit produced several low-signal
- * records despite `/docs` being documented as a probe route. Treat these static
- * asset roots as subtrees.
- */
-const EXEMPT_SUBTREES = ['/docs'];
-
-function matchesExemptPath(path, exemptPaths) {
-	const lower = path.toLowerCase();
-	if (exemptPaths.has(lower)) return true;
-	for (const prefix of EXEMPT_SUBTREES) {
-		if (lower === prefix || lower.startsWith(`${prefix}/`)) return true;
-	}
-	return false;
-}
-
-/**
- * Reusing the deadline's resolver keeps a single validation rule for the
+ * Reusing the deadline's matcher keeps a single validation rule for the
  * correlation id across the request lifecycle, so the structured log line and
  * any 408 payload always agree. It already prefers `req.requestId` over the
  * inbound header, which is what makes the ids match.
@@ -91,13 +66,15 @@ function resolveRequestId(req) {
 }
 
 /**
- * The deadline's exemption list is the single vocabulary for "probe route".
- * It is read per request rather than captured once at module load, so an
- * operator who adds a path to `REQUEST_DEADLINE_EXEMPT_PATHS` exempts it from
- * request logging at the same time, with no reload.
+ * The deadline's exemption predicate is the single vocabulary for "probe
+ * route" — the same `normalizeExemptPath` rule (lower-case, no trailing slash)
+ * and the same `/docs` subtree treatment. It is read per request rather than
+ * captured once at module load, so an operator who adds a path to
+ * `REQUEST_DEADLINE_EXEMPT_PATHS` exempts it from the deadline and from request
+ * logging at the same time, and the two middlewares cannot drift.
  */
 function isExemptPath(path) {
-	return matchesExemptPath(path, requestDeadline.resolveExemptPaths());
+	return requestDeadline.isExemptPath(path, requestDeadline.resolveExemptPaths());
 }
 
 function sanitizeClientIp(ip) {
