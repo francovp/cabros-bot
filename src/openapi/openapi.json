@@ -727,7 +727,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "502": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/MarketScannerBadGateway"
           },
           "503": {
             "$ref": "#/components/responses/MaintenanceMode"
@@ -5536,6 +5536,51 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/JsonObject"
+            }
+          }
+        }
+      },
+      "MarketScannerBadGateway": {
+        "description": "The endpoint can return 502 in two distinct shapes. (1) TRADINGVIEW_MCP_UNAVAILABLE: the readiness gate skipped every scan because the process-local TradingView MCP circuit breaker is open after recent HTTP 5xx or request failures, so no scanner call was attempted. (2) ALL_SCANS_FAILED: the scans were attempted and every one failed at the provider.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/JsonObject"
+            },
+            "examples": {
+              "mcpUnavailable": {
+                "summary": "502 TRADINGVIEW_MCP_UNAVAILABLE (scans skipped, nothing attempted)",
+                "value": {
+                  "success": false,
+                  "code": "TRADINGVIEW_MCP_UNAVAILABLE",
+                  "error": "TradingView MCP is currently unavailable (circuit breaker: open, lastError: http_5xx). Scans skipped.",
+                  "scanResults": [
+                    {
+                      "scan": "top_gainers",
+                      "status": "skipped",
+                      "reason": "TradingView MCP is currently unavailable (circuit breaker: open, lastError: http_5xx). Scans skipped."
+                    }
+                  ],
+                  "timedOut": false
+                }
+              },
+              "allScansFailed": {
+                "summary": "502 ALL_SCANS_FAILED (scans attempted, every one failed)",
+                "value": {
+                  "success": false,
+                  "code": "ALL_SCANS_FAILED",
+                  "error": "TradingView MCP failed for all requested scans.",
+                  "scanResults": [
+                    {
+                      "scan": "top_gainers",
+                      "status": "error",
+                      "error": "TradingView MCP request failed",
+                      "errorCategory": "request_failed"
+                    }
+                  ],
+                  "timedOut": false
+                }
+              }
             }
           }
         }
