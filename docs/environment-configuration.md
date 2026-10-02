@@ -305,6 +305,31 @@ pnpm test:firebase
 `dryRun` defaults to `true` and validates the request without submitting. Set `dryRun: false` only after enabling the feature and explicitly selecting the intended environment. The default environment is Spot Testnet; `live` is never selected implicitly. Live requests require `idempotency-key` (or `x-idempotency-key`) or an explicit `clientOrderId`; a matching request is replayed and a changed payload returns `409 IDEMPOTENCY_CONFLICT`. Send decimal quantities, prices, and quote amounts as strings when exact precision matters; the service preserves those values through validation, submission, and reconciliation by disabling Binance SDK response beautification. MARKET orders must omit `timeInForce`; Binance order-test validation runs for LIMIT dynamic price filters and account-dependent filters such as `MAX_POSITION` and `MAX_NUM_ORDERS`. Definitive Binance rejections, including pre-execution timestamp and throttling failures, return `400 BINANCE_ORDER_REJECTED`; a recovered Binance order that does not match the request returns `409 BINANCE_ORDER_CONFLICT`; transient order-test failures return retryable `502 BINANCE_VALIDATION_FAILED`. A live request with an idempotency key derives a deterministic Binance `clientOrderId`; after cache expiration or process restart, the service reconciles that ID before submitting again. If Binance submission status is ambiguous, including Binance execution-unknown code `-1006`, the API returns `503 BINANCE_ORDER_STATUS_UNKNOWN` and replays that result for the same key; reconcile the order before retrying with a new key.
 
 The response and audit logs include only sanitized order metadata. API credentials are never returned or logged.
+
+#### Auto-Trade (Alert-to-Order Bridge)
+
+Opt-in bridging of an enriched TradingView alert to a Binance Spot order. This closes the alerting-to-execution gap tracked in #955; advanced order types (OCO, trailing-stop, bracket) remain #805.
+
+Auto-trade is opt-in **twice** — the operator sets `ENABLE_AUTO_TRADE=true` and the caller additionally passes `autoTrade=true` to `POST /api/webhook/alert`. It never runs in preview deployments. **Dry-run is the default**, so enabling the flag alone validates the entire path (request validation, exchange-info filters, notional bounds) without mutating Binance.
+
+- `ENABLE_AUTO_TRADE` - Master operator switch (`true` or `false`, default: `false`). Security control; environment-only and excluded from Firebase Remote Config.
+- `AUTO_TRADE_DRY_RUN` - Validate without submitting (`true` or `false`, default: `true`). Set to `false` only after testnet and demo validation.
+- `AUTO_TRADE_MAX_NOTIONAL` - Per-order quote-asset cap (default: `100`). The effective cap is the **lower** of this and `BINANCE_TRADING_MAX_NOTIONAL`, so it can only tighten the existing limit.
+- `AUTO_TRADE_MIN_ABS_SENTIMENT` - Minimum `|sentiment_score|` before an alert may trigger an order (default: `0.3`, range `0`-`1`).
+- `AUTO_TRADE_COOLDOWN_BARS` - Duplicate-signal cooldown in bars (default: `1`, range `1`-`10`; out-of-range integers clamp). The key includes the side, so an opposite-side flip is never suppressed.
+
+The bridge is deliberately conservative. It only submits a `MARKET` `BUY`, and only when the alert was parsed as a TradingView signal (`EXCHANGE:SYMBOL(TIMEFRAME) COMPRA|VENTA|BUY|SELL`) and enrichment produced both a sentiment score and an observed price. It never infers trade direction from sentiment, because that would risk inverting a trader's intent.
+
+**Live (non-dry-run) orders additionally require** both a resolvable signal timeframe and `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`. Without a timeframe-derived bar length there is no dedup window, and without process-wide repeat suppression a notification retry storm could drive repeated real submissions for the same signal.
+
+Auto-trade **never blocks alert delivery**. Every outcome returns HTTP 200 with the alert delivered and reports a non-sensitive `autoTrade` summary instead:
+
+```json
+{ "success": true, "autoTrade": { "requested": true, "executed": false, "reason": "SENTIMENT_BELOW_THRESHOLD" } }
+```
+
+`SELL` signals are intentionally **not** auto-executed: no balance/holdings lookup exists, so a sell cannot be sized safely without risking oversell. That gap is tracked in #955 Phase 2.
+
 - `ENABLE_LLM_ALERT_ENRICHMENT` - Enable optional secondary LLM enrichment (`true` or `false`, default: `false`)
 - `AZURE_LLM_ENDPOINT` - Azure AI Inference endpoint URL (required if enrichment enabled)
 - `AZURE_LLM_KEY` - Azure AI Inference API key (required if enrichment enabled)

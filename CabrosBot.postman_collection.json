@@ -1272,6 +1272,169 @@
           ]
         },
         {
+          "name": "POST Send Alert (autoTrade)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BINANCE:BTCUSDT(1h) COMPRA\",\n  \"signalClass\": \"breakout\",\n  \"autoTrade\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert?autoTrade=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ],
+              "query": [
+                {
+                  "key": "autoTrade",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('auto-trade returns 200 and still delivers the alert', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.success).to.eql(true);",
+                  "    pm.expect(body.requestId).to.be.a('string');",
+                  "});",
+                  "",
+                  "pm.test('autoTrade summary never leaks secrets', function () {",
+                  "    const body = pm.response.json();",
+                  "    if (!body.autoTrade) { return; }",
+                  "    const serialized = JSON.stringify(body.autoTrade);",
+                  "    pm.expect(body.autoTrade.requested).to.eql(true);",
+                  "    pm.expect(body.autoTrade.executed).to.be.a('boolean');",
+                  "    pm.expect(serialized).to.not.include('apiKey');",
+                  "    pm.expect(serialized).to.not.include('api_secret');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Auto-trade dry-run executed",
+              "status": "OK",
+              "code": 200,
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BINANCE:BTCUSDT(1h) COMPRA\",\n  \"signalClass\": \"breakout\",\n  \"autoTrade\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert?autoTrade=true",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ],
+                  "query": [
+                    {
+                      "key": "autoTrade",
+                      "value": "true"
+                    }
+                  ]
+                }
+              },
+              "body": "{\"success\": true, \"requestId\": \"req-12345\", \"results\": [{\"channel\": \"telegram\", \"success\": true, \"durationMs\": 180}], \"enriched\": true, \"requestedChannels\": [\"telegram\"], \"deliveredChannels\": [\"telegram\"], \"autoTrade\": {\"requested\": true, \"executed\": true, \"symbol\": \"BTCUSDT\", \"dryRun\": true, \"orderId\": 4242}}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ]
+            },
+            {
+              "name": "Auto-trade skipped (sentiment below threshold)",
+              "status": "OK",
+              "code": 200,
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BINANCE:BTCUSDT(1h) COMPRA\",\n  \"signalClass\": \"breakout\",\n  \"autoTrade\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert?autoTrade=true",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ],
+                  "query": [
+                    {
+                      "key": "autoTrade",
+                      "value": "true"
+                    }
+                  ]
+                }
+              },
+              "body": "{\"success\": true, \"requestId\": \"req-12346\", \"results\": [{\"channel\": \"telegram\", \"success\": true, \"durationMs\": 180}], \"enriched\": true, \"requestedChannels\": [\"telegram\"], \"deliveredChannels\": [\"telegram\"], \"autoTrade\": {\"requested\": true, \"executed\": false, \"reason\": \"SENTIMENT_BELOW_THRESHOLD\"}}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ]
+            }
+          ]
+        },
+        {
           "name": "POST Send Alert (invalid signalClass - 400 Bad Request)",
           "request": {
             "method": "POST",

@@ -3,7 +3,7 @@
   "info": {
     "title": "Cabros Bot API",
     "version": "0.1.0",
-    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter is deprecated and exists only for legacy compatibility — it may leak through reverse-proxy access logs. A one-time per-process deprecation warning is emitted on use; setting API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) rejects query-parameter auth with 401 API_KEY_QUERY_REMOVED after the date. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true."
+    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter is deprecated and exists only for legacy compatibility \u2014 it may leak through reverse-proxy access logs. A one-time per-process deprecation warning is emitted on use; setting API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) rejects query-parameter auth with 401 API_KEY_QUERY_REMOVED after the date. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true."
   },
   "servers": [
     {
@@ -158,7 +158,7 @@
                 },
                 "examples": {
                   "depthReadiness": {
-                    "summary": "?depth=readiness — always 200; degradation is reported in the body",
+                    "summary": "?depth=readiness \u2014 always 200; degradation is reported in the body",
                     "value": {
                       "ready": true,
                       "failClosed": false,
@@ -194,7 +194,7 @@
                     }
                   },
                   "depthReadinessDegraded": {
-                    "summary": "?depth=readiness with a degraded provider — still 200 (advisory)",
+                    "summary": "?depth=readiness with a degraded provider \u2014 still 200 (advisory)",
                     "value": {
                       "ready": false,
                       "failClosed": false,
@@ -272,7 +272,7 @@
                 },
                 "examples": {
                   "dependenciesHealthy": {
-                    "summary": "/ready?depth=dependencies — bootstrap ready AND every considered dependency healthy",
+                    "summary": "/ready?depth=dependencies \u2014 bootstrap ready AND every considered dependency healthy",
                     "value": {
                       "ready": true,
                       "failClosed": true,
@@ -321,7 +321,7 @@
                     }
                   },
                   "bootstrapReady": {
-                    "summary": "Bare /ready — bootstrap gate only, no provider probes",
+                    "summary": "Bare /ready \u2014 bootstrap gate only, no provider probes",
                     "value": {
                       "status": "ready",
                       "ready": true,
@@ -362,7 +362,7 @@
                 },
                 "examples": {
                   "bootstrapPending": {
-                    "summary": "Bare /ready — bootstrap still pending (503)",
+                    "summary": "Bare /ready \u2014 bootstrap still pending (503)",
                     "value": {
                       "status": "pending",
                       "ready": false,
@@ -384,7 +384,7 @@
                     }
                   },
                   "dependenciesDegraded": {
-                    "summary": "/ready?depth=dependencies — dependency degraded (503)",
+                    "summary": "/ready?depth=dependencies \u2014 dependency degraded (503)",
                     "value": {
                       "ready": false,
                       "failClosed": true,
@@ -434,7 +434,7 @@
                     }
                   },
                   "bootstrapPendingBlocksDependencies": {
-                    "summary": "/ready?depth=dependencies — bootstrap still pending, so the gate stays 503 even though every dependency is healthy",
+                    "summary": "/ready?depth=dependencies \u2014 bootstrap still pending, so the gate stays 503 even though every dependency is healthy",
                     "value": {
                       "ready": false,
                       "failClosed": true,
@@ -513,6 +513,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/AutoTrade"
           },
           {
             "$ref": "#/components/parameters/UseTradingViewData"
@@ -1189,7 +1192,7 @@
         "tags": [
           "Alerts"
         ],
-        "summary": "Record a trader verdict (👍 / 👎) for a stored alert",
+        "summary": "Record a trader verdict (\ud83d\udc4d / \ud83d\udc4e) for a stored alert",
         "operationId": "submitAlertFeedback",
         "description": "Persists a single trader verdict per (alertId, chatId) tuple. Re-clicks update the verdict instead of appending a new row. Bounded by ALERT_FEEDBACK_RETENTION_DAYS and a SHA-256 chat hash; raw chat ids are never returned through this surface.",
         "requestBody": {
@@ -2950,7 +2953,7 @@
           "Signal outcomes"
         ],
         "summary": "Retrieve confidence calibration analysis for signal outcomes",
-        "description": "Calculates empirical target-hit rates and average returns grouped by confidence score buckets (e.g. 0.70–0.75, 0.75–0.80, 0.80–0.85, 0.85–0.90, 0.90–1.00) over evaluated signals, suggesting an optimal confidence threshold.",
+        "description": "Calculates empirical target-hit rates and average returns grouped by confidence score buckets (e.g. 0.70\u20130.75, 0.75\u20130.80, 0.80\u20130.85, 0.85\u20130.90, 0.90\u20131.00) over evaluated signals, suggesting an optimal confidence threshold.",
         "operationId": "getOutcomesCalibration",
         "parameters": [
           {
@@ -3083,7 +3086,7 @@
           "Trading"
         ],
         "summary": "Preview a Binance Spot order without submitting it",
-        "description": "Returns a BINANCE_ORDER_PREVIEW response with the LOT_SIZE-adjusted quantity, projected notional, estimated maker/taker fees, slippage estimate from a fail-open depth probe (4-second AbortController deadline), and a 5-second expiresAt token. The endpoint is read-only and never calls submitNewOrder. Preview-time validation reuses the same exchange-info filters and Binance order-test filters as POST /api/trading/binance/orders, but cannot be replayed after expiresAt. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot; wouldExceedBudget is reported when the slippageBps estimate exceeds the supplied budget but no order is rejected. BINANCE_TRADING_MAX_NOTIONAL is enforced — previews above the cap return 403 MAX_NOTIONAL_EXCEEDED.",
+        "description": "Returns a BINANCE_ORDER_PREVIEW response with the LOT_SIZE-adjusted quantity, projected notional, estimated maker/taker fees, slippage estimate from a fail-open depth probe (4-second AbortController deadline), and a 5-second expiresAt token. The endpoint is read-only and never calls submitNewOrder. Preview-time validation reuses the same exchange-info filters and Binance order-test filters as POST /api/trading/binance/orders, but cannot be replayed after expiresAt. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot; wouldExceedBudget is reported when the slippageBps estimate exceeds the supplied budget but no order is rejected. BINANCE_TRADING_MAX_NOTIONAL is enforced \u2014 previews above the cap return 403 MAX_NOTIONAL_EXCEEDED.",
         "operationId": "postBinanceSpotOrderPreview",
         "requestBody": {
           "required": true,
@@ -3178,7 +3181,7 @@
                         "makerFeeBps": 10,
                         "appliedFeeBps": 10,
                         "estimatedFeeQuote": "0.65",
-                        "label": "estimate — not a Binance fill guarantee"
+                        "label": "estimate \u2014 not a Binance fill guarantee"
                       },
                       "slippage": {
                         "slippageBudgetBps": 75,
@@ -3890,7 +3893,7 @@
         "type": "apiKey",
         "in": "query",
         "name": "api-key",
-        "description": "Deprecated (GH-756): legacy compatibility only — query strings may be logged by reverse proxies and access logs. Prefer the x-api-key header. A process-scoped deprecation warning is logged on first use, and a sunset date (API_KEY_QUERY_SUNSET, YYYY-MM-DD UTC) can be set to reject query-parameter auth with 401 API_KEY_QUERY_REMOVED.",
+        "description": "Deprecated (GH-756): legacy compatibility only \u2014 query strings may be logged by reverse proxies and access logs. Prefer the x-api-key header. A process-scoped deprecation warning is logged on first use, and a sunset date (API_KEY_QUERY_SUNSET, YYYY-MM-DD UTC) can be set to reject query-parameter auth with 401 API_KEY_QUERY_REMOVED.",
         "x-deprecated": true
       },
       "FirebaseBearerAuth": {
@@ -4401,6 +4404,15 @@
           ]
         },
         "description": "Filter by analysis decision action (BUY, SELL, or NO_TRADE)."
+      },
+      "AutoTrade": {
+        "name": "autoTrade",
+        "in": "query",
+        "description": "When true, the enriched alert signal may be bridged to a Binance Spot order. Requires the server-side ENABLE_AUTO_TRADE flag and is ignored in preview deployments. Dry-run remains the default, so this only routes the signal unless AUTO_TRADE_DRY_RUN=false is explicitly configured. Auto-trade never blocks alert delivery; failures are reported in the non-sensitive autoTrade object.",
+        "schema": {
+          "type": "boolean",
+          "default": false
+        }
       }
     },
     "requestBodies": {
@@ -6582,7 +6594,7 @@
                 },
                 "message": {
                   "type": "string",
-                  "example": "Preferencias eliminadas. Se usarán valores por defecto."
+                  "example": "Preferencias eliminadas. Se usar\u00e1n valores por defecto."
                 }
               },
               "required": [
@@ -10983,6 +10995,10 @@
               "type": "string"
             }
           },
+          "autoTrade": {
+            "$ref": "#/components/schemas/AutoTradeOutcome",
+            "description": "Present only when auto-trade was requested and the ENABLE_AUTO_TRADE flag is enabled. Omitted when auto-trade is disabled."
+          },
           "alertId": {
             "type": "string",
             "description": "Stored alert ID echoed back from replay endpoints."
@@ -13181,6 +13197,58 @@
             "description": "Bootstrap gate verdict, ANDed with the dependency verdict. Only present on the `/ready?depth=dependencies` variant."
           }
         }
+      },
+      "AutoTradeOutcome": {
+        "type": "object",
+        "description": "Non-sensitive summary of the alert-to-order bridge. Present only when the request opted in with autoTrade=true and the server-side ENABLE_AUTO_TRADE flag is enabled. Auto-trade never blocks alert delivery: an executed:false outcome still returns HTTP 200 with the alert delivered.",
+        "additionalProperties": false,
+        "properties": {
+          "requested": {
+            "type": "boolean",
+            "description": "Always true when this object is present."
+          },
+          "executed": {
+            "type": "boolean",
+            "description": "True only when an order was accepted by the Binance order service."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why no order was placed.",
+            "enum": [
+              "AUTO_TRADE_DISABLED",
+              "BINANCE_TRADING_NOT_CONFIGURED",
+              "NO_ENRICHED_ALERT",
+              "NO_SYMBOL",
+              "NO_PARSED_SIDE",
+              "SENTIMENT_BELOW_THRESHOLD",
+              "SELL_NOT_SUPPORTED_PENDING_BALANCE_LOOKUP",
+              "NO_CURRENT_PRICE",
+              "INVALID_MAX_NOTIONAL",
+              "SYMBOL_NOT_ALLOWED",
+              "UNKNOWN_TIMEFRAME_CANNOT_DEDUPLICATE",
+              "LIVE_ORDER_REQUIRES_REPEAT_SUPPRESSION",
+              "COOLDOWN_ACTIVE",
+              "ORDER_FAILED",
+              "AUTO_TRADE_BRIDGE_ERROR"
+            ]
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Binance Spot symbol the order targeted."
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "True when the order was validated without mutating Binance. Dry-run is the default."
+          },
+          "orderId": {
+            "type": "integer",
+            "description": "Binance order id, present only when executed."
+          }
+        },
+        "required": [
+          "requested",
+          "executed"
+        ]
       }
     },
     "headers": {
