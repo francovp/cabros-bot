@@ -36,6 +36,8 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const sentryService = require('../../src/services/monitoring/SentryService');
+const { enrichAlert } = require('../../src/controllers/webhooks/handlers/alert/grounding');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const { postAlert, resolveRequestId } = require('../../src/controllers/webhooks/handlers/alert/alert');
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -60,6 +62,77 @@ describe('alert request ID resolution and echo', () => {
 		process.env.ENABLE_WHATSAPP_ALERTS = 'false';
 		process.env.ENABLE_DISCORD_ALERTS = 'false';
 		jest.clearAllMocks();
+	});
+
+	describe('signal outcome price provenance', () => {
+		it('normalizes derived quote provenance for MCP prices before recording outcomes', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			enrichAlert.mockResolvedValue({
+				current_price: 64863.03,
+				levelsSource: 'derived-quote',
+				tradingViewEnrichmentApplied: true,
+				tradingViewEnrichmentStatus: 'partial',
+			});
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.recordSignal.mockResolvedValue(null);
+
+			const response = buildResponse();
+			await postAlert({})({
+				headers: {},
+				body: { text: 'BINANCE:BTCUSDT (1h) BUY' },
+				query: { useTradingViewData: 'true' },
+			}, response);
+
+			expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(expect.objectContaining({
+				priceSource: 'tradingview-mcp',
+			}));
+		});
+
+		it('normalizes derived quote provenance for Binance fallback prices', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			enrichAlert.mockResolvedValue({
+				current_price: 64863.03,
+				levelsSource: 'derived-quote',
+				tradingViewEnrichmentApplied: false,
+				tradingViewEnrichmentStatus: 'failed',
+			});
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.recordSignal.mockResolvedValue(null);
+
+			const response = buildResponse();
+			await postAlert({})({
+				headers: {},
+				body: { text: 'BINANCE:BTCUSDT (1h) BUY' },
+				query: { useTradingViewData: 'true' },
+			}, response);
+
+			expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(expect.objectContaining({
+				priceSource: 'binance',
+			}));
+		});
+
+		it('normalizes derived quote provenance for Twelve Data fallback prices', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			enrichAlert.mockResolvedValue({
+				current_price: 230.5,
+				levelsSource: 'derived-quote',
+				tradingViewEnrichmentApplied: false,
+				tradingViewEnrichmentStatus: 'failed',
+			});
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.recordSignal.mockResolvedValue(null);
+
+			const response = buildResponse();
+			await postAlert({})({
+				headers: {},
+				body: { text: 'NASDAQ:AAPL (1h) BUY' },
+				query: { useTradingViewData: 'true' },
+			}, response);
+
+			expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(expect.objectContaining({
+				priceSource: 'twelve-data',
+			}));
+		});
 	});
 
 	describe('resolveRequestId helper', () => {
@@ -200,6 +273,7 @@ describe('alert request ID resolution and echo', () => {
 				sentiment: 'BULLISH',
 				sentiment_score: 0.7,
 				current_price: 85000,
+				priceSource: 'gemini-grounding',
 				invalidation_level: 83000,
 				target_level: 89000,
 				sources: [],
@@ -271,7 +345,7 @@ describe('alert request ID resolution and echo', () => {
 
 			expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(expect.objectContaining({
 				price: 3250,
-				priceSource: 'derived-quote',
+				priceSource: 'binance',
 			}));
 		});
 

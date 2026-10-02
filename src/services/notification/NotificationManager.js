@@ -7,6 +7,9 @@ const sentryService = require('../monitoring/SentryService');
 const remoteConfigService = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { notificationRedriveService } = require('./NotificationRedriveService');
+const { deliveryMetricsService } = require('./DeliveryMetricsService');
+const { chatPreferenceService } = require('../preferences/ChatPreferenceService');
+const NotificationChannel = require('./NotificationChannel');
 
 const DEFAULT_ZERO_CHANNEL_ALERT_COOLDOWN_MS = 300000;
 
@@ -15,8 +18,9 @@ class NotificationManager {
    * @param {Object} telegramService - TelegramService instance
    * @param {Object} whatsappService - WhatsAppService instance
    * @param {Object} discordService - DiscordService instance
+   * @param {Object} [preferenceService] - ChatPreferenceService instance
    */
-	constructor(telegramService, whatsappService, discordService) {
+	constructor(telegramService, whatsappService, discordService, preferenceService = chatPreferenceService) {
 		this.channels = new Map(
 			[
 				['telegram', telegramService],
@@ -24,6 +28,7 @@ class NotificationManager {
 				['discord', discordService],
 			].filter(([, channel]) => !!channel),
 		);
+		this.chatPreferenceService = preferenceService || chatPreferenceService;
 		this.zeroChannelBroadcastCount = 0;
 		this.lastZeroChannelAlertAt = 0;
 		notificationRedriveService.setNotificationManagerGetter(() => this);
@@ -93,6 +98,76 @@ class NotificationManager {
 			.map((ch) => ch.name);
 	}
 
+	/**
+	 * Check if a channel is configured for delivery by operator intent.
+	 * Subclasses of NotificationChannel report based on operator gates and credentials.
+	 * Plain mocks in unit tests without isConfigured default to true for backward compatibility.
+	 * @param {Object} channel
+	 * @returns {boolean}
+	 */
+	isChannelConfigured(channel) {
+		if (!channel) {
+			return false;
+		}
+		if (typeof channel.isConfigured === 'function') {
+			return Boolean(channel.isConfigured());
+		}
+		if (typeof channel.isConfigured === 'boolean') {
+			return channel.isConfigured;
+		}
+		if (channel instanceof NotificationChannel) {
+			return typeof channel.isEnabled === 'function' ? channel.isEnabled() : false;
+		}
+		return true;
+	}
+
+	/**
+	 * Get array of names of channels that are configured by operator intent
+	 * @returns {Array<string>}
+	 */
+	getConfiguredChannels() {
+		return Array.from(this.channels.values())
+			.filter(channel => this.isChannelConfigured(channel))
+			.map(channel => channel.name);
+	}
+
+	/**
+	 * Get array of names of registered channels the operator never configured.
+	 * Used to make the zero-channel admin page actionable ("why did I get this?").
+	 * @returns {Array<string>}
+	 */
+	getUnconfiguredChannels() {
+		return Array.from(this.channels.values())
+			.filter(channel => !this.isChannelConfigured(channel))
+			.map(channel => channel.name);
+	}
+
+	/**
+	 * Check if Telegram service is eligible to send admin notifications.
+	 * Allows dedicated admin paging during zero-channel outages even when
+	 * the default broadcast channel is disabled or missing its broadcast chat ID.
+	 * @param {Object} telegramService
+	 * @returns {boolean}
+	 */
+	isTelegramAdminDeliveryEligible(telegramService) {
+		if (!telegramService) {
+			return false;
+		}
+		if (typeof telegramService.isAdminDeliveryEligible === 'function') {
+			return telegramService.isAdminDeliveryEligible();
+		}
+		if (telegramService.isEnabled?.()) {
+			return true;
+		}
+		if (telegramService.bot) {
+			return true;
+		}
+		if (typeof telegramService.send === 'function' && !('bot' in telegramService)) {
+			return true;
+		}
+		return false;
+	}
+
 	async notifyAdminOfFailures(alert, results, options = {}) {
 		if (options && options.isRedrive) {
 			return;
@@ -109,8 +184,8 @@ class NotificationManager {
 			console.warn('[NotificationManager] Admin chat is not configured; delivery failure notification skipped');
 			return;
 		}
-		if (!telegramService || !telegramService.isEnabled()) {
-			console.warn('[NotificationManager] Telegram is disabled; delivery failure notification skipped');
+		if (!this.isTelegramAdminDeliveryEligible(telegramService)) {
+			console.warn('[NotificationManager] Telegram is not eligible for admin delivery; delivery failure notification skipped');
 			return;
 		}
 
@@ -170,20 +245,34 @@ class NotificationManager {
 			console.warn('[NotificationManager] Admin chat is not configured; zero-channel alert notification skipped');
 			return;
 		}
-		if (!telegramService || !telegramService.isEnabled()) {
-			console.warn('[NotificationManager] Telegram is disabled; zero-channel alert notification skipped');
+		if (!this.isTelegramAdminDeliveryEligible(telegramService)) {
+			console.warn('[NotificationManager] Telegram is not eligible for admin delivery; zero-channel alert notification skipped');
 			return;
 		}
 
 		const requestId = alert && (alert.requestId || alert.correlationId);
-		const redriveContext = notificationRedriveService.isEnabled()
+		const configuredChannels = this.getConfiguredChannels();
+		const unconfiguredChannels = this.getUnconfiguredChannels();
+		const redriveContext = notificationRedriveService.isEnabled() && configuredChannels.length > 0
 			? [`Dead-letters queued for redrive (pending: ${notificationRedriveService.getPendingCount()})`]
 			: [];
+		const droppedMessage = configuredChannels.length > 0
+			? 'Broadcast alerts are being dropped and dead-lettered.'
+			: 'Broadcast alerts are being dropped.';
+		// Operator intent is the difference between "a channel broke" and "a channel was never
+		// configured". Reporting both sets makes the page self-diagnosing.
+		const channelContext = configuredChannels.length === 0
+			? ['No notification channels are configured (operator intent).']
+			: [`Configured channels (failing validation or disabled at runtime): ${configuredChannels.join(', ')}`];
+		if (unconfiguredChannels.length > 0) {
+			channelContext.push(`Not configured: ${unconfiguredChannels.join(', ')}`);
+		}
 		const message = [
 			'🚨 CRITICAL: Notification delivery failure (Zero channels enabled)',
 			'All notification channels are currently disabled or failing validation.',
-			'Broadcast alerts are being dropped and dead-lettered.',
+			droppedMessage,
 			`Total zero-channel broadcasts dropped: ${this.zeroChannelBroadcastCount}`,
+			...channelContext,
 			...redriveContext,
 			...(requestId ? [`Request ID: ${requestId}`] : []),
 		].join('\n');
@@ -267,10 +356,38 @@ class NotificationManager {
 					},
 				});
 
+				const channelStartTime = Date.now();
 				return Promise.resolve()
-					.then(() => ch.send(alert, {
-						...options,
-						signal: options.signalByChannel?.[ch.name] || options.signal,
+					.then(async () => {
+						const prefCheck = await this._evaluateChatPreferences(ch, alert, options);
+						if (!prefCheck.deliver) {
+							return {
+								channel: ch.name,
+								success: true,
+								skipped: true,
+								reason: 'PREFERENCE_FILTER',
+								filterReason: prefCheck.reason,
+							};
+						}
+						const channelSignal = options.signalByChannel?.[ch.name];
+						let signal = options.signal;
+						if (channelSignal && signal) {
+							signal = AbortSignal.any([channelSignal, signal]);
+						} else if (channelSignal) {
+							signal = channelSignal;
+						}
+						return ch.send(alert, {
+							...options,
+							signal,
+						});
+					})
+					.then((value) => ({
+						value,
+						durationMs: Date.now() - channelStartTime,
+					}))
+					.catch((error) => Promise.reject({
+						error,
+						durationMs: Date.now() - channelStartTime,
 					}))
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
@@ -282,30 +399,48 @@ class NotificationManager {
 			sentryService.endSpan(dispatchSpan);
 		}
 
+		const totalDurationMs = Date.now() - startTime;
+
 		const formattedResults = results.map((r, idx) => {
 			const chName = channels[idx] ? channels[idx].name : 'unknown';
 			if (r.status === 'fulfilled') {
-				if (r.value && typeof r.value === 'object') {
-					return {
+				const val = r.value && r.value.value;
+				const fallbackDuration = (r.value && typeof r.value.durationMs === 'number')
+					? r.value.durationMs
+					: Math.max(Date.now() - startTime, 0);
+
+				if (val && typeof val === 'object') {
+					const item = {
 						channel: chName,
-						...r.value,
+						...val,
 					};
+					if (typeof item.durationMs !== 'number' || !Number.isFinite(item.durationMs) || item.durationMs < 0) {
+						item.durationMs = fallbackDuration;
+					}
+					return item;
 				}
 				return {
 					success: false,
 					channel: chName,
 					error: 'Channel returned empty response',
+					durationMs: fallbackDuration,
 				};
 			}
+
+			const reasonErr = r.reason && r.reason.error !== undefined ? r.reason.error : r.reason;
+			const fallbackDuration = (r.reason && typeof r.reason.durationMs === 'number')
+				? r.reason.durationMs
+				: Math.max(Date.now() - startTime, 0);
+
 			return {
 				success: false,
 				channel: chName,
-				error: (r.reason && (r.reason.message || String(r.reason))) || 'Unknown error',
+				error: (reasonErr && (reasonErr.message || String(reasonErr))) || 'Unknown error',
+				durationMs: fallbackDuration,
 			};
 		});
 
 		// Report external failures to Sentry
-		const totalDurationMs = Date.now() - startTime;
 		const httpContext = options.http || (options.endpoint ? {
 			endpoint: options.endpoint,
 			method: options.method || 'POST',
@@ -335,7 +470,14 @@ class NotificationManager {
 			}
 		}
 
-		if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+		const isRedriveIneligible =
+			Boolean(options.isRedrive) ||
+			options.redriveEligible === false ||
+			Boolean(options.isProbe) ||
+			Boolean(alert?.isProbe) ||
+			alert?.redriveEligible === false;
+
+		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 			const failedResults = formattedResults.filter(result => result && !result.success);
 			if (failedResults.length > 0) {
 				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
@@ -348,17 +490,19 @@ class NotificationManager {
 			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
 		});
 
-		console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
-			channel: r ? r.channel : 'unknown',
-			success: r ? r.success : false,
-			messageId: r ? r.messageId : undefined,
-			error: r ? r.error : undefined,
-		}))));
+				this._recordDeliveryMetrics(formattedResults, totalDurationMs);
 
-		return formattedResults;
-	}
+				console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
+					channel: r ? r.channel : 'unknown',
+					success: r ? r.success : false,
+					messageId: r ? r.messageId : undefined,
+					error: r ? r.error : undefined,
+				}))));
 
-	/**
+				return formattedResults;
+			}
+
+			/**
     * Send alert to all enabled channels in parallel
     * @param {Object} alert - Alert object with text and optional enriched content
     * @returns {Promise<Array>} Array of SendResult objects (one per enabled channel)
@@ -397,22 +541,30 @@ class NotificationManager {
 				http: httpContext,
 			});
 
-			if (!options.isRedrive && notificationRedriveService.isEnabled()) {
-				const candidateChannels = Array.from(this.channels.keys());
-				const channelsToQueue = candidateChannels.length > 0 ? candidateChannels : ['telegram', 'whatsapp', 'discord'];
-				const syntheticResults = channelsToQueue.map(channelName => ({
-					channel: channelName,
-					success: false,
-					error: 'No notification channels enabled at broadcast time (zero-channel drop)',
-					statusCode: 0,
-					attemptCount: 1,
-				}));
+		const isRedriveIneligible =
+			Boolean(options.isRedrive) ||
+			options.redriveEligible === false ||
+			Boolean(options.isProbe) ||
+			Boolean(alert?.isProbe) ||
+			alert?.redriveEligible === false;
 
-				trackBackgroundTask(
-					notificationRedriveService.recordDeliveryResults(alert, syntheticResults, options),
-				).catch((error) => {
-					console.warn('[NotificationManager] Failed to record dead-letters for zero-channel broadcast:', error.message);
-				});
+		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
+				const candidateChannels = this.getConfiguredChannels();
+				if (candidateChannels.length > 0) {
+					const syntheticResults = candidateChannels.map(channelName => ({
+						channel: channelName,
+						success: false,
+						error: 'No notification channels enabled at broadcast time (zero-channel drop)',
+						statusCode: 0,
+						attemptCount: 1,
+					}));
+
+					trackBackgroundTask(
+						notificationRedriveService.recordDeliveryResults(alert, syntheticResults, options),
+					).catch((error) => {
+						console.warn('[NotificationManager] Failed to record dead-letters for zero-channel broadcast:', error.message);
+					});
+				}
 			}
 
 			trackBackgroundTask(this.notifyAdminOfZeroChannels(alert, options)).catch((error) => {
@@ -450,10 +602,31 @@ class NotificationManager {
 					},
 				});
 
+				const channelStartTime = Date.now();
 				return Promise.resolve()
-					.then(() => ch.send(alert, {
-						...options,
-						signal: options.signalByChannel?.[ch.name] || options.signal,
+					.then(async () => {
+						const prefCheck = await this._evaluateChatPreferences(ch, alert, options);
+						if (!prefCheck.deliver) {
+							return {
+								channel: ch.name,
+								success: true,
+								skipped: true,
+								reason: 'PREFERENCE_FILTER',
+								filterReason: prefCheck.reason,
+							};
+						}
+						return ch.send(alert, {
+							...options,
+							signal: options.signalByChannel?.[ch.name] || options.signal,
+						});
+					})
+					.then((value) => ({
+						value,
+						durationMs: Date.now() - channelStartTime,
+					}))
+					.catch((error) => Promise.reject({
+						error,
+						durationMs: Date.now() - channelStartTime,
 					}))
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
@@ -465,30 +638,48 @@ class NotificationManager {
 			sentryService.endSpan(dispatchSpan);
 		}
 
+		const totalDurationMs = Date.now() - startTime;
+
 		const formattedResults = results.map((r, idx) => {
 			const chName = enabledChannels[idx] ? enabledChannels[idx].name : 'unknown';
 			if (r.status === 'fulfilled') {
-				if (r.value && typeof r.value === 'object') {
-					return {
+				const val = r.value && r.value.value;
+				const fallbackDuration = (r.value && typeof r.value.durationMs === 'number')
+					? r.value.durationMs
+					: Math.max(Date.now() - startTime, 0);
+
+				if (val && typeof val === 'object') {
+					const item = {
 						channel: chName,
-						...r.value,
+						...val,
 					};
+					if (typeof item.durationMs !== 'number' || !Number.isFinite(item.durationMs) || item.durationMs < 0) {
+						item.durationMs = fallbackDuration;
+					}
+					return item;
 				}
 				return {
 					success: false,
 					channel: chName,
 					error: 'Channel returned empty response',
+					durationMs: fallbackDuration,
 				};
 			}
+
+			const reasonErr = r.reason && r.reason.error !== undefined ? r.reason.error : r.reason;
+			const fallbackDuration = (r.reason && typeof r.reason.durationMs === 'number')
+				? r.reason.durationMs
+				: Math.max(Date.now() - startTime, 0);
+
 			return {
 				success: false,
 				channel: chName,
-				error: (r.reason && (r.reason.message || String(r.reason))) || 'Unknown error',
+				error: (reasonErr && (reasonErr.message || String(reasonErr))) || 'Unknown error',
+				durationMs: fallbackDuration,
 			};
 		});
 
 		// Report external failures to Sentry (T014)
-		const totalDurationMs = Date.now() - startTime;
 		const httpContext = options.http || (options.endpoint ? {
 			endpoint: options.endpoint,
 			method: options.method || 'POST',
@@ -518,7 +709,14 @@ class NotificationManager {
 			}
 		}
 
-		if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+		const isRedriveIneligible =
+			Boolean(options.isRedrive) ||
+			options.redriveEligible === false ||
+			Boolean(options.isProbe) ||
+			Boolean(alert?.isProbe) ||
+			alert?.redriveEligible === false;
+
+		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 			const failedResults = formattedResults.filter(result => result && !result.success);
 			if (failedResults.length > 0) {
 				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
@@ -531,6 +729,8 @@ class NotificationManager {
 			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
 		});
 
+		this._recordDeliveryMetrics(formattedResults, totalDurationMs);
+
 		console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
 			channel: r ? r.channel : 'unknown',
 			success: r ? r.success : false,
@@ -539,6 +739,44 @@ class NotificationManager {
 		}))));
 
 		return formattedResults;
+	}
+
+	async _evaluateChatPreferences(channel, alert, options = {}) {
+		if (options.bypassPreferences || alert?.bypassPreferences || alert?.isProbe || options.isProbe) {
+			return { deliver: true };
+		}
+		const chatId = channel.name === 'telegram'
+			? (alert?.telegramChatId || channel.chatId)
+			: channel.name === 'whatsapp'
+				? (alert?.whatsappChatId || channel.chatId)
+				: channel.chatId;
+
+		const prefService = this.chatPreferenceService || chatPreferenceService;
+		return prefService.shouldDeliverAlert({
+			chatId: chatId ? String(chatId) : '',
+			channel: channel.name,
+			alert,
+			options,
+		});
+	}
+
+	_recordDeliveryMetrics(formattedResults, fallbackDurationMs) {
+		if (!Array.isArray(formattedResults) || formattedResults.length === 0) {
+			return;
+		}
+		for (const result of formattedResults) {
+			if (!result || typeof result !== 'object' || result.skipped) {
+				continue;
+			}
+			const durationMs = typeof result.durationMs === 'number' && Number.isFinite(result.durationMs)
+				? result.durationMs
+				: fallbackDurationMs;
+			deliveryMetricsService.record({
+				channel: result.channel,
+				success: result.success === true,
+				durationMs,
+			});
+		}
 	}
 }
 
