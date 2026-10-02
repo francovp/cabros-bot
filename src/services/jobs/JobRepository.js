@@ -2,6 +2,9 @@
 
 const admin = require('firebase-admin');
 const alertStorageService = require('../storage/AlertStorageService');
+const { firestoreWriteMetricsService } = require('../storage/FirestoreWriteMetricsService');
+
+const WRITE_METRICS_DOMAIN_JOBS = 'jobs';
 
 const COLLECTION_NAME = 'tradingviewJobs';
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
@@ -53,6 +56,17 @@ function mergeCallbackStatus(currentStatus, incomingStatus) {
 function isFirestoreEnabled() {
 	return process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
 		|| process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true';
+}
+
+// Whether a durable execution record counts as queued backlog depth: never started,
+// or a claim whose lease has already expired and can therefore never complete.
+// A row can become queued on its own as time passes, which is why a rotation cycle
+// spanning several probes is not a consistent view of the collection.
+function isQueuedExecution(execution, now = Date.now()) {
+	if (execution.status === 'queued') return true;
+	if (!['claimed', 'running'].includes(execution.status)) return false;
+	const leaseUntilMs = Date.parse(execution.leaseUntil || '');
+	return Number.isFinite(leaseUntilMs) && leaseUntilMs <= now;
 }
 
 function sanitizeJob(job) {
@@ -111,6 +125,26 @@ function createCallbackStatusUnavailableError(cause) {
 }
 
 class JobRepository {
+	// Rotation cursor for the bounded durable backlog scan. Held on the instance
+	// so a sweep that hit its page cap resumes where the previous one stopped,
+	// instead of re-reading the same prefix and never reaching a backlog that
+	// sorts after it. Cleared when a sweep reaches the end of the collection.
+	constructor() {
+		this._backlogScanCursor = null;
+		this._backlogScanCursorId = null;
+		// Bumped whenever the caller accepts a result. A scan captures the current
+		// value and only advances the cursor if it is unchanged when the scan
+		// finishes, so a request that was abandoned at the caller's probe deadline
+		// (and whose result was discarded) cannot move the shared cursor. That would
+		// silently skip a window the caller never saw, letting the next sweep close a
+		// rotation cycle on evidence with a hole in it.
+		this._backlogScanEpoch = 0;
+		// Called by the consumer to mark the previous result as accepted.
+		this.commitBacklogScan = () => {
+			this._backlogScanEpoch += 1;
+		};
+	}
+
 	async save(job, { required = false } = {}) {
 		const sanitized = sanitizeJob(job);
 		if (!sanitized || !sanitized.jobId) {
@@ -128,6 +162,9 @@ class JobRepository {
 
 		const firestore = this._getFirestore();
 		if (!firestore) {
+			if (isFirestoreEnabled()) {
+				firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN_JOBS);
+			}
 			memoryJobs.set(sanitized.jobId, cloneJob(sanitized));
 			return sanitized.jobId;
 		}
@@ -184,8 +221,10 @@ class JobRepository {
 				} else {
 					await firestore.collection(COLLECTION_NAME).doc(sanitized.jobId).set(durableJob);
 				}
+				firestoreWriteMetricsService.recordWriteSuccess(WRITE_METRICS_DOMAIN_JOBS);
 			} catch (error) {
 				console.warn('[JobRepository] Failed to persist job:', error.message);
+				firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN_JOBS);
 				if (required) {
 					memoryJobs.delete(sanitized.jobId);
 					const storageError = new Error('Durable job storage is unavailable.');
@@ -739,6 +778,265 @@ class JobRepository {
 		return [...memoryJobs.entries()].map(([id, job]) => [id, cloneJob(job)]);
 	}
 
+	async getBacklogDepth({ maxScan = 100, maxPages = 5, now = Date.now() } = {}) {
+		const firestore = this._getFirestore();
+
+		if (firestore) {
+			try {
+				let query = firestore.collection(COLLECTION_NAME);
+				// The page cap only bounds one sweep. Carry the last scanned document
+				// across probes so a backlog sitting past the cap is not invisible
+				// forever: the next sweep resumes after it, and once the suffix is
+				// reached the cursor resets and the scan starts over from the front.
+				// Without this, the oldest N documents would be rescanned every
+				// probe and any queued job ordered after them would never be seen.
+				let lastDoc = this._backlogScanCursor;
+				let lastDocId = this._backlogScanCursorId;
+				const scanEpoch = this._backlogScanEpoch;
+				let rotatedFromCursor = Boolean(lastDoc);
+				let durableQueuedCount = 0;
+				let oldestCreatedAt = null;
+				let truncated = false;
+
+				for (let page = 0; page < maxPages; page += 1) {
+					let pageQuery = query;
+					if (typeof pageQuery.where === 'function') {
+						pageQuery = pageQuery.where('status', '==', 'processing');
+					}
+					if (typeof pageQuery.orderBy === 'function') {
+						pageQuery = pageQuery.orderBy('createdAt', 'asc');
+					}
+					if (typeof pageQuery.limit === 'function') {
+						pageQuery = pageQuery.limit(maxScan);
+					}
+					if (lastDoc && typeof pageQuery.startAfter === 'function') {
+						pageQuery = pageQuery.startAfter(lastDoc);
+					}
+
+					const snapshot = await pageQuery.get();
+					const docs = snapshot?.docs || [];
+					for (const doc of docs) {
+						const data = doc.data() || {};
+						const execution = data.execution || {};
+						const isQueued = isQueuedExecution(execution, now);
+
+						if (isQueued) {
+							durableQueuedCount += 1;
+							if (data.createdAt && (!oldestCreatedAt || Date.parse(data.createdAt) < Date.parse(oldestCreatedAt))) {
+								oldestCreatedAt = data.createdAt;
+							}
+						}
+					}
+
+					if (docs.length < maxScan || typeof pageQuery.startAfter !== 'function') break;
+					const nextDoc = docs[docs.length - 1];
+					if (!nextDoc || !nextDoc.id || nextDoc.id === lastDocId) break;
+					lastDoc = nextDoc;
+					lastDocId = nextDoc.id;
+					// A full page was scanned and more may remain; keep the counts a
+					// lower bound rather than paginating the whole collection.
+					if (page === maxPages - 1) truncated = true;
+				}
+
+				// Advance the rotation cursor for the next probe. truncated is only set
+				// on the last allowed page, which is only reached once lastDoc and
+				// lastDocId hold a real document, so no extra guard is needed. A sweep
+				// that reached the end of the collection clears the cursor so the next
+				// probe re-reads from the oldest document.
+				//
+				// A sweep that both resumed from a cursor and then reached the end has
+				// covered the whole collection across two sweeps, so it reports
+				// cycleComplete. Without it, a collection larger than the page cap
+				// could never produce a sweep that proves recovery and the operator
+				// incident would never clear.
+				//
+				// The commit is conditional on scanEpoch: the caller bumps it only when
+				// it actually accepts a result. A scan abandoned at the caller's probe
+				// deadline still resolves here, but by then the epoch has moved on, so
+				// it leaves the cursor alone instead of skipping a window whose result
+				// the caller discarded.
+				const cycleComplete = !truncated && rotatedFromCursor;
+				if (this._backlogScanEpoch === scanEpoch) {
+					if (truncated) {
+						this._backlogScanCursor = lastDoc;
+						this._backlogScanCursorId = lastDocId;
+					} else {
+						this._backlogScanCursor = null;
+						this._backlogScanCursorId = null;
+					}
+				}
+
+				const oldestCreatedAtMs = oldestCreatedAt ? Date.parse(oldestCreatedAt) : null;
+				const oldestQueuedAgeMs = Number.isFinite(oldestCreatedAtMs)
+					? Math.max(0, now - oldestCreatedAtMs)
+					: null;
+
+				// A sweep that started past the front of the collection sees only part
+				// of the backlog, so the reported age is a lower bound: an older
+				// queued job may sit in the unscanned prefix and this probe cannot
+				// see it. The age is never inflated (that would page on no evidence),
+				// and the rotation flag makes the partial view explicit instead of
+				// letting it read as a complete depth.
+				return {
+					durableQueuedCount,
+					oldestQueuedAgeMs,
+					oldestCreatedAt,
+					truncated,
+					scanRotated: rotatedFromCursor,
+					cycleComplete,
+					source: 'firestore',
+				};
+			} catch (error) {
+				console.warn('[JobRepository] Failed to probe durable backlog depth from Firestore:', error.message);
+				// Report the failure instead of silently degrading to the process-local
+				// map. On a web replica that map is empty, so an empty result would be
+				// indistinguishable from a genuinely drained backlog and could clear a
+				// real active alert. The caller decides how to fail open.
+				return {
+					...this.getMemoryBacklogDepth(now),
+					source: 'firestore-error',
+					probeFailed: true,
+				};
+			}
+		}
+
+		// Firestore job storage is enabled but the client is unavailable: bad
+		// credentials, a failed admin init, or a dependency that never resolved.
+		// That is a broken dependency, not a drained queue. Falling through to the
+		// process-local map would report zero on a freshly restarted web replica
+		// and silently suppress the page for an unreadable backlog, so report an
+		// indeterminate result instead. Intentionally disabled storage keeps using
+		// the map, where an empty result really does mean empty.
+		if (isFirestoreEnabled()) {
+			return {
+				durableQueuedCount: null,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+				truncated: false,
+				source: 'firestore-unavailable',
+				probeFailed: true,
+			};
+		}
+
+		return { ...this.getMemoryBacklogDepth(now), source: 'memory', probeFailed: false };
+	}
+
+	// Re-read the oldest window of the collection, bypassing any rotation cursor.
+	//
+	// A rotation cycle that spans several probes is not a consistent snapshot: the
+	// scan counts a `claimed`/`running` job whose lease has expired as queued, so a
+	// job in the already-scanned prefix can become queued while the later windows are
+	// still being read. By the time the tail reaches the end the cursor is cleared and
+	// nothing re-reads that prefix, so the caller uses this to confirm it is still
+	// drained before claiming recovery.
+	//
+	// Reads a single window rather than the whole collection: the point is to detect
+	// that the prefix is no longer empty, not to re-derive a total depth, so a
+	// `truncated` result here is expected and not an error.
+	async getFrontBacklogDepth({ maxScan = 100, now = Date.now() } = {}) {
+		const firestore = this._getFirestore();
+		if (!firestore) {
+			// Without Firestore the process-local map is the whole truth, and the
+			// in-memory sweep that just ran already read all of it.
+			return this.getMemoryBacklogDepth(now);
+		}
+		try {
+			let query = firestore.collection(COLLECTION_NAME);
+			if (typeof query.where === 'function') {
+				query = query.where('status', '==', 'processing');
+			}
+			if (typeof query.orderBy === 'function') {
+				query = query.orderBy('createdAt', 'asc');
+			}
+			if (typeof query.limit === 'function') {
+				query = query.limit(maxScan);
+			}
+			const snapshot = await query.get();
+			const docs = snapshot?.docs || [];
+			let durableQueuedCount = 0;
+			let oldestCreatedAt = null;
+			// Whether the last row read is a claim that is still live. Rows sort by
+			// createdAt ascending, so anything beyond this page is strictly newer —
+			// and a live claim there could still expire into newly-queued work, which
+			// is the hazard this re-read exists to catch. A last row that is finished
+			// (or queued) cannot grow into anything, so the read is conclusive even
+			// though the page was full.
+			//
+			// Note this is deliberately NOT `docs.length >= maxScan`: the query filters
+			// on the top-level `status == 'processing'`, and every queued job is also
+			// `processing`, so a full page of ordinary running jobs would otherwise
+			// veto recovery permanently on any collection that big.
+			let mayHideUnexpiredClaim = false;
+			for (const doc of docs) {
+				const data = doc.data() || {};
+				const execution = data.execution || {};
+				if (isQueuedExecution(execution, now)) {
+					durableQueuedCount += 1;
+					if (data.createdAt && (!oldestCreatedAt || Date.parse(data.createdAt) < Date.parse(oldestCreatedAt))) {
+						oldestCreatedAt = data.createdAt;
+					}
+				}
+				const leaseUntilMs = Date.parse(execution.leaseUntil || '');
+				mayHideUnexpiredClaim = ['claimed', 'running'].includes(execution.status)
+					&& Number.isFinite(leaseUntilMs)
+					&& leaseUntilMs > now;
+			}
+			const oldestCreatedAtMs = oldestCreatedAt ? Date.parse(oldestCreatedAt) : null;
+			return {
+				durableQueuedCount,
+				oldestCreatedAt,
+				oldestQueuedAgeMs: Number.isFinite(oldestCreatedAtMs)
+					? Math.max(0, now - oldestCreatedAtMs)
+					: null,
+				truncated: mayHideUnexpiredClaim,
+				source: 'firestore',
+			};
+		} catch (error) {
+			console.warn('[JobRepository] Failed to revalidate the backlog front:', error.message);
+			// The caller must treat this as unproven rather than empty, so it reports
+			// the failure rather than falling back to the process-local map.
+			return {
+				durableQueuedCount: null,
+				oldestQueuedAgeMs: null,
+				oldestCreatedAt: null,
+				truncated: false,
+				source: 'firestore-error',
+				probeFailed: true,
+			};
+		}
+	}
+
+	getMemoryBacklogDepth(now = Date.now()) {
+		let durableQueuedCount = 0;
+		let oldestCreatedAt = null;
+
+		for (const job of memoryJobs.values()) {
+			if (TERMINAL_JOB_STATUSES.has(job.status)) continue;
+			const execution = job.execution || {};
+			const isQueued = isQueuedExecution(execution, now);
+
+			if (isQueued) {
+				durableQueuedCount += 1;
+				if (job.createdAt) {
+					if (!oldestCreatedAt || Date.parse(job.createdAt) < Date.parse(oldestCreatedAt)) {
+						oldestCreatedAt = job.createdAt;
+					}
+				}
+			}
+		}
+
+		const oldestCreatedAtMs = oldestCreatedAt ? Date.parse(oldestCreatedAt) : null;
+		const oldestQueuedAgeMs = Number.isFinite(oldestCreatedAtMs)
+			? Math.max(0, now - oldestCreatedAtMs)
+			: null;
+
+		return {
+			durableQueuedCount,
+			oldestQueuedAgeMs,
+			oldestCreatedAt,
+		};
+	}
+
 	_getFirestore() {
 		if (!isFirestoreEnabled()) {
 			return null;
@@ -757,5 +1055,8 @@ module.exports = {
 		memoryJobs.clear();
 		saveVersions.clear();
 		pendingSaves.clear();
+		firestoreWriteMetricsService.resetForTesting();
+		jobRepository._backlogScanCursor = null;
+		jobRepository._backlogScanCursorId = null;
 	},
 };

@@ -18,6 +18,14 @@ function findHeader(item, key) {
 	return item.request.header.find((header) => header.key === key);
 }
 
+function collectRequestItems(items, result = []) {
+	for (const item of items) {
+		if (item.request) result.push(item);
+		if (Array.isArray(item.item)) collectRequestItems(item.item, result);
+	}
+	return result;
+}
+
 describe('Postman collection contract', () => {
 	it('documents Firebase admin configuration and bearer-auth status access', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
@@ -53,6 +61,40 @@ describe('Postman collection contract', () => {
 		});
 	});
 
+	it('documents alertScheduler feature flag and dependency in the Get Status response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+
+		expect(status).toBeDefined();
+		const responseBody = JSON.parse(status.response[0].body);
+		expect(responseBody.featureFlags.alertScheduler).toBe(false);
+		expect(responseBody.dependencies.alertScheduler).toEqual(expect.objectContaining({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+			role: 'web',
+			running: false,
+		}));
+	});
+
+	it('documents entry price source chains in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).dependencies.signalOutcomeWorker.entryPriceSources).toEqual({
+			configured: false,
+			crypto: ['mcp', 'binance', 'gemini'],
+			equity: ['twelve-data'],
+		});
+		expect(JSON.parse(capabilities.response[0].body).dependencies.signalOutcomeWorker.entryPriceSources).toEqual({
+			configured: true,
+			crypto: ['mcp', 'binance', 'gemini'],
+			equity: ['mcp', 'binance', 'gemini'],
+		});
+	});
+
 	it('documents x-idempotency-key on the alert webhook request', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const sendAlert = findItem(collection.item, 'POST Send Alert');
@@ -64,6 +106,44 @@ describe('Postman collection contract', () => {
 				disabled: true,
 			}),
 		]));
+	});
+
+	it('documents valid and invalid per-symbol alert routing variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const valid = findItem(collection.item, 'POST Send Alert (per-symbol routing)');
+		const invalid = findItem(collection.item, 'POST Send Alert (invalid symbol route)');
+
+		expect(valid).toBeDefined();
+		expect(JSON.parse(valid.request.body.raw).symbolRoutes).toEqual({
+			BTCUSDT: { channels: ['telegram'] },
+			NVDA: { channels: ['discord'] },
+		});
+		expect(valid.response[0].body).toContain('"symbol":"BTCUSDT"');
+		expect(invalid).toBeDefined();
+		expect(JSON.parse(invalid.request.body.raw).symbolRoutes.BTCUSDT.channels).toEqual(['slack']);
+		expect(invalid.response[0].code).toBe(400);
+		// The nested channel validation reports `field: "channels"` (plus the unknown
+		// channel list), not the outer `symbolRoutes` field. This mirrors the real
+		// NotificationRoutingValidationError raised by normalizeChannels.
+		expect(JSON.parse(invalid.response[0].body).details).toEqual({
+			field: 'channels',
+			unknownChannels: ['slack'],
+		});
+	});
+
+	it('makes the oversized webhook example generate padding in Postman', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const oversized = findItem(collection.item, 'POST Send Message (oversized body)');
+
+		expect(oversized).toBeDefined();
+		const preRequest = oversized.event?.find((event) => event.listen === 'prerequest');
+		const script = preRequest?.script?.exec?.join('\n') || '';
+
+		expect(preRequest).toBeDefined();
+		expect(script).toContain('pm.variables.set(\'oversizedWebhookPadding\'');
+		expect(oversized.request.body.raw).toContain('{{oversizedWebhookPadding}}');
+		expect(oversized.request.body.raw).not.toContain('{{$padString}}');
+
 	});
 
 	it('uses distinct demo keys for middleware-backed scanner requests', () => {
@@ -223,5 +303,421 @@ describe('Postman collection contract', () => {
 		expect(marketBuyResp.order.quoteOrderQty).toBe('50');
 		expect(marketBuyResp.order.newOrderRespType).toBe('FULL');
 		expect(marketBuyResp.order.newClientOrderId).toBeUndefined();
+	});
+
+	it('documents Request Timeout (408) response examples with required fields', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const endpointsWithTimeout = [
+			'POST Send Alert',
+			'POST Send Message',
+			'POST Create TradingView Analysis Job',
+		];
+
+		for (const name of endpointsWithTimeout) {
+			const item = findItem(collection.item, name);
+			expect(item).toBeDefined();
+			const timeoutExample = item.response.find((res) => res.code === 408);
+			expect(timeoutExample).toBeDefined();
+			expect(timeoutExample.name).toBe('Request Timeout (408)');
+			expect(timeoutExample.status).toBe('Request Timeout');
+			expect(timeoutExample.header).toEqual(expect.arrayContaining([
+				expect.objectContaining({ key: 'X-Request-Id' }),
+			]));
+
+			const parsed = JSON.parse(timeoutExample.body);
+			expect(parsed).toEqual(expect.objectContaining({
+				error: 'Request Timeout',
+				code: 'REQUEST_TIMEOUT',
+				requestId: expect.any(String),
+				deadlineMs: expect.any(Number),
+				durationMs: expect.any(Number),
+			}));
+		}
+	});
+
+	it('documents Request Timeout (408) on every affected admin request variant', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const affectedPaths = [
+			'/api/admin/test-alert',
+			'/api/alerts/batch/delete',
+			'/api/alerts/batch/export',
+			'/api/alerts/batch/replay',
+			'/api/news-monitor/pause',
+			'/api/news-monitor/resume',
+			'/api/news-monitor/status',
+			'/api/symbol-analyses',
+			'/api/symbol-analyses/summary',
+		];
+		const requestItems = collectRequestItems(collection.item);
+
+		for (const routePath of affectedPaths) {
+			const variants = requestItems.filter((item) => {
+				const rawUrl = item.request.url && item.request.url.raw;
+				return typeof rawUrl === 'string' && rawUrl.split('?')[0] === `{{baseUrl}}${routePath}`;
+			});
+			expect(variants.length).toBeGreaterThan(0);
+			for (const item of variants) {
+				expect(item.response.some((response) => response.code === 408)).toBe(true);
+			}
+		}
+	});
+
+	it('documents include=enrichment_summary success and invalid 400 response in GET List Alerts', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const includeItem = findItem(collection.item, 'GET List Alerts (include=enrichment_summary)');
+		const invalidIncludeItem = findItem(collection.item, 'GET List Alerts (invalid include - 400 Bad Request)');
+
+		expect(includeItem).toBeDefined();
+		expect(includeItem.request.url.raw).toContain('include=enrichment_summary');
+		const successBody = JSON.parse(includeItem.response[0].body);
+		expect(successBody.success).toBe(true);
+		expect(successBody.alerts[0].enrichmentSummary).toBeDefined();
+		expect(successBody.alerts[0].enrichmentSummary.sentiment).toBe('BULLISH');
+		expect(successBody.alerts[0].enrichmentSummary.promptProvenance).toBeDefined();
+
+		expect(invalidIncludeItem).toBeDefined();
+		expect(invalidIncludeItem.request.url.raw).toContain('include=invalid_field');
+		expect(invalidIncludeItem.response[0].code).toBe(400);
+		const errorBody = JSON.parse(invalidIncludeItem.response[0].body);
+		expect(errorBody.code).toBe('INVALID_REQUEST');
+		expect(errorBody.error).toContain('enrichment_summary');
+	});
+
+	it('documents chat preferences endpoints with request and response examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const getItem = findItem(collection.item, 'GET Get Chat Preferences');
+		const putItem = findItem(collection.item, 'PUT Update Chat Preferences');
+		const deleteItem = findItem(collection.item, 'DELETE Reset Chat Preferences');
+
+		expect(getItem).toBeDefined();
+		expect(getItem.request.url.raw).toContain('/api/preferences/telegram/');
+		expect(getItem.response).toEqual(expect.arrayContaining([
+			expect.objectContaining({ code: 200 }),
+			expect.objectContaining({ code: 400 }),
+			expect.objectContaining({ code: 401 }),
+		]));
+
+		expect(putItem).toBeDefined();
+		expect(putItem.request.method).toBe('PUT');
+		const putBody = JSON.parse(putItem.request.body.raw);
+		expect(putBody.symbolFilter).toContain('BTCUSDT');
+		expect(putItem.response).toEqual(expect.arrayContaining([
+			expect.objectContaining({ code: 200 }),
+			expect.objectContaining({ code: 400 }),
+		]));
+
+		expect(deleteItem).toBeDefined();
+		expect(deleteItem.request.method).toBe('DELETE');
+		expect(deleteItem.response[0].code).toBe(200);
+	});
+
+	it('documents symbol, exchange, and eventCategory query filters in GET List Alerts and GET Alert Analytics Summary', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const listFiltered = findItem(collection.item, 'GET List Alerts (symbol, exchange, eventCategory)');
+		const listInvalid = findItem(collection.item, 'GET List Alerts (invalid symbol - 400 Bad Request)');
+		const summaryFiltered = findItem(collection.item, 'GET Alert Analytics Summary (symbol, exchange, eventCategory)');
+		const summaryInvalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid symbol - 400 Bad Request)');
+
+		expect(listFiltered).toBeDefined();
+		expect(listFiltered.request.url.raw).toContain('symbol=BTCUSDT');
+		expect(listFiltered.request.url.raw).toContain('exchange=BINANCE');
+		expect(listFiltered.request.url.raw).toContain('eventCategory=price_surge');
+		expect(listFiltered.response[0].code).toBe(200);
+
+		expect(listInvalid).toBeDefined();
+		expect(listInvalid.response[0].code).toBe(400);
+		expect(JSON.parse(listInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+
+		expect(summaryFiltered).toBeDefined();
+		expect(summaryFiltered.request.url.raw).toContain('symbol=BTCUSDT');
+		expect(summaryFiltered.request.url.raw).toContain('exchange=BINANCE');
+		expect(summaryFiltered.request.url.raw).toContain('eventCategory=price_surge');
+		expect(summaryFiltered.response[0].code).toBe(200);
+
+		expect(summaryInvalid).toBeDefined();
+		expect(summaryInvalid.response[0].code).toBe(400);
+		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+	});
+
+	it('documents signalClass in alert webhook and alert query/summary examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const postAlert = findItem(collection.item, 'POST Send Alert');
+		expect(postAlert).toBeDefined();
+		const body = JSON.parse(postAlert.request.body.raw);
+		expect(body.signalClass).toBe('breakout');
+
+		const dryRunAlert = findItem(collection.item, 'POST Send Alert Dry Run (risk metadata)');
+		expect(dryRunAlert).toBeDefined();
+		const dryRunBody = JSON.parse(dryRunAlert.request.body.raw);
+		expect(dryRunBody.signalClass).toBe('breakout');
+		const dryRunResp = JSON.parse(dryRunAlert.response[0].body);
+		expect(dryRunResp.signalClass).toBeUndefined();
+		expect(dryRunResp.payload.signalClass).toBe('breakout');
+
+		const listFiltered = findItem(collection.item, 'GET List Alerts (symbol, exchange, eventCategory)');
+		const listAlert = JSON.parse(listFiltered.response[0].body).alerts[0];
+		expect(listAlert.signalClass).toBe('breakout');
+
+		const summaryFiltered = findItem(collection.item, 'GET Alert Analytics Summary (symbol, exchange, eventCategory)');
+		const summary = JSON.parse(summaryFiltered.response[0].body).summary;
+		expect(summary.signalClassCounts).toBeDefined();
+		expect(summary.signalClassCounts.breakout).toBe(1);
+
+		const postInvalid = findItem(collection.item, 'POST Send Alert (invalid signalClass - 400 Bad Request)');
+		expect(postInvalid).toBeDefined();
+		expect(postInvalid.response[0].code).toBe(400);
+		expect(JSON.parse(postInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+
+		const listClassFiltered = findItem(collection.item, 'GET List Alerts (signalClass filter)');
+		expect(listClassFiltered).toBeDefined();
+		expect(listClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');
+		expect(listClassFiltered.response[0].code).toBe(200);
+
+		const listClassInvalid = findItem(collection.item, 'GET List Alerts (invalid signalClass - 400 Bad Request)');
+		expect(listClassInvalid).toBeDefined();
+		expect(listClassInvalid.response[0].code).toBe(400);
+
+		const summaryClassFiltered = findItem(collection.item, 'GET Alert Analytics Summary (signalClass filter)');
+		expect(summaryClassFiltered).toBeDefined();
+		expect(summaryClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');
+		expect(summaryClassFiltered.response[0].code).toBe(200);
+
+		const summaryClassInvalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid signalClass - 400 Bad Request)');
+		expect(summaryClassInvalid).toBeDefined();
+		expect(summaryClassInvalid.response[0].code).toBe(400);
+
+		const exportClassFiltered = findItem(collection.item, 'GET Export Alerts (JSONL - signalClass filter)');
+		expect(exportClassFiltered).toBeDefined();
+		expect(exportClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');
+		expect(exportClassFiltered.response[0].code).toBe(200);
+
+		const exportClassInvalid = findItem(collection.item, 'GET Export Alerts (invalid signalClass - 400 Bad Request)');
+		expect(exportClassInvalid).toBeDefined();
+		expect(exportClassInvalid.response[0].code).toBe(400);
+	});
+
+	it('documents notificationRedrive and zeroChannelBroadcasts in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		const statusBody = JSON.parse(status.response[0].body);
+		expect(statusBody.featureFlags.notificationRedrive).toBe(false);
+		expect(statusBody.dependencies.notificationRedrive).toEqual(expect.objectContaining({
+			enabled: false,
+			role: 'web',
+			workerRole: 'web',
+			maxAgeMs: 3600000,
+			zeroChannelBroadcasts: 0,
+			lastSweepAt: null,
+			lastSweepResult: null,
+		}));
+
+		const capabilitiesBody = JSON.parse(capabilities.response[0].body);
+		expect(capabilitiesBody.featureFlags.notificationRedrive).toBe(false);
+		expect(capabilitiesBody.dependencies.notificationRedrive).toEqual(expect.objectContaining({
+			enabled: false,
+			role: 'web',
+			workerRole: 'web',
+			maxAgeMs: 3600000,
+			zeroChannelBroadcasts: 0,
+			lastSweepAt: null,
+			lastSweepResult: null,
+		}));
+	});
+
+	it('documents both JSONL and CSV request variants and response examples for batch alert export', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const jsonlExport = findItem(collection.item, 'POST Batch Export Alerts (JSONL)') || findItem(collection.item, 'POST Batch Export Alerts');
+		const csvExport = findItem(collection.item, 'POST Batch Export Alerts (CSV)');
+
+		expect(jsonlExport).toBeDefined();
+		expect(csvExport).toBeDefined();
+
+		const jsonlBody = JSON.parse(jsonlExport.request.body.raw);
+		expect(jsonlBody.format).toBe('jsonl');
+
+		const csvBody = JSON.parse(csvExport.request.body.raw);
+		expect(csvBody.format).toBe('csv');
+
+		const csvSuccess = csvExport.response.find((r) => r.name.includes('CSV'));
+		expect(csvSuccess).toBeDefined();
+		expect(csvSuccess.code).toBe(200);
+	});
+
+	it('documents populated, omitted, and unauthorized response variants for firestore write metrics', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - firestore write metrics');
+
+		expect(item).toBeDefined();
+		const populated = item.response.find((res) => res.name.includes('populated'));
+		const omitted = item.response.find((res) => res.name.includes('omitted'));
+		const unauthorized = item.response.find((res) => res.code === 401);
+
+		expect(populated).toBeDefined();
+		expect(populated.code).toBe(200);
+		expect(JSON.parse(populated.body).dependencies.firestoreWriteMetrics).toBeDefined();
+
+		expect(omitted).toBeDefined();
+		expect(omitted.code).toBe(200);
+		expect(JSON.parse(omitted.body).dependencies.firestoreWriteMetrics).toBeUndefined();
+
+		expect(unauthorized).toBeDefined();
+		expect(unauthorized.code).toBe(401);
+		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
+	});
+
+	it('documents distinct invalid query variants for GET Summarize Signal Outcomes', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const invalidLimit = findItem(collection.item, 'GET Summarize Signal Outcomes (invalid limit)');
+		const invalidStatus = findItem(collection.item, 'GET Summarize Signal Outcomes (invalid status)');
+		const invalidWindow = findItem(collection.item, 'GET Summarize Signal Outcomes (invalid window)');
+		const malformedFrom = findItem(collection.item, 'GET Summarize Signal Outcomes (malformed from timestamp)');
+		const malformedTo = findItem(collection.item, 'GET Summarize Signal Outcomes (malformed to timestamp)');
+		const reversedRange = findItem(collection.item, 'GET Summarize Signal Outcomes (reversed time range)');
+
+		expect(invalidLimit).toBeDefined();
+		expect(invalidLimit.request.url.raw).toContain('limit=200');
+		expect(invalidLimit.response[0].code).toBe(400);
+		expect(JSON.parse(invalidLimit.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid limit. Use an integer between 1 and 100.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(invalidStatus).toBeDefined();
+		expect(invalidStatus.request.url.raw).toContain('status=invalid');
+		expect(invalidStatus.response[0].code).toBe(400);
+		expect(JSON.parse(invalidStatus.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(invalidWindow).toBeDefined();
+		expect(invalidWindow.request.url.raw).toContain('window=invalid');
+		expect(invalidWindow.response[0].code).toBe(400);
+		expect(JSON.parse(invalidWindow.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(malformedFrom).toBeDefined();
+		expect(malformedFrom.request.url.raw).toContain('from=not-a-date');
+		expect(malformedFrom.response[0].code).toBe(400);
+		expect(JSON.parse(malformedFrom.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(malformedTo).toBeDefined();
+		expect(malformedTo.request.url.raw).toContain('to=not-a-date');
+		expect(malformedTo.response[0].code).toBe(400);
+		expect(JSON.parse(malformedTo.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(reversedRange).toBeDefined();
+		expect(reversedRange.request.url.raw).toContain('from=2026-08-30T00:00:00.000Z&to=2026-08-01T00:00:00.000Z');
+		expect(reversedRange.response[0].code).toBe(400);
+		expect(JSON.parse(reversedRange.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid time window. from must be before or equal to to.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		[invalidLimit, invalidStatus, invalidWindow, malformedFrom, malformedTo, reversedRange].forEach((item) => {
+			expect(item.event).toBeDefined();
+			const testEvent = item.event.find((e) => e.listen === 'test');
+			expect(testEvent).toBeDefined();
+			const scriptText = testEvent.script.exec.join('\n');
+			expect(scriptText).toContain('pm.response.to.have.status(400)');
+			expect(scriptText).toContain('INVALID_REQUEST');
+		});
+	});
+	it('documents idempotency headers and replay examples for volume confirmation and symbol analysis', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const volumeConfirm = findItem(collection.item, 'POST Volume Confirmation');
+		const symbolAnalysis = findItem(collection.item, 'POST Single Symbol Analysis');
+
+		expect(volumeConfirm).toBeDefined();
+		expect(findHeader(volumeConfirm, 'idempotency-key')).toEqual(expect.objectContaining({
+			value: 'volume-confirm-demo-1',
+		}));
+		expect(findHeader(volumeConfirm, 'x-idempotency-key')).toEqual(expect.objectContaining({
+			value: 'volume-confirm-key-1',
+			disabled: true,
+		}));
+		expect(volumeConfirm.response.map((r) => r.name)).toEqual(expect.arrayContaining([
+			'Success - volume confirmed (idempotent replay)',
+			'409 Idempotency conflict',
+			'400 Invalid idempotency key',
+		]));
+
+		expect(symbolAnalysis).toBeDefined();
+		expect(findHeader(symbolAnalysis, 'idempotency-key')).toEqual(expect.objectContaining({
+			value: 'symbol-analysis-demo-1',
+		}));
+		expect(findHeader(symbolAnalysis, 'x-idempotency-key')).toEqual(expect.objectContaining({
+			value: 'symbol-analysis-key-1',
+			disabled: true,
+		}));
+		expect(symbolAnalysis.response.map((r) => r.name)).toEqual(expect.arrayContaining([
+			'Success - decision-ready analysis (idempotent replay)',
+			'409 Idempotency conflict',
+			'400 Invalid idempotency key',
+		]));
+	});
+});
+
+describe('news-monitor stop/target example (GH-712)', () => {
+	it('POST News Monitor success example includes a populated stop/target alert', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const postItem = findItem(collection.item, 'POST News Monitor');
+		expect(postItem).toBeDefined();
+
+		const successExample = postItem.response.find(
+			(response) => response.name === '200 OK - Analysis summary',
+		);
+		expect(successExample).toBeDefined();
+
+		const body = JSON.parse(successExample.body);
+		const resultsWithBarriers = body.results.filter(
+			(result) => result.alert && typeof result.alert.stop === 'number' && typeof result.alert.target === 'number',
+		);
+		expect(resultsWithBarriers.length).toBeGreaterThanOrEqual(1);
+
+		resultsWithBarriers.forEach((result) => {
+			expect(result.alert.stop).toBeGreaterThan(0);
+			expect(result.alert.target).toBeGreaterThan(result.alert.stop);
+		});
+
+		const resultsWithoutBarriers = body.results.filter(
+			(result) => result.alert && (result.alert.stop === undefined || result.alert.target === undefined),
+		);
+		expect(resultsWithoutBarriers.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it('POST News Monitor (dry run) example includes a populated stop/target alert', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const dryRunItem = findItem(collection.item, 'POST News Monitor (dry run)');
+		expect(dryRunItem).toBeDefined();
+
+		const body = JSON.parse(dryRunItem.response[0].body);
+		const alert = body.results[0].alert;
+		expect(typeof alert.stop).toBe('number');
+		expect(typeof alert.target).toBe('number');
+		expect(alert.stop).toBeGreaterThan(0);
+		expect(alert.target).toBeGreaterThan(alert.stop);
 	});
 });
