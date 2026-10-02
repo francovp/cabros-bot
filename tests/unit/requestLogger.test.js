@@ -148,6 +148,42 @@ describe('Request Logger Middleware', () => {
 		expect(output.error).not.toHaveBeenCalled();
 	});
 
+	it('stamps req.requestId on exempt paths so headers stay consistent', () => {
+		// An operator can exempt an API route through REQUEST_DEADLINE_EXEMPT_PATHS.
+		// requestDeadline also skips that route, so it never sets X-Request-Id. The
+		// handler still returns a requestId in its body, and the OpenAPI contract
+		// promises the header — so the correlation id must be stamped even though
+		// the request itself is never logged.
+		const savedExempt = process.env.REQUEST_DEADLINE_EXEMPT_PATHS;
+		process.env.REQUEST_DEADLINE_EXEMPT_PATHS = '/api/webhook/expanded-analysis-alert';
+		jest.resetModules();
+		const freshLogger = require('../../src/lib/requestLogger');
+		const middleware = freshLogger.createRequestLogger();
+
+		const req = buildReq({
+			url: '/api/webhook/expanded-analysis-alert',
+			headers: { 'x-request-id': 'client-supplied-1' },
+		});
+		const res = buildRes();
+
+		middleware(req, res, jest.fn());
+		res.statusCode = 200;
+		res.end();
+		triggerFinish(res);
+
+		expect(req.requestId).toBe('client-supplied-1');
+		expect(output.info).not.toHaveBeenCalled();
+		expect(output.warn).not.toHaveBeenCalled();
+		expect(output.error).not.toHaveBeenCalled();
+
+		if (savedExempt === undefined) {
+			delete process.env.REQUEST_DEADLINE_EXEMPT_PATHS;
+		} else {
+			process.env.REQUEST_DEADLINE_EXEMPT_PATHS = savedExempt;
+		}
+		jest.resetModules();
+	});
+
 	it('uses warn level for 4xx status codes', () => {
 		const middleware = createRequestLogger();
 		const req = buildReq();

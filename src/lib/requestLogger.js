@@ -148,6 +148,18 @@ function createRequestLogger() {
 	return function requestLogger(req, res, next) {
 		const startTime = Date.now();
 		const rawPath = normalizeRequestPath(req.originalUrl || req.url || req.path || '');
+
+		// Stamp the correlation id BEFORE the exemption check. An operator can
+		// exempt an API route through REQUEST_DEADLINE_EXEMPT_PATHS, and
+		// `requestDeadline` skips that route too — so it never sets
+		// `X-Request-Id`. Handlers still return a `requestId` in their body, and
+		// the OpenAPI contract promises the header, so resolving the id here keeps
+		// `req.requestId`, the response header, and the body in agreement even when
+		// the request itself is never logged. On a non-exempt path the deadline
+		// resolves the same id from `req.requestId`, so this only fills a gap.
+		const requestId = resolveRequestId(req);
+		req.requestId = requestId;
+
 		// Exemption is decided on the unmasked path. Masking first would rewrite
 		// `/api/preferences/telegram/123` to `:redacted` and an operator who
 		// configured that exact path as exempt would still see it logged.
@@ -156,8 +168,6 @@ function createRequestLogger() {
 		}
 		const path = maskSensitivePathSegments(rawPath);
 
-		const requestId = resolveRequestId(req);
-		req.requestId = requestId;
 		const clientIp = sanitizeClientIp(req.ip || (req.socket && req.socket.remoteAddress));
 		let finalized = false;
 

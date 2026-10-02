@@ -161,7 +161,7 @@ to the free-form application logs above. Each line records:
 | `path` | Request path with the query string and trailing slash stripped (case preserved; `chatId` redacted) |
 | `statusCode` | Final response status (`0` when the response never started) |
 | `durationMs` | Time from middleware entry to response end (excludes connection setup and TLS) |
-| `requestId` | Correlation id, shared with the `X-Request-Id` response header |
+| `requestId` | Correlation id, shared with the `X-Request-Id` response header and the `requestId` returned in response bodies |
 | `clientIp` | Client address, truncated (`203.0.113.x`) or redacted for IPv6 |
 | `aborted` | `true` when the client disconnected before the response was fully flushed |
 | `outcome` | `completed` or `aborted` |
