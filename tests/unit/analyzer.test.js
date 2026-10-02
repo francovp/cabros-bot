@@ -613,6 +613,24 @@ describe('Analyzer - Grounding Calibration Surface', () => {
 		expect(message).toMatch(/low/);
 	});
 
+	it('renders the source quality audit line into the DELIVERED payload (enriched.extraText)', () => {
+		// formatAlertMessage() has no production call site — production renders
+		// alert.enriched through formatEnriched(), which prints extraText. Without
+		// this the operator never sees why an alert cleared the threshold.
+		const analysis = baseAnalysis({
+			calibration: {
+				grounding_used: true,
+				actual_source_count: 3,
+				actual_quality_tiers: { high: 0, medium: 0, low: 3, unknown: 0 },
+				qualityTier: 'low',
+				qualityPenalty: 0.85,
+			},
+		});
+		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
+
+		expect(alert.enriched.extraText).toMatch(/Source Quality: low \(x0\.85\)/);
+	});
+
 	it('should omit the quality tier line when no tier was resolved', () => {
 		const analysis = baseAnalysis({
 			calibration: { grounding_used: true, actual_source_count: 0, qualityTier: null, qualityPenalty: 1 },

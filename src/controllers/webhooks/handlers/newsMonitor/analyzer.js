@@ -1872,9 +1872,20 @@ class NewsAnalyzer {
 		const confidenceProvenance = geminiAnalysis.confidence_source
 			? `_Confidence source: ${geminiAnalysis.confidence_source}_`
 			: `_Model used: ${GROUNDING_MODEL_NAME}_`;
-		const enrichedExtraText = confidenceReason
-			? `_Model Confidence: ${confidense}%_\n_Reason: ${confidenceReason}_\n${confidenceProvenance}`
-			: `_Model Confidence: ${confidense}%_\n${confidenceProvenance}`;
+		// Issue #1230: the tier is appended to `extraText` because that is what
+		// `formatEnriched()` actually renders to the trader. `formatAlertMessage()`
+		// has no production call site, so a line added only there would never be seen.
+		const qualityAuditLine = sourceQualityTier
+			? (typeof geminiAnalysis.calibration?.qualityPenalty === 'number'
+				? `_Source Quality: ${sourceQualityTier} (x${geminiAnalysis.calibration.qualityPenalty})_`
+				: `_Source Quality: ${sourceQualityTier}_`)
+			: '';
+		const enrichedExtraText = [
+			confidenceReason
+				? `_Model Confidence: ${confidense}%_\n_Reason: ${confidenceReason}_\n${confidenceProvenance}`
+				: `_Model Confidence: ${confidense}%_\n${confidenceProvenance}`,
+			qualityAuditLine,
+		].filter(Boolean).join('\n');
 		const enriched = {
 			originalText: alertTitle,
 			summary: context,
