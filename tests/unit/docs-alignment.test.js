@@ -160,6 +160,7 @@ describe('Documentation Alignment Policy', () => {
       path.join(repoRoot, 'README.md'),
 		path.join(repoRoot, 'AGENTS.md'),
       ...getAllFiles(path.join(repoRoot, 'specs', '003-news-monitor')),
+      ...getAllFiles(path.join(repoRoot, 'docs')).filter(f => !f.includes(`${path.sep}superpowers${path.sep}`)),
     ];
     const staleConfigurationPatterns = [
       /\bAZURE_AI_(?:ENDPOINT|API_KEY|MODEL)\s*=/i,
@@ -183,6 +184,12 @@ describe('Documentation Alignment Policy', () => {
     expect(envExample).toContain('PICSEE_API_KEY=');
     expect(envExample).toContain('CUTTLY_API_KEY=');
 		expect(envExample).toContain('AZURE_LLM_ENDPOINT=');
+	});
+
+	test('news-monitor documentation includes throttled status in README', () => {
+		const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+		expect(readme).toMatch(/"throttled":\s*0/);
+		expect(readme).toMatch(/- `?throttled`? -/);
 	});
 
 	test('Cloudflare documentation separates provider routing from status exposure', () => {
@@ -253,6 +260,7 @@ describe('Node.js runtime contract', () => {
       path.join(repoRoot, 'README.md'),
 		path.join(repoRoot, 'AGENTS.md'),
       ...getAllFiles(path.join(repoRoot, 'specs')),
+      ...getAllFiles(path.join(repoRoot, 'docs')).filter(f => !f.includes(`${path.sep}superpowers${path.sep}`)),
     ];
     const staleNode20Pattern = /\bNode(?:\.js)?\s*20(?:\.x)?\b|\bnode:20\b/i;
 

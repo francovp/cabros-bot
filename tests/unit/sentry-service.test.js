@@ -951,4 +951,42 @@ describe('profiling configuration', () => {
 			});
 		});
 	});
+
+	describe('captureFirestoreWriteMetric', () => {
+		it('should record firestore_writes count metric when sentry is enabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			service.init();
+
+			service.captureFirestoreWriteMetric({ domain: 'alerts', status: 'success' });
+
+			expect(Sentry.metrics.count).toHaveBeenCalledWith('firestore_writes', 1, {
+				tags: {
+					domain: 'alerts',
+					status: 'success',
+				},
+			});
+		});
+
+		it('should handle failure status and fallback domain', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			service.init();
+
+			service.captureFirestoreWriteMetric({ domain: '', status: 'failure' });
+
+			expect(Sentry.metrics.count).toHaveBeenCalledWith('firestore_writes', 1, {
+				tags: {
+					domain: 'unknown',
+					status: 'failure',
+				},
+			});
+		});
+
+		it('should do nothing when sentry is disabled', () => {
+			service.captureFirestoreWriteMetric({ domain: 'alerts', status: 'success' });
+			expect(Sentry.metrics.count).not.toHaveBeenCalled();
+		});
+	});
 });
+
