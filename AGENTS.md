@@ -1833,3 +1833,21 @@ The HTTP server applies bounded Node.js timeouts at startup: 10 seconds for head
 - `src/openapi/openapi.json`, `CabrosBot.postman_collection.json`, and `README.md` — request/response contract and valid/invalid examples.
 
 No new environment variable, startup gate, destination, secret, or Remote Config key was introduced.
+
+## Market Scanner MCP Circuit-Breaker Fast-Fail Gate (Issue #632)
+
+`POST /api/webhook/market-scanner-alert` consults the process-local TradingView MCP status before starting its sequential scans. `getMcpUnavailableReason()` in `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` returns a skip reason only when **all** of these hold:
+
+1. `tradingViewMcpService.getStatus({ enabled: true })` reports `status === 'degraded'`;
+2. `lastErrorCategory` is one of `http_5xx`, `request_failed`, `circuit_breaker_open`;
+3. `circuitBreaker.state === 'open'` — the time-based breaker state, **not** the sticky runtime status.
+
+Only then does the endpoint return `502 TRADINGVIEW_MCP_UNAVAILABLE` with every requested scan as `status: 'skipped'` plus a `reason`, without attempting any scanner call.
+
+**Why the gate keys on the breaker state (Codex P1 on the original PR).** `runtimeStatus.status === 'degraded'` is cleared only by a *later successful* MCP call. Gating on it therefore skips the very probe that would clear it, so in a scanner-only process the scanner would return 502 forever — a self-locking outage that could never self-heal without a restart. `getCircuitBreakerStatus().state` is time-based: `getBreakerState()` flips `open` → `half-open` once `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses, so the first request after the cooldown proceeds and acts as the bounded recovery probe. Verified empirically: after one transient failure the old gate still skipped post-cooldown, while the new gate allows the probe and the service returns to `ready`/`closed` after it succeeds.
+
+**Fail-open paths** (must never block the scanner): readiness-lookup throwing, a `degraded` state with no reported breaker state, degraded categories outside the provider-outcome set such as `http_4xx`, and any non-`degraded` status.
+
+**502 has two documented shapes** (Codex P2). `TRADINGVIEW_MCP_UNAVAILABLE` is the skip path (nothing attempted); `ALL_SCANS_FAILED` is the attempt path (every scan was attempted and failed). Both are enumerated under `components.responses.MarketScannerBadGateway` in `src/openapi/openapi.json`, in `CabrosBot.postman_collection.json`, and in `docs/webhooks.md`.
+
+**Coverage:** `tests/unit/market-scanner.test.js` covers fail-fast while open, the half-open recovery probe, unknown-breaker fail-open, and the non-outage category; `tests/integration/market-scanner-endpoint.test.js` covers the endpoint-level 502 skip, the transient-failure self-recovery round trip, the `ALL_SCANS_FAILED` attempt path, and the two-variant OpenAPI 502 contract. No new environment variable, Remote Config key, or feature flag was added.
