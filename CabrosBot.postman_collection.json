@@ -156,6 +156,104 @@
       ]
     },
     {
+      "name": "Healthcheck (readiness depth)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "description": "ADVISORY dependency probe. Runs bounded Firestore / Gemini / TradingView MCP / Binance / Telegram probes in parallel. ALWAYS returns HTTP 200: degradation is reported in the body as `ready: false` so a flaky third-party provider can never evict healthy replicas from load-balancer rotation. Alert on `ready: false`; use `GET /ready?depth=dependencies` when you want a traffic-gating 503.",
+        "url": {
+          "raw": "{{baseUrl}}/healthcheck?depth=readiness",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "healthcheck"
+          ],
+          "query": [
+            {
+              "key": "depth",
+              "value": "readiness"
+            }
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "200 All dependencies healthy",
+          "status": "OK",
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
+          ],
+          "body": "{\"ready\":true,\"failClosed\":false,\"checkedAt\":\"2026-08-31T02:30:00.000Z\",\"latencyMs\":412,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":53},\"gemini\":{\"ready\":true,\"backend\":\"gemini\",\"latencyMs\":124},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":18},\"binance\":{\"ready\":true,\"backend\":\"binance\",\"latencyMs\":36},\"telegram\":{\"ready\":true,\"backend\":\"telegram\",\"latencyMs\":22}}}"
+        },
+        {
+          "name": "200 Degraded dependency (still 200 by design)",
+          "status": "OK",
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
+          ],
+          "body": "{\"ready\":false,\"failClosed\":false,\"checkedAt\":\"2026-08-31T02:30:05.000Z\",\"latencyMs\":3011,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":84},\"gemini\":{\"ready\":false,\"error\":\"timeout_after_3000ms\",\"latencyMs\":3000},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":22},\"binance\":{\"ready\":false,\"error\":\"binance_http_451\",\"latencyMs\":124},\"telegram\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"telegram_disabled\"}}}"
+        }
+      ]
+    },
+    {
+      "name": "Get Ready - Dependencies (fail-closed)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "description": "Traffic-gating readiness. Runs the bootstrap gate AND bounded external dependency probes (Firestore, Gemini, TradingView MCP, Binance, Telegram) in parallel. Returns 503 when any considered dependency is unhealthy. Only opt in when the deployment can tolerate losing all capacity on provider failure; otherwise alert on `/healthcheck?depth=readiness` instead.",
+        "url": {
+          "raw": "{{baseUrl}}/ready?depth=dependencies",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "ready"
+          ],
+          "query": [
+            {
+              "key": "depth",
+              "value": "dependencies"
+            }
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "200 Bootstrap ready and all dependencies healthy",
+          "status": "OK",
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
+          ],
+          "body": "{\"ready\":true,\"failClosed\":true,\"status\":\"ready\",\"bootstrapReady\":true,\"components\":{\"telegramBot\":{\"status\":\"disabled\"},\"notificationServices\":{\"status\":\"ready\"},\"newsMonitor\":{\"status\":\"disabled\"}},\"checkedAt\":\"2026-08-31T02:30:00.000Z\",\"latencyMs\":412,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":53},\"gemini\":{\"ready\":true,\"backend\":\"gemini\",\"latencyMs\":124},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":18},\"binance\":{\"ready\":true,\"backend\":\"binance\",\"latencyMs\":36},\"telegram\":{\"ready\":true,\"backend\":\"telegram\",\"latencyMs\":22}}}"
+        },
+        {
+          "name": "503 Dependency degraded (fail-closed)",
+          "status": "Service Unavailable",
+          "code": 503,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
+          ],
+          "body": "{\"ready\":false,\"failClosed\":true,\"status\":\"ready\",\"bootstrapReady\":true,\"components\":{\"telegramBot\":{\"status\":\"disabled\"},\"notificationServices\":{\"status\":\"ready\"},\"newsMonitor\":{\"status\":\"disabled\"}},\"checkedAt\":\"2026-08-31T02:30:05.000Z\",\"latencyMs\":3011,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":84},\"gemini\":{\"ready\":false,\"error\":\"timeout_after_3000ms\",\"latencyMs\":3000},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":22},\"binance\":{\"ready\":false,\"error\":\"binance_http_451\",\"latencyMs\":124},\"telegram\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"telegram_not_initialized\"}}}"
+        }
+      ]
+    },
+    {
       "name": "Get OpenAPI Contract",
       "request": {
         "method": "GET",
@@ -238,14 +336,20 @@
             "status"
           ]
         },
-        "description": "Protected runtime status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. dependencies.newsMonitorDedup.cacheSize reports bounded in-memory cache and URL shortener entries, limits, and eviction counts. When ENABLE_FIREBASE_REMOTE_CONFIG=true, dependencies.firebaseRemoteConfig contains safe loader metadata only; disabled, stale, invalid, or unavailable remote values fall back to environment/default settings."
+        "description": "Protected runtime status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. dependencies.newsMonitorDedup.cacheSize reports bounded in-memory cache and URL shortener entries, limits, and eviction counts. When ENABLE_FIREBASE_REMOTE_CONFIG=true, dependencies.firebaseRemoteConfig contains safe loader metadata only; disabled, stale, invalid, or unavailable remote values fall back to environment/default settings. TradingView MCP exposes sanitized lastErrorCategory and lastHttpStatusCode telemetry; terminal provider outages use provider_unavailable and do not consume same-operation retries."
       },
       "response": [
         {
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"telegramCommandAuth\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false,\"alertScheduler\":false,\"notificationRedrive\":false,\"firestoreChatPreferences\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true,\"newsMonitorClassifier\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0,\"entryPriceSources\":{\"configured\":false,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"twelve-data\"]}},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"alertScheduler\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":10,\"scheduleCount\":0,\"activeCount\":0,\"lastRunAt\":null,\"lastRunDurationMs\":null,\"lastRunExecutedCount\":0,\"lastRunErrorCount\":0,\"lastError\":null,\"schedules\":[]},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"telegramCommandAuth\":{\"enabled\":true,\"allowlistSource\":\"TELEGRAM_ALLOWED_CHAT_IDS\",\"allowlistSize\":1,\"deniedSinceStart\":0,\"trackedDeniedSenders\":0,\"deniedSenderCacheLimit\":1000},\"selfTest\":{\"lastRunAt\":null,\"lastStatus\":\"unknown\",\"ttlSec\":3600,\"ageMs\":null},\"newsMonitorDedup\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"mode\":\"in-memory\",\"backend\":null,\"cacheSize\":{\"entries\":0,\"maxEntries\":5000,\"evictionCount\":0,\"deliveryLocks\":0,\"deliveryLockMaxEntries\":1000,\"deliveryLockEvictionCount\":0,\"urlShortenerCache\":{\"size\":0,\"maxEntries\":1000,\"evictionCount\":0},\"urlShortenerServiceFailures\":{\"size\":0,\"maxEntries\":32,\"evictionCount\":0}}},\"chatPreferences\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cachedCount\":0,\"cacheTtlMs\":60000,\"retentionDays\":90},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"}}}"
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"telegramCommandAuth\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false,\"alertScheduler\":false,\"notificationRedrive\":false,\"firestoreChatPreferences\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true,\"newsMonitorClassifier\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"jobExecutionQueue\":{\"mode\":\"local\",\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"queueName\":\"tradingview-jobs\",\"enqueued\":0,\"claimed\":0,\"completed\":0,\"failed\":0,\"lastErrorCode\":null,\"lastEnqueuedAt\":null,\"waitingCount\":0,\"delayedCount\":0,\"failedCount\":0,\"activeCount\":0,\"durableQueuedCount\":0,\"durableQueuedTruncated\":false,\"durableScanRotated\":false,\"durableProbeSucceeded\":null,\"durableCycleComplete\":false,\"oldestQueuedAgeMs\":null,\"backlogAlert\":{\"active\":false,\"thresholdMs\":900000,\"pagedAt\":null,\"lastRecoveryAt\":null},\"backlogMonitorEnabled\":true,\"backlogMonitorRunning\":false},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0,\"entryPriceSources\":{\"configured\":false,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"twelve-data\"]}},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"alertScheduler\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":10,\"scheduleCount\":0,\"activeCount\":0,\"lastRunAt\":null,\"lastRunDurationMs\":null,\"lastRunExecutedCount\":0,\"lastRunErrorCount\":0,\"lastError\":null,\"schedules\":[]},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"telegramCommandAuth\":{\"enabled\":true,\"allowlistSource\":\"TELEGRAM_ALLOWED_CHAT_IDS\",\"allowlistSize\":1,\"deniedSinceStart\":0,\"trackedDeniedSenders\":0,\"deniedSenderCacheLimit\":1000},\"selfTest\":{\"lastRunAt\":null,\"lastStatus\":\"unknown\",\"ttlSec\":3600,\"ageMs\":null},\"newsMonitorDedup\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"mode\":\"in-memory\",\"backend\":null,\"cacheSize\":{\"entries\":0,\"maxEntries\":5000,\"evictionCount\":0,\"deliveryLocks\":0,\"deliveryLockMaxEntries\":1000,\"deliveryLockEvictionCount\":0,\"urlShortenerCache\":{\"size\":0,\"maxEntries\":1000,\"evictionCount\":0},\"urlShortenerServiceFailures\":{\"size\":0,\"maxEntries\":32,\"evictionCount\":0}}},\"chatPreferences\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cachedCount\":0,\"cacheTtlMs\":60000,\"retentionDays\":90},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"}}}"
+        },
+        {
+          "name": "200 degraded provider unavailable telemetry",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"tradingViewMcp\":{\"status\":\"degraded\",\"lastErrorCategory\":\"provider_unavailable\",\"lastHttpStatusCode\":503}}}"
         }
       ]
     },
@@ -311,6 +415,38 @@
           "status": "OK",
           "code": 200,
           "body": "{\"dependencies\":{\"tradingViewMcp\":{\"enrichment\":{\"alertPath\":{\"windowMs\":86400000,\"totalCount\":3,\"appliedCount\":2,\"failedCount\":1,\"appliedRate24h\":66.67,\"failureRate24h\":33.33}}}}}"
+        }
+      ]
+    },
+    {
+      "name": "Get Status - grounding operational metrics",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Valid protected status request showing grounding operational metrics (total/success/failure/timeout counts, successRate, and uptimeSince) when ENABLE_GEMINI_GROUNDING=true."
+      },
+      "response": [
+        {
+          "name": "200 OK - Grounding operational metrics",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"grounding\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"metrics\":{\"totalRequests\":1234,\"successRequests\":1180,\"failureRequests\":40,\"timeoutRequests\":14,\"successRate\":0.956,\"uptimeSince\":\"2026-08-25T10:00:00Z\"}}}}"
         }
       ]
     },
@@ -578,7 +714,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true,\"notificationRedrive\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true,\"newsMonitorClassifier\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000},\"toolMetrics\":{}},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"signalOutcomeWorker\":{\"entryPriceSources\":{\"configured\":true,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"mcp\",\"binance\",\"gemini\"]}},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"}}}"
+          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true,\"notificationRedrive\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true,\"newsMonitorClassifier\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000},\"toolMetrics\":{}},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"signalOutcomeWorker\":{\"entryPriceSources\":{\"configured\":true,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"mcp\",\"binance\",\"gemini\"]}},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"},\"jobExecutionQueue\":{\"mode\":\"local\",\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"queueName\":\"tradingview-jobs\",\"enqueued\":0,\"claimed\":0,\"completed\":0,\"failed\":0,\"lastErrorCode\":null,\"lastEnqueuedAt\":null,\"waitingCount\":0,\"delayedCount\":0,\"failedCount\":0,\"activeCount\":0,\"durableQueuedCount\":0,\"durableQueuedTruncated\":false,\"durableScanRotated\":false,\"durableProbeSucceeded\":null,\"durableCycleComplete\":false,\"oldestQueuedAgeMs\":null,\"backlogAlert\":{\"active\":false,\"thresholdMs\":900000,\"pagedAt\":null,\"lastRecoveryAt\":null},\"backlogMonitorEnabled\":true,\"backlogMonitorRunning\":false}}}"
         }
       ]
     },
@@ -704,6 +840,88 @@
               "code": 400,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"error\": \"Invalid signalClass: \\\"invalid_class\\\". Valid values are: breakout, mean_reversion, trend_continuation, reversal, volume_spike, news_event, manual, unknown\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-12345\",\n  \"retryable\": false\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Send Alert (per-symbol routing)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT and NVDA momentum update\",\n  \"symbolRoutes\": {\n    \"BTCUSDT\": { \"channels\": [\"telegram\"] },\n    \"NVDA\": { \"channels\": [\"discord\"] }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"symbol\":\"BTCUSDT\",\"success\":true},{\"channel\":\"discord\",\"symbol\":\"NVDA\",\"success\":true}],\"requestedChannels\":[\"telegram\",\"discord\"],\"deliveredChannels\":[\"telegram\",\"discord\"]}"
+            }
+          ]
+        },
+        {
+          "name": "POST Send Alert (invalid symbol route)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT momentum update\",\n  \"symbolRoutes\": {\n    \"BTCUSDT\": { \"channels\": [\"slack\"] }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Invalid symbol route",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\"success\":false,\"error\":\"Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord\",\"details\":{\"field\":\"channels\",\"unknownChannels\":[\"slack\"]}}"
             }
           ]
         },
@@ -859,6 +1077,12 @@
               "status": "OK",
               "code": 200,
               "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"sentiment\":\"BULLISH\"}}}"
+            },
+            {
+              "name": "Dry run - secondary fallback trade plan when ATR risk block is rejected",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"current_price\":100,\"price_data\":{\"current_price\":100},\"insights\":[\"Señal detectada: COMPRA para BTCUSDT en 4h (BINANCE)\"],\"invalidation_level\":97.5,\"target_level\":105,\"risk_reward_ratio\":2,\"setup_type\":\"trend_continuation\",\"levelsSource\":\"fallback-trade-plan\"}}}"
             }
           ]
         },
@@ -990,16 +1214,30 @@
           },
           "response": [
             {
-              "name": "Service Unavailable - Maintenance Mode (503)",
-              "status": "Service Unavailable",
-              "code": 503,
+              "name": "502 TRADINGVIEW_MCP_UNAVAILABLE (scans skipped)",
+              "status": "Bad Gateway",
+              "code": 502,
+              "_postman_previewlanguage": "json",
               "header": [
                 {
                   "key": "Content-Type",
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+              "body": "{\n  \"success\": false,\n  \"ranked\": false,\n  \"includeMultiTimeframe\": false,\n  \"code\": \"TRADINGVIEW_MCP_UNAVAILABLE\",\n  \"error\": \"TradingView MCP is currently unavailable (circuit breaker: open, lastError: http_5xx). Scans skipped.\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"skipped\",\n      \"reason\": \"TradingView MCP is currently unavailable (circuit breaker: open, lastError: http_5xx). Scans skipped.\"\n    }\n  ],\n  \"timedOut\": false\n}"
+            },
+            {
+              "name": "502 ALL_SCANS_FAILED (scans attempted)",
+              "status": "Bad Gateway",
+              "code": 502,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"ranked\": false,\n  \"includeMultiTimeframe\": false,\n  \"code\": \"ALL_SCANS_FAILED\",\n  \"error\": \"TradingView MCP failed for all requested scans.\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"error\",\n      \"error\": \"Connection failure\",\n      \"errorCategory\": \"unknown\"\n    }\n  ],\n  \"timedOut\": false\n}"
             }
           ]
         },
@@ -3115,6 +3353,55 @@
               "code": 200,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [{\n    \"symbol\": \"BTCUSDT\",\n    \"status\": \"analyzed\",\n    \"alert\": {\n      \"symbol\": \"BTCUSDT\",\n      \"eventCategory\": \"price_surge\",\n      \"headline\": \"Bitcoin breaks resistance\",\n      \"sentimentScore\": 0.65,\n      \"confidence\": 0.85,\n      \"sources\": [\n        \"https://www.coindesk.com/markets/2026/08/bitcoin-resistance\"\n      ],\n      \"formattedMessage\": \"BTCUSDT breakout above resistance (confidence 0.85).\",\n      \"timestamp\": 1724745600000,\n      \"marketContext\": {\n        \"price\": 68500,\n        \"change24h\": 2.4,\n        \"volume24h\": 18500000000,\n        \"source\": \"binance\",\n        \"timestamp\": 1724745599000\n      },\n      \"stop\": 67130,\n      \"target\": 71925\n    },\n    \"deliveryResults\": [],\n    \"cached\": false\n  }],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"deliveredChannels\": [],\n  \"requestId\": \"req-dryrun123\"\n}"
+            },
+            {
+              "name": "200 OK - Dry run (low source quality tier suppressed by NEWS_ALERT_THRESHOLD, issue #1230)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"crypto\": [\"BTCUSDT\"],\n  \"channels\": [\"telegram\", \"whatsapp\", \"discord\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/news-monitor?dryRun=true",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "news-monitor"
+                  ],
+                  "query": [
+                    {
+                      "key": "dryRun",
+                      "value": "true"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8",
+                  "type": "text"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"analyzed\",\n      \"alert\": {\n        \"symbol\": \"BTCUSDT\",\n        \"eventCategory\": \"price_surge\",\n        \"headline\": \"Unconfirmed pump chatter spreads across low-tier blogs\",\n        \"sentimentScore\": 0.8,\n        \"confidence\": 0.646,\n        \"sourceQualityTier\": \"low\",\n        \"calibration\": {\n          \"grounding_used\": true,\n          \"model_source_count\": 3,\n          \"model_source_freshness\": 0.9,\n          \"model_source_quality\": 0.9,\n          \"effective_source_count\": 3,\n          \"effective_source_freshness\": 0.930556,\n          \"effective_source_quality\": 0.3,\n          \"freshness_unknown\": false,\n          \"qualityTier\": \"low\",\n          \"qualityPenalty\": 0.85,\n          \"actual_source_count\": 3,\n          \"actual_source_quality\": 0.3,\n          \"actual_source_freshness\": 0.930556,\n          \"actual_quality_tiers\": {\n            \"high\": 0,\n            \"medium\": 0,\n            \"low\": 3,\n            \"unknown\": 0\n          },\n          \"actual_source_domains\": [\n            \"alpha-spam.blog\",\n            \"beta-pump.buzz\",\n            \"gamma-click.xyz\"\n          ],\n          \"actual_stale_sources\": 0,\n          \"actual_dated_sources\": 3,\n          \"has_explicit_dates\": true,\n          \"actual_freshness_reason\": \"fresh\"\n        },\n        \"confidence_reason\": \"low source authority; low source quality tier (low, x0.85)\",\n        \"sources\": [\n          \"https://alpha-spam.blog/pump\",\n          \"https://beta-pump.buzz/pump\",\n          \"https://gamma-click.xyz/pump\"\n        ],\n        \"formattedMessage\": \"*BTCUSDT Alert*\\n\\nEvent: Unconfirmed pump chatter spreads across low-tier blogs\\nSentiment: Positive (0.80)\\nConfidence: 65%\\nReason: low source authority; low source quality tier (low, x0.85)\\nSource Quality: low (x0.85)\\n\",\n        \"timestamp\": 1724745600000\n      },\n      \"deliveryResults\": [],\n      \"cached\": false,\n      \"alertDelivered\": false,\n      \"suppressedReason\": \"confidence below NEWS_ALERT_THRESHOLD (0.7)\"\n    }\n  ],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\n    \"telegram\",\n    \"whatsapp\",\n    \"discord\"\n  ],\n  \"deliveredChannels\": [],\n  \"requestId\": \"req-dryrun-quality-tier\"\n}"
             }
           ]
         },
