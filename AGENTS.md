@@ -1170,6 +1170,22 @@ A zero-channel broadcast is a silent total loss of alerting: no channel is reach
 
 No new environment variable, Remote Config key, feature flag, or route was added; the behavior is unconditional and fail-open.
 
+### Admin paging fallback across channels (Issue #1168)
+
+Single-channel admin paging is an observability blackout at the moment it matters most: when the admin Telegram destination breaks, the operator is paged exclusively over that broken channel. Live production evidence (72h window): `telegram { total: 3, success: 0, failure: 3 }` while `whatsapp { total: 10, success: 10, failure: 0 }` — a healthy channel was carrying 10 of 14 deliveries and went unused for paging.
+
+- `NotificationManager._dispatchAdminPage({ message, pageType })` — the single non-recursive admin send path shared by `notifyAdminOfFailures()` (pageType `delivery-failure`) and `notifyAdminOfZeroChannels()` (pageType `zero-channel`). It tries the Telegram admin chat first, then walks the fallback chain, and records a `ADMIN_PAGING_UNDELIVERABLE` Sentry external failure only when every operator channel fails. It never throws and never re-enters `sendToAll`/`sendToChannels`, so admin paging cannot recurse and cannot inflate broadcast delivery metrics or dead-letter counters.
+- **Prefer healthy over merely configured.** `NotificationManager.getAdminPagingFallbackChannels()` keeps only channels that pass the existing `isChannelConfigured()` predicate (enable flag AND credentials) and orders them by `DeliveryMetricsService.getChannelHealth()`: `healthy` (0) → `unknown` (1) → `degraded` (2) → `failing` (3), with the deterministic `['discord', 'whatsapp']` order as the tie-break. A channel known to be failing is still tried last rather than dropped, and a never-configured channel is never tried, so there are no phantom pages.
+- `/api/status` and `/api/capabilities` expose a top-level `adminPaging` block (schema `AdminPagingStatus`) with `status` (`unknown` | `ready` | `degraded`), `attempts`/`successes`/`failures`, `consecutiveFailures`, `lastSuccessAt`/`lastFailureAt`, `lastSuccessChannel`, `lastErrorCategory`, `lastError` (truncated, sanitized), `fallbackEnabled`, and `fallbackChannels` (names only). This is what makes a 0/3 blackout distinguishable from a channel whose readiness block says `ready`; channel readiness reflects configuration, not live outcome. The block is omitted until a `NotificationManager` exists, and is resolved through `src/services/notification/adminPagingStatus.js` so `status.js` does not import the notification stack.
+- No tokens, webhook URLs, or chat ids appear in the page, in `adminPaging`, or in the fallback payload — the fallback `channel.send()` receives only `{ text }`, never the Telegram admin chat id.
+- `notificationChannelIntent` is unchanged and still derives from `isConfigured()`, so the new fallback never reclassifies a never-configured channel as configured.
+
+**Core components**: `src/services/notification/NotificationManager.js`, `src/services/notification/adminPagingStatus.js`, `src/services/notification/DeliveryMetricsService.js`, `src/controllers/status.js`.
+
+**Coverage**: `tests/unit/notification-manager.test.js` (fallback on `chat not found`, health-preferred ordering, no phantom page, total-failure Sentry + degraded status, zero-channel fallback, real `attemptCount`, no delivery-metric inflation), `tests/unit/delivery-metrics-service.test.js` (`getChannelHealth` states), and `tests/integration/status-endpoint.test.js` (`adminPaging` present, no destination leakage, omitted with no manager).
+
+No new environment variable, Remote Config key, feature flag, or route was added; fallback reuses the existing operator channel configuration and the behavior is unconditional and fail-open.
+
 **To extend**:
 1. **Discord integration**: Add in `src/services/notification/DiscordService.js`
 2. **Error aggregation**: Track error rates in memory for metrics
