@@ -65,6 +65,35 @@ describe('Alert Handler', () => {
 		});
 	});
 
+	it.each([
+		[false, null, 100, 'USD', 'gemini-grounding'],
+		[true, null, 100, 'USD', 'gemini-grounding'],
+		[true, 110, undefined, 'USDT', 'tradingview-mcp'],
+	])('preserves Gemini entry price through the adapter (MCP enabled=%s, price=%s)', async (mcpEnabled, mcpPrice, expectedGeminiPrice, expectedCurrency, expectedSource) => {
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100,
+			price_currency: 'USD', invalidation_level: 90, target_level: 130,
+			risk_reward_ratio: 3, insights: [], sources: [],
+		});
+		tradingViewMcpService.isEnabled.mockReturnValue(mcpEnabled);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			current_price: mcpPrice, price_currency: mcpPrice ? 'USDT' : undefined,
+			tradingViewEnrichmentApplied: !!mcpPrice,
+		});
+		const result = await enrichAlert({ text: 'BINANCE:BTCUSDT(60) pasó a señal de COMPRA' }, { useTradingViewData: mcpEnabled });
+		expect(result.current_price).toBe(expectedGeminiPrice ?? mcpPrice);
+		expect(result.price_currency).toBe(expectedCurrency);
+		expect(result.priceSource).toBe(expectedSource);
+	});
+
+	it('keeps fallback quote price and levels together when Gemini has incomplete risk metadata', async () => {
+		groundAlert.mockResolvedValue({ current_price: 100, price_currency: 'USD', sentiment: 'BULLISH', sentiment_score: 0.6 });
+		deriveFallbackTradePlan.mockResolvedValue({ current_price: 110, price_data: { current_price: 110 }, invalidation_level: 107.25, target_level: 115.5, risk_reward_ratio: 2 });
+		const result = await enrichAlert({ text: 'BINANCE:BTCUSDT(60) pasó a señal de COMPRA' });
+		expect(result).toMatchObject({ current_price: 110, price_data: { current_price: 110 }, invalidation_level: 107.25, target_level: 115.5, priceSource: 'derived-quote' });
+		expect(result).not.toHaveProperty('price_currency');
+	});
+
 	it('should preserve the raw Gemini sentiment score in the mapped alert', async () => {
 		groundAlert.mockResolvedValue({
 			sentiment: 'BULLISH',

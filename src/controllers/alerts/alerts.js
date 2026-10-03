@@ -37,6 +37,8 @@ const EXPORT_FIELDS = [
 	'tokenUsage',
 	'enrichmentData',
 	'text',
+	'currentPrice',
+	'priceCurrency',
 ];
 
 function parseLimit(rawLimit) {

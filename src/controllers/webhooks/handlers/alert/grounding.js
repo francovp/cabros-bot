@@ -339,7 +339,10 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 					? { sentiment_score_raw: gemini.sentiment_score_raw }
 					: {}),
 				...(sentimentConflict ? { sentimentConflict: true } : {}),
-			current_price: mcpCurrentPrice,
+			current_price: mcpCurrentPrice ?? gemini.current_price ?? null,
+			...(mcpCurrentPrice !== null
+				? { priceSource: mcp.priceSource || (mcp.levelsSource === 'derived-quote' ? 'derived-quote' : 'tradingview-mcp'), ...(mcp.price_currency ? { price_currency: mcp.price_currency } : {}) }
+				: (gemini.current_price ? { priceSource: 'gemini-grounding', ...(gemini.price_currency ? { price_currency: gemini.price_currency } : {}) } : {})),
 			...(mcp.price_data ? { price_data: mcp.price_data } : {}),
 			insights,
 			...(technicalLevels ? { technical_levels: technicalLevels } : {}),
@@ -384,6 +387,8 @@ async function enrichWithGemini(text, tokenUsage) {
 		setup_type,
 		setup_evidence,
 		risk_reward_ratio,
+		current_price,
+		price_currency,
 	} = await groundAlert({
 		text,
 		options: {
@@ -414,8 +419,9 @@ async function enrichWithGemini(text, tokenUsage) {
 		extraText,
 		...(promptProvenance ? { promptProvenance } : {}),
 		...(technical_levels ? { technical_levels } : {}),
+		...(current_price ? { priceSource: 'gemini-grounding' } : {}),
 		...Object.fromEntries(
-			Object.entries({ invalidation_level, target_level, setup_type, setup_evidence, risk_reward_ratio })
+			Object.entries({ invalidation_level, target_level, setup_type, setup_evidence, risk_reward_ratio, current_price, price_currency })
 				.filter(([, value]) => value !== undefined),
 		),
 	};
@@ -562,14 +568,16 @@ async function enrichAlert(alert, options = {}) {
 				if (fallbackPlan) {
 					result = {
 						...result,
-						current_price: result.current_price ?? fallbackPlan.current_price,
-						price_data: result.price_data ?? fallbackPlan.price_data,
-						invalidation_level: result.invalidation_level ?? fallbackPlan.invalidation_level,
-						target_level: result.target_level ?? fallbackPlan.target_level,
-						risk_reward_ratio: result.risk_reward_ratio ?? fallbackPlan.risk_reward_ratio,
+						current_price: fallbackPlan.current_price,
+						priceSource: 'derived-quote',
+						price_data: fallbackPlan.price_data,
+						invalidation_level: fallbackPlan.invalidation_level,
+						target_level: fallbackPlan.target_level,
+						risk_reward_ratio: fallbackPlan.risk_reward_ratio,
 						setup_type: result.setup_type || fallbackPlan.setup_type,
-						levelsSource: result.levelsSource || 'derived-quote',
+						levelsSource: 'derived-quote',
 					};
+					delete result.price_currency;
 				}
 			}
 

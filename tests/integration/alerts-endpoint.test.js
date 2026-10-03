@@ -821,6 +821,16 @@ describe('Alerts API Integration Tests', () => {
 		expect(res.text).toContain('}]",true,,');
 	});
 
+	it('includes entry-price mirrors in CSV export', async () => {
+		alertStorageService.exportAlerts.mockResolvedValue({ alerts: [{ id: 'priced-alert', currentPrice: 100, priceCurrency: 'USD' }] });
+		const res = await request(app)
+			.get('/api/alerts/export?format=csv&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z')
+			.set('x-api-key', 'test-key').expect(200);
+		const [header, row] = res.text.trim().split('\n').map(line => line.split(','));
+		expect(row[header.indexOf('currentPrice')]).toBe('100');
+		expect(row[header.indexOf('priceCurrency')]).toBe('USD');
+	});
+
 	it('includes news-monitor metadata in CSV export', async () => {
 		alertStorageService.exportAlerts.mockResolvedValue({
 			alerts: [

@@ -57,3 +57,14 @@ Behavior notes:
 - **SDK caching**: prompt fetches use the Langfuse SDK cache and can be tuned with `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`.
 - **Current architecture contract**: prompts are compiled into the existing `systemPrompt` / `userPrompt` flow, so provider routing for Gemini, Azure, and OpenRouter remains unchanged.
 - **Alert enrichment schema**: Langfuse `alert-enrichment` versions should mirror the local fallback's optional `invalidation_level`, `target_level`, `setup_type`, and `risk_reward_ratio` fields. The prompt service inspects resolved remote prompts against `REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS`, records `schemaDriftDetected: true` and missing risk fields if any are omitted, and warns once per version without failing open delivery.
+
+### Persisted Gemini-Grounding Entry Price (GH-599)
+
+The alert-enrichment prompt can now extract an optional `current_price` (with optional `price_currency`) from grounded snippets. Values are validated to be finite positive numbers; any malformed entry is silently dropped (fail-open). When the field is present it propagates through `alert.enriched` and the stored alert document, and is mirrored as top-level `currentPrice` / `priceCurrency` on `GET /api/alerts` and the JSONL/CSV export records.
+
+Outcomes-tracking benefits from this in two ways:
+
+- `signalOutcomeService.recordSignal()` now treats a Gemini-grounding-sourced `current_price` as a valid entry-price fallback when TradingView MCP is absent — `priceSource` is set to `'gemini-grounding'` and `entryPriceSourceBreakdown` gains that bucket in `GET /api/outcomes/summary`, so BINANCE alerts stop landing in `missing_entry_price` whenever grounding returns a price.
+- `AlertStorageService` deterministically derives `risk_reward_ratio` from `current_price`, `invalidation_level`, `target_level`, and the parsed signal `side` whenever the model omitted the ratio. The directional computation matches the trade side (`BUY` ⇒ `(target - entry) / (entry - invalidation)`, `SELL` ⇒ `(entry - target) / (invalidation - entry)`); positive numeric and non-empty string model ratios are preserved, and the new field `risk_reward_ratio_source: "computed"` only appears when we filled it in.
+
+Both changes are purely additive. Existing alert-delivery behavior, MarkdownV2 formatting, and fail-open semantics remain unchanged; when grounding omits `current_price` nothing new is written and all existing fields stay untouched.

@@ -565,6 +565,7 @@ function postAlert(botOrGetter) {
 
 			// Fire-and-forget: persist alert to Firestore after responding to the caller.
 			// Errors are caught inside saveAlert — delivery is never blocked by storage.
+			const parsedSignal = parseTradingViewSignal(alert.text);
 			const saveAlertPromise = alertStorageService.saveAlert({
 				requestId,
 				text: alert.text,
@@ -587,6 +588,7 @@ function postAlert(botOrGetter) {
 				whatsappChatId: routing.whatsappChatId,
 				discordWebhookUrl: routing.discordWebhookUrl,
 				alertId: inlineAlertId || undefined,
+				side: parsedSignal?.side || null,
 			});
 			Promise.resolve(saveAlertPromise)
 				.then((storedAlertId) => {

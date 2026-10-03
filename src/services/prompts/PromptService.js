@@ -18,6 +18,8 @@ const REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS = Object.freeze([
 	'setup_type',
 	'risk_reward_ratio',
 ]);
+
+// Optional price fields stay outside drift detection for legacy prompts.
 const REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE = Object.freeze([
 	'0.9+',
 	'0.6-0.8',

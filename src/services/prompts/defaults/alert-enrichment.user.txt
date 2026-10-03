@@ -17,7 +17,9 @@ Instructions:
   "target_level": string | number (optional),
   "setup_type": "breakout" | "mean_reversion" | "trend_continuation" | "reversal" (optional),
   "setup_evidence": string (optional, 1-line rationale for setup_type),
-  "risk_reward_ratio": string | number (optional)
+  "risk_reward_ratio": string | number (optional),
+  "current_price": number (optional, >0 — current price at alert time, sourced from grounding snippets when available; do NOT invent),
+  "price_currency": string (optional, ISO-4217 currency code, e.g. "USD", "USDT")
 }
 
 Score calibration:
@@ -32,3 +34,9 @@ Setup type rubric:
 - When `setup_type` is provided, include a concise 1-line `setup_evidence` summarizing the structural observation.
 
 Risk metadata must be omitted when it cannot be inferred reliably. Never invent a price level or risk-reward estimate.
+
+Entry price context:
+- `current_price` is OPTIONAL: extract it ONLY when a grounding snippet provides a clear, finite, positive quote for the alerted symbol at alert time (e.g. a "$64,863.03" or "$3200" snippet tied to BINANCE:BTCUSDT or the same exchange/symbol).
+- DO NOT infer `current_price` from signal direction, invalidation, target, or any other field. DO NOT fabricate a price from technical_levels. Omit `current_price` entirely when no snippet is available — omission is the preferred and correct output.
+- When `current_price` is omitted, also omit `price_currency`. When `current_price` is provided, `price_currency` should match the quote currency seen in the source snippet (default "USD" only when the snippet clearly says so; "USDT" / "USDC" when pegged).
+- The numeric value is consumed by downstream R:R computation and outcome eligibility — a wrong price silently breaks trade grading. Err on the side of omission.
