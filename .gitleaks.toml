@@ -14,16 +14,18 @@ regexes = ['''AIzaSyDskGc5b0hpVX6YIUW-IYqwuH7_ZIP07O0''']
 # form does not suppress a `generic-api-key` finding at all, while the global
 # table does. Verified by running 8.24.3 against `origin/master..HEAD`; the same
 # config on 8.28 behaves either way.
+#
+# The exception is scoped to the single offending VALUE, never to the file.
+# A previous revision also listed `paths`, which combined permissively and
+# suppressed every finding in `generic-message-webhook.test.js` — a real Slack
+# token committed there would have passed the scan. Verified against 8.24.3: with
+# `paths` a planted `xoxb-…` token reported 0 leaks; with `stopwords` alone it is
+# still reported, while the two historical findings for this fixture value are
+# suppressed and nothing else is.
 [allowlist]
 description = "Synthetic idempotency-key fixture in the generic-message webhook test"
 # `msg-divergent-idem-001` is a supertest request fixture, not a credential; the
 # generic-api-key rule fires on its entropy alone. The action scans full history
 # (`fetch-depth: 0`), so the value remains in the commit that introduced it and a
 # later rename cannot clear the finding.
-#
-# Known limitation, accepted deliberately: `stopwords` suppresses every finding
-# in the matched file, not just this value. It is scoped to a single test file
-# that holds no credentials, so the practical exposure is a real secret
-# committed to that one file going unreported.
-paths = ['''^tests/integration/generic-message-webhook\.test\.js$''']
 stopwords = ['''msg-divergent-idem-001''']

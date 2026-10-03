@@ -521,14 +521,15 @@ describe('Request Logger Middleware', () => {
 	it('treats a closed SSE stream as a completion, not an abort', () => {
 		// The admin console aborts its EventSource on teardown and on stream
 		// replacement, so a closed event stream is routine and must not inflate
-		// the aborted-request signal an operator alerts on.
+		// the aborted-request signal an operator alerts on. The stream has to
+		// have actually been established for that suppression to apply, so this
+		// drives the same `writeHead` handshake the real SSE handler uses.
 		const middleware = createRequestLogger();
 		const req = buildReq({ url: '/api/admin/events' });
 		const res = buildRes();
 
 		middleware(req, res, jest.fn());
-		res.statusCode = 200;
-		res.headersSent = true;
+		res.writeHead(200, { 'Content-Type': 'text/event-stream' });
 		res.writableFinished = false;
 		res._closeCb();
 
@@ -554,6 +555,101 @@ describe('Request Logger Middleware', () => {
 		const log = parseLast(output.warn);
 		expect(log.attributes.outcome).toBe('aborted');
 		expect(log.attributes.aborted).toBe(true);
+	});
+
+	// A client that drops the SSE route before the stream opens is a genuine
+	// failure — e.g. disconnecting while async Firebase token verification is
+	// pending, or while a 401/403/503 body is still flushing. Suppressing that
+	// because the URL merely looks like an event stream would hide it behind
+	// info-level completions.
+	it('reports an abort when the SSE route drops before a stream was established', () => {
+		const middleware = createRequestLogger();
+		const req = buildReq({ url: '/api/admin/events' });
+		const res = buildRes();
+
+		middleware(req, res, jest.fn());
+		// No `text/event-stream` content type was ever set: the handshake never
+		// completed, so this is not the routine console-initiated close.
+		res.statusCode = 503;
+		res.headersSent = true;
+		res.getHeader = jest.fn(() => undefined);
+		res.writableFinished = false;
+		res._closeCb();
+
+		expect(output.warn).toHaveBeenCalled();
+		const log = parseLast(output.warn);
+		expect(log.attributes.outcome).toBe('aborted');
+		expect(log.attributes.aborted).toBe(true);
+	});
+
+	// The suppression must key on the response that actually began, not on the
+	// request path, so a real disconnect that happens to arrive mid-handshake
+	// is still counted. Here the handshake committed a JSON 401 body, never an
+	// event stream.
+	it('reports an abort when the SSE route drops during the handshake', () => {
+		const middleware = createRequestLogger();
+		const req = buildReq({ url: '/api/admin/events' });
+		const res = buildRes();
+
+		middleware(req, res, jest.fn());
+		res.writeHead(401, { 'Content-Type': 'application/json' });
+		res.writableFinished = false;
+		res._closeCb();
+
+		expect(output.warn).toHaveBeenCalled();
+		const log = parseLast(output.warn);
+		expect(log.attributes.aborted).toBe(true);
+		expect(log.attributes.outcome).toBe('aborted');
+	});
+
+	// Regression guard for the production runtime, not the test double.
+	// `writeHead()` serializes headers into its own buffer and leaves the live
+	// header store empty, so a `close`-time `res.getHeader('Content-Type')` returns
+	// `undefined` unless some *earlier* `setHeader` ran first. That made the
+	// classification depend on an unrelated middleware: exempting the route via
+	// REQUEST_DEADLINE_EXEMPT_PATHS, or disabling `x-powered-by`, was enough to
+	// turn every routine admin-console teardown into a warn-level abort. This runs
+	// the real SSE handshake against a real `http.ServerResponse` with no prior
+	// setHeader and no stubbed getHeader, which is exactly the case that failed.
+	it('suppresses the abort on a real SSE handshake with no prior setHeader', async () => {
+		const http = require('node:http');
+
+		await new Promise((resolve, reject) => {
+			const server = http.createServer((req, res) => {
+				const middleware = createRequestLogger();
+				middleware(req, res, () => {
+					// The real AdminSseService handshake.
+					res.writeHead(200, {
+						'Content-Type': 'text/event-stream',
+						'Cache-Control': 'no-cache, no-transform',
+						Connection: 'keep-alive',
+					});
+					res.flushHeaders();
+					res.write(':connected\n\n');
+				});
+				// The admin console tears the stream down on purpose: the connection
+				// is dropped while the response is still open.
+				setTimeout(() => res.destroy(), 50);
+			});
+
+			server.listen(0, () => {
+				const { port } = server.address();
+				const req = http.get({ port, path: '/api/admin/events' }, (r) => r.resume());
+				req.on('error', () => { /* client-initiated destroy */ });
+				setTimeout(() => server.close(() => resolve()), 300);
+			});
+			server.on('error', reject);
+		});
+
+		const entry = output.info.mock.calls
+			.map((call) => String(call[0]))
+			.map((line) => { try { return JSON.parse(line); } catch { return null; } })
+			.find((line) => line && line.attributes && line.attributes.path === '/api/admin/events');
+
+		expect(entry).toBeDefined();
+		expect(entry.attributes.outcome).toBe('completed');
+		expect(entry.attributes.aborted).toBe(false);
+		expect(output.warn).not.toHaveBeenCalled();
 	});
 
 	it('reports statusCode 0 when no response was ever sent', () => {

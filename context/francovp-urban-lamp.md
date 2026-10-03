@@ -70,16 +70,95 @@ The logger attaches listeners at position 0 and finalizes on whichever of `finis
 
 ## Testing
 
-- `pnpm test -- tests/unit/ --testTimeout=10000` — **158 suites, 3,643 tests passed**
-- `pnpm test -- tests/integration/ --testTimeout=25000` — **62 suites, 857 tests passed**
-- `tests/unit/requestLogger.test.js` — level mapping, single-emission guard, abort vs completion, IPv4/IPv6 masking, path normalization, case preservation, sensitive-segment masking, exempt-path matching, fail-open emit.
+- `pnpm test` — **224 suites, 4,596 tests passed**
+- `tests/unit/requestLogger.test.js` — level mapping, single-emission guard, abort vs completion, IPv4/IPv6 masking, path normalization, case preservation, sensitive-segment masking, exempt-path matching, fail-open emit, and four SSE classification cases. One drives a **real `http.ServerResponse`** through the actual `writeHead` handshake with no prior `setHeader` and no stubbed `getHeader` — the `node-mocks-http` double is more forgiving than the real runtime here and would have hidden the defect. All four SSE tests were mutation-checked: reverting the fix fails them.
+- `tests/unit/security-workflows.test.js` — asserts the gitleaks fixture exception stays value-scoped and that no global allowlist entry narrows the scan by path.
 - `tests/integration/request-logger.test.js` — supertest coverage for parser rejections, `x-request-id` header reuse, `408` payload/log id agreement, and probe-path silence.
 - `tests/unit/handlers-request-id.test.js` and `tests/unit/alert-webhook-request-id.test.js` — handlers reuse the middleware-resolved id.
 - Each of the seven bug fixes is covered by a regression test verified to fail when the fix is reverted.
+- Local smoke test (`pnpm run start-dev`, port 3199): `GET /api/selftest` → `warn` line with `statusCode=401`, `requestId=smoke-req-001` echoed from the inbound header, `durationMs` present; `GET /api/alerts` → `401` logged at `warn`; `GET /api/does-not-exist` → `404` logged at `warn`; `GET /healthcheck` → `200` returned and correctly **not** logged.
 - Live preview verified: `https://openclaw.tail5e4271.ts.net/cabros-bot-pr-967/healthcheck` and `/openapi.json` return `200`; a custom `x-request-id` header is echoed on both the response header and the error payload.
 
 ### Idempotency replay correlation
 A replayed body is re-correlated: request headers are not part of the idempotency fingerprint, so a retry carrying a new `x-request-id` is a valid replay. `sendCachedResponse` rewrites `requestId` to the replaying request's id so the body, the `X-Request-Id` header, and the access log all agree. Without it, one response would advertise a correlation id that appears nowhere in the logs for the replay.
+
+## Follow-up review round (4 findings)
+
+The previous head handed off with four findings that Codex had confirmed as valid
+and that were left unfixed. Each is addressed here; none was waved through.
+
+### 1. SSE abort suppression keyed on the path, not the stream
+
+`treatAsAborted` was `aborted && !isSsePath(rawPath)`. Asking the path "does this
+look like an event stream?" silently merged two different events: a stream the admin
+console closed on purpose, and a client that vanished **before** the stream opened —
+while async Firebase token verification was pending, or while a 401/403/503 body was
+still flushing. The second is a genuine client failure and was being recorded as an
+info-level completion.
+
+`trackEventStream(res)` now asks the response what it became, rather than asking the
+path what it looks like. Keying on the path alone merged two different events: a stream
+the admin console closed on purpose, and a client that vanished **before** the stream
+opened — while async Firebase token verification was pending, or while a 401/403/503
+body was still flushing. The second is a genuine client failure and was being recorded
+as an info-level completion.
+
+**The content type has to be captured at handshake time.** A first attempt read
+`res.getHeader('Content-Type')` inside the `close` handler. That is wrong: `writeHead()`
+serializes headers into its own buffer and leaves the live header store empty, so the
+read returns `undefined` unless some *earlier* `setHeader` happened to run — and today
+that earlier call is `requestDeadline` setting `X-Request-Id`. The answer would then
+depend on an unrelated middleware. Verified against real Node: after
+`writeHead(200, {'Content-Type':'text/event-stream'})`, `getHeader` returns
+`undefined` when nothing set a header first. Two independent triggers reach that
+state — exempting the route via `REQUEST_DEADLINE_EXEMPT_PATHS` (a documented option
+an operator would plausibly use for a long-lived stream), and `app.disable('x-powered-by')`
+/ `helmet({hidePoweredBy})`. Either one turned every routine admin-console teardown
+into a warn-level abort.
+
+The middleware now wraps `res.writeHead` — the same technique `requestDeadline` already
+uses — and records establishment from the headers actually being committed.
+
+### 2. Seven self-test error responses carried `headers` beside `$ref`
+
+OpenAPI 3.1 ignores siblings on a Reference Object, so those `headers` blocks were
+dead weight that happened to agree with the referenced components. An earlier round
+fixed the 8 success responses; the 7 error responses were missed because the fix was
+scoped to the paths already under inspection rather than sweeping the contract. A
+whole-file AST scan now reports zero `$ref`-plus-`headers` siblings; the `$ref` values
+are preserved and the headers live solely in the referenced components.
+
+### 3. The `X-Request-Id` description overpromised
+
+The component claimed the id "is also returned as `requestId` in JSON response bodies".
+`src/lib/auth.js` returns `{ error: '…' }` for a missing or invalid key with no
+`requestId` at all, and the deadline middleware only sets the header. Because the
+description sits on a reusable component, the claim applied to every response
+referencing it. Narrowed to the header guarantee, with the body echo described as
+something handlers *may* do. Adding `requestId` uniformly would be better for
+correlation, but that changes response bodies on auth and rate-limit paths — a wider
+behavioural change than an observability PR should carry on its own.
+
+### 4. The gitleaks exception was scoped to a file, not a value
+
+The global `[allowlist]` listed both `paths` (matching
+`tests/integration/generic-message-webhook.test.js`) and `stopwords`. Global allowlist
+criteria combine permissively, so `paths` alone suppressed **every** secret finding in
+that file — a real credential committed there would have passed the scan.
+
+Verified empirically against gitleaks **8.24.3**, the version `gitleaks-action@v3` pins,
+with a `xoxb-…` Slack token planted in that same file:
+
+| Config | Slack token reported | Historical fixture findings |
+|---|---|---|
+| `paths` + `stopwords` (previous) | **no** | suppressed |
+| `stopwords` only (this revision) | **yes** | suppressed |
+
+The action scans full history (`fetch-depth: 0`), and commit `c5640c8d` still contains
+the fixture value, so the `stopwords` entry is load-bearing and cannot simply be
+deleted. Dropping `paths` keeps it effective while restoring detection. A regression
+test in `tests/unit/security-workflows.test.js` asserts the global allowlist never
+declares a `paths` key.
 
 ## Known limitation
 

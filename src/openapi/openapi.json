@@ -3770,28 +3770,13 @@
             }
           },
           "401": {
-            "$ref": "#/components/responses/Unauthorized",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "408": {
-            "$ref": "#/components/responses/RequestTimeout",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "500": {
-            "$ref": "#/components/responses/Error",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
@@ -3867,36 +3852,16 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/Error",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/Error"
           },
           "401": {
-            "$ref": "#/components/responses/Unauthorized",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/Unauthorized"
           },
           "408": {
-            "$ref": "#/components/responses/RequestTimeout",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "500": {
-            "$ref": "#/components/responses/Error",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
@@ -12680,7 +12645,7 @@
     },
     "headers": {
       "XRequestIdResponseHeader": {
-        "description": "Unique identifier assigned to the request. Echoes the inbound `x-request-id` when supplied, and is also returned as `requestId` in JSON response bodies. Absent on routes exempted through `REQUEST_DEADLINE_EXEMPT_PATHS`.",
+        "description": "Unique identifier assigned to the request. Echoes the inbound `x-request-id` when supplied. Set as a response header on every non-exempt route; handlers that build their own response body may also echo it as `requestId`. Absent on routes exempted through `REQUEST_DEADLINE_EXEMPT_PATHS`.",
         "schema": {
           "type": "string"
         }

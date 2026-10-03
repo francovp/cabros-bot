@@ -61,10 +61,48 @@ function maskSensitivePathSegments(path) {
  * `writableFinished` and its `close` is a normal end of stream.
  */
 const SSE_PATHS = ['/api/admin/events'];
+const EVENT_STREAM_CONTENT_TYPE = 'text/event-stream';
 
 function isSsePath(path) {
 	const lower = path.toLowerCase();
 	return SSE_PATHS.some((candidate) => lower === candidate || lower.startsWith(`${candidate}/`));
+}
+
+/**
+ * Whether a server-sent-events response actually began.
+ *
+ * This asks the *response* what it became rather than asking the path what it
+ * looks like. Keying on the path alone conflated a stream the admin console
+ * closed on purpose with a client that vanished before the stream ever opened —
+ * the second is a real failure, and recording it as a completion buried it.
+ *
+ * The content type must be captured at handshake time, not read later from
+ * `res.getHeader()`: `writeHead()` serializes headers into its own buffer and
+ * leaves the live header store empty, so a read in the `close` handler returns
+ * `undefined` unless some *earlier* `setHeader` happened to run first. That made
+ * the answer depend on an unrelated middleware — exempting the route via
+ * `REQUEST_DEADLINE_EXEMPT_PATHS`, or disabling `x-powered-by`, was enough to
+ * turn every routine console teardown into a warn-level abort.
+ */
+function trackEventStream(res) {
+	const state = { established: false };
+	const originalWriteHead = res.writeHead;
+	if (typeof originalWriteHead !== 'function') return state;
+
+	res.writeHead = function(...args) {
+		// The header map is the 2nd argument when `writeHead(status, headers)` is
+		// used; it can also arrive via setHeader beforehand, so both are consulted
+		// at the moment the status line is actually committed.
+		const declared = args[1];
+		const contentType = (declared && typeof declared === 'object' && declared['Content-Type'])
+			|| res.getHeader('Content-Type');
+		if (typeof contentType === 'string'
+			&& contentType.toLowerCase().split(';')[0].trim() === EVENT_STREAM_CONTENT_TYPE) {
+			state.established = true;
+		}
+		return originalWriteHead.apply(this, args);
+	};
+	return state;
 }
 
 /**
@@ -163,7 +201,10 @@ function createRequestLogger() {
 		// admin console aborts the controller on teardown and on stream
 		// replacement, so without this every routine disconnect would land in the
 		// aborted bucket and drown the signal that a real client failure produces.
+		// The path only selects the candidate — `eventStream.established` still has
+		// to confirm the stream really started.
 		const isEventStream = isSsePath(rawPath);
+		const eventStream = isEventStream ? trackEventStream(res) : { established: false };
 		let finalized = false;
 
 		const finalize = (aborted = false) => {
@@ -179,8 +220,9 @@ function createRequestLogger() {
 				: 0;
 			// An event stream that the client closes is the expected end of that
 			// response, not a failed request: report it as a completion at the
-			// stream's own duration instead of inflating the abort counter.
-			const treatAsAborted = aborted && !isEventStream;
+			// stream's own duration instead of inflating the abort counter. This
+			// applies only once the stream was genuinely established.
+			const treatAsAborted = aborted && !eventStream.established;
 			const level = treatAsAborted ? 'warn' : resolveLogLevel(statusCode);
 			// Fail open: `console.*` is globally replaceable (the logging wrapper,
 			// Sentry, or a test double), and this runs from a Node event emitter
