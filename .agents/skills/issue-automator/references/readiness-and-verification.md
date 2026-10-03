@@ -13,6 +13,7 @@ A PR is ready to merge directly only if all of these are true and the agent is c
 5. **Criteria Matched**: The implementation matches all issue acceptance criteria.
 6. **No Ownership Conflict**: No active ownership conflicts remain.
 7. **Stability Period**: The head SHA has been stable for at least 5 minutes with no new Codex reviews or unresolved threads appearing.
+8. **Codex Review Disposition**: Codex gave its configured 👍 approval on the PR description, or the complete quiet window ended without new actionable feedback. A rate-limit response uses the fallback below; any other review error blocks merge. If Codex still requests changes after the third review request, hand off for human revision.
 
 If any criterion is uncertain, or a discussion requires human input, keep the same gate but hand the PR off through `In review` instead of merging it directly.
 
@@ -32,6 +33,7 @@ If any criterion is uncertain, or a discussion requires human input, keep the sa
 1. **Bounded Checks**: Each quiet-window check is bounded; check paginated inline `reviewThreads` plus every paginated comment within each thread and paginated top-level PR conversation comments, and do not poll continuously outside the required midpoint and endpoint checks.
 2. **Verification Limit**: Allow at most 3 full verification cycles for an unchanged head SHA. Discussion-only activity does not reset this counter.
 3. **Reset Trigger**: A concrete new head commit resets the verification-cycle counter and quiet window. A new discussion resets only the quiet window; address it without resetting the cycle budget.
+   - This verification-cycle limit is separate from the maximum of 3 Codex review requests per PR; the first request counts, and failed requests still use the cap.
 4. **Baseline Discussions**: Before the quiet window starts, triage every unresolved inline thread and actionable top-level conversation comment in the baseline snapshot. Do not treat an existing item as already handled merely because it predates the snapshot.
 5. **Human Input**: If a thread needs product authority or missing requirements, stop the loop and use Step 7 for `IN_REVIEW`; do not force resolution or classify it as a polling blocker.
 6. **Repeated Blockers**: If the same blocker persists across cycles, end with outcome `LOCAL_DEADLOCK`.
