@@ -535,13 +535,7 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/DeliveryResult",
-            "description": "Per-channel delivery result. When ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION is enabled and the same exchange/symbol/timeframe/side signal fires within its cooldown window, the response includes suppressedRepeat: true with empty results and deliveredChannels while the alert remains persisted with a suppression marker. Replay endpoints that run with dryRun=true return payloadPreview, alertId, channels, and idempotencyKeyHashPrefix instead of dispatching to any channel.",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/DeliveryResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -601,13 +595,7 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/MessageDeliveryResult",
-            "description": "Generic-message delivery response. A replay returns the cached body with idempotencyReplayed=true and Idempotency-Replay: true. The requestId field mirrors the inbound x-request-id header (sanitized) or a generated UUIDv4 so callers can correlate the response with logs, Sentry, and admin paging.",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/MessageDeliveryResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -664,13 +652,7 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/AnalysisResult",
-            "description": "Analysis and delivery result",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/AnalysisResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -733,13 +715,7 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/AnalysisResult",
-            "description": "Analysis and delivery result",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/AnalysisResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -788,13 +764,7 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/VolumeConfirmationResult",
-            "description": "Structured TradingView MCP volume confirmation data, decision, and timing metadata.",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/VolumeConfirmationResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -842,13 +812,7 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/SymbolAnalysisResult",
-            "description": "Single-symbol TradingView analysis, formatted alert text, risk levels, and decision metadata.",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/SymbolAnalysisResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -2470,13 +2434,7 @@
         ],
         "responses": {
           "200": {
-            "$ref": "#/components/responses/NewsMonitorAnalysisResult",
-            "description": "News monitor analysis and delivery result",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/NewsMonitorAnalysisResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -2522,13 +2480,7 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/NewsMonitorAnalysisResult",
-            "description": "News monitor analysis and delivery result",
-            "headers": {
-              "X-Request-Id": {
-                "$ref": "#/components/headers/XRequestIdResponseHeader"
-              }
-            }
+            "$ref": "#/components/responses/NewsMonitorAnalysisResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -5159,6 +5111,11 @@
               "code": "UNAUTHORIZED"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "MaintenanceMode": {
@@ -5172,6 +5129,11 @@
               "error": "MAINTENANCE_MODE",
               "message": "Service is temporarily unavailable for maintenance"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5205,6 +5167,11 @@
                 }
               }
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5243,6 +5210,11 @@
               }
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "Error": {
@@ -5257,6 +5229,11 @@
               "code": "INVALID_REQUEST"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "IdempotencyConflict": {
@@ -5270,6 +5247,11 @@
               "error": "Idempotency key was reused with a different payload",
               "code": "IDEMPOTENCY_CONFLICT"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5286,6 +5268,11 @@
               "message": "Request body exceeds maximum size of 256kb",
               "limit": "256kb"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5454,15 +5441,8 @@
       "MessageDeliveryResult": {
         "description": "Generic-message delivery response. A replay returns the cached body with idempotencyReplayed=true and Idempotency-Replay: true. The requestId field mirrors the inbound x-request-id header (sanitized) or a generated UUIDv4 so callers can correlate the response with logs, Sentry, and admin paging.",
         "headers": {
-          "Idempotency-Replay": {
-            "description": "false for the first accepted request, true for a cached replay.",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "true",
-                "false"
-              ]
-            }
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         },
         "content": {
@@ -5528,6 +5508,11 @@
               "code": "IDEMPOTENCY_CONFLICT"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "DeliveryResult": {
@@ -5548,6 +5533,11 @@
                 }
               ]
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5608,6 +5598,11 @@
               "$ref": "#/components/schemas/JsonObject"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "SymbolAnalysisResult": {
@@ -5618,6 +5613,11 @@
               "$ref": "#/components/schemas/SymbolAnalysisResult"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "VolumeConfirmationResult": {
@@ -5627,6 +5627,11 @@
             "schema": {
               "$ref": "#/components/schemas/VolumeConfirmationResult"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5839,6 +5844,11 @@
                 }
               }
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },

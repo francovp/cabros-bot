@@ -170,7 +170,10 @@
             "healthcheck"
           ],
           "query": [
-            { "key": "depth", "value": "readiness" }
+            {
+              "key": "depth",
+              "value": "readiness"
+            }
           ]
         }
       },
@@ -180,7 +183,10 @@
           "status": "OK",
           "code": 200,
           "header": [
-            { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+            {
+              "key": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
           ],
           "body": "{\"ready\":true,\"failClosed\":false,\"checkedAt\":\"2026-08-31T02:30:00.000Z\",\"latencyMs\":412,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":53},\"gemini\":{\"ready\":true,\"backend\":\"gemini\",\"latencyMs\":124},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":18},\"binance\":{\"ready\":true,\"backend\":\"binance\",\"latencyMs\":36},\"telegram\":{\"ready\":true,\"backend\":\"telegram\",\"latencyMs\":22}}}"
         },
@@ -189,7 +195,10 @@
           "status": "OK",
           "code": 200,
           "header": [
-            { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+            {
+              "key": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
           ],
           "body": "{\"ready\":false,\"failClosed\":false,\"checkedAt\":\"2026-08-31T02:30:05.000Z\",\"latencyMs\":3011,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":84},\"gemini\":{\"ready\":false,\"error\":\"timeout_after_3000ms\",\"latencyMs\":3000},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":22},\"binance\":{\"ready\":false,\"error\":\"binance_http_451\",\"latencyMs\":124},\"telegram\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"telegram_disabled\"}}}"
         }
@@ -210,7 +219,10 @@
             "ready"
           ],
           "query": [
-            { "key": "depth", "value": "dependencies" }
+            {
+              "key": "depth",
+              "value": "dependencies"
+            }
           ]
         }
       },
@@ -220,7 +232,10 @@
           "status": "OK",
           "code": 200,
           "header": [
-            { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+            {
+              "key": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
           ],
           "body": "{\"ready\":true,\"failClosed\":true,\"status\":\"ready\",\"bootstrapReady\":true,\"components\":{\"telegramBot\":{\"status\":\"disabled\"},\"notificationServices\":{\"status\":\"ready\"},\"newsMonitor\":{\"status\":\"disabled\"}},\"checkedAt\":\"2026-08-31T02:30:00.000Z\",\"latencyMs\":412,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":53},\"gemini\":{\"ready\":true,\"backend\":\"gemini\",\"latencyMs\":124},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":18},\"binance\":{\"ready\":true,\"backend\":\"binance\",\"latencyMs\":36},\"telegram\":{\"ready\":true,\"backend\":\"telegram\",\"latencyMs\":22}}}"
         },
@@ -229,7 +244,10 @@
           "status": "Service Unavailable",
           "code": 503,
           "header": [
-            { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+            {
+              "key": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
           ],
           "body": "{\"ready\":false,\"failClosed\":true,\"status\":\"ready\",\"bootstrapReady\":true,\"components\":{\"telegramBot\":{\"status\":\"disabled\"},\"notificationServices\":{\"status\":\"ready\"},\"newsMonitor\":{\"status\":\"disabled\"}},\"checkedAt\":\"2026-08-31T02:30:05.000Z\",\"latencyMs\":3011,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":84},\"gemini\":{\"ready\":false,\"error\":\"timeout_after_3000ms\",\"latencyMs\":3000},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":22},\"binance\":{\"ready\":false,\"error\":\"binance_http_451\",\"latencyMs\":124},\"telegram\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"telegram_not_initialized\"}}}"
         }
@@ -2454,520 +2472,520 @@
               "body": "{\n  \"success\": false,\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
+        },
+        {
+          "name": "POST Expanded Analysis Alert (request ID echo)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh665-trace-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbols\": [\"NASDAQ:NVDA\"],\n  \"timeframe\": \"1D\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/expanded-analysis-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "expanded-analysis-alert"
+              ]
+            },
+            "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A valid X-Request-Id must be echoed back verbatim.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
+                  "  pm.expect(json.requestId).to.eql(\"gh665-trace-001\");",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id response header matches\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh665-trace-001\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Market Scanner Alert (request ID echo)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh665-trace-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/market-scanner-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "market-scanner-alert"
+              ]
+            },
+            "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A valid X-Request-Id must be echoed back verbatim.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
+                  "  pm.expect(json.requestId).to.eql(\"gh665-trace-001\");",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id response header matches\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh665-trace-001\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Volume Confirmation (request ID echo)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh665-trace-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/volume-confirmation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "volume-confirmation"
+              ]
+            },
+            "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A valid X-Request-Id must be echoed back verbatim.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
+                  "  pm.expect(json.requestId).to.eql(\"gh665-trace-001\");",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id response header matches\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh665-trace-001\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Single Symbol Analysis (request ID echo)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh665-trace-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"NASDAQ:NVDA\",\n  \"timeframe\": \"1D\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/symbol-analysis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "symbol-analysis"
+              ]
+            },
+            "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A valid X-Request-Id must be echoed back verbatim.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
+                  "  pm.expect(json.requestId).to.eql(\"gh665-trace-001\");",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id response header matches\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh665-trace-001\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST request ID fallback (invalid value)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "",
+                "type": "text",
+                "description": "Empty request id: must be ignored, and the server generates a UUIDv4 instead of echoing it."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbols\": [\"NASDAQ:NVDA\"],\n  \"timeframe\": \"1D\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/expanded-analysis-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "expanded-analysis-alert"
+              ]
+            },
+            "description": "Negative variant: an empty x-request-id must not be echoed. The server generates a UUIDv4 correlation id instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// An invalid X-Request-Id must be discarded, not echoed.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"requestId is a generated UUID, not the empty input\", function () {",
+                  "  pm.expect(json.requestId).to.be.a(\"string\");",
+                  "  pm.expect(json.requestId.length).to.be.above(0);",
+                  "  pm.expect(json.requestId).to.not.eql(\"\");",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST request ID fallback (invalid value)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "",
+                "type": "text",
+                "description": "Empty request id: must be ignored, and the server generates a UUIDv4 instead of echoing it."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/market-scanner-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "market-scanner-alert"
+              ]
+            },
+            "description": "Negative variant: an empty x-request-id must not be echoed. The server generates a UUIDv4 correlation id instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// An invalid X-Request-Id must be discarded, not echoed.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"requestId is a generated UUID, not the empty input\", function () {",
+                  "  pm.expect(json.requestId).to.be.a(\"string\");",
+                  "  pm.expect(json.requestId.length).to.be.above(0);",
+                  "  pm.expect(json.requestId).to.not.eql(\"\");",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST request ID fallback (invalid value)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "",
+                "type": "text",
+                "description": "Empty request id: must be ignored, and the server generates a UUIDv4 instead of echoing it."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/volume-confirmation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "volume-confirmation"
+              ]
+            },
+            "description": "Negative variant: an empty x-request-id must not be echoed. The server generates a UUIDv4 correlation id instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// An invalid X-Request-Id must be discarded, not echoed.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"requestId is a generated UUID, not the empty input\", function () {",
+                  "  pm.expect(json.requestId).to.be.a(\"string\");",
+                  "  pm.expect(json.requestId.length).to.be.above(0);",
+                  "  pm.expect(json.requestId).to.not.eql(\"\");",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST request ID fallback (invalid value)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "",
+                "type": "text",
+                "description": "Empty request id: must be ignored, and the server generates a UUIDv4 instead of echoing it."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"NASDAQ:NVDA\",\n  \"timeframe\": \"1D\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/symbol-analysis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "symbol-analysis"
+              ]
+            },
+            "description": "Negative variant: an empty x-request-id must not be echoed. The server generates a UUIDv4 correlation id instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// An invalid X-Request-Id must be discarded, not echoed.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"requestId is a generated UUID, not the empty input\", function () {",
+                  "  pm.expect(json.requestId).to.be.a(\"string\");",
+                  "  pm.expect(json.requestId.length).to.be.above(0);",
+                  "  pm.expect(json.requestId).to.not.eql(\"\");",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
-,
-                {
-            "name": "POST Expanded Analysis Alert (request ID echo)",
-            "request": {
-              "method": "POST",
-              "header": [
-                {
-                  "key": "Content-Type",
-                  "value": "application/json",
-                  "type": "text"
-                },
-                {
-                  "key": "x-api-key",
-                  "value": "{{apiKey}}",
-                  "type": "text"
-                },
-                {
-                  "key": "X-Request-Id",
-                  "value": "gh665-trace-001",
-                  "type": "text",
-                  "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
-                }
-              ],
-              "body": {
-                "mode": "raw",
-                "raw": "{\n  \"symbols\": [\"NASDAQ:NVDA\"],\n  \"timeframe\": \"1D\"\n}"
-              },
-              "url": {
-                "raw": "{{baseUrl}}/api/webhook/expanded-analysis-alert",
-                "host": [
-                  "{{baseUrl}}"
-                ],
-                "path": [
-                  "api",
-                  "webhook",
-                  "expanded-analysis-alert"
-                ]
-              },
-              "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
-            },
-            "event": [
-              {
-                "listen": "test",
-                "script": {
-                  "type": "text/javascript",
-                  "exec": [
-                    "// A valid X-Request-Id must be echoed back verbatim.",
-                    "pm.test(\"status is 2xx\", function () {",
-                    "  pm.expect(pm.response.code).to.be.within(200, 299);",
-                    "});",
-                    "",
-                    "var json = pm.response.json();",
-                    "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
-                    "  pm.expect(json.requestId).to.eql(\"gh665-trace-001\");",
-                    "});",
-                    "",
-                    "pm.test(\"X-Request-Id response header matches\", function () {",
-                    "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh665-trace-001\");",
-                    "});"
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "name": "POST Market Scanner Alert (request ID echo)",
-            "request": {
-              "method": "POST",
-              "header": [
-                {
-                  "key": "Content-Type",
-                  "value": "application/json",
-                  "type": "text"
-                },
-                {
-                  "key": "x-api-key",
-                  "value": "{{apiKey}}",
-                  "type": "text"
-                },
-                {
-                  "key": "X-Request-Id",
-                  "value": "gh665-trace-001",
-                  "type": "text",
-                  "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
-                }
-              ],
-              "body": {
-                "mode": "raw",
-                "raw": "{\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\"\n}"
-              },
-              "url": {
-                "raw": "{{baseUrl}}/api/webhook/market-scanner-alert",
-                "host": [
-                  "{{baseUrl}}"
-                ],
-                "path": [
-                  "api",
-                  "webhook",
-                  "market-scanner-alert"
-                ]
-              },
-              "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
-            },
-            "event": [
-              {
-                "listen": "test",
-                "script": {
-                  "type": "text/javascript",
-                  "exec": [
-                    "// A valid X-Request-Id must be echoed back verbatim.",
-                    "pm.test(\"status is 2xx\", function () {",
-                    "  pm.expect(pm.response.code).to.be.within(200, 299);",
-                    "});",
-                    "",
-                    "var json = pm.response.json();",
-                    "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
-                    "  pm.expect(json.requestId).to.eql(\"gh665-trace-001\");",
-                    "});",
-                    "",
-                    "pm.test(\"X-Request-Id response header matches\", function () {",
-                    "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh665-trace-001\");",
-                    "});"
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "name": "POST Volume Confirmation (request ID echo)",
-            "request": {
-              "method": "POST",
-              "header": [
-                {
-                  "key": "Content-Type",
-                  "value": "application/json",
-                  "type": "text"
-                },
-                {
-                  "key": "x-api-key",
-                  "value": "{{apiKey}}",
-                  "type": "text"
-                },
-                {
-                  "key": "X-Request-Id",
-                  "value": "gh665-trace-001",
-                  "type": "text",
-                  "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
-                }
-              ],
-              "body": {
-                "mode": "raw",
-                "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\"\n}"
-              },
-              "url": {
-                "raw": "{{baseUrl}}/api/webhook/volume-confirmation",
-                "host": [
-                  "{{baseUrl}}"
-                ],
-                "path": [
-                  "api",
-                  "webhook",
-                  "volume-confirmation"
-                ]
-              },
-              "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
-            },
-            "event": [
-              {
-                "listen": "test",
-                "script": {
-                  "type": "text/javascript",
-                  "exec": [
-                    "// A valid X-Request-Id must be echoed back verbatim.",
-                    "pm.test(\"status is 2xx\", function () {",
-                    "  pm.expect(pm.response.code).to.be.within(200, 299);",
-                    "});",
-                    "",
-                    "var json = pm.response.json();",
-                    "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
-                    "  pm.expect(json.requestId).to.eql(\"gh665-trace-001\");",
-                    "});",
-                    "",
-                    "pm.test(\"X-Request-Id response header matches\", function () {",
-                    "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh665-trace-001\");",
-                    "});"
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "name": "POST Single Symbol Analysis (request ID echo)",
-            "request": {
-              "method": "POST",
-              "header": [
-                {
-                  "key": "Content-Type",
-                  "value": "application/json",
-                  "type": "text"
-                },
-                {
-                  "key": "x-api-key",
-                  "value": "{{apiKey}}",
-                  "type": "text"
-                },
-                {
-                  "key": "X-Request-Id",
-                  "value": "gh665-trace-001",
-                  "type": "text",
-                  "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
-                }
-              ],
-              "body": {
-                "mode": "raw",
-                "raw": "{\n  \"symbol\": \"NASDAQ:NVDA\",\n  \"timeframe\": \"1D\"\n}"
-              },
-              "url": {
-                "raw": "{{baseUrl}}/api/webhook/symbol-analysis",
-                "host": [
-                  "{{baseUrl}}"
-                ],
-                "path": [
-                  "api",
-                  "webhook",
-                  "symbol-analysis"
-                ]
-              },
-              "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
-            },
-            "event": [
-              {
-                "listen": "test",
-                "script": {
-                  "type": "text/javascript",
-                  "exec": [
-                    "// A valid X-Request-Id must be echoed back verbatim.",
-                    "pm.test(\"status is 2xx\", function () {",
-                    "  pm.expect(pm.response.code).to.be.within(200, 299);",
-                    "});",
-                    "",
-                    "var json = pm.response.json();",
-                    "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
-                    "  pm.expect(json.requestId).to.eql(\"gh665-trace-001\");",
-                    "});",
-                    "",
-                    "pm.test(\"X-Request-Id response header matches\", function () {",
-                    "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh665-trace-001\");",
-                    "});"
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "name": "POST request ID fallback (invalid value)",
-            "request": {
-              "method": "POST",
-              "header": [
-                {
-                  "key": "Content-Type",
-                  "value": "application/json",
-                  "type": "text"
-                },
-                {
-                  "key": "x-api-key",
-                  "value": "{{apiKey}}",
-                  "type": "text"
-                },
-                {
-                  "key": "X-Request-Id",
-                  "value": "",
-                  "type": "text",
-                  "description": "Empty request id: must be ignored, and the server generates a UUIDv4 instead of echoing it."
-                }
-              ],
-              "body": {
-                "mode": "raw",
-                "raw": "{\n  \"symbols\": [\"NASDAQ:NVDA\"],\n  \"timeframe\": \"1D\"\n}"
-              },
-              "url": {
-                "raw": "{{baseUrl}}/api/webhook/expanded-analysis-alert",
-                "host": [
-                  "{{baseUrl}}"
-                ],
-                "path": [
-                  "api",
-                  "webhook",
-                  "expanded-analysis-alert"
-                ]
-              },
-              "description": "Negative variant: an empty x-request-id must not be echoed. The server generates a UUIDv4 correlation id instead."
-            },
-            "event": [
-              {
-                "listen": "test",
-                "script": {
-                  "type": "text/javascript",
-                  "exec": [
-                    "// An invalid X-Request-Id must be discarded, not echoed.",
-                    "pm.test(\"status is 2xx\", function () {",
-                    "  pm.expect(pm.response.code).to.be.within(200, 299);",
-                    "});",
-                    "",
-                    "var json = pm.response.json();",
-                    "pm.test(\"requestId is a generated UUID, not the empty input\", function () {",
-                    "  pm.expect(json.requestId).to.be.a(\"string\");",
-                    "  pm.expect(json.requestId.length).to.be.above(0);",
-                    "  pm.expect(json.requestId).to.not.eql(\"\");",
-                    "});",
-                    "",
-                    "pm.test(\"X-Request-Id header is populated\", function () {",
-                    "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
-                    "});"
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "name": "POST request ID fallback (invalid value)",
-            "request": {
-              "method": "POST",
-              "header": [
-                {
-                  "key": "Content-Type",
-                  "value": "application/json",
-                  "type": "text"
-                },
-                {
-                  "key": "x-api-key",
-                  "value": "{{apiKey}}",
-                  "type": "text"
-                },
-                {
-                  "key": "X-Request-Id",
-                  "value": "",
-                  "type": "text",
-                  "description": "Empty request id: must be ignored, and the server generates a UUIDv4 instead of echoing it."
-                }
-              ],
-              "body": {
-                "mode": "raw",
-                "raw": "{\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\"\n}"
-              },
-              "url": {
-                "raw": "{{baseUrl}}/api/webhook/market-scanner-alert",
-                "host": [
-                  "{{baseUrl}}"
-                ],
-                "path": [
-                  "api",
-                  "webhook",
-                  "market-scanner-alert"
-                ]
-              },
-              "description": "Negative variant: an empty x-request-id must not be echoed. The server generates a UUIDv4 correlation id instead."
-            },
-            "event": [
-              {
-                "listen": "test",
-                "script": {
-                  "type": "text/javascript",
-                  "exec": [
-                    "// An invalid X-Request-Id must be discarded, not echoed.",
-                    "pm.test(\"status is 2xx\", function () {",
-                    "  pm.expect(pm.response.code).to.be.within(200, 299);",
-                    "});",
-                    "",
-                    "var json = pm.response.json();",
-                    "pm.test(\"requestId is a generated UUID, not the empty input\", function () {",
-                    "  pm.expect(json.requestId).to.be.a(\"string\");",
-                    "  pm.expect(json.requestId.length).to.be.above(0);",
-                    "  pm.expect(json.requestId).to.not.eql(\"\");",
-                    "});",
-                    "",
-                    "pm.test(\"X-Request-Id header is populated\", function () {",
-                    "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
-                    "});"
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "name": "POST request ID fallback (invalid value)",
-            "request": {
-              "method": "POST",
-              "header": [
-                {
-                  "key": "Content-Type",
-                  "value": "application/json",
-                  "type": "text"
-                },
-                {
-                  "key": "x-api-key",
-                  "value": "{{apiKey}}",
-                  "type": "text"
-                },
-                {
-                  "key": "X-Request-Id",
-                  "value": "",
-                  "type": "text",
-                  "description": "Empty request id: must be ignored, and the server generates a UUIDv4 instead of echoing it."
-                }
-              ],
-              "body": {
-                "mode": "raw",
-                "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\"\n}"
-              },
-              "url": {
-                "raw": "{{baseUrl}}/api/webhook/volume-confirmation",
-                "host": [
-                  "{{baseUrl}}"
-                ],
-                "path": [
-                  "api",
-                  "webhook",
-                  "volume-confirmation"
-                ]
-              },
-              "description": "Negative variant: an empty x-request-id must not be echoed. The server generates a UUIDv4 correlation id instead."
-            },
-            "event": [
-              {
-                "listen": "test",
-                "script": {
-                  "type": "text/javascript",
-                  "exec": [
-                    "// An invalid X-Request-Id must be discarded, not echoed.",
-                    "pm.test(\"status is 2xx\", function () {",
-                    "  pm.expect(pm.response.code).to.be.within(200, 299);",
-                    "});",
-                    "",
-                    "var json = pm.response.json();",
-                    "pm.test(\"requestId is a generated UUID, not the empty input\", function () {",
-                    "  pm.expect(json.requestId).to.be.a(\"string\");",
-                    "  pm.expect(json.requestId.length).to.be.above(0);",
-                    "  pm.expect(json.requestId).to.not.eql(\"\");",
-                    "});",
-                    "",
-                    "pm.test(\"X-Request-Id header is populated\", function () {",
-                    "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
-                    "});"
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "name": "POST request ID fallback (invalid value)",
-            "request": {
-              "method": "POST",
-              "header": [
-                {
-                  "key": "Content-Type",
-                  "value": "application/json",
-                  "type": "text"
-                },
-                {
-                  "key": "x-api-key",
-                  "value": "{{apiKey}}",
-                  "type": "text"
-                },
-                {
-                  "key": "X-Request-Id",
-                  "value": "",
-                  "type": "text",
-                  "description": "Empty request id: must be ignored, and the server generates a UUIDv4 instead of echoing it."
-                }
-              ],
-              "body": {
-                "mode": "raw",
-                "raw": "{\n  \"symbol\": \"NASDAQ:NVDA\",\n  \"timeframe\": \"1D\"\n}"
-              },
-              "url": {
-                "raw": "{{baseUrl}}/api/webhook/symbol-analysis",
-                "host": [
-                  "{{baseUrl}}"
-                ],
-                "path": [
-                  "api",
-                  "webhook",
-                  "symbol-analysis"
-                ]
-              },
-              "description": "Negative variant: an empty x-request-id must not be echoed. The server generates a UUIDv4 correlation id instead."
-            },
-            "event": [
-              {
-                "listen": "test",
-                "script": {
-                  "type": "text/javascript",
-                  "exec": [
-                    "// An invalid X-Request-Id must be discarded, not echoed.",
-                    "pm.test(\"status is 2xx\", function () {",
-                    "  pm.expect(pm.response.code).to.be.within(200, 299);",
-                    "});",
-                    "",
-                    "var json = pm.response.json();",
-                    "pm.test(\"requestId is a generated UUID, not the empty input\", function () {",
-                    "  pm.expect(json.requestId).to.be.a(\"string\");",
-                    "  pm.expect(json.requestId.length).to.be.above(0);",
-                    "  pm.expect(json.requestId).to.not.eql(\"\");",
-                    "});",
-                    "",
-                    "pm.test(\"X-Request-Id header is populated\", function () {",
-                    "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
-                    "});"
-                  ]
-                }
-              }
-            ]
-          }]
+      ]
     },
     {
       "name": "Scanner Presets",
@@ -4040,134 +4058,242 @@
               "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
-        }
-,
-                {
-            "name": "POST News Monitor (request ID echo)",
-            "request": {
-              "method": "POST",
-              "header": [
-                {
-                  "key": "Content-Type",
-                  "value": "application/json",
-                  "type": "text"
-                },
-                {
-                  "key": "x-api-key",
-                  "value": "{{apiKey}}",
-                  "type": "text"
-                },
-                {
-                  "key": "X-Request-Id",
-                  "value": "gh665-trace-001",
-                  "type": "text",
-                  "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
-                }
-              ],
-              "body": {
-                "mode": "raw",
-                "raw": "{\n  \"crypto\": [\"BTCUSDT\"]\n}"
-              },
-              "url": {
-                "raw": "{{baseUrl}}/api/news-monitor",
-                "host": [
-                  "{{baseUrl}}"
-                ],
-                "path": [
-                  "api",
-                  "news-monitor"
-                ]
-              },
-              "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
-            },
-            "event": [
+        },
+        {
+          "name": "POST News Monitor (request ID echo)",
+          "request": {
+            "method": "POST",
+            "header": [
               {
-                "listen": "test",
-                "script": {
-                  "type": "text/javascript",
-                  "exec": [
-                    "// A valid X-Request-Id must be echoed back verbatim.",
-                    "pm.test(\"status is 2xx\", function () {",
-                    "  pm.expect(pm.response.code).to.be.within(200, 299);",
-                    "});",
-                    "",
-                    "var json = pm.response.json();",
-                    "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
-                    "  pm.expect(json.requestId).to.eql(\"gh665-trace-001\");",
-                    "});",
-                    "",
-                    "pm.test(\"X-Request-Id response header matches\", function () {",
-                    "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh665-trace-001\");",
-                    "});"
-                  ]
-                }
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh665-trace-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
               }
-            ]
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"crypto\": [\"BTCUSDT\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor"
+              ]
+            },
+            "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
           },
-          {
-            "name": "POST request ID fallback (invalid value)",
-            "request": {
-              "method": "POST",
-              "header": [
-                {
-                  "key": "Content-Type",
-                  "value": "application/json",
-                  "type": "text"
-                },
-                {
-                  "key": "x-api-key",
-                  "value": "{{apiKey}}",
-                  "type": "text"
-                },
-                {
-                  "key": "X-Request-Id",
-                  "value": "",
-                  "type": "text",
-                  "description": "Empty request id: must be ignored, and the server generates a UUIDv4 instead of echoing it."
-                }
-              ],
-              "body": {
-                "mode": "raw",
-                "raw": "{\n  \"crypto\": [\"BTCUSDT\"]\n}"
-              },
-              "url": {
-                "raw": "{{baseUrl}}/api/news-monitor",
-                "host": [
-                  "{{baseUrl}}"
-                ],
-                "path": [
-                  "api",
-                  "news-monitor"
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A valid X-Request-Id must be echoed back verbatim.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
+                  "  pm.expect(json.requestId).to.eql(\"gh665-trace-001\");",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id response header matches\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh665-trace-001\");",
+                  "});"
                 ]
-              },
-              "description": "Negative variant: an empty x-request-id must not be echoed. The server generates a UUIDv4 correlation id instead."
-            },
-            "event": [
-              {
-                "listen": "test",
-                "script": {
-                  "type": "text/javascript",
-                  "exec": [
-                    "// An invalid X-Request-Id must be discarded, not echoed.",
-                    "pm.test(\"status is 2xx\", function () {",
-                    "  pm.expect(pm.response.code).to.be.within(200, 299);",
-                    "});",
-                    "",
-                    "var json = pm.response.json();",
-                    "pm.test(\"requestId is a generated UUID, not the empty input\", function () {",
-                    "  pm.expect(json.requestId).to.be.a(\"string\");",
-                    "  pm.expect(json.requestId.length).to.be.above(0);",
-                    "  pm.expect(json.requestId).to.not.eql(\"\");",
-                    "});",
-                    "",
-                    "pm.test(\"X-Request-Id header is populated\", function () {",
-                    "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
-                    "});"
-                  ]
-                }
               }
-            ]
-          }]
+            }
+          ]
+        },
+        {
+          "name": "POST request ID fallback (invalid value)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "",
+                "type": "text",
+                "description": "Empty request id: must be ignored, and the server generates a UUIDv4 instead of echoing it."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"crypto\": [\"BTCUSDT\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor"
+              ]
+            },
+            "description": "Negative variant: an empty x-request-id must not be echoed. The server generates a UUIDv4 correlation id instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// An invalid X-Request-Id must be discarded, not echoed.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"requestId is a generated UUID, not the empty input\", function () {",
+                  "  pm.expect(json.requestId).to.be.a(\"string\");",
+                  "  pm.expect(json.requestId.length).to.be.above(0);",
+                  "  pm.expect(json.requestId).to.not.eql(\"\");",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET News Monitor (request ID echo)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh665-trace-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor"
+              ]
+            },
+            "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead.\n\nExercised as a GET request: the contract is identical, and the same correlation rules apply."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A valid X-Request-Id must be echoed back verbatim.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
+                  "  pm.expect(json.requestId).to.eql(\"gh665-trace-001\");",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id response header matches\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh665-trace-001\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET News Monitor request ID fallback (invalid value)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "",
+                "type": "text",
+                "description": "Empty request id: must be ignored, and the server generates a UUIDv4 instead of echoing it."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor"
+              ]
+            },
+            "description": "Negative variant: an empty x-request-id must not be echoed. The server generates a UUIDv4 correlation id instead.\n\nExercised as a GET request: the contract is identical, and the same correlation rules apply."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// An invalid X-Request-Id must be discarded, not echoed.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"requestId is a generated UUID, not the empty input\", function () {",
+                  "  pm.expect(json.requestId).to.be.a(\"string\");",
+                  "  pm.expect(json.requestId.length).to.be.above(0);",
+                  "  pm.expect(json.requestId).to.not.eql(\"\");",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "Stored Alerts",
