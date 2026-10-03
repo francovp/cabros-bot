@@ -642,6 +642,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -702,6 +705,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -786,6 +792,11 @@
           {
             "ApiKeyQuery": []
           }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
         ]
       }
     },
@@ -831,6 +842,11 @@
           },
           {
             "ApiKeyQuery": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ]
       }
@@ -2411,6 +2427,9 @@
           },
           {
             "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -2451,6 +2470,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -3740,6 +3762,11 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "401": {
@@ -3763,7 +3790,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.viewer"
+        "x-admin-role": "admin.viewer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/selftest/run": {
@@ -3775,6 +3807,9 @@
         "description": "Runs a bounded self-diagnostic suite (each check has a 5s deadline; the whole suite is bounded to 30s). Optional `only` filter scopes the run to a comma-separated list of check ids.",
         "operationId": "postSelfTestRun",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          },
           {
             "name": "only",
             "in": "query",
@@ -3808,6 +3843,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/SelfTestResult"
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -4289,7 +4329,7 @@
           "minLength": 1,
           "maxLength": 128
         },
-        "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Echoed in the response and persisted on stored alerts."
+        "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Returned as the X-Request-Id response header on every non-exempt route, included in structured request logs, and persisted on stored alerts. Handlers that build their own response body may also echo it as `requestId`; middleware-generated errors such as an authentication failure do not include it in the body."
       },
       "NewsAnalysisSymbol": {
         "name": "symbol",
@@ -5029,6 +5069,9 @@
                 "false"
               ]
             }
+          },
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         },
         "content": {
@@ -5099,6 +5142,11 @@
               "code": "UNAUTHORIZED"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "MaintenanceMode": {
@@ -5112,6 +5160,11 @@
               "error": "MAINTENANCE_MODE",
               "message": "Service is temporarily unavailable for maintenance"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5145,6 +5198,11 @@
                 }
               }
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5183,6 +5241,11 @@
               }
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "Error": {
@@ -5197,6 +5260,11 @@
               "code": "INVALID_REQUEST"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "IdempotencyConflict": {
@@ -5210,6 +5278,11 @@
               "error": "Idempotency key was reused with a different payload",
               "code": "IDEMPOTENCY_CONFLICT"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5226,6 +5299,11 @@
               "message": "Request body exceeds maximum size of 256kb",
               "limit": "256kb"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5338,6 +5416,9 @@
               "type": "string",
               "example": "\"3\""
             }
+          },
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         },
         "content": {
@@ -5403,6 +5484,9 @@
                 "false"
               ]
             }
+          },
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         },
         "content": {
@@ -5582,6 +5666,11 @@
               "code": "IDEMPOTENCY_CONFLICT"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "DeliveryResult": {
@@ -5602,6 +5691,11 @@
                 }
               ]
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5662,6 +5756,11 @@
               "$ref": "#/components/schemas/JsonObject"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "MarketScannerBadGateway": {
@@ -5707,6 +5806,11 @@
               }
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "SymbolAnalysisResult": {
@@ -5717,6 +5821,11 @@
               "$ref": "#/components/schemas/SymbolAnalysisResult"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "VolumeConfirmationResult": {
@@ -5726,6 +5835,11 @@
             "schema": {
               "$ref": "#/components/schemas/VolumeConfirmationResult"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5938,6 +6052,11 @@
                 }
               }
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -6227,10 +6346,7 @@
         "description": "Request processing exceeded the global request-deadline ceiling",
         "headers": {
           "X-Request-Id": {
-            "description": "Unique identifier assigned to the request",
-            "schema": {
-              "type": "string"
-            }
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         },
         "content": {
@@ -12705,6 +12821,14 @@
             "type": "boolean",
             "description": "Bootstrap gate verdict, ANDed with the dependency verdict. Only present on the `/ready?depth=dependencies` variant."
           }
+        }
+      }
+    },
+    "headers": {
+      "XRequestIdResponseHeader": {
+        "description": "Unique identifier assigned to the request. Echoes the inbound `x-request-id` when supplied. Set as a response header on every non-exempt route; handlers that build their own response body may also echo it as `requestId`. Absent on routes exempted through `REQUEST_DEADLINE_EXEMPT_PATHS`.",
+        "schema": {
+          "type": "string"
         }
       }
     }
