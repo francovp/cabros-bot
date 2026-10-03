@@ -1,3 +1,4 @@
+/* global saveEnv, restoreEnv */
 const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('fs');
 const request = require('supertest');
 const express = require('express');
@@ -12,6 +13,7 @@ const { tradingViewMcpService } = require('../../src/services/tradingview/Tradin
 const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -57,6 +59,7 @@ describe('Status endpoints', () => {
 			failureCount: 0,
 		};
 		tradingViewMcpService.enrichmentEvents = [];
+		tradingViewMcpService.toolMetrics = {};
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
@@ -78,11 +81,11 @@ describe('Status endpoints', () => {
 		process.env.NODE_ENV = 'test';
 		delete process.env.SENTRY_ENVIRONMENT;
 		process.env.ENABLE_TELEGRAM_BOT = 'true';
-		process.env.BOT_TOKEN = 'token';
+		process.env.BOT_TOKEN = 'secret-bot-token';
 		process.env.TELEGRAM_CHAT_ID = '123';
 		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
 		process.env.WHATSAPP_API_URL = 'https://greenapi.example/';
-		process.env.WHATSAPP_API_KEY = 'key';
+		process.env.WHATSAPP_API_KEY = 'secret-whatsapp-key';
 		process.env.WHATSAPP_CHAT_ID = 'chat';
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';
 		process.env.GEMINI_API_KEY = 'gemini-key';
@@ -106,9 +109,11 @@ describe('Status endpoints', () => {
 		geminiQuotaManager.resetForTesting();
 		groundingMetrics.resetForTesting();
 		deliveryMetricsService.resetForTesting();
+		firestoreWriteMetricsService.resetForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
+		tradingViewMcpService.toolMetrics = {};
 		restoreEnv(savedEnv);
 		if (tempDir) {
 			rmSync(tempDir, { recursive: true, force: true });
@@ -195,6 +200,15 @@ describe('Status endpoints', () => {
 				failureThreshold: 5,
 				cooldownMs: 600000,
 			},
+			errorCategoryCounts: {
+				circuit_breaker_open: 0,
+				http_5xx: 0,
+				http_4xx: 0,
+				timeout: 0,
+				invalid_response: 0,
+				request_failed: 0,
+			},
+			toolMetrics: {},
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: false,
@@ -275,6 +289,27 @@ describe('Status endpoints', () => {
 			mode: 'ephemeral',
 			backend: 'memory',
 		});
+	});
+
+	it('reports firestoreChatPreferences feature flag and dependency status when disabled and enabled', async () => {
+		delete process.env.ENABLE_FIRESTORE_CHAT_PREFERENCES;
+		let res = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(res.status).toBe(200);
+		expect(res.body.featureFlags.firestoreChatPreferences).toBe(false);
+		expect(res.body.dependencies.chatPreferences.enabled).toBe(false);
+
+		process.env.ENABLE_FIRESTORE_CHAT_PREFERENCES = 'true';
+		res = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(res.status).toBe(200);
+		expect(res.body.featureFlags.firestoreChatPreferences).toBe(true);
+		expect(res.body.dependencies.chatPreferences.enabled).toBe(true);
+		expect(res.body.dependencies.chatPreferences.cachedCount).toEqual(expect.any(Number));
 	});
 
 	it('reports durable scanner preset storage from its dedicated Firestore gate', async () => {
@@ -416,6 +451,23 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.newsMonitorTestMode).toBe(true);
 	});
 
+	it('reports the optional news monitor classifier gate', async () => {
+		let response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.newsMonitorClassifier).toBe(false);
+
+		process.env.ENABLE_NEWS_MONITOR_CLASSIFIER = 'true';
+		response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.newsMonitorClassifier).toBe(true);
+	});
+
 	it('reports message footer metadata as enabled by default', async () => {
 		const response = await request(app)
 			.get('/api/capabilities')
@@ -434,6 +486,26 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.messageFooterMetadata).toBe(false);
+	});
+
+	it('reports signal class marker as enabled by default', async () => {
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.signalClassMarker).toBe(true);
+	});
+
+	it('reports signal class marker as disabled when explicitly disabled', async () => {
+		process.env.ENABLE_SIGNAL_CLASS_MARKER = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.signalClassMarker).toBe(false);
 	});
 
 	it('reports alert signal repeat suppression as disabled by default', async () => {
@@ -536,6 +608,11 @@ describe('Status endpoints', () => {
 			lastRunPendingCount: 0,
 			lastRunErrorCount: 0,
 			shutdownRequested: false,
+			entryPriceSources: {
+				configured: false,
+				crypto: ['mcp', 'binance', 'gemini'],
+				equity: ['twelve-data'],
+			},
 		});
 	});
 
@@ -625,6 +702,20 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'misconfigured',
+			waitingCount: expect.any(Number),
+			delayedCount: expect.any(Number),
+			failedCount: expect.any(Number),
+			activeCount: expect.any(Number),
+			durableQueuedCount: expect.any(Number),
+			// Documented in the OpenAPI JobQueueStatus schema and both Postman
+			// success examples, so the endpoint must actually surface it. Asserting
+			// here pins the published contract rather than one layer's projection.
+			durableScanRotated: expect.any(Boolean),
+			durableCycleComplete: expect.any(Boolean),
+			backlogAlert: {
+				active: false,
+				thresholdMs: expect.any(Number),
+			},
 		});
 		expect(JSON.stringify(response.body.dependencies.jobExecutionQueue)).not.toContain('redis://');
 	});
@@ -853,6 +944,24 @@ describe('Status endpoints', () => {
 			ready: true,
 			status: 'ready',
 		});
+	});
+
+	it('reports news monitor volume tracking status and window usage', async () => {
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitor).toEqual(
+			expect.objectContaining({
+				enabled: true,
+				paused: false,
+				alertsDelivered: 0,
+				alertsThrottled: 0,
+				windowResetsAt: expect.any(String),
+			}),
+		);
 	});
 
 	it('reports the primary news monitor Gemini provider separately from Gemini search readiness', async () => {
@@ -1129,6 +1238,14 @@ describe('Status endpoints', () => {
 				lastStateChangeAt: null,
 				failureThreshold: 5,
 				cooldownMs: 600000,
+			},
+			errorCategoryCounts: {
+				circuit_breaker_open: 0,
+				http_5xx: 0,
+				http_4xx: 0,
+				timeout: 0,
+				invalid_response: 0,
+				request_failed: 0,
 			},
 		});
 	});
@@ -1588,8 +1705,8 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 		const serializedBody = JSON.stringify(response.body);
 
-		expect(serializedBody).not.toContain('token');
-		expect(serializedBody).not.toContain('key');
+		expect(serializedBody).not.toContain('secret-bot-token');
+		expect(serializedBody).not.toContain('secret-whatsapp-key');
 		expect(serializedBody).not.toContain('gemini-key');
 		expect(serializedBody).not.toContain('https://dsn.example');
 		expect(serializedBody).not.toContain('https://greenapi.example/');
@@ -1650,7 +1767,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: false,
 			configured: false,
 			ready: false,
@@ -1658,6 +1775,8 @@ describe('Status endpoints', () => {
 			mode: 'in-memory',
 			backend: null,
 		});
+		expect(response.body.dependencies.newsMonitorDedup.cacheSize).toBeDefined();
+		expect(typeof response.body.dependencies.newsMonitorDedup.cacheSize.entries).toBe('number');
 	});
 
 	it('reports news monitor deduplication as persistent (firestore) when enabled', async () => {
@@ -1668,7 +1787,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: true,
 			configured: true,
 			ready: true,
@@ -1690,7 +1809,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: true,
 			configured: true,
 			ready: true,
@@ -1712,7 +1831,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: false,
 			configured: false,
 			ready: false,
@@ -1776,8 +1895,12 @@ describe('Status endpoints', () => {
 		expect(disabledResponse.body.dependencies.notificationRedrive).toMatchObject({
 			enabled: false,
 			role: 'web',
+			workerRole: 'web',
 			running: false,
 			pendingCount: 0,
+			zeroChannelBroadcasts: 0,
+			lastSweepAt: null,
+			lastSweepResult: null,
 		});
 
 		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
@@ -1791,8 +1914,158 @@ describe('Status endpoints', () => {
 		expect(enabledResponse.body.dependencies.notificationRedrive).toMatchObject({
 			enabled: true,
 			role: 'worker',
+			workerRole: 'worker',
 			batchLimit: 50,
 			maxAttempts: 5,
+			zeroChannelBroadcasts: 0,
+		});
+		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepAt).toBeNull();
+		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepResult).toBeNull();
+	});
+
+	it('reports operator-intent channel configuration for zero-channel triage (GH-713)', async () => {
+		// Nothing configured: every channel must be listed as unconfigured so an operator
+		// can tell "never configured" apart from "configured but failing".
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		delete process.env.BOT_TOKEN;
+		delete process.env.TELEGRAM_CHAT_ID;
+		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+		delete process.env.WHATSAPP_API_URL;
+		delete process.env.WHATSAPP_API_KEY;
+		delete process.env.WHATSAPP_CHAT_ID;
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		delete process.env.DISCORD_WEBHOOK_URL;
+
+		const unconfiguredResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(unconfiguredResponse.status).toBe(200);
+		expect(unconfiguredResponse.body.notificationChannelIntent).toEqual({
+			configured: [],
+			unconfigured: expect.arrayContaining(['telegram', 'whatsapp', 'discord']),
+		});
+
+		// Configure Discord only: intent must be Discord-configured, Telegram/WhatsApp unconfigured.
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1/abc';
+		const partialResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(partialResponse.status).toBe(200);
+		expect(partialResponse.body.notificationChannelIntent).toEqual({
+			configured: ['discord'],
+			unconfigured: expect.arrayContaining(['telegram', 'whatsapp']),
+		});
+
+		// Intent mirrors NotificationChannel.isConfigured() = enable flag AND
+		// credentials (dependencyStatus.ready). A channel whose webhook URL is set
+		// but whose ENABLE_DISCORD_ALERTS flag is off is therefore NOT configured
+		// by operator intent — the same verdict the zero-channel page reaches,
+		// since it calls that same method. Reporting it as configured here would
+		// contradict the page that reported it as unconfigured.
+		process.env.ENABLE_DISCORD_ALERTS = 'false';
+		const flagDisabledResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(flagDisabledResponse.body.dependencies.discord.configured).toBe(true);
+		expect(flagDisabledResponse.body.dependencies.discord.ready).toBe(false);
+		expect(flagDisabledResponse.body.notificationChannelIntent.configured).toEqual([]);
+		expect(flagDisabledResponse.body.notificationChannelIntent.unconfigured)
+			.toEqual(expect.arrayContaining(['telegram', 'whatsapp', 'discord']));
+	});
+
+	it('waits for the initial notification redrive heartbeat before serializing status', async () => {
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
+		const statusController = require('../../src/controllers/status');
+		const service = require('../../src/services/notification/NotificationRedriveService').notificationRedriveService;
+		let releaseSync;
+		let responseSettled = false;
+		const response = {
+			status: jest.fn().mockReturnThis(),
+			json: jest.fn(),
+		};
+		const getFirestoreSpy = jest.spyOn(service, 'getFirestore').mockReturnValue({});
+		const getStatusSpy = jest.spyOn(service, 'getStatus');
+		const syncSpy = jest.spyOn(service, 'syncWorkerTelemetry').mockImplementation(() => new Promise((resolve) => {
+			releaseSync = () => {
+				service.persistedPendingCount = 6;
+				service.persistedLastSweepAt = new Date('2026-09-14T08:00:00.000Z');
+				resolve(true);
+			};
+		}));
+
+		try {
+			const responsePromise = Promise.resolve(statusController.getApiStatus({}, response))
+				.then(() => {
+					responseSettled = true;
+				});
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(syncSpy).toHaveBeenCalledTimes(1);
+			expect(responseSettled).toBe(false);
+
+			releaseSync();
+			await responsePromise;
+			expect(response.status).toHaveBeenCalledWith(200);
+			expect(response.json).toHaveBeenCalledTimes(1);
+			expect(getStatusSpy).toHaveBeenCalledWith({ skipTelemetrySync: true });
+			expect(syncSpy).toHaveBeenCalledTimes(1);
+			expect(response.json.mock.calls[0][0].dependencies.notificationRedrive.pendingCount).toBe(6);
+			expect(response.json.mock.calls[0][0].dependencies.notificationRedrive.lastSweepAt).toBe('2026-09-14T08:00:00.000Z');
+		} finally {
+			releaseSync?.();
+			syncSpy.mockRestore();
+			getStatusSpy.mockRestore();
+			getFirestoreSpy.mockRestore();
+			service._resetForTesting();
+		}
+	});
+
+	it('exposes structured lastSweepResult with processed/succeeded/exhausted/errors after a sweep', async () => {
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
+		const service = require('../../src/services/notification/NotificationRedriveService').notificationRedriveService;
+		service.lastSweepAt = new Date('2026-08-30T00:00:00.000Z');
+		service.lastSweepResult = {
+			processed: 8,
+			succeeded: 3,
+			exhausted: 2,
+			errors: 1,
+		};
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.notificationRedrive.lastSweepAt).toBe('2026-08-30T00:00:00.000Z');
+		expect(response.body.dependencies.notificationRedrive.lastSweepResult).toEqual({
+			processed: 8,
+			succeeded: 3,
+			exhausted: 2,
+			errors: 1,
+		});
+		service._resetForTesting();
+	});
+
+	it('reports testAlert feature flag and dependency status', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.testAlert).toBe(true);
+		expect(response.body.dependencies.testAlert).toEqual({
+			enabled: true,
+			lastRunAt: null,
+			lastRunStatus: null,
+			rateLimitState: {
+				windowMs: 60000,
+				dailyLimit: 30,
+				dailyRunsToday: 0,
+			},
 		});
 	});
 
@@ -1860,5 +2133,198 @@ describe('Status endpoints', () => {
 				discord: expect.objectContaining({ successRate: 1.0 }),
 			}),
 		}));
+	});
+
+	it('omits firestoreWriteMetrics when no writes have been recorded', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies).not.toHaveProperty('firestoreWriteMetrics');
+	});
+
+	it('exposes firestoreWriteMetrics counters after alert and job writes', async () => {
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+		firestoreWriteMetricsService.recordWriteFailure('alerts');
+		firestoreWriteMetricsService.recordWriteSuccess('jobs');
+		firestoreWriteMetricsService.recordWriteFailure('jobs');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const metrics = response.body.dependencies.firestoreWriteMetrics;
+		expect(metrics).toEqual(expect.objectContaining({
+			writesAttempted: 5,
+			writesSucceeded: 3,
+			writesFailed: 2,
+			successRate: 3 / 5,
+			window: expect.objectContaining({
+				startedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+				durationMs: expect.any(Number),
+			}),
+			byDomain: expect.objectContaining({
+				alerts: expect.objectContaining({ success: 2, failure: 1, total: 3, successRate: 2 / 3 }),
+				jobs: expect.objectContaining({ success: 1, failure: 1, total: 2, successRate: 0.5 }),
+			}),
+		}));
+	});
+
+	it('aliases /api/capabilities to expose firestoreWriteMetrics', async () => {
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestoreWriteMetrics).toEqual(expect.objectContaining({
+			writesSucceeded: 1,
+			writesFailed: 0,
+		}));
+	});
+
+	it('invokes tokenCostBudgetService.syncSharedSpendThrottled before returning status', async () => {
+		const { tokenCostBudgetService } = require('../../src/lib/tokenUsage');
+		const syncSpy = jest.spyOn(tokenCostBudgetService, 'syncSharedSpendThrottled').mockResolvedValue();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(syncSpy).toHaveBeenCalled();
+	});
+
+
+	it('exposes per-tool metrics for TradingView MCP calls in dependencies.tradingViewMcp', async () => {
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 150);
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 250);
+		tradingViewMcpService._recordToolFailure('volume_confirmation_analysis', 500, new Error('ETIMEDOUT: request timed out'));
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.toolMetrics).toEqual({
+			coin_analysis: {
+				callCount: 2,
+				successCount: 2,
+				failureCount: 0,
+				timeoutCount: 0,
+				totalDurationMs: 400,
+				averageDurationMs: 200,
+				lastCallAt: expect.any(String),
+				lastErrorCategory: null,
+			},
+			volume_confirmation_analysis: {
+				callCount: 1,
+				successCount: 0,
+				failureCount: 1,
+				timeoutCount: 1,
+				totalDurationMs: 500,
+				averageDurationMs: 500,
+				lastCallAt: expect.any(String),
+				lastErrorCategory: 'timeout',
+			},
+		});
+	});
+
+	it('aliases /api/capabilities to expose TradingView MCP toolMetrics', async () => {
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 100);
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.toolMetrics).toEqual({
+			coin_analysis: {
+				callCount: 1,
+				successCount: 1,
+				failureCount: 0,
+				timeoutCount: 0,
+				totalDurationMs: 100,
+				averageDurationMs: 100,
+				lastCallAt: expect.any(String),
+				lastErrorCategory: null,
+			},
+		});
+	});
+
+	it('omits TradingView MCP toolMetrics when ENABLE_TRADINGVIEW_MCP_ENRICHMENT is false', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 100);
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.toolMetrics).toBeUndefined();
+	});
+
+	it('exposes grounding operational metrics in /api/status when ENABLE_GEMINI_GROUNDING is true', async () => {
+		groundingMetrics.recordSuccess(100, 'ALERT_ENRICHMENT');
+		groundingMetrics.recordFailure('error', new Error('API error'), 'ALERT_ENRICHMENT');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.grounding).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			metrics: {
+				totalRequests: 2,
+				successRequests: 1,
+				failureRequests: 1,
+				timeoutRequests: 0,
+				successRate: 0.5,
+				uptimeSince: expect.any(String),
+			},
+		});
+	});
+
+	it('omits grounding section when ENABLE_GEMINI_GROUNDING is disabled', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies).not.toHaveProperty('grounding');
+	});
+
+	it('reports grounding as misconfigured when credentials are missing but grounding is enabled', async () => {
+		delete process.env.GEMINI_API_KEY;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.grounding).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+			metrics: expect.objectContaining({
+				totalRequests: 0,
+				successRequests: 0,
+				failureRequests: 0,
+				timeoutRequests: 0,
+				successRate: 0,
+				uptimeSince: expect.any(String),
+			}),
+		});
 	});
 });
