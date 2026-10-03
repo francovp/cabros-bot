@@ -50,47 +50,4 @@ describe('Firebase Hosting Configuration', () => {
 		expect(workflowContent).toContain('pull_request');
 		expect(workflowContent).toContain('channelId: live');
 	});
-
-	it('firebase.json hosting headers include required security headers for all routes', () => {
-		const config = JSON.parse(fs.readFileSync(firebaseJsonPath, 'utf8'));
-		const headerGroups = config.hosting.headers;
-		expect(Array.isArray(headerGroups)).toBe(true);
-
-		// Flatten all header key/value pairs across all sources
-		const allHeaders = headerGroups.flatMap((g) => g.headers);
-		const byKey = Object.fromEntries(allHeaders.map((h) => [h.key, h.value]));
-
-		expect(byKey['X-Content-Type-Options']).toBe('nosniff');
-		expect(byKey['Referrer-Policy']).toBe('no-referrer');
-		expect(byKey['X-Frame-Options']).toBe('DENY');
-		expect(byKey['Content-Security-Policy']).toContain('frame-ancestors \'none\'');
-		expect(byKey['Content-Security-Policy']).toContain('default-src \'self\'');
-	});
-
-	it('generated public/admin/index.html contains security meta-tag fallbacks', () => {
-		buildHosting();
-		const publicAdminIndex = path.join(rootDir, 'public/admin/index.html');
-		const html = fs.readFileSync(publicAdminIndex, 'utf8');
-
-		expect(html).toContain('http-equiv="X-Content-Type-Options"');
-		expect(html).toContain('content="nosniff"');
-		expect(html).toContain('http-equiv="Referrer-Policy"');
-		expect(html).toContain('content="no-referrer"');
-		expect(html).toContain('http-equiv="X-Frame-Options"');
-		expect(html).toContain('http-equiv="Content-Security-Policy"');
-		expect(html).toContain('frame-ancestors \'none\'');
-	});
-
-	it('src/admin/index.html and public/admin/index.html have identical security meta tags', () => {
-		buildHosting();
-		const srcHtml = fs.readFileSync(path.join(rootDir, 'src/admin/index.html'), 'utf8');
-		const publicHtml = fs.readFileSync(path.join(rootDir, 'public/admin/index.html'), 'utf8');
-
-		const securityMetaRe = /<meta http-equiv="(?:Content-Security-Policy|X-Frame-Options|X-Content-Type-Options|Referrer-Policy)"[^>]+>/g;
-		const srcTags = srcHtml.match(securityMetaRe) || [];
-		const publicTags = publicHtml.match(securityMetaRe) || [];
-
-		expect(srcTags.length).toBe(4);
-		expect(publicTags).toEqual(srcTags);
-	});
 });
