@@ -24,7 +24,8 @@ This revision supersedes the original #967 head: the branch was 192 commits behi
 |---|---|
 | Correlation id | `requestDeadline.resolveRequestId(req)` — the log line, the `X-Request-Id` header, and the `408` payload all carry the same id |
 | Probe skip list | `requestDeadline.resolveExemptPaths()`, read per request, so `REQUEST_DEADLINE_EXEMPT_PATHS` silences both middlewares at once (new `resolveExemptPaths` export added to `requestDeadline`) |
-| Path matching | exemption matching is case-insensitive (mirroring `requestDeadline.normalizePath`) because Express routing is case-insensitive and `/HEALTHCHECK` otherwise reached the healthcheck handler while still being logged |
+| Probe predicate | `requestDeadline.isExemptPath(path, exemptPaths)` — a **single shared** matcher, so the deadline and the log cannot disagree about what counts as a probe route. `/docs` is subtree-aware (Swagger pulls css/js from the same router) |
+| Path normalization | one rule for both the configured set and incoming requests (`normalizeExemptPath`): leading slash, lower-case, strip trailing slashes. Both halves matter — without them `REQUEST_DEADLINE_EXEMPT_PATHS=/Internal/Ping` and `=/api/slow/` silently exempt nothing |
 
 ### Correctness bugs found and fixed during review
 1. **Truncated downloads logged as clean completions.** Abort detection read `res.writableEnded`, which flips the instant the handler calls `res.end()` — before bytes reach the socket. A client disconnecting in that window produced `outcome: "completed", aborted: false` with a tiny `durationMs`. Now reads `res.writableFinished`.
@@ -43,6 +44,7 @@ This revision supersedes the original #967 head: the branch was 192 commits behi
 
 ### Documentation
 - `docs/monitoring.md` — "Structured Request Logging" section: field table, level mapping, `requestId` correlation recipe, and what is deliberately not logged.
+- `src/openapi/openapi.json` — `X-Request-Id` is declared as a reusable response-header component (`XRequestIdResponseHeader`) and referenced from all 8 operations documenting `x-request-id`, so generated clients can discover it. Prose on a request parameter cannot become a client property.
 - `docs/environment-configuration.md` — `REQUEST_DEADLINE_EXEMPT_PATHS` now notes it also silences request logging.
 - `AGENTS.md` — documents the invariants (shared id, single exemption vocabulary, `writableFinished`, exempt-before-mask, fail-open emit).
 - `.env.example` — notes that `REQUEST_DEADLINE_EXEMPT_PATHS` also silences request logging; no new variable.
@@ -68,13 +70,16 @@ The logger attaches listeners at position 0 and finalizes on whichever of `finis
 
 ## Testing
 
-- `pnpm test -- tests/unit/ --testTimeout=10000` — **158 suites, 3,637 tests passed**
-- `pnpm test -- tests/integration/ --testTimeout=25000` — **62 suites, 856 tests passed**
+- `pnpm test -- tests/unit/ --testTimeout=10000` — **158 suites, 3,643 tests passed**
+- `pnpm test -- tests/integration/ --testTimeout=25000` — **62 suites, 857 tests passed**
 - `tests/unit/requestLogger.test.js` — level mapping, single-emission guard, abort vs completion, IPv4/IPv6 masking, path normalization, case preservation, sensitive-segment masking, exempt-path matching, fail-open emit.
 - `tests/integration/request-logger.test.js` — supertest coverage for parser rejections, `x-request-id` header reuse, `408` payload/log id agreement, and probe-path silence.
 - `tests/unit/handlers-request-id.test.js` and `tests/unit/alert-webhook-request-id.test.js` — handlers reuse the middleware-resolved id.
 - Each of the seven bug fixes is covered by a regression test verified to fail when the fix is reverted.
 - Live preview verified: `https://openclaw.tail5e4271.ts.net/cabros-bot-pr-967/healthcheck` and `/openapi.json` return `200`; a custom `x-request-id` header is echoed on both the response header and the error payload.
+
+### Idempotency replay correlation
+A replayed body is re-correlated: request headers are not part of the idempotency fingerprint, so a retry carrying a new `x-request-id` is a valid replay. `sendCachedResponse` rewrites `requestId` to the replaying request's id so the body, the `X-Request-Id` header, and the access log all agree. Without it, one response would advertise a correlation id that appears nowhere in the logs for the replay.
 
 ## Known limitation
 
