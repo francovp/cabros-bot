@@ -206,6 +206,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		body,
 		createElement: (tag) => {
 			const node = new FakeElement(tag);
+			if (tag === 'cabros-result') Object.defineProperty(node, 'value', { set(value) { this.textContent = require('../../src/admin/admin-components').plainText(value); } });
 			if (tag === 'a') node.click = () => downloads.push({ href: node.href, download: node.download });
 			return node;
 		},
@@ -254,6 +255,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		clearTimeout: (id) => { timers.delete(id); timerDelays.delete(id); },
 		window: {
 			CabrosAdminRequest: helper,
+			CabrosAdminComponents: require('../../src/admin/admin-components'),
 			confirm,
 			firebase,
 			location,
@@ -279,6 +281,20 @@ async function selectView(browser, name) {
 }
 
 describe('admin browser client', () => {
+	it('uses visual controls instead of editable JSON throughout the console', async () => {
+		const browser = createBrowser({ fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}) });
+		await flush();
+		for (const name of ['alerts', 'presets', 'jobs', 'analysis', 'playground']) {
+			await selectView(browser, name);
+			const view = browser.elementsById.view;
+			const payloads = findAll(view, (node) => ['body', 'query'].includes(node.name));
+			expect(payloads.length).toBeGreaterThan(0);
+			payloads.forEach((input) => expect(input.type).toBe('hidden'));
+			expect(findAll(view, (node) => node.tagName === 'CABROS-FIELDS').length).toBeGreaterThan(0);
+			expect(view.textContent).not.toMatch(/Request body JSON|Query JSON|Show raw|Copy JSON/);
+		}
+	});
+
 	it('reconnects after the SSE stream ends cleanly', async () => {
 		const browser = createBrowser({
 			storedKey: 'test-key',
@@ -822,7 +838,7 @@ describe('admin browser client', () => {
 		const requests = [];
 		const browser = createBrowser({
 			location: {
-				hostname: 'cabros-bot.web.app',
+				hostname: 'cabros-bot--pr-1211-abcdef.web.app',
 				search: '?backend=https%3A%2F%2Fattacker.example',
 			},
 			fetchImpl: async (url) => {
@@ -833,7 +849,7 @@ describe('admin browser client', () => {
 		});
 		await flush();
 
-		expect(requests[0]).toBe('https://cabros-bot-production.up.railway.app/admin/auth-config');
+		expect(requests[0]).toBe('https://openclaw.tail5e4271.ts.net/admin/auth-config');
 		expect(requests.some((url) => url.includes('attacker.example'))).toBe(false);
 		void browser;
 	});
@@ -1050,12 +1066,12 @@ describe('admin browser client', () => {
 		await flush();
 
 		expect(browser.timers.size).toBe(0);
-		expect(volumeForm.textContent).toContain('volumeConfirmed');
+		expect(volumeForm.textContent).toContain('Volume Confirmed');
 
 		// Webhook alert slow response within budget via Playground
 		await selectView(browser, 'playground');
 		const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-			&& node.textContent.includes('Playground'));
+			&& node.textContent.includes('Operations'));
 		const select = find(playground, (node) => node.tagName === 'SELECT');
 		select.value = find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes('POST /api/webhook/alert')).value;
 		await select.dispatch('change');
@@ -1207,7 +1223,7 @@ describe('admin browser client', () => {
 		await selectView(browser, 'playground');
 
 		const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-			&& node.textContent.includes('Playground'));
+			&& node.textContent.includes('Operations'));
 		const select = find(playground, (node) => node.tagName === 'SELECT');
 		select.value = find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes('POST /api/alerts/{alertId}/replay')).value;
 		await select.dispatch('change');
@@ -1316,27 +1332,27 @@ describe('admin browser client', () => {
 			fetchImpl: async (url, options) => {
 				if (url === '/openapi.json') return response(contract);
 				requests.push([url, options]);
-			return response({
-				success: true,
-				summary: {
-					window: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-02T00:00:00.000Z' },
-					totalAlerts: 3,
-					enrichment: {
-						enrichedAlerts: 2,
-						plainAlerts: 1,
-						riskMetadataCoverage: {
-							denominator: 2,
-							fields: { invalidation_level: { populated: 1, percentage: 50 } },
+				return response({
+					success: true,
+					summary: {
+						window: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-02T00:00:00.000Z' },
+						totalAlerts: 3,
+						enrichment: {
+							enrichedAlerts: 2,
+							plainAlerts: 1,
+							riskMetadataCoverage: {
+								denominator: 2,
+								fields: { invalidation_level: { populated: 1, percentage: 50 } },
+							},
+							tokenUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.002 },
 						},
-						tokenUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.002 },
+						delivery: {
+							totalSuccess: 2,
+							totalFailure: 1,
+							byChannel: { telegram: { total: 3, success: 2, failure: 1 } },
+						},
 					},
-					delivery: {
-						totalSuccess: 2,
-						totalFailure: 1,
-						byChannel: { telegram: { total: 3, success: 2, failure: 1 } },
-					},
-				},
-			});
+				});
 			},
 		});
 		await flush();
@@ -1366,7 +1382,7 @@ describe('admin browser client', () => {
 		expect(find(blocks, (node) => node.tagName === 'TR'
 			&& node.textContent.toLowerCase().includes('invalidation'))).toBeDefined();
 		expect(blocks.textContent).toContain('50%');
-		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(false);
+		expect(findButton(summaryForm, 'Copy details').hidden).toBe(false);
 	});
 
 	it.each([
@@ -1435,7 +1451,7 @@ describe('admin browser client', () => {
 		await exportForm.dispatch('submit');
 		await flush();
 		expect(requests).toHaveLength(0);
-		const exportOutput = find(exportForm, (node) => node.tagName === 'PRE');
+		const exportOutput = find(exportForm, (node) => node.className.includes('response-block'));
 		expect(exportOutput.className).toContain('response-error');
 		expect(exportOutput.textContent).toContain('From and To are required');
 
@@ -1443,7 +1459,7 @@ describe('admin browser client', () => {
 		await summaryForm.dispatch('submit');
 		await flush();
 		expect(requests).toHaveLength(1);
-		const summaryOutput = find(summaryForm, (node) => node.tagName === 'PRE');
+		const summaryOutput = find(summaryForm, (node) => node.className.includes('response-block'));
 		expect(summaryOutput.className).toContain('response-error');
 		expect(summaryOutput.textContent).toContain('HTTP 503');
 		expect(summaryOutput.textContent).toContain('STORAGE_UNAVAILABLE');
@@ -1529,7 +1545,7 @@ describe('admin browser client', () => {
 		expect(listForm.textContent).toContain('Ranked');
 		expect(listForm.textContent).toContain('MTF');
 		expect(listForm.textContent).toContain('BBW: 0.08');
-		expect(listForm.textContent).toContain('Show raw presets response');
+		expect(listForm.textContent).toContain('Presets details');
 	});
 
 	it('supports running a scanner preset from its card with confirmation and structured analysis result', async () => {
@@ -1586,7 +1602,19 @@ describe('admin browser client', () => {
 		expect(confirmPrompts).toContain('Run this scanner preset?');
 		expect(requests.at(-1)[0]).toContain('/api/scanner-presets/crypto_breakout/run?dryRun=false');
 		expect(listForm.textContent).toContain('Technical scan report for crypto breakout');
-		expect(listForm.textContent).toContain('Show raw run response');
+		expect(listForm.textContent).toContain('Run details');
+
+		let copiedTextarea;
+		const createElement = browser.context.document.createElement;
+		browser.context.document.createElement = (tag) => {
+			const node = createElement(tag);
+			if (tag === 'textarea') copiedTextarea = node;
+			return node;
+		};
+		browser.context.document.execCommand = () => true;
+		await findButton(runBtn.parentNode.parentNode, 'Copy details').dispatch('click');
+		await flush();
+		expect(copiedTextarea.value).toContain('Technical scan report for crypto breakout');
 	});
 
 	it('supports editing a scanner preset from its card and populates update form fields', async () => {
@@ -2156,7 +2184,7 @@ describe('admin browser client', () => {
 		await selectView(browser, 'status');
 		await flush();
 
-		const output = find(browser.elementsById.view, (node) => node.tagName === 'PRE');
+		const output = find(browser.elementsById.view, (node) => node.className.includes('response-block'));
 		expect(find(output, (node) => node.className === 'spinner')).toBeDefined();
 		expect(output.textContent).toContain('Request in progress');
 
@@ -2229,14 +2257,14 @@ describe('admin browser client', () => {
 		await selectView(browser, 'overview');
 		await flush();
 
-		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		const copyButton = findButton(browser.elementsById.view, 'Copy details');
 		expect(copyButton).toBeDefined();
 		await copyButton.dispatch('click');
 		await flush();
 		expect(copyButton.textContent).toBe('Copy unavailable');
 
 		for (const fireTimer of [...browser.timers.values()]) fireTimer();
-		expect(copyButton.textContent).toBe('Copy JSON');
+		expect(copyButton.textContent).toBe('Copy details');
 	});
 
 	it('renders stored alerts as cards with sentiment, delivery chips, and lazy detail', async () => {
@@ -2325,8 +2353,8 @@ describe('admin browser client', () => {
 		const rawToggle = find(listForm, (node) => node.tagName === 'DETAILS');
 		expect(rawToggle).toBeDefined();
 		const summary = find(rawToggle, (node) => node.tagName === 'SUMMARY');
-		expect(summary.textContent).toContain('Show raw response');
-		expect(findButton(listForm, 'Copy JSON').hidden).toBe(false);
+		expect(summary.textContent).toContain('Response details');
+		expect(findButton(listForm, 'Copy details').hidden).toBe(false);
 	});
 
 	it('supports bulk alert selection, select-all toggle, and batch operations', async () => {
@@ -2659,7 +2687,7 @@ describe('admin browser client', () => {
 		expect(find(panel, (node) => node.tagName === 'TR' && node.textContent.includes('BINANCE:BTCUSDT'))).toBeDefined();
 		expect(find(panel, (node) => node.className === 'report-text').textContent).toContain('REPORT BODY');
 		expect(find(panel, (node) => node.className.includes('delivery-ok'))).toBeDefined();
-		expect(findButton(statusForm, 'Copy JSON').hidden).toBe(false);
+		expect(findButton(statusForm, 'Copy details').hidden).toBe(false);
 	});
 
 	it('auto-refreshes active jobs and stops on terminal status', async () => {
@@ -2829,7 +2857,7 @@ describe('admin browser client', () => {
 		expect(verdict.textContent).toContain('4h: BULLISH');
 		expect(verdict.textContent).toContain('Report preview');
 		expect(verdict.textContent).toContain('BTCUSDT Analysis: Bullish breakout above 65000');
-		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
+		expect(findButton(form, 'Copy details').hidden).toBe(false);
 	});
 
 	it('renders NO_TRADE decision action and warning chips when data is insufficient or neutral', async () => {
@@ -2927,7 +2955,7 @@ describe('admin browser client', () => {
 		expect(verdict.textContent).toContain('BINANCE:BTCUSDT · 4h');
 		expect(verdict.textContent).toContain('1.7x average volume');
 		expect(verdict.textContent).toContain('Strength: HIGH');
-		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
+		expect(findButton(form, 'Copy details').hidden).toBe(false);
 	});
 
 	it('renders news-monitor result cards with confidence and dry-run notice', async () => {
@@ -3212,7 +3240,7 @@ describe('admin browser client', () => {
 		await selectView(browser, 'overview');
 		await flush();
 
-		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		const copyButton = findButton(browser.elementsById.view, 'Copy details');
 		expect(copyButton).toBeDefined();
 		expect(copyButton.hidden).toBe(false);
 
@@ -3283,7 +3311,7 @@ describe('admin browser client', () => {
 		await flush();
 
 		browser.context.document.execCommand = () => { throw new Error('blocked'); };
-		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		const copyButton = findButton(browser.elementsById.view, 'Copy details');
 		await copyButton.dispatch('click');
 		await flush();
 
@@ -3307,7 +3335,7 @@ describe('admin browser client', () => {
 		await flush();
 
 		browser.context.document.execCommand = () => true;
-		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		const copyButton = findButton(browser.elementsById.view, 'Copy details');
 		await copyButton.dispatch('click');
 		await flush();
 
@@ -3373,8 +3401,8 @@ describe('admin browser client', () => {
 		expect(nextButton.disabled).toBe(true);
 		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
 		expect(listForm.textContent).not.toContain('first page alert');
-		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
-		expect(find(listForm, (node) => node.tagName === 'PRE' && node.textContent.includes('first page alert'))).toBeUndefined();
+		expect(findButton(listForm, 'Copy details').hidden).toBe(true);
+		expect(find(listForm, (node) => node.className.includes('response-block') && node.textContent.includes('first page alert'))).toBeUndefined();
 
 		await nextButton.dispatch('click');
 		await flush();
@@ -3403,13 +3431,13 @@ describe('admin browser client', () => {
 		await listForm.dispatch('submit');
 		await flush();
 		expect(listForm.textContent).toContain('first page alert');
-		expect(findButton(listForm, 'Copy JSON').hidden).toBe(false);
+		expect(findButton(listForm, 'Copy details').hidden).toBe(false);
 
 		await listForm.dispatch('submit');
 		await flush();
 
 		expect(listForm.textContent).not.toContain('first page alert');
-		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
+		expect(findButton(listForm, 'Copy details').hidden).toBe(true);
 	});
 
 	it('resets pagination when the before cursor is edited manually', async () => {
@@ -3467,13 +3495,13 @@ describe('admin browser client', () => {
 		const summaryForm = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
 		await summaryForm.dispatch('submit');
 		await flush();
-		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(false);
+		expect(findButton(summaryForm, 'Copy details').hidden).toBe(false);
 
 		await summaryForm.dispatch('submit');
 		await flush();
 
-		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(true);
-		const rawPre = find(summaryForm, (node) => node.tagName === 'PRE' && node.textContent.includes('totalAlerts'));
+		expect(findButton(summaryForm, 'Copy details').hidden).toBe(true);
+		const rawPre = find(summaryForm, (node) => node.className.includes('response-block') && node.textContent.includes('Total Alerts'));
 		expect(rawPre).toBeUndefined();
 	});
 
@@ -3553,7 +3581,7 @@ describe('admin browser client', () => {
 		const form = findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation');
 		await form.dispatch('submit');
 		await flush();
-		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
+		expect(findButton(form, 'Copy details').hidden).toBe(false);
 
 		// Use form.elements to find the raw textarea by name
 		const rawTextarea = form.elements.body;
@@ -3561,8 +3589,8 @@ describe('admin browser client', () => {
 		await form.dispatch('submit');
 		await flush();
 
-		expect(findButton(form, 'Copy JSON').hidden).toBe(true);
-		const staleRaw = find(form, (node) => node.tagName === 'PRE' && node.textContent.includes('volume_ratio'));
+		expect(findButton(form, 'Copy details').hidden).toBe(true);
+		const staleRaw = find(form, (node) => node.className.includes('response-block') && node.textContent.includes('Volume ratio'));
 		expect(staleRaw).toBeUndefined();
 	});
 
@@ -3915,11 +3943,11 @@ describe('admin browser client', () => {
 		await summaryForm.elements.source.dispatch('input');
 
 		expect(loadButton.disabled).toBe(false);
-		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(true);
+		expect(findButton(summaryForm, 'Copy details').hidden).toBe(true);
 
 		releaseSlow();
 		await flush();
-		expect(find(summaryForm, (node) => node.tagName === 'PRE' && node.textContent.includes('totalAlerts'))).toBeUndefined();
+		expect(find(summaryForm, (node) => node.className.includes('response-block') && node.textContent.includes('Total Alerts'))).toBeUndefined();
 		expect(summaryForm.textContent).toContain('Filters changed');
 	});
 
@@ -4228,7 +4256,7 @@ describe('admin browser client', () => {
 		await listForm.elements.symbol.dispatch('input');
 
 		expect(listButton.disabled).toBe(false);
-		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
+		expect(findButton(listForm, 'Copy details').hidden).toBe(true);
 
 		releaseList();
 		await flush();
@@ -4316,7 +4344,7 @@ describe('admin browser client', () => {
 					environment: 'testnet',
 					orders: [{
 						symbol: 'BTCUSDT',
-						orderId: 9007199254740993,
+						orderId: Number('9007199254740993'),
 						clientOrderId: 'cb-test-001',
 						price: '65000.00',
 						origQty: '0.01000000',
@@ -5197,7 +5225,7 @@ describe('structured analysis forms', () => {
 			await flush();
 
 			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Playground'));
+				&& node.textContent.includes('Operations'));
 			const select = find(playground, (node) => node.tagName === 'SELECT');
 
 			// POST /api/jobs/tradingview-analysis has body but NO query parameters
@@ -5232,7 +5260,7 @@ describe('structured analysis forms', () => {
 			await flush();
 
 			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Playground'));
+				&& node.textContent.includes('Operations'));
 			const select = find(playground, (node) => node.tagName === 'SELECT');
 			const optgroups = findAll(select, (node) => node.tagName === 'OPTGROUP');
 
@@ -5267,7 +5295,7 @@ describe('structured analysis forms', () => {
 			await flush();
 
 			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Playground'));
+				&& node.textContent.includes('Operations'));
 			const select = find(playground, (node) => node.tagName === 'SELECT');
 
 			// Select POST /api/webhook/alert and enter custom body
@@ -5285,6 +5313,42 @@ describe('structured analysis forms', () => {
 			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
 			await select.dispatch('change');
 			expect(playground.elements.body.value).toContain('Custom alert message 42');
+		});
+
+		it('preserves operation input when filtering auto-selects another operation', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+			});
+			await flush();
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
+			const alertOperation = optionValue('POST /api/webhook/alert');
+			const volumeOperation = optionValue('POST /api/webhook/volume-confirmation');
+
+			select.value = alertOperation;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ message: 'Original alert payload' });
+
+			const filter = playground.elements.filterOperations;
+			filter.value = 'volume-confirmation';
+			await filter.dispatch('input');
+			expect(select.value).toBe(volumeOperation);
+			playground.elements.body.value = JSON.stringify({ symbol: 'BINANCE:BTCUSDT', timeframe: '1h' });
+
+			filter.value = '';
+			await filter.dispatch('input');
+			select.value = alertOperation;
+			await select.dispatch('change');
+			expect(playground.elements.body.value).toContain('Original alert payload');
+
+			select.value = volumeOperation;
+			await select.dispatch('change');
+			expect(playground.elements.body.value).toContain('BINANCE:BTCUSDT');
 		});
 
 		it('renders structured results and provides collapsible raw JSON toggle', async () => {
@@ -5311,7 +5375,7 @@ describe('structured analysis forms', () => {
 			await flush();
 
 			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Playground'));
+				&& node.textContent.includes('Operations'));
 			const select = find(playground, (node) => node.tagName === 'SELECT');
 
 			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/volume-confirmation')).value;
@@ -5327,7 +5391,7 @@ describe('structured analysis forms', () => {
 			// Raw toggle should be visible with copy button and formatted JSON
 			const rawToggle = find(playground, (n) => n.tagName === 'DETAILS' && n.className === 'raw-status');
 			expect(rawToggle.hidden).toBe(false);
-			expect(rawToggle.textContent).toContain('Show raw response');
+			expect(rawToggle.textContent).toContain('Response details');
 			expect(rawToggle.textContent).toContain('2.15');
 		});
 
@@ -5347,7 +5411,7 @@ describe('structured analysis forms', () => {
 			await flush();
 
 			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Playground'));
+				&& node.textContent.includes('Operations'));
 			const select = find(playground, (node) => node.tagName === 'SELECT');
 
 			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
@@ -5403,7 +5467,7 @@ describe('structured analysis forms', () => {
 			browser.context.document.execCommand = () => true;
 
 			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Playground'));
+				&& node.textContent.includes('Operations'));
 			const select = find(playground, (node) => node.tagName === 'SELECT');
 
 			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
@@ -5464,8 +5528,4 @@ describe('structured analysis forms', () => {
 		expect(shell).toMatch(/<section id="view"[^>]*tabindex="-1"/);
 	});
 
-	it('keeps the view region focusable for screen readers', () => {
-		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
-		expect(shell).toMatch(/<section id="view"[^>]*tabindex="-1"/);
-	});
 });

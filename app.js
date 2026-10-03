@@ -49,6 +49,7 @@ contentSecurityPolicy['connect-src'] = [
 	'https://*.web.app',
 	'https://*.firebaseapp.com',
 	'https://cabros-bot-production.up.railway.app',
+	'https://openclaw.tail5e4271.ts.net',
 ];
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
 app.use(requestDeadline.guard);
