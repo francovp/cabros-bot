@@ -82,6 +82,16 @@ function getAbortMessage(signal, fallback) {
 	return fallback;
 }
 
+function createBudgetExhaustedError(message) {
+	// GH-630: tag the error structurally rather than relying on message text.
+	// Provider-controlled text is composed into our wrapper messages
+	// (`TradingView MCP scan ... failed: <provider text>`), so a prefix anchor
+	// can be spoofed by a provider that merely mentions a budget.
+	const error = new Error(message);
+	error.mcpBudgetExhausted = true;
+	return error;
+}
+
 function createMcpError(message) {
 	const error = new Error(message);
 	if (TERMINAL_PROVIDER_ERROR_PATTERN.test(message)) {
@@ -519,14 +529,14 @@ class TradingViewMcpService {
 		let budgetTimer = null;
 		if (budgetMs > 0) {
 			budgetTimer = setTimeout(() => {
-				budgetController.abort(new Error(`TradingView MCP enrichment budget exceeded (${budgetMs}ms)`));
+				budgetController.abort(createBudgetExhaustedError(`TradingView MCP enrichment budget exceeded (${budgetMs}ms)`));
 			}, budgetMs);
 		}
 		const baseBudgetController = new AbortController();
 		const retryDelayCapMs = baseBudgetMs ? Math.max(1, Math.floor(baseBudgetMs / Math.max(1, cfg.maxRetries))) : null;
 		const baseBudgetTimer = baseDeadlineAt
 			? setTimeout(() => {
-				baseBudgetController.abort(new Error(`TradingView MCP base analysis budget exceeded (${baseBudgetMs}ms)`));
+				baseBudgetController.abort(createBudgetExhaustedError(`TradingView MCP base analysis budget exceeded (${baseBudgetMs}ms)`));
 			}, Math.max(1, baseDeadlineAt - Date.now()))
 			: null;
 		const baseSignal = AbortSignal.any([budgetController.signal, baseBudgetController.signal]);
@@ -546,31 +556,45 @@ class TradingViewMcpService {
 		const result = await sendWithRetry(async ({ signal: retrySignal, attempt }) => {
 			const remainingBaseMs = baseDeadlineAt ? baseDeadlineAt - Date.now() : cfg.timeoutMs;
 			if (remainingBaseMs <= 0) {
-				return { success: false, channel: 'tradingview-mcp', error: 'TradingView MCP base analysis budget exhausted' };
+				return {
+					success: false,
+					channel: 'tradingview-mcp',
+					error: 'TradingView MCP base analysis budget exhausted',
+					mcpBudgetExhausted: true,
+				};
 			}
 			const attemptController = new AbortController();
-			// Reserve every remaining exponential backoff, then give this attempt
-			// whatever time is left in the base sub-budget.
-			let retryReserveMs = 0;
-			for (let retryAttempt = attempt; retryAttempt < cfg.maxRetries; retryAttempt += 1) {
-				retryReserveMs += Math.min(Math.pow(2, retryAttempt - 1) * 1100, retryDelayCapMs || Number.POSITIVE_INFINITY);
-			}
-			const attemptBudgetMs = Math.max(1, remainingBaseMs - retryReserveMs);
-			// `remainingBaseMs` already shrinks on every attempt because it is
-			// measured against the shared base deadline, and `retryReserveMs`
-			// already holds back the backoff needed by the attempts that follow.
-			// Dividing the result by the remaining attempt count on top of that
-			// starved a single tool call of most of its budget: one call needs
-			// three sequential HTTP hops (initialize, notifications/initialized,
-			// tools/call), so with the production settings (maxRetries=3,
-			// budget=12000, optional enrichment on) attempt 1 was capped at ~1900ms
-			// for a call measured at 431-770ms against the live host. Any hop
-			// slower than ~633ms aborted the attempt, every retry re-ran the whole
-			// handshake, the 12s budget drained, and healthy providers were
-			// reported as `request_failed`.
-			const attemptTimeoutMs = Math.min(cfg.timeoutMs, attemptBudgetMs);
+			// GH-630: give this attempt whatever is left in the base sub-budget.
+			//
+			// There is deliberately NO reservation for the remaining backoffs and NO
+			// division by the remaining attempt count. Both starved a single tool
+			// call, which needs three sequential HTTP hops (initialize,
+			// notifications/initialized, tools/call):
+			//
+			//  - Dividing by the remaining attempts capped attempt 1 at ~679ms per hop
+			//    against a call measured at 431-770ms in total, so any marginally slow
+			//    hop aborted and the healthy host was reported as `request_failed`.
+			//  - Reserving backoff was worse on later attempts, because the reserve is
+			//    a FIXED sum while the remaining budget shrinks. After a first attempt
+			//    that used its full budget the reserve exceeded what was left and
+			//    `Math.max(1, ...)` collapsed attempt 2 to a 1ms timeout - a retry
+			//    guaranteed to fail. Measured with production settings (base budget
+			//    9000ms, maxRetries=3, backoff cap 3000ms):
+			//        attempt 1 fast (770ms)  -> attempt 2 capped 3830ms
+			//        attempt 1 slow (2100ms) -> attempt 2 capped 2500ms
+			//        attempt 1 timed out     -> attempt 2 capped    1ms  <-- wasted
+			//
+			// The reserve was redundant anyway: `waitForRetryDelay` in retryHelper
+			// already aborts a pending backoff when the shared signal fires, and
+			// `remainingBaseMs` is measured against the same base deadline, so an
+			// attempt can never outlive the envelope regardless.
+			const attemptTimeoutMs = Math.min(cfg.timeoutMs, Math.max(1, remainingBaseMs));
 			const attemptTimeoutId = setTimeout(() => {
-				attemptController.abort(new Error(`TradingView MCP base analysis attempt timeout after ${attemptTimeoutMs}ms`));
+				// A per-attempt deadline is the same class of event as a drained budget:
+				// a client-side time limit, not a provider fault.
+				attemptController.abort(createBudgetExhaustedError(
+					`TradingView MCP base analysis attempt timeout after ${attemptTimeoutMs}ms`,
+				));
 			}, attemptTimeoutMs);
 			try {
 				const combinedSignal = AbortSignal.any([retrySignal || baseSignal, attemptController.signal]);
@@ -581,6 +605,9 @@ class TradingViewMcpService {
 					success: false,
 					channel: 'tradingview-mcp',
 					error: error.message,
+					// Carry the structural budget marker out of the abort reason so the
+					// retry/caller chain can still recognise our own deadline.
+					...(error && error.mcpBudgetExhausted === true ? { mcpBudgetExhausted: true } : {}),
 					retryable: error.category !== 'provider_unavailable',
 				};
 			} finally {
@@ -594,7 +621,13 @@ class TradingViewMcpService {
 		if (!result.success) {
 			this._recordEnrichmentStatus('failed');
 			cleanBudget();
-			throw new Error(`TradingView MCP call failed: ${result.error || 'unknown error'}`);
+			// Preserve the budget-exhaustion marker across the wrapper message, so the
+			// classifier still recognises our own deadline after the error is re-wrapped.
+			const failure = new Error(`TradingView MCP call failed: ${result.error || 'unknown error'}`);
+			if (result.mcpBudgetExhausted === true) {
+				failure.mcpBudgetExhausted = true;
+			}
+			throw failure;
 		}
 
 		let volumeAnalysis = null;
@@ -607,7 +640,7 @@ class TradingViewMcpService {
 				const volumeTimeoutMs = Math.min(5000, Math.max(1, remainingBudgetMs));
 				const controller = new AbortController();
 				const timeoutId = setTimeout(() => {
-					controller.abort(new Error(`TradingView MCP volume confirmation timeout after ${volumeTimeoutMs}ms`));
+					controller.abort(createBudgetExhaustedError(`TradingView MCP volume confirmation timeout after ${volumeTimeoutMs}ms`));
 				}, volumeTimeoutMs);
 
 				const vResult = await sendWithRetry(async ({ signal: retrySignal }) => {
@@ -843,6 +876,9 @@ class TradingViewMcpService {
 						error: error.message,
 						category: error.category,
 						httpStatusCode: error.httpStatusCode,
+						// Preserve the structural budget marker so the runtime status
+						// classifier still sees our own deadline, not a provider fault.
+						mcpBudgetExhausted: error.mcpBudgetExhausted === true,
 						retryable: error.category !== 'provider_unavailable',
 					};
 				}
@@ -852,6 +888,7 @@ class TradingViewMcpService {
 				const error = new Error(`TradingView MCP scan ${toolName} failed: ${result.error || 'unknown error'}`);
 				error.category = result.category;
 				error.httpStatusCode = result.httpStatusCode;
+				error.mcpBudgetExhausted = result.mcpBudgetExhausted === true;
 				throw error;
 			}
 
@@ -973,14 +1010,23 @@ class TradingViewMcpService {
 		const { sessionId, expectResponse = true, signal } = options;
 		const controller = new AbortController();
 		const timeoutId = setTimeout(() => {
-			controller.abort(new Error(`TradingView MCP timeout after ${cfg.timeoutMs}ms`));
+			// Our own per-fetch deadline, so it carries the same marker as the budget and
+			// attempt aborts: a client time limit, not a provider fault.
+			controller.abort(createBudgetExhaustedError(`TradingView MCP timeout after ${cfg.timeoutMs}ms`));
 		}, cfg.timeoutMs);
 		let onAbort = null;
 
 		if (signal) {
 			if (signal.aborted) {
 				clearTimeout(timeoutId);
-				throw new Error(getAbortMessage(signal, 'TradingView MCP request aborted'));
+				// Preserve the abort reason's marker. When the budget already fired
+				// before this call started, `signal.reason` IS our marked error and a
+				// fresh Error() here would drop it, misclassifying the deadline.
+				const aborted = new Error(getAbortMessage(signal, 'TradingView MCP request aborted'));
+				if (signal.reason && signal.reason.mcpBudgetExhausted === true) {
+					aborted.mcpBudgetExhausted = true;
+				}
+				throw aborted;
 			}
 
 			onAbort = () => {
@@ -1010,14 +1056,32 @@ class TradingViewMcpService {
 			bodyText = await response.text();
 		} catch (error) {
 			if (controller.signal.aborted || error.name === 'AbortError') {
+				// The abort reason IS our marked deadline error; re-wrapping it in a
+				// fresh Error() would discard the marker and make a client timeout
+				// indistinguishable from a provider fault.
+				const reason = (signal && signal.reason) || controller.signal.reason || error;
 				if (signal && signal.aborted) {
-					throw new Error(getAbortMessage(signal, 'TradingView MCP request aborted'));
+					const aborted = new Error(getAbortMessage(signal, 'TradingView MCP request aborted'));
+					if (reason && reason.mcpBudgetExhausted === true) {
+						aborted.mcpBudgetExhausted = true;
+					}
+					throw aborted;
 				}
 
-				throw new Error(`TradingView MCP timeout after ${cfg.timeoutMs}ms`);
+				const timedOut = new Error(`TradingView MCP timeout after ${cfg.timeoutMs}ms`);
+				if (reason && reason.mcpBudgetExhausted === true) {
+					timedOut.mcpBudgetExhausted = true;
+				}
+				throw timedOut;
 			}
 
-			throw new Error(`TradingView MCP request failed: ${error.message}`);
+			// Re-wrap for context, but keep the structural budget marker: our own
+			// deadline must still classify as a timeout after this hop re-wraps it.
+			const wrapped = new Error(`TradingView MCP request failed: ${error.message}`);
+			if (error && error.mcpBudgetExhausted === true) {
+				wrapped.mcpBudgetExhausted = true;
+			}
+			throw wrapped;
 		} finally {
 			clearTimeout(timeoutId);
 			if (signal && onAbort) {
@@ -1672,7 +1736,12 @@ class TradingViewMcpService {
 		// failure. Without this, a client-side budget boundary was reported as
 		// `request_failed`, which is indistinguishable from a real provider fault
 		// in `/api/status` and hid the actual cause of the zero-enrichment state.
-		if (/budget (exceeded|exhausted)/i.test(message)) {
+		// Anchored on this client's own `TradingView MCP` prefix so a PROVIDER error
+		// that happens to mention a budget is not reclassified as our deadline.
+		// GH-630: a drained budget is a deadline, not a transport fault. Detected
+		// from the marker the abort sites attach, NOT from message text - provider
+		// text is composed into our wrapper messages and can otherwise spoof it.
+		if (error && error.mcpBudgetExhausted === true) {
 			return 'timeout';
 		}
 		if (/timeout|timed[ -]?out|aborted|ETIMEDOUT/i.test(message) || /AbortError|TimeoutError/i.test(name)) {

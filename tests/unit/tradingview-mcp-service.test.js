@@ -1672,6 +1672,26 @@ describe('TradingViewMcpService', () => {
 			}
 		});
 
+		it('never collapses a retry budget to 1ms as the base budget drains', () => {
+			// GH-630 regression guard on the arithmetic itself rather than through timing.
+			// The old code subtracted a FIXED reservation for the remaining backoffs from
+			// the REMAINING budget. Because that reservation never shrinks as the budget
+			// drains, once an early attempt had consumed enough of it the next attempt
+			// collapsed to a 1ms timeout - a retry that could never complete.
+			// Mirrors the production expression:
+			//   Math.min(cfg.timeoutMs, Math.max(1, remainingBaseMs))
+			const perAttemptTimeout = remainingBaseMs => Math.min(12000, Math.max(1, remainingBaseMs));
+
+			for (const remaining of [9000, 7130, 5800, 3200, 2200, 1100, 500, 100]) {
+				expect(perAttemptTimeout(remaining)).toBeGreaterThan(1);
+				expect(perAttemptTimeout(remaining)).toBeLessThanOrEqual(remaining);
+				expect(perAttemptTimeout(remaining)).toBeLessThanOrEqual(12000);
+			}
+
+			// The removed reservation produced exactly this collapse.
+			expect(Math.max(1, Math.min(12000, 2200 - 3850))).toBe(1);
+		});
+
 		it('fails open inside the total budget when the provider hangs, without a retry storm', async () => {
 			// Each hop outstays any per-hop share of the budget. A hanging call
 			// must consume the budget once and fail open; retrying it would
@@ -1746,12 +1766,22 @@ describe('TradingViewMcpService', () => {
 		it('classifies budget exhaustion as a timeout, not an unexplained request failure', () => {
 			const service = new TradingViewMcpService();
 
+			// GH-630: classified from the structural marker the budget aborts attach, not
+			// from message text, so provider-controlled text cannot spoof a client deadline.
+			const marked = message => Object.assign(new Error(message), { mcpBudgetExhausted: true });
+			expect(service._getErrorCategory(marked('TradingView MCP enrichment budget exceeded (12000ms)')))
+				.toBe('timeout');
+			expect(service._getErrorCategory(marked('TradingView MCP base analysis budget exceeded (9000ms)')))
+				.toBe('timeout');
+			expect(service._getErrorCategory(marked('TradingView MCP base analysis budget exhausted')))
+				.toBe('timeout');
+			// Unmarked text alone must NOT classify as a timeout.
 			expect(service._getErrorCategory(new Error('TradingView MCP enrichment budget exceeded (12000ms)')))
-				.toBe('timeout');
-			expect(service._getErrorCategory(new Error('TradingView MCP base analysis budget exceeded (9000ms)')))
-				.toBe('timeout');
-			expect(service._getErrorCategory(new Error('TradingView MCP base analysis budget exhausted')))
-				.toBe('timeout');
+				.not.toBe('timeout');
+			// Including the composed-wrapper form, where OUR prefix carries provider text.
+			expect(service._getErrorCategory(new Error(
+				'TradingView MCP scan coin_analysis failed: Upstream budget exhausted for your account',
+			))).not.toBe('timeout');
 			// Existing taxonomy must stay intact.
 			expect(service._getErrorCategory(new Error('TradingView MCP HTTP 503: suspended'))).toBe('http_5xx');
 			expect(service._getErrorCategory(new Error('TradingView MCP circuit breaker is OPEN'))).toBe('circuit_breaker_open');
