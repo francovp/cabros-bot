@@ -1910,12 +1910,12 @@
                   },
                   {
                     "key": "idempotency-key",
-                    "value": "generic-message-demo-1",
+                    "value": "generic-message-truncation-demo-1",
                     "type": "text"
                   },
                   {
                     "key": "x-idempotency-key",
-                    "value": "generic-message-key-1",
+                    "value": "generic-message-truncation-key-1",
                     "type": "text",
                     "description": "Alternative x-prefixed idempotency header variant",
                     "disabled": true
