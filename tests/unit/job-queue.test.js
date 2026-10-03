@@ -200,4 +200,79 @@ describe('JobQueue', () => {
 		expect(onFailed).toHaveBeenCalledTimes(1);
 		expect(close).toHaveBeenCalledTimes(1);
 	});
+
+	it('returns queue job counts in render-worker mode', async () => {
+		const counts = { waiting: 2, delayed: 1, failed: 0, active: 3, paused: 0 };
+		const getJobCounts = jest.fn().mockResolvedValue(counts);
+		const waitUntilReady = jest.fn().mockResolvedValue(undefined);
+		const queueClient = { getJobCounts, waitUntilReady, close: jest.fn() };
+		const QueueClass = jest.fn(() => queueClient);
+		const RedisClass = jest.fn(() => ({ disconnect: jest.fn() }));
+
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			REDIS_URL: 'redis://queue.example:6379',
+		};
+
+		const queue = new JobQueue({ QueueClass, RedisClass });
+		const result = await queue.getJobCounts();
+
+		expect(result).toEqual({ waiting: 2, delayed: 1, failed: 0, active: 3, paused: 0 });
+		expect(getJobCounts).toHaveBeenCalledWith('waiting', 'delayed', 'failed', 'active', 'paused');
+	});
+
+	it('includes backlog depth in getStatus', () => {
+		const queue = new JobQueue();
+		const backlog = {
+			waitingCount: 5,
+			delayedCount: 2,
+			failedCount: 1,
+			activeCount: 3,
+			durableQueuedCount: 7,
+			oldestQueuedAgeMs: 450000,
+			backlogAlert: {
+				active: false,
+				thresholdMs: 900000,
+				pagedAt: null,
+				lastRecoveryAt: null,
+			},
+		};
+
+		const status = queue.getStatus(backlog);
+		expect(status.waitingCount).toBe(5);
+		expect(status.delayedCount).toBe(2);
+		expect(status.failedCount).toBe(1);
+		expect(status.activeCount).toBe(3);
+		expect(status.durableQueuedCount).toBe(7);
+		expect(status.oldestQueuedAgeMs).toBe(450000);
+		expect(status.backlogAlert).toEqual({
+			active: false,
+			thresholdMs: 900000,
+			pagedAt: null,
+			lastRecoveryAt: null,
+		});
+	});
+
+	it('preserves an unknown durable depth through the queue projection', () => {
+		// An explicit null means the last sweep could not observe durable state.
+		// Defaulting it to 0 would publish an apparently empty backlog next to
+		// durableProbeSucceeded: false, so a client reading the count would see a
+		// drained queue that was never actually read.
+		const queue = new JobQueue();
+		const status = queue.getStatus({ durableQueuedCount: null, durableProbeSucceeded: false });
+
+		expect(status.durableQueuedCount).toBeNull();
+		expect(status.durableProbeSucceeded).toBe(false);
+	});
+
+	it('defaults the durable depth to zero only when no backlog service reported', () => {
+		// Absent is different from explicitly unknown: with no service at all there
+		// is genuinely nothing to observe, and the documented schema allows null
+		// for the unknown case.
+		const queue = new JobQueue();
+		const status = queue.getStatus({});
+
+		expect(status.durableQueuedCount).toBe(0);
+	});
 });

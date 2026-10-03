@@ -1,0 +1,4 @@
+interface:
+  display_name: "Langfuse Prompt Sync"
+  short_description: "Add or update Langfuse prompts from codebase prompt definitions"
+  default_prompt: "Use $langfuse-prompt-sync when adding, updating, or syncing prompt templates in src/services/prompts/ with Langfuse."

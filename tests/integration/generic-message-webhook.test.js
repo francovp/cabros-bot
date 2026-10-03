@@ -6,6 +6,12 @@ const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 
+jest.mock('../../src/services/storage/AlertStorageService', () => ({
+	saveAlert: jest.fn().mockResolvedValue('stored-message-id'),
+}));
+
+const alertStorageService = require('../../src/services/storage/AlertStorageService');
+
 describe('POST /api/webhook/message - Generic message webhook', () => {
 	let savedEnv;
 	let mockBot;
@@ -70,6 +76,15 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(res.body.results[0].messageId).toBe('tg-msg-123');
 		expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
 		expect(global.fetch).not.toHaveBeenCalled();
+		expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
+			text: 'Hello from test',
+			source: 'webhook-message',
+			enriched: false,
+			enrichmentData: null,
+			tokenUsage: null,
+			channels: ['telegram'],
+			deliveryResults: res.body.results,
+		}));
 	});
 
 	it('sends a message to whatsapp only', async () => {
@@ -86,6 +101,47 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(res.body.results[0].messageId).toBe('wa-msg-456');
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 		expect(global.fetch).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps delivery successful when alert storage rejects', async () => {
+		alertStorageService.saveAlert.mockRejectedValueOnce(new Error('storage unavailable'));
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Storage failure is fail-open', channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.results[0].success).toBe(true);
+		expect(alertStorageService.saveAlert).toHaveBeenCalledTimes(1);
+	});
+
+	it('does not persist raw discordWebhookUrl to AlertStorageService to prevent credential leakage', async () => {
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ id: 'discord-msg-789' }),
+		});
+		await initializeNotificationServices(mockBot);
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({
+				message: 'Discord message test',
+				channels: ['discord'],
+				discordWebhookUrl: 'https://discord.com/api/webhooks/123456789/secret-webhook-token',
+			})
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(alertStorageService.saveAlert).toHaveBeenCalledWith(
+			expect.not.objectContaining({
+				discordWebhookUrl: expect.anything(),
+			})
+		);
 	});
 
 	it('sends a message to both channels', async () => {
@@ -390,6 +446,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			{
 				success: true,
 				channel: 'discord',
+				durationMs: expect.any(Number),
 				messageId: 'discord-msg-789',
 				messageIds: ['discord-msg-789'],
 				messageCount: 1,
@@ -675,6 +732,67 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		);
 		// fetch is called multiple times due to WhatsApp retry logic
 		expect(global.fetch).toHaveBeenCalled();
+	});
+
+	// ---------------------------------------------------------------------------
+	// requestId correlation parity with /api/webhook/alert (GH-867)
+	// ---------------------------------------------------------------------------
+	it('returns a generated requestId on success when no x-request-id header is supplied', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Hello correlation', channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.requestId).toEqual(expect.any(String));
+		expect(res.body.requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+	});
+
+	it('echoes a supplied x-request-id header on success', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('x-request-id', 'msg-correlation-001')
+			.send({ message: 'Hello correlation', channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.requestId).toBe('msg-correlation-001');
+	});
+
+	it('includes requestId in validation error bodies', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('x-request-id', 'msg-validation-001')
+			.send({ channels: ['telegram'] })
+			.expect(400);
+
+		expect(res.body.requestId).toBe('msg-validation-001');
+	});
+
+	it('replays the same requestId on idempotent replay', async () => {
+		const payload = { message: 'Replay with same requestId', channels: ['telegram'] };
+		const first = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('x-request-id', 'msg-replay-001')
+			.set('idempotency-key', 'msg-replay-idem-001')
+			.send(payload)
+			.expect(200);
+
+		const replay = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('x-request-id', 'msg-replay-001')
+			.set('idempotency-key', 'msg-replay-idem-001')
+			.send(payload)
+			.expect(200);
+
+		expect(first.body.requestId).toBe('msg-replay-001');
+		expect(replay.body.requestId).toBe('msg-replay-001');
+		expect(replay.body.idempotencyReplayed).toBe(true);
 	});
 
 	// ---------------------------------------------------------------------------
