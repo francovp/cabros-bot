@@ -1821,6 +1821,15 @@ Successful `POST /api/webhook/message` deliveries now reuse `AlertStorageService
 
 No environment variable, Remote Config key, endpoint, OpenAPI, or Postman contract changed.
 
+## Generic Message Chunk Estimates and Dry Validation (GH-614)
+
+`POST /api/webhook/message` exposes per-channel chunk estimation and dry-run validation support:
+- `dryValidate: true` in the JSON request body validates the request and immediately returns `{ success: true, dryValidate: true, estimatedChunks: { telegram, whatsapp, discord } }` without initializing notification services or dispatching messages. Non-boolean `dryValidate` values return `400 Bad Request`.
+- Normal dispatch requests exceeding single-chunk limits on any channel (WhatsApp > 20,000 chars, Discord > 2,000 chars) return additive metadata: `delivered`, `channelDetails`, and `estimatedChunks` alongside `results`. Single-chunk messages retain backwards compatibility returning `{ success: true, results }`.
+- `estimateMessageChunks(text)` in `src/lib/messageHelper.js` provides centralized estimation logic.
+- `tests/unit/message-helper.test.js` and `tests/integration/generic-message-webhook.test.js` cover chunk estimation, dry validation, invalid input, and additive response metadata.
+- `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document `dryValidate` request/response schemas and examples.
+
 ## Telegram Command Rate Limiting (Issue #658)
 
 `index.js` installs `telegramCommandRateLimiter` before Telegraf command handlers. It applies process-local per-chat fixed-window limits to the expensive `/precio`, `/analisis`/`/analysis`, `/scanner`, and `/noticias`/`/news` commands, with bounded storage for 10,000 chat-command buckets. It defaults to 10 `/precio` calls per minute and 3 calls per hour for the other commands; `ENABLE_TELEGRAM_COMMAND_RATE_LIMITING=false` disables it, and `TELEGRAM_COMMAND_RATE_LIMITS_JSON` provides optional per-command `{max,windowMs}` overrides bounded to `max` 1-1000 and `windowMs` 1-86400000, with invalid values falling back to defaults. These are environment-only security controls and are intentionally excluded from Firebase Remote Config.

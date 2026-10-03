@@ -10,7 +10,9 @@ const {
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
 	sendWithNotificationRouting,
+	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
+const { estimateMessageChunks } = require('../../../../lib/messageHelper');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
 const MAX_MESSAGE_LENGTH = 4000;
 
@@ -19,20 +21,32 @@ function validateMessageRequest(body) {
 		throw new NotificationRoutingValidationError('Request body must be a JSON object');
 	}
 
-	const { message } = body;
+	const { message, dryValidate } = body;
 
 	if (!message || typeof message !== 'string') {
 		throw new NotificationRoutingValidationError('"message" is required and must be a non-empty string', {
 			field: 'message',
 		});
 	}
+
+	if (dryValidate !== undefined && typeof dryValidate !== 'boolean') {
+		throw new NotificationRoutingValidationError('"dryValidate" must be a boolean if provided', {
+			field: 'dryValidate',
+		});
+	}
+
 	const routing = parseNotificationRouting(body);
 
 	const text = message.length > MAX_MESSAGE_LENGTH
 		? message.substring(0, MAX_MESSAGE_LENGTH) + '...'
 		: message;
 
-	return { text, ...routing };
+	return {
+		text,
+		originalMessage: message,
+		dryValidate: dryValidate === true,
+		...routing,
+	};
 }
 
 function postMessage(botOrGetter) {
@@ -41,6 +55,16 @@ function postMessage(botOrGetter) {
 		const startTime = Date.now();
 		try {
 			const routing = validateMessageRequest(req.body);
+
+			if (routing.dryValidate) {
+				const estimatedChunks = estimateMessageChunks(routing.originalMessage);
+				return res.json({
+					success: true,
+					dryValidate: true,
+					estimatedChunks,
+				});
+			}
+
 			const alert = {
 				text: routing.text,
 				source: 'generic-message',
@@ -82,7 +106,37 @@ function postMessage(botOrGetter) {
 				{ http: httpContext },
 			);
 
-			res.json({ success: true, results, requestId });
+const estimatedChunks = estimateMessageChunks(routing.originalMessage);
+			const hasExceededChunks = Object.values(estimatedChunks).some((count) => count > 1);
+
+			const responseBody = { success: true, results, requestId };
+			if (hasExceededChunks) {
+				const channelDetails = {};
+				for (const r of results) {
+					if (r && r.channel) {
+						const details = {
+							success: Boolean(r.success),
+						};
+						if (r.messageId) {
+							details.messageId = r.messageId;
+						}
+						if (r.error) {
+							details.error = r.error;
+						}
+						const chunks = r.splitMessageCount || r.messageCount;
+						if (typeof chunks === 'number' && chunks > 1) {
+							details.chunks = chunks;
+						}
+						channelDetails[r.channel] = details;
+					}
+				}
+
+				responseBody.delivered = getDeliveredChannels(results);
+				responseBody.channelDetails = channelDetails;
+				responseBody.estimatedChunks = estimatedChunks;
+			}
+
+			res.json(responseBody);
 
 			// Fire-and-forget: persist after responding so storage never blocks delivery.
 			// Do not persist raw discordWebhookUrl to avoid storing sensitive webhook credentials.
