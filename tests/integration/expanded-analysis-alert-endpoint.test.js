@@ -89,6 +89,8 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		expect(res.body.success).toBe(true);
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.alertText).toContain('*🟡 NEUTROS*');
 		expect(res.body.summary).toEqual({
@@ -108,6 +110,7 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		}));
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
 		expect(mockTelegramSendMessage.mock.calls[0][1]).toContain('ANÁLISIS AMPLIADO');
+		expect(signalOutcomeService.recordSignal.mock.calls[0][0].priceSource).toBe('tradingview-mcp');
 	});
 
 	it('records SELL expanded-analysis signals with side-correct stop and target barriers', async () => {
@@ -230,6 +233,8 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		}));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.results).toEqual([
 			expect.objectContaining({
@@ -615,6 +620,8 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		expect(res.body.dryRun).toBe(true);
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});

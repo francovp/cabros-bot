@@ -11,6 +11,7 @@
     "build:hosting": "node scripts/build-hosting.js",
     "deploy:firebase-remote-config:server": "node scripts/deploy-server-remote-config.js",
     "sync:production-env": "node scripts/sync-production-env.js",
+    "cleanup:preview-channels": "node scripts/cleanup-preview-channels.js",
     "preinstall": "npx only-allow pnpm",
     "start": "node index.js",
     "start-worker": "node worker.js",
@@ -21,6 +22,8 @@
     "test:firebase": "env -u FIREBASE_SERVICE_ACCOUNT_JSON -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_APPLICATION_CREDENTIALS_JSON -u FIREBASE_CONFIG FIREBASE_PROJECT_ID=demo-cabros GCLOUD_PROJECT=demo-cabros FIRESTORE_EMULATOR_HOST=127.0.0.1:8081 firebase emulators:exec --project demo-cabros --config firebase.json --only firestore \"pnpm exec jest --config jest.firebase.config.js --runInBand\"",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
+    "backup:firestore": "node ops/export-firestore-collections.js",
+    "restore:firestore": "node ops/restore-firestore-collections.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
@@ -36,7 +39,6 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.17.1",
-    "express-healthcheck": "^0.1.0",
     "firebase-admin": "^12.1.0",
     "helmet": "^7.1.0",
     "ioredis": "^5.11.1",
@@ -44,7 +46,8 @@
     "swagger-ui-dist": "^5.32.6",
     "telegraf": "^4.3.0",
     "undici": "6.28.0",
-    "uuid": "^11.1.1"
+    "uuid": "^11.1.1",
+    "vue": "^3.5.43"
   },
   "optionalDependencies": {
     "@azure-rest/ai-inference": "^1.0.0-beta.6",
@@ -53,7 +56,7 @@
   },
   "devDependencies": {
     "@apidevtools/swagger-parser": "^12.1.0",
-    "@babel/core": "^7.28.5",
+    "@babel/core": "^7.29.7",
     "@babel/preset-env": "^7.28.5",
     "@eslint/js": "^10.0.1",
     "@firebase/rules-unit-testing": "5.0.1",
