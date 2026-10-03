@@ -803,7 +803,7 @@ function pickLevel(candidates) {
  * Records signal outcomes for completed market scanner results in a fail-open manner.
  * @param {Array<Object>} scanResults
  * @param {Object} [parsed] - { exchange, timeframe, ranked }
- * @param {Object} [options] - { requestId, startTime, source }
+ * @param {Object} [options] - { requestId, startTime, source, jobId }
  * @returns {void}
  */
 function recordMarketScannerOutcomes(scanResults, parsed = {}, options = {}) {
@@ -820,10 +820,10 @@ function recordMarketScannerOutcomes(scanResults, parsed = {}, options = {}) {
 		const exchange = parsed?.exchange || null;
 		const timeframe = parsed?.timeframe || null;
 
-		for (const scanResult of scanResults) {
+		for (const [scanIndex, scanResult] of scanResults.entries()) {
 			if (scanResult && scanResult.status === 'success' && Array.isArray(scanResult.items) && scanResult.items.length > 0) {
 				const preparedItems = prepareMarketScannerItems(scanResult, ranked);
-				for (const item of preparedItems) {
+				for (const [itemIndex, item] of preparedItems.entries()) {
 					const closePrice = item.indicators?.close ?? null;
 					const itemSide = getScanItemSide(scanResult.scan, item);
 					const itemScore = item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null;
@@ -864,6 +864,7 @@ function recordMarketScannerOutcomes(scanResults, parsed = {}, options = {}) {
 					}
 
 					signalOutcomeService.recordSignal({
+						idempotencyKey: options.jobId ? `job:${options.jobId}:market-scanner:${scanIndex}:${itemIndex}` : null,
 						requestId,
 						source,
 						symbol: item.symbol,

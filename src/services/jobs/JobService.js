@@ -998,6 +998,9 @@ class JobService {
 			if (claim.reason === 'terminal') {
 				const terminalJob = await this.repository.get(jobId);
 				if (terminalJob) {
+					if (terminalJob.status === 'completed' && terminalJob.deliveryCheckpoint?.status === 'completed') {
+						this._recordJobOutcomes(terminalJob, terminalJob.requestMetadata || {});
+					}
 					await this._triggerCallbackIfConfigured(terminalJob, { awaitDelivery: true });
 				}
 			}
@@ -1168,6 +1171,7 @@ class JobService {
 					? this._buildScannerSummary(job.fullScanResults || [], job.deliveryResults)
 					: this._buildExpandedSummary(job.fullResults || [], job.deliveryResults);
 				job.status = 'completed';
+				this._recordJobOutcomes(job, parsed);
 			} else if (job.type === 'expanded-analysis') {
 				await this._executeExpandedAnalysis(job, parsed, signal, botOrGetter);
 			} else if (job.type === 'market-scanner') {
@@ -1201,6 +1205,7 @@ class JobService {
 				job.status = 'completed';
 				job.error = null;
 				job.code = null;
+				this._recordJobOutcomes(job, parsed);
 			} else {
 				const isTimeout =
 					error.message.includes('timed out') ||
@@ -1401,11 +1406,7 @@ class JobService {
 		job.summary = this._buildExpandedSummary(job.fullResults, deliveryResults);
 		job.status = 'completed';
 
-		recordExpandedAnalysisOutcomes(analyzedItems, parsed, {
-			requestId: job.requestId || job.jobId,
-			startTime: job.startedAt ? new Date(job.startedAt).getTime() : undefined,
-			source: 'expanded-analysis',
-		});
+		this._recordJobOutcomes(job, parsed);
 
 		await this._persistJob(job);
 	}
@@ -1549,11 +1550,7 @@ class JobService {
 		job.summary = this._buildScannerSummary(job.fullScanResults, deliveryResults);
 		job.status = 'completed';
 
-		recordMarketScannerOutcomes(job.fullScanResults, parsed, {
-			requestId: job.requestId || job.jobId,
-			startTime: job.startedAt ? new Date(job.startedAt).getTime() : undefined,
-			source: 'market-scanner',
-		});
+		this._recordJobOutcomes(job, parsed);
 
 		await this._persistJob(job);
 	}
@@ -1639,6 +1636,20 @@ class JobService {
 			&& job.execution
 			&& (job.execution.mode === 'render-worker' || job.execution.mode === 'firestore-poller'),
 		);
+	}
+
+	_recordJobOutcomes(job, parsed) {
+		const options = {
+			jobId: job.jobId,
+			requestId: job.requestId || job.jobId,
+			startTime: job.startedAt ? new Date(job.startedAt).getTime() : undefined,
+		};
+		if (job.type === 'market-scanner') {
+			recordMarketScannerOutcomes(job.fullScanResults || [], parsed, options);
+		} else {
+			const analyzedItems = (job.fullResults || []).filter((result) => result.status === 'analyzed');
+			recordExpandedAnalysisOutcomes(analyzedItems, parsed, options);
+		}
 	}
 
 	async _sendQueuedNotification(job, notificationManager, alert, routing = {}, options = {}) {

@@ -702,13 +702,49 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 
 **Dry-run request mode:** Add `dryRun=true` to GET or POST `/api/news-monitor` (query parameter; POST also accepts the boolean body field) to run validation and analysis without notification delivery, deduplication cache reads/claims/writes, or signal-outcome persistence. The response includes `dryRun: true`, generated alerts, intended `requestedChannels`, and an empty `deliveredChannels` array. Dry runs bypass cached results so operators inspect fresh analysis output.
 
+### News Monitor Domain-Quality Confidence Penalty (Issue #1230)
+
+`calibrateNewsConfidence()` in `src/services/grounding/gemini.js` now applies a bounded **multiplicative** domain-quality penalty on top of the existing additive source-count, freshness, and authority penalties.
+
+Previously the `domainQuality` tier classifier (`src/services/grounding/domainQuality.js`, `src/services/grounding/qualityTiers.js`) leaked out of the module without feeding back into confidence: three blog-spam sources scored identically to three reputable financial sources, so a weak signal could clear `NEWS_ALERT_THRESHOLD` on source count alone.
+
+**Penalty pipeline** (in order):
+1. `baseConfidence = 0.6 × event_significance + 0.4 × |sentiment_score|`
+2. Additive penalties (source count, freshness, authority, uncertainty, invalidation hint) → `penaltyAdjustedConfidence`
+3. Multiplicative quality-tier penalty → `qualityPenalty`
+4. Clamp into `[0, 1]`
+
+**Tier multipliers** — the *weakest* (most penalty-bearing) tier present in the source set wins, so one blog-spam source cannot be masked by reputable ones:
+
+| Tier | Multiplier | Rationale |
+|---|---|---|
+| `high` | `×1` | Reputable wire/financial press, regulators, exchange disclosures — baseline, no penalty |
+| `medium` | `×0.95` | Recognizable finance/crypto outlets |
+| `low` | `×0.85` | Aggregator/UGC platforms and low-editorial-control TLDs (`.blog`, `.buzz`, `.xyz`, …) |
+| `unknown` | `×1` (no penalty) | Domain absent from the classification lists (~56 domains total) — unclassified, not judged weak |
+
+**Safety properties** (all covered by tests):
+- **Monotonicity**: every multiplier is `<= 1`, so the calibrated result is **non-increasing** vs. the pre-#1230 value for every input. This is a false-positive *reduction* feature; it can never inflate a score. `tests/unit/event-detection.test.js` asserts this against a fixed matrix of pre-change oracle values.
+- **Fail open**: a missing, blank, or malformed tier is a **no-op** (no penalty, no crash). A throwing `domainQuality` classifier is caught, logged at `warn`, and discarded — calibration falls back to model-emitted metadata exactly as before.
+- **No double-penalty on empty grounding**: when grounding returns zero sources the source-count penalty (`-0.3`) already applies, so the quality step is skipped and `qualityTier` stays `null`.
+- **No threshold change**: `NEWS_ALERT_THRESHOLD` keeps its `0.7` default. The multiplier is applied *before* the threshold comparison, so the effective bar rises for weak-source signals while the configured default is untouched.
+
+**Observability**: `calibration.qualityTier` and `calibration.qualityPenalty` are always present (issue #1230) so an operator can audit *why* an alert cleared the threshold. The resolved tier is also surfaced as `alert.sourceQualityTier` and rendered as a `Source Quality: <tier> (x<multiplier>)` line in the delivered Telegram/WhatsApp message, and as `confidence_reason` text.
+
+**Where to look first**:
+- `src/services/grounding/gemini.js` — `QUALITY_TIER_PENALTIES`, `resolveWeakestQualityTier()`, and the penalty step in `calibrateNewsConfidence()`
+- `src/services/grounding/domainQuality.js` / `qualityTiers.js` — tier classification inputs
+- `src/controllers/webhooks/handlers/newsMonitor/analyzer.js` — `buildAlert()` and `formatAlertMessage()` tier surfacing
+- `tests/unit/event-detection.test.js` — tier-penalty, monotonicity, and fail-open coverage
+- `tests/unit/analyzer.test.js` — alert-payload and message surfacing coverage
+
 **Configuration**:
 - `ENABLE_NEWS_MONITOR` — Feature flag (default: false for safe rollout)
 - `ENABLE_NEWS_MONITOR_TEST_MODE` — Expose news monitor test-mode state in `/api/status` and `/api/capabilities` (default: false)
 - `ENABLE_NEWS_MONITOR_CLASSIFIER` — Optional classifier.dev second pass when Gemini returns `none` (default: false); only recognized categories at or above `NEWS_ALERT_THRESHOLD` are promoted, and request failures preserve `none`. Because it sends the asset symbol and generated headline to an external provider, keep it environment-only and exclude it from Firebase Remote Config. `/api/status` reports its state as `featureFlags.newsMonitorClassifier`.
 - `NEWS_SYMBOLS_CRYPTO` — Default crypto symbols if not provided in request (comma-separated, e.g., "BTCUSDT,ETHUSD")
 - `NEWS_SYMBOLS_STOCKS` — Default stock symbols if not provided in request (comma-separated)
-- `NEWS_ALERT_THRESHOLD` — Confidence score threshold (default: 0.7, range 0.0-1.0)
+- `NEWS_ALERT_THRESHOLD` — Confidence score threshold (default: 0.7, range 0.0-1.0). Unchanged by #1230; the domain-quality multiplier is applied *before* this comparison, so the effective bar rises for weak-source signals without moving the configured default.
 - `NEWS_CACHE_TTL_HOURS` — Cache time-to-live (default: 6 hours)
 - `NEWS_CACHE_MAX_ENTRIES` — Maximum in-memory news-cache entries before LRU eviction (default: `5000`, range `1`-`1000000`; Remote Config supported)
 - `NEWS_DELIVERY_LOCK_MAX_ENTRIES` — Maximum in-memory channel delivery leases (default: `1000`, range `1`-`100000`; active leases are preserved)
@@ -915,7 +951,7 @@ The system uses two complementary terms with specific meanings:
 See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 
 
-- GH-401 / CB-163: `src/admin/admin.js` now validates both the `backend` query parameter and `cabros_backend_origin` localStorage override with an exact HTTPS origin allowlist before using them for API requests. The only allowed override is `https://cabros-bot-production.up.railway.app`; arbitrary origins, wildcards, HTTP URLs, and malformed values fall back to the normal same-origin or hosted-production behavior. `tests/unit/admin-client.test.js` covers rejection of an attacker-controlled override, and the generated Firebase Hosting asset must stay synchronized with `pnpm run build:hosting`.
+- GH-401 / CB-163: `src/admin/admin.js` validates both the `backend` query parameter and `cabros_backend_origin` localStorage override against an exact HTTPS origin allowlist before using them for API requests. Firebase Hosting defaults to `https://openclaw.tail5e4271.ts.net`; the OpenClaw origin and `https://cabros-bot-production.up.railway.app` remain the only allowed overrides. Arbitrary origins, wildcards, HTTP URLs, and malformed values fall back to the same-origin or Firebase-hosted default. `tests/unit/admin-client.test.js` covers rejection of an attacker-controlled override, and the generated Firebase Hosting asset must stay synchronized with `pnpm run build:hosting`.
 - GH-402 / CB-164: the hosted admin console `loadAuthConfig()` fetch is now bounded by an 8-second `AbortController` timeout; an aborted or stalled `/admin/auth-config` request resolves through the existing `{ enabled: true, configured: false }` fallback so the console renders "Firebase sign-in is unavailable" instead of hanging on "Checking authentication…". The vm-based admin client test harness provides controllable timers and a fake `AbortController`, with regression coverage for the stall-then-timeout path in `tests/unit/admin-client.test.js`.
 - GH-366 / CB-150: durable TradingView jobs now receive a one-hour `expiresAt` on terminal Firestore writes; the shared Firestore retention backfill/configuration covers legacy terminal `tradingviewJobs` documents while leaving active jobs untouched. Unit and Firebase Emulator coverage verify terminal expiry and active-job preservation.
 - GH-533 / CB-236: operational Firestore retention now enables native TTL and backfills legacy `notificationDeadLetters` documents using `NOTIFICATION_REDRIVE_MAX_AGE_MS`; existing idempotency and news-dedup retention behavior remains unchanged. Unit coverage verifies the collection mapping.
@@ -1225,6 +1261,10 @@ No new environment variable or Remote Config key was added; the fixed cap is an 
 
 TradingView alert enrichment now exposes an in-process rolling 24-hour `dependencies.tradingViewMcp.enrichment.alertPath` snapshot with total, applied, failed, and percentage counters. The existing MCP circuit-breaker paging remains the single deduplicated admin outage page and continues to fail open. Stored-alert summaries expose `enrichment.tradingViewStatusCounts` with `full`, `partial`, `failed`, `not_applicable`, and `unrecorded`; requested legacy records without a persisted outcome are counted as `unrecorded`.
 
+TradingView MCP suspension responses and terminal upstream tool errors are classified as `provider_unavailable`, preserve `lastHttpStatusCode` in `/api/status`, and stop same-operation retries while retaining fail-open delivery. Transient HTTP and protocol failures keep the existing retry behavior.
+
+Issue #630 validation confirmed the configured TradingView MCP endpoint is live; no environment variable or Remote Config key was added.
+
 **Coverage**:
 - `src/services/tradingview/TradingViewMcpService.js` — Rolling alert-path outcome window and status projection, isolated from volume-confirmation runtime state.
 - `src/services/storage/AlertStorageService.js` — Explicit stored outcome buckets with legacy requested-record accounting.
@@ -1479,6 +1519,25 @@ The grounding asset-context fallback no longer classifies lowercase ordinary pro
 - `pnpm test -- tests/unit/grounding.test.js`
 - `pnpm test -- tests/unit/ --testTimeout=5000`
 
+## Deterministic Symbol Extraction (Issue #222)
+
+Stored alerts are now indexed by a validated symbol captured at **write time** by `saveAlert()`, so new documents no longer fall back to `unknown` for ordinary TradingView alert text. Production analytics over a 72h window showed 7 of 10 alerts (70%) bucketed as `unknown` plus a bare integer `"53"` and the parse artifact `MASTER` — the integer in particular could have been made "worse-looking-but-better" by loosening extraction, which would have silently corrupted the same `bySymbol` surface this work exists to fix.
+
+- `parseSymbolFromText()` reuses the hardened `deriveAssetContext()` from `src/services/tradingview/parseTradingViewSignal.js` first, rather than adding a parallel regex, so the `aerosol` / `teeth` lowercase-prose guards and `BTC/USDT` slash-pair preservation stay in one place. Because `deriveAssetContext()` intentionally returns null for non-crypto shapes it does not own (a bare `EXCHANGE:SYMBOL`, a 2-character ticker), the pre-existing TradingView patterns are retained as a second, now-validated pass so coverage is not reduced. `deriveAssetContext()`'s own explicit-exchange pattern was widened to `[A-Z_]+` so underscore venues (`FX_IDC`, `CME_MINI`, `CBOT_MINI`) resolve through that shared path instead of the extra regex.
+- `isValidExtractedSymbol()` is the single guard applied to every candidate from every source (`symbol`, `ticker`, `enrichmentData.*`, and text parsing). It rejects non-strings, the `unknown` sentinel, values under 2 characters, numeric-only values, whitespace, backslashes, and malformed slash usage. A single well-formed slash pair (`BTC/USDT`, both sides ≥2 chars) is allowed.
+- An invalid explicit property no longer short-circuits: `extractSymbolAndExchange()` falls through to the remaining sources, so `{ symbol: '53', text: 'BINANCE:ETHUSDT(D)…' }` still yields `ETHUSDT`/`BINANCE`.
+- Extraction never throws — `parseSymbolFromText()` wraps `deriveAssetContext()` in try/catch and returns the unknown sentinel, preserving the fail-open storage path so persistence can never block alert delivery.
+- `unknown` remains the honest fallback for genuinely unparseable text. A symbol is never invented, and a numeric-only or single-character value is never emitted.
+
+**No contract change**: no new environment variable, Remote Config key, endpoint, OpenAPI schema, or Postman variant. Read filtering (`source`, `symbol`, `exchange`, `eventCategory`, `signalClass`) still runs in memory after `receivedAt`-ordered batches, so no new composite Firestore index requirement is introduced. Historical `unknown` documents stay `unknown` — there is no retroactive backfill.
+
+**Coverage**:
+- `tests/unit/alert-storage-service.test.js` — Rejects bare integers, single characters, and numeric-only `EXCHANGE:SYMBOL` values; asserts write-time capture of the symbol; asserts a numeric-only symbol is never persisted; asserts no regression for 2-character tickers, `BTC/USDT`, `aerosol`, and `teeth`; asserts the `bySymbol` summary no longer indexes numeric-only or single-character keys.
+- `tests/unit/tradingview-signal-parser.test.js` — Unchanged and still green; the shared normalizer was not modified.
+
+**Testing**:
+- `pnpm test -- tests/unit/alert-storage-service.test.js tests/integration/alerts-endpoint.test.js --testTimeout=10000`
+
 ## Admin Recent Job Discovery (CB-117 / Issue #283)
 
 The in-app `/admin` Jobs view consumes the existing protected `GET /api/jobs` endpoint with contract-derived status/type filters and the bounded `limit` range. It renders only safe summary fields with DOM text nodes, keeps the API key in the existing `x-api-key` header path, and lets operators pre-fill the existing job-status workflow without bypassing its cancel/retry confirmations.
@@ -1570,7 +1629,7 @@ This is test-only hardening; runtime code, endpoints, OpenAPI, Postman, and envi
 
 ## TradingView MCP Risk Metadata (CB-175 / Issue #412)
 
-TradingView MCP alert enrichment derives optional directional invalidation, target, setup, and risk/reward metadata from the MCP analysis. Numeric and numeric-string ATR values are normalized before validation. ATR-derived levels are emitted only when the supplied ATR and every resulting level are finite, positive, and on the correct side of entry; a rejected supplied ATR suppresses the entire numeric risk block instead of falling back to a synthetic stop. Setup metadata remains independently optional, uses explicit/inferred evidence only, and mean-reversion inference must align Bollinger position with signal direction. When Gemini and MCP enrichment are combined, invalidation, target, and risk/reward are selected atomically from one complete provider block to prevent inconsistent ratios.
+TradingView MCP alert enrichment derives optional directional invalidation, target, setup, and risk/reward metadata from the MCP analysis. Numeric and numeric-string ATR values are normalized before validation. ATR-derived levels are emitted only when the supplied ATR and every resulting level are finite, positive, and on the correct side of entry; a rejected supplied ATR still suppresses the entire numeric risk block instead of falling back to a synthetic ATR stop (Issue #1229 then supplies a separate, provenance-tagged secondary heuristic plan — see below). Setup metadata remains independently optional, uses explicit/inferred evidence only, and mean-reversion inference must align Bollinger position with signal direction. When Gemini and MCP enrichment are combined, invalidation, target, and risk/reward are selected atomically from one complete provider block to prevent inconsistent ratios.
 
 **Coverage**:
 - `src/services/tradingview/TradingViewMcpService.js` — MCP risk derivation, ATR rejection, standalone setup metadata, and side-aware setup inference.
@@ -1578,6 +1637,27 @@ TradingView MCP alert enrichment derives optional directional invalidation, targ
 - `tests/unit/tradingview-mcp-service.test.js` and `tests/unit/alert-handler.test.js` — Directional calculations, invalid ATR/fallback suppression, setup inference, and provider merge invariants.
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed; existing optional response fields and formatter support remain in place.
+
+## Secondary Fallback Trade Plan for Rejected ATR (Issue #1229)
+
+`TradingViewMcpService._toEnrichedAlert()` now calls `calculateFallbackRiskLevels()` from `src/services/tradingview/fallbackTradePlan.js` as a **secondary** source of risk metadata. Previously that module was dead code inside the MCP path.
+
+**Contract**:
+- The fallback runs **only** when `hasValidRiskMetadata` is false — i.e. the ATR-derived block was rejected because ATR was `0`, non-finite, or a resulting level failed the side/positivity check — **and** MCP supplied a usable `current_price`.
+- A valid ATR-derived block always wins. A real ATR level is never downgraded to a heuristic one, and `levelsSource` is omitted on that path exactly as before.
+- The ATR block itself is still suppressed: an invalid ATR never produces a synthetic ATR stop. The fallback is an additional source, not a relaxation of the ATR validation rules.
+- When the fallback supplies the levels they are tagged `levelsSource: 'fallback-trade-plan'` so dashboards and the stored-alert summary can distinguish heuristic levels from ATR-derived ones. The OpenAPI `levelsSource` enum and `EnrichedAlert.levelsSource` in `src/services/grounding/types.ts` were extended with the new value; `mergeEnrichmentData()` in `src/controllers/webhooks/handlers/alert/grounding.js` propagates the tag without ever overriding a `gemini-grounding` source.
+- `getRiskRewardRatio()` recomputes the ratio from the fallback stop/target so a fallback level is never paired with a stale ATR ratio. The fallback levels are re-validated with `isValidRiskLevel()` before use, and any failure stays fail-open (alert delivery is never blocked).
+- `setup_type` is unchanged: the fallback does not inject `trend_continuation` on its own, so setup evidence remains explicit or MCP-inferred only.
+
+**Sanity-checked risk map** (`TIMEFRAME_RISK_MAP`, nominal R:R 2.0): 5m/15m stop 1.5% / target 3%, 1h/4h stop 2.5% / target 5%, 1D/1W/1M stop 5% / target 10%, unknown timeframe falls back to the 1h defaults. Stops widen with the analysis horizon and stay strictly on the correct side of entry for both BUY and SELL.
+
+The **emitted** `risk_reward_ratio` is recomputed from the rounded levels that actually ship, so it is only *approximately* 2.0 (observed drift up to ~0.01 on non-round prices, e.g. `2.0095`). That recomputation is deliberate: it guarantees the ratio always matches the displayed stop and target rather than a stale plan constant. Consumers must not treat exactly `2` as an invariant.
+
+**Coverage**:
+- `tests/unit/tradingview-mcp-service.test.js` — Zero ATR and non-finite ATR each produce a `fallback-trade-plan` block (BUY and SELL), a valid ATR block is never downgraded, and no usable MCP price means no fallback at all.
+
+No new environment variable or Remote Config key was added. Post-merge this path sees no traffic until #630/#591 restore MCP enrichment in production; that is an independent fix and this change is correct to land first.
 
 ## Telegram Delivery Retry and Telemetry (CB-178 / Issue #415)
 
@@ -1829,3 +1909,21 @@ The HTTP server applies bounded Node.js timeouts at startup: 10 seconds for head
 - `src/openapi/openapi.json`, `CabrosBot.postman_collection.json`, and `README.md` — request/response contract and valid/invalid examples.
 
 No new environment variable, startup gate, destination, secret, or Remote Config key was introduced.
+
+## Market Scanner MCP Circuit-Breaker Fast-Fail Gate (Issue #632)
+
+`POST /api/webhook/market-scanner-alert` consults the process-local TradingView MCP status before starting its sequential scans. `getMcpUnavailableReason()` in `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` returns a skip reason only when **all** of these hold:
+
+1. `tradingViewMcpService.getStatus({ enabled: true })` reports `status === 'degraded'`;
+2. `lastErrorCategory` is one of `http_5xx`, `request_failed`, `circuit_breaker_open`;
+3. `circuitBreaker.state === 'open'` — the time-based breaker state, **not** the sticky runtime status.
+
+Only then does the endpoint return `502 TRADINGVIEW_MCP_UNAVAILABLE` with every requested scan as `status: 'skipped'` plus a `reason`, without attempting any scanner call.
+
+**Why the gate keys on the breaker state (Codex P1 on the original PR).** `runtimeStatus.status === 'degraded'` is cleared only by a *later successful* MCP call. Gating on it therefore skips the very probe that would clear it, so in a scanner-only process the scanner would return 502 forever — a self-locking outage that could never self-heal without a restart. `getCircuitBreakerStatus().state` is time-based: `getBreakerState()` flips `open` → `half-open` once `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses, so the first request after the cooldown proceeds and acts as the bounded recovery probe. Verified empirically: after one transient failure the old gate still skipped post-cooldown, while the new gate allows the probe and the service returns to `ready`/`closed` after it succeeds.
+
+**Fail-open paths** (must never block the scanner): readiness-lookup throwing, a `degraded` state with no reported breaker state, degraded categories outside the provider-outcome set such as `http_4xx`, and any non-`degraded` status.
+
+**502 has two documented shapes** (Codex P2). `TRADINGVIEW_MCP_UNAVAILABLE` is the skip path (nothing attempted); `ALL_SCANS_FAILED` is the attempt path (every scan was attempted and failed). Both are enumerated under `components.responses.MarketScannerBadGateway` in `src/openapi/openapi.json`, in `CabrosBot.postman_collection.json`, and in `docs/webhooks.md`.
+
+**Coverage:** `tests/unit/market-scanner.test.js` covers fail-fast while open, the half-open recovery probe, unknown-breaker fail-open, and the non-outage category; `tests/integration/market-scanner-endpoint.test.js` covers the endpoint-level 502 skip, the transient-failure self-recovery round trip, the `ALL_SCANS_FAILED` attempt path, and the two-variant OpenAPI 502 contract. No new environment variable, Remote Config key, or feature flag was added.

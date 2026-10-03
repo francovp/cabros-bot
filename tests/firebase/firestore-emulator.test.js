@@ -190,6 +190,18 @@ describe('Firestore emulator integration', () => {
 		expect(await scannerPresetService.getPreset(preset.id)).toBeNull();
 	});
 
+	it('deduplicates concurrent job outcomes without replacing evaluated records', async () => {
+		const signal = { idempotencyKey: 'job:emulator:expanded-analysis:0', symbol: 'BINANCE:BTCUSDT', price: 50000 };
+		const [first, replay] = await Promise.all([signalOutcomeService.recordSignal(signal), signalOutcomeService.recordSignal(signal)]);
+		expect(first).toMatch(/^[a-f0-9]{64}$/);
+		expect(replay).toBe(first);
+		const ref = firestore.collection('tradingSignalOutcomes').doc(first);
+		await ref.update({ outcomeEvaluated: true });
+		expect(await signalOutcomeService.recordSignal(signal)).toBe(first);
+		expect((await ref.get()).data().outcomeEvaluated).toBe(true);
+		expect((await firestore.collection('tradingSignalOutcomes').get()).size).toBe(1);
+	});
+
 	it('writes and reads a signal outcome record without external market data', async () => {
 		const signalId = await signalOutcomeService.recordSignal({
 			requestId: 'firebase-signal',
