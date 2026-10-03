@@ -4527,14 +4527,24 @@
             "schema": {
               "$ref": "#/components/schemas/MessageRequest"
             },
-            "example": {
-              "message": "Deployment completed",
-              "channels": [
-                "telegram",
-                "whatsapp",
-                "discord"
-              ],
-              "idempotencyKey": "generic-message-demo-1"
+            "examples": {
+              "default": {
+                "value": {
+                  "message": "Deployment completed",
+                  "channels": [
+                    "telegram",
+                    "whatsapp",
+                    "discord"
+                  ],
+                  "idempotencyKey": "generic-message-demo-1"
+                }
+              },
+              "dryValidate": {
+                "value": {
+                  "message": "Custom notification payload to estimate before dispatch",
+                  "dryValidate": true
+                }
+              }
             }
           }
         }
@@ -5407,6 +5417,55 @@
                   "properties": {
                     "idempotencyReplayed": {
                       "type": "boolean"
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "description": "True when the inbound message exceeded MAX_MESSAGE_LENGTH (4000) and was clipped before delivery. Caller can detect silent content loss; downstream delivery proceeds with the truncated text."
+                    },
+                    "originalLength": {
+                      "type": "integer",
+                      "description": "Inbound message character count before truncation. Only present when truncated=true.",
+                      "minimum": 4001
+                    },
+                    "deliveredLength": {
+                      "type": "integer",
+                      "description": "Character count of the text actually passed to the notification channels. Only present when truncated=true.",
+                      "minimum": 1
+                    },
+                    "dryValidate": {
+                      "type": "boolean",
+                      "description": "True when the request was executed in dry-run validation mode without sending notifications."
+                    },
+                    "delivered": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "List of channels that successfully delivered the message."
+                    },
+                    "channelDetails": {
+                      "type": "object",
+                      "description": "Detailed per-channel delivery results including chunk counts when messages are split.",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "success": {
+                            "type": "boolean"
+                          },
+                          "messageId": {
+                            "type": "string"
+                          },
+                          "chunks": {
+                            "type": "integer"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "estimatedChunks": {
+                      "$ref": "#/components/schemas/EstimatedChunks"
                     }
                   }
                 }
@@ -5423,6 +5482,71 @@
                       "success": true,
                       "messageId": "tg-msg-123",
                       "durationMs": 450
+                    }
+                  ]
+                }
+              },
+              "dryValidate": {
+                "value": {
+                  "success": true,
+                  "dryValidate": true,
+                  "estimatedChunks": {
+                    "telegram": 1,
+                    "whatsapp": 3,
+                    "discord": 25
+                  }
+                }
+              },
+              "chunked": {
+                "value": {
+                  "success": true,
+                  "results": [
+                    {
+                      "channel": "telegram",
+                      "success": true,
+                      "messageId": "tg-msg-123"
+                    },
+                    {
+                      "channel": "whatsapp",
+                      "success": true,
+                      "messageId": "wa-msg-456",
+                      "splitMessageCount": 3
+                    }
+                  ],
+                  "delivered": [
+                    "telegram",
+                    "whatsapp"
+                  ],
+                  "channelDetails": {
+                    "telegram": {
+                      "success": true,
+                      "messageId": "tg-msg-123"
+                    },
+                    "whatsapp": {
+                      "success": true,
+                      "messageId": "wa-msg-456",
+                      "chunks": 3
+                    }
+                  },
+                  "estimatedChunks": {
+                    "telegram": 1,
+                    "whatsapp": 3,
+                    "discord": 25
+                  }
+                }
+              },
+              "truncated": {
+                "summary": "Inbound message exceeded MAX_MESSAGE_LENGTH",
+                "value": {
+                  "success": true,
+                  "truncated": true,
+                  "originalLength": 6000,
+                  "deliveredLength": 4003,
+                  "results": [
+                    {
+                      "channel": "telegram",
+                      "success": true,
+                      "messageId": "tg-msg-123"
                     }
                   ]
                 }
@@ -6355,6 +6479,28 @@
       }
     },
     "schemas": {
+      "RateLimitHeaders": {
+        "type": "object",
+        "description": "Standard X-RateLimit-* response headers emitted by the global rate limiter on every protected /api response (success and throttled). The webhook ingest endpoints use an isolated 1,000-request bucket; ordinary /api endpoints use RATE_LIMIT_MAX.",
+        "required": ["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
+        "properties": {
+          "X-RateLimit-Limit": {
+            "type": "string",
+            "description": "Maximum requests per window for the current bucket.",
+            "examples": ["1000"]
+          },
+          "X-RateLimit-Remaining": {
+            "type": "string",
+            "description": "Requests remaining in the current window. Zero on a throttled response.",
+            "examples": ["999"]
+          },
+          "X-RateLimit-Reset": {
+            "type": "string",
+            "description": "Unix timestamp (seconds) when the current window resets.",
+            "examples": ["1756819200"]
+          }
+        }
+      },
       "PublicStatus": {
         "type": "object",
         "description": "Public, unauthenticated service status snapshot. Intentionally omits credentials, configuration details, per-channel counters, feature flags, and operator identifiers.",
@@ -9005,8 +9151,38 @@
             "type": "string",
             "minLength": 1,
             "description": "Optional replay key; snake_case body form."
+          },
+          "dryValidate": {
+            "type": "boolean",
+            "description": "Optional validation mode; when true, validates the request and returns per-channel estimatedChunks without sending notifications."
           }
         }
+      },
+      "EstimatedChunks": {
+        "type": "object",
+        "description": "Estimated message chunk count per channel based on provider-specific payload limits.",
+        "properties": {
+          "telegram": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Estimated chunk count for Telegram (single chunk for standard messages)."
+          },
+          "whatsapp": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Estimated chunk count for WhatsApp based on 20,000 character limit."
+          },
+          "discord": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Estimated chunk count for Discord based on 2,000 character limit."
+          }
+        },
+        "required": [
+          "telegram",
+          "whatsapp",
+          "discord"
+        ]
       },
       "ExpandedAnalysisRequest": {
         "type": "object",

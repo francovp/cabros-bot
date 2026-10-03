@@ -1884,6 +1884,61 @@
               "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"requestId\": \"msg-correlation-001\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ]\n}"
             },
             {
+              "name": "Success (truncated - message exceeded MAX_MESSAGE_LENGTH)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"truncated\": true,\n  \"originalLength\": 6000,\n  \"deliveredLength\": 4003,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ]\n}",
+              "originalRequest": {
+                "method": "POST",
+                "description": "Idempotency accepts the recommended idempotency-key header, x-idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true; conflicting payload reuse returns 409. The response always carries a requestId field that mirrors the inbound x-request-id header (when supplied, sanitized to printable ASCII and <=128 chars) or a generated UUIDv4 so callers can correlate deliveries with logs and Sentry.",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-request-id",
+                    "value": "msg-correlation-001",
+                    "type": "text",
+                    "description": "Optional correlation ID echoed in the response and propagated to Sentry."
+                  },
+                  {
+                    "key": "idempotency-key",
+                    "value": "generic-message-truncation-demo-1",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-idempotency-key",
+                    "value": "generic-message-truncation-key-1",
+                    "type": "text",
+                    "description": "Alternative x-prefixed idempotency header variant",
+                    "disabled": true
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"message\": \"Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. Automated signal alert for CABROS breakout watch. \",\n  \"channels\": [\n    \"telegram\",\n    \"whatsapp\",\n    \"discord\"\n  ],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101,\n  \"whatsappChatId\": \"120363000000000000@g.us\",\n  \"discordWebhookUrl\": \"https://discord.com/api/webhooks/123456789/abc-xyz-token\",\n  \"idempotencyKey\": \"generic-message-demo-1\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/message",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "message"
+                  ]
+                }
+              }
+            },
+            {
               "name": "Error (idempotency conflict)",
               "status": "Conflict",
               "code": 409,
@@ -1990,6 +2045,24 @@
                 }
               ],
               "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            },
+            {
+              "name": "Success (dry-run validation with estimatedChunks)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"dryValidate\": true,\n  \"estimatedChunks\": {\n    \"telegram\": 1,\n    \"whatsapp\": 3,\n    \"discord\": 25\n  }\n}"
+            },
+            {
+              "name": "Success (chunked multi-channel delivery)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320,\n      \"splitMessageCount\": 3\n    }\n  ],\n  \"delivered\": [\n    \"telegram\",\n    \"whatsapp\"\n  ],\n  \"channelDetails\": {\n    \"telegram\": {\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    },\n    \"whatsapp\": {\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"chunks\": 3\n    }\n  },\n  \"estimatedChunks\": {\n    \"telegram\": 1,\n    \"whatsapp\": 3,\n    \"discord\": 25\n  }\n}"
+            },
+            {
+              "name": "Error (invalid dryValidate type)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryValidate\\\" must be a boolean if provided\",\n  \"details\": {\n    \"field\": \"dryValidate\"\n  }\n}"
             }
           ]
         },
@@ -2496,6 +2569,95 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"success\": false,\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Rate limit headers (X-RateLimit-*)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT: rate-limit header smoke test\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            },
+            "description": "Every protected /api response carries the standard X-RateLimit-* headers so callers can implement adaptive backpressure. The webhook ingest endpoints use an isolated 1,000-request bucket; ordinary /api endpoints use RATE_LIMIT_MAX. Throttled (429) responses include the headers plus the existing Retry-After header and retryAfterSeconds body field. Healthcheck, /ready, and static asset routes are exempt — the global rate limiter is mounted after them in app.js."
+          },
+          "response": [
+            {
+              "name": "Success - rate-limit headers visible",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\"}],\"enriched\":false}",
+              "header": [
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "1000",
+                  "description": "Max requests per window for the active bucket (webhook ingest uses 1,000)."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "999",
+                  "description": "Requests remaining in the current window."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp (seconds) when the window resets."
+                }
+              ],
+              "cookie": []
+            },
+            {
+              "name": "Throttled (429) - headers + Retry-After",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\"error\":\"Too many requests, please try again later.\",\"retryAfterSeconds\":120}",
+              "header": [
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "2",
+                  "description": "Max requests per window for the active bucket."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window (zero on a throttled response)."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp (seconds) when the window resets."
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "120",
+                  "description": "Seconds until the caller may retry the request."
+                }
+              ],
+              "cookie": []
             }
           ]
         }
