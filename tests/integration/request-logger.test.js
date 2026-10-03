@@ -210,6 +210,51 @@ describe('Request Logger Integration', () => {
 
 	// The skip list is read per request, not frozen at module load. Without that,
 	// a path an operator adds to REQUEST_DEADLINE_EXEMPT_PATHS would be exempt
+	// CORS completes an allowed browser preflight with 204 and ends the response
+	// before `requestDeadline` runs, so the deadline never gets to set the header.
+	// The logger is mounted first, so stamping there keeps the documented
+	// every-non-exempt-route invariant true for preflights too.
+	it('sets X-Request-Id on a CORS preflight that completes before the deadline', async () => {
+		const previous = process.env.CORS_ALLOWED_ORIGINS;
+		process.env.CORS_ALLOWED_ORIGINS = 'http://localhost:3000';
+		app = loadApp();
+
+		try {
+			const response = await request(app)
+				.options('/api/webhook/alert')
+				.set('Origin', 'http://localhost:3000')
+				.set('Access-Control-Request-Method', 'POST');
+
+			expect(response.status).toBe(204);
+			expect(response.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/i);
+		} finally {
+			if (previous === undefined) delete process.env.CORS_ALLOWED_ORIGINS;
+			else process.env.CORS_ALLOWED_ORIGINS = previous;
+		}
+	});
+
+	// A client-supplied id must survive too, so browser-side correlation works
+	// end to end rather than being replaced by a generated one.
+	it('echoes a client-supplied x-request-id on the preflight header', async () => {
+		const previous = process.env.CORS_ALLOWED_ORIGINS;
+		process.env.CORS_ALLOWED_ORIGINS = 'http://localhost:3000';
+		app = loadApp();
+
+		try {
+			const response = await request(app)
+				.options('/api/webhook/alert')
+				.set('Origin', 'http://localhost:3000')
+				.set('Access-Control-Request-Method', 'POST')
+				.set('x-request-id', 'preflight-supplied-id');
+
+			expect(response.status).toBe(204);
+			expect(response.headers['x-request-id']).toBe('preflight-supplied-id');
+		} finally {
+			if (previous === undefined) delete process.env.CORS_ALLOWED_ORIGINS;
+			else process.env.CORS_ALLOWED_ORIGINS = previous;
+		}
+	});
+
 	// from the deadline yet still emit one log line per hit — the documented
 	// single-vocabulary invariant would hold only for the default paths.
 	it('honors an operator-declared exempt path without reloading the module', async () => {

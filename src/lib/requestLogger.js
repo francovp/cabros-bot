@@ -212,6 +212,17 @@ function createRequestLogger() {
 		const requestId = resolveRequestId(req);
 		req.requestId = requestId;
 
+		// Set the response header here, not only in `requestDeadline`. This
+		// middleware is mounted first, so it is the earliest point that sees every
+		// request; `requestDeadline` sits behind CORS, and CORS completes an allowed
+		// browser preflight with 204 before the deadline ever runs. That left the
+		// logger emitting a correlation id the client could never see, breaking the
+		// documented every-non-exempt-route invariant. The deadline sets the same
+		// value from the same `req.requestId`, so this is idempotent.
+		if (!res.headersSent) {
+			res.setHeader('X-Request-Id', requestId);
+		}
+
 		// Exemption is decided on the unmasked path. Masking first would rewrite
 		// `/api/preferences/telegram/123` to `:redacted` and an operator who
 		// configured that exact path as exempt would still see it logged.

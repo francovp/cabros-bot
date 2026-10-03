@@ -161,7 +161,7 @@ to the free-form application logs above. Each line records:
 | `path` | Request path with the query string and trailing slash stripped (case preserved; `chatId` redacted) |
 | `statusCode` | Final response status (`0` when the response never started) |
 | `durationMs` | Time from middleware entry to response end (excludes connection setup and TLS) |
-| `requestId` | Correlation id, shared with the `X-Request-Id` response header and the `requestId` returned in response bodies |
+| `requestId` | Correlation id, shared with the `X-Request-Id` response header. Some handlers also echo it as `requestId` in the response body |
 | `clientIp` | Client address, truncated (`203.0.113.x`) or redacted for IPv6 |
 | `aborted` | `true` when the client disconnected before the response was fully flushed |
 | `outcome` | `completed` or `aborted` |
@@ -183,6 +183,12 @@ client's error body:
 ```bash
 grep '"requestId":"3f1c' logs.json | jq -c '{path:.attributes.path,status:.attributes.statusCode}'
 ```
+
+The `X-Request-Id` **response header** is the reliable surface, and it is set on
+every non-exempt route. Body echo is handler-dependent: many handlers include
+`requestId`, but middleware-generated failures do not — a `401` from
+`validateApiKey` carries only `{"error":"Unauthorized: Missing API key"}`. Search
+logs by the header value rather than assuming a body field exists.
 
 **What is not logged.** Probe paths (`/healthcheck`, `/ready`, `/openapi.json`,
 `/docs` and its static asset subtree — the same list the request deadline

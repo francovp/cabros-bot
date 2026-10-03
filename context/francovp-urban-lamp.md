@@ -171,6 +171,26 @@ the only response under that operation without `X-Request-Id` — even though th
 sets it on every non-exempt route. A provider failure is exactly when an operator needs
 the correlation ID, so the response component now declares it.
 
+### 3c. CORS preflights had no `X-Request-Id`
+
+`requestDeadline` sets the response header, but it is mounted **behind** CORS — and CORS
+completes an allowed browser preflight with `204` before the deadline ever runs. The logger
+emitted a correlation id the client could never see, so the "every non-exempt route"
+invariant was false for preflights. Confirmed against the live deployment: an
+`OPTIONS /api/webhook/alert` with an allowed origin returned `204` with no `X-Request-Id`.
+
+The logger is mounted first and is the earliest point that sees every request, so it now
+stamps the header itself. The deadline sets the same value from the same `req.requestId`,
+so the change is idempotent. Two integration tests cover the generated and
+client-supplied id, both mutation-verified.
+
+### 3d. `docs/monitoring.md` repeated the body-echo overreach
+
+The guide's field table and correlation section still told operators the id is "returned in
+response bodies". Middleware-generated failures do not do that — a `401` from
+`validateApiKey` carries only `{"error":"Unauthorized: Missing API key"}`. Corrected to
+name the response header as the reliable surface and to call out the auth-failure case.
+
 ### 4. The gitleaks exception was scoped to a file, not a value
 
 The global `[allowlist]` listed both `paths` (matching
