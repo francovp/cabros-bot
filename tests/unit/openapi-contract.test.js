@@ -631,6 +631,39 @@ describe('status dependency contract drift', () => {
 		expect(documentedDependencyKeys().length).toBeGreaterThan(0);
 	});
 
+	// `requestDeadline` stamps `X-Request-Id` on every non-exempt route, so every
+	// documented response should surface it. A response component that omits it
+	// hides the correlation ID from generated clients precisely when an operator
+	// needs it — on a provider 502. `MarketScannerBadGateway` was the one gap.
+	it('declares X-Request-Id on every documented response of a request-id operation', () => {
+		const spec = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const hasHeader = (node) => Boolean(node && node.headers && node.headers['X-Request-Id']);
+
+		const missing = [];
+		for (const [routePath, operations] of Object.entries(spec.paths || {})) {
+			for (const [method, operation] of Object.entries(operations)) {
+				if (!operation || typeof operation !== 'object' || !operation.responses) continue;
+				const documentsRequestId = (operation.parameters || []).some((parameter) => {
+					const ref = parameter && parameter.$ref;
+					return ref === '#/components/parameters/XRequestIdHeader'
+						|| (parameter && parameter.in === 'header' && parameter.name === 'x-request-id');
+				});
+				if (!documentsRequestId) continue;
+
+				for (const [status, response] of Object.entries(operation.responses)) {
+					const component = response.$ref
+						? spec.components.responses[response.$ref.split('/').pop()]
+						: response;
+					if (!hasHeader(component) && !hasHeader(response)) {
+						missing.push(`${method.toUpperCase()} ${routePath} ${status}`);
+					}
+				}
+			}
+		}
+
+		expect(missing).toEqual([]);
+	});
+
 	it('exposes every named Status dependency in some Postman status example', () => {
 		const examples = getStatusExamples();
 		expect(examples.length).toBeGreaterThan(0);

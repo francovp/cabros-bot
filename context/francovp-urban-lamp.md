@@ -142,16 +142,34 @@ scoped to the paths already under inspection rather than sweeping the contract. 
 whole-file AST scan now reports zero `$ref`-plus-`headers` siblings; the `$ref` values
 are preserved and the headers live solely in the referenced components.
 
-### 3. The `X-Request-Id` description overpromised
+### 3. The `X-Request-Id` descriptions overpromised
 
-The component claimed the id "is also returned as `requestId` in JSON response bodies".
-`src/lib/auth.js` returns `{ error: '…' }` for a missing or invalid key with no
-`requestId` at all, and the deadline middleware only sets the header. Because the
-description sits on a reusable component, the claim applied to every response
-referencing it. Narrowed to the header guarantee, with the body echo described as
-something handlers *may* do. Adding `requestId` uniformly would be better for
-correlation, but that changes response bodies on auth and rate-limit paths — a wider
-behavioural change than an observability PR should carry on its own.
+Two separate components made the claim, and only one was caught in the first round.
+
+- `XRequestIdResponseHeader` (response header) claimed the id "is also returned as
+  `requestId` in JSON response bodies". `src/lib/auth.js` returns `{ error: '…' }` for a
+  missing or invalid key with no `requestId` at all, and the deadline middleware only
+  sets the header. Narrowed to the header guarantee, with the body echo described as
+  something handlers *may* do.
+- `XRequestIdHeader` (request parameter) claimed "Echoed in the response body and the
+  X-Request-Id response header" unconditionally. Same overreach, and it survives on every
+  operation that documents the parameter. Corrected to match, naming auth failures
+  explicitly as the counterexample.
+
+Adding `requestId` uniformly would be better for correlation, but that changes response
+bodies on auth and rate-limit paths — a wider behavioural change than an observability PR
+should carry on its own.
+
+A contract test now asserts that every documented response on an operation which accepts
+`x-request-id` declares `X-Request-Id`, resolving `$ref`s. That test is what caught the
+`MarketScannerBadGateway` gap below, and it is mutation-verified.
+
+### 3b. `MarketScannerBadGateway` omitted the header
+
+Codex found, and the new contract test independently confirms, that the scanner 502 was
+the only response under that operation without `X-Request-Id` — even though the runtime
+sets it on every non-exempt route. A provider failure is exactly when an operator needs
+the correlation ID, so the response component now declares it.
 
 ### 4. The gitleaks exception was scoped to a file, not a value
 

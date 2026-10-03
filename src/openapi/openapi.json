@@ -4329,7 +4329,7 @@
           "minLength": 1,
           "maxLength": 128
         },
-        "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Echoed in the response body and the X-Request-Id response header, included in structured request logs, and persisted on stored alerts."
+        "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Returned as the X-Request-Id response header on every non-exempt route, included in structured request logs, and persisted on stored alerts. Handlers that build their own response body may also echo it as `requestId`; middleware-generated errors such as an authentication failure do not include it in the body."
       },
       "NewsAnalysisSymbol": {
         "name": "symbol",
@@ -5681,6 +5681,11 @@
                 }
               }
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
