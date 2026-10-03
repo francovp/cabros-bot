@@ -277,6 +277,18 @@ pnpm run lint
 
 ---
 
+### Updating SHA-pinned GitHub Actions
+
+All `uses:` references in `.github/workflows/*.yml` are pinned to full 40-character commit SHAs (with an inline `# v<major>` comment) for supply-chain hardening — see [issue #803](https://github.com/francovp/cabros-bot/issues/803). Mutable major-version tags can be force-moved by the action owner, so a tag pin is not a reproducible CI reference.
+
+To bump a pinned action to a newer release:
+
+1. Visit `https://github.com/<owner>/<repo>/commits/<major-tag>` (for example, `https://github.com/actions/checkout/commits/v4`).
+2. Copy the latest commit's 40-character SHA.
+3. Update both the SHA and the trailing version comment in every workflow that references the action. The `grep -rEn 'uses:.*@v[0-9]+(\.|$| )' .github/workflows/` check must return zero matches after the change.
+
+A future Dependabot `github-actions` ecosystem entry (proposed in #559) can automate the SHA rewrite on upstream release; until that lands, bump SHAs manually on the cadence above.
+
 ## Architecture Overview
 
 ```
