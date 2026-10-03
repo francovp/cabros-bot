@@ -42,7 +42,7 @@ function buildRequestFingerprint(req) {
 	};
 }
 
-function sendCachedResponse(res, cachedRecord) {
+function sendCachedResponse(req, res, cachedRecord) {
 	res.set('Idempotency-Replay', 'true');
 
 	if (cachedRecord.headers) {
@@ -53,14 +53,29 @@ function sendCachedResponse(res, cachedRecord) {
 
 	res.status(cachedRecord.statusCode);
 
+	// The cached body carries the ORIGINAL request's `requestId`, but the replay
+	// is a distinct HTTP request: the request deadline resolved a fresh id for
+	// it, stamped it on `req.requestId`, returned it in the `X-Request-Id`
+	// header, and the structured access log emitted that same id. Replaying the
+	// original id in the body would split one response across two correlation
+	// surfaces, so an operator searching logs by the body's advertised id would
+	// never find the replay. Rewrite it to the current request's id; the
+	// original remains available in the stored record and in the alert audit.
+	const replayedRequestId = req && req.requestId;
 	let finalBody = cachedRecord.responseBody;
 	if (finalBody && typeof finalBody === 'object') {
 		finalBody = { ...finalBody, idempotencyReplayed: true };
+		if (replayedRequestId && typeof finalBody.requestId === 'string') {
+			finalBody.requestId = replayedRequestId;
+		}
 		return res.json(finalBody);
 	} else if (typeof finalBody === 'string') {
 		try {
 			const parsed = JSON.parse(finalBody);
 			parsed.idempotencyReplayed = true;
+			if (replayedRequestId && typeof parsed.requestId === 'string') {
+				parsed.requestId = replayedRequestId;
+			}
 			return res.json(parsed);
 		} catch (error) {
 			// Leave as plain string/text
@@ -128,13 +143,13 @@ function idempotencyMiddleware(req, res, next) {
 
 		if (reservation.state === 'completed') {
 			console.debug('[Idempotency] Replaying cached response');
-			return sendCachedResponse(res, reservation.record);
+			return sendCachedResponse(req, res, reservation.record);
 		}
 
 		if (reservation.state === 'pending') {
 			console.debug('[Idempotency] Waiting for in-flight response');
 			return reservation.promise
-				.then((cachedRecord) => sendCachedResponse(res, cachedRecord))
+				.then((cachedRecord) => sendCachedResponse(req, res, cachedRecord))
 				.catch((error) => {
 					if (error && (error.code === 'IDEMPOTENCY_RELEASED' || error.code === 'IDEMPOTENCY_CONFLICT')) {
 						return res.status(409).json({
