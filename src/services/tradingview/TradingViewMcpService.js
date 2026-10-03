@@ -549,14 +549,26 @@ class TradingViewMcpService {
 				return { success: false, channel: 'tradingview-mcp', error: 'TradingView MCP base analysis budget exhausted' };
 			}
 			const attemptController = new AbortController();
-			// Reserve every remaining exponential backoff, then split the time left across attempts.
-			const remainingAttempts = Math.max(1, cfg.maxRetries - attempt + 1);
+			// Reserve every remaining exponential backoff, then give this attempt
+			// whatever time is left in the base sub-budget.
 			let retryReserveMs = 0;
 			for (let retryAttempt = attempt; retryAttempt < cfg.maxRetries; retryAttempt += 1) {
 				retryReserveMs += Math.min(Math.pow(2, retryAttempt - 1) * 1100, retryDelayCapMs || Number.POSITIVE_INFINITY);
 			}
 			const attemptBudgetMs = Math.max(1, remainingBaseMs - retryReserveMs);
-			const attemptTimeoutMs = Math.min(cfg.timeoutMs, Math.max(1, Math.floor(attemptBudgetMs / remainingAttempts)));
+			// `remainingBaseMs` already shrinks on every attempt because it is
+			// measured against the shared base deadline, and `retryReserveMs`
+			// already holds back the backoff needed by the attempts that follow.
+			// Dividing the result by the remaining attempt count on top of that
+			// starved a single tool call of most of its budget: one call needs
+			// three sequential HTTP hops (initialize, notifications/initialized,
+			// tools/call), so with the production settings (maxRetries=3,
+			// budget=12000, optional enrichment on) attempt 1 was capped at ~1900ms
+			// for a call measured at 431-770ms against the live host. Any hop
+			// slower than ~633ms aborted the attempt, every retry re-ran the whole
+			// handshake, the 12s budget drained, and healthy providers were
+			// reported as `request_failed`.
+			const attemptTimeoutMs = Math.min(cfg.timeoutMs, attemptBudgetMs);
 			const attemptTimeoutId = setTimeout(() => {
 				attemptController.abort(new Error(`TradingView MCP base analysis attempt timeout after ${attemptTimeoutMs}ms`));
 			}, attemptTimeoutMs);
@@ -1655,6 +1667,13 @@ class TradingViewMcpService {
 		}
 		if (/HTTP 4\d\d/i.test(message)) {
 			return 'http_4xx';
+		}
+		// A drained enrichment budget is a deadline, not an unexplained transport
+		// failure. Without this, a client-side budget boundary was reported as
+		// `request_failed`, which is indistinguishable from a real provider fault
+		// in `/api/status` and hid the actual cause of the zero-enrichment state.
+		if (/budget (exceeded|exhausted)/i.test(message)) {
+			return 'timeout';
 		}
 		if (/timeout|timed[ -]?out|aborted|ETIMEDOUT/i.test(message) || /AbortError|TimeoutError/i.test(name)) {
 			return 'timeout';
