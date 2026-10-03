@@ -10169,6 +10169,911 @@
           "body": "{\"error\":\"Unauthorized\",\"code\":\"ADMIN_AUTH_REQUIRED\"}"
         }
       ]
+    },
+    {
+      "name": "Error Envelope Contract",
+      "description": "Contract coverage for the standardized error envelope introduced in issue #1231. Every /api/* error response now carries success:false, a machine-readable code, a requestId, and a retryable flag derived from the HTTP status, so an automated monitor can distinguish a transient provider failure (retryable) from a permanently disabled feature (not retryable).",
+      "item": [
+        {
+          "name": "GET /api/outcomes - invalid limit (400, permanent)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{webhookApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes?limit=not-a-number",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "not-a-number"
+                }
+              ]
+            },
+            "description": "Non-numeric limit is a client error and must not be retried."
+          },
+          "event": [
+            {
+              "event": "test",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 400', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('envelope: success is false', () => pm.expect(pm.response.json().success).to.eql(false));",
+                  "",
+                  "pm.test('envelope: code is INVALID_REQUEST', () => pm.expect(pm.response.json().code).to.eql('INVALID_REQUEST'));",
+                  "",
+                  "pm.test('envelope: requestId is present', () => pm.expect(pm.response.json().requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test('envelope: retryable is false for 400', () => pm.expect(pm.response.json().retryable).to.eql(false));",
+                  "",
+                  "pm.test('envelope: human error message is present', () => pm.expect(pm.response.json().error).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Standard error envelope",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{webhookApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/outcomes?limit=not-a-number",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "outcomes"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "not-a-number"
+                    }
+                  ]
+                },
+                "description": "Non-numeric limit is a client error and must not be retried."
+              },
+              "status": "INVALID_REQUEST",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid request\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{webhookApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/outcomes?limit=not-a-number",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "outcomes"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "not-a-number"
+                    }
+                  ]
+                },
+                "description": "Non-numeric limit is a client error and must not be retried."
+              },
+              "status": "REQUEST_TIMEOUT",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30001\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/outcomes/summary - invalid status filter (400, permanent)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{webhookApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?status=bogus",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "bogus"
+                }
+              ]
+            },
+            "description": "Unknown status filter value is a client error."
+          },
+          "event": [
+            {
+              "event": "test",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 400', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('envelope: success is false', () => pm.expect(pm.response.json().success).to.eql(false));",
+                  "",
+                  "pm.test('envelope: code is INVALID_REQUEST', () => pm.expect(pm.response.json().code).to.eql('INVALID_REQUEST'));",
+                  "",
+                  "pm.test('envelope: requestId is present', () => pm.expect(pm.response.json().requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test('envelope: retryable is false for 400', () => pm.expect(pm.response.json().retryable).to.eql(false));",
+                  "",
+                  "pm.test('envelope: human error message is present', () => pm.expect(pm.response.json().error).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Standard error envelope",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{webhookApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/outcomes/summary?status=bogus",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "outcomes",
+                    "summary"
+                  ],
+                  "query": [
+                    {
+                      "key": "status",
+                      "value": "bogus"
+                    }
+                  ]
+                },
+                "description": "Unknown status filter value is a client error."
+              },
+              "status": "INVALID_REQUEST",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid request\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{webhookApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/outcomes/summary?status=bogus",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "outcomes",
+                    "summary"
+                  ],
+                  "query": [
+                    {
+                      "key": "status",
+                      "value": "bogus"
+                    }
+                  ]
+                },
+                "description": "Unknown status filter value is a client error."
+              },
+              "status": "REQUEST_TIMEOUT",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30001\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/symbol-analyses - invalid limit (400, permanent)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{webhookApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/symbol-analyses?limit=9999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "symbol-analyses"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "9999"
+                }
+              ]
+            },
+            "description": "Limit above the documented maximum is a client error."
+          },
+          "event": [
+            {
+              "event": "test",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 400', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('envelope: success is false', () => pm.expect(pm.response.json().success).to.eql(false));",
+                  "",
+                  "pm.test('envelope: code is INVALID_REQUEST', () => pm.expect(pm.response.json().code).to.eql('INVALID_REQUEST'));",
+                  "",
+                  "pm.test('envelope: requestId is present', () => pm.expect(pm.response.json().requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test('envelope: retryable is false for 400', () => pm.expect(pm.response.json().retryable).to.eql(false));",
+                  "",
+                  "pm.test('envelope: human error message is present', () => pm.expect(pm.response.json().error).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Standard error envelope",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{webhookApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/symbol-analyses?limit=9999",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "symbol-analyses"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "9999"
+                    }
+                  ]
+                },
+                "description": "Limit above the documented maximum is a client error."
+              },
+              "status": "INVALID_REQUEST",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid request\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{webhookApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/symbol-analyses?limit=9999",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "symbol-analyses"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "9999"
+                    }
+                  ]
+                },
+                "description": "Limit above the documented maximum is a client error."
+              },
+              "status": "REQUEST_TIMEOUT",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30001\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/jobs - invalid limit (400, permanent)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{webhookApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/jobs?limit=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Job list limit below the documented minimum is a client error."
+          },
+          "event": [
+            {
+              "event": "test",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 400', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('envelope: success is false', () => pm.expect(pm.response.json().success).to.eql(false));",
+                  "",
+                  "pm.test('envelope: code is INVALID_REQUEST', () => pm.expect(pm.response.json().code).to.eql('INVALID_REQUEST'));",
+                  "",
+                  "pm.test('envelope: requestId is present', () => pm.expect(pm.response.json().requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test('envelope: retryable is false for 400', () => pm.expect(pm.response.json().retryable).to.eql(false));",
+                  "",
+                  "pm.test('envelope: human error message is present', () => pm.expect(pm.response.json().error).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Standard error envelope",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{webhookApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/jobs?limit=0",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "jobs"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "0"
+                    }
+                  ]
+                },
+                "description": "Job list limit below the documented minimum is a client error."
+              },
+              "status": "INVALID_REQUEST",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid request\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{webhookApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/jobs?limit=0",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "jobs"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "0"
+                    }
+                  ]
+                },
+                "description": "Job list limit below the documented minimum is a client error."
+              },
+              "status": "REQUEST_TIMEOUT",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30001\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/jobs/{jobId} - not found (404, permanent)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{webhookApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/jobs/does-not-exist",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "jobs",
+                "does-not-exist"
+              ]
+            },
+            "description": "Unknown job ids are permanent failures; retrying cannot help."
+          },
+          "event": [
+            {
+              "event": "test",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 404', () => pm.response.to.have.status(404));",
+                  "",
+                  "pm.test('envelope: success is false', () => pm.expect(pm.response.json().success).to.eql(false));",
+                  "",
+                  "pm.test('envelope: code is NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('NOT_FOUND'));",
+                  "",
+                  "pm.test('envelope: requestId is present', () => pm.expect(pm.response.json().requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test('envelope: retryable is false for 404', () => pm.expect(pm.response.json().retryable).to.eql(false));",
+                  "",
+                  "pm.test('envelope: human error message is present', () => pm.expect(pm.response.json().error).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Standard error envelope",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{webhookApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/jobs/does-not-exist",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "jobs",
+                    "does-not-exist"
+                  ]
+                },
+                "description": "Unknown job ids are permanent failures; retrying cannot help."
+              },
+              "status": "INVALID_REQUEST",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Job not found\",\n  \"code\": \"NOT_FOUND\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{webhookApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/jobs/does-not-exist",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "jobs",
+                    "does-not-exist"
+                  ]
+                },
+                "description": "Unknown job ids are permanent failures; retrying cannot help."
+              },
+              "status": "REQUEST_TIMEOUT",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30001\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/preferences/{channel}/{chatId} - invalid channel (400, permanent)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{webhookApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/preferences/carrier-pigeon/123",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "preferences",
+                "carrier-pigeon",
+                "123"
+              ]
+            },
+            "description": "Unsupported notification channel is a client error."
+          },
+          "event": [
+            {
+              "event": "test",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 400', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('envelope: success is false', () => pm.expect(pm.response.json().success).to.eql(false));",
+                  "",
+                  "pm.test('envelope: code is INVALID_REQUEST', () => pm.expect(pm.response.json().code).to.eql('INVALID_REQUEST'));",
+                  "",
+                  "pm.test('envelope: requestId is present', () => pm.expect(pm.response.json().requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test('envelope: retryable is false for 400', () => pm.expect(pm.response.json().retryable).to.eql(false));",
+                  "",
+                  "pm.test('envelope: human error message is present', () => pm.expect(pm.response.json().error).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Standard error envelope",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{webhookApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/preferences/carrier-pigeon/123",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "preferences",
+                    "carrier-pigeon",
+                    "123"
+                  ]
+                },
+                "description": "Unsupported notification channel is a client error."
+              },
+              "status": "INVALID_REQUEST",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid request\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{webhookApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/preferences/carrier-pigeon/123",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "preferences",
+                    "carrier-pigeon",
+                    "123"
+                  ]
+                },
+                "description": "Unsupported notification channel is a client error."
+              },
+              "status": "REQUEST_TIMEOUT",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30001\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/scanner-presets/{id} - not found (404, permanent)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{webhookApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/scanner-presets/missing-preset",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "scanner-presets",
+                "missing-preset"
+              ]
+            },
+            "description": "Unknown preset ids are permanent failures."
+          },
+          "event": [
+            {
+              "event": "test",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 404', () => pm.response.to.have.status(404));",
+                  "",
+                  "pm.test('envelope: success is false', () => pm.expect(pm.response.json().success).to.eql(false));",
+                  "",
+                  "pm.test('envelope: code is NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('NOT_FOUND'));",
+                  "",
+                  "pm.test('envelope: requestId is present', () => pm.expect(pm.response.json().requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test('envelope: retryable is false for 404', () => pm.expect(pm.response.json().retryable).to.eql(false));",
+                  "",
+                  "pm.test('envelope: human error message is present', () => pm.expect(pm.response.json().error).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Standard error envelope",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{webhookApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/scanner-presets/missing-preset",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "scanner-presets",
+                    "missing-preset"
+                  ]
+                },
+                "description": "Unknown preset ids are permanent failures."
+              },
+              "status": "INVALID_REQUEST",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Preset not found\",\n  \"code\": \"NOT_FOUND\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{webhookApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/scanner-presets/missing-preset",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "scanner-presets",
+                    "missing-preset"
+                  ]
+                },
+                "description": "Unknown preset ids are permanent failures."
+              },
+              "status": "REQUEST_TIMEOUT",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30001\n}"
+            }
+          ]
+        }
+      ]
     }
   ]
 }

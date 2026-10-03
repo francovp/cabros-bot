@@ -5176,15 +5176,53 @@
         }
       },
       "Error": {
-        "description": "Request or service error",
+        "description": "Request or service error. Returns the standardized error envelope; `retryable` is derived from the HTTP status.",
         "content": {
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/Error"
             },
-            "example": {
-              "error": "Invalid request",
-              "code": "INVALID_REQUEST"
+            "examples": {
+              "invalidRequest": {
+                "summary": "400 INVALID_REQUEST (permanent)",
+                "value": {
+                  "success": false,
+                  "error": "Invalid request",
+                  "code": "INVALID_REQUEST",
+                  "requestId": "6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c",
+                  "retryable": false
+                }
+              },
+              "featureDisabled": {
+                "summary": "403 FEATURE_DISABLED (permanent)",
+                "value": {
+                  "success": false,
+                  "error": "Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.",
+                  "code": "FEATURE_DISABLED",
+                  "requestId": "6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c",
+                  "retryable": false
+                }
+              },
+              "providerTimeout": {
+                "summary": "504 PROVIDER_TIMEOUT (retryable)",
+                "value": {
+                  "success": false,
+                  "error": "TradingView MCP timed out after the configured budget.",
+                  "code": "PROVIDER_TIMEOUT",
+                  "requestId": "6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c",
+                  "retryable": true
+                }
+              },
+              "storageUnavailable": {
+                "summary": "503 STORAGE_UNAVAILABLE (retryable)",
+                "value": {
+                  "success": false,
+                  "error": "Signal outcome tracking is enabled but Firestore is unavailable.",
+                  "code": "STORAGE_UNAVAILABLE",
+                  "requestId": "6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c",
+                  "retryable": true
+                }
+              }
             }
           }
         }
@@ -7407,15 +7445,41 @@
       },
       "Error": {
         "type": "object",
+        "description": "Standardized error envelope returned by every /api/* endpoint. Endpoint-specific fields (jobId, storage, message, details, scanResults, ...) are preserved alongside these fields.",
         "required": [
-          "error"
+          "success",
+          "error",
+          "code",
+          "retryable"
         ],
         "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [false],
+            "description": "Always false on an error response."
+          },
           "error": {
-            "type": "string"
+            "type": "string",
+            "description": "Human-readable error message."
           },
           "code": {
-            "type": "string"
+            "type": "string",
+            "description": "Machine-readable error code. Standard codes are INVALID_REQUEST, FEATURE_DISABLED, PROVIDER_UNAVAILABLE, PROVIDER_TIMEOUT, DELIVERY_FAILED, STORAGE_UNAVAILABLE and INTERNAL_ERROR; endpoints may return additional specific codes such as NOT_FOUND, RATE_LIMITED, UNAUTHORIZED or MAINTENANCE_MODE.",
+            "examples": ["INVALID_REQUEST", "FEATURE_DISABLED", "PROVIDER_TIMEOUT", "STORAGE_UNAVAILABLE", "INTERNAL_ERROR"]
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Correlation id for this request. Matches the X-Request-Id response header and Sentry event data."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "True when the caller should retry. Derived from the HTTP status: true for 408, 425, 429, 500, 502, 503 and 504; false otherwise. This is the field an automated monitor uses to distinguish a transient provider failure from a permanently disabled feature.",
+            "examples": [false, true]
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Optional sanitized details for the failure."
           },
           "jobId": {
             "type": "string",

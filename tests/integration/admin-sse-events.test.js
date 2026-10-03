@@ -186,10 +186,15 @@ describe('Admin SSE Events Stream Integration (/api/admin/events)', () => {
 				.expect(503);
 
 			expect(res.headers['retry-after']).toBe('30');
-			expect(res.body).toEqual({
+			expect(res.body).toEqual(expect.objectContaining({
 				error: 'Server has reached maximum SSE connection capacity. Please retry shortly.',
 				code: 'SSE_CONNECTION_LIMIT_EXCEEDED',
-			});
+			}));
+			expect(res.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 		} finally {
 			adminSseService.clients.clear();
 			adminSseService.maxTotalConnections = null;
