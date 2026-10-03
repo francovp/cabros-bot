@@ -440,3 +440,96 @@ The 35 remaining channels are all under 24 hours old, created by current PR burs
 - Last-Seen: 2026-10-01
 
 ---
+
+## [LRN-20261003-001] correction
+
+**Logged**: 2026-10-03T00:30:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Risk metadata selection precedence was inverted: heuristic fallback plan silently displaced real Gemini levels when numerically complete.
+
+### Details
+In PR #1260 (feat(tradingview): wire fallbackTradePlan as secondary risk-metadata source), @francovp corrected the implementation:
+1. **High** — `selectRiskMetadata` gave MCP unconditional precedence whenever its block was *numerically complete*. The fallback plan is always complete, so once it existed it always won. Before this PR a rejected ATR produced an **incomplete** MCP block, `hasCompleteRiskMetadata(mcp)` was false, and **Gemini's real support/resistance levels won**. The heuristic plan therefore silently replaced genuine provider levels — the exact inverse of "secondary source", and the `levelsSource` tag was emitted but never consulted for precedence.
+2. **Medium** — `levelsSource` mislabelled the winning block. The tag derived from `technical_levels`, but the risk block is selected independently. After fix 1, when Gemini won, the output carried Gemini's levels tagged `fallback-trade-plan` — describing a block that had been rejected.
+3. **Contract drift** — `derived-quote` was undocumented. It is emitted in 9 places and branched on in `alert.js`, but was absent from both the OpenAPI and `types.ts` `levelsSource` enums.
+4. **Over-engineering** — Replaced two-boolean ternary with an ordered-candidates list that names the precedence directly.
+5. **Documentation corrected** — The emitted `risk_reward_ratio` is recomputed from the rounded levels that ship, so it is only *approximately* 2.0. The recomputation is deliberate so the ratio always matches the displayed stop and target; the "all R:R 2.0" claim was wrong, not the code.
+
+### Suggested Action
+1. When implementing fallback/secondary sources, explicitly encode precedence order (primary → secondary → fallback) rather than relying on completeness checks that the fallback always satisfies.
+2. Ensure emitted tags/labels reflect the actual selected source, not a fixed field.
+3. Cross-check all emitted enum values against OpenAPI and TypeScript definitions — contract drift is silent and dangerous.
+4. Verify documentation claims against actual computed values; rounded outputs may differ from theoretical ideals.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/services/tradingview/TradingViewMcpService.js, src/controllers/webhooks/handlers/alert/alert.js, tests/unit/alert-handler.test.js, AGENTS.md
+- Tags: risk-metadata, fallback, precedence, contract-drift, over-engineering
+- See Also: LRN-20260927-004
+- Pattern-Key: harden.fallback_precedence_explicit
+- Recurrence-Count: 1
+- First-Seen: 2026-10-02
+- Last-Seen: 2026-10-02
+---
+
+## [LRN-20261003-002] correction
+
+**Logged**: 2026-10-03T00:30:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+`formatAlertMessage()` has no production call site — audit line added to formatter was invisible to every trader.
+
+### Details
+In PR #1259 (feat(news-monitor): feed domainQuality tiers into calibrateNewsConfidence), @francovp corrected via Codex review: `grep -rn "formatAlertMessage(" src/` confirmed the only definition is the method itself. Production delivery goes through `sendWithNotificationRouting(notificationMgr, alert, ...)` → Telegram/WhatsApp services → `formatter.formatEnriched(alert.enriched, ...)`, and `MarkdownV2Formatter` renders `extraText`. The audit line added to `formatAlertMessage()` never reached users.
+
+### Suggested Action
+1. Always trace the actual production call path before adding observability or audit fields — formatter methods may be test-only.
+2. Add audit/quality data to the payload that actually ships (`alert.enriched.extraText`), not to intermediate formatter methods.
+3. Include regression tests asserting the field is present in the *delivered* payload, not just the formatter output.
+
+### Metadata
+- Source: pr_review
+- Related Files: src/controllers/webhooks/handlers/newsMonitor/analyzer.js, src/services/notification/TelegramService.js, src/services/notification/WhatsAppService.js, src/formatters/MarkdownV2Formatter.js
+- Tags: news-monitor, audit, production-path, formatter, test-coverage
+- See Also: LRN-20260927-005
+- Pattern-Key: harden.trace_production_delivery_path
+- Recurrence-Count: 1
+- First-Seen: 2026-10-02
+- Last-Seen: 2026-10-02
+---
+
+## [LRN-20261003-003] correction
+
+**Logged**: 2026-10-03T00:30:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: contracts
+
+### Summary
+Postman example documented a delivered low-tier alert that the real pipeline would never produce — the example described a suppressed outcome, not a delivered one.
+
+### Details
+In PR #1259, the Postman collection example showed `confidence: 0.646` with a low-tier source as a delivered alert. @francovp corrected: a `low`-resolved tier cannot reach the `NEWS_ALERT_THRESHOLD` of 0.7 because weakest-tier-wins plus the 0.85 multiplier stacks on top of the existing source-quality penalty. The example was corrected to document the actual suppression path with `alertDelivered: false` and `suppressedReason: "confidence below NEWS_ALERT_THRESHOLD (0.7)"`.
+
+### Suggested Action
+1. When documenting API examples, verify the example represents an actually reachable state in the real pipeline — not a theoretical value that gets filtered out.
+2. If a code path is suppressed by thresholds, document the suppression outcome explicitly rather than pretending the filtered result is delivered.
+3. Cross-check Postman examples against the actual threshold logic and multiplier stacking.
+
+### Metadata
+- Source: pr_review
+- Related Files: CabrosBot.postman_collection.json, src/controllers/webhooks/handlers/newsMonitor/analyzer.js
+- Tags: postman, contracts, news-monitor, threshold-suppression, example-validation
+- See Also: LRN-20260927-006
+- Pattern-Key: harden.postman_examples_reachable
+- Recurrence-Count: 1
+- First-Seen: 2026-10-02
+- Last-Seen: 2026-10-02
+---
