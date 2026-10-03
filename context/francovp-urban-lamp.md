@@ -71,7 +71,7 @@ The logger attaches listeners at position 0 and finalizes on whichever of `finis
 ## Testing
 
 - `pnpm test` — **224 suites, 4,596 tests passed**
-- `tests/unit/requestLogger.test.js` — level mapping, single-emission guard, abort vs completion, IPv4/IPv6 masking, path normalization, case preservation, sensitive-segment masking, exempt-path matching, fail-open emit, and four SSE classification cases. One drives a **real `http.ServerResponse`** through the actual `writeHead` handshake with no prior `setHeader` and no stubbed `getHeader` — the `node-mocks-http` double is more forgiving than the real runtime here and would have hidden the defect. All four SSE tests were mutation-checked: reverting the fix fails them.
+- `tests/unit/requestLogger.test.js` — level mapping, single-emission guard, abort vs completion, IPv4/IPv6 masking, path normalization, case preservation, sensitive-segment masking, exempt-path matching, fail-open emit, and six SSE handshake forms plus two non-established disconnect cases. One drives a **real `http.ServerResponse`** on a real `http.Server`, because `node-mocks-http` populates the header store on `writeHead` and is *more* forgiving than the real runtime — the mock-only suite passed under the original buggy close-time read. Every SSE test was mutation-checked: reverting the fix fails them.
 - `tests/unit/security-workflows.test.js` — asserts the gitleaks fixture exception stays value-scoped and that no global allowlist entry narrows the scan by path.
 - `tests/integration/request-logger.test.js` — supertest coverage for parser rejections, `x-request-id` header reuse, `408` payload/log id agreement, and probe-path silence.
 - `tests/unit/handlers-request-id.test.js` and `tests/unit/alert-webhook-request-id.test.js` — handlers reuse the middleware-resolved id.
@@ -117,7 +117,21 @@ an operator would plausibly use for a long-lived stream), and `app.disable('x-po
 into a warn-level abort.
 
 The middleware now wraps `res.writeHead` — the same technique `requestDeadline` already
-uses — and records establishment from the headers actually being committed.
+uses — and records establishment from the headers actually being committed at
+handshake time. `declaredContentType()` accepts every shape Node does: an object map,
+the flat `[name, value, …]` raw-header array, and the 3-argument
+`(status, message, headers)` signature, and it matches header names
+case-insensitively because HTTP header names are. An exact `'Content-Type'` lookup
+would be stricter than the `writeHead` it wraps and would silently reclassify a
+stream built with a lowercase key.
+
+Verified against real Node `http.ServerResponse` — all six header forms yield
+`outcome: completed, aborted: false`: canonical key, lowercase key, flat array,
+3-arg signature, `setHeader` + bare `writeHead(status)`, and `; charset=utf-8`.
+Implicit header flush via `res.write()`/`res.end()` is covered too, because Node
+routes `_implicitHeader()` through `writeHead`. The two `writeHead` wrappers nest
+safely: `app.js` mounts the logger first, so the logger's wrapper is outer and the
+deadline's is inner, each calling the next with `this` intact and no recursion.
 
 ### 2. Seven self-test error responses carried `headers` beside `$ref`
 
@@ -163,6 +177,19 @@ declares a `paths` key.
 ## Known limitation
 
 The issue's "< 1ms overhead" criterion is not asserted by an automated test. The middleware performs one `Date.now()` pair, two `String.replace` calls, one `Set` lookup, and one `console.info` per request — no per-request allocation beyond the listener closures, and no synchronous I/O — but no benchmark pins that claim.
+
+### Pre-existing suite flakiness (not introduced here)
+
+`pnpm test` is not fully deterministic under parallel worker load: a single integration
+suite intermittently fails with `socket hang up` or a stray `401`, and a different
+suite fails on each occurrence (`webhook-body-size`, `jobs-endpoint`,
+`healthcheck-readiness`, `cors`, `public-status-endpoint`, `alert-inline-keyboard`).
+Every one of them passes in isolation, and the same behaviour reproduces on a pristine
+checkout with this branch's changes stashed. Each occurrence is on a different file,
+which is the signature of resource contention rather than a regression. The failing
+assertions are all unrelated to request logging — body-size `413`s, rate-limiter
+budgets, and readiness probes. Worth a separate issue; it is not this PR's to fix,
+and doing so would widen its scope considerably.
 
 ## References
 

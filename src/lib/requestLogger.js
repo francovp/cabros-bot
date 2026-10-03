@@ -69,6 +69,31 @@ function isSsePath(path) {
 }
 
 /**
+ * Extracts the Content-Type from whatever shape `writeHead` was called with:
+ * an object map, the flat `[name, value, …]` array Node accepts interchangeably,
+ * or a bare `setHeader` call committed by a subsequent `writeHead(status)`.
+ *
+ * HTTP header names are case-insensitive, and `writeHead` matches its own map
+ * that way, so an exact `'Content-Type'` lookup here would be stricter than the
+ * API being wrapped — and would silently reclassify a stream built with a
+ * lowercase key.
+ */
+function declaredContentType(declared, res) {
+	if (Array.isArray(declared)) {
+		for (let i = 0; i + 1 < declared.length; i += 2) {
+			if (String(declared[i]).toLowerCase() === 'content-type') return declared[i + 1];
+		}
+	} else if (declared && typeof declared === 'object') {
+		const match = Object.keys(declared).find((name) => name.toLowerCase() === 'content-type');
+		if (match) return declared[match];
+	}
+	// A handler may set the type first and commit a bare `writeHead(status)`.
+	// This still reads correctly because the wrapper runs before Node flushes
+	// and empties the live header store.
+	return res.getHeader('Content-Type');
+}
+
+/**
  * Whether a server-sent-events response actually began.
  *
  * This asks the *response* what it became rather than asking the path what it
@@ -90,12 +115,12 @@ function trackEventStream(res) {
 	if (typeof originalWriteHead !== 'function') return state;
 
 	res.writeHead = function(...args) {
-		// The header map is the 2nd argument when `writeHead(status, headers)` is
-		// used; it can also arrive via setHeader beforehand, so both are consulted
-		// at the moment the status line is actually committed.
-		const declared = args[1];
-		const contentType = (declared && typeof declared === 'object' && declared['Content-Type'])
-			|| res.getHeader('Content-Type');
+		// `writeHead(status, headers)` puts the headers in the 2nd argument, but the
+		// 3-arg `(status, message, headers)` signature shifts them to the 3rd.
+		const contentType = declaredContentType(
+			args.length >= 3 ? args[2] : args[1],
+			res,
+		);
 		if (typeof contentType === 'string'
 			&& contentType.toLowerCase().split(';')[0].trim() === EVENT_STREAM_CONTENT_TYPE) {
 			state.established = true;

@@ -582,6 +582,67 @@ describe('Request Logger Middleware', () => {
 		expect(log.attributes.aborted).toBe(true);
 	});
 
+	// Covers the `setHeader` + bare `writeHead(status)` handshake, which is the
+	// other way a response can become an event stream. Without this the
+	// fallback branch in `trackEventStream` would be unexercised production code.
+	it('establishes a stream that sets Content-Type via setHeader then a bare writeHead', () => {
+		const middleware = createRequestLogger();
+		const req = buildReq({ url: '/api/admin/events' });
+		const res = buildRes();
+
+		middleware(req, res, jest.fn());
+		res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+		res.writeHead(200);
+		res.writableFinished = false;
+		res._closeCb();
+
+		expect(output.warn).not.toHaveBeenCalled();
+		const log = parseLast(output.info);
+		expect(log.attributes.outcome).toBe('completed');
+		expect(log.attributes.aborted).toBe(false);
+	});
+
+	// HTTP header names are case-insensitive and `writeHead` matches its own map
+	// that way, so an exact-case lookup would be stricter than the API it wraps.
+	// Any of these forms produces a genuine event stream; missing one silently
+	// reclassifies a routine console teardown as a warn-level abort.
+	it.each([
+		['a lowercase header key', { 'content-type': 'text/event-stream' }],
+		['the flat rawHeaders array', ['Content-Type', 'text/event-stream']],
+	])('establishes a stream declared with %s', (_label, headers) => {
+		const middleware = createRequestLogger();
+		const req = buildReq({ url: '/api/admin/events' });
+		const res = buildRes();
+
+		middleware(req, res, jest.fn());
+		res.writeHead(200, headers);
+		res.writableFinished = false;
+		res._closeCb();
+
+		expect(output.warn).not.toHaveBeenCalled();
+		const log = parseLast(output.info);
+		expect(log.attributes.outcome).toBe('completed');
+		expect(log.attributes.aborted).toBe(false);
+	});
+
+	// `writeHead(status, message, headers)` shifts the header map to the 3rd
+	// argument, so reading only `args[1]` would inspect the reason phrase.
+	it('establishes a stream declared via the 3-arg writeHead signature', () => {
+		const middleware = createRequestLogger();
+		const req = buildReq({ url: '/api/admin/events' });
+		const res = buildRes();
+
+		middleware(req, res, jest.fn());
+		res.writeHead(200, 'OK', { 'Content-Type': 'text/event-stream' });
+		res.writableFinished = false;
+		res._closeCb();
+
+		expect(output.warn).not.toHaveBeenCalled();
+		const log = parseLast(output.info);
+		expect(log.attributes.outcome).toBe('completed');
+		expect(log.attributes.aborted).toBe(false);
+	});
+
 	// The suppression must key on the response that actually began, not on the
 	// request path, so a real disconnect that happens to arrive mid-handshake
 	// is still counted. Here the handshake committed a JSON 401 body, never an
