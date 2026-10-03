@@ -8,3 +8,13 @@ description = "Known public Firebase browser key in Render blueprint"
 condition = "AND"
 paths = ['''^render\.yaml$''']
 regexes = ['''AIzaSyDskGc5b0hpVX6YIUW-IYqwuH7_ZIP07O0''']
+
+[[allowlists]]
+description = "Synthetic idempotency-key fixtures in webhook integration tests"
+condition = "AND"
+# Scoped to test files only. These are request fixtures, not credentials; the
+# generic-api-key rule fires on their entropy alone. Gitleaks scans full history,
+# so this also covers the value in the commit that introduced it, which a later
+# rename cannot clear.
+paths = ['''^tests/''']
+regexes = ['''msg-divergent-idem-001''']
