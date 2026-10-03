@@ -187,3 +187,34 @@ When Codex or automated review is unavailable, run structured fallback reviews (
 - Recurrence-Count: 1
 - First-Seen: 2026-10-03
 - Last-Seen: 2026-10-03
+
+---
+
+## [LRN-20261003-004] correction
+
+**Logged**: 2026-10-03T10:22:00Z
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+Firebase Hosting preview channel cleanup default threshold (3 days) deletes zero channels — only 1-day threshold frees quota.
+
+### Details
+In Issue #1269, @francovp corrected his own earlier remediation suggestion. The cleanup script `scripts/cleanup-preview-channels.js` with default `--max-age-days 3` deletes **0 of 51** channels. Only `--max-age-days 1` deletes 16 channels (all from a ~19-minute burst on 2026-09-27). The other 35 channels are under 24 hours old. The default 3-day threshold is misleading and would have deleted nothing. Root cause is the workflow creating a channel per branch (not per PR), so rebases/force-pushes consume new slots faster than the 7-day TTL decays.
+
+### Suggested Action
+1. Always verify cleanup/dry-run commands against real data before recommending them.  
+2. The useful threshold today is `--max-age-days 1`, not the default 3.  
+3. Fix the recurrence: reuse single channel per PR number instead of per branch name, and/or shorten the 7-day TTL.  
+4. Consider making preview deploy non-blocking so channel exhaustion cannot block merges.
+
+### Metadata
+- Source: user_feedback
+- Related Files: Issue #1269, scripts/cleanup-preview-channels.js
+- Tags: firebase-hosting, preview-channels, quota-management, dry-run-verification
+- See Also: LRN-20260927-001, Issue #1268
+- Pattern-Key: harden.verify_cleanup_thresholds
+- Recurrence-Count: 1
+- First-Seen: 2026-10-03
+- Last-Seen: 2026-10-03
