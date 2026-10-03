@@ -456,6 +456,13 @@ class ScannerPresetSchedulerService {
 						parentSpan: sentryService.getActiveSpan(),
 					});
 				}
+
+				// Preset reports currently render unranked; persist the same item directions.
+				marketScannerReportModule.recordMarketScannerOutcomes(scanResults, { ...preset, ranked: false }, {
+					requestId: `preset-${preset.id}-${startTime}`,
+					startTime,
+					source: 'scanner-preset',
+				});
 			}
 		} catch (err) {
 			status = 'error';

@@ -1,6 +1,7 @@
 'use strict';
 
 const admin = require('firebase-admin');
+const { createHash } = require('node:crypto');
 const AlertStorageService = require('./AlertStorageService');
 const equityMarketDataService = require('./EquityMarketDataService');
 const geminiPriceService = require('../grounding/geminiPriceService');
@@ -610,6 +611,7 @@ function normalizeConfidenceScore(val) {
  * Persist signal metadata to Firestore.
  */
 async function recordSignalInternal({
+	idempotencyKey,
 	requestId,
 	source,
 	symbol,
@@ -836,7 +838,19 @@ async function recordSignalInternal({
 			outcomes,
 		};
 
-		const docRef = await firestore.collection(COLLECTION_NAME).add(document);
+		let docRef;
+		if (idempotencyKey) {
+			const id = createHash('sha256').update(idempotencyKey).digest('hex');
+			docRef = firestore.collection(COLLECTION_NAME).doc(id);
+			try {
+				await docRef.create(document);
+			} catch (error) {
+				if (error.code !== 6) throw error;
+				// Already recorded: never overwrite a concurrently evaluated outcome.
+			}
+		} else {
+			docRef = await firestore.collection(COLLECTION_NAME).add(document);
+		}
 		console.debug(`[SignalOutcomeService] Signal outcome recorded with ID: ${docRef.id}`);
 		return docRef.id;
 	} catch (error) {

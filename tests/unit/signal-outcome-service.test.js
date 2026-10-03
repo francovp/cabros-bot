@@ -360,6 +360,34 @@ describe('SignalOutcomeService', () => {
 	});
 
 	describe('recordSignal()', () => {
+		it('creates one durable outcome for concurrent and later replays without overwriting evaluation', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const documents = new Map();
+			const firestore = {
+				collection: () => ({
+					doc: (id) => ({ id, create: async (document) => {
+						if (documents.has(id)) throw Object.assign(new Error('Already exists'), { code: 6 });
+						documents.set(id, document);
+					} }),
+				}),
+			};
+			const storage = jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(firestore);
+			try {
+				const signal = { symbol: 'BINANCE:BTCUSDT', price: 50000, idempotencyKey: 'job-1:expanded:0' };
+				const [first, replay] = await Promise.all([SignalOutcomeService.recordSignal(signal), SignalOutcomeService.recordSignal(signal)]);
+				expect(first).toMatch(/^[a-f0-9]{64}$/);
+				expect(replay).toBe(first);
+				expect(documents.size).toBe(1);
+				documents.get(first).outcomeEvaluated = true;
+				expect(await SignalOutcomeService.recordSignal(signal)).toBe(first);
+				expect(documents.get(first).outcomeEvaluated).toBe(true);
+				expect(await SignalOutcomeService.recordSignal({ ...signal, idempotencyKey: 'job-1:expanded:1' })).not.toBe(first);
+				expect(documents.size).toBe(2);
+			} finally {
+				storage.mockRestore();
+			}
+		});
+
 		it('returns null when feature is disabled', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'false';
 			const res = await SignalOutcomeService.recordSignal({ symbol: 'BTCUSDT', price: 50000 });
