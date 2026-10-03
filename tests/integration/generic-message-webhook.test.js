@@ -816,7 +816,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.post('/api/webhook/message')
 			.set('x-api-key', 'test-key')
 			.set('x-request-id', 'msg-original-001')
-			.set('idempotency-key', 'msg-divergent-idem-001')
+			.set('idempotency-key', 'generic-message-divergent-1')
 			.send(payload)
 			.expect(200);
 
@@ -824,7 +824,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.post('/api/webhook/message')
 			.set('x-api-key', 'test-key')
 			.set('x-request-id', 'msg-retry-002')
-			.set('idempotency-key', 'msg-divergent-idem-001')
+			.set('idempotency-key', 'generic-message-divergent-1')
 			.send(payload)
 			.expect(200);
 
