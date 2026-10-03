@@ -14,6 +14,7 @@ const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaMana
 const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
+const { signalClassMetrics } = require('../../src/services/alerts/signalClassifier');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -506,6 +507,53 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.signalClassMarker).toBe(false);
+	});
+
+	it('omits signal classification metrics until an alert has been classified', async () => {
+		signalClassMetrics.reset();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.signalClassClassification).toBeUndefined();
+	});
+
+	it('reports an honest zero population rate when every alert is unknown', async () => {
+		signalClassMetrics.reset();
+		signalClassMetrics.record('unknown');
+		signalClassMetrics.record('unknown');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const classification = response.body.dependencies.signalClassClassification;
+		expect(classification.populationRate).toBe(0);
+		expect(classification.classifiedAlerts).toBe(0);
+		expect(classification.unknownAlerts).toBe(2);
+		expect(classification.byClass).toEqual({ unknown: 2 });
+		// Non-secret operational counters only — no alert text, no symbols.
+		expect(JSON.stringify(classification)).not.toMatch(/BTCUSDT|ETHUSDT/i);
+	});
+
+	it('reports a non-zero signal classification population rate', async () => {
+		signalClassMetrics.reset();
+		signalClassMetrics.record('breakout');
+		signalClassMetrics.record('unknown');
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const classification = response.body.dependencies.signalClassClassification;
+		expect(classification.totalAlerts).toBe(2);
+		expect(classification.classifiedAlerts).toBe(1);
+		expect(classification.populationRate).toBe(0.5);
+		expect(classification.byClass).toEqual({ breakout: 1, unknown: 1 });
 	});
 
 	it('reports alert signal repeat suppression as disabled by default', async () => {
