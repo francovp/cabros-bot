@@ -133,6 +133,43 @@ services:
       name: cabros-crypto-bot-telegram-iac
       type: web
       envVarKey: NEWS_MONITOR_SCHEDULER_LEASE_MS
+  - key: ENABLE_USER_PRICE_ALERTS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_USER_PRICE_ALERTS
+  - key: USER_PRICE_ALERT_WORKER_ROLE
+    value: worker
+  - key: USER_PRICE_ALERT_EVALUATION_INTERVAL_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: USER_PRICE_ALERT_EVALUATION_INTERVAL_MS
+  - key: USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT
+  - key: USER_PRICE_ALERT_MAX_PER_CHAT
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: USER_PRICE_ALERT_MAX_PER_CHAT
+  - key: USER_PRICE_ALERT_RETENTION_DAYS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: USER_PRICE_ALERT_RETENTION_DAYS
+  - key: USER_PRICE_ALERT_LEASE_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: USER_PRICE_ALERT_LEASE_MS
+  - key: USER_PRICE_ALERT_PRICE_FETCH_CONCURRENCY
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: USER_PRICE_ALERT_PRICE_FETCH_CONCURRENCY
   - key: NEWS_MONITOR_SCHEDULER_TIMEOUT_MS
     fromService:
       name: cabros-crypto-bot-telegram-iac
@@ -344,6 +381,8 @@ services:
   maxShutdownDelaySeconds: 60
   envVars:
   - key: ENABLE_SIGNAL_OUTCOME_TRACKING
+    sync: false
+  - key: ENABLE_FIREBASE_REMOTE_CONFIG
     sync: false
   - key: ENABLE_SENTRY
     sync: false
