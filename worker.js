@@ -11,6 +11,8 @@ const { initializeNotificationServices } = require('./src/controllers/webhooks/h
 const { startJobWorker } = require('./src/services/jobs/jobWorker');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
+const { alertSchedulerService } = require('./src/services/scheduler');
+const { userPriceAlertService } = require('./src/services/alerts/UserPriceAlertService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
 
@@ -42,6 +44,10 @@ async function main() {
 	const runtime = await startJobWorker({ botOrGetter: bot });
 	notificationRedriveService.startWorker({ source: 'worker', unref: false });
 	newsMonitorSchedulerService.startWorker({ source: 'worker' });
+	alertSchedulerService.botGetter = () => bot;
+	alertSchedulerService.startWorker({ source: 'worker' });
+	userPriceAlertService.setBotGetter(() => bot);
+	userPriceAlertService.startWorker({ source: 'worker' });
 	let stopping = false;
 
 	const shutdown = async (signal) => {
@@ -54,6 +60,8 @@ async function main() {
 		try {
 			await notificationRedriveService.stopWorker({ drain: false });
 			await newsMonitorSchedulerService.stopWorker({ drain: true, timeoutMs: shutdownTimeoutMs });
+			await alertSchedulerService.stopWorker({ drain: true, timeoutMs: shutdownTimeoutMs });
+			await userPriceAlertService.stopWorker({ drain: true, timeoutMs: shutdownTimeoutMs });
 			await runtime.stop();
 			await notificationRedriveService.stopWorker({ drain: true });
 			stopNotificationBot(bot, signal);

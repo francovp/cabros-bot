@@ -8,6 +8,7 @@ const {
 	deriveFallbackTradePlan,
 	calculateFallbackRiskLevels,
 } = require('../../../../services/tradingview/fallbackTradePlan');
+const { tokenCostBudgetService } = require('../../../../lib/tokenUsage');
 
 function mergeUnique(first = [], second = [], maxItems = 6) {
 	const result = [];
@@ -66,8 +67,27 @@ function hasCompleteRiskMetadata(value = {}) {
 		.every(field => isOptionalRiskValue(value[field]));
 }
 
+// GH-1229: a heuristic per-timeframe percentage plan is NOT a provider-derived level.
+// It is numerically complete, so it must not outrank a real support/resistance level
+// just by virtue of filling all three fields. `levelsSource` is the provenance signal
+// that lets the merge weigh it below a genuine provider block.
+//
+// Precedence, highest first:
+//   1. ATR/MCP levels  - real provider data
+//   2. Gemini levels   - real provider data (support/resistance parsed from grounding)
+//   3. heuristic MCP   - per-timeframe percentage guess, used only as a last resort
+function isHeuristicRiskBlock(value = {}) {
+	return value.levelsSource === 'fallback-trade-plan';
+}
+
 function selectRiskMetadata(gemini, mcp) {
-	const source = hasCompleteRiskMetadata(mcp) ? mcp : hasCompleteRiskMetadata(gemini) ? gemini : null;
+	const mcpComplete = hasCompleteRiskMetadata(mcp);
+	const heuristicMcp = mcpComplete && isHeuristicRiskBlock(mcp);
+	const source = [
+		mcpComplete && !heuristicMcp ? mcp : null,
+		hasCompleteRiskMetadata(gemini) ? gemini : null,
+		heuristicMcp ? mcp : null,
+	].find(Boolean) || null;
 	const setupType = pickSetupType(gemini.setup_type, mcp.setup_type);
 	const setupEvidence = setupType && (setupType === gemini.setup_type ? gemini.setup_evidence : mcp.setup_evidence);
 	if (!source) {
@@ -81,6 +101,9 @@ function selectRiskMetadata(gemini, mcp) {
 		invalidation_level: source.invalidation_level,
 		target_level: source.target_level,
 		risk_reward_ratio: source.risk_reward_ratio,
+		// Reports WHICH block actually supplied the risk levels, so a caller cannot
+		// describe a rejected heuristic block as the origin of the emitted levels.
+		riskLevelsSource: source === mcp ? (mcp.levelsSource || 'tradingview-mcp') : 'gemini-grounding',
 		...(setupType ? { setup_type: setupType } : {}),
 		...(setupEvidence ? { setup_evidence: setupEvidence } : {}),
 	};
@@ -278,7 +301,15 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 				? mcp.price_data.current_price
 				: null);
 
-		let levelsSource = technicalLevelsSource;
+		// GH-1229: `levelsSource` describes where the emitted risk levels actually came
+		// from. When MCP supplied only a heuristic block and Gemini won the precedence
+		// fight, tagging the result `fallback-trade-plan` would describe a block that was
+		// rejected. Prefer the chosen risk block's own provenance, falling back to the
+		// technical_levels tag only when no risk block was selected.
+		let levelsSource = optionalRiskMetadata.riskLevelsSource
+			|| technicalLevelsSource
+			|| mcp.levelsSource
+			|| undefined;
 
 		if (!hasCompleteRiskMetadata(optionalRiskMetadata) && mcpCurrentPrice) {
 			const parsed = parseTradingViewSignal(text);
@@ -320,7 +351,8 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 			multiTimeframeData: mcp.multiTimeframeData || null,
 			...(gemini.promptProvenance ? { promptProvenance: gemini.promptProvenance } : {}),
 			...Object.fromEntries(
-				Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
+				Object.entries(optionalRiskMetadata)
+					.filter(([key, value]) => key !== 'riskLevelsSource' && value !== undefined),
 			),
 		};
 	} catch (error) {
@@ -447,7 +479,11 @@ async function enrichAlert(alert, options = {}) {
 	const validated = validateAlert(inputText, metadata);
 	// validateAlert may return either a string (when mocked in tests) or an object { text, metadata }
 	const text = (typeof validated === 'string') ? validated : (validated && validated.text) ? validated.text : inputText;
-	const isGeminiEnabled = getRuntimeConfig().ENABLE_GEMINI_GROUNDING;
+	const isBudgetExceeded = tokenCostBudgetService.isBudgetExceeded();
+	if (isBudgetExceeded) {
+		console.warn('[Alert] Daily token cost budget exceeded, disabling Gemini grounding for alert');
+	}
+	const isGeminiEnabled = getRuntimeConfig().ENABLE_GEMINI_GROUNDING && !isBudgetExceeded;
 	const shouldUseTradingViewData = options.useTradingViewData === true;
 	const isMcpEnabled = shouldUseTradingViewData && tradingViewMcpService.isEnabled();
 
