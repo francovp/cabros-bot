@@ -7,6 +7,8 @@
 
 A high-performance crypto, equity, and market intelligence bot service built with Node.js and Express. It connects incoming TradingView alerts and scheduled event monitors with Gemini Grounding, TradingView MCP analysis, and Binance Spot execution, dispatching formatted alerts concurrently across Telegram, WhatsApp, and Discord.
 
+> **New here?** Start with [`docs/PRODUCT.md`](docs/PRODUCT.md) for a human-readable capability map, status legend, and the first-24-hours operator journey. This README is the detailed operator reference.
+
 ---
 
 ## Core Capabilities
