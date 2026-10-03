@@ -518,6 +518,44 @@ describe('Request Logger Middleware', () => {
 	});
 
 	// A response that never began must not report Node's default 200.
+	it('treats a closed SSE stream as a completion, not an abort', () => {
+		// The admin console aborts its EventSource on teardown and on stream
+		// replacement, so a closed event stream is routine and must not inflate
+		// the aborted-request signal an operator alerts on.
+		const middleware = createRequestLogger();
+		const req = buildReq({ url: '/api/admin/events' });
+		const res = buildRes();
+
+		middleware(req, res, jest.fn());
+		res.statusCode = 200;
+		res.headersSent = true;
+		res.writableFinished = false;
+		res._closeCb();
+
+		expect(output.warn).not.toHaveBeenCalled();
+		expect(output.error).not.toHaveBeenCalled();
+		const log = parseLast(output.info);
+		expect(log.attributes.outcome).toBe('completed');
+		expect(log.attributes.aborted).toBe(false);
+	});
+
+	it('still reports a genuine abort on non-stream routes', () => {
+		const middleware = createRequestLogger();
+		const req = buildReq({ url: '/api/alerts' });
+		const res = buildRes();
+
+		middleware(req, res, jest.fn());
+		res.statusCode = 200;
+		res.headersSent = true;
+		res.writableFinished = false;
+		res._closeCb();
+
+		expect(output.warn).toHaveBeenCalled();
+		const log = parseLast(output.warn);
+		expect(log.attributes.outcome).toBe('aborted');
+		expect(log.attributes.aborted).toBe(true);
+	});
+
 	it('reports statusCode 0 when no response was ever sent', () => {
 		const middleware = createRequestLogger();
 		const req = buildReq();

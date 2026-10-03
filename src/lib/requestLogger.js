@@ -56,6 +56,18 @@ function maskSensitivePathSegments(path) {
 }
 
 /**
+ * `GET /api/admin/events` streams events for the admin console. The response is
+ * held open for the life of the subscription, so it never reaches
+ * `writableFinished` and its `close` is a normal end of stream.
+ */
+const SSE_PATHS = ['/api/admin/events'];
+
+function isSsePath(path) {
+	const lower = path.toLowerCase();
+	return SSE_PATHS.some((candidate) => lower === candidate || lower.startsWith(`${candidate}/`));
+}
+
+/**
  * Reusing the deadline's matcher keeps a single validation rule for the
  * correlation id across the request lifecycle, so the structured log line and
  * any 408 payload always agree. It already prefers `req.requestId` over the
@@ -146,6 +158,12 @@ function createRequestLogger() {
 		const path = maskSensitivePathSegments(rawPath);
 
 		const clientIp = sanitizeClientIp(req.ip || (req.socket && req.socket.remoteAddress));
+		// A server-sent-events response is deliberately held open and never
+		// reaches `writableFinished`, so `close` is its normal termination. The
+		// admin console aborts the controller on teardown and on stream
+		// replacement, so without this every routine disconnect would land in the
+		// aborted bucket and drown the signal that a real client failure produces.
+		const isEventStream = isSsePath(rawPath);
 		let finalized = false;
 
 		const finalize = (aborted = false) => {
@@ -159,7 +177,11 @@ function createRequestLogger() {
 			const statusCode = res.headersSent && typeof res.statusCode === 'number'
 				? res.statusCode
 				: 0;
-			const level = aborted ? 'warn' : resolveLogLevel(statusCode);
+			// An event stream that the client closes is the expected end of that
+			// response, not a failed request: report it as a completion at the
+			// stream's own duration instead of inflating the abort counter.
+			const treatAsAborted = aborted && !isEventStream;
+			const level = treatAsAborted ? 'warn' : resolveLogLevel(statusCode);
 			// Fail open: `console.*` is globally replaceable (the logging wrapper,
 			// Sentry, or a test double), and this runs from a Node event emitter
 			// outside Express's try/catch. A throwing sink must never take down
@@ -172,8 +194,8 @@ function createRequestLogger() {
 					durationMs,
 					requestId,
 					clientIp,
-					aborted,
-					outcome: aborted ? 'aborted' : 'completed',
+					aborted: treatAsAborted,
+					outcome: treatAsAborted ? 'aborted' : 'completed',
 				});
 			} catch (_) {
 				// Observability is never allowed to break a response.
@@ -203,3 +225,4 @@ module.exports.normalizeRequestPath = normalizeRequestPath;
 module.exports.resolveRequestId = resolveRequestId;
 module.exports.sanitizeClientIp = sanitizeClientIp;
 module.exports.resolveLogLevel = resolveLogLevel;
+module.exports.isSsePath = isSsePath;

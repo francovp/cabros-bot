@@ -636,6 +636,216 @@
       ]
     },
     {
+      "name": "Get Self-Test (request ID echo)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "X-Request-Id",
+            "value": "gh665-selftest-001",
+            "type": "text",
+            "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/selftest",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "selftest"
+          ]
+        },
+        "description": "Returns the cached result of the most recent POST /api/selftest/run call. The result expires after 60 seconds; clients should call POST /api/selftest/run to refresh."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// A valid X-Request-Id must be echoed back verbatim.",
+              "pm.test(\"status is 2xx\", function () {",
+              "  pm.expect(pm.response.code).to.be.within(200, 299);",
+              "});",
+              "",
+              "var json = pm.response.json();",
+              "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
+              "  pm.expect(json.requestId).to.eql(\"gh665-selftest-001\");",
+              "});",
+              "pm.test(\"X-Request-Id response header matches the body\", function () {",
+              "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(json.requestId);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Get Self-Test request ID fallback (invalid value)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "X-Request-Id",
+            "value": "",
+            "type": "text",
+            "description": "Empty/invalid value: the server must ignore it and generate a UUIDv4."
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/selftest",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "selftest"
+          ]
+        },
+        "description": "Returns the cached result of the most recent POST /api/selftest/run call. The result expires after 60 seconds; clients should call POST /api/selftest/run to refresh."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 2xx\", function () {",
+              "  pm.expect(pm.response.code).to.be.within(200, 299);",
+              "});",
+              "",
+              "var json = pm.response.json();",
+              "pm.test(\"an unusable X-Request-Id falls back to a generated UUIDv4\", function () {",
+              "  pm.expect(json.requestId).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);",
+              "  pm.expect(json.requestId).to.not.eql(\"\");",
+              "});",
+              "pm.test(\"response header agrees with the generated id\", function () {",
+              "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(json.requestId);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Run Self-Test (request ID echo)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "X-Request-Id",
+            "value": "gh665-selftest-001",
+            "type": "text",
+            "description": "Optional client-supplied correlation ID (1-128 printable ASCII). The response echoes it as `requestId`, returns it in the `X-Request-Id` response header, and the structured request log line carries the same value. An empty or non-printable value is ignored and a UUIDv4 is generated instead."
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/selftest/run",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "selftest",
+            "run"
+          ]
+        },
+        "description": "Runs the self-diagnostic suite. Each check has a 5s deadline; the whole suite has a 30s budget. Optional `only` query parameter scopes the run to a comma-separated list of check ids."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// A valid X-Request-Id must be echoed back verbatim.",
+              "pm.test(\"status is 2xx\", function () {",
+              "  pm.expect(pm.response.code).to.be.within(200, 299);",
+              "});",
+              "",
+              "var json = pm.response.json();",
+              "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
+              "  pm.expect(json.requestId).to.eql(\"gh665-selftest-001\");",
+              "});",
+              "pm.test(\"X-Request-Id response header matches the body\", function () {",
+              "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(json.requestId);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Run Self-Test request ID fallback (invalid value)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "X-Request-Id",
+            "value": "",
+            "type": "text",
+            "description": "Empty/invalid value: the server must ignore it and generate a UUIDv4."
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/selftest/run",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "selftest",
+            "run"
+          ]
+        },
+        "description": "Runs the self-diagnostic suite. Each check has a 5s deadline; the whole suite has a 30s budget. Optional `only` query parameter scopes the run to a comma-separated list of check ids."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 2xx\", function () {",
+              "  pm.expect(pm.response.code).to.be.within(200, 299);",
+              "});",
+              "",
+              "var json = pm.response.json();",
+              "pm.test(\"an unusable X-Request-Id falls back to a generated UUIDv4\", function () {",
+              "  pm.expect(json.requestId).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);",
+              "  pm.expect(json.requestId).to.not.eql(\"\");",
+              "});",
+              "pm.test(\"response header agrees with the generated id\", function () {",
+              "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(json.requestId);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "Run Self-Test (scoped to subset)",
       "request": {
         "method": "POST",

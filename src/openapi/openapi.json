@@ -3762,16 +3762,36 @@
                   ]
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "401": {
-            "$ref": "#/components/responses/Unauthorized"
+            "$ref": "#/components/responses/Unauthorized",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "408": {
-            "$ref": "#/components/responses/RequestTimeout"
+            "$ref": "#/components/responses/RequestTimeout",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "500": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/Error",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           }
         },
         "security": [
@@ -3785,7 +3805,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.viewer"
+        "x-admin-role": "admin.viewer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/selftest/run": {
@@ -3797,6 +3822,9 @@
         "description": "Runs a bounded self-diagnostic suite (each check has a 5s deadline; the whole suite is bounded to 30s). Optional `only` filter scopes the run to a comma-separated list of check ids.",
         "operationId": "postSelfTestRun",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          },
           {
             "name": "only",
             "in": "query",
@@ -3831,19 +3859,44 @@
                   "$ref": "#/components/schemas/SelfTestResult"
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/Error",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "401": {
-            "$ref": "#/components/responses/Unauthorized"
+            "$ref": "#/components/responses/Unauthorized",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "408": {
-            "$ref": "#/components/responses/RequestTimeout"
+            "$ref": "#/components/responses/RequestTimeout",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "500": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/Error",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           }
         },
         "security": [
@@ -5041,6 +5094,9 @@
                 "false"
               ]
             }
+          },
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         },
         "content": {
@@ -5385,6 +5441,9 @@
               "type": "string",
               "example": "\"3\""
             }
+          },
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         },
         "content": {
@@ -5441,6 +5500,16 @@
       "MessageDeliveryResult": {
         "description": "Generic-message delivery response. A replay returns the cached body with idempotencyReplayed=true and Idempotency-Replay: true. The requestId field mirrors the inbound x-request-id header (sanitized) or a generated UUIDv4 so callers can correlate the response with logs, Sentry, and admin paging.",
         "headers": {
+          "Idempotency-Replay": {
+            "description": "false for the first accepted request, true for a cached replay.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
           "X-Request-Id": {
             "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
