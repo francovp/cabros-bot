@@ -31,6 +31,7 @@ const { alertModeration } = require('../../../../services/alerts/alertModeration
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
 const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
+const { routeAlertToOrder, isEnabled: isAutoTradeEnabled } = require('../../../../services/trading/AlertSignalRouter');
 const {
 	buildErrorEnvelope,
 	sendError,
@@ -184,6 +185,54 @@ function resolveDryRun(req) {
 	return queryFlag || bodyFlag;
 }
 
+/**
+ * Auto-trade is opt-in twice: the operator sets ENABLE_AUTO_TRADE, and the
+ * caller must additionally ask for it per request. Auto-trade never runs in a
+ * preview deployment, where a "real" order would be meaningless anyway.
+ */
+function resolveAutoTradeRequest(req) {
+	if (isPreviewEnvironment()) return false;
+	if (!isAutoTradeEnabled()) return false;
+	const queryFlag = req.query && (req.query.autoTrade === 'true' || req.query.autoTrade === true);
+	const bodyFlag = req.body && typeof req.body === 'object'
+		&& (req.body.autoTrade === true || req.body.autoTrade === 'true');
+	return Boolean(queryFlag || bodyFlag);
+}
+
+/**
+ * Runs the alert-to-order bridge and returns a safe, non-sensitive summary for
+ * the webhook response. Never throws, so trading failures cannot turn a
+ * delivered alert into an error response. The Binance client enforces its own
+ * bounded timeout (see BINANCE_TRADING_TIMEOUT_MS, capped at 30s).
+ */
+async function dispatchAutoTrade({ alert, parsedSignal, requestId }) {
+	try {
+		const outcome = await routeAlertToOrder({
+			alert,
+			parsed: parsedSignal,
+			requestId,
+		});
+		console.info('[Alert] auto-trade outcome', {
+			requestId,
+			executed: Boolean(outcome && outcome.executed),
+			reason: outcome && outcome.reason,
+		});
+		return {
+			executed: Boolean(outcome && outcome.executed),
+			...(outcome && outcome.reason ? { reason: outcome.reason } : {}),
+			...(outcome && outcome.symbol ? { symbol: outcome.symbol } : {}),
+			...(outcome && outcome.dryRun !== undefined ? { dryRun: outcome.dryRun } : {}),
+			...(outcome && outcome.orderId ? { orderId: outcome.orderId } : {}),
+		};
+	} catch (error) {
+		console.warn('[Alert] auto-trade bridge failed (fail-open)', {
+			requestId,
+			message: error && error.message,
+		});
+		return { executed: false, reason: 'AUTO_TRADE_BRIDGE_ERROR' };
+	}
+}
+
 function getCooldownDestination(channel, routing = {}) {
 	const defaultTelegramChatId = process.env.TELEGRAM_CHAT_ID;
 	const telegramChatId = routing.telegramChatId || defaultTelegramChatId;
@@ -248,6 +297,7 @@ function postAlert(botOrGetter) {
 		const { body } = req;
 		const useTradingViewData = req.query && (req.query.useTradingViewData === true || req.query.useTradingViewData === 'true');
 		const dryRun = resolveDryRun(req);
+		const autoTradeRequested = resolveAutoTradeRequest(req);
 
 		let alertText = '';
 		let alert = null;
@@ -537,6 +587,17 @@ function postAlert(botOrGetter) {
 			}
 			const processingTimeMs = Math.max(0, Date.now() - startTime);
 
+			// Auto-trade is dispatched as tracked background work so Binance
+			// latency and failures can never delay or fail alert delivery.
+			let autoTrade = null;
+			if (autoTradeRequested && !suppressedRepeat) {
+				const parsedSignal = parseTradingViewSignal(alert.text);
+				autoTrade = {
+					requested: true,
+					...(await dispatchAutoTrade({ alert, parsedSignal, requestId })),
+				};
+			}
+
 			// Return 200 OK regardless of delivery success (fail-open pattern)
 			res.json({
 				success: true,
@@ -546,6 +607,7 @@ function postAlert(botOrGetter) {
 				tokenUsage: tokenUsageJSON,
 				requestedChannels,
 				deliveredChannels,
+				...(autoTrade ? { autoTrade } : {}),
 				requestId,
 			});
 
