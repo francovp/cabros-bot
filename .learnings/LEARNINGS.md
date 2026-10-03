@@ -221,6 +221,51 @@ When Codex or automated review is unavailable, run structured fallback reviews (
 
 ---
 
+## [LRN-20261003-006] correction
+
+**Logged**: 2026-10-03T22:22:00Z
+**Priority**: critical
+**Status**: pending
+**Area**: trading / api / infra
+
+### Summary
+PR #1273 (auto-trade alert-to-order bridge) has a 20,000-line Postman reformat that reverts #967, is 15 commits behind master, and lacks safety review for money-moving code.
+
+### Details
+@francovp reviewed PR #1273 and found:
+
+1. **Postman reformat regression**: The `CabrosBot.postman_collection.json` diff is +10183/-10020 lines — almost entirely a reformat at a different indent level. The file round-trips byte-identically at `indent=2` on `master`; this branch reserializes differently. This reformat also **reverts #967** (merged today at 7045c49d): `master` has 194 items, this branch has 181. Missing 14 items are exactly the request-ID items from #967. Only 1 new item added: `/Webhooks/POST Send Alert (autoTrade)`.
+
+2. **Branch is 15 commits behind master** and marked `CONFLICTING`.
+
+3. **No review decision** — the PR was opened today and has no human approval.
+
+4. **Safety-critical questions unanswered** (highest-risk surface in service — bug here places real orders):
+   - **Gating**: Does the bridge respect all existing kill switches (`ENABLE_BINANCE_TRADING`, `BINANCE_TRADING_ENV`, `ALLOWED_SYMBOLS`, `MAX_NOTIONAL`)? Can it bypass allowlist or testnet/live distinction?
+   - **Idempotency**: Can same alert produce two orders on webhook retry? Needs per-key claims with durable reservation, not in-process dedup.
+   - **Env/testnet affinity**: Is order construction pinned to `BINANCE_TRADING_ENV` so misconfigured deploy cannot target live from staging flag?
+   - **Failure containment**: What happens when order submission is ambiguous (timeout after exchange may have accepted)? Must not silently retry into duplicate.
+   - **Audit trail**: Is originating `alertId`/`requestId` persisted onto the order so a fill traces back to the signal?
+
+### Suggested Action
+1. **Rebase onto current `master`** (resolve 15-commit divergence).
+2. **Revert `CabrosBot.postman_collection.json` to `master`**, then add only the one new `POST Send Alert (autoTrade)` item at `indent=2`. This turns 20,000-line diff into ~100 lines and eliminates the #967 revert.
+3. **Answer all five safety questions explicitly** before merge consideration.
+4. **Require deliberate transaction-safety review** against current `master` — this moves real money.
+5. **Never commit whole-file reformats of generated/serialized files** (Postman, OpenAPI, lockfiles) — they hide regressions and create massive noise.
+
+### Metadata
+- Source: user_feedback
+- Related Files: PR #1273, CabrosBot.postman_collection.json, src/services/trading/AlertSignalRouter.js, src/controllers/webhooks/handlers/alert/alert.js
+- Tags: trading, postman, reformat-regression, safety-review, idempotency, audit-trail, kill-switch
+- See Also: LRN-20260927-001, LRN-20260927-002, Issue #967
+- Pattern-Key: harden.no_wholesale_reformat_generated_files
+- Recurrence-Count: 1
+- First-Seen: 2026-10-03
+- Last-Seen: 2026-10-03
+
+---
+
 ## [LRN-20261003-004] correction
 
 **Logged**: 2026-10-03T10:22:00Z
