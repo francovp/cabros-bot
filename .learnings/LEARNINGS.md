@@ -150,3 +150,40 @@ When providing example values or scenarios, verify they can actually occur in th
 - Recurrence-Count: 1
 - First-Seen: 2026-10-03
 - Last-Seen: 2026-10-03
+
+---
+
+## [LRN-20261003-003] correction
+
+**Logged**: 2026-10-03T08:22:00Z
+**Priority**: high
+**Area**: trading
+
+### Summary
+Self-review fallback process uncovered critical bugs when Codex rate-limited: heuristic fallbacks displacing real provider levels, mislabeled provenance tags, undocumented contract enums, over-engineering, and incorrect R:R documentation.
+
+### Details
+In PR #1260 (feat(tradingview): wire fallbackTradePlan as secondary risk-metadata source), @francovp performed a defect-first + over-engineering review after Codex returned rate limits. Five issues found and fixed:
+
+1. **High - Heuristic levels silently displaced real Gemini levels**: `selectRiskMetadata` gave MCP unconditional precedence when numerically complete. The fallback plan is always complete, so it always won over Gemini's real support/resistance levels. Fixed by weighing blocks on provenance order: ATR/MCP → Gemini → heuristic MCP as last resort. Covered by new tests in `tests/unit/alert-handler.test.js`.
+
+2. **Medium - `levelsSource` mislabelled the winning block**: The tag derived from `technical_levels`, but risk block is selected independently. When Gemini won, output carried Gemini's levels tagged `fallback-trade-plan`. Fixed: `selectRiskMetadata` now reports `riskLevelsSource` for the chosen block; tag derives from that.
+
+3. **Contract drift - `derived-quote` was undocumented**: Emitted in 9 places and branched on in `alert.js`, but absent from OpenAPI and `types.ts` `levelsSource` enums. Added to both; description corrected.
+
+4. **Over-engineering**: Two-boolean ternary replaced with ordered-candidates list naming precedence directly.
+
+5. **Documentation corrected**: `risk_reward_ratio` is recomputed from rounded levels that ship, so it's only ~2.0 (drift up to ~0.01 on non-round prices). The "all R:R 2.0" claim was wrong; `AGENTS.md` updated.
+
+### Suggested Action
+When Codex or automated review is unavailable, run structured fallback reviews (defect-first + over-engineering) as documented. Always trace provenance of computed values through the actual selection logic, not just the emitted tags. Verify contract enums match all emitted values. Document recomputed/approximate values accurately.
+
+### Metadata
+- Source: user_feedback
+- Related Files: PR #1260, src/services/tradingview/expandedAnalysisAlertReport.js, tests/unit/alert-handler.test.js, AGENTS.md
+- Tags: trading, risk-metadata, fallback, contract-design, code-review
+- See Also: LRN-20260927-001
+- Pattern-Key: harden.fallback_review_provenance
+- Recurrence-Count: 1
+- First-Seen: 2026-10-03
+- Last-Seen: 2026-10-03
