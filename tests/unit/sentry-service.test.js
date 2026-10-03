@@ -9,7 +9,7 @@
  */
 
 const Sentry = require('@sentry/node');
-const { SentryService, FEATURE_NAMES } = require('../../src/services/monitoring/SentryService');
+const { SentryService, FEATURE_NAMES, shouldSendAlertContent } = require('../../src/services/monitoring/SentryService');
 
 describe('SentryService', () => {
 	let service;
@@ -191,6 +191,33 @@ describe('SentryService', () => {
 
 				const config = service._buildConfiguration();
 				expect(config.sendAlertContent).toBe(true);
+			});
+		});
+
+		describe('shouldSendAlertContent (module export)', () => {
+			it('returns true when SENTRY_SEND_ALERT_CONTENT is unset (matches docs default true)', () => {
+				delete process.env.SENTRY_SEND_ALERT_CONTENT;
+				expect(shouldSendAlertContent()).toBe(true);
+			});
+
+			it('returns false when SENTRY_SEND_ALERT_CONTENT=false', () => {
+				process.env.SENTRY_SEND_ALERT_CONTENT = 'false';
+				expect(shouldSendAlertContent()).toBe(false);
+			});
+
+			it('returns true when SENTRY_SEND_ALERT_CONTENT=true', () => {
+				process.env.SENTRY_SEND_ALERT_CONTENT = 'true';
+				expect(shouldSendAlertContent()).toBe(true);
+			});
+
+			it('returns true when SENTRY_SEND_ALERT_CONTENT is an arbitrary non-false value', () => {
+				process.env.SENTRY_SEND_ALERT_CONTENT = 'YES';
+				expect(shouldSendAlertContent()).toBe(true);
+			});
+
+			it('returns true when SENTRY_SEND_ALERT_CONTENT is the empty string', () => {
+				process.env.SENTRY_SEND_ALERT_CONTENT = '';
+				expect(shouldSendAlertContent()).toBe(true);
 			});
 		});
 
