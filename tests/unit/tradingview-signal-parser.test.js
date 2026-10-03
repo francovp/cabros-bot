@@ -63,6 +63,20 @@ describe('TradingView signal parser', () => {
 	});
 
 	it('keeps known futures venues neutral', () => {
+		// The bare `EXCHANGE:SYMBOL(TF)` form takes a different code path inside
+		// deriveAssetContext than the side-word form. Both must apply the same
+		// neutrality rule: a crypto suffix on CME_MINI:ETH must NOT relabel the
+		// futures venue as crypto.
+		expect(deriveAssetContext('CME_MINI:ETH(D)')).toEqual(expect.objectContaining({
+			exchange: 'CME_MINI',
+			assetClass: null,
+		}));
+		expect(deriveCleanSearchQuery('CME_MINI:ETH(D)')).toBe('ETH market news analyst');
+		expect(deriveAssetContext('FX_IDC:USDCLP(D)')).toEqual(expect.objectContaining({
+			exchange: 'FX_IDC',
+			assetClass: null,
+		}));
+
 		for (const exchange of ['CME_MINI', 'CBOT_MINI']) {
 			expect(deriveAssetContext(`${exchange}:ESU2026(D) cambió a señal de COMPRA`)).toEqual(expect.objectContaining({
 				exchange,
@@ -108,6 +122,82 @@ describe('TradingView signal parser', () => {
 			side: 'SELL',
 			timeframe: '1D',
 		}));
+	});
+
+	it('keeps explicit stock exchanges as stock even when the symbol ends in a crypto suffix', () => {
+		// Explicit exchange classification must win over suffix-based inference (#835).
+		// Each input carries a real signal phrase so parseTradingViewSignal() succeeds and
+		// the PRIMARY parsed-signal branch is exercised — the path real TradingView alerts
+		// take. Without the side/timeframe phrase these fall through to the generic
+		// explicit-exchange matcher and would pass even if precedence regressed.
+		expect(deriveAssetContext('BATS:TSMUSDT(D) cambió a señal de VENTA')).toEqual(expect.objectContaining({
+			exchange: 'BATS',
+			symbol: 'TSMUSDT',
+			assetClass: 'stock',
+		}));
+		expect(deriveAssetContext('BATS:INTCUSDC(1H) cambió a señal de COMPRA')).toEqual(expect.objectContaining({
+			exchange: 'BATS',
+			symbol: 'INTCUSDC',
+			assetClass: 'stock',
+		}));
+		expect(deriveAssetContext('BATS:ETHBUSD(D) cambió a señal de VENTA')).toEqual(expect.objectContaining({
+			exchange: 'BATS',
+			symbol: 'ETHBUSD',
+			assetClass: 'stock',
+		}));
+		expect(deriveAssetContext('NASDAQ:NVDAUSDT(1D) cambió a señal de COMPRA')).toEqual(expect.objectContaining({
+			exchange: 'NASDAQ',
+			symbol: 'NVDAUSDT',
+			assetClass: 'stock',
+		}));
+	});
+
+	it('still classifies explicit crypto exchanges as crypto', () => {
+		expect(deriveAssetContext('BINANCE:BTCUSDT(D) cambió a señal de COMPRA')).toEqual(expect.objectContaining({
+			exchange: 'BINANCE',
+			assetClass: 'crypto',
+		}));
+		expect(deriveAssetContext('BYBIT:ETHUSDT(1H) cambió a señal de VENTA')).toEqual(expect.objectContaining({
+			exchange: 'BYBIT',
+			assetClass: 'crypto',
+		}));
+	});
+
+	it('infers crypto only for unknown exchanges carrying a crypto suffix', () => {
+		const context = deriveAssetContext('SOMENEWEXCHANGE:PAIRUSDT(D) cambió a señal de COMPRA');
+		expect(context).toEqual(expect.objectContaining({
+			exchange: 'SOMENEWEXCHANGE',
+			assetClass: 'crypto',
+		}));
+	});
+
+	it('normalizes lowercase exchange prefixes to their canonical stock form', () => {
+		// Exchange matching is case-insensitive upstream; confirm the normalized
+		// prefix still wins over the crypto suffix.
+		const context = deriveAssetContext('bats:TSMUSDT(D) cambió a señal de VENTA');
+		expect(context).toEqual(expect.objectContaining({
+			exchange: 'BATS',
+			assetClass: 'stock',
+		}));
+	});
+
+	it('applies exchange precedence to English and shorthand signal phrasings', () => {
+		expect(deriveAssetContext('NASDAQ:NVDAUSDT changed to BUY signal')).toEqual(expect.objectContaining({
+			exchange: 'NASDAQ',
+			assetClass: 'stock',
+		}));
+		expect(deriveAssetContext('BATS:TSMUSDT(D) changed to SELL signal')).toEqual(expect.objectContaining({
+			exchange: 'BATS',
+			assetClass: 'stock',
+		}));
+	});
+
+	it('keeps forex and futures venues neutral even with crypto-suffixed symbols', () => {
+		// NON_EQUITY_EXCHANGES must stay neutral; suffix inference must not leak in.
+		for (const venue of ['FX_IDC', 'CME_MINI', 'CBOT_MINI']) {
+			const context = deriveAssetContext(`${venue}:USDT(D) cambió a señal de COMPRA`);
+			expect(context === null || context.assetClass === null).toBe(true);
+		}
 	});
 
 	it('returns null asset context for generic prose alerts without explicit symbols', () => {

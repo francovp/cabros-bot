@@ -1,10 +1,12 @@
 const TELEGRAM_COMMAND_MENU = Object.freeze([
 	{ command: 'precio', description: 'Consulta el precio en Binance o Twelve Data' },
+	{ command: 'alerta', description: 'Configura o gestiona alertas de precio' },
 	{ command: 'cryptobot', description: 'Muestra el Chat ID actual de Telegram' },
 	{ command: 'analisis', description: 'Crea un análisis técnico en TradingView' },
 	{ command: 'scanner', description: 'Escaneo de mercado en TradingView' },
 	{ command: 'noticias', description: 'Monitor y análisis de noticias con IA' },
 	{ command: 'outcomes', description: 'Rendimiento reciente de señales evaluadas' },
+	{ command: 'preferencias', description: 'Preferencias de alertas para este chat' },
 	{ command: 'help', description: 'Muestra este mensaje de ayuda' },
 	{ command: 'start', description: 'Muestra este mensaje de ayuda' },
 ]);
@@ -21,9 +23,10 @@ async function registerTelegramCommandMenu(telegram) {
 	}
 }
 
-function launchTelegramBot(bot, onLaunchError) {
+function launchTelegramBot(bot, onLaunchError, onLaunch) {
 	const launchPromise = bot.launch(() => {
 		void registerTelegramCommandMenu(bot.telegram);
+		onLaunch?.();
 	});
 	void launchPromise.catch(onLaunchError);
 	return launchPromise;
