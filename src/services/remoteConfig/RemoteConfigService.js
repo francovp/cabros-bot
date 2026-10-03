@@ -319,7 +319,6 @@ function getStatus() {
 	// must never be reported as serving remote values (issue #598).
 	const hasSuccessfulLoad = typeof lastSuccessfulLoad === 'string' && lastSuccessfulLoad.length > 0;
 	const isReady = Boolean(enabled && configured && hasSuccessfulLoad && hasFreshRemoteConfig() && !stale);
-	const neverLoaded = !hasSuccessfulLoad;
 
 	let status;
 	if (!enabled) {
@@ -339,10 +338,14 @@ function getStatus() {
 		configured,
 		ready: isReady,
 		status,
-		// `true` only when enabled+configured but the server template has never
-		// been fetched successfully. Lets an operator tell "wired up" apart from
-		// "actually serving remote values" without inspecting error counters.
-		templatePublished: hasSuccessfulLoad || (enabled && configured && !neverLoaded),
+		// True once a server template has actually been fetched at least once. Lets an
+		// operator tell "wired up" (enabled+configured) apart from "actually serving
+		// remote values" without inspecting error counters.
+		//
+		// This is deliberately exactly `hasSuccessfulLoad`: an earlier version added
+		// `(enabled && configured && !neverLoaded)`, but `neverLoaded` is `!hasSuccessfulLoad`,
+		// so the second operand was always `hasSuccessfulLoad` and reduced to a no-op.
+		templatePublished: hasSuccessfulLoad,
 		source: getSource(),
 		templateVersion,
 		lastSuccessfulLoad,
@@ -433,14 +436,13 @@ function getSdkErrorCode(error) {
 	if (code && code.startsWith('remote-config/')) {
 		return code.slice('remote-config/'.length);
 	}
+	// Fallback for SDK-shaped errors that carry `hasCode()` but a non-prefixed `.code`.
+	// `PrefixedFirebaseError.hasCode()` is a pure string comparison and cannot throw,
+	// so this is a single probe rather than a defensive loop over every category.
 	if (typeof error.hasCode === 'function') {
 		for (const candidate of Object.keys(SDK_ERROR_CATEGORIES)) {
-			try {
-				if (error.hasCode(candidate)) {
-					return candidate;
-				}
-			} catch (err) {
-				// Treat a throwing hasCode() as unusable rather than fatal.
+			if (error.hasCode(candidate)) {
+				return candidate;
 			}
 		}
 	}
@@ -457,11 +459,7 @@ function getErrorCategory(error) {
 	if (error && error.code === 'REMOTE_CONFIG_UNSUPPORTED') {
 		return 'unsupported_sdk';
 	}
-	const sdkCode = getSdkErrorCode(error);
-	if (sdkCode && SDK_ERROR_CATEGORIES[sdkCode]) {
-		return SDK_ERROR_CATEGORIES[sdkCode];
-	}
-	return 'load_failed';
+	return SDK_ERROR_CATEGORIES[getSdkErrorCode(error)] || 'load_failed';
 }
 
 async function loadNow(options = {}) {

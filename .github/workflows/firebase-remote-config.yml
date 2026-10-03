@@ -1,16 +1,7 @@
 name: Deploy Firebase Remote Config Server Template
 
-# Publishes firebase-remote-config-template.json to the **server** Remote Config
-# namespace (`projects/{projectId}/namespaces/firebase-server/serverRemoteConfig`),
-# which is the namespace `admin.remoteConfig().initServerTemplate()` reads at
-# runtime. Publishing to the default/client namespace is a silent no-op for the
-# server loader. The first publish bootstraps the namespace (If-Match: *) because
-# it does not exist until then.
-#
-# Enabling ENABLE_FIREBASE_REMOTE_CONFIG in the service without running this
-# workflow leaves every value on the environment fallback. Verify activation via
-# GET /api/status -> dependencies.firebaseRemoteConfig.templatePublished === true.
-
+# Publishes firebase-remote-config-template.json to the `firebase-server` namespace
+# that initServerTemplate() reads. Full contract: AGENTS.md.
 on:
   workflow_dispatch:
 

@@ -2,27 +2,14 @@
 
 /**
  * Publishes `firebase-remote-config-template.json` to the Firebase **server**
- * Remote Config namespace.
+ * Remote Config namespace (`namespaces/firebase-server/serverRemoteConfig`),
+ * which is what `admin.remoteConfig().initServerTemplate()` reads. Publishing to
+ * the default client namespace is a silent no-op for the server loader.
  *
- * Namespace contract (issue #598):
- *   The runtime loader uses `admin.remoteConfig().initServerTemplate()`, which
- *   reads the `firebase-server` namespace. Every publish must therefore target
- *     projects/{projectId}/namespaces/firebase-server/serverRemoteConfig
- *   Publishing to the default (client) namespace `/remoteConfig` is a silent
- *   no-op for the server loader: the template appears in the console but the
- *   service keeps reading an empty server template forever.
- *
- * Bootstrap contract:
- *   The `firebase-server` namespace does not exist until the first publish, so
- *   the pre-publish `getServerTemplate()` read rejects with
- *   `remote-config/not-found`. Treating that as fatal means the very first
- *   publish can never happen, which deadlocks the feature. We therefore fall
- *   back to `If-Match: *` (the documented forced-update form) to create the
- *   namespace, and only treat a real non-2xx PUT as a failure.
- *
- * Credentials come from the same resolution order the application uses
- * (FIREBASE_SERVICE_ACCOUNT_JSON / GOOGLE_APPLICATION_CREDENTIALS / ADC). No
- * credential value is ever logged.
+ * That namespace does not exist until the first publish, so the pre-publish read
+ * rejects `remote-config/not-found`. That is the expected bootstrap state, not a
+ * failure: we fall back to `If-Match: *` to create it. Treating it as fatal
+ * deadlocked the very first publish (issue #598). Full contract in AGENTS.md.
  */
 
 const fs = require('node:fs');
@@ -38,17 +25,6 @@ function loadDependencies() {
 		path.join(path.dirname(require.resolve('firebase-admin')), 'utils/api-request'),
 	);
 	return { admin, AuthorizedHttpClient };
-}
-
-/**
- * Resolved lazily so a fully injected publish (tests, or a caller supplying
- * every collaborator) never touches the real SDK module graph.
- */
-function resolveDependencies(overrides) {
-	if (overrides.admin && overrides.AuthorizedHttpClient) {
-		return { admin: overrides.admin, AuthorizedHttpClient: overrides.AuthorizedHttpClient };
-	}
-	return loadDependencies();
 }
 
 function readTemplate(templatePath = TEMPLATE_PATH) {
@@ -76,14 +52,13 @@ function isNamespaceMissing(error) {
 	return typeof error.hasCode === 'function' && error.hasCode('not-found');
 }
 
-function resolveProjectId(configuredProjectId, app) {
-	const fromApp = app && app.options ? app.options.projectId : undefined;
-	return fromApp || configuredProjectId || undefined;
-}
-
 async function publishServerTemplate(overrides = {}) {
-	const needsSdk = !overrides.app || !overrides.client || !overrides.remoteConfig;
-	const deps = needsSdk ? resolveDependencies(overrides) : { admin: null, AuthorizedHttpClient: null };
+	// `admin` and `AuthorizedHttpClient` are only needed when the caller did not
+	// supply a ready `client` (and, for `admin`, an `app`). Loading the real SDK
+	// unconditionally drags the whole firebase-admin module graph into any process
+	// that only wants to inject a client - including the publish tests.
+	const needsSdk = !overrides.client || !overrides.app;
+	const deps = needsSdk ? loadDependencies() : { admin: null, AuthorizedHttpClient: null };
 	const admin = overrides.admin || deps.admin;
 	const AuthorizedHttpClient = overrides.AuthorizedHttpClient || deps.AuthorizedHttpClient;
 	const templatePath = overrides.templatePath || TEMPLATE_PATH;
@@ -106,33 +81,29 @@ async function publishServerTemplate(overrides = {}) {
 		app = admin.initializeApp(appOptions);
 	}
 
-	const projectId = resolveProjectId(configuredProjectId, app);
+	const projectId = (app.options && app.options.projectId) || configuredProjectId;
 	if (!projectId) {
 		throw new Error('Firebase project ID is not configured (set FIREBASE_PROJECT_ID)');
 	}
 
 	const remoteConfig = overrides.remoteConfig || admin.remoteConfig(app);
 
+	// Single read path: a caller that needs to intercept this should mock
+	// `remoteConfig.getServerTemplate`, exactly as production invokes it. A separate
+	// injection seam here was a second, divergent code path with different If-Match
+	// fallback behaviour - i.e. a second thing to keep correct.
 	let ifMatch = '*';
 	let currentTemplate = { conditions: [] };
-	if (overrides.getServerTemplate) {
-		const fetched = await overrides.getServerTemplate(remoteConfig);
-		if (fetched) {
-			currentTemplate = fetched;
-			ifMatch = currentTemplate.etag;
+	try {
+		const fetched = (await remoteConfig.getServerTemplate()).toJSON();
+		currentTemplate = fetched || { conditions: [] };
+		ifMatch = currentTemplate.etag || '*';
+	} catch (error) {
+		if (!isNamespaceMissing(error)) {
+			throw error;
 		}
-	} else {
-		try {
-			const fetched = (await remoteConfig.getServerTemplate()).toJSON();
-			currentTemplate = fetched || { conditions: [] };
-			ifMatch = currentTemplate.etag || '*';
-		} catch (error) {
-			if (!isNamespaceMissing(error)) {
-				throw error;
-			}
-			// Namespace absent: bootstrap it with a forced update.
-			console.warn(`No existing ${SERVER_NAMESPACE} template found; creating it (If-Match: *).`);
-		}
+		// Namespace absent: bootstrap it with a forced update.
+		console.warn(`No existing ${SERVER_NAMESPACE} template found; creating it (If-Match: *).`);
 	}
 
 	const client = overrides.client || new AuthorizedHttpClient(app);
@@ -162,11 +133,8 @@ if (require.main === module) {
 	});
 }
 
+// Only what the tests actually consume; the rest stays module-private.
 module.exports = {
-	SERVER_NAMESPACE,
-	TEMPLATE_PATH,
 	buildServerTemplate,
-	isNamespaceMissing,
 	publishServerTemplate,
-	readTemplate,
 };

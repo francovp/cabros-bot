@@ -231,7 +231,7 @@ Verify activation through `GET /api/status` → `dependencies.firebaseRemoteConf
 | `lastErrorCategory` | `template_not_published` means the `firebase-server` namespace has no template and must be published. This is distinct from a transient `load_failed`; `permission_denied` and `unauthenticated` mean the service account lacks the server-template permission. |
 | `consecutiveFailures` | Consecutive failed loads; reset to `0` on success. |
 
-An inert feature looks like `enabled: true, configured: true, templatePublished: false, ready: false, source: "environment", lastErrorCategory: "template_not_published"`. In that state every value comes from the environment fallback, which is the intended fail-open behavior — the alert path is never blocked.
+In the inert state (`templatePublished: false, ready: false, source: "environment", lastErrorCategory: "template_not_published"`) every value comes from the environment fallback — intended fail-open behavior; the alert path is never blocked.
 
 #### Firestore Emulator Integration Tests
 
