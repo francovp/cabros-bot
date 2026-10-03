@@ -90,6 +90,15 @@ class EnrichmentService {
 			return null;
 		}
 
+		const { tokenCostBudgetService, registerGlobalUsage, normalizeUsageMetadata: normalizeUsage } = require('../../lib/tokenUsage');
+		const isExceeded = tokenCostBudgetService?.isBudgetExceededAsync
+			? await tokenCostBudgetService.isBudgetExceededAsync()
+			: tokenCostBudgetService?.isBudgetExceeded();
+		if (isExceeded) {
+			console.warn('[EnrichmentService] Daily token cost budget exceeded, skipping secondary LLM enrichment');
+			return null;
+		}
+
 		const { confidence: geminiConfidence } = geminiAnalysis;
 		const timeoutBudgetMs = (typeof options?.timeout === 'number' && options.timeout > 0)
 			? options.timeout
@@ -116,9 +125,14 @@ class EnrichmentService {
 					const activeSignal = retrySignal || combinedSignal;
 					const result = await this.azureClient.chatCompletion(systemPrompt, userPrompt, { signal: activeSignal });
 					const durationMs = Date.now() - startTime;
-					const usage = normalizeUsageMetadata(result?.usage) || { inputTokens: 0, outputTokens: 0 };
+					const usage = (typeof normalizeUsage === 'function' ? normalizeUsage(result?.usage) : normalizeUsageMetadata(result?.usage)) || { inputTokens: 0, outputTokens: 0 };
+					const modelName = process.env.AZURE_LLM_MODEL || 'gpt-4o-mini';
 
-					sentryService.captureLlmMetric({ model: process.env.AZURE_LLM_MODEL || 'unknown', inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, durationMs });
+					if (typeof registerGlobalUsage === 'function') {
+						registerGlobalUsage(usage, modelName);
+					}
+
+					sentryService.captureLlmMetric({ model: modelName, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, durationMs });
 					const rawText = typeof result === 'string' ? result : result?.text;
 					return {
 						success: true,

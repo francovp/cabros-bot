@@ -33,6 +33,9 @@ describe('Render worker shutdown', () => {
 			jest.doMock('../../src/services/remoteConfig/RemoteConfigService', () => ({
 				start: startRc,
 				stop: stopRc,
+				// worker.js now also starts the user price alert worker, which reads
+				// the runtime config through this module.
+				getRuntimeConfig: () => ({}),
 			}));
 			jest.doMock('../../src/controllers/webhooks/handlers/alert/alert', () => ({
 				initializeNotificationServices: jest.fn().mockResolvedValue(undefined),
