@@ -9,12 +9,21 @@ condition = "AND"
 paths = ['''^render\.yaml$''']
 regexes = ['''AIzaSyDskGc5b0hpVX6YIUW-IYqwuH7_ZIP07O0''']
 
-[[allowlists]]
-description = "Synthetic idempotency-key fixtures in webhook integration tests"
-condition = "AND"
-# Scoped to test files only. These are request fixtures, not credentials; the
-# generic-api-key rule fires on their entropy alone. Gitleaks scans full history,
-# so this also covers the value in the commit that introduced it, which a later
-# rename cannot clear.
-paths = ['''^tests/''']
-regexes = ['''msg-divergent-idem-001''']
+# NOTE: this must be a global `[allowlist]` table, not a `[[allowlists]]` array
+# entry. On gitleaks 8.24.3 — the version gitleaks-action@v3 runs — the array
+# form does not suppress a `generic-api-key` finding at all, while the global
+# table does. Verified by running 8.24.3 against `origin/master..HEAD`; the same
+# config on 8.28 behaves either way.
+[allowlist]
+description = "Synthetic idempotency-key fixture in the generic-message webhook test"
+# `msg-divergent-idem-001` is a supertest request fixture, not a credential; the
+# generic-api-key rule fires on its entropy alone. The action scans full history
+# (`fetch-depth: 0`), so the value remains in the commit that introduced it and a
+# later rename cannot clear the finding.
+#
+# Known limitation, accepted deliberately: `stopwords` suppresses every finding
+# in the matched file, not just this value. It is scoped to a single test file
+# that holds no credentials, so the practical exposure is a real secret
+# committed to that one file going unreported.
+paths = ['''^tests/integration/generic-message-webhook\.test\.js$''']
+stopwords = ['''msg-divergent-idem-001''']
