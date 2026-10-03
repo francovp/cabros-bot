@@ -1830,6 +1830,16 @@ No environment variable, Remote Config key, endpoint, OpenAPI, or Postman contra
 - `tests/unit/message-helper.test.js` and `tests/integration/generic-message-webhook.test.js` cover chunk estimation, dry validation, invalid input, and additive response metadata.
 - `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document `dryValidate` request/response schemas and examples.
 
+## Generic Message Truncation Metadata (GH-602)
+
+`POST /api/webhook/message` reports inbound truncation so callers can detect silent content loss:
+- Inbound `message` values longer than `MAX_MESSAGE_LENGTH` (4,000 characters) are clipped before delivery and emit a `console.warn` line carrying only numeric `originalLength`, `deliveredLength`, and `max` values (no message content, so no injection surface).
+- Truncated responses add `truncated: true`, `originalLength`, and `deliveredLength` alongside `results`. These fields are strictly additive and appear **only** when truncation occurred, so existing `{ success: true, results }` consumers are unaffected for messages that fit.
+- Truncation metadata is independent of the GH-614 chunk-estimation metadata; both may appear on the same response when a long message also exceeds a channel's single-chunk limit.
+- `tests/integration/generic-message-webhook.test.js` covers both branches: metadata omitted when the message fits, metadata present when it does not, and the matching `console.warn` behavior.
+- `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document the conditional fields and both response shapes.
+
+
 ## Telegram Command Rate Limiting (Issue #658)
 
 `index.js` installs `telegramCommandRateLimiter` before Telegraf command handlers. It applies process-local per-chat fixed-window limits to the expensive `/precio`, `/analisis`/`/analysis`, `/scanner`, and `/noticias`/`/news` commands, with bounded storage for 10,000 chat-command buckets. It defaults to 10 `/precio` calls per minute and 3 calls per hour for the other commands; `ENABLE_TELEGRAM_COMMAND_RATE_LIMITING=false` disables it, and `TELEGRAM_COMMAND_RATE_LIMITS_JSON` provides optional per-command `{max,windowMs}` overrides bounded to `max` 1-1000 and `windowMs` 1-86400000, with invalid values falling back to defaults. These are environment-only security controls and are intentionally excluded from Firebase Remote Config.

@@ -37,12 +37,24 @@ function validateMessageRequest(body) {
 
 	const routing = parseNotificationRouting(body);
 
-	const text = message.length > MAX_MESSAGE_LENGTH
+	const originalLength = message.length;
+	const truncated = originalLength > MAX_MESSAGE_LENGTH;
+	const text = truncated
 		? message.substring(0, MAX_MESSAGE_LENGTH) + '...'
 		: message;
+	const deliveredLength = text.length;
+
+	if (truncated) {
+		console.warn(
+			`[MessageWebhook] Message truncated: originalLength=${originalLength}, deliveredLength=${deliveredLength}, max=${MAX_MESSAGE_LENGTH}`,
+		);
+	}
 
 	return {
 		text,
+		truncated,
+		originalLength,
+		deliveredLength,
 		originalMessage: message,
 		dryValidate: dryValidate === true,
 		...routing,
@@ -106,7 +118,7 @@ function postMessage(botOrGetter) {
 				{ http: httpContext },
 			);
 
-const estimatedChunks = estimateMessageChunks(routing.originalMessage);
+			const estimatedChunks = estimateMessageChunks(routing.originalMessage);
 			const hasExceededChunks = Object.values(estimatedChunks).some((count) => count > 1);
 
 			const responseBody = { success: true, results, requestId };
@@ -134,6 +146,12 @@ const estimatedChunks = estimateMessageChunks(routing.originalMessage);
 				responseBody.delivered = getDeliveredChannels(results);
 				responseBody.channelDetails = channelDetails;
 				responseBody.estimatedChunks = estimatedChunks;
+			}
+
+			if (routing.truncated) {
+				responseBody.truncated = true;
+				responseBody.originalLength = routing.originalLength;
+				responseBody.deliveredLength = routing.deliveredLength;
 			}
 
 			res.json(responseBody);
