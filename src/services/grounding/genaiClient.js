@@ -85,10 +85,12 @@ class GenaiClient {
 			// Parse Brave results
 			// Brave structure: { web: { results: [ { title, url, description, profile: { name } } ] } }
 			const results = data.web?.results?.map(result => {
+				// Prefer the URL hostname. `profile.name` is a human-readable display
+				// label ("Reuters", "Medium"), not a domain, and domainQuality
+				// classifies on domain strings — passing the display name through made
+				// essentially every Brave-sourced result classify as `unknown`.
 				let sourceDomain = '';
-				if (result.profile && result.profile.name) {
-					sourceDomain = result.profile.name;
-				} else if (result.url) {
+				if (result.url) {
 					try {
 						sourceDomain = new URL(result.url).hostname;
 					} catch (e) {

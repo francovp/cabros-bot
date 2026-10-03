@@ -702,6 +702,20 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'misconfigured',
+			waitingCount: expect.any(Number),
+			delayedCount: expect.any(Number),
+			failedCount: expect.any(Number),
+			activeCount: expect.any(Number),
+			durableQueuedCount: expect.any(Number),
+			// Documented in the OpenAPI JobQueueStatus schema and both Postman
+			// success examples, so the endpoint must actually surface it. Asserting
+			// here pins the published contract rather than one layer's projection.
+			durableScanRotated: expect.any(Boolean),
+			durableCycleComplete: expect.any(Boolean),
+			backlogAlert: {
+				active: false,
+				thresholdMs: expect.any(Number),
+			},
 		});
 		expect(JSON.stringify(response.body.dependencies.jobExecutionQueue)).not.toContain('redis://');
 	});

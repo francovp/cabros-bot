@@ -109,7 +109,9 @@ const VIEW_TITLES = {
 };
 const CONSOLE_TITLE_BASE = 'Cabros Bot Console';
 
+const DEFAULT_BACKEND_ORIGIN = 'https://openclaw.tail5e4271.ts.net';
 const ALLOWED_BACKEND_ORIGINS = new Set([
+	DEFAULT_BACKEND_ORIGIN,
 	'https://cabros-bot-production.up.railway.app',
 ]);
 
@@ -132,7 +134,7 @@ const getApiBaseUrl = () => {
 		const paramOrigin = getAllowedBackendOrigin(param);
 		if (paramOrigin) return paramOrigin;
 		if (typeof window !== 'undefined' && window.location && (window.location.hostname.endsWith('web.app') || window.location.hostname.endsWith('firebaseapp.com'))) {
-			return 'https://cabros-bot-production.up.railway.app';
+			return DEFAULT_BACKEND_ORIGIN;
 		}
 	} catch (_) {
 		// Fallback safely
@@ -235,7 +237,7 @@ const getApiRequestTimeout = (definition, options) => {
 					if (Array.isArray(parsed && parsed.alertIds) && parsed.alertIds.length > 0) {
 						count = Math.min(parsed.alertIds.length, 50);
 					}
-				} catch (_) {}
+				} catch (_) { /* Fall back to the bounded default budget. */ }
 			}
 		}
 		return count > 1 ? count * LONG_RUNNING_API_REQUEST_TIMEOUT_MS : LONG_RUNNING_API_REQUEST_TIMEOUT_MS;
@@ -359,7 +361,9 @@ const createCopyButton = (getText, label = 'Copy') => {
 	button.type = 'button';
 	button.className = 'copy-button';
 	button.addEventListener('click', () => copyToClipboard(
-		typeof getText === 'function' ? String(getText() ?? '') : String(getText ?? ''),
+		label === 'Copy details'
+			? window.CabrosAdminComponents.plainText(window.CabrosAdminComponents.present(JSON.parse((typeof getText === 'function' ? getText() : getText) || 'null'), false, getElement('api-key')?.value || ''))
+			: typeof getText === 'function' ? String(getText() ?? '') : String(getText ?? ''),
 		button,
 	));
 	return button;
@@ -771,14 +775,46 @@ const getRequestBody = (definition, form) => {
 	return requestBody;
 };
 
-const addJsonField = (form, labelText, name, value) => {
-	const label = element('label', { text: labelText });
-	const textarea = element('textarea');
-	textarea.name = name;
-	textarea.rows = 8;
-	textarea.value = JSON.stringify(value, null, 2);
-	label.append(textarea);
-	form.append(label);
+// The hidden transport value preserves existing request/idempotency builders;
+// operators edit typed Vue controls, never serialized payloads.
+const addObjectField = (form, labelText, name, value, contract, schema = {}) => {
+	const input = element('input');
+	input.name = name;
+	input.type = 'hidden';
+	const editor = element('cabros-fields');
+	editor.heading = labelText;
+	editor.schema = window.CabrosAdminComponents.schemaFor(contract, schema);
+	let serialized = '';
+	Object.defineProperty(input, 'value', {
+		get: () => serialized,
+		set: (next) => {
+			serialized = String(next);
+			try { editor.value = JSON.parse(serialized); } catch (_) { /* Request validation reports invalid restored data. */ }
+		},
+	});
+	input.value = JSON.stringify(value || {}, null, 2);
+	editor.addEventListener('update', (event) => {
+		input.value = JSON.stringify(event.detail[0]);
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+	});
+	form.append(input, editor);
+};
+
+const getQuerySchema = (contract, operation) => ({
+	type: 'object', additionalProperties: false,
+	properties: Object.fromEntries(getParameters(contract, operation).filter((p) => p.in === 'query').map((p) => [p.name, { ...resolveRef(contract, p.schema), description: p.description }])),
+	required: getParameters(contract, operation).filter((p) => p.in === 'query' && p.required).map((p) => p.name),
+});
+
+const createResult = (data) => {
+	const value = window.CabrosAdminComponents.present(data, false, getElement('api-key')?.value || '');
+	const result = element('cabros-result');
+	result.value = value;
+	return result;
+};
+
+const showResult = (output, serialized) => {
+	output.replaceChildren(...(serialized ? [createResult(JSON.parse(serialized))] : []));
 };
 
 const addField = (form, labelText, name, options = {}) => {
@@ -1257,14 +1293,14 @@ const symbolAnalysisResult = (data) => {
 };
 
 const volumeConfirmationResult = (data) => {
-		const panel = element('article', { className: 'operation-card verdict-panel' });
-		panel.append(element('p', { className: 'eyebrow', text: 'Volume confirmation' }));
-		const badges = element('div', { className: 'badge-row' });
-		badges.append(data.confirmed === true
-			? element('span', { className: 'status-badge status-ready', text: 'Confirmed' })
-			: data.confirmed === false
-				? element('span', { className: 'status-badge status-danger', text: 'Not confirmed' })
-				: element('span', { className: 'status-badge status-active', text: 'Unknown' }));
+	const panel = element('article', { className: 'operation-card verdict-panel' });
+	panel.append(element('p', { className: 'eyebrow', text: 'Volume confirmation' }));
+	const badges = element('div', { className: 'badge-row' });
+	badges.append(data.confirmed === true
+		? element('span', { className: 'status-badge status-ready', text: 'Confirmed' })
+		: data.confirmed === false
+			? element('span', { className: 'status-badge status-danger', text: 'Not confirmed' })
+			: element('span', { className: 'status-badge status-active', text: 'Unknown' }));
 	if (data.decision) badges.append(element('span', { className: 'capability-chip', text: displayLabel(data.decision) }));
 	panel.append(badges);
 
@@ -1606,11 +1642,11 @@ const renderStatusCards = (container, entries, emptyText, { detailed = false } =
 				value.append(timestamp ? createTimestamp(fieldValue) : element('span', { text: Array.isArray(fieldValue) ? fieldValue.join(', ') : String(fieldValue) }));
 				list.append(element('dt', { text: label }), value);
 			});
-			nestedStatusEntries(detail).forEach(([name, nested]) => {
+			nestedStatusEntries(detail).forEach(([nestedName, nested]) => {
 				const value = element('dd');
 				value.append(createStatusBadge(nested.status));
 				list.append(
-					element('dt', { text: displayLabel(name) }),
+					element('dt', { text: displayLabel(nestedName) }),
 					value,
 				);
 			});
@@ -1738,13 +1774,13 @@ const createStatusExplorer = () => {
 	const filters = element('div', { className: 'status-filter-bar' });
 	filters.append(searchLabel, toneLabel);
 
-	const statusOutput = element('pre', { className: 'response-block', text: 'No status response yet.' });
+	const statusOutput = element('div', { className: 'response-block', text: 'No status response yet.' });
 	let lastRawStatus = '';
-	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy JSON');
+	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawStatus = element('details', { className: 'raw-status' });
 	rawStatus.append(
-		element('summary', { text: 'Show raw status response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		statusOutput,
 	);
@@ -1778,10 +1814,7 @@ const createStatusExplorer = () => {
 			output: statusOutput,
 		});
 		if (status && typeof status === 'object') {
-			lastRawStatus = window.CabrosAdminRequest.redactSecret(
-				JSON.stringify(status, null, 2),
-				getElement('api-key')?.value || '',
-			);
+			lastRawStatus = JSON.stringify(status);
 			rawCopyButton.hidden = false;
 			dependencies = statusEntries(status.dependencies);
 			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status, { renderDependencies });
@@ -1816,13 +1849,13 @@ const createOverviewDashboard = () => {
 	const channelGrid = element('div', { className: 'status-grid' });
 	const dependencyGrid = element('div', { className: 'status-grid' });
 	const featureGrid = element('div', { className: 'chip-grid' });
-	const statusOutput = element('pre', { className: 'response-block', text: 'No status response yet.' });
+	const statusOutput = element('div', { className: 'response-block', text: 'No status response yet.' });
 	let lastRawStatus = '';
-	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy JSON');
+	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawStatus = element('details', { className: 'raw-status' });
 	rawStatus.append(
-		element('summary', { text: 'Show raw status response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		statusOutput,
 	);
@@ -1851,10 +1884,7 @@ const createOverviewDashboard = () => {
 			output: statusOutput,
 		});
 		if (status && typeof status === 'object') {
-			lastRawStatus = window.CabrosAdminRequest.redactSecret(
-				JSON.stringify(status, null, 2),
-				getElement('api-key')?.value || '',
-			);
+			lastRawStatus = JSON.stringify(status);
 			rawCopyButton.hidden = false;
 			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status);
 		} else {
@@ -1945,8 +1975,12 @@ const sendRequest = async ({
 		output.className = `response-block${response.ok ? '' : ' response-error'}`;
 		const responseText = response.ok && formatResponse
 			? formatResponse({ summary, status: response.status, elapsed, data })
-			: `${summary}\nHTTP ${response.status} · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(formatted, apiKey)}`;
+			: `${summary}\nHTTP ${response.status} · ${elapsed} ms`;
 		output.textContent = window.CabrosAdminRequest.redactSecret(responseText, apiKey);
+		if (!(response.ok && formatResponse)) {
+			if (data !== undefined) output.append(createResult(data));
+			else output.append(element('p', { text: window.CabrosAdminRequest.redactSecret(formatted, apiKey) }));
+		}
 		return response.ok ? data : undefined;
 	} catch (error) {
 		const elapsed = Math.round(performance.now() - started);
@@ -1985,15 +2019,15 @@ const createAlertListForm = () => {
 	const next = element('button', { text: 'Next page' });
 	next.type = 'button';
 	next.disabled = true;
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const alertList = element('div', { className: 'form-fields alert-list' });
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -2020,7 +2054,7 @@ const createAlertListForm = () => {
 	batchDeleteButton.type = 'button';
 	batchDeleteButton.disabled = true;
 
-	const batchOutput = element('pre', { className: 'response-block batch-output' });
+	const batchOutput = element('div', { className: 'response-block batch-output' });
 	batchOutput.hidden = true;
 
 	batchToolbar.append(selectAllLabel, selectionCount, batchReplayButton, batchExportButton, batchDeleteButton, batchOutput);
@@ -2201,7 +2235,7 @@ const createAlertListForm = () => {
 			selectAllCheckbox.checked = false;
 			updateBatchToolbar();
 			lastRawJson = JSON.stringify(data, null, 2);
-			rawOutput.textContent = lastRawJson;
+			showResult(rawOutput, lastRawJson);
 			rawCopyButton.hidden = false;
 			alertList.replaceChildren();
 			if (!data.alerts.length) {
@@ -2220,7 +2254,7 @@ const createAlertListForm = () => {
 			selectAllCheckbox.checked = false;
 			updateBatchToolbar();
 			lastRawJson = '';
-			rawOutput.textContent = '';
+			showResult(rawOutput, '');
 			rawCopyButton.hidden = true;
 			alertList.replaceChildren();
 		}
@@ -2250,7 +2284,7 @@ const createAlertListForm = () => {
 		button.disabled = false;
 		alertList.replaceChildren();
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load alerts to refresh.';
 		if (clearCursor) before.value = '';
@@ -2450,15 +2484,15 @@ const createAlertSummaryForm = () => {
 	const fields = addAlertReportFilters(form);
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const blocks = element('div', { className: 'summary-host' });
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw analytics response' }),
+		element('summary', { text: 'Analytics details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -2469,7 +2503,7 @@ const createAlertSummaryForm = () => {
 		button.disabled = false;
 		blocks.replaceChildren();
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load alert analytics to refresh.';
 	};
@@ -2499,12 +2533,12 @@ const createAlertSummaryForm = () => {
 				if (!data || !data.summary) {
 					blocks.replaceChildren();
 					lastRawJson = '';
-					rawOutput.textContent = '';
+					showResult(rawOutput, '');
 					rawCopyButton.hidden = true;
 					return;
 				}
 				blocks.replaceChildren(renderAlertSummaryBlocks(data));
-				rawOutput.textContent = lastRawJson;
+				showResult(rawOutput, lastRawJson);
 				rawCopyButton.hidden = false;
 			});
 		} catch (error) {
@@ -2533,7 +2567,7 @@ const createAlertExportForm = () => {
 	});
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	form.append(button, output);
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
@@ -2831,15 +2865,15 @@ const createOutcomesListForm = () => {
 	const next = element('button', { text: 'Next page' });
 	next.type = 'button';
 	next.disabled = true;
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const outcomeList = element('div', { className: 'form-fields outcome-list' });
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -2876,7 +2910,7 @@ const createOutcomesListForm = () => {
 		if (generation !== pageGeneration) return false;
 		if (data && Array.isArray(data.outcomes)) {
 			lastRawJson = JSON.stringify(data, null, 2);
-			rawOutput.textContent = lastRawJson;
+			showResult(rawOutput, lastRawJson);
 			rawCopyButton.hidden = false;
 			outcomeList.replaceChildren();
 			if (!data.outcomes.length) {
@@ -2886,7 +2920,7 @@ const createOutcomesListForm = () => {
 			}
 		} else {
 			lastRawJson = '';
-			rawOutput.textContent = '';
+			showResult(rawOutput, '');
 			rawCopyButton.hidden = true;
 			outcomeList.replaceChildren();
 		}
@@ -2911,7 +2945,7 @@ const createOutcomesListForm = () => {
 		button.disabled = false;
 		outcomeList.replaceChildren();
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load outcomes to refresh.';
 		if (clearCursor) before.value = '';
@@ -3055,15 +3089,15 @@ const createOutcomesSummaryForm = () => {
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const blocks = element('div', { className: 'summary-host' });
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw summary response' }),
+		element('summary', { text: 'Summary details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -3075,7 +3109,7 @@ const createOutcomesSummaryForm = () => {
 		button.disabled = false;
 		blocks.replaceChildren();
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load outcomes summary to refresh.';
 	};
@@ -3112,12 +3146,12 @@ const createOutcomesSummaryForm = () => {
 			if (!data || !data.summary) {
 				blocks.replaceChildren();
 				lastRawJson = '';
-				rawOutput.textContent = '';
+				showResult(rawOutput, '');
 				rawCopyButton.hidden = true;
 				return;
 			}
 			blocks.replaceChildren(renderOutcomesSummaryBlocks(data));
-			rawOutput.textContent = lastRawJson;
+			showResult(rawOutput, lastRawJson);
 			rawCopyButton.hidden = false;
 		});
 	});
@@ -3287,14 +3321,18 @@ const getQueryEnum = (contract, definition, name) => {
 const formatOrderValue = (value) => value === undefined || value === null || value === '' ? '—' : String(value);
 
 const formatOrderEnvironment = (environment) => {
-	if (environment === 'live') return element('span', {
-		className: 'status-badge status-danger',
-		text: 'Environment: live',
-	});
-	if (environment === 'testnet') return element('span', {
-		className: 'status-badge status-ready',
-		text: 'Environment: testnet',
-	});
+	if (environment === 'live') {
+		return element('span', {
+			className: 'status-badge status-danger',
+			text: 'Environment: live',
+		});
+	}
+	if (environment === 'testnet') {
+		return element('span', {
+			className: 'status-badge status-ready',
+			text: 'Environment: testnet',
+		});
+	}
 	return element('span', {
 		className: 'status-badge status-disabled',
 		text: `Environment: ${formatOrderValue(environment)}`,
@@ -3414,7 +3452,7 @@ const createOrderListForm = () => {
 	button.type = 'submit';
 	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: —' });
 	const list = element('div', { className: 'form-fields' });
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	form.append(button, environmentBadge, list, output);
 
 	let listRequestVersion = 0;
@@ -3490,7 +3528,7 @@ const createOrderLookupForm = () => {
 	button.type = 'submit';
 	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: —' });
 	const result = element('div');
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const hint = element('p', { className: 'hint', text: 'Provide either orderId or origClientOrderId to query a single order.' });
 	form.append(button, environmentBadge, hint, result, output);
 
@@ -3637,7 +3675,7 @@ const createJobListForm = (contract, onSelect) => {
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	const list = element('div', { className: 'form-fields' });
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	form.append(button, list, output);
 	let listRequestVersion = 0;
 	const invalidateListRequest = () => {
@@ -3699,15 +3737,15 @@ const createJobStatusForm = () => {
 	const pollButton = element('button', { className: 'button-ghost', text: 'Pause auto-refresh' });
 	pollButton.type = 'button';
 	pollButton.hidden = true;
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const statusPanel = element('div');
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw job payload' }),
+		element('summary', { text: 'Job details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -3744,7 +3782,7 @@ const createJobStatusForm = () => {
 	const clearStructuredState = () => {
 		statusPanel.replaceChildren();
 		actions.replaceChildren();
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		lastFetchedActive = false;
 		stopPollTimer();
@@ -3754,7 +3792,7 @@ const createJobStatusForm = () => {
 	const applyStatus = (data, jobId) => {
 		statusPanel.replaceChildren(createJobPanel(data));
 		lastRawJson = JSON.stringify(data, null, 2);
-		rawOutput.textContent = lastRawJson;
+		showResult(rawOutput, lastRawJson);
 		rawCopyButton.hidden = false;
 		renderActions(data, jobId);
 		lastFetchedActive = JOB_ACTIVE_STATUSES.includes(data.status);
@@ -3781,15 +3819,16 @@ const createJobStatusForm = () => {
 			captureResponseStatus: (responseStatus) => { pollFailureStatus = responseStatus; },
 		});
 		if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value.trim() !== jobId) return data;
-		if (data && data.status) applyStatus(data, jobId);
-		else if (!isAutoRefresh) clearStructuredState();
-		else {
+		if (data && data.status) {
+			applyStatus(data, jobId);
+		} else if (!isAutoRefresh) {
+			clearStructuredState();
+		} else {
 			statusRequestVersion += 1;
 			stopPollTimer();
 			const recoverable = typeof pollFailureStatus !== 'number'
 				|| pollFailureStatus >= 500 || pollFailureStatus === 429;
-			if (recoverable && lastFetchedActive && !pollPaused) schedulePoll();
-			else {
+			if (recoverable && lastFetchedActive && !pollPaused) {schedulePoll();} else {
 				lastFetchedActive = false;
 				updatePollButton();
 			}
@@ -3906,6 +3945,7 @@ const PRESET_SCAN_TYPES = [
 const PRESET_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1D', '1W', '1M'];
 
 const createJobCreateForm = (contract, definition, onJobCreated) => {
+	const operation = getOperation(contract, definition);
 	const form = element('form', { className: 'operation-card structured-form' });
 	form.append(
 		element('h3', { text: definition.label || 'Create job' }),
@@ -4039,7 +4079,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 
 	// --- Advanced Section ---
 	const advancedDetails = element('details', { className: 'raw-status' });
-	advancedDetails.append(element('summary', { text: 'Advanced options & raw JSON' }));
+	advancedDetails.append(element('summary', { text: 'Advanced options' }));
 
 	const channelsFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
 	channelsFieldset.append(element('legend', { text: 'Notification channels (optional)' }));
@@ -4092,7 +4132,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 		placeholder: '300000',
 	});
 
-	addJsonField(advancedDetails, 'Request body JSON (raw override)', 'body', {});
+	addObjectField(advancedDetails, 'Request options', 'body', {}, contract, getBodySchema(contract, operation));
 	form.append(advancedDetails);
 
 	// Actions, output, and raw response
@@ -4104,14 +4144,14 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 	const formActions = element('div', { className: 'form-actions' });
 	formActions.append(button, retryButton);
 
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -4279,7 +4319,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 		lastIdempotencyKey = idempotencyKey;
 		retryButton.hidden = true;
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		submitInProgress = true;
 
@@ -4304,7 +4344,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 			const effectiveData = data || responseData;
 			if (effectiveData) {
 				lastRawJson = JSON.stringify(effectiveData, null, 2);
-				rawOutput.textContent = lastRawJson;
+				showResult(rawOutput, lastRawJson);
 				rawCopyButton.hidden = false;
 			}
 
@@ -4426,18 +4466,20 @@ const createPresetSummary = (preset, { onEdit, onRun, onDelete }) => {
 	}
 
 	const resultHost = element('div');
-	const output = element('pre', { className: 'response-block', text: '' });
+	const output = element('div', { className: 'response-block', text: '' });
 	output.hidden = true;
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.hidden = true;
-	rawToggle.append(element('summary', { text: 'Show raw run response' }), rawCopyButton, rawOutput);
+	rawToggle.append(element('summary', { text: 'Run details' }), rawCopyButton, rawOutput);
 
 	runBtn.addEventListener('click', () => {
-		onRun(preset, runBtn, card, output, resultHost, rawToggle, rawOutput, rawCopyButton);
+		onRun(preset, runBtn, card, output, resultHost, rawToggle, rawOutput, rawCopyButton, (rawJson) => {
+			lastRawJson = rawJson;
+		});
 	});
 	editBtn.addEventListener('click', () => {
 		onEdit(preset);
@@ -4476,19 +4518,19 @@ const createPresetListForm = (contract, { onEdit, onStorageUpdate }) => {
 	button.type = 'submit';
 
 	const listContainer = element('div', { className: 'form-fields preset-list' });
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 
 	let lastListRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastListRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastListRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.hidden = true;
-	rawToggle.append(element('summary', { text: 'Show raw presets response' }), rawCopyButton, rawOutput);
+	rawToggle.append(element('summary', { text: 'Presets details' }), rawCopyButton, rawOutput);
 
 	form.append(button, listContainer, output, rawToggle);
 
-	const onRunPreset = async (preset, runBtn, card, cardOutput, cardResultHost, cardRawToggle, cardRawOutput, cardRawCopy) => {
+	const onRunPreset = async (preset, runBtn, card, cardOutput, cardResultHost, cardRawToggle, cardRawOutput, cardRawCopy, setRawJson) => {
 		const runDef = {
 			method: 'POST',
 			path: '/api/scanner-presets/{id}/run',
@@ -4497,6 +4539,7 @@ const createPresetListForm = (contract, { onEdit, onStorageUpdate }) => {
 			requiredRole: 'admin.operator',
 		};
 		cardResultHost.replaceChildren();
+		setRawJson('');
 		cardRawToggle.hidden = true;
 		cardOutput.hidden = false;
 		cardOutput.className = 'response-block request-state';
@@ -4519,7 +4562,8 @@ const createPresetListForm = (contract, { onEdit, onStorageUpdate }) => {
 				if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
 			}
 			const rawJson = JSON.stringify(data, null, 2);
-			cardRawOutput.textContent = rawJson;
+			setRawJson(rawJson);
+			showResult(cardRawOutput, rawJson);
 			cardRawCopy.hidden = false;
 			cardRawToggle.hidden = false;
 			const rendered = analysisReportResult(data);
@@ -4577,7 +4621,7 @@ const createPresetListForm = (contract, { onEdit, onStorageUpdate }) => {
 				if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
 			}
 			lastListRawJson = JSON.stringify(data, null, 2);
-			rawOutput.textContent = lastListRawJson;
+			showResult(rawOutput, lastListRawJson);
 			rawCopyButton.hidden = false;
 			rawToggle.hidden = false;
 
@@ -4696,8 +4740,8 @@ const addPresetStructuredFields = (form, contract, operation) => {
 	});
 
 	const advancedDetails = element('details', { className: 'raw-status' });
-	advancedDetails.append(element('summary', { text: 'Advanced request body' }));
-	addJsonField(advancedDetails, 'Request body JSON', 'body', bodyExample);
+	advancedDetails.append(element('summary', { text: 'All request options' }));
+	addObjectField(advancedDetails, 'Request options', 'body', bodyExample, contract, getBodySchema(contract, operation));
 	form.append(advancedDetails);
 
 	const syncBody = () => {
@@ -4785,30 +4829,30 @@ const createOperationForm = (contract, definition, options = {}) => {
 		(definition.path === '/api/scanner-presets/{id}' && definition.method === 'PUT');
 
 	if (definition.method === 'GET' || getParameters(contract, operation).some((parameter) => parameter.in === 'query')) {
-		addJsonField(form, 'Query JSON', 'query', getQueryExample(contract, operation));
+		addObjectField(form, 'Filters', 'query', getQueryExample(contract, operation), contract, getQuerySchema(contract, operation));
 	}
 	if (isPresetUpsert) {
 		addPresetStructuredFields(form, contract, operation);
 	} else if (definition.method !== 'GET' && operation && operation.requestBody) {
-		addJsonField(form, 'Request body JSON', 'body', getBodyExample(contract, operation));
+		addObjectField(form, 'Request options', 'body', getBodyExample(contract, operation), contract, getBodySchema(contract, operation));
 	}
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	if (definition.confirm) button.className = 'destructive-action';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const hasStructuredResult = typeof definition.renderSuccess === 'function';
 	const resultHost = hasStructuredResult ? element('div') : null;
 	let lastRawJson = '';
 	let rawOutputEl = null;
 	let rawCopyButton = null;
 	if (hasStructuredResult) {
-		rawOutputEl = element('pre', { className: 'response-block' });
-		rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+		rawOutputEl = element('div', { className: 'response-block' });
+		rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 		rawCopyButton.hidden = true;
 		const rawToggle = element('details', { className: 'raw-status' });
 		rawToggle.append(
-			element('summary', { text: 'Show raw response' }),
+			element('summary', { text: 'Response details' }),
 			rawCopyButton,
 			rawOutputEl,
 		);
@@ -4821,7 +4865,7 @@ const createOperationForm = (contract, definition, options = {}) => {
 		if (resultHost) resultHost.replaceChildren();
 		if (rawCopyButton) {
 			lastRawJson = '';
-			rawOutputEl.textContent = '';
+			showResult(rawOutputEl, '');
 			rawCopyButton.hidden = true;
 		}
 		try {
@@ -4849,12 +4893,12 @@ const createOperationForm = (contract, definition, options = {}) => {
 				if (!resultHost) return;
 				if (!data) {
 					resultHost.replaceChildren();
-					rawOutputEl.textContent = '';
+					showResult(rawOutputEl, '');
 					rawCopyButton.hidden = true;
 					return;
 				}
 				lastRawJson = JSON.stringify(data, null, 2);
-				rawOutputEl.textContent = lastRawJson;
+				showResult(rawOutputEl, lastRawJson);
 				rawCopyButton.hidden = false;
 				const rendered = definition.renderSuccess(data);
 				resultHost.replaceChildren(...(rendered ? [rendered] : []));
@@ -4933,7 +4977,7 @@ const sanitizeForHistory = (text) => {
 
 const renderPlayground = (contract, view) => {
 	const form = element('form', { className: 'operation-card playground' });
-	form.append(element('h2', { text: 'Playground' }));
+	form.append(element('h2', { text: 'Operations' }));
 
 	const filterLabel = element('label', { text: 'Filter operations' });
 	const filterInput = element('input', { type: 'search', placeholder: 'Filter by method, path, or label...' });
@@ -4989,7 +5033,7 @@ const renderPlayground = (contract, view) => {
 			const bodyVal = form.elements.body.value.trim();
 			if (bodyVal) {
 				lines.push('  -H "Content-Type: application/json"');
-				lines.push(`  -d '${bodyVal.replace(/'/g, "'\\''")}'`);
+				lines.push(`  -d '${bodyVal.replace(/'/g, '\'\\\'\'')}'`);
 			}
 		}
 		return lines.join(' \\\n');
@@ -4999,15 +5043,15 @@ const renderPlayground = (contract, view) => {
 	buttonRow.append(button, curlButton);
 
 	const resultHost = element('div', { className: 'playground-structured-result' });
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -5055,13 +5099,13 @@ const renderPlayground = (contract, view) => {
 		const queryParameters = getParameters(contract, operation).filter((p) => p && p.in === 'query');
 		const hasQueryParams = queryParameters.length > 0;
 		if (hasQueryParams) {
-			addJsonField(fields, 'Query JSON', 'query', getQueryExample(contract, operation));
+			addObjectField(fields, 'Filters', 'query', getQueryExample(contract, operation), contract, getQuerySchema(contract, operation));
 		}
 
 		const requestBody = resolveRef(contract, operation && operation.requestBody);
 		const hasRequestBody = Boolean(requestBody && requestBody.content && requestBody.content['application/json']);
 		if (hasRequestBody && definition.method !== 'GET') {
-			addJsonField(fields, 'Request body JSON', 'body', getBodyExample(contract, operation));
+			addObjectField(fields, 'Request options', 'body', getBodyExample(contract, operation), contract, getBodySchema(contract, operation));
 		}
 
 		const key = `${definition.method} ${definition.path}`;
@@ -5219,7 +5263,7 @@ const renderPlayground = (contract, view) => {
 		event.preventDefault();
 		resultHost.replaceChildren();
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		rawToggle.hidden = true;
 
@@ -5311,11 +5355,11 @@ const renderPlayground = (contract, view) => {
 			if (rendered) {
 				resultHost.replaceChildren(rendered);
 				lastRawJson = JSON.stringify(payloadToRender, null, 2);
-				rawOutput.textContent = lastRawJson;
+				showResult(rawOutput, lastRawJson);
 				rawCopyButton.hidden = false;
 				rawToggle.hidden = false;
 			} else if (payloadToRender && hasStructured) {
-				output.textContent = `${output.textContent}\n\n${JSON.stringify(payloadToRender, null, 2)}`;
+				output.append(createResult(payloadToRender));
 			}
 		}).catch(() => {
 			addHistoryEntry({
@@ -5384,8 +5428,8 @@ const createStructuredAnalysisForm = (contract, definition, builder) => {
 
 	if (!isGet) {
 		const advancedDetails = element('details', { className: 'raw-status' });
-		advancedDetails.append(element('summary', { text: 'Advanced request body' }));
-		addJsonField(advancedDetails, 'Request body JSON', 'body', bodyExample);
+		advancedDetails.append(element('summary', { text: 'All request options' }));
+		addObjectField(advancedDetails, 'Request options', 'body', bodyExample, contract, getBodySchema(contract, operation));
 		form.append(fields, advancedDetails);
 	} else {
 		form.append(fields);
@@ -5440,7 +5484,7 @@ const createStructuredAnalysisForm = (contract, definition, builder) => {
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	if (definition.confirm) button.className = 'destructive-action';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const hasStructuredResult = typeof definition.renderSuccess === 'function';
 	const resultHost = hasStructuredResult ? element('div') : null;
 	let lastRawJson = '';
@@ -5448,12 +5492,12 @@ const createStructuredAnalysisForm = (contract, definition, builder) => {
 	let rawCopyButton = null;
 
 	if (hasStructuredResult) {
-		rawOutputEl = element('pre', { className: 'response-block' });
-		rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+		rawOutputEl = element('div', { className: 'response-block' });
+		rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 		rawCopyButton.hidden = true;
 		const rawToggle = element('details', { className: 'raw-status' });
 		rawToggle.append(
-			element('summary', { text: 'Show raw response' }),
+			element('summary', { text: 'Response details' }),
 			rawCopyButton,
 			rawOutputEl,
 		);
@@ -5467,7 +5511,7 @@ const createStructuredAnalysisForm = (contract, definition, builder) => {
 		if (resultHost) resultHost.replaceChildren();
 		if (rawCopyButton) {
 			lastRawJson = '';
-			rawOutputEl.textContent = '';
+			showResult(rawOutputEl, '');
 			rawCopyButton.hidden = true;
 		}
 
@@ -5511,12 +5555,12 @@ const createStructuredAnalysisForm = (contract, definition, builder) => {
 				if (!resultHost) return;
 				if (!data) {
 					resultHost.replaceChildren();
-					rawOutputEl.textContent = '';
+					showResult(rawOutputEl, '');
 					rawCopyButton.hidden = true;
 					return;
 				}
 				lastRawJson = JSON.stringify(data, null, 2);
-				rawOutputEl.textContent = lastRawJson;
+				showResult(rawOutputEl, lastRawJson);
 				rawCopyButton.hidden = false;
 				const rendered = definition.renderSuccess(data);
 				resultHost.replaceChildren(...(rendered ? [rendered] : []));

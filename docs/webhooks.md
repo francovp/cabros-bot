@@ -189,6 +189,31 @@ When `ranked` is `true`, each successful scan also includes structured scores:
 }
 ```
 
+**Provider-outage fast-fail (502):**
+
+Before starting the sequential scans the handler reads the process-local TradingView MCP status. When the status is `degraded` with `lastErrorCategory` of `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, no scanner call is attempted: the endpoint returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with every requested scan reported as `status: "skipped"` plus a `reason`.
+
+```json
+{
+  "success": false,
+  "code": "TRADINGVIEW_MCP_UNAVAILABLE",
+  "error": "TradingView MCP is currently unavailable (circuit breaker: open, lastError: http_5xx). Scans skipped.",
+  "scanResults": [
+    { "scan": "top_gainers", "status": "skipped", "reason": "TradingView MCP is currently unavailable (circuit breaker: open, lastError: http_5xx). Scans skipped." }
+  ],
+  "timedOut": false
+}
+```
+
+This endpoint returns `502` in two distinct shapes:
+
+| `code` | Meaning |
+|---|---|
+| `TRADINGVIEW_MCP_UNAVAILABLE` | The readiness gate skipped every scan; **no** scanner call was attempted. |
+| `ALL_SCANS_FAILED` | The scans were attempted and every one failed at the provider. |
+
+**Self-recovery guarantee:** the gate is intentionally keyed on the circuit breaker's time-based state, not on the sticky `status: "degraded"` runtime flag. `getBreakerState()` moves `open` → `half-open` once `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses, so the first request after the cooldown is allowed through as a bounded recovery probe. A transient outage therefore always self-heals without a process restart, while a provider that is genuinely still down still fails fast instead of firing every scan at it. Degraded states outside the provider-outcome categories (for example `http_4xx`), a missing circuit-breaker state, and readiness-lookup errors all fail open and scan normally.
+
 ### POST /api/webhook/alert
 
 Send alert via webhook. Accepts either JSON or plain text.

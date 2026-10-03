@@ -7,6 +7,7 @@ printWarnings(validateEnv());
 
 const {
 	getPrice,
+	userPriceAlertCmd,
 	cryptoBotCmd,
 	expandedAnalysisCmd,
 	marketScannerCmd,
@@ -33,15 +34,18 @@ const { createProcessLifecycle } = require('./src/lib/processLifecycle');
 const { waitForBackgroundTasks } = require('./src/lib/backgroundTaskTracker');
 const { getTelegramBootstrapConfig, sendStartupDeploymentNotification } = require('./src/lib/telegramBootstrap');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
+const { attachReadinessOverrides } = require('./src/controllers/readiness');
 const { launchTelegramBot } = require('./src/lib/telegramCommandMenu');
 const { attachTelegramErrorBoundary, handlePollingError, startTelegramHealthProbe, stopTelegramHealthProbe } = require('./src/lib/telegramErrorBoundary');
 const { registerAlertActionHandlers } = require('./src/lib/telegramAlertActions');
 const { registerAuthMiddleware: registerTelegramCommandAuth } = require('./src/lib/telegramCommandAuth');
 const { jobService } = require('./src/services/jobs/JobService');
+const { jobBacklogService } = require('./src/services/jobs/JobBacklogService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
 const { whatsAppCommandBridgeService } = require('./src/services/notification/WhatsAppCommandBridgeService');
 const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
+const { userPriceAlertService } = require('./src/services/alerts/UserPriceAlertService');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
 const { alertSchedulerService } = require('./src/services/scheduler');
 const { adminSseService } = require('./src/services/sse/AdminSseService');
@@ -93,6 +97,8 @@ const lifecycle = createProcessLifecycle({
 	stopNotificationRedriveWorker: (options) => notificationRedriveService.stopWorker(options),
 	stopWhatsAppCommandBridge: (options) => whatsAppCommandBridgeService.stop(options),
 	stopScannerPresetScheduler: (options) => scannerPresetSchedulerService.stopWorker(options),
+	stopJobBacklogMonitor: (options) => jobBacklogService.stop(options),
+	stopUserPriceAlertWorker: (options) => userPriceAlertService.stopWorker(options),
 	stopNewsMonitorScheduler: (options) => newsMonitorSchedulerService.stopWorker(options),
 	stopAlertScheduler: (options) => alertSchedulerService.stopWorker(options),
 	stopRemoteConfig: () => remoteConfigService.stop(),
@@ -117,6 +123,11 @@ async function bootstrapApplication() {
 	// Start background scanner preset scheduler if enabled
 	scannerPresetSchedulerService.botGetter = () => bot;
 	scannerPresetSchedulerService.startWorker();
+	// Start background job backlog monitor if enabled
+	jobBacklogService.startMonitor();
+	// Start background user price alert worker if enabled
+	userPriceAlertService.setBotGetter(() => bot);
+	userPriceAlertService.startWorker({ source: 'web' });
 	// Start background news-monitor scheduler if enabled
 	newsMonitorSchedulerService.startWorker({ source: 'web' });
 	// Start background alert scheduler (JSON-defined news + scanner schedules) if enabled
@@ -138,10 +149,18 @@ async function bootstrapApplication() {
 	if (shouldLaunchTelegramBot) {
 		console.log('Telegram Bot is enabled');
 		bot = new Telegraf(token);
+		// Give the readiness probe a live handle on the bot so its Telegram check
+		// performs a real getMe round-trip instead of reporting a permanent
+		// `telegram_bot_unavailable`. Registered before the probe can ever run.
+		attachReadinessOverrides(app, {
+			getBot: () => bot,
+			isBotEnabled: () => Boolean(bot) && !lifecycle.isShuttingDown(),
+		});
 		bot.use(telegramMaintenanceMode);
 		registerTelegramCommandAuth(bot);
 		bot.use(telegramCommandRateLimiter);
 		bot.command(['precio'], getPrice);
+		bot.command(['alerta', 'alert'], userPriceAlertCmd);
 		bot.command(['cryptobot'], cryptoBotCmd);
 		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);
 		bot.command(['scanner'], marketScannerCmd);

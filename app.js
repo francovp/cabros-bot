@@ -49,13 +49,39 @@ contentSecurityPolicy['connect-src'] = [
 	'https://*.web.app',
 	'https://*.firebaseapp.com',
 	'https://cabros-bot-production.up.railway.app',
+	'https://openclaw.tail5e4271.ts.net',
 ];
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
 app.use(requestDeadline.guard);
 
 const { getDeepHealthcheckHandler } = require('./src/controllers/healthcheck');
-app.use('/healthcheck', getDeepHealthcheckHandler());
+const { handleDependencyReadiness } = require('./src/controllers/readiness');
+
+// `depth=readiness` runs external provider probes; bare requests keep the
+// legacy liveness / `?deep=true` channel contract from master. The deep
+// handler is built once at mount time, not per request.
+//
+// Each route owns its own depth vocabulary and tests only that value, so
+// `?depth=dependencies` on /healthcheck and `?depth=readiness` on /ready both
+// fall through to the master contract instead of cross-hijacking.
+const deepHealthcheckHandler = getDeepHealthcheckHandler();
+app.use('/healthcheck', (req, res, next) => {
+	if (req.query.depth === 'readiness') {
+		return handleDependencyReadiness(req, res, { failClosed: false });
+	}
+	return deepHealthcheckHandler(req, res, next);
+});
+
 app.get('/ready', (req, res) => {
+	if (req.query.depth === 'dependencies') {
+		// Layer the dependency verdict on top of the bootstrap gate rather than
+		// replacing it, so a pending or failed bootstrap can never be reported
+		// as a healthy 200 to a load balancer.
+		return handleDependencyReadiness(req, res, {
+			failClosed: true,
+			bootstrap: () => bootstrapReadiness.getStatus(),
+		});
+	}
 	const status = bootstrapReadiness.getStatus();
 	return res.status(status.ready ? 200 : 503).json(status);
 });

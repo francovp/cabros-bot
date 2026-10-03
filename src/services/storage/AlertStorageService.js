@@ -34,6 +34,7 @@ const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
 const { adminSseService } = require('../sse/AdminSseService');
 const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
+const { deriveAssetContext } = require('../tradingview/parseTradingViewSignal');
 
 function createEmptySignalClassCounts() {
 	return {
@@ -117,6 +118,7 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
 		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true'
 		|| process.env.ENABLE_NOTIFICATION_REDRIVE === 'true'
+		|| process.env.ENABLE_USER_PRICE_ALERTS === 'true'
 		|| process.env.ENABLE_NEWS_MONITOR_SCHEDULER === 'true'
 		|| process.env.ENABLE_BINANCE_ORDER_AUDIT === 'true'
 		|| process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS === 'true'
@@ -730,6 +732,142 @@ function incrementCounter(target, key) {
 	target[normalizedKey] = (target[normalizedKey] || 0) + 1;
 }
 
+const UNKNOWN_SYMBOL = 'unknown';
+const MAX_EXTRACTED_SYMBOL_LENGTH = 32;
+// A normalized crypto pair ("BTC/USDT") keeps a single internal slash; every
+// other separator usage is rejected. Each side must itself be a real ticker.
+const SLASH_PAIR_PATTERN = /^[A-Z0-9][A-Z0-9._-]+\/[A-Z0-9][A-Z0-9._-]+$/;
+
+/**
+ * A candidate value is only usable as an indexable symbol when it is a non-empty
+ * string that is not the `unknown` sentinel, contains no whitespace, carries at
+ * most one well-formed slash pair, and is at least two characters long and not
+ * numeric-only.
+ *
+ * Issue #222: production `bySymbol` analytics contained a bare integer (`"53"`)
+ * and a single-character value, so a permissive extractor silently polluted the
+ * very surface this guard exists to keep honest. `unknown` must stay the honest
+ * fallback rather than a fabricated ticker.
+ */
+function isValidExtractedSymbol(value) {
+	if (typeof value !== 'string') {
+		return false;
+	}
+
+	const candidate = value.trim();
+	if (candidate.length < 2 || candidate.length > MAX_EXTRACTED_SYMBOL_LENGTH) {
+		return false;
+	}
+	if (candidate.toLowerCase() === UNKNOWN_SYMBOL) {
+		return false;
+	}
+	if (/\s/.test(candidate) || candidate.includes('\\')) {
+		return false;
+	}
+	if (candidate.includes('/') && !SLASH_PAIR_PATTERN.test(candidate)) {
+		return false;
+	}
+	// Numeric-only values are never tickers. `\p{Nd}` is used rather than `\d` so
+	// non-ASCII digits (Arabic-Indic ٥٣, fullwidth ５３) cannot slip through as a
+	// symbol, which is the exact bug class this guard exists to prevent.
+	if (/^\p{Nd}+$/u.test(candidate)) {
+		return false;
+	}
+
+	// Astral characters (emoji, some scripts) count as 2 UTF-16 units, so a
+	// length-based check alone can admit a single "character" symbol.
+	if (/[\u{10000}-\u{10FFFF}]/u.test(candidate)) {
+		return false;
+	}
+
+	return true;
+}
+
+/**
+ * Normalizes an `EXCHANGE:SYMBOL` (or bare `SYMBOL`) candidate and returns
+ * `{ symbol, exchange }`, or null when the symbol is not indexable.
+ */
+function normalizeSymbolCandidate(candidate, exchangeFallback) {
+	if (typeof candidate !== 'string' || !candidate.trim()) {
+		return null;
+	}
+
+	const normalized = candidate.trim().toUpperCase();
+	const fallbackExchange = typeof exchangeFallback === 'string' && exchangeFallback.trim()
+		? exchangeFallback.trim().toUpperCase()
+		: null;
+
+	if (normalized.includes(':')) {
+		const separatorIndex = normalized.indexOf(':');
+		const exchange = normalized.slice(0, separatorIndex).trim();
+		const symbol = normalized.slice(separatorIndex + 1).trim();
+		if (!isValidExtractedSymbol(symbol)) {
+			return null;
+		}
+		return { symbol, exchange: exchange || fallbackExchange };
+	}
+
+	if (!isValidExtractedSymbol(normalized)) {
+		return null;
+	}
+
+	return { symbol: normalized, exchange: fallbackExchange };
+}
+
+/**
+ * Deterministic symbol extraction from raw alert text.
+ *
+ * Prefers the hardened `deriveAssetContext()` normalizer (the same one used by
+ * the grounding / search-query path) so the `aerosol` / `teeth` lowercase-prose
+ * guards and the `BTC/USDT` slash-pair preservation stay in a single place
+ * instead of being re-implemented as a parallel regex. Because
+ * `deriveAssetContext()` intentionally returns null for non-crypto shapes it
+ * does not own (a bare `EXCHANGE:SYMBOL`, a 2-character ticker), the pre-existing
+ * TradingView alert patterns are retained as a second, now-validated pass so
+ * coverage is not reduced. Every returned symbol is validated, so bare integers
+ * and single characters can never be extracted.
+ */
+/**
+ * True when `text` contains an `EXCHANGE:` prefix, using a linear scan.
+ *
+ * `/[A-Z_]+:/i` is quadratic: `_` is inside the case-insensitive character class,
+ * so a long run of underscores forces backtracking (CodeQL js/polynomial-redos).
+ * Alert text is caller-supplied and unbounded, so this walks the string instead.
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasExplicitExchangePrefix(text) {
+	if (typeof text !== 'string' || text.length < 2) {
+		return false;
+	}
+	for (let i = 0; i < text.length; i += 1) {
+		if (text[i] !== ':') {
+			continue;
+		}
+		// Walk backwards over the exchange token and require >=1 leading letter/underscore.
+		let j = i - 1;
+		let hasToken = false;
+		while (j >= 0) {
+			const code = text.charCodeAt(j);
+			const isUpper = code >= 65 && code <= 90;
+			const isLower = code >= 97 && code <= 122;
+			const isDigit = code >= 48 && code <= 57;
+			if (!isUpper && !isLower && !isDigit && text[j] !== '_') {
+				break;
+			}
+			if (!isDigit) {
+				hasToken = true;
+			}
+			j -= 1;
+		}
+		if (hasToken && j < i - 1) {
+			return true;
+		}
+	}
+	return false;
+}
+
 function parseSymbolFromText(text) {
 	if (!text || typeof text !== 'string') {
 		return null;
@@ -740,17 +878,48 @@ function parseSymbolFromText(text) {
 		return null;
 	}
 
+	try {
+		const context = deriveAssetContext(cleaned);
+		// Only trust the context when the text actually carries an exchange or a
+		// slash pair. `deriveAssetContext` matches on crypto SUFFIXES, so an
+		// uppercase prose word like AEROSOL/PARASOL/BTC otherwise reads as a ticker —
+		// and a plausible-looking fake is worse than `unknown`, because it silently
+		// corrupts bySymbol analytics. A real alert names its venue or quotes a pair.
+		const hasExplicitVenue = typeof context?.exchange === 'string' && context.exchange.trim()
+			|| cleaned.includes('/');
+		if (context && context.symbol && hasExplicitVenue && isValidExtractedSymbol(context.symbol)) {
+			return {
+				symbol: context.symbol.trim().toUpperCase(),
+				// Use only an exchange that was actually present in the text.
+				// `deriveAssetContext` synthesises "BINANCE" for any USDT pair, which
+				// would fabricate venue attribution on alerts that named none.
+				// A plain scan is used instead of /[A-Z_]+:/i: `_` overlaps the
+				// case-insensitive class, making that pattern quadratic on long
+				// underscore runs (CodeQL js/polynomial-redos).
+				exchange: typeof context.exchange === 'string' && context.exchange.trim()
+					&& hasExplicitExchangePrefix(cleaned)
+					? context.exchange.trim().toUpperCase()
+					: null,
+			};
+		}
+	} catch {
+		// Extraction must never throw: fall through to the next strategy.
+	}
+
 	const exchangeMatch = cleaned.match(/(?:^|\b)(?<exchange>[A-Z0-9_]{2,10}):(?<symbol>[A-Z0-9._-]{2,20})(?:\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\))?/i);
-	if (exchangeMatch && exchangeMatch.groups && exchangeMatch.groups.symbol) {
-		const symbol = exchangeMatch.groups.symbol.toUpperCase();
-		const exchange = exchangeMatch.groups.exchange ? exchangeMatch.groups.exchange.toUpperCase() : null;
-		return { symbol, exchange };
+	if (exchangeMatch && exchangeMatch.groups && isValidExtractedSymbol(exchangeMatch.groups.symbol)) {
+		return {
+			symbol: exchangeMatch.groups.symbol.trim().toUpperCase(),
+			exchange: exchangeMatch.groups.exchange ? exchangeMatch.groups.exchange.toUpperCase() : null,
+		};
 	}
 
 	const timeframeMatch = cleaned.match(/(?:^|\s)(?<symbol>[A-Z0-9._-]{2,20})\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\)/i);
-	if (timeframeMatch && timeframeMatch.groups && timeframeMatch.groups.symbol) {
-		const symbol = timeframeMatch.groups.symbol.toUpperCase();
-		return { symbol, exchange: null };
+	if (timeframeMatch && timeframeMatch.groups && isValidExtractedSymbol(timeframeMatch.groups.symbol)) {
+		return {
+			symbol: timeframeMatch.groups.symbol.trim().toUpperCase(),
+			exchange: null,
+		};
 	}
 
 	return null;
@@ -758,31 +927,25 @@ function parseSymbolFromText(text) {
 
 function extractSymbolAndExchange(data) {
 	if (!data || typeof data !== 'object') {
-		return { symbol: 'unknown', exchange: null };
+		return { symbol: UNKNOWN_SYMBOL, exchange: null };
 	}
 
+	const topLevelExchange = typeof data.exchange === 'string' && data.exchange.trim()
+		? data.exchange.trim().toUpperCase()
+		: null;
+
 	if (typeof data.symbol === 'string' && data.symbol.trim()) {
-		const sym = data.symbol.trim().toUpperCase();
-		if (sym.includes(':')) {
-			const parts = sym.split(':');
-			return { symbol: parts[1], exchange: parts[0] };
+		const normalized = normalizeSymbolCandidate(data.symbol, topLevelExchange);
+		if (normalized) {
+			return normalized;
 		}
-		return {
-			symbol: sym,
-			exchange: typeof data.exchange === 'string' && data.exchange.trim() ? data.exchange.trim().toUpperCase() : null,
-		};
 	}
 
 	if (typeof data.ticker === 'string' && data.ticker.trim()) {
-		const ticker = data.ticker.trim().toUpperCase();
-		if (ticker.includes(':')) {
-			const parts = ticker.split(':');
-			return { symbol: parts[1], exchange: parts[0] };
+		const normalized = normalizeSymbolCandidate(data.ticker, topLevelExchange);
+		if (normalized) {
+			return normalized;
 		}
-		return {
-			symbol: ticker,
-			exchange: typeof data.exchange === 'string' && data.exchange.trim() ? data.exchange.trim().toUpperCase() : null,
-		};
 	}
 
 	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
@@ -792,17 +955,17 @@ function extractSymbolAndExchange(data) {
 			data.enrichmentData.asset,
 			data.enrichmentData.original_symbol,
 		];
-		const found = candidates.find((c) => typeof c === 'string' && c.trim());
-		if (found) {
-			const sym = found.trim().toUpperCase();
-			if (sym.includes(':')) {
-				const parts = sym.split(':');
-				return { symbol: parts[1], exchange: parts[0] };
+		const enrichmentExchange = typeof data.enrichmentData.exchange === 'string' && data.enrichmentData.exchange.trim()
+			? data.enrichmentData.exchange.trim().toUpperCase()
+			: null;
+		for (const candidate of candidates) {
+			const normalized = normalizeSymbolCandidate(
+				candidate,
+				enrichmentExchange || topLevelExchange,
+			);
+			if (normalized) {
+				return normalized;
 			}
-			const exchange = typeof data.enrichmentData.exchange === 'string' && data.enrichmentData.exchange.trim()
-				? data.enrichmentData.exchange.trim().toUpperCase()
-				: (typeof data.exchange === 'string' && data.exchange.trim() ? data.exchange.trim().toUpperCase() : null);
-			return { symbol: sym, exchange };
 		}
 	}
 
@@ -813,7 +976,7 @@ function extractSymbolAndExchange(data) {
 		}
 	}
 
-	return { symbol: 'unknown', exchange: null };
+	return { symbol: UNKNOWN_SYMBOL, exchange: null };
 }
 
 function extractAlertSymbol(data) {
@@ -2448,6 +2611,7 @@ module.exports = {
 	getLatestReplayForAlert,
 	getReplayAttemptByIdempotencyKey,
 	parseSymbolFromText,
+	isValidExtractedSymbol,
 	extractSymbolAndExchange,
 	extractAlertSymbol,
 	formatEnrichmentSummary,
