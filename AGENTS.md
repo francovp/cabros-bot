@@ -1593,7 +1593,7 @@ Raw alert text remains disabled by default and requires an explicit checkbox. Th
 
 **Coverage**:
 - `src/services/tradingview/TradingViewMcpService.js` — Bounded base retry sub-budget, remaining-budget abort propagation, optional fail-open handling, and full/partial/failed runtime counters.
-- `tests/unit/tradingview-mcp-service.test.js` — Covers full-budget base analysis, retry after base timeout, capped retry delays, optional timeout preserving base data, and failed status accounting.
+- `tests/unit/tradingview-mcp-service.test.js` — Covers full-budget base analysis, capped retry delays, optional timeout preserving base data, failed status accounting, the budget-arithmetic guard against a retry collapsing to 1ms (GH-630), and budget-exhaustion classification via the structural `mcpBudgetExhausted` marker rather than message text.
 - `src/services/storage/AlertStorageService.js` — Persists only the allow-listed enrichment outcome status.
 
 `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS`, `TRADINGVIEW_MCP_TIMEOUT_MS`, and `TRADINGVIEW_MCP_MAX_RETRIES` remain the existing environment/Remote Config controls; no new environment variable was added.

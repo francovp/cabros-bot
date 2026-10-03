@@ -17,7 +17,7 @@ const http = require('http');
  * `perHopDelayMs` simulates per-hop provider latency so bounded-budget
  * regressions reproduce deterministically instead of depending on a live host.
  */
-function startFakeMcpServer({ perHopDelayMs = 0, analysis = null } = {}) {
+function startFakeMcpServer({ perHopDelayMs = 0 } = {}) {
 	const calls = { initialize: 0, initialized: 0, tools: [] };
 	const sessions = new Set();
 
@@ -86,7 +86,7 @@ function startFakeMcpServer({ perHopDelayMs = 0, analysis = null } = {}) {
 
 		if (message.method === 'tools/call') {
 			calls.tools.push({ name: message.params && message.params.name, args: message.params && message.params.arguments });
-			const payload = analysis || {
+			const payload = {
 				price_data: { current_price: 70000 },
 				technical_indicators: { atr: 900 },
 				rsi: { value: 55 },
@@ -1730,7 +1730,6 @@ describe('TradingViewMcpService', () => {
 			// A provider that errors immediately (not a hang) must still consume
 			// its retry allowance, and a later attempt may succeed.
 			const server = await startFakeMcpServer();
-			const originalTools = server.calls.tools;
 			const service = new TradingViewMcpService({
 				url: server.url,
 				maxRetries: 3,
@@ -1757,7 +1756,7 @@ describe('TradingViewMcpService', () => {
 					current_price: 70000,
 				}));
 				expect(attempts).toBe(2);
-				expect(originalTools.map(call => call.name)).toContain('coin_analysis');
+				expect(server.calls.tools.map(call => call.name)).toContain('coin_analysis');
 			} finally {
 				await server.close();
 			}
