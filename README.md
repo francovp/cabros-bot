@@ -7,6 +7,8 @@
 
 A high-performance crypto, equity, and market intelligence bot service built with Node.js and Express. It connects incoming TradingView alerts and scheduled event monitors with Gemini Grounding, TradingView MCP analysis, and Binance Spot execution, dispatching formatted alerts concurrently across Telegram, WhatsApp, and Discord.
 
+> **New here?** Start with [`docs/PRODUCT.md`](docs/PRODUCT.md) for a human-readable capability map, status legend, and the first-24-hours operator journey. This README is the detailed operator reference.
+
 ---
 
 ## Core Capabilities
@@ -115,6 +117,8 @@ Verify service readiness:
 ```bash
 curl http://localhost:3000/healthcheck
 curl http://localhost:3000/ready
+curl "http://localhost:3000/healthcheck?depth=readiness"
+curl "http://localhost:3000/ready?depth=dependencies"
 ```
 
 ---
@@ -125,8 +129,8 @@ All webhook and mutation endpoints require the `x-api-key` header (configured vi
 
 | Method | Path | Description | Documentation |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/healthcheck` | Fast process liveness probe | [API Reference](docs/api-reference.md#get-healthcheck) |
-| `GET` | `/ready` | Deep dependency readiness probe (Redis, Firestore, MCP) | [API Reference](docs/api-reference.md#get-ready) |
+| `GET` | `/healthcheck` | Process liveness probe; `?deep=true` = channel readiness, `?depth=readiness` = dependency report (advisory, always 200) | [API Reference](docs/api-reference.md#get-healthcheck) |
+| `GET` | `/ready` | Bootstrap gate; `?depth=dependencies` adds a fail-closed dependency probe | [API Reference](docs/api-reference.md#get-ready) |
 | `GET` | `/api/status` | Comprehensive system capabilities & dependency matrix | [API Reference](docs/api-reference.md#get-apistatus) |
 | `GET` | `/api/public/status` | Safe public subset of capabilities & channel statuses | [API Reference](docs/api-reference.md#get-apipublicstatus) |
 | `POST` | `/api/webhook/alert` | Ingest and dispatch alert to configured channels | [Webhook Alerts](docs/webhooks.md#post-apiwebhookalert) |
@@ -134,6 +138,7 @@ All webhook and mutation endpoints require the `x-api-key` header (configured vi
 | `POST` | `/api/webhook/volume-confirmation` | TradingView volume and momentum confirmation | [Webhook Alerts](docs/webhooks.md#post-apiwebhookvolume-confirmation) |
 | `POST` | `/api/webhook/symbol-analysis` | Immediate multi-timeframe symbol analysis | [Webhook Alerts](docs/webhooks.md#post-apiwebhooksymbol-analysis) |
 | `POST` | `/api/webhook/market-scanner-alert` | Multi-asset market scanner report (gainers/losers) | [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert) |
+| `POST` | `/api/webhook/message` | Generic non-alert message to enabled channels; reports inbound truncation metadata | [Webhook Alerts](docs/webhooks.md#post-apiwebhookmessage) |
 | `POST` | `/api/jobs/tradingview-analysis` | Queue long-running analysis or scanner job | [Jobs API](docs/jobs.md#post-apijobstradingview-analysis) |
 | `GET` | `/api/jobs` | List recent background jobs with status & progress | [Jobs API](docs/jobs.md#get-apijobs) |
 | `GET` | `/api/jobs/:jobId` | Poll background job progress and retrieve result | [Jobs API](docs/jobs.md#get-apijobsjobid) |
@@ -157,6 +162,7 @@ When the Telegram bot is enabled (`ENABLE_TELEGRAM_BOT=true`), the bot provides 
 | :--- | :--- | :--- |
 | `/help`, `/start` | None | Displays command list and argument help. |
 | `/precio` | `<symbol>` | Real-time crypto (Binance) or equity (Twelve Data) price quote. |
+| `/alerta`, `/alert` | `<symbol> <op> <price>` | Creates a user-defined price-threshold alert. Also `/alerta list` and `/alerta cancel <id>`. |
 | `/cryptobot` | `id` | Displays the current Telegram chat ID. |
 | `/analisis` | `<symbols>` | Runs quick TradingView technical analysis for specified symbols. |
 | `/scanner` | `[options]` | Executes market scanner sweep across preconfigured assets. |
@@ -187,6 +193,63 @@ The news monitor endpoint reports volume throttling status in its response paylo
 ```
 - `throttled` - The number of symbols skipped during the execution sweep because the rate limit window was reached. See [News Monitoring Guide](docs/news-monitor.md).
 
+### User-Defined Price Threshold Alerts
+
+Users can create their own threshold alerts from Telegram (opt-in via `ENABLE_USER_PRICE_ALERTS=true`, disabled by default):
+
+```
+/alerta BTCUSDT < 60000      # notify when BTC drops below 60000
+/alerta NASDAQ:NVDA >= 140   # notify when NVDA reaches 140
+/alerta ETHUSDT mayor 3500   # natural-language operator
+/alerta list                 # list this chat's active alerts
+/alerta cancel <id>          # cancel an alert
+```
+
+Alerts are stored in the server-side-only `userPriceAlerts` Firestore collection (client access is denied by `firestore.rules`) and evaluated by a bounded background sweep. Key behavior:
+
+- **Durable with a fail-open in-memory fallback.** When Firestore is unavailable the service runs from an in-process map; a durable write failure is reported to the user instead of silently acknowledging a lost alert.
+- **Durable reads never fall back to the ephemeral mirror.** If a durable `list`/`get`/sweep read fails, the service reports the storage error instead of answering from the process-local map, which would tell a user their armed alerts had vanished and make them impossible to cancel.
+- **Fires at most once.** The `armed → triggered` transition is claimed inside a Firestore transaction before the notification is dispatched, and the sweep is guarded by a distributed lease (`userPriceAlertLocks`), so overlapping sweeps or multiple replicas cannot double-notify.
+- **A trigger is only consumed when it is actually delivered.** If no Telegram bot is available, the claim is rolled back and the alert returns to `armed` so a replica that can send still notifies the user. Delivery records `deliveryAttemptedAt` *before* the send and `deliveredAt` after it, and the re-arm requires the absence of both — so a lost delivery-marker write can never resurrect a notification the user already received.
+- **A replica that cannot deliver never sweeps.** If the process has no Telegram bot (Telegram disabled, or a preview deployment), the sweep is deferred instead of claiming and re-arming the same alert on every cycle.
+- **No starvation.** The sweep orders by document id and resumes after the last scanned id, so alerts beyond `USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT` are still evaluated on later sweeps.
+- **Bounded cost.** Prices are deduplicated per symbol and fetched with at most `USER_PRICE_ALERT_PRICE_FETCH_CONCURRENCY` concurrent provider calls.
+- **Bounded state.** Each chat may hold at most `USER_PRICE_ALERT_MAX_PER_CHAT` armed alerts, they expire after `USER_PRICE_ALERT_RETENTION_DAYS`, and `/alerta` is rate-limited like the other expensive commands.
+- **Forum topics.** A Telegram forum topic id of `0` (the chat's General topic) is preserved as an explicit destination rather than treated as "no topic".
+- **Notification-only.** No exchange-key custody and no order placement; trading stays behind the operator-only Binance endpoint.
+
+`GET /api/status` and `GET /api/capabilities` expose `featureFlags.userPriceAlerts` and a non-sensitive `dependencies.userPriceAlertWorker` block (role, running state, sweep counters, `lastError`, and `storageMode`). `ready` is only true when storage is `durable`; without Firestore the service reports `configured: false` / `status: "degraded"` so process-local alerts are never mistaken for durable ones.
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `ENABLE_USER_PRICE_ALERTS` | `false` | Master feature gate. Remote Config eligible. |
+| `USER_PRICE_ALERT_WORKER_ROLE` | `web` | `web`, `worker`, or `disabled`. Must match the process source. |
+| `USER_PRICE_ALERT_EVALUATION_INTERVAL_MS` | `60000` | Sweep cadence. Remote Config eligible. |
+| `USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT` | `50` | Armed alerts scanned per sweep. Remote Config eligible. |
+| `USER_PRICE_ALERT_MAX_PER_CHAT` | `20` | Per-chat armed-alert quota. |
+| `USER_PRICE_ALERT_RETENTION_DAYS` | `30` | Days before an armed alert expires. |
+| `USER_PRICE_ALERT_LEASE_MS` | `120000` | Distributed sweep lease duration. |
+| `USER_PRICE_ALERT_PRICE_FETCH_CONCURRENCY` | `3` | Concurrent price lookups per sweep. |
+
+### Async Job Backlog Depth & Operator Paging
+
+A background probe reports durable async-job backlog depth on `GET /api/status` and `GET /api/capabilities` under `dependencies.jobExecutionQueue`, and pages `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` when non-terminal queued jobs accumulate while workers are stalled or offline. Broker readiness alone cannot distinguish a *ready but undrained* queue from a healthy one, which is why queue "ready" is reported alongside depth rather than instead of it.
+
+`durableQueuedCount` is a **lower bound**: the probe scans at most `5` pages of `100` documents and sets `truncated` when it stops early, so it never overstates what it observed. `oldestQueuedAgeMs` is `null` when the backlog is empty **or** when the durable probe failed — a failed probe never clears an active alert or emits a false all-clear, because an indeterminate result is not evidence of recovery. `backlogMonitorEnabled` is `false` when the monitor is switched off, so disabled monitoring is never read as a healthy empty queue.
+
+Paging is deduplicated by cooldown and only latches after confirmed delivery; a failed page or a failed all-clear is retried on the next probe. All probing and paging is fail-open — it never blocks job intake or alert delivery — and each external probe is individually bounded so a half-open broker connection cannot silently stop backlog reporting for the process lifetime.
+
+| Variable | Default | Bounds | Purpose |
+| :--- | :--- | :--- | :--- |
+| `JOB_BACKLOG_ALERT_THRESHOLD_MS` | `900000` | `1000`–`86400000` | Oldest-queued age that triggers an operator page. Remote Config eligible. |
+| `JOB_BACKLOG_PAGE_COOLDOWN_MS` | `900000` | `1000`–`86400000` | Minimum gap between repeat pages, so a sustained stall cannot storm the operator. Remote Config eligible. |
+| `JOB_BACKLOG_PROBE_INTERVAL_MS` | `60000` | `1000`–`3600000` | Background probe cadence. Remote Config eligible. |
+| `JOB_BACKLOG_PROBE_TIMEOUT_MS` | `10000` | `1000`–`300000` | Per-dependency probe deadline. Environment-only. |
+| `ENABLE_JOB_BACKLOG_MONITOR` | `true` | — | Master monitor gate. **Environment-only** — a process-startup gate, deliberately excluded from Remote Config. |
+
+### Market Scanner MCP Fast-Fail Gate
+`POST /api/webhook/market-scanner-alert` checks the process-local TradingView MCP status before running its sequential scans. If the status is `degraded` with `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, it skips every scan and returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with each scan as `status: "skipped"`. The endpoint returns `502` in two shapes: `TRADINGVIEW_MCP_UNAVAILABLE` (skipped, nothing attempted) and `ALL_SCANS_FAILED` (attempted, all failed). The gate keys on the breaker's time-based state so that after `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses the next request is allowed through as a recovery probe — a transient outage self-heals without a restart. See [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert).
+
 ---
 
 ## Running Tests
@@ -214,6 +277,30 @@ pnpm run lint
 ```
 
 ---
+
+### Updating SHA-pinned GitHub Actions
+
+All `uses:` references in `.github/workflows/*.yml` are pinned to full 40-character commit SHAs (with an inline `# v<major>` comment) for supply-chain hardening — see [issue #803](https://github.com/francovp/cabros-bot/issues/803). Mutable major-version tags can be force-moved by the action owner, so a tag pin is not a reproducible CI reference.
+
+To bump a pinned action to a newer release:
+
+1. Visit `https://github.com/<owner>/<repo>/commits/<major-tag>` (for example, `https://github.com/actions/checkout/commits/v4`).
+2. Copy the latest commit's 40-character SHA.
+3. Update both the SHA and the trailing version comment in every workflow that references the action. The `grep -rEn 'uses:.*@v[0-9]+(\.|$| )' .github/workflows/` check must return zero matches after the change.
+
+A future Dependabot `github-actions` ecosystem entry (proposed in #559) can automate the SHA rewrite on upstream release; until that lands, bump SHAs manually on the cadence above.
+
+### Rate-limit response headers
+
+Every protected `/api` response (success and throttled) carries the standard `X-RateLimit-*` headers so callers can implement adaptive backpressure:
+
+| Header | Value |
+|---|---|
+| `X-RateLimit-Limit` | Max requests per window for the active bucket (`RATE_LIMIT_MAX` or `1000` for `/api/webhook/alert` and `/api/webhook/message`). |
+| `X-RateLimit-Remaining` | Requests remaining in the current window. Zero on a throttled response. |
+| `X-RateLimit-Reset` | Unix timestamp (seconds) when the current window resets. |
+
+Throttled (`429`) responses additionally include the existing `Retry-After` header (seconds) and the `retryAfterSeconds` field in the JSON body. `/healthcheck`, `/ready`, and static asset routes are exempt — the global rate limiter is mounted after them in `app.js`.
 
 ## Architecture Overview
 

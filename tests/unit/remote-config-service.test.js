@@ -854,4 +854,40 @@ describe('RemoteConfigService', () => {
 			});
 		});
 	});
+
+	it('supports user price alert parameters via Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({
+			ENABLE_USER_PRICE_ALERTS: true,
+			USER_PRICE_ALERT_EVALUATION_INTERVAL_MS: 30000,
+			USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT: 25,
+			USER_PRICE_ALERT_MAX_PER_CHAT: 15,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.ENABLE_USER_PRICE_ALERTS).toBe(true);
+		expect(config.USER_PRICE_ALERT_EVALUATION_INTERVAL_MS).toBe(30000);
+		expect(config.USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT).toBe(25);
+		expect(config.USER_PRICE_ALERT_MAX_PER_CHAT).toBe(15);
+	});
+
+	it('supports JOB_BACKLOG_* parameters via Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({
+			JOB_BACKLOG_ALERT_THRESHOLD_MS: 600000,
+			JOB_BACKLOG_PAGE_COOLDOWN_MS: 1200000,
+			JOB_BACKLOG_PROBE_INTERVAL_MS: 30000,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.JOB_BACKLOG_ALERT_THRESHOLD_MS).toBe(600000);
+		expect(config.JOB_BACKLOG_PAGE_COOLDOWN_MS).toBe(1200000);
+		expect(config.JOB_BACKLOG_PROBE_INTERVAL_MS).toBe(30000);
+	});
 });

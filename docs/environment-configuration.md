@@ -170,6 +170,15 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 - `JOB_QUEUE_CLAIM_LEASE_MS` - Firestore claim lease and heartbeat interval (default: `60000` ms)
 - `JOB_QUEUE_CONNECT_TIMEOUT_MS` - Redis connection timeout (default: `5000` ms)
 
+#### Async Job Backlog Monitoring
+
+- `ENABLE_JOB_BACKLOG_MONITOR` - Enable the periodic background async job backlog depth probe and operator paging (`true` or `false`, default: `true`)
+- `JOB_BACKLOG_ALERT_THRESHOLD_MS` - Age in milliseconds at which the oldest queued job triggers an operator page (`1000`-`86400000`, default: `900000` / 15m, Remote Config supported)
+- `JOB_BACKLOG_PAGE_COOLDOWN_MS` - Cooldown in milliseconds between repeated backlog pages so a sustained stall cannot storm the operator (`1000`-`86400000`, default: `900000` / 15m, Remote Config supported)
+- `JOB_BACKLOG_PROBE_INTERVAL_MS` - Interval in milliseconds between background backlog depth probes (`1000`-`3600000`, default: `60000` / 1m, Remote Config supported)
+
+The probe reads BullMQ waiting/delayed/failed/active counts plus a bounded Firestore count of non-terminal `queued` durable rows, and surfaces them on `GET /api/status` and `GET /api/capabilities` under `dependencies.jobExecutionQueue` (`waitingCount`, `delayedCount`, `failedCount`, `activeCount`, `durableQueuedCount`, `oldestQueuedAgeMs`, `backlogAlert`). No Redis URL or credential is exposed. When `oldestQueuedAgeMs` crosses the threshold, the monitor pages `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` once per cooldown window and sends a single all-clear when the backlog drains. All probing and paging fails open: a probe or notification failure never blocks job intake or alert delivery.
+
 `render.yaml` provisions a starter Background Worker and Key Value store. The web service remains on `JOB_EXECUTION_MODE=local` by default; switching it to `render-worker` requires the worker, Redis, and Firestore credentials to be available. For deployments without Redis, `JOB_EXECUTION_MODE=firestore-poller` allows dedicated workers to poll Firestore directly without extra infrastructure. The API returns `503 JOB_QUEUE_UNAVAILABLE` instead of accepting a job when durable storage or queue requirements are not met. If enqueue acknowledgement and deterministic Redis reconciliation both fail in `render-worker` mode, it returns `503 JOB_QUEUE_ACCEPTANCE_UNKNOWN` with the durably stored `jobId`; the worker periodically re-enqueues durable queued rows, retries retained failed BullMQ jobs, and recovers expired claims after Redis recovers.
 
 Unfiltered signal outcome summaries include `shadowModeMetrics` with full coverage buckets and per-window hit-rate metrics. The `exchangeBreakdown` and `providerBreakdown` maps carry `received`, `eligible`, `evaluated`, `pending`, and `unavailable` counts. Target and stop hit rates use barrier-eligible denominators: evaluated outcomes without a configured target or stop (`null`/non-positive) are excluded from the corresponding rate instead of counted as misses, and `windows[*].targetEligibleWindows` / `windows[*].stopEligibleWindows` expose each window's eligible denominator. Filtered alert summaries/exports omit shadow-mode metrics because that service has no matching source/enrichment filters. Equity signals only enter the eligible/evaluated population when the opt-in Twelve Data provider is configured; otherwise they remain explicitly unavailable.
@@ -241,6 +250,7 @@ pnpm test:firebase
 #### Server Configuration
 
 - `PORT` - HTTP server port (default: `80`)
+- HTTP server timeouts are fixed at 10 seconds for headers, 120 seconds for complete requests, and 30 seconds for keep-alive connections to bound slow-client resource use. Node only enforces `headersTimeout` when its periodic connection checker fires, so `connectionsCheckingInterval` is also fixed at 5 seconds (Node's 30s default would defer rejection to ~30s). Because the sweep is aligned to server start rather than to each connection, a slow-header client is rejected within a worst case of **15 seconds** (`headersTimeout + connectionsCheckingInterval`), not exactly 10 (see `src/lib/serverTimeouts.js`).
 - `SHUTDOWN_TIMEOUT_MS` - Maximum graceful shutdown budget in milliseconds (default: `10000`, hard cap: `30000`); after the deadline active jobs receive a bounded finalization attempt and are persisted as retryable cancellations, remaining HTTP connections are force-closed, and the process exits
 - `RENDER` - Render.com deployment flag (used internally)
 - `IS_PULL_REQUEST` - Render preview environment flag (disables bot in PRs)
