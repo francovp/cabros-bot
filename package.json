@@ -12,6 +12,7 @@
     "deploy:firebase-remote-config:server": "node scripts/deploy-server-remote-config.js",
     "sync:production-env": "node scripts/sync-production-env.js",
     "cleanup:preview-channels": "node scripts/cleanup-preview-channels.js",
+    "uptime:monitor": "node ops/external-uptime-monitor.js",
     "preinstall": "npx only-allow pnpm",
     "start": "node index.js",
     "start-worker": "node worker.js",
