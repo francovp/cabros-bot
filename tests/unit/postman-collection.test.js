@@ -567,6 +567,71 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
 	});
 
+	it('documents degraded, healthy, and omitted firestore read-metric variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - firestore read metrics (degraded read path)');
+
+		expect(item).toBeDefined();
+
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const healthy = item.response.find((res) => res.name.includes('healthy'));
+		const omitted = item.response.find((res) => res.name.includes('omitted'));
+		const unauthorized = item.response.find((res) => res.code === 401);
+
+		// Issue #1285 acceptance: a broken read path must be visible on /api/status
+		// as a non-ready dependency with a sanitized category.
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.firestore).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readHealth: 'degraded',
+			lastReadErrorCategory: 'failed_precondition',
+		});
+		expect(JSON.parse(degraded.body).dependencies.firestoreReadMetrics.lastErrorCategory)
+			.toBe('failed_precondition');
+
+		expect(healthy.code).toBe(200);
+		expect(JSON.parse(healthy.body).dependencies.firestore).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readHealth: 'healthy',
+		});
+
+		expect(omitted.code).toBe(200);
+		expect(JSON.parse(omitted.body).dependencies.firestoreReadMetrics).toBeUndefined();
+		expect(JSON.parse(omitted.body).dependencies.firestore).not.toHaveProperty('readHealth');
+
+		expect(unauthorized.code).toBe(401);
+	});
+
+	it('documents both STORAGE_UNAVAILABLE classifications for GET List Alerts', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'GET List Alerts');
+
+		const missingIndex = item.response.find((res) => res.name.includes('missing composite index'));
+		const uninitialized = item.response.find((res) => res.name.includes('check credentials'));
+
+		// The two variants must be mutually exclusive so an operator can tell a
+		// rejected query from a credential/init failure without log access.
+		expect(missingIndex.code).toBe(503);
+		expect(JSON.parse(missingIndex.body)).toMatchObject({
+			code: 'STORAGE_UNAVAILABLE',
+			category: 'failed_precondition',
+			missingIndex: true,
+		});
+		expect(uninitialized.code).toBe(503);
+		expect(JSON.parse(uninitialized.body)).toMatchObject({
+			code: 'STORAGE_UNAVAILABLE',
+			category: 'uninitialized',
+		});
+
+		for (const res of [missingIndex, uninitialized]) {
+			const body = JSON.parse(res.body);
+			expect(body.error).not.toMatch(/projects\//);
+			expect(body.error).not.toMatch(/console\.firebase\.google\.com/);
+		}
+	});
+
 	it('documents distinct invalid query variants for GET Summarize Signal Outcomes', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const invalidLimit = findItem(collection.item, 'GET Summarize Signal Outcomes (invalid limit)');

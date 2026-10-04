@@ -54,6 +54,7 @@ function calculateBackoffDelay(attempt) {
  * @param {Function} sendFn - Async function that returns SendResult or throws
  * @param {number} maxRetries - Maximum retry attempts (default: 3)
  * @param {Object} logger - Logger object with warn() and error() methods (optional)
+ * @param {Object} options - Optional { signal, maxRetryDelayMs }
  * @returns {Promise<Object>} SendResult object after success or max retries exhausted
  */
 async function sendWithRetry(sendFn, maxRetries = 3, logger = null, options = {}) {

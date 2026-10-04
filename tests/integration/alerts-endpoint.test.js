@@ -407,6 +407,43 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	// ── Issue #1285 ──────────────────────────────────────────────────────────
+	// The 503 body carried no machine-readable reason, so a rejected query was
+	// indistinguishable from a credential failure without log access.
+	it('surfaces the sanitized Firestore category on a rejected query', async () => {
+		const error = new Error('Alert storage is enabled but Firestore is unavailable. Firestore failed precondition: a missing composite index is the usual cause.');
+		error.code = 'STORAGE_UNAVAILABLE';
+		error.category = 'failed_precondition';
+		error.missingIndex = true;
+		alertStorageService.listAlerts.mockRejectedValue(error);
+
+		const res = await request(app)
+			.get('/api/alerts')
+			.set('x-api-key', 'test-key')
+			.expect(503);
+
+		expect(res.body).toMatchObject({
+			code: 'STORAGE_UNAVAILABLE',
+			category: 'failed_precondition',
+			missingIndex: true,
+		});
+	});
+
+	it('omits category and missingIndex when the error carries no valid category', async () => {
+		const error = new Error('Alert storage is enabled but Firestore is unavailable.');
+		error.code = 'STORAGE_UNAVAILABLE';
+		error.category = 'definitely_not_a_real_category';
+		alertStorageService.summarizeAlerts.mockRejectedValue(error);
+
+		const res = await request(app)
+			.get('/api/alerts/summary')
+			.set('x-api-key', 'test-key')
+			.expect(503);
+
+		expect(res.body).not.toHaveProperty('category');
+		expect(res.body).not.toHaveProperty('missingIndex');
+	});
+
 	it('returns an alert analytics summary for a bounded time window', async () => {
 		alertStorageService.summarizeAlerts.mockResolvedValue({
 			window: {

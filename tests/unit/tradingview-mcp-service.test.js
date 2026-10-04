@@ -1932,5 +1932,124 @@ describe('TradingViewMcpService', () => {
 			expect(synced).toBeNull();
 		});
 	});
+
+	describe('outbound MCP exchange alias resolution (#591)', () => {
+		it('sends the mapped venue to the MCP server while reporting the original exchange', async () => {
+			const service = new TradingViewMcpService({
+				maxRetries: 2,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+			service._executeCallTool = jest.fn().mockResolvedValue({
+				structuredContent: { price_data: { current_price: 372.11 } },
+			});
+
+			const enriched = await service.enrichFromSignal({
+				symbol: 'TSLA',
+				exchange: 'BATS',
+				timeframe: '1D',
+				side: 'BUY',
+				rawText: 'BATS:TSLA(D) cambió a señal de COMPRA',
+			});
+
+			const [, toolArgs] = service._executeCallTool.mock.calls[0];
+			expect(toolArgs).toMatchObject({ symbol: 'TSLA', exchange: 'NASDAQ', timeframe: '1D' });
+			// Metadata keeps the exchange the screener actually sent, and the
+			// alias target is reported separately.
+			expect(enriched.requestedExchange).toBe('BATS');
+			expect(enriched.requestedExchangeMappedTo).toBe('NASDAQ');
+			// `exchange` is deliberately absent: emitting it would duplicate
+			// requestedExchange AND pre-empt the fill-from-parse path in alert.js,
+			// which would let a configured default venue (BINANCE) masquerade as a
+			// screener-sent prefix in the persisted alert.
+			expect(enriched).not.toHaveProperty('exchange');
+		});
+
+		it('keeps supported exchanges byte-for-byte unchanged', async () => {
+			const service = new TradingViewMcpService({
+				maxRetries: 1,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+			service._executeCallTool = jest.fn().mockResolvedValue({
+				structuredContent: { price_data: { current_price: 70000 } },
+			});
+
+			await service.enrichFromSignal({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+				side: 'BUY',
+				rawText: 'BINANCE:BTCUSDT(1D) pasó a señal de COMPRA',
+			});
+
+			const [, toolArgs] = service._executeCallTool.mock.calls[0];
+			expect(toolArgs).toMatchObject({ symbol: 'BTCUSDT', exchange: 'BINANCE' });
+		});
+
+		it('spends a single attempt on a deterministic no-data miss', async () => {
+			const service = new TradingViewMcpService({
+				maxRetries: 3,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+			service.callCoinAnalysis = jest.fn().mockRejectedValue(
+				new Error('No data found for SPX on KUCOIN'),
+			);
+
+			await expect(service.enrichFromSignal({
+				symbol: 'SPX',
+				exchange: 'SPCFD',
+				timeframe: '1D',
+				side: 'BUY',
+				rawText: 'SPCFD:SPX(D) cambió a señal de COMPRA',
+			})).rejects.toThrow('No data found for SPX on KUCOIN');
+
+			expect(service.callCoinAnalysis).toHaveBeenCalledTimes(1);
+		});
+
+		it('still retries genuine transport failures', async () => {
+			const service = new TradingViewMcpService({
+				maxRetries: 3,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+			service.callCoinAnalysis = jest.fn()
+				.mockRejectedValueOnce(new Error('fetch failed'))
+				.mockResolvedValue({ price_data: { current_price: 70000 } });
+
+			const enriched = await service.enrichFromSignal({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+				side: 'BUY',
+				rawText: 'BINANCE:BTCUSDT(1D) pasó a señal de COMPRA',
+			});
+
+			expect(service.callCoinAnalysis).toHaveBeenCalledTimes(2);
+			expect(enriched.price_data.current_price).toBe(70000);
+		});
+
+		it('degrades gracefully when the exchange cannot be resolved at all', async () => {
+			const service = new TradingViewMcpService({
+				maxRetries: 1,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+			service.callCoinAnalysis = jest.fn().mockRejectedValue(new Error('No data found for USDCLP on KUCOIN'));
+
+			await expect(service.enrichFromSignal({
+				symbol: 'USDCLP',
+				exchange: 'FX_IDC',
+				timeframe: '1D',
+				side: 'SELL',
+				rawText: 'FX_IDC:USDCLP(D) cambió a señal de VENTA',
+			})).rejects.toThrow(/No data found/);
+
+			// The unsupported venue is reported, and the failure is recorded as a
+			// normal enrichment failure instead of crashing the caller.
+			expect(service.getStatus()).toEqual(expect.objectContaining({
+				enrichment: expect.objectContaining({
+					lastStatus: 'failed',
+					alertPath: expect.objectContaining({ failedCount: 1, appliedCount: 0 }),
+				}),
+			}));
+		});
+	});
 });
 

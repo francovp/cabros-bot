@@ -7342,6 +7342,171 @@
           }
         }
       },
+      "FirestoreReadMetrics": {
+        "type": "object",
+        "description": "In-memory counters for Firestore read attempts. Added for issue #1285, where every stored-alert read endpoint answered 503 while writes succeeded and dependencies.firestore still reported ready: write success and credential shape could not detect a rejected query. readHealth is 'unknown' before any read is observed (no evidence, not a failure), 'healthy' after a successful read, and 'degraded' while the consecutive-failure streak is non-empty; only 'degraded' forces dependencies.firestore.ready to false. Counters reset on process restart and the field is omitted entirely when nothing has been recorded yet. The sanitized lastErrorCategory never carries the provider message, project path, or index definition.",
+        "required": [
+          "window",
+          "readsAttempted",
+          "readsSucceeded",
+          "readsFailed",
+          "successRate",
+          "readHealth",
+          "consecutiveReadFailures",
+          "lastReadAt",
+          "lastReadFailureAt",
+          "lastErrorCategory",
+          "byDomain"
+        ],
+        "properties": {
+          "window": {
+            "type": "object",
+            "required": [
+              "startedAt",
+              "durationMs"
+            ],
+            "properties": {
+              "startedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "durationMs": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          },
+          "readsAttempted": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "readsSucceeded": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "readsFailed": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "successRate": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "readHealth": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "healthy",
+              "degraded"
+            ]
+          },
+          "consecutiveReadFailures": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lastReadAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastReadFailureAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastErrorCategory": {
+            "$ref": "#/components/schemas/FirestoreErrorCategory"
+          },
+          "byDomain": {
+            "type": "object",
+            "description": "Per-domain read breakdown (alerts, alertReplays).",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FirestoreWriteDomainMetrics"
+            }
+          }
+        }
+      },
+      "FirestoreDependency": {
+        "type": "object",
+        "description": "Firestore alert-storage dependency. enabled/configured reflect the ENABLE_FIRESTORE_ALERT_STORAGE gate and whether a usable credential was found; `configured` only validates credential shape. Since issue #1285 the verdict also reflects the observed read path: readHealth is 'unknown' until a read happens, 'healthy' after a successful read, and 'degraded' while the consecutive-failure streak is non-empty. A degraded read path forces ready:false and status:'degraded', so a deployment can no longer report a ready Firestore while every read endpoint answers 503 (issue #1285). The failure detail fields are present only while degraded.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "ready",
+              "degraded"
+            ]
+          },
+          "readHealth": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "healthy",
+              "degraded"
+            ]
+          },
+          "readsFailed": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "consecutiveReadFailures": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lastReadErrorCategory": {
+            "$ref": "#/components/schemas/FirestoreErrorCategory"
+          },
+          "lastReadFailureAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "FirestoreErrorCategory": {
+        "type": "string",
+        "description": "Sanitized Firestore failure category. Never contains the provider message, credentials, project id, or index definition.",
+        "enum": [
+          "uninitialized",
+          "failed_precondition",
+          "permission_denied",
+          "unauthenticated",
+          "unavailable",
+          "deadline_exceeded",
+          "not_found",
+          "resource_exhausted",
+          "invalid_argument",
+          "aborted",
+          "internal",
+          "unknown_error"
+        ]
+      },
       "SelfTestResult": {
         "type": "object",
         "description": "Self-test diagnostic suite result. Sensitive evidence is redacted server-side; secrets are never returned.",
@@ -7692,6 +7857,18 @@
           "jobId": {
             "type": "string",
             "description": "Durably stored job identifier returned when queue acceptance is indeterminate."
+          },
+          "category": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FirestoreErrorCategory"
+              }
+            ],
+            "description": "Present on 503 STORAGE_UNAVAILABLE from the stored-alert read endpoints when the failure could be classified, so a rejected query is distinguishable from a credential/init failure without log access (issue #1285)."
+          },
+          "missingIndex": {
+            "type": "boolean",
+            "description": "Present and true when the failure was a Firestore missing-composite-index rejection. Resolved by deploying the composite indexes declared in firestore.indexes.json."
           }
         }
       },
@@ -10545,6 +10722,18 @@
                     ],
                     "description": "Sanitized TradingView MCP outcome for this alert."
                   },
+                  "exchange": {
+                    "type": "string",
+                    "description": "Exchange prefix reported by the upstream screener, unchanged by outbound MCP venue aliasing (GH-591)."
+                  },
+                  "requestedExchange": {
+                    "type": "string",
+                    "description": "Exchange prefix that was requested by the screener for the outbound TradingView MCP call. Alias resolution never rewrites this value (GH-591)."
+                  },
+                  "requestedExchangeMappedTo": {
+                    "type": "string",
+                    "description": "Venue the outbound TradingView MCP call was actually sent to when the screener's exchange prefix had no equivalent venue on the MCP server (for example 'BATS' -> 'NASDAQ'). Omitted when no alias was applied (GH-591)."
+                  },
                   "levelsSource": {
                     "type": "string",
                     "enum": [
@@ -11487,6 +11676,12 @@
               },
               "selfTest": {
                 "$ref": "#/components/schemas/SelfTestStatus"
+              },
+              "firestoreReadMetrics": {
+                "$ref": "#/components/schemas/FirestoreReadMetrics"
+              },
+              "firestore": {
+                "$ref": "#/components/schemas/FirestoreDependency"
               }
             }
           }

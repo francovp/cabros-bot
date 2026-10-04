@@ -1279,6 +1279,28 @@ Issue #630 validation confirmed the configured TradingView MCP endpoint is live;
 
 No new environment variable or Remote Config key was added; the 24-hour window is a fixed operational reporting boundary and existing circuit-breaker controls already provide deduplicated paging.
 
+## TradingView MCP Exchange Alias Resolution (Issue #591)
+
+`resolveMcpExchange()` in `src/services/tradingview/parseTradingViewSignal.js` maps an alert's exchange prefix to a venue the TradingView MCP server actually serves. It runs inside `TradingViewMcpService.enrichFromSignal()` before `coin_analysis` and is a **closed, probe-verified lookup table** with higher priority than suffix-shape inference — never a broadened fuzzy regex, which would remap venues that already work.
+
+- `MCP_EXCHANGE_ALIASES` — `BATS → NASDAQ`, `NASDAQ_DLY → NASDAQ`. Each entry was confirmed live: the source prefix answers `No data found for <SYMBOL> on KUCOIN` while the target returns a full indicator payload.
+- `MCP_UNSUPPORTED_EXCHANGES` — `FX_IDC` and `SPCFD` are deliberately **not** aliased. Every candidate venue was probed and all returned the same KUCOIN miss, so aliasing would fabricate a market. They keep the original prefix and degrade through the normal fail-open path.
+- `MCP_SUPPORTED_EXCHANGES` — The server's advertised venue list, used to flag an unknown-but-unsupported prefix for debug logging only.
+
+**Outbound only.** Alias resolution never rewrites stored metadata. The parsed signal, `deriveAssetContext()` classification (including the GH-320 `FX_IDC`/futures neutrality), and every persisted `exchange` keep the venue the screener sent. The enrichment payload adds `exchange`, `requestedExchange` (both the original) and `requestedExchangeMappedTo` (alias target, omitted when no alias applied).
+
+**Fast-fail.** `isDeterministicNoDataError()` classifies a `no data`/`symbol not found` MCP response as terminal for that attempt, and `sendWithRetry()` gained a `shouldRetry(result)` hook so the base analysis stops after one attempt instead of burning the remaining `TRADINGVIEW_MCP_MAX_RETRIES` backoff. Transport errors, timeouts, HTTP 5xx, and circuit-breaker semantics are unchanged.
+
+**Failure mode addressed.** This change fixes **symbol/exchange resolution**, not transport. A healthy MCP host still returned `No data found for TSLA on KUCOIN` because the exchange argument was unresolvable. See #630 for the complementary MCP handshake defect. Probe evidence (2026-09-28): `BATS:TSLA`/`NASDAQ:TSLA` → fails/succeeds respectively; `GLD:AMEX` and `SPY:NYSEARCA` succeed while `SPY:NASDAQ` does not, confirming the miss is venue-scoped and not a blanket symbol gap.
+
+**Coverage**:
+- `tests/unit/tradingview-signal-parser.test.js` — Alias table, case/padding normalization, supported-venue passthrough, unresolvable-venue degradation, non-string safety, and the guarantee that stored/parsed exchanges are untouched.
+- `tests/unit/tradingview-mcp-service.test.js` — Outbound argument mapping with original-exchange reporting, byte-for-byte pass-through for supported venues, single-attempt spend on a deterministic miss, retry preservation for transport errors, and graceful degradation.
+- `tests/unit/retry-helper.test.js` — `shouldRetry` terminal-result, terminal-from-first-attempt, and default-behavior regression.
+- `docs/tradingview-mcp.md`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` — Contract documentation and dry-run examples.
+
+No new environment variable or Remote Config key was added: the alias table is a code-level contract, not runtime tuning.
+
 ### Testing Patterns
 
 **Test locations**:
@@ -1981,6 +2003,19 @@ Only then does the endpoint return `502 TRADINGVIEW_MCP_UNAVAILABLE` with every 
 **502 has two documented shapes** (Codex P2). `TRADINGVIEW_MCP_UNAVAILABLE` is the skip path (nothing attempted); `ALL_SCANS_FAILED` is the attempt path (every scan was attempted and failed). Both are enumerated under `components.responses.MarketScannerBadGateway` in `src/openapi/openapi.json`, in `CabrosBot.postman_collection.json`, and in `docs/webhooks.md`.
 
 **Coverage:** `tests/unit/market-scanner.test.js` covers fail-fast while open, the half-open recovery probe, unknown-breaker fail-open, and the non-outage category; `tests/integration/market-scanner-endpoint.test.js` covers the endpoint-level 502 skip, the transient-failure self-recovery round trip, the `ALL_SCANS_FAILED` attempt path, and the two-variant OpenAPI 502 contract. No new environment variable, Remote Config key, or feature flag was added.
+
+## Stored-Alert Read Health and the `__name__` Descending Composite Index (Issue #1285)
+
+`GET /api/alerts`, `/api/alerts/summary`, `/api/alerts/export`, and replay all answer `503 STORAGE_UNAVAILABLE` when Firestore rejects the **query**, even though every write succeeds. This is the second time this repository has been bitten by the same Firestore indexing rule (the first was `userPriceAlertService`'s sweep), so the rule is now recorded here as a hard constraint.
+
+- **The invariant.** Every Firestore query that adds `.orderBy(admin.firestore.FieldPath.documentId(), <dir>)` **on top of another `orderBy` requires a composite index in `firestore.indexes.json` for that field pair.** Firestore applies a *free* final sort on `__name__` in the **ascending** direction only, and it never merges single-field indexes. Ordering `__name__` **descending** therefore needs an explicit composite. The `alerts` reads order by `receivedAt DESC, __name__ DESC` and need `alerts { receivedAt DESC, __name__ DESC }`; the unit Firestore double makes `orderBy` a no-op and the Firestore emulator auto-creates indexes, so **neither the unit suite nor `pnpm test:firebase` can catch a missing index.** The only guard is an explicit declaration assertion (the pattern at `tests/unit/alert-storage-service.test.js` "declares the composite Firestore index required by the ordered alerts read"). **Any new `orderBy(FieldPath.documentId(), ...)` must add its index declaration and its assertion in the same PR.**
+- **A declaration is not a deployment.** `firestore.indexes.json` is the repository template of record only; it does not create the index in the live project. `firebase deploy --only firestore:indexes` is required, indexes build asynchronously, and a query is rejected until the build reaches `READY`. So a merged fix does not by itself restore service — the deploy is an explicit follow-up step.
+- **Read health is separate from write health.** `dependencies.firestore.ready` was derived only from `enabled && configured`, and `configured` validates credential *shape*. A deployment could therefore report `ready: true` while 100% of reads failed. `FirestoreWriteMetricsService` now keeps an independent read counter set (`getReadSnapshot()` → `dependencies.firestoreReadMetrics`), and `readHealth` drives the verdict: `unknown` (no read observed yet — **no evidence, not health**) leaves `ready` alone, `healthy` leaves it alone, and `degraded` forces `ready: false` / `status: "degraded"`. Read health clears on the first successful read, with no restart. **Adding a read path means recording it through `recordReadSuccess`/`recordReadFailure`, or the outage stays invisible.**
+- **`/ready` must exercise the real query shape.** The Firestore readiness probe used `listCollections()`, a metadata call that never runs a collection query, so it could not observe this class of fault. It now runs `AlertStorageService.probeOrderedAlertRead()` — the exact indexed query bounded to one document, routed through `recordReadFailure` so a probe-detected fault also feeds `readHealth` and carries its category into the `/ready` payload. **A readiness probe must issue the operation whose availability it is asserting, not a cheaper proxy for it.**
+- **Messages must name the failing subsystem.** `createStorageUnavailableError` previously emitted one fixed "Check Firestore credentials and project configuration" for every failure, which actively misdirected operators toward credentials that were demonstrably working. The credential hint is now reserved for `isConfigurationErrorCategory` categories (`uninitialized`, `unauthenticated`); a rejected query reports its own sanitized category from the closed enum in `src/services/storage/firestoreErrorCategories.js` plus `missingIndex: true`. The enum and the provider message are kept separate because **Firestore embeds the fully-qualified project/database path and the index definition in its message** — it is logged, never returned in a response body or a status payload.
+- **Coverage**: `tests/unit/firestore-error-categories.test.js`, the read-metric block in `tests/unit/firestore-write-metrics-service.test.js`, the `#1285` blocks in `tests/unit/alert-storage-service.test.js` / `tests/integration/status-endpoint.test.js` / `tests/integration/healthcheck-readiness.test.js` / `tests/integration/alerts-endpoint.test.js`, and the two new Postman assertions in `tests/unit/postman-collection.test.js`. Docs: `docs/troubleshooting.md` runbook, `docs/api-reference.md` read-health section, `docs/alerts.md` index requirement.
+
+No environment variable or Remote Config key was added. `FirestoreWriteMetricsService.js` remains space-indented to match its own existing style (75 pre-existing `indent` findings, lint is `continue-on-error`); it was not reformatted to keep this diff readable.
 
 ## Preview Verification Binds SHA to the Selected Deployment (Issue #1129)
 

@@ -101,3 +101,34 @@
 - Failed alerts automatically retry per channel (WhatsApp up to 3 attempts with 1s → 2s → 4s exponential backoff per chunk; Telegram and Discord for 429 rate limits up to their configured retry limits)
 - ±10% jitter prevents thundering herd on exponential backoff
 - All retries logged at WARN/ERROR level
+
+### Stored Alerts Return 503 STORAGE_UNAVAILABLE
+
+Symptom: `GET /api/alerts`, `/api/alerts/summary`, `/api/alerts/export`, and replay all answer `503`, while `/api/status` reports Firestore as healthy and `firestoreWriteMetrics` shows a perfect success rate. That combination means **the write path works and the read queries are being rejected** — it is not a credentials problem, despite what older response text suggested.
+
+1. **Read the `category` on the 503 body.** It is a closed, sanitized enum and is the fastest discriminator:
+
+   | `category` | What it means | Fix |
+   | :--- | :--- | :--- |
+   | `failed_precondition` (+ `missingIndex: true`) | Firestore refused the *query* because no index backs it | Deploy the declared composite indexes (see below) |
+   | `uninitialized` | The Firestore client never built | Check `FIREBASE_SERVICE_ACCOUNT_JSON` / `GOOGLE_APPLICATION_CREDENTIALS` and `FIREBASE_PROJECT_ID` |
+   | `permission_denied` | IAM or `firestore.rules` rejected the call | Check the service account's roles and the rules file |
+   | `unauthenticated` | Credentials missing, expired, or revoked | Rotate the service-account key |
+   | `unavailable` / `deadline_exceeded` | Backend unreachable | Usually transient; retry |
+   | `resource_exhausted` | Quota or rate limit | Back off, then check quotas |
+
+2. **Check `dependencies.firestore.readHealth` on `/api/status`.** `degraded` forces `ready: false` and `status: "degraded"`, which is the authoritative signal that the read path — not the credentials — is broken. `unknown` means no read has been attempted yet, which is *not* evidence of health.
+
+3. **Missing composite index (the usual cause).** Stored-alert reads order by `receivedAt` **and** `FieldPath.documentId()` so pagination has a deterministic tie-breaker. Firestore applies a free final `__name__` **ascending** sort, so ordering `__name__` **descending** requires the composite index `alerts { receivedAt DESC, __name__ DESC }` declared in `firestore.indexes.json`. Adding the declaration to the file does **not** create it in the live project:
+
+   ```bash
+   firebase deploy --only firestore:indexes --project <project-id>
+   ```
+
+   Composite indexes build asynchronously and a query is rejected until the build reaches `READY`. Confirm with `firebase firestore:indexes` or the Firebase console. Only `receivedAt`-ordered `alerts` queries need it; `GET /api/alerts/:alertId` reads a document by id and is unaffected.
+
+4. **Confirm the read path with `/ready`.** `GET /ready?depth=dependencies` executes the same indexed read (bounded to one document) and fails closed with `503` while it is broken, so it can be used as an external alert signal. `GET /api/alerts/summary` and `GET /api/alerts` reproduce the fault directly.
+
+5. **Do not chase credentials for a `failed_precondition`.** If `firestoreWriteMetrics` shows writes succeeding, the credential is demonstrably valid; the rejection is per-query.
+
+> The provider's own message (which contains the project/database path and the index definition) is written to the log only and is never returned in a response body or a status payload. Grep the logs for `[AlertStorageService]` with the `category` to find the exact provider detail.
