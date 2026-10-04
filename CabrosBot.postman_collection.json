@@ -12495,7 +12495,7 @@
           "body": "{\n  \"featureFlags\": {\n    \"firebaseAdminAuth\": true\n  },\n  \"dependencies\": {\n    \"adminAuth\": {\n      \"enabled\": true,\n      \"provider\": \"firebase\",\n      \"signIn\": \"email-password\",\n      \"browserConfigConfigured\": true,\n      \"verifierConfigured\": true,\n      \"apiKeyFallbackConfigured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"verificationSuccessCount\": 12,\n      \"verifierUnavailableCount\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": \"2026-10-04T09:00:00.000Z\",\n      \"lastUnavailableAt\": null\n    }\n  }\n}"
         },
         {
-          "name": "200 degraded - the Firebase Admin SDK could not initialize",
+          "name": "200 degraded - defensive: credential shape present but Firebase Auth unavailable",
           "originalRequest": {
             "method": "GET",
             "header": [

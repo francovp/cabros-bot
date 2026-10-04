@@ -333,7 +333,9 @@ Setting the variable is **necessary but not sufficient**, because this layer is 
 | `misconfigured` | Enabled, but the server has no verifier credentials. |
 | `unverified` | Configured, but no token has verified yet. Not a failure — and not health. It is the normal state right after every deploy. |
 | `ready` | A Firebase ID token has actually verified. |
-| `degraded` | The verifier itself was unavailable (`ADMIN_AUTH_UNAVAILABLE`); an access decision still fails closed. |
+| `degraded` | Defensive, not routine: credential shape is complete but the Firebase Admin SDK could not produce an Auth instance (`ADMIN_AUTH_UNAVAILABLE`). An access decision still fails closed. |
+
+`degraded` is ranked **below** `misconfigured`, so it can only surface while `verifierConfigured` is `true`. A deployment that simply has no verifier credentials reports `misconfigured`, never `degraded`, and never inflates `verifierUnavailableCount` in a state that hides it: the absent-credential case is a configuration verdict, not an outage.
 
 **A rejected bearer token is never recorded.** Expired, revoked, wrong-project and random-garbage tokens are indistinguishable to `verifyIdToken()`, so counting them would let any unauthenticated caller flip the dependency to `degraded` with a single request — turning a monitoring surface into a one-request DoS. Only a verifier that cannot be *reached* degrades the block. A verified token **without** an admin role counts as a success, because the token verified and the role decision is an authorization outcome, not a dependency fault.
 
