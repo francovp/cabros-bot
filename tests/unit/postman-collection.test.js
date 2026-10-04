@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
 
 const collectionPath = path.join(__dirname, '../../CabrosBot.postman_collection.json');
 
@@ -361,6 +362,34 @@ describe('Postman collection contract', () => {
 			'utf8',
 		));
 		expect(contract.components.schemas.TestAlertRequest.properties.text.minLength).toBe(1);
+	});
+
+	it('documents the test-alert dry-run preview the formatter actually returns (GH-1158)', () => {
+		// postTestAlert() sets `text` to the same string as `preview` and
+		// `length` to preview.length, so asserting preview === text looks redundant
+		// until you know it: it is the property the stale GH-1158 example broke by
+		// hand-writing an ellipsis preview. Regenerated from the documented request so
+		// the example can still detect formatter or contract drift.
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Test Alert (Dry Run)');
+		const example = item.response.find((response) => response.name === '200 OK - Dry Run Preview');
+
+		expect(example).toBeDefined();
+		const requestBody = JSON.parse(item.request.body.raw);
+		expect(JSON.parse(example.originalRequest.body.raw)).toEqual(requestBody);
+		expect(requestBody.dryRun).toBe(true);
+		expect(requestBody.channels).toEqual(['telegram']);
+
+		const body = JSON.parse(example.body);
+		expect(body.ok).toBe(true);
+		expect(body.dryRun).toBe(true);
+		expect(body.persisted).toBe(false);
+		expect(body.results).toEqual([]);
+
+		const expectedPreview = new MarkdownV2Formatter().format(requestBody.text);
+		expect(body.formatted.telegram.preview).toBe(expectedPreview);
+		expect(body.formatted.telegram.text).toBe(expectedPreview);
+		expect(body.formatted.telegram.length).toBe(expectedPreview.length);
 	});
 
 	it('documents Request Timeout (408) on every affected admin request variant', () => {
