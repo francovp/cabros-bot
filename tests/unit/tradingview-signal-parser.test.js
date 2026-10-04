@@ -64,6 +64,20 @@ describe('TradingView signal parser', () => {
 	});
 
 	it('keeps known futures venues neutral', () => {
+		// The bare `EXCHANGE:SYMBOL(TF)` form takes a different code path inside
+		// deriveAssetContext than the side-word form. Both must apply the same
+		// neutrality rule: a crypto suffix on CME_MINI:ETH must NOT relabel the
+		// futures venue as crypto.
+		expect(deriveAssetContext('CME_MINI:ETH(D)')).toEqual(expect.objectContaining({
+			exchange: 'CME_MINI',
+			assetClass: null,
+		}));
+		expect(deriveCleanSearchQuery('CME_MINI:ETH(D)')).toBe('ETH market news analyst');
+		expect(deriveAssetContext('FX_IDC:USDCLP(D)')).toEqual(expect.objectContaining({
+			exchange: 'FX_IDC',
+			assetClass: null,
+		}));
+
 		for (const exchange of ['CME_MINI', 'CBOT_MINI']) {
 			expect(deriveAssetContext(`${exchange}:ESU2026(D) cambió a señal de COMPRA`)).toEqual(expect.objectContaining({
 				exchange,

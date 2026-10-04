@@ -5,6 +5,117 @@ const {
 } = require('../../src/services/tradingview/TradingViewMcpService');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
+const http = require('http');
+
+/**
+ * Minimal conforming Streamable HTTP MCP server used to reproduce the real
+ * production handshake against a local endpoint:
+ *   1. POST initialize            -> 200 SSE + `mcp-session-id` response header
+ *   2. POST notifications/initialized (with session) -> 202
+ *   3. POST tools/call (with session)               -> 200 SSE-framed JSON-RPC result
+ *
+ * `perHopDelayMs` simulates per-hop provider latency so bounded-budget
+ * regressions reproduce deterministically instead of depending on a live host.
+ */
+function startFakeMcpServer({ perHopDelayMs = 0 } = {}) {
+	const calls = { initialize: 0, initialized: 0, tools: [] };
+	const sessions = new Set();
+
+	const sseBody = payload => `event: message\ndata: ${JSON.stringify(payload)}\n\n`;
+	const readBody = req => new Promise((resolve) => {
+		let raw = '';
+		req.on('data', chunk => { raw += chunk; });
+		req.on('end', () => resolve(raw));
+	});
+	const delay = () => (perHopDelayMs > 0
+		? new Promise(resolve => setTimeout(resolve, perHopDelayMs))
+		: Promise.resolve());
+
+	const server = http.createServer(async (req, res) => {
+		const raw = await readBody(req);
+		let message = {};
+		try {
+			message = JSON.parse(raw);
+		} catch {
+			message = {};
+		}
+
+		const accept = String(req.headers.accept || '');
+		if (!accept.includes('text/event-stream') || !accept.includes('application/json')) {
+			res.writeHead(406, { 'Content-Type': 'text/plain' });
+			res.end('Not Acceptable: client must accept text/event-stream and application/json');
+			return;
+		}
+
+		await delay();
+
+		if (message.method === 'initialize') {
+			calls.initialize += 1;
+			const sessionId = `sess-${calls.initialize}`;
+			sessions.add(sessionId);
+			res.writeHead(200, {
+				'Content-Type': 'text/event-stream',
+				'Cache-Control': 'no-cache',
+				'mcp-session-id': sessionId,
+			});
+			res.end(sseBody({
+				jsonrpc: '2.0',
+				id: message.id,
+				result: {
+					protocolVersion: '2024-11-05',
+					capabilities: { tools: {} },
+					serverInfo: { name: 'TradingView Multi-Market Screener', version: '1.12.4' },
+				},
+			}));
+			return;
+		}
+
+		const sessionId = req.headers['mcp-session-id'];
+		if (!sessions.has(sessionId)) {
+			res.writeHead(400, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'Bad Request: no valid session id' } }));
+			return;
+		}
+
+		if (message.method === 'notifications/initialized') {
+			calls.initialized += 1;
+			res.writeHead(202, { 'mcp-session-id': sessionId, 'Content-Type': 'application/json' });
+			res.end('{}');
+			return;
+		}
+
+		if (message.method === 'tools/call') {
+			calls.tools.push({ name: message.params && message.params.name, args: message.params && message.params.arguments });
+			const payload = {
+				price_data: { current_price: 70000 },
+				technical_indicators: { atr: 900 },
+				rsi: { value: 55 },
+				market_structure: { trend: 'bullish' },
+			};
+			res.writeHead(200, { 'Content-Type': 'text/event-stream', 'mcp-session-id': sessionId });
+			res.end(sseBody({
+				jsonrpc: '2.0',
+				id: message.id,
+				result: { content: [{ type: 'text', text: JSON.stringify(payload) }] },
+			}));
+			return;
+		}
+
+		res.writeHead(400, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'Method not found' } }));
+	});
+
+	return new Promise((resolve) => {
+		server.listen(0, '127.0.0.1', () => {
+			resolve({
+				url: `http://127.0.0.1:${server.address().port}/mcp`,
+				calls,
+				close: () => new Promise(done => server.close(done)),
+			});
+		});
+	});
+}
+
 describe('TradingViewMcpService', () => {
 	afterEach(() => {
 		delete process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT;
@@ -267,7 +378,7 @@ describe('TradingViewMcpService', () => {
 		}));
 	});
 
-	it('omits risk metadata when ATR-derived levels are invalid', async () => {
+	it('replaces invalid ATR levels with a fallback trade plan instead of a synthetic ATR stop', async () => {
 		const service = new TradingViewMcpService({
 			maxRetries: 1,
 			defaultExchange: 'BINANCE',
@@ -282,13 +393,18 @@ describe('TradingViewMcpService', () => {
 
 		const result = await service.enrichFromAlertText('SHIBUSDT(240) pasó a señal de COMPRA');
 
-		expect(result).not.toHaveProperty('invalidation_level');
-		expect(result).not.toHaveProperty('target_level');
-		expect(result).not.toHaveProperty('risk_reward_ratio');
+		// 4h risk map on 0.01: stop 2.5% (0.00975) / target 5% (0.0105).
+		// The rejected ATR would have produced a stop below zero (0.01 - 0.03).
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 0.00975,
+			target_level: 0.0105,
+			risk_reward_ratio: 2,
+			levelsSource: 'fallback-trade-plan',
+		}));
 		expect(result).not.toHaveProperty('setup_type');
 	});
 
-	it('omits the full risk block when rejected ATR leaves a valid alternate target', async () => {
+	it('still suppresses the ATR block when rejected ATR leaves a valid alternate target', async () => {
 		const service = new TradingViewMcpService({
 			maxRetries: 1,
 			defaultExchange: 'BINANCE',
@@ -304,9 +420,11 @@ describe('TradingViewMcpService', () => {
 
 		const result = await service.enrichFromAlertText('SHIBUSDT(240) pasó a señal de COMPRA');
 
-		expect(result).not.toHaveProperty('invalidation_level');
-		expect(result).not.toHaveProperty('target_level');
-		expect(result).not.toHaveProperty('risk_reward_ratio');
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 0.00975,
+			target_level: 0.0105,
+			levelsSource: 'fallback-trade-plan',
+		}));
 		expect(result).not.toHaveProperty('setup_type');
 	});
 
@@ -326,10 +444,105 @@ describe('TradingViewMcpService', () => {
 
 		const result = await service.enrichFromAlertText('SHIBUSDT(240) pasó a señal de COMPRA');
 
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 0.00975,
+			target_level: 0.0105,
+			levelsSource: 'fallback-trade-plan',
+		}));
+		expect(result).not.toHaveProperty('setup_type');
+	});
+
+	it('derives a fallback trade plan tagged as secondary when ATR is zero', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 100 },
+			technical_indicators: { atr: 0 },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		// 4h default risk map: stop 2.5% (97.5) / target 5% (105) => R:R 2.
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 97.5,
+			target_level: 105,
+			risk_reward_ratio: 2,
+			levelsSource: 'fallback-trade-plan',
+		}));
+	});
+
+	it('derives a fallback trade plan tagged as secondary when ATR is non-finite', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 100 },
+			technical_indicators: { atr: 'not-a-number' },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de VENTA');
+
+		// 4h default risk map inverted for SELL: stop 2.5% above (102.5) / target 5% below (95).
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 102.5,
+			target_level: 95,
+			risk_reward_ratio: 2,
+			levelsSource: 'fallback-trade-plan',
+		}));
+	});
+
+	it('never downgrades a valid ATR-derived risk block to the fallback trade plan', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 100 },
+			technical_indicators: { atr: 4 },
+			support_resistance: { nearest_resistance: 112 },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 94,
+			target_level: 112,
+			risk_reward_ratio: 2,
+		}));
+		expect(result).not.toHaveProperty('levelsSource');
+	});
+
+	it('omits the fallback trade plan when MCP returns no usable current price', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 0 },
+			technical_indicators: { atr: 0 },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
 		expect(result).not.toHaveProperty('invalidation_level');
 		expect(result).not.toHaveProperty('target_level');
 		expect(result).not.toHaveProperty('risk_reward_ratio');
-		expect(result).not.toHaveProperty('setup_type');
+		expect(result).not.toHaveProperty('levelsSource');
 	});
 
 	it('only infers mean reversion when Bollinger position aligns with signal side', async () => {
@@ -361,7 +574,7 @@ describe('TradingViewMcpService', () => {
 		expect(sellResult).not.toHaveProperty('setup_type');
 	});
 
-	it('preserves an explicit setup type without complete numeric risk data', async () => {
+	it('preserves an explicit setup type while filling numeric risk levels from the fallback plan', async () => {
 		const service = new TradingViewMcpService({
 			maxRetries: 1,
 			defaultExchange: 'BINANCE',
@@ -376,10 +589,13 @@ describe('TradingViewMcpService', () => {
 
 		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
 
-		expect(result.setup_type).toBe('breakout');
-		expect(result).not.toHaveProperty('invalidation_level');
-		expect(result).not.toHaveProperty('target_level');
-		expect(result).not.toHaveProperty('risk_reward_ratio');
+		expect(result).toEqual(expect.objectContaining({
+			setup_type: 'breakout',
+			invalidation_level: 97.5,
+			target_level: 105,
+			risk_reward_ratio: 2,
+			levelsSource: 'fallback-trade-plan',
+		}));
 	});
 
 	it('suppresses the metadata footer when explicitly disabled', async () => {
@@ -566,7 +782,7 @@ describe('TradingViewMcpService', () => {
 		expect(service.callCoinAnalysis).toHaveBeenCalledTimes(1);
 	});
 
-	it('retries base analysis inside a sub-budget after the first attempt times out', async () => {
+	it('retries base analysis inside a sub-budget after a fast failure', async () => {
 		const service = new TradingViewMcpService({
 			maxRetries: 2,
 			timeoutMs: 5000,
@@ -574,14 +790,10 @@ describe('TradingViewMcpService', () => {
 			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
 		});
 		let attempts = 0;
-		service.callCoinAnalysis = jest.fn().mockImplementation(async ({ signal } = {}) => {
+		service.callCoinAnalysis = jest.fn().mockImplementation(async () => {
 			attempts += 1;
 			if (attempts === 1) {
-				return new Promise((resolve, reject) => {
-					if (signal) {
-						signal.addEventListener('abort', () => reject(new Error('base attempt timeout')), { once: true });
-					}
-				});
+				throw new Error('TradingView MCP HTTP 503: provider restarting');
 			}
 
 			return { price_data: { current_price: 100 } };
@@ -604,12 +816,10 @@ describe('TradingViewMcpService', () => {
 			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
 		});
 		let attempts = 0;
-		service.callCoinAnalysis = jest.fn().mockImplementation(async ({ signal } = {}) => {
+		service.callCoinAnalysis = jest.fn().mockImplementation(async () => {
 			attempts += 1;
 			if (attempts < 3) {
-				return new Promise((resolve, reject) => {
-					signal.addEventListener('abort', () => reject(new Error('base attempt timeout')), { once: true });
-				});
+				throw new Error('TradingView MCP HTTP 503: provider restarting');
 			}
 
 			return { price_data: { current_price: 100 } };
@@ -711,6 +921,230 @@ describe('TradingViewMcpService', () => {
 		expect(service._getErrorCategory(new Error('TradingView MCP HTTP 504: Gateway Timeout'))).toBe('http_5xx');
 		expect(service._getErrorCategory(new Error('TradingView MCP HTTP 503: provider timeout'))).toBe('http_5xx');
 		expect(service._getErrorCategory(new Error('TradingView MCP HTTP 408: request timeout'))).toBe('http_4xx');
+	});
+
+	it('classifies provider-level failures as terminal and preserves the HTTP status', async () => {
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: false,
+			status: 503,
+			text: async () => 'Service Suspended: this service has been suspended by its owner',
+			headers: { get: () => null },
+		});
+		const service = new TradingViewMcpService({ maxRetries: 1 });
+
+		try {
+			await expect(service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+			})).rejects.toThrow('HTTP 503');
+
+			expect(service.getStatus()).toEqual(expect.objectContaining({
+				lastHttpStatusCode: 503,
+				lastErrorCategory: 'provider_unavailable',
+			}));
+		} finally {
+			global.fetch = originalFetch;
+		}
+	});
+
+	it('does not retry terminal provider-level tool failures raised through createMcpError', async () => {
+		const originalFetch = global.fetch;
+		// HTTP 200 handshake, then an isError tool result carrying a suspension payload so the
+		// error is produced by the real createMcpError path rather than a hand-built Error.
+		const buildFetch = () => jest.fn().mockImplementation(async (_url, init) => {
+			const body = JSON.parse(init.body);
+			if (body.method === 'initialize') {
+				return {
+					ok: true,
+					status: 200,
+					text: async () => JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2024-11-05' } }),
+					headers: { get: (h) => (h === 'mcp-session-id' ? 'session-terminal' : (h === 'content-type' ? 'application/json' : null)) },
+				};
+			}
+			if (body.method === 'tools/call') {
+				return {
+					ok: true,
+					status: 200,
+					text: async () => JSON.stringify({
+						jsonrpc: '2.0',
+						id: body.id,
+						result: { isError: true, content: [{ type: 'text', text: 'Service Suspended: this service has been suspended by its owner' }] },
+					}),
+					headers: { get: (h) => (h === 'content-type' ? 'application/json' : null) },
+				};
+			}
+			return { ok: true, status: 202, text: async () => '', headers: { get: () => null } };
+		});
+		global.fetch = buildFetch();
+		const service = new TradingViewMcpService({ maxRetries: 3 });
+
+		try {
+			await expect(service.analyzeSymbolIdentifier({
+				raw: 'BINANCE:BTCUSDT',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+			})).rejects.toThrow('TradingView MCP call failed');
+
+			// Only the initialize handshake and one tool call: the suspension payload is terminal.
+			const toolCalls = global.fetch.mock.calls
+				.map(([, init]) => JSON.parse(init.body))
+				.filter((body) => body.method === 'tools/call');
+			expect(toolCalls).toHaveLength(1);
+			expect(service.getStatus()).toEqual(expect.objectContaining({
+				lastErrorCategory: 'provider_unavailable',
+			}));
+		} finally {
+			global.fetch = originalFetch;
+		}
+	});
+
+	it('retries transient tool payload errors that are not provider outages', async () => {
+		const originalFetch = global.fetch;
+		const buildFetch = () => jest.fn().mockImplementation(async (_url, init) => {
+			const body = JSON.parse(init.body);
+			if (body.method === 'initialize') {
+				return {
+					ok: true,
+					status: 200,
+					text: async () => JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2024-11-05' } }),
+					headers: { get: (h) => (h === 'mcp-session-id' ? 'session-transient' : (h === 'content-type' ? 'application/json' : null)) },
+				};
+			}
+			if (body.method === 'tools/call') {
+				return {
+					ok: true,
+					status: 200,
+					text: async () => JSON.stringify({
+						jsonrpc: '2.0',
+						id: body.id,
+						result: { isError: true, content: [{ type: 'text', text: 'Analysis failed: Expecting value: line 1 column 1' }] },
+					}),
+					headers: { get: (h) => (h === 'content-type' ? 'application/json' : null) },
+				};
+			}
+			return { ok: true, status: 202, text: async () => '', headers: { get: () => null } };
+		});
+		global.fetch = buildFetch();
+		const service = new TradingViewMcpService({ maxRetries: 3 });
+
+		try {
+			await expect(service.analyzeSymbolIdentifier({
+				raw: 'BINANCE:BTCUSDT',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+			})).rejects.toThrow('TradingView MCP call failed');
+
+			// A malformed upstream payload is not a definitive outage, so all attempts are used.
+			const toolCalls = global.fetch.mock.calls
+				.map(([, init]) => JSON.parse(init.body))
+				.filter((body) => body.method === 'tools/call');
+			expect(toolCalls).toHaveLength(3);
+			// A malformed upstream payload is not classified as a definitive provider outage.
+			expect(service.getStatus()).toEqual(expect.objectContaining({
+				lastErrorCategory: 'request_failed',
+			}));
+		} finally {
+			global.fetch = originalFetch;
+		}
+	});
+
+	it('classifies top-level JSON-RPC provider errors as terminal', async () => {
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn().mockImplementation(async (_url, init) => {
+			const body = JSON.parse(init.body);
+			return {
+				ok: true,
+				status: 200,
+				text: async () => JSON.stringify({
+					jsonrpc: '2.0',
+					id: body.id ?? null,
+					error: { code: -32000, message: 'Service Suspended' },
+				}),
+				headers: { get: (h) => (h === 'mcp-session-id' ? 'session-rpc-error' : (h === 'content-type' ? 'application/json' : null)) },
+			};
+		});
+		const service = new TradingViewMcpService({ maxRetries: 3 });
+
+		try {
+			await expect(service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+			})).rejects.toThrow('Service Suspended');
+
+			expect(service.getStatus()).toEqual(expect.objectContaining({
+				lastErrorCategory: 'provider_unavailable',
+			}));
+		} finally {
+			global.fetch = originalFetch;
+		}
+	});
+
+	it('retains the last observed HTTP status when a later failure has no HTTP status', async () => {
+		const originalFetch = global.fetch;
+		const service = new TradingViewMcpService({ maxRetries: 1 });
+
+		const http503 = () => ({
+			ok: false,
+			status: 503,
+			text: async () => 'upstream down',
+			headers: { get: () => null },
+		});
+
+		try {
+			// First operation observes an HTTP 503.
+			global.fetch = jest.fn().mockResolvedValue(http503());
+			await expect(service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+			})).rejects.toThrow();
+			expect(service.getStatus()).toEqual(expect.objectContaining({ lastHttpStatusCode: 503 }));
+
+			// A later failure with no HTTP status must not erase the only 5xx evidence.
+			global.fetch = jest.fn().mockRejectedValue(new Error('socket hang up'));
+			await expect(service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+			})).rejects.toThrow();
+			expect(service.getStatus()).toEqual(expect.objectContaining({
+				lastHttpStatusCode: 503,
+				lastErrorCategory: 'request_failed',
+			}));
+
+			// A newer HTTP response still replaces the retained value.
+			global.fetch = jest.fn().mockResolvedValue({ ...http503(), status: 502 });
+			await expect(service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+			})).rejects.toThrow();
+			expect(service.getStatus()).toEqual(expect.objectContaining({ lastHttpStatusCode: 502 }));
+		} finally {
+			global.fetch = originalFetch;
+		}
+	});
+
+	it('preserves terminal provider status when scan tools fail', async () => {
+		const service = new TradingViewMcpService({ maxRetries: 3 });
+		const error = Object.assign(new Error('TradingView MCP HTTP 503: Service Suspended'), {
+			category: 'provider_unavailable',
+			httpStatusCode: 503,
+		});
+		service._callTool = jest.fn().mockRejectedValue(error);
+
+		await expect(service.callScanTool('top_gainers')).rejects.toThrow('TradingView MCP scan top_gainers failed');
+
+		expect(service._callTool).toHaveBeenCalledTimes(1);
+		expect(service.getStatus()).toEqual(expect.objectContaining({
+			lastHttpStatusCode: 503,
+			lastErrorCategory: 'provider_unavailable',
+		}));
 	});
 
 	it('calls combined_analysis tool and unwraps result in callCombinedAnalysis', async () => {
@@ -1150,6 +1584,207 @@ describe('TradingViewMcpService', () => {
 			expect(service.breakerState).toBe('closed');
 			expect(service.breakerOpenedAt).toBeNull();
 			expect(service.hasActiveOutagePage).toBe(false);
+		});
+	});
+
+	describe('Streamable HTTP handshake against a conforming MCP server', () => {
+		beforeEach(() => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+		});
+
+		it('completes the full handshake and unwraps SSE-framed coin_analysis results', async () => {
+			const server = await startFakeMcpServer();
+			try {
+				const service = new TradingViewMcpService({
+					url: server.url,
+					maxRetries: 1,
+					timeoutMs: 5000,
+					logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+				});
+
+				const analysis = await service.callCoinAnalysis({
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					timeframe: '1D',
+				});
+
+				// initialize -> notifications/initialized -> tools/call, in order.
+				expect(server.calls.initialize).toBe(1);
+				expect(server.calls.initialized).toBe(1);
+				expect(server.calls.tools).toEqual([
+					{ name: 'coin_analysis', args: { symbol: 'BTCUSDT', exchange: 'BINANCE', timeframe: '1D' } },
+				]);
+				expect(analysis).toEqual(expect.objectContaining({
+					price_data: { current_price: 70000 },
+				}));
+				expect(service.getStatus()).toEqual(expect.objectContaining({ status: 'ready', ready: true }));
+			} finally {
+				await server.close();
+			}
+		});
+
+		// Regression for the production outage: the first attempt timeout was
+		// computed as attemptBudget / remainingAttempts. With the production
+		// settings (maxRetries=3, budget=12000, optional enrichment enabled) that
+		// left ~1900ms for a call that needs THREE sequential HTTP round trips
+		// (initialize, notifications/initialized, tools/call). Any provider hop
+		// slower than ~633ms aborted the attempt, each retry re-ran the whole
+		// handshake, the 12s budget drained, and the alert surfaced as
+		// `request_failed` even though the host was healthy.
+		it('budgets a whole tool call, not a fraction of one, against the base sub-budget', async () => {
+			// 3 hops x 700ms = 2100ms of unavoidable provider latency, which a
+			// correctly functioning client must still complete on attempt 1.
+			process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = 'true';
+			const server = await startFakeMcpServer({ perHopDelayMs: 700 });
+			try {
+				const service = new TradingViewMcpService({
+					url: server.url,
+					maxRetries: 3,
+					timeoutMs: 12000,
+					enrichmentBudgetMs: 12000,
+					logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+				});
+
+				const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+				expect(result).toEqual(expect.objectContaining({
+					tradingViewEnrichmentApplied: true,
+					tradingViewEnrichmentStatus: 'full',
+					current_price: 70000,
+				}));
+				// Base analysis must succeed on attempt 1. One handshake each for
+				// the base call and the optional volume call; no retry storm.
+				expect(server.calls.initialize).toBe(2);
+				expect(server.calls.tools.map(call => call.name)).toEqual([
+					'coin_analysis',
+					'volume_confirmation_analysis',
+				]);
+				expect(service.getStatus()).toEqual(expect.objectContaining({
+					status: 'ready',
+					ready: true,
+					lastErrorCategory: null,
+					// Two successful tool calls (base + volume), zero failures.
+					successCount: 2,
+					failureCount: 0,
+				}));
+			} finally {
+				await server.close();
+			}
+		});
+
+		it('never collapses a retry budget to 1ms as the base budget drains', () => {
+			// GH-630 regression guard on the arithmetic itself rather than through timing.
+			// The old code subtracted a FIXED reservation for the remaining backoffs from
+			// the REMAINING budget. Because that reservation never shrinks as the budget
+			// drains, once an early attempt had consumed enough of it the next attempt
+			// collapsed to a 1ms timeout - a retry that could never complete.
+			// Mirrors the production expression:
+			//   Math.min(cfg.timeoutMs, Math.max(1, remainingBaseMs))
+			const perAttemptTimeout = remainingBaseMs => Math.min(12000, Math.max(1, remainingBaseMs));
+
+			for (const remaining of [9000, 7130, 5800, 3200, 2200, 1100, 500, 100]) {
+				expect(perAttemptTimeout(remaining)).toBeGreaterThan(1);
+				expect(perAttemptTimeout(remaining)).toBeLessThanOrEqual(remaining);
+				expect(perAttemptTimeout(remaining)).toBeLessThanOrEqual(12000);
+			}
+
+			// The removed reservation produced exactly this collapse.
+			expect(Math.max(1, Math.min(12000, 2200 - 3850))).toBe(1);
+		});
+
+		it('fails open inside the total budget when the provider hangs, without a retry storm', async () => {
+			// Each hop outstays any per-hop share of the budget. A hanging call
+			// must consume the budget once and fail open; retrying it would
+			// re-run the whole handshake for a provider that is already down.
+			const server = await startFakeMcpServer({ perHopDelayMs: 4000 });
+			try {
+				const service = new TradingViewMcpService({
+					url: server.url,
+					maxRetries: 3,
+					timeoutMs: 12000,
+					enrichmentBudgetMs: 12000,
+					logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+				});
+
+				const startedAt = Date.now();
+				await expect(service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA'))
+					.rejects.toThrow('TradingView MCP call failed');
+				const elapsed = Date.now() - startedAt;
+
+				expect(elapsed).toBeLessThan(14000);
+				// Budget exhaustion is now a deadline, not a mystery transport fault.
+				expect(service.getStatus()).toEqual(expect.objectContaining({
+					status: 'degraded',
+					ready: false,
+					lastErrorCategory: 'timeout',
+				}));
+				expect(service.getStatus().errorCategoryCounts.timeout).toBeGreaterThan(0);
+				// One handshake only: the attempt budget is not sliced per retry.
+				expect(server.calls.initialize).toBe(1);
+			} finally {
+				await server.close();
+			}
+		});
+
+		it('still retries a fast failure within the base budget', async () => {
+			// A provider that errors immediately (not a hang) must still consume
+			// its retry allowance, and a later attempt may succeed.
+			const server = await startFakeMcpServer();
+			const service = new TradingViewMcpService({
+				url: server.url,
+				maxRetries: 3,
+				timeoutMs: 12000,
+				enrichmentBudgetMs: 12000,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+
+			let attempts = 0;
+			const realExecute = service._executeCallTool.bind(service);
+			service._executeCallTool = async (toolName, args, options) => {
+				attempts += 1;
+				if (attempts === 1) {
+					throw new Error('TradingView MCP HTTP 503: provider restarting');
+				}
+				return realExecute(toolName, args, options);
+			};
+
+			try {
+				const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+				expect(result).toEqual(expect.objectContaining({
+					tradingViewEnrichmentApplied: true,
+					current_price: 70000,
+				}));
+				expect(attempts).toBe(2);
+				expect(server.calls.tools.map(call => call.name)).toContain('coin_analysis');
+			} finally {
+				await server.close();
+			}
+		});
+
+		it('classifies budget exhaustion as a timeout, not an unexplained request failure', () => {
+			const service = new TradingViewMcpService();
+
+			// GH-630: classified from the structural marker the budget aborts attach, not
+			// from message text, so provider-controlled text cannot spoof a client deadline.
+			const marked = message => Object.assign(new Error(message), { mcpBudgetExhausted: true });
+			expect(service._getErrorCategory(marked('TradingView MCP enrichment budget exceeded (12000ms)')))
+				.toBe('timeout');
+			expect(service._getErrorCategory(marked('TradingView MCP base analysis budget exceeded (9000ms)')))
+				.toBe('timeout');
+			expect(service._getErrorCategory(marked('TradingView MCP base analysis budget exhausted')))
+				.toBe('timeout');
+			// Unmarked text alone must NOT classify as a timeout.
+			expect(service._getErrorCategory(new Error('TradingView MCP enrichment budget exceeded (12000ms)')))
+				.not.toBe('timeout');
+			// Including the composed-wrapper form, where OUR prefix carries provider text.
+			expect(service._getErrorCategory(new Error(
+				'TradingView MCP scan coin_analysis failed: Upstream budget exhausted for your account',
+			))).not.toBe('timeout');
+			// Existing taxonomy must stay intact.
+			expect(service._getErrorCategory(new Error('TradingView MCP HTTP 503: suspended'))).toBe('http_5xx');
+			expect(service._getErrorCategory(new Error('TradingView MCP circuit breaker is OPEN'))).toBe('circuit_breaker_open');
+			expect(service._getErrorCategory(new Error('TradingView MCP did not return mcp-session-id header'))).toBe('invalid_response');
 		});
 	});
 

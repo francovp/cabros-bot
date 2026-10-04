@@ -580,6 +580,44 @@ describe('Status endpoints', () => {
 		}));
 	});
 
+	// Issue #598: production reported `enabled: true, configured: true` with a
+	// never-loaded server template. The status contract must make the
+	// unready-but-configured state explicit so an operator cannot mistake
+	// "wired up" for "actually serving remote values".
+	it('reports an explicit unready state while the server template has never loaded', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const remoteConfig = response.body.dependencies.firebaseRemoteConfig;
+
+		expect(remoteConfig.ready).toBe(false);
+		expect(remoteConfig.lastSuccessfulLoad).toBeNull();
+		expect(remoteConfig.status).not.toBe('ready');
+		expect(response.body.featureFlags.firebaseRemoteConfig).toBe(true);
+		// `enabled` + `configured` alone must not read as "template is live".
+		expect(remoteConfig.templatePublished).toBe(false);
+	});
+
+	it('keeps /api/capabilities readiness consistent with /api/status', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+
+		const statusResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		const capabilitiesResponse = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(statusResponse.status).toBe(200);
+		expect(capabilitiesResponse.status).toBe(200);
+		expect(capabilitiesResponse.body.dependencies.firebaseRemoteConfig)
+			.toEqual(statusResponse.body.dependencies.firebaseRemoteConfig);
+	});
+
 	it('reports signal outcome tracking from the canonical environment variable', async () => {
 		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 
@@ -702,6 +740,20 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'misconfigured',
+			waitingCount: expect.any(Number),
+			delayedCount: expect.any(Number),
+			failedCount: expect.any(Number),
+			activeCount: expect.any(Number),
+			durableQueuedCount: expect.any(Number),
+			// Documented in the OpenAPI JobQueueStatus schema and both Postman
+			// success examples, so the endpoint must actually surface it. Asserting
+			// here pins the published contract rather than one layer's projection.
+			durableScanRotated: expect.any(Boolean),
+			durableCycleComplete: expect.any(Boolean),
+			backlogAlert: {
+				active: false,
+				thresholdMs: expect.any(Number),
+			},
 		});
 		expect(JSON.stringify(response.body.dependencies.jobExecutionQueue)).not.toContain('redis://');
 	});
@@ -2252,5 +2304,65 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.dependencies.tradingViewMcp.toolMetrics).toBeUndefined();
+	});
+
+	it('exposes grounding operational metrics in /api/status when ENABLE_GEMINI_GROUNDING is true', async () => {
+		groundingMetrics.recordSuccess(100, 'ALERT_ENRICHMENT');
+		groundingMetrics.recordFailure('error', new Error('API error'), 'ALERT_ENRICHMENT');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.grounding).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			metrics: {
+				totalRequests: 2,
+				successRequests: 1,
+				failureRequests: 1,
+				timeoutRequests: 0,
+				successRate: 0.5,
+				uptimeSince: expect.any(String),
+			},
+		});
+	});
+
+	it('omits grounding section when ENABLE_GEMINI_GROUNDING is disabled', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies).not.toHaveProperty('grounding');
+	});
+
+	it('reports grounding as misconfigured when credentials are missing but grounding is enabled', async () => {
+		delete process.env.GEMINI_API_KEY;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.grounding).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+			metrics: expect.objectContaining({
+				totalRequests: 0,
+				successRequests: 0,
+				failureRequests: 0,
+				timeoutRequests: 0,
+				successRate: 0,
+				uptimeSince: expect.any(String),
+			}),
+		});
 	});
 });

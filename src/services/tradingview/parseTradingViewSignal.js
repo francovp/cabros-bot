@@ -193,14 +193,21 @@ function deriveAssetContext(text) {
 	const parsed = parseTradingViewSignal(text);
 	if (parsed && parsed.symbol) {
 		const exchange = parsed.exchange || (parsed.symbol.endsWith('USDT') ? 'BINANCE' : null);
-		let assetClass = exchange && NON_EQUITY_EXCHANGES.has(exchange) ? null : 'stock';
-		if (exchange && CRYPTO_EXCHANGES.has(exchange)) {
-			assetClass = 'crypto';
-		} else if (exchange && STOCK_EXCHANGES.has(exchange)) {
-			assetClass = 'stock';
-		} else if (!NON_EQUITY_EXCHANGES.has(exchange)
-			&& CRYPTO_SUFFIXES.some(s => parsed.symbol.endsWith(s))) {
-			assetClass = 'crypto';
+		// A known non-equity venue (FX_IDC, CME_MINI, CBOT_MINI) stays NEUTRAL: it is
+		// neither equity nor crypto, so it must not be labelled as either. This check
+		// has to gate the crypto/stock branches below — CME_MINI is a member of
+		// CRYPTO_EXCHANGES (it lists ETH contracts), so without the guard the crypto
+		// branch overrode the neutrality and produced e.g. "ETH crypto price news".
+		const isNonEquityVenue = Boolean(exchange && NON_EQUITY_EXCHANGES.has(exchange));
+		let assetClass = isNonEquityVenue ? null : 'stock';
+		if (!isNonEquityVenue) {
+			if (exchange && CRYPTO_EXCHANGES.has(exchange)) {
+				assetClass = 'crypto';
+			} else if (exchange && STOCK_EXCHANGES.has(exchange)) {
+				assetClass = 'stock';
+			} else if (CRYPTO_SUFFIXES.some(s => parsed.symbol.endsWith(s))) {
+				assetClass = 'crypto';
+			}
 		}
 
 		return {
@@ -212,12 +219,19 @@ function deriveAssetContext(text) {
 		};
 	}
 
-	const explicitExchangeMatch = text.match(/(?:^|\s)(?<exchange>[A-Z]+):(?<symbol>[A-Z0-9._-]{2,20})/i);
+	// Exchange identifiers may contain underscores (`FX_IDC`, `CME_MINI`, `CBOT_MINI`),
+// matching the pattern `parseTradingViewSignal` already uses. Without the `_` this
+// returned null for every underscore-exchange form, forcing callers to keep a
+// separate regex pass for those inputs.
+	const explicitExchangeMatch = text.match(/(?:^|\s)(?<exchange>[A-Z_]+):(?<symbol>[A-Z0-9._-]{2,20})/i);
 	if (explicitExchangeMatch && explicitExchangeMatch.groups && explicitExchangeMatch.groups.symbol) {
 		const symbol = explicitExchangeMatch.groups.symbol.toUpperCase();
 		const exchange = explicitExchangeMatch.groups.exchange.toUpperCase();
 
-		let assetClass = 'stock';
+	// Same neutrality rule as the parsed branch above: a known non-equity venue
+	// is neither equity nor crypto, so a crypto suffix must not relabel it.
+	let assetClass = NON_EQUITY_EXCHANGES.has(exchange) ? null : 'stock';
+	if (!NON_EQUITY_EXCHANGES.has(exchange)) {
 		if (CRYPTO_EXCHANGES.has(exchange)) {
 			assetClass = 'crypto';
 		} else if (STOCK_EXCHANGES.has(exchange)) {
@@ -225,6 +239,7 @@ function deriveAssetContext(text) {
 		} else if (CRYPTO_SUFFIXES.some(s => symbol.endsWith(s))) {
 			assetClass = 'crypto';
 		}
+	}
 
 		return {
 			symbol,
