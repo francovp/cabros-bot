@@ -57,6 +57,27 @@ const FIRESTORE_API = 'https://firestore.googleapis.com/v1';
 const READY_STATE = 'READY';
 
 /**
+ * `projects.databases.collectionGroups.indexes.list` is paginated: it accepts
+ * `pageSize`/`pageToken` and answers with `nextPageToken`. 300 keeps the whole
+ * listing inside a handful of round trips while staying well under the service's
+ * per-request maximum.
+ */
+const INDEX_PAGE_SIZE = 300;
+
+/**
+ * Hard stop on the page loop. A well-behaved listing terminates on an absent
+ * `nextPageToken`; this cap only exists so a malformed or cycling `pageToken`
+ * cannot spin forever. 50 pages x 300 = 15,000 composite indexes in one
+ * database, which is far above any real deployment, so hitting it means the
+ * provider is misbehaving and the answer must be "cannot determine" (exit 2)
+ * rather than a partial audit that could report a READY index as MISSING.
+ */
+const MAX_INDEX_PAGES = 50;
+
+/** Default gap between readiness polls after `--apply`. */
+const DEFAULT_POLL_INTERVAL_MS = 10000;
+
+/**
  * Parse CLI arguments. Dry-run unless `--apply` is passed, matching the other
  * operator tooling in this repository.
  *
@@ -239,6 +260,14 @@ function summarizeAudit(audit) {
  * Load an authenticated HTTP client. Kept behind a function so tests can inject
  * their own request function and never touch the network or real credentials.
  *
+ * Note the deep import: `utils/api-request` is firebase-admin *internal* API, not
+ * published surface, so a firebase-admin major bump could move it. The coupling is
+ * accepted deliberately — it is the only way to reuse the Admin SDK's own
+ * credential resolution and OAuth refresh for a plain REST call, and reimplementing
+ * a token refresh here would be strictly worse. If a future bump breaks it, the
+ * failure is loud (a require error at startup) and the fix is a one-line path
+ * change, not a silent behaviour change.
+ *
  * @returns {{request: Function}}
  */
 function loadAuthenticatedClient() {
@@ -271,6 +300,13 @@ function loadAuthenticatedClient() {
  * Fetch the live index collection, which — unlike the Firebase CLI — includes
  * each index's build `state`.
  *
+ * The collection is paginated, and the listing also carries Firestore's
+ * automatic single-field indexes alongside the declared composites, so a project
+ * with a modest number of declared composites can still exceed one page. Every
+ * page is followed; stopping at page one would report a genuinely READY index as
+ * MISSING and hold the tool at exit 1 forever, which is the opposite of what an
+ * operator running this during a P0 needs.
+ *
  * @param {Object} opts
  * @param {string} opts.project
  * @param {string} opts.database
@@ -281,51 +317,108 @@ async function fetchLiveIndexes(opts = {}) {
 	const { project, database } = opts;
 	const request = opts.request || loadAuthenticatedClient().request;
 	const databaseId = database === '(default)' ? '(default)' : database;
-	const url = `${FIRESTORE_API}/projects/${project}/databases/${databaseId}/collectionGroups/-/indexes`;
+	const all = [];
+	let pageToken = null;
+	let pages = 0;
 
-	let response;
-	try {
-		response = await request('GET', url);
-	} catch (error) {
-		// The provider message can embed the project/database path; surface a
-		// fixed message so no project detail leaks into CI output or the log.
-		throw new Error(`Failed to list Firestore indexes for project ${project}. `
-			+ 'Check that you are authenticated and hold datastore.indexes.list.', { cause: error });
+	for (;;) {
+		const url = new URL(
+			`${FIRESTORE_API}/projects/${project}/databases/${databaseId}/collectionGroups/-/indexes`,
+		);
+		url.searchParams.set('pageSize', String(INDEX_PAGE_SIZE));
+		if (pageToken) {
+			url.searchParams.set('pageToken', pageToken);
+		}
+
+		let response;
+		try {
+			response = await request('GET', url.toString());
+		} catch (error) {
+			// The provider message can embed the project/database path; surface a
+			// fixed message so no project detail leaks into CI output or the log.
+			throw new Error(`Failed to list Firestore indexes for project ${project}. `
+				+ 'Check that you are authenticated and hold datastore.indexes.list.', { cause: error });
+		}
+
+		// `AuthorizedHttpClient.send()` resolves with the parsed JSON body on `.data`;
+		// a bare object is also accepted so tests can inject a plain payload.
+		const body = response && response.data ? response.data : response;
+
+		// A body with no `indexes` array is *indeterminate*, not "zero indexes".
+		// Firestore returns `{}` for a project that genuinely has none, but an
+		// unauthenticated call (or an intercepting proxy) can also answer `200 {}`.
+		// Collapsing that into an empty list would report every declared index as
+		// missing and send an operator to create indexes that already exist - the
+		// same "assert a cause you cannot know" defect that made #1285 misleading in
+		// the first place. Refuse to audit instead. This runs per page so a
+		// truncated response is refused too, rather than being treated as the last
+		// page of an authoritative list.
+		if (!body || !Array.isArray(body.indexes)) {
+			throw new Error(`Firestore returned no index list for project ${project}. `
+				+ 'The listing could not be read authoritatively, so the declared indexes '
+				+ 'cannot be reported as missing or ready. Verify authentication '
+				+ '(FIREBASE_SERVICE_ACCOUNT_JSON / GOOGLE_APPLICATION_CREDENTIALS / ADC) and retry.');
+		}
+
+		all.push(...body.indexes);
+		pages += 1;
+
+		const next = typeof body.nextPageToken === 'string' && body.nextPageToken.length > 0
+			? body.nextPageToken
+			: null;
+		if (!next || next === pageToken) {
+			break;
+		}
+
+		if (pages >= MAX_INDEX_PAGES) {
+			// Discarding the pages already read and refusing is deliberate: a
+			// partial list would report the unread suffix as MISSING, which is the
+			// false alarm this tool exists to avoid.
+			throw new Error(`Firestore kept paging the index list for project ${project} `
+				+ `past ${MAX_INDEX_PAGES} pages. The listing is being truncated, so the `
+				+ 'declared indexes cannot be reported as missing or ready.');
+		}
+
+		pageToken = next;
 	}
 
-	// `AuthorizedHttpClient.send()` resolves with the parsed JSON body on `.data`;
-	// a bare object is also accepted so tests can inject a plain payload.
-	const body = response && response.data ? response.data : response;
-
-	// A body with no `indexes` array is *indeterminate*, not "zero indexes".
-	// Firestore returns `{}` for a project that genuinely has none, but an
-	// unauthenticated call (or an intercepting proxy) can also answer `200 {}`.
-	// Collapsing that into an empty list would report every declared index as
-	// missing and send an operator to create indexes that already exist - the
-	// same "assert a cause you cannot know" defect that made #1285 misleading in
-	// the first place. Refuse to audit instead.
-	if (!body || !Array.isArray(body.indexes)) {
-		throw new Error(`Firestore returned no index list for project ${project}. `
-			+ 'The listing could not be read authoritatively, so the declared indexes '
-			+ 'cannot be reported as missing or ready. Verify authentication '
-			+ '(FIREBASE_SERVICE_ACCOUNT_JSON / GOOGLE_APPLICATION_CREDENTIALS / ADC) and retry.');
-	}
-
-	return body.indexes;
+	return all;
 }
 
 /**
- * Resolve the local firebase-tools bin entry to drive from Node.
+ * Resolve the firebase-tools JS entry to drive from Node.
+ *
+ * `runDeploy` executes the result with `process.execPath`, so this must always be
+ * a real JavaScript file. `node_modules/.bin/firebase` is a shell shim and is
+ * deliberately not a fallback: handing it to `node` would fail on the shim's
+ * shell syntax and report a CLI failure that never happened.
  *
  * @param {string} [repoRoot]
  * @returns {string}
  */
 function resolveFirebaseBin(repoRoot = path.join(__dirname, '..')) {
+	const candidates = [path.join(repoRoot, 'node_modules', 'firebase-tools', 'lib', 'bin', 'firebase.js')];
+
 	try {
-		return require.resolve('firebase-tools/lib/bin/firebase.js');
+		candidates.push(require.resolve('firebase-tools/lib/bin/firebase.js'));
 	} catch {
-		return path.join(repoRoot, 'node_modules', '.bin', 'firebase');
+		// Hoisted/pnpm layouts resolve through the package entry instead.
 	}
+
+	try {
+		const pkgJson = require.resolve('firebase-tools/package.json');
+		candidates.push(path.join(path.dirname(pkgJson), 'lib', 'bin', 'firebase.js'));
+	} catch {
+		// firebase-tools is not installed; nothing further to try.
+	}
+
+	const resolved = candidates.find((candidate) => fs.existsSync(candidate));
+	if (resolved) {
+		return resolved;
+	}
+
+	throw new Error('Unable to locate the firebase-tools CLI entry '
+		+ '(firebase-tools/lib/bin/firebase.js). Run `pnpm install --frozen-lockfile` and retry.');
 }
 
 /**
@@ -401,12 +494,18 @@ function sleep(ms) {
  * Exit codes: 0 when every declared index is READY (or nothing is declared),
  * 1 when any index is missing or not yet READY, 2 on an operational error.
  *
+ * `argv` and `deps` exist so the exit codes and the `--apply` wait loop can be
+ * tested without credentials, a network, the real CLI, or a real clock. The CLI
+ * path passes neither and behaves exactly as before.
+ *
+ * @param {string[]} [argv]
+ * @param {{request?: Function|null, runDeploy?: Function, pollIntervalMs?: number, now?: Function}} [deps]
  * @returns {Promise<number>}
  */
-async function main() {
+async function main(argv = process.argv.slice(2), deps = {}) {
 	let args;
 	try {
-		args = parseArgs();
+		args = parseArgs(argv);
 	} catch (error) {
 		console.error(`error: ${error.message}`);
 		return 2;
@@ -463,13 +562,15 @@ GOOGLE_APPLICATION_CREDENTIALS) with datastore.indexes permissions.
 		return 0;
 	}
 
-	const request = (() => {
-		try {
-			return loadAuthenticatedClient().request;
-		} catch {
-			return null;
-		}
-	})();
+	const request = deps.request !== undefined
+		? deps.request
+		: (() => {
+			try {
+				return loadAuthenticatedClient().request;
+			} catch {
+				return null;
+			}
+		})();
 
 	if (!request) {
 		console.error('error: unable to build an authenticated Firestore client from the '
@@ -477,11 +578,15 @@ GOOGLE_APPLICATION_CREDENTIALS) with datastore.indexes permissions.
 		return 2;
 	}
 
+	const deploy = deps.runDeploy || runDeploy;
+	const pollIntervalMs = deps.pollIntervalMs === undefined ? DEFAULT_POLL_INTERVAL_MS : deps.pollIntervalMs;
+	const now = deps.now || Date.now;
+
 	let deployed = false;
 	let deployStatus = null;
 	if (args.apply) {
 		try {
-			const result = runDeploy({ project: args.project });
+			const result = deploy({ project: args.project });
 			deployStatus = result.status;
 			if (result.status !== 0) {
 				// Surface the CLI's own message: this is the deploy failing, not
@@ -503,7 +608,7 @@ GOOGLE_APPLICATION_CREDENTIALS) with datastore.indexes permissions.
 	// Poll until every declared index is READY or the budget is exhausted. Without
 	// this the script would exit 0 the instant the CLI returns, while reads are
 	// still being rejected.
-	const deadline = Date.now() + args.timeoutMs;
+	const deadline = now() + args.timeoutMs;
 	let audit;
 	let summary;
 
@@ -522,10 +627,10 @@ GOOGLE_APPLICATION_CREDENTIALS) with datastore.indexes permissions.
 
 		audit = auditIndexes(declared, live);
 		summary = summarizeAudit(audit);
-		if (summary.allReady || !args.apply || Date.now() >= deadline) {
+		if (summary.allReady || !args.apply || now() >= deadline) {
 			break;
 		}
-		await sleep(10000);
+		await sleep(pollIntervalMs);
 	}
 
 	const payload = {
@@ -581,7 +686,10 @@ GOOGLE_APPLICATION_CREDENTIALS) with datastore.indexes permissions.
 
 module.exports = {
 	DEFAULT_DATABASE,
+	DEFAULT_POLL_INTERVAL_MS,
 	DEFAULT_PROJECT,
+	INDEX_PAGE_SIZE,
+	MAX_INDEX_PAGES,
 	READY_STATE,
 	auditIndexes,
 	fetchLiveIndexes,

@@ -15,12 +15,16 @@ const os = require('os');
 const path = require('path');
 
 const {
+	INDEX_PAGE_SIZE,
+	MAX_INDEX_PAGES,
 	auditIndexes,
 	fetchLiveIndexes,
 	indexKey,
+	main,
 	parseArgs,
 	readDeclaredIndexes,
 	recordDeployLog,
+	resolveFirebaseBin,
 	runDeploy,
 	summarizeAudit,
 } = require('../../scripts/deploy-firestore-indexes');
@@ -225,7 +229,7 @@ describe('deploy-firestore-indexes', () => {
 
 			expect(request).toHaveBeenCalledWith(
 				'GET',
-				'https://firestore.googleapis.com/v1/projects/cabros-bot/databases/(default)/collectionGroups/-/indexes',
+				`https://firestore.googleapis.com/v1/projects/cabros-bot/databases/(default)/collectionGroups/-/indexes?pageSize=${INDEX_PAGE_SIZE}`,
 			);
 			expect(indexes[0].state).toBe('BUILDING');
 		});
@@ -253,6 +257,85 @@ describe('deploy-firestore-indexes', () => {
 				.rejects.toThrow(/datastore\.indexes\.list/);
 			await expect(fetchLiveIndexes({ project: 'cabros-bot', database: '(default)', request }))
 				.rejects.not.toThrow(/10\.0\.0\.1/);
+		});
+
+		// The listing is paginated, and it also contains Firestore's automatic
+		// single-field indexes, so exceeding one page is realistic. Stopping at
+		// page one would report a genuinely READY index as MISSING.
+		it('follows nextPageToken and collects every page', async () => {
+			const request = jest.fn()
+				.mockResolvedValueOnce({
+					data: { indexes: [liveIndex(REPLAYS_INDEX, 'READY')], nextPageToken: 'page-2' },
+				})
+				.mockResolvedValueOnce({
+					data: { indexes: [liveIndex(ALERTS_INDEX, 'READY')] },
+				});
+
+			const indexes = await fetchLiveIndexes({
+				project: 'cabros-bot',
+				database: '(default)',
+				request,
+			});
+
+			expect(request).toHaveBeenCalledTimes(2);
+			const secondUrl = new URL(request.mock.calls[1][1]);
+			expect(secondUrl.searchParams.get('pageSize')).toBe(String(INDEX_PAGE_SIZE));
+			expect(secondUrl.searchParams.get('pageToken')).toBe('page-2');
+			expect(indexes.map((index) => index.state)).toEqual(['READY', 'READY']);
+		});
+
+		it('reports everyReady when the declared index is only found on a later page', () => {
+			const request = jest.fn()
+				.mockResolvedValueOnce({ data: { indexes: [], nextPageToken: 'page-2' } })
+				.mockResolvedValueOnce({ data: { indexes: [liveIndex(ALERTS_INDEX, 'READY')] } });
+
+			return fetchLiveIndexes({ project: 'p', database: '(default)', request })
+				.then((live) => {
+					expect(summarizeAudit(auditIndexes([ALERTS_INDEX], live)).allReady).toBe(true);
+				});
+		});
+
+		it('still refuses a truncated later page instead of trusting the pages read so far', async () => {
+			const request = jest.fn()
+				.mockResolvedValueOnce({ data: { indexes: [liveIndex(ALERTS_INDEX, 'READY')], nextPageToken: 'page-2' } })
+				.mockResolvedValueOnce({ data: {} });
+
+			await expect(fetchLiveIndexes({ project: 'p', database: '(default)', request }))
+				.rejects.toThrow(/could not be read authoritatively/);
+		});
+
+		it('stops on a nextPageToken that repeats itself', async () => {
+			const request = jest.fn().mockResolvedValue({
+				data: { indexes: [liveIndex(ALERTS_INDEX, 'READY')], nextPageToken: 'stuck' },
+			});
+
+			// The repeated page is still consumed; only the *next* hop stops. A
+			// duplicate is harmless because auditIndexes keys a Map by indexKey.
+			await expect(fetchLiveIndexes({ project: 'p', database: '(default)', request }))
+				.resolves.toHaveLength(2);
+			expect(request).toHaveBeenCalledTimes(2);
+		});
+
+		it('refuses rather than auditing a truncated listing when the page cap is reached', async () => {
+			let page = 0;
+			const request = jest.fn().mockImplementation(async () => {
+				page += 1;
+				return { data: { indexes: [], nextPageToken: `page-${page}` } };
+			});
+
+			await expect(fetchLiveIndexes({ project: 'p', database: '(default)', request }))
+				.rejects.toThrow(/truncated/);
+			expect(request).toHaveBeenCalledTimes(MAX_INDEX_PAGES);
+		});
+	});
+
+	describe('resolveFirebaseBin()', () => {
+		it('resolves a real JavaScript entry, never the node_modules/.bin shell shim', () => {
+			const binPath = resolveFirebaseBin();
+
+			expect(binPath.endsWith('.js')).toBe(true);
+			expect(binPath).not.toContain(`${path.sep}.bin${path.sep}`);
+			expect(fs.existsSync(binPath)).toBe(true);
 		});
 	});
 
@@ -287,6 +370,137 @@ describe('deploy-firestore-indexes', () => {
 
 			expect(line).toContain('ALL_READY=false');
 			expect(fs.readFileSync(logFile, 'utf8')).toContain('MISSING=1');
+		});
+	});
+
+	// The exit code is this tool's entire contract: operators are told to trust
+	// it during a P0, so 0/1/2 are pinned here rather than only in the summary.
+	describe('main()', () => {
+		let tempDir;
+		let indexesFile;
+		let logFile;
+		let logSpy;
+		let errorSpy;
+
+		beforeEach(() => {
+			tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'firestore-index-main-'));
+			indexesFile = path.join(tempDir, 'indexes.json');
+			logFile = path.join(tempDir, 'audit.log');
+			fs.writeFileSync(indexesFile, JSON.stringify({ indexes: [ALERTS_INDEX] }), 'utf8');
+			logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+			errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+		});
+
+		afterEach(() => {
+			logSpy.mockRestore();
+			errorSpy.mockRestore();
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		});
+
+		const baseArgs = () => ['--indexes', indexesFile, '--log-file', logFile];
+
+		const readyRequest = () => jest.fn().mockResolvedValue({
+			data: { indexes: [liveIndex(ALERTS_INDEX, 'READY')] },
+		});
+
+		it('exits 0 when every declared index is READY', async () => {
+			await expect(main(baseArgs(), { request: readyRequest() })).resolves.toBe(0);
+			expect(errorSpy).not.toHaveBeenCalled();
+		});
+
+		it('exits 1 when a declared index is missing, without touching the audit log', async () => {
+			const request = jest.fn().mockResolvedValue({ data: { indexes: [] } });
+
+			await expect(main(baseArgs(), { request })).resolves.toBe(1);
+			expect(fs.existsSync(logFile)).toBe(false);
+		});
+
+		it('exits 1 when a declared index exists but is still building', async () => {
+			const request = jest.fn().mockResolvedValue({
+				data: { indexes: [liveIndex(ALERTS_INDEX, 'BUILDING')] },
+			});
+
+			await expect(main(baseArgs(), { request })).resolves.toBe(1);
+		});
+
+		it('exits 2 on an unparseable option', async () => {
+			await expect(main([...baseArgs(), '--nope'], { request: readyRequest() })).resolves.toBe(2);
+			expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/Unknown option/));
+		});
+
+		it('exits 2 rather than reporting missing indexes when the listing is indeterminate', async () => {
+			const request = jest.fn().mockResolvedValue({ data: {} });
+
+			await expect(main(baseArgs(), { request })).resolves.toBe(2);
+			expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/authoritatively/));
+		});
+
+		it('exits 2 when no authenticated client can be built', async () => {
+			await expect(main(baseArgs(), { request: null })).resolves.toBe(2);
+			expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/unable to build an authenticated Firestore client/));
+		});
+
+		it('exits 2 when the deploy itself fails, before auditing anything', async () => {
+			const request = readyRequest();
+			const deploy = jest.fn().mockReturnValue({ status: 1, stdout: '', stderr: 'boom' });
+
+			await expect(main([...baseArgs(), '--apply'], { request, runDeploy: deploy })).resolves.toBe(2);
+			expect(request).not.toHaveBeenCalled();
+		});
+
+		it('exits 2 when the deploy cannot even be launched', async () => {
+			const deploy = jest.fn(() => {
+				throw new Error('Unable to locate the firebase-tools CLI entry');
+			});
+
+			await expect(main([...baseArgs(), '--apply'], { request: readyRequest(), runDeploy: deploy }))
+				.resolves.toBe(2);
+		});
+
+		it('waits through --apply until the build reaches READY instead of exiting on the first poll', async () => {
+			const request = jest.fn()
+				.mockResolvedValueOnce({ data: { indexes: [liveIndex(ALERTS_INDEX, 'BUILDING')] } })
+				.mockResolvedValueOnce({ data: { indexes: [liveIndex(ALERTS_INDEX, 'READY')] } });
+			const deploy = jest.fn().mockReturnValue({ status: 0, stdout: '', stderr: '' });
+
+			await expect(main([...baseArgs(), '--apply'], {
+				request,
+				runDeploy: deploy,
+				pollIntervalMs: 1,
+			})).resolves.toBe(0);
+
+			expect(deploy).toHaveBeenCalledTimes(1);
+			expect(request).toHaveBeenCalledTimes(2);
+			expect(fs.readFileSync(logFile, 'utf8')).toContain('ALL_READY=true');
+		});
+
+		it('exits 1 when --apply never reaches READY within the budget', async () => {
+			const request = jest.fn().mockResolvedValue({
+				data: { indexes: [liveIndex(ALERTS_INDEX, 'BUILDING')] },
+			});
+			const deploy = jest.fn().mockReturnValue({ status: 0, stdout: '', stderr: '' });
+			let clock = 0;
+
+			await expect(main([...baseArgs(), '--apply', '--timeout-ms', '1000'], {
+				request,
+				runDeploy: deploy,
+				pollIntervalMs: 1,
+				now: () => {
+					clock += 2000;
+					return clock;
+				},
+			})).resolves.toBe(1);
+
+			expect(request).toHaveBeenCalledTimes(1);
+			expect(fs.readFileSync(logFile, 'utf8')).toContain('ALL_READY=false');
+		});
+
+		it('exits 0 without any request when the template declares no indexes', async () => {
+			fs.writeFileSync(indexesFile, JSON.stringify({ indexes: [] }), 'utf8');
+			const request = readyRequest();
+
+			await expect(main(baseArgs(), { request })).resolves.toBe(0);
+			expect(request).not.toHaveBeenCalled();
 		});
 	});
 });
