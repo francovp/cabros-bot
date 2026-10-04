@@ -5386,6 +5386,17 @@ const renderPlayground = (contract, view) => {
 
 	const definitions = window.CabrosAdminRequest.operationDefinitions(contract);
 
+	// `Number('') === 0`, so a direct `definitions[Number(select.value)]` lookup resolves a
+	// blank selection to the FIRST definition instead of to nothing. Every lookup goes through
+	// this resolver so "no operation matches" is a real no-selection state. Do not inline it.
+	const selectedDefinition = () => {
+		const raw = select.value;
+		if (raw === undefined || raw === null || String(raw).trim() === '') return undefined;
+		const index = Number(raw);
+		if (!Number.isInteger(index) || index < 0) return undefined;
+		return definitions[index];
+	};
+
 	const fields = element('div', { className: 'form-fields' });
 
 	const buttonRow = element('div', { className: 'badge-row playground-actions' });
@@ -5393,7 +5404,7 @@ const renderPlayground = (contract, view) => {
 	button.type = 'submit';
 
 	const buildCurlCommand = () => {
-		const definition = definitions[Number(select.value)];
+		const definition = selectedDefinition();
 		if (!definition) return '';
 		const pathNames = [...definition.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
 		const resolvedPath = pathNames.reduce((acc, name) => {
@@ -5464,7 +5475,7 @@ const renderPlayground = (contract, view) => {
 	let pendingRequestCount = 0;
 	const isSubmitLocked = () => pendingRequestCount > 0;
 	const syncSubmitLockedState = () => {
-		button.disabled = isSubmitLocked() || !definitions[Number(select.value)];
+		button.disabled = isSubmitLocked() || !selectedDefinition();
 	};
 
 	const saveCurrentInputs = (def) => {
@@ -5485,7 +5496,7 @@ const renderPlayground = (contract, view) => {
 
 	const renderFields = () => {
 		fields.replaceChildren();
-		const definition = definitions[Number(select.value)];
+		const definition = selectedDefinition();
 		if (!definition) {
 			button.disabled = true;
 			curlButton.disabled = true;
@@ -5573,12 +5584,20 @@ const renderPlayground = (contract, view) => {
 		} else if (firstAvailableValue !== null) {
 			// Filter-driven selection: save current inputs under the old definition
 			// and update previousDefinition to the newly selected one so subsequent
-			// explicit changes save under the correct operation.
+			// explicit changes save under the correct operation. `previousDefinition`
+			// is null when this filter followed an empty result, which makes this save a
+			// no-op instead of writing the empty form over the last active operation.
 			saveCurrentInputs(previousDefinition);
 			previousDefinition = definitions[Number(firstAvailableValue)];
 			select.value = firstAvailableValue;
 			renderFields();
 		} else {
+			// Nothing matches. Persist the in-flight draft before the fields are torn
+			// down, then clear previousDefinition: leaving it pointing at the operation
+			// that is no longer rendered is what let the next auto-select save the blank
+			// form into that operation's cache.
+			saveCurrentInputs(previousDefinition);
+			previousDefinition = null;
 			select.value = '';
 			renderFields();
 		}
@@ -5627,7 +5646,7 @@ const renderPlayground = (contract, view) => {
 	const restoreHistoryEntry = (entry) => {
 		const targetIndex = definitions.findIndex((d) => d.method === entry.method && d.path === entry.path);
 		if (targetIndex === -1) return;
-		saveCurrentInputs(definitions[Number(select.value)]);
+		saveCurrentInputs(selectedDefinition());
 		if (filterInput.value) {
 			filterInput.value = '';
 			populateOptions('');
@@ -5653,12 +5672,12 @@ const renderPlayground = (contract, view) => {
 	let previousDefinition = definitions[0];
 	select.addEventListener('change', () => {
 		saveCurrentInputs(previousDefinition);
-		previousDefinition = definitions[Number(select.value)];
+		previousDefinition = selectedDefinition();
 		renderFields();
 	});
 
 	fields.addEventListener('input', () => {
-		saveCurrentInputs(definitions[Number(select.value)]);
+		saveCurrentInputs(selectedDefinition());
 	});
 
 	filterInput.addEventListener('input', () => {
@@ -5676,7 +5695,7 @@ const renderPlayground = (contract, view) => {
 		rawCopyButton.hidden = true;
 		rawToggle.hidden = true;
 
-		const definition = definitions[Number(select.value)];
+		const definition = selectedDefinition();
 		if (!definition) return;
 
 		const pathNames = [...definition.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
