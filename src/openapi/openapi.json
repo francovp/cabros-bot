@@ -6227,6 +6227,19 @@
                   "successCount": 0,
                   "failureCount": 0,
                   "enrichment": {
+                    "lastStatus": "partial",
+                    "fullCount": 1,
+                    "partialCount": 2,
+                    "failedCount": 0,
+                    "confluence": {
+                      "enabled": true,
+                      "attemptedCount": 3,
+                      "appliedCount": 3,
+                      "failedCount": 0,
+                      "budgetExhaustedCount": 2,
+                      "lastAppliedAt": "2026-10-04T09:41:12.482Z",
+                      "lastFailureCategory": null
+                    },
                     "alertPath": {
                       "windowMs": 86400000,
                       "totalCount": 0,
@@ -12549,6 +12562,67 @@
           "failureCount": {
             "type": "integer",
             "minimum": 0
+          },
+          "enrichment": {
+            "type": "object",
+            "description": "Alert-path enrichment telemetry. `alertPath` aggregates the whole webhook enrichment path (full/partial/failed), so it cannot attribute an outcome to the confluence call specifically; `confluence` reports the optional ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT calls on their own (issue #1109). Counters are process-local and reset on restart.",
+            "additionalProperties": true,
+            "properties": {
+              "confluence": {
+                "type": "object",
+                "description": "Confluence enrichment counters, measured in CALLS rather than alerts: one alert enrichment issues up to two confluence calls (`combined_analysis`, then `multi_timeframe_analysis` when multi-timeframe mode is enabled). Each issued call records exactly one outcome, so `appliedCount + failedCount <= attemptedCount`. `budgetExhaustedCount` counts stages skipped because the enrichment budget was already spent, which is not a call. `enabled: true` with every counter at 0 means the gate is on but no alert has exercised it yet.",
+                "required": [
+                  "enabled",
+                  "attemptedCount",
+                  "appliedCount",
+                  "failedCount",
+                  "budgetExhaustedCount",
+                  "lastAppliedAt",
+                  "lastFailureCategory"
+                ],
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Effective state of ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT."
+                  },
+                  "attemptedCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Confluence calls issued. One alert enrichment contributes up to two: one `combined_analysis`, plus one `multi_timeframe_analysis` when multi-timeframe mode is enabled."
+                  },
+                  "appliedCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Confluence calls that returned data and were applied to the alert."
+                  },
+                  "failedCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Confluence calls that failed. Fail-open: a failure never blocks alert delivery. Because each issued call records exactly one outcome, `appliedCount + failedCount` never exceeds `attemptedCount`."
+                  },
+                  "budgetExhaustedCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Confluence stages skipped because the enrichment budget was already spent, so no call was issued at that stage. Not a call, and therefore not part of `attemptedCount`."
+                  },
+                  "lastAppliedAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time",
+                    "description": "Timestamp of the last confluence result applied to an alert, or null."
+                  },
+                  "lastFailureCategory": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Closed-enum category of the last confluence failure, or null. Provider response bodies and error messages are never exposed."
+                  }
+                }
+              }
+            }
           }
         },
         "additionalProperties": true

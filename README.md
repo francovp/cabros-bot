@@ -426,6 +426,28 @@ Configure it with the repository variables `UPTIME_MONITOR_BASE_URL`, `UPTIME_MO
 
 **Any platform or host change must update `UPTIME_MONITOR_BASE_URL` and re-register the third-party uptime monitor** — see the platform migration re-activation checklist in [Observability & Monitoring](docs/monitoring.md#external-uptime-monitoring).
 
+### TradingView Confluence Enrichment
+
+`ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` are enabled in production on the **web service only** (previews off). Together they add an optional `combined_analysis` call to each enriched alert webhook followed by a `multi_timeframe_analysis` call. Both are fail-open: a failure never blocks alert delivery, and it is recorded as a `partial` enrichment rather than a dropped alert.
+
+`ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` is nested **inside** the confluence gate, so it is inert until confluence enrichment is on — the two flags cannot disagree. Both keys need a web-service declaration in `render.yaml` even though they are only ever read on the web service, because the worker block mirrors them with `fromService` and a mirror whose source is never declared resolves to nothing.
+
+**The enrichment budget decides how much of this actually runs.** `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (default `12000`) is the ceiling for the whole webhook enrichment path. Whenever volume confirmation *or* confluence is enabled, the base `coin_analysis` call is reserved 75% of it and the optional calls share what remains — a single split, not a cumulative one, so enabling confluence does not shrink the base slice further when volume confirmation is also on. (Note that `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` is **not** declared in `render.yaml`, so which slice production actually reserves is not verifiable from the repository; the single-ternary conclusion above is a property of the code and holds either way.) Both confluence calls share one deadline of `min(8000, remaining budget)`, so with the default budget the second (`multi_timeframe_analysis`) call is commonly cut short and the alert is stored as `tradingViewEnrichmentStatus: "partial"`. Raise `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (Remote Config eligible, max `120000`) if you want both to complete — but note the webhook request deadline (`REQUEST_TIMEOUT_MS`, default `30000`) bounds the whole request, so the budget cannot usefully exceed it.
+
+Setting the flag is **necessary but not sufficient**, because the layer is fail-open: a confluence call that fails looks identical in delivery terms to one that was never attempted. `dependencies.tradingViewMcp.enrichment.confluence` reports the observed window — `attemptedCount`, `appliedCount`, `failedCount`, `budgetExhaustedCount`, `lastAppliedAt` and a closed-enum `lastFailureCategory`.
+
+**These counters are per *call*, not per alert.** One alert enrichment issues up to two confluence calls (`combined_analysis`, then `multi_timeframe_analysis` when multi-timeframe mode is on), so a single alert can move `attemptedCount` by 2. Every issued call records exactly one outcome, which is what makes `appliedCount + failedCount <= attemptedCount` hold — including the budget-starved case, where `combined_analysis` applied, `multi_timeframe_analysis` failed, and the result is `appliedCount + failedCount == attemptedCount`. `budgetExhaustedCount` counts stages skipped because the budget was already spent, which is *not* a call and therefore not an attempt. Do not read these counters as alert counts or compare them 1:1 against `enrichment.alertPath.totalCount`.
+
+Counters are process-local and reset on restart, so `enabled: true` with every counter at `0` is the expected state right after a deploy. `enrichment.alertPath` remains the aggregate over the whole webhook path and cannot attribute an outcome to confluence specifically.
+
+Verify after the Blueprint is applied:
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
+  | jq '{flag: .featureFlags.tradingViewConfluenceEnrichment,
+         confluence: .dependencies.tradingViewMcp.enrichment.confluence}'
+```
+
 ### Market Scanner MCP Fast-Fail Gate
 `POST /api/webhook/market-scanner-alert` checks the process-local TradingView MCP status before running its sequential scans. If the status is `degraded` with `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, it skips every scan and returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with each scan as `status: "skipped"`. The endpoint returns `502` in two shapes: `TRADINGVIEW_MCP_UNAVAILABLE` (skipped, nothing attempted) and `ALL_SCANS_FAILED` (attempted, all failed). The gate keys on the breaker's time-based state so that after `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses the next request is allowed through as a recovery probe — a transient outage self-heals without a restart. See [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert).
 

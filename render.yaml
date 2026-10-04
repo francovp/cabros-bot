@@ -119,6 +119,16 @@ services:
     sync: false
   - key: LANGFUSE_SECRET_KEY
     sync: false
+  # TradingView confluence enrichment: web service only, previews off. See AGENTS.md.
+  - key: ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT
+    value: true
+    previewValue: false
+  # MTF is nested inside the confluence gate, so it needs a web-service value of its
+  # own: without this the worker's fromService mirror below pointed at a key the web
+  # service never set - the same dangling-mirror shape as the flag above.
+  - key: ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME
+    value: true
+    previewValue: false
   - key: REDIS_URL
     fromService:
       name: cabros-crypto-bot-telegram-queue
