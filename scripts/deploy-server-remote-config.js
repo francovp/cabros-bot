@@ -53,11 +53,13 @@ function isNamespaceMissing(error) {
 }
 
 async function publishServerTemplate(overrides = {}) {
-	// `admin` and `AuthorizedHttpClient` are only needed when the caller did not
-	// supply a ready `client` (and, for `admin`, an `app`). Loading the real SDK
-	// unconditionally drags the whole firebase-admin module graph into any process
-	// that only wants to inject a client - including the publish tests.
-	const needsSdk = !overrides.client || !overrides.app;
+	// The SDK is loaded only when a collaborator we actually need is missing.
+	// `admin` is required whenever `app` or `remoteConfig` is absent, and
+	// `AuthorizedHttpClient` whenever `client` is - so all three must be checked,
+	// otherwise a partially injected call dereferences a null dependency.
+	// Loading unconditionally would drag the whole firebase-admin module graph into
+	// any process that only wants to inject collaborators, including the tests.
+	const needsSdk = !overrides.app || !overrides.client || !overrides.remoteConfig;
 	const deps = needsSdk ? loadDependencies() : { admin: null, AuthorizedHttpClient: null };
 	const admin = overrides.admin || deps.admin;
 	const AuthorizedHttpClient = overrides.AuthorizedHttpClient || deps.AuthorizedHttpClient;

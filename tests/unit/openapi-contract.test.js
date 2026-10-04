@@ -674,4 +674,16 @@ describe('status dependency contract drift', () => {
 		const missing = documentedDependencyKeys().filter((key) => !seen.has(key));
 		expect(missing).toEqual([]);
 	});
+	it('documents every lastErrorCategory the remote-config service can emit', () => {
+		// The service emits `invalid_value` on a SUCCESSFUL load whose values failed
+		// schema validation. A client validating responses against the published spec
+		// must not reject that value, so the enum has to list it.
+		const spec = require('../../src/openapi/openapi.json');
+		const enumValues = spec.components.schemas.FirebaseRemoteConfigDependency
+			.properties.lastErrorCategory.enum;
+
+		for (const category of ['load_failed', 'template_not_published', 'invalid_value', 'stale', 'timeout']) {
+			expect(enumValues).toContain(category);
+		}
+	});
 });

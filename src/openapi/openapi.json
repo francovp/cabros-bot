@@ -6598,22 +6598,32 @@
       "RateLimitHeaders": {
         "type": "object",
         "description": "Standard X-RateLimit-* response headers emitted by the global rate limiter on every protected /api response (success and throttled). The webhook ingest endpoints use an isolated 1,000-request bucket; ordinary /api endpoints use RATE_LIMIT_MAX.",
-        "required": ["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
+        "required": [
+          "X-RateLimit-Limit",
+          "X-RateLimit-Remaining",
+          "X-RateLimit-Reset"
+        ],
         "properties": {
           "X-RateLimit-Limit": {
             "type": "string",
             "description": "Maximum requests per window for the current bucket.",
-            "examples": ["1000"]
+            "examples": [
+              "1000"
+            ]
           },
           "X-RateLimit-Remaining": {
             "type": "string",
             "description": "Requests remaining in the current window. Zero on a throttled response.",
-            "examples": ["999"]
+            "examples": [
+              "999"
+            ]
           },
           "X-RateLimit-Reset": {
             "type": "string",
             "description": "Unix timestamp (seconds) when the current window resets.",
-            "examples": ["1756819200"]
+            "examples": [
+              "1756819200"
+            ]
           }
         }
       },
@@ -10330,15 +10340,25 @@
             "type": "object",
             "description": "Per-tier counts across the grounding sources.",
             "properties": {
-              "high": { "type": "number" },
-              "medium": { "type": "number" },
-              "low": { "type": "number" },
-              "unknown": { "type": "number" }
+              "high": {
+                "type": "number"
+              },
+              "medium": {
+                "type": "number"
+              },
+              "low": {
+                "type": "number"
+              },
+              "unknown": {
+                "type": "number"
+              }
             }
           },
           "actual_source_domains": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Normalized hostnames classified from the grounding sources."
           },
           "actual_stale_sources": {
@@ -11640,10 +11660,11 @@
               "aborted",
               "resource_exhausted",
               "invalid_argument",
+              "invalid_value",
               "unknown_error",
               null
             ],
-            "description": "Sanitized error category if the last load failed or values are stale, or null. `template_not_published` means the `firebase-server` namespace has no template yet and must be published (see the deploy:firebase-remote-config:server workflow); it is distinct from a transient `load_failed`."
+            "description": "Sanitized error category if the last load failed, returned values are stale, or a successful load produced values that failed schema validation (`invalid_value`), or null. `template_not_published` means the `firebase-server` namespace has no template yet and must be published (see the deploy:firebase-remote-config:server workflow); it is distinct from a transient `load_failed`."
           },
           "consecutiveFailures": {
             "type": "integer",
