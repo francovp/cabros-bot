@@ -5966,6 +5966,114 @@ describe('structured analysis forms', () => {
 			expect(playground.elements.body.value).toContain('[REDACTED]');
 		});
 
+		it('records the submitted query payload when operations change mid-flight', async () => {
+			let releaseRequest;
+			const pendingRequest = new Promise((resolve) => { releaseRequest = resolve; });
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/selftest/run')) {
+						await pendingRequest;
+						return response({ success: true, results: [] });
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
+
+			select.value = optionValue('POST /api/selftest/run');
+			await select.dispatch('change');
+			playground.elements.query.value = JSON.stringify({ only: 'submitted-check-1162' });
+			playground.elements.body.value = JSON.stringify({ only: 'submitted-body-1162' });
+
+			await playground.dispatch('submit');
+			await flush();
+
+			// The response is still in flight: switch operation and type a different query.
+			select.value = optionValue('GET /api/alerts —');
+			await select.dispatch('change');
+			playground.elements.query.value = JSON.stringify({ limit: 5 });
+			await playground.dispatch('input');
+
+			releaseRequest();
+			await flush();
+			await flush();
+
+			const historyItems = findAll(playground, (n) => n.className === 'history-item');
+			expect(historyItems.length).toBe(1);
+
+			const restoreBtn = find(historyItems[0], (n) => n.tagName === 'BUTTON' && n.textContent === 'Restore');
+			await restoreBtn.dispatch('click');
+			await flush();
+
+			const currentSelected = find(select, (o) => o.value === select.value);
+			expect(currentSelected.textContent).toContain('POST /api/selftest/run');
+			expect(playground.elements.query.value).toContain('submitted-check-1162');
+			expect(playground.elements.query.value).not.toContain('"limit"');
+			expect(playground.elements.body.value).toContain('submitted-body-1162');
+		});
+
+		it('records the submitted body payload when operations change mid-flight', async () => {
+			let releaseRequest;
+			const pendingRequest = new Promise((resolve) => { releaseRequest = resolve; });
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/webhook/alert')) {
+						await pendingRequest;
+						return response({ success: true, messageId: 'm-1162' });
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
+
+			select.value = optionValue('POST /api/webhook/alert');
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ text: 'submitted alert 1162' });
+
+			await playground.dispatch('submit');
+			await flush();
+
+			// The response is still in flight: switch operation and type a different body.
+			select.value = optionValue('POST /api/jobs/tradingview-analysis');
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ symbols: ['BINANCE:BTCUSDT'] });
+			await playground.dispatch('input');
+
+			releaseRequest();
+			await flush();
+			await flush();
+
+			const historyItems = findAll(playground, (n) => n.className === 'history-item');
+			expect(historyItems.length).toBe(1);
+
+			const restoreBtn = find(historyItems[0], (n) => n.tagName === 'BUTTON' && n.textContent === 'Restore');
+			await restoreBtn.dispatch('click');
+			await flush();
+
+			const currentSelected = find(select, (o) => o.value === select.value);
+			expect(currentSelected.textContent).toContain('POST /api/webhook/alert');
+			expect(playground.elements.body.value).toContain('submitted alert 1162');
+			expect(playground.elements.body.value).not.toContain('BINANCE:BTCUSDT');
+		});
+
 		it('generates a curl command with literal $WEBHOOK_API_KEY placeholder and never leaks actual key', async () => {
 			let capturedTextarea = null;
 			const browser = createBrowser({
