@@ -1661,6 +1661,37 @@ The hosted admin console now bounds browser fetches: `/admin/auth-config` keeps 
 
 No new environment variable, endpoint, OpenAPI, Postman, or Remote Config change was needed.
 
+## Admin Playground Request History Records Actual Outcomes (Issue #1163)
+
+A Playground request can end **without an HTTP response at all**, and each way it can end is a distinct operator-facing result. The request history must name that result; it must never synthesize a status for a request that got no response.
+
+**The bug.** `sendRequest` returns `undefined` on every no-response path (authorization refusal, sign-in refresh failure, request construction failure, declined confirmation, superseded request, transport failure). The history callback only tested whether `responseStatus` was set and otherwise fell back to a literal `'200 OK'`, so a declined or failed mutation was recorded as `HTTP 200` — a false success an operator could act on during incident diagnosis.
+
+**The contract.** An HTTP status is assigned **only** after `captureResponseStatus` receives a real response. Every other end is an explicit token from the closed `REQUEST_OUTCOMES` map, reported through the new `captureOutcome` callback and rendered by `describeRequestOutcome()`:
+
+| Outcome | History label | Trigger |
+|---|---|---|
+| `authorization_denied` | `Not authorized` | Firebase admin auth enabled and the role cannot perform the operation |
+| `sign_in_expired` | `Sign-in expired` | `getIdToken()` rejected |
+| `invalid_request` | `Invalid request` | `createRequest` threw (bad path/query) |
+| `cancelled` | `Cancelled` | Operator dismissed the confirmation dialog; nothing was sent |
+| `superseded` | `Superseded` | `isCurrent()` was false before dispatch; nothing was sent |
+| `timed_out` | `Timed out` | Client deadline exceeded (`AbortError` from `fetchWithTimeout`) |
+| `network_error` | `Network error` | Any other transport failure |
+| *(unknown token)* | `No response` | Defensive default; still `ok: false` |
+
+**Invariants**:
+- **A no-response outcome is never `ok: true`.** The history entry uses `ok: responseOk`, and `responseOk` is initialized to `false` and set only by `captureResponseStatus`/`captureResponseData`. The previous `responseOk !== false` form happened to coincide because the initializer was already `false`; the bare `responseOk` states the dependency directly, so a future initializer change cannot silently turn a no-response entry into a success.
+- **`captureOutcome` fires only where no response exists.** Every call site is inside an early `return` or the `catch` — never on the success path — so a real response can never be overwritten by a later outcome token. `classifyRequestFailure()` reads `error.name === 'AbortError'` to separate an exceeded client budget from a transport failure, because `fetchWithTimeout` aborts through `AbortController` and the request may still have reached the server.
+- **`sendRequest` still swallows its own errors.** The `.catch` arm on the Playground handler remains a backstop for a throw outside `sendRequest`'s `try`; it uses the same `describeRequestOutcome()` helper, so it also degrades to `No response` with `ok: false` rather than inventing a status.
+- **`showError()` and history stay separate.** The error banner and the history badge are the same fact rendered for two audiences; the history badge is never derived from the banner text.
+
+**Coverage**: `tests/unit/admin-client.test.js`, `describe('request history records the actual outcome')` — network failure, `AbortError` timeout, declined confirmation, authorization refusal, real HTTP 4xx, real HTTP 2xx. The 4xx/2xx cases assert the tone (`status-danger` / `status-ready`) as well as the label, so a label change that keeps the wrong tone still fails.
+
+**Verified in a real browser** at 1440px and 375px: `Cancelled`, `Network error`, `HTTP 400` render in the danger tone (`rgb(180, 45, 66)` on `rgb(255, 240, 241)`) and `HTTP 200` in the ready tone (`rgb(21, 107, 73)` on `rgb(234, 246, 238)`), with no page-level horizontal overflow and every badge and Restore control inside the viewport.
+
+No new environment variable, endpoint, Remote Config key, OpenAPI schema, or Postman variant was added: this is a browser-console rendering fix over existing responses.
+
 ## Admin Console Deep Links and Filter State (Issue #1294)
 
 The `/admin` console keeps its active view and its report filters in the URL, so an operator can paste a link to a colleague, and Back/Forward move between views without reloading the page.
