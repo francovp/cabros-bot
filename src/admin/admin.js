@@ -106,6 +106,7 @@ const VIEW_TITLES = {
 	jobs: 'Jobs',
 	orders: 'Orders',
 	analysis: 'Analysis',
+	newsMonitor: 'News monitor',
 	playground: 'Playground',
 };
 const CONSOLE_TITLE_BASE = 'Cabros Bot Console';
@@ -124,6 +125,8 @@ const FILTER_SCOPE_VIEWS = Object.freeze({
 	'outcomes.list': 'outcomes',
 	'outcomes.summary': 'outcomes',
 	'outcomes.calibration': 'outcomes',
+	'newsMonitor.summary': 'newsMonitor',
+	'newsMonitor.analyses': 'newsMonitor',
 });
 
 const DEFAULT_BACKEND_ORIGIN = 'https://openclaw.tail5e4271.ts.net';
@@ -6567,6 +6570,32 @@ const buildNewsMonitorForm = (contract, operation, fields, definition) => {
 	};
 };
 
+// The news monitor view (#1290) lives in admin-newsmonitor.js and receives its helpers
+// instead of importing them: sendRequest must stay the only owner of the operator-role
+// gate and the confirm-before-mutation contract, or this view grows a private auth path.
+const createNewsMonitorView = () => {
+	const factory = window.CabrosAdminNewsMonitor && window.CabrosAdminNewsMonitor.createNewsMonitorView;
+	if (typeof factory !== 'function') {
+		return showError(element('div'), 'The news monitor console module failed to load. Reload the console.');
+	}
+	return factory({
+		sendRequest,
+		element,
+		getElement,
+		createMetricCard,
+		createEmptyState,
+		createTimestamp,
+		showError,
+		addField,
+		registerFilterScope,
+		reportWindowDefaults,
+		toIsoTimestamp,
+		canPerformMutation,
+		charts: window.CabrosAdminCharts,
+		authState,
+	});
+};
+
 const renderView = async (name) => {
 	const view = document.getElementById('view');
 	if (typeof detachActiveViewPoll === 'function') detachActiveViewPoll();
@@ -6586,6 +6615,10 @@ const renderView = async (name) => {
 		}
 		if (name === 'status') {
 			view.append(createStatusExplorer());
+			return;
+		}
+		if (name === 'newsMonitor') {
+			view.append(createNewsMonitorView());
 			return;
 		}
 		view.append(element('h2', { text: name[0].toUpperCase() + name.slice(1) }));
