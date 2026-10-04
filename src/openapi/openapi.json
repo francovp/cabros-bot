@@ -11173,7 +11173,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "description": "ENABLE_SYMBOL_ANALYSIS_STORAGE (or its Remote Config equivalent) is true. This is configured intent, not evidence that persistence works."
+            "description": "ENABLE_SYMBOL_ANALYSIS_STORAGE is true. Environment-only: excluded from Remote Config so a published server template cannot override render.yaml. This is configured intent, not evidence that persistence works."
           },
           "configured": {
             "type": "boolean",

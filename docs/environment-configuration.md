@@ -245,10 +245,12 @@ Until that runs, the collection grows without bound. This is the same eventual d
 
 #### Symbol Analysis Persistence
 
-- `ENABLE_SYMBOL_ANALYSIS_STORAGE` - Store `/api/webhook/symbol-analysis` results in the Firestore `symbolAnalyses` collection so they are readable from `/api/symbol-analyses` (`true` or `false`, default: `false`). **Enabled in production** via `render.yaml` on the web service only, with previews off (issue #1179). Read [`dependencies.symbolAnalysisStorage`](#verifying-symbol-analysis-persistence-is-actually-working) before treating it as working.
-- `SYMBOL_ANALYSIS_RETENTION_DAYS` - Retention for stored symbol analyses in days (`1`-`365`, default: `7`). New records write `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` once per Firebase project to enable native Firestore TTL deletion on `expiresAt`.
+- `ENABLE_SYMBOL_ANALYSIS_STORAGE` - Store `/api/webhook/symbol-analysis` results in the Firestore `symbolAnalyses` collection so they are readable from `/api/symbol-analyses` (`true` or `false`, default: `false`). **Enabled in production** via `render.yaml` on the web service only, with previews off (issue #1179). Read [`dependencies.symbolAnalysisStorage`](#verifying-symbol-analysis-persistence-is-actually-working) before treating it as working. **Environment-only** — excluded from Remote Config (see the note below).
+- `SYMBOL_ANALYSIS_RETENTION_DAYS` - Retention for stored symbol analyses in days (`1`-`365`, default: `7`). New records write `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` once per Firebase project to enable native Firestore TTL deletion on `expiresAt`. **Environment-only** — excluded from Remote Config.
 
 The flag is declared on the **web service only**. The single writer is the HTTP route layer in `src/controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis.js`, and `worker.js` never mounts routes, so the worker stays off rather than becoming a second writer on the collection. Previews stay off because previews share the production Firestore project: a preview would write throwaway rows into the collection operators read.
+
+**Both keys are excluded from Remote Config on purpose.** A gate that decides where a collection lives is a process-startup decision, not a runtime tuning knob, so neither key is in `RemoteConfigService.js` `PARAMETER_SCHEMA` nor in `firebase-remote-config-template.json`. This is not cosmetic: `getRemoteValue()` accepts a published template parameter with a plain `defaultValue`, and a published template outranks `render.yaml` for every allow-listed key. An allow-listed gate whose template value disagrees with the blueprint therefore reports the blueprint's value in `/api/capabilities` while the template keeps the feature silently off. `tests/unit/remote-config-service.test.js` fails if the blueprint and the template ever disagree for a shared key.
 
 #### Verifying symbol analysis persistence is actually working
 
@@ -268,8 +270,12 @@ Read and write counters are reported separately (`writesAttempted`, `writesSucce
 
 ```bash
 curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
-  | jq '{flag: .featureFlags.symbolAnalysisStorage, dep: .dependencies.symbolAnalysisStorage}'
+  | jq '{flag: .featureFlags.symbolAnalysisStorage, dep: .dependencies.symbolAnalysisStorage,
+         templatePublished: .dependencies.firebaseRemoteConfig.templatePublished,
+         configSource: .dependencies.firebaseRemoteConfig.source}'
 ```
+
+- `flag: false` in production although `render.yaml` says `true` — check `templatePublished` and `configSource` first. Because both keys are excluded from Remote Config, a `true` template here can no longer be the cause; a published template that disagrees with `render.yaml` on *any* allow-listed key means `render.yaml` itself has not been applied to the running deployment, so redeploy from the blueprint.
 
 - `status: "unverified"` — the normal state right after a deploy. `configured` is already `true` here; nothing has been proven yet. Persist one analysis and re-check.
 - `status: "ready"` — proven: `writesSucceeded` is at least `1`.

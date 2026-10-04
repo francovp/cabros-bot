@@ -482,8 +482,12 @@ BASE_URL=https://cabros-crypto-bot-telegram.onrender.com
 curl -s -H "x-api-key: $WEBHOOK_API_KEY" "$BASE_URL/api/capabilities" \
   | jq '{flag: .featureFlags.symbolAnalysisStorage,
          status: .dependencies.symbolAnalysisStorage.status,
-         writes: .dependencies.symbolAnalysisStorage.writesSucceeded}'
-# Expected right after deploy: flag true, status "unverified", writes 0
+         writes: .dependencies.symbolAnalysisStorage.writesSucceeded,
+         templatePublished: .dependencies.firebaseRemoteConfig.templatePublished,
+         configSource: .dependencies.firebaseRemoteConfig.source}'
+# Expected right after deploy: flag true, status "unverified", writes 0.
+# If flag is false, check templatePublished first: a published template that
+# disagrees with render.yaml is what silently overrides the blueprint.
 
 # 2. Persist one analysis, then re-check.
 curl -s -X POST -H "x-api-key: $WEBHOOK_API_KEY" -H 'Content-Type: application/json' \
@@ -502,10 +506,12 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" "$BASE_URL/api/capabilities" \
 
 | Variable | Default | Bounds | Purpose |
 | :--- | :--- | :--- | :--- |
-| `ENABLE_SYMBOL_ANALYSIS_STORAGE` | `false` | — | Persist symbol analyses to Firestore. |
-| `SYMBOL_ANALYSIS_RETENTION_DAYS` | `7` | `1`–`365` | TTL horizon for stored analyses. |
+| `ENABLE_SYMBOL_ANALYSIS_STORAGE` | `false` | — | Persist symbol analyses to Firestore. Environment-only. |
+| `SYMBOL_ANALYSIS_RETENTION_DAYS` | `7` | `1`–`365` | TTL horizon for stored analyses. Environment-only. |
 
-Both are classified **environment-only** for Firebase Remote Config parity: a process-startup gate that decides where a collection lives, and a retention horizon, are not runtime tuning knobs. Both are nevertheless present in `RemoteConfigService.js` `PARAMETER_SCHEMA` and in `firebase-remote-config-template.json`, so once a server template has been published `firebase-remote-config-template.json` outranks `render.yaml` — change them there, not in the blueprint.
+Both are classified **environment-only** for Firebase Remote Config parity: a process-startup gate that decides where a collection lives, and a retention horizon, are not runtime tuning knobs. Neither is in `RemoteConfigService.js` `PARAMETER_SCHEMA` nor in `firebase-remote-config-template.json`, so `render.yaml` is the only place either value comes from — matching `ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_SCANNER_PRESETS` and `ENABLE_SIGNAL_OUTCOME_TRACKING`.
+
+**This matters because a published template outranks `render.yaml`.** Any allow-listed key present in `firebase-remote-config-template.json` beats `process.env` at runtime (`getRemoteValue()` accepts a plain `defaultValue` from the template, not just a targeted condition), so an allow-listed gate whose template value disagrees with the blueprint reports the blueprint's value in `/api/capabilities` while the template keeps the feature off. `tests/unit/remote-config-service.test.js` now fails if the two ever disagree for a shared key. When triaging a flag that is `true` in the blueprint but reports `false` in production, check `dependencies.firebaseRemoteConfig.templatePublished` first — a published template is the usual cause, and the `Deploy Firebase Remote Config Server Template` workflow is the only thing that changes it.
 
 ### External Uptime Monitoring
 

@@ -2,7 +2,6 @@
 
 const crypto = require('crypto');
 const admin = require('firebase-admin');
-const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { isFirestoreConfigured } = require('./firestoreConfig');
 const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
 const { classifyFirestoreError, describeFirestoreErrorCategory } = require('./firestoreErrorCategories');
@@ -162,24 +161,17 @@ function _createReadUnavailableError(cause) {
 	return error;
 }
 
+// Both settings are deployment-controlled, matching
+// `AlertStorageService.canInitializeFirestore()`, which reads the same gate from
+// `process.env`. They are deliberately absent from `RemoteConfigService`
+// PARAMETER_SCHEMA: a published server template outranks `render.yaml`, so an
+// allow-listed gate here would let a stale template silently keep the enablement
+// off while `/api/capabilities` reported the blueprint's value (issue #1179).
 function isEnabled() {
-	try {
-		const runtime = getRuntimeConfig();
-		if (runtime && runtime.ENABLE_SYMBOL_ANALYSIS_STORAGE !== undefined) {
-			return runtime.ENABLE_SYMBOL_ANALYSIS_STORAGE === true;
-		}
-	} catch {}
 	return process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE === 'true';
 }
 
 function getRetentionDays() {
-	try {
-		const runtime = getRuntimeConfig();
-		const days = runtime?.SYMBOL_ANALYSIS_RETENTION_DAYS;
-		if (Number.isInteger(days) && days >= 1 && days <= 365) {
-			return days;
-		}
-	} catch {}
 	const parsed = Number.parseInt(process.env.SYMBOL_ANALYSIS_RETENTION_DAYS, 10);
 	return Number.isInteger(parsed) && parsed >= 1 && parsed <= 365 ? parsed : DEFAULT_RETENTION_DAYS;
 }

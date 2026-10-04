@@ -54,10 +54,16 @@ describe('SymbolAnalysisStorageService', () => {
 			expect(SymbolAnalysisStorageService.isEnabled()).toBe(false);
 		});
 
-		it('prefers RemoteConfig value when available', () => {
+		// The gate is environment-only. A published server template outranks
+		// render.yaml, so allowing the key here would let the template silently
+		// override the blueprint's `true` and keep the enablement inert.
+		it('ignores a Remote Config override because the gate is environment-only', () => {
 			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 			process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'false';
 			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_SYMBOL_ANALYSIS_STORAGE: true });
+			expect(SymbolAnalysisStorageService.isEnabled()).toBe(false);
+
+			process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'true';
 			expect(SymbolAnalysisStorageService.isEnabled()).toBe(true);
 		});
 	});
@@ -83,11 +89,11 @@ describe('SymbolAnalysisStorageService', () => {
 			expect(SymbolAnalysisStorageService.getRetentionDays()).toBe(7);
 		});
 
-		it('uses RemoteConfig override when available', () => {
+		it('ignores a Remote Config override because the retention horizon is environment-only', () => {
 			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 			process.env.SYMBOL_ANALYSIS_RETENTION_DAYS = '14';
 			remoteConfigService._setRemoteOverridesForTesting({ SYMBOL_ANALYSIS_RETENTION_DAYS: 30 });
-			expect(SymbolAnalysisStorageService.getRetentionDays()).toBe(30);
+			expect(SymbolAnalysisStorageService.getRetentionDays()).toBe(14);
 		});
 	});
 

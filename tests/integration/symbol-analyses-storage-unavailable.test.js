@@ -1,3 +1,4 @@
+/* global saveEnv, restoreEnv */
 'use strict';
 
 jest.mock('firebase-admin');
