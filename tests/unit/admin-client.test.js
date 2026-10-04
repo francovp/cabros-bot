@@ -6117,6 +6117,185 @@ describe('structured analysis forms', () => {
 			// Crucial security check: the actual API key MUST NOT appear anywhere in the curl output
 			expect(curlCommand).not.toContain('actual-production-secret-key-12345');
 		});
+
+		describe('request history records the actual outcome', () => {
+			const openPlayground = async (options) => {
+				const browser = createBrowser({
+					fetchImpl: async (url) => {
+						if (url === '/openapi.json') return response(contract);
+						return response({});
+					},
+					...options,
+				});
+				await flush();
+				browser.elementsById['api-key'].value = 'test-key';
+				await selectView(browser, 'playground');
+				await flush();
+				const form = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+					&& node.textContent.includes('Operations'));
+				const select = find(form, (node) => node.tagName === 'SELECT');
+				const choose = async (route) => {
+					select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes(route)).value;
+					await select.dispatch('change');
+				};
+				return { browser, form, select, choose };
+			};
+
+			const badgeOf = (historyItem) => find(historyItem, (node) => typeof node.className === 'string'
+				&& node.className.startsWith('status-badge'));
+
+			it('labels a network failure as a network error instead of 200 OK', async () => {
+				const { form, choose } = await openPlayground({
+					fetchImpl: async (url) => {
+						if (url === '/openapi.json') return response(contract);
+						throw new TypeError('Failed to fetch');
+					},
+				});
+				await choose('POST /api/webhook/alert');
+				form.elements.body.value = JSON.stringify({ text: 'network failure probe' });
+				await form.dispatch('submit');
+				await flush();
+
+				const historyItems = findAll(form, (n) => n.className === 'history-item');
+				expect(historyItems.length).toBe(1);
+				const badge = badgeOf(historyItems[0]);
+				expect(badge.textContent).toBe('Network error');
+				expect(badge.textContent).not.toContain('200');
+				expect(badge.className).toContain('status-danger');
+			});
+
+			it('distinguishes a client-side request timeout from a generic network error', async () => {
+				const abortError = new Error('The operation was aborted');
+				abortError.name = 'AbortError';
+				const { form, choose } = await openPlayground({
+					fetchImpl: async (url) => {
+						if (url === '/openapi.json') return response(contract);
+						throw abortError;
+					},
+				});
+				await choose('POST /api/webhook/alert');
+				form.elements.body.value = JSON.stringify({ text: 'timeout probe' });
+				await form.dispatch('submit');
+				await flush();
+
+				const historyItems = findAll(form, (n) => n.className === 'history-item');
+				expect(badgeOf(historyItems[0]).textContent).toBe('Timed out');
+			});
+
+			it('labels a declined confirmation as cancelled and never sends the request', async () => {
+				const sent = [];
+				const { form, choose } = await openPlayground({
+					confirm: () => false,
+					fetchImpl: async (url) => {
+						if (url === '/openapi.json') return response(contract);
+						sent.push(url);
+						return response({ success: true });
+					},
+				});
+				await choose('POST /api/alerts/{alertId}/replay');
+				form.elements['path-alertId'].value = 'alert-1163';
+				await form.dispatch('submit');
+				await flush();
+
+				expect(sent.some((url) => url.includes('/api/alerts/alert-1163/replay'))).toBe(false);
+				const historyItems = findAll(form, (n) => n.className === 'history-item');
+				expect(historyItems.length).toBe(1);
+				const badge = badgeOf(historyItems[0]);
+				expect(badge.textContent).toBe('Cancelled');
+				expect(badge.className).toContain('status-danger');
+			});
+
+			it('labels an authorization refusal as not authorized and never sends the request', async () => {
+				const sent = [];
+				const auth = {
+					onAuthStateChanged: (listener) => {
+						listener({
+							email: 'viewer@example.com',
+							getIdToken: async () => 'viewer-token',
+							getIdTokenResult: async () => ({ claims: { role: 'admin.viewer' } }),
+						});
+						return () => {};
+					},
+					setPersistence: async () => undefined,
+					signInWithEmailAndPassword: jest.fn(),
+					signOut: jest.fn(),
+				};
+				const { form, choose } = await openPlayground({
+					firebase: { initializeApp: jest.fn(), auth: jest.fn(() => auth) },
+					fetchImpl: async (url) => {
+						if (url === '/admin/auth-config') {
+							return response({
+								enabled: true,
+								configured: true,
+								config: { apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros' },
+							});
+						}
+						if (url === '/openapi.json') return response(contract);
+						sent.push(url);
+						return response({ success: true });
+					},
+				});
+				await choose('POST /api/webhook/alert');
+				form.elements.body.value = JSON.stringify({ text: 'viewer must not mutate' });
+				await form.dispatch('submit');
+				await flush();
+
+				expect(sent.some((url) => url.includes('/api/webhook/alert'))).toBe(false);
+				const historyItems = findAll(form, (n) => n.className === 'history-item');
+				expect(historyItems.length).toBe(1);
+				const badge = badgeOf(historyItems[0]);
+				expect(badge.textContent).toBe('Not authorized');
+				expect(badge.className).toContain('status-danger');
+			});
+
+			it('records a real 4xx response as its own HTTP status and a non-success tone', async () => {
+				const { form, choose } = await openPlayground({
+					fetchImpl: async (url) => {
+						if (url === '/openapi.json') return response(contract);
+						if (url.includes('/api/webhook/alert')) {
+							return response({
+								success: false,
+								error: 'text is required',
+								code: 'INVALID_REQUEST',
+								requestId: 'req-1163',
+								retryable: false,
+							}, 400);
+						}
+						return response({});
+					},
+				});
+				await choose('POST /api/webhook/alert');
+				form.elements.body.value = JSON.stringify({});
+				await form.dispatch('submit');
+				await flush();
+
+				const historyItems = findAll(form, (n) => n.className === 'history-item');
+				expect(historyItems.length).toBe(1);
+				const badge = badgeOf(historyItems[0]);
+				expect(badge.textContent).toBe('HTTP 400');
+				expect(badge.className).toContain('status-danger');
+			});
+
+			it('records a real 2xx response as an HTTP status and a success tone', async () => {
+				const { form, choose } = await openPlayground({
+					fetchImpl: async (url) => {
+						if (url === '/openapi.json') return response(contract);
+						if (url.includes('/api/webhook/alert')) return response({ success: true, messageId: 'm-1163' });
+						return response({});
+					},
+				});
+				await choose('POST /api/webhook/alert');
+				form.elements.body.value = JSON.stringify({ text: 'successful delivery probe' });
+				await form.dispatch('submit');
+				await flush();
+
+				const historyItems = findAll(form, (n) => n.className === 'history-item');
+				expect(historyItems.length).toBe(1);
+				const badge = badgeOf(historyItems[0]);
+				expect(badge.textContent).toBe('HTTP 200');
+				expect(badge.className).toContain('status-ready');
+			});
+		});
 	});
 	it('moves focus to the view region and updates the document title on every view switch', async () => {
 		const browser = createBrowser({

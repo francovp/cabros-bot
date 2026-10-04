@@ -2059,13 +2059,50 @@ const createOverviewDashboard = () => {
 	return dashboard;
 };
 
+// A request can end without an HTTP response at all. Each such end is a distinct
+// operator-facing result, so it is labelled explicitly; an HTTP status is only ever
+// assigned after captureResponseStatus receives a real response.
+const REQUEST_OUTCOMES = {
+	AUTHORIZATION_DENIED: 'authorization_denied',
+	SIGN_IN_EXPIRED: 'sign_in_expired',
+	INVALID_REQUEST: 'invalid_request',
+	CANCELLED: 'cancelled',
+	SUPERSEDED: 'superseded',
+	TIMED_OUT: 'timed_out',
+	NETWORK_ERROR: 'network_error',
+};
+
+const REQUEST_OUTCOME_LABELS = {
+	[REQUEST_OUTCOMES.AUTHORIZATION_DENIED]: 'Not authorized',
+	[REQUEST_OUTCOMES.SIGN_IN_EXPIRED]: 'Sign-in expired',
+	[REQUEST_OUTCOMES.INVALID_REQUEST]: 'Invalid request',
+	[REQUEST_OUTCOMES.CANCELLED]: 'Cancelled',
+	[REQUEST_OUTCOMES.SUPERSEDED]: 'Superseded',
+	[REQUEST_OUTCOMES.TIMED_OUT]: 'Timed out',
+	[REQUEST_OUTCOMES.NETWORK_ERROR]: 'Network error',
+};
+
+const DEFAULT_NO_RESPONSE_LABEL = 'No response';
+
+const describeRequestOutcome = (outcome) => REQUEST_OUTCOME_LABELS[outcome] || DEFAULT_NO_RESPONSE_LABEL;
+
+// fetchWithTimeout aborts via AbortController, so an exceeded client budget rejects with
+// an AbortError — the request may or may not have reached the server, unlike a transport failure.
+const classifyRequestFailure = (error) => (error && error.name === 'AbortError'
+	? REQUEST_OUTCOMES.TIMED_OUT
+	: REQUEST_OUTCOMES.NETWORK_ERROR);
+
 const sendRequest = async ({
-	definition, path, query, body, headers, button, output, formatResponse, parseSuccessResponse, isCurrent, captureResponseStatus, captureResponseData,
+	definition, path, query, body, headers, button, output, formatResponse, parseSuccessResponse, isCurrent, captureResponseStatus, captureResponseData, captureOutcome,
 }) => {
 	const requestIsCurrent = typeof isCurrent === 'function' ? isCurrent : () => true;
+	const recordOutcome = (outcome) => {
+		if (typeof captureOutcome === 'function') captureOutcome(outcome);
+	};
 	const apiKey = getElement('api-key')?.value || '';
 	const requiredRole = definition.requiredRole || (definition.method === 'GET' ? 'admin.viewer' : 'admin.operator');
 	if (authState.enabled && (!authState.user || !window.CabrosAdminRequest.canAccess({ requiredRole }, authState.role))) {
+		recordOutcome(REQUEST_OUTCOMES.AUTHORIZATION_DENIED);
 		showError(output, authState.user ? 'Your admin role cannot perform this operation.' : 'Sign in is required.');
 		return;
 	}
@@ -2074,6 +2111,7 @@ const sendRequest = async ({
 		try {
 			authToken = await authState.user.getIdToken();
 		} catch (error) {
+			recordOutcome(REQUEST_OUTCOMES.SIGN_IN_EXPIRED);
 			showError(output, 'Unable to refresh the admin sign-in. Please sign in again.');
 			return;
 		}
@@ -2094,13 +2132,20 @@ const sendRequest = async ({
 			baseUrl: getApiBaseUrl(),
 		});
 	} catch (error) {
+		recordOutcome(REQUEST_OUTCOMES.INVALID_REQUEST);
 		showError(output, error.message);
 		return;
 	}
 
-	if (!window.CabrosAdminRequest.confirmRequest(definition, (message) => window.confirm(message))) return;
+	if (!window.CabrosAdminRequest.confirmRequest(definition, (message) => window.confirm(message))) {
+		recordOutcome(REQUEST_OUTCOMES.CANCELLED);
+		return;
+	}
 
-	if (!requestIsCurrent()) return;
+	if (!requestIsCurrent()) {
+		recordOutcome(REQUEST_OUTCOMES.SUPERSEDED);
+		return;
+	}
 	button.disabled = true;
 	output.className = 'response-block';
 	output.replaceChildren(
@@ -2143,6 +2188,7 @@ const sendRequest = async ({
 		return response.ok ? data : undefined;
 	} catch (error) {
 		const elapsed = Math.round(performance.now() - started);
+		recordOutcome(classifyRequestFailure(error));
 		if (!requestIsCurrent()) return;
 		showError(output, `${summary}\nNetwork error · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(error.message, apiKey)}`);
 	} finally {
@@ -5657,6 +5703,7 @@ const renderPlayground = (contract, view) => {
 		let responseStatus = null;
 		let responseOk = false;
 		let responseData = null;
+		let requestOutcome = null;
 
 		pendingRequestCount += 1;
 		syncSubmitLockedState();
@@ -5678,6 +5725,7 @@ const renderPlayground = (contract, view) => {
 					responseOk = response.ok;
 				}
 			},
+			captureOutcome: (outcome) => { requestOutcome = outcome; },
 			formatResponse: hasStructured
 				? ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`
 				: undefined,
@@ -5689,8 +5737,8 @@ const renderPlayground = (contract, view) => {
 				pathValues,
 				query: submittedQuery,
 				body: submittedBody,
-				status: responseStatus ? `HTTP ${responseStatus}` : '200 OK',
-				ok: responseOk !== false,
+				status: responseStatus ? `HTTP ${responseStatus}` : describeRequestOutcome(requestOutcome),
+				ok: responseOk,
 			});
 
 			const payloadToRender = data || responseData;
@@ -5719,8 +5767,8 @@ const renderPlayground = (contract, view) => {
 				pathValues,
 				query: submittedQuery,
 				body: submittedBody,
-				status: responseStatus ? `HTTP ${responseStatus}` : 'Network error',
-				ok: false,
+				status: responseStatus ? `HTTP ${responseStatus}` : describeRequestOutcome(requestOutcome),
+				ok: responseOk,
 			});
 		}).finally(() => {
 			// Runs after sendRequest's own finally, so this is the authoritative write.
