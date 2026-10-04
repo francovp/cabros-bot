@@ -610,6 +610,18 @@ describe('firebaseAdminCredentials helper', () => {
 			expect(resolved.status).toBe(helper.CREDENTIAL_STATUS.INVALID);
 			expect(resolved.appOptions).toBeNull();
 		});
+
+		it('reports INVALID for an inline non-service-account document', () => {
+			// Issue #1127 refuses ADC auth for an inline authorized_user document; #1128
+		// requires that refusal to also skip initialization instead of reaching initializeApp({}).
+			const helper = loadHelper({ FIREBASE_SERVICE_ACCOUNT_JSON: AUTHORIZED_USER });
+			const resolved = helper.resolveFirebaseAdminCredentials();
+
+			expect(resolved.status).toBe(helper.CREDENTIAL_STATUS.INVALID);
+			expect(resolved.appOptions).toBeNull();
+			expect(resolved.error.code).toBe('FIREBASE_CREDENTIALS_UNSUPPORTED_TYPE');
+			expect(FAKE_ADMIN.credential.applicationDefault).not.toHaveBeenCalled();
+		});
 	});
 
 	describe('initializeFirebaseAdminApp (issue #1128)', () => {

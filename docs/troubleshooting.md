@@ -149,6 +149,7 @@ This is deliberate fail-fast behavior (issue #1128). When a credential source **
 | `FIREBASE_CREDENTIALS_MISSING_FIELDS` | `project_id`, `private_key`, or `client_email` absent | Include all three fields (camelCase aliases are accepted) |
 | `FIREBASE_CREDENTIALS_INVALID_KEY` | `private_key` is not a valid PEM key | Check that the value kept its literal `\n` escapes |
 | `FIREBASE_CREDENTIALS_UNREADABLE_FILE` | `GOOGLE_APPLICATION_CREDENTIALS` is not a readable regular file | Verify the path exists inside the container and the process can read it |
+| `FIREBASE_CREDENTIALS_UNSUPPORTED_TYPE` | Inline `FIREBASE_SERVICE_ACCOUNT_JSON` holds an `authorized_user` / `external_account` document | Store the credentials in a file and point `GOOGLE_APPLICATION_CREDENTIALS` at it, or provide a service-account JSON inline |
 | `FIREBASE_CREDENTIALS_LOAD_FAILED` | The credential parsed but the SDK rejected the document | Usually a truncated or re-encoded key; re-download the service-account JSON |
 
 Distinguish this from an unconfigured deployment: with **no** credential source at all the behavior is unchanged and intentional — the app still calls `initializeApp({})` so Application Default Credentials (managed runtimes, the well-known `gcloud` file) keep working. The shared helper reports that case as `unconfigured`, not `invalid`.

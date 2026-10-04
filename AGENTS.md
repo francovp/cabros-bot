@@ -878,6 +878,7 @@ Callers routed through it: `IdempotencyStorageService`, `NewsDedupStorageService
 Preserved behavior:
 
 - **No credential source configured** still calls `initializeApp({})`, so Application Default Credentials (managed runtimes, `FIREBASE_PROJECT_ID`-only) keep working.
+- **`FIREBASE_CREDENTIALS_UNSUPPORTED_TYPE` (issue #1127) now also skips initialization.** An inline `authorized_user` / `external_account` document is refused by the loader because ADC resolves a file, never an inline value. Under #1128 that refusal is reported as `invalid`, so storage callers fall back to memory instead of calling `initializeApp({})` — authenticating with a *different* credential than the operator configured. `resolveFirebaseAdminCredentials()` still never calls `credential.applicationDefault()` for it.
 - The well-known `gcloud` ADC file remains an **optional probe**: a malformed one still falls through to `unconfigured` rather than failing the process.
 - `isFirestoreConfigured()` (`firestoreConfig.js`) remains the independent credential-*shape* check behind `dependencies.firestore.configured`, so a deployment can still report `configured: true` and fail here — shape validation does not prove the SDK can use the document.
 
