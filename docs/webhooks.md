@@ -291,6 +291,42 @@ so a route cannot resurrect a channel that is still in its repeat-suppression co
 Omitting `symbolRoutes` preserves the existing broadcast and request-level routing
 behavior exactly.
 
+#### Cross-timeframe duplicate collapse
+
+`ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` keys on `exchange|symbol|timeframe|side`, so a
+symbol that fires the same direction on two *different* timeframes seconds apart is two
+separate keys and both messages are delivered:
+
+```
+2026-08-31T00:00:25.419Z  BINANCE:BTCUSDT(D)   cambió a señal de VENTA
+2026-08-31T00:00:25.845Z  BINANCE:BTCUSDT(240) pasó a señal de VENTA
+```
+
+Set `ENABLE_ALERT_CROSS_TF_SUPPRESSION=true` to collapse that pair. The rule keys on
+`exchange|symbol|side` — timeframe deliberately excluded — over a window of
+`ALERT_CROSS_TF_WINDOW_MS` (default `60000`, bounded `0`-`600000`).
+
+**Collapse direction: first delivered wins, the later arrival is suppressed.** Preferring
+the higher timeframe would mean holding every alert until the window closed before
+deciding, which would add up to a full window of latency to the delivery path. The first
+signal to arrive is therefore always delivered, and every same-direction signal on any
+other timeframe inside the window is suppressed against it.
+
+| Property | Behavior |
+| :--- | :--- |
+| Suppressed response | `200` with `suppressedRepeat: true`, `suppressionReason: "cross_timeframe_duplicate"`, empty `results` and `deliveredChannels` |
+| Persistence | Still persisted with the suppression marker, so replay and audit stay complete |
+| Opposite side | Never collapsed; a delivered flip also clears the stale opposite-side entry |
+| Same timeframe | Not this rule's job — that stays `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` |
+| Unmapped timeframes | Signals whose raw token does not map exactly (e.g. `3M`) never enter the store |
+| Store failures | Fail open to normal delivery |
+| Replicas | The store is in-process and per replica, so each replica may still deliver one copy |
+| `dryRun` | Bypasses the gate entirely and does not consume the store |
+| Keying boundary | `entry` price is ignored; acceptable inside a `60s` window |
+
+Both flags are Remote Config eligible and default to disabled, so existing CB-230
+behavior is unchanged until an operator opts in.
+
 ### POST /api/webhook/message
 
 Deliver a generic, non-alert message to the enabled notification channels. Use this when the payload is

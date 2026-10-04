@@ -1,0 +1,170 @@
+/* global jest, describe, it, beforeEach, afterEach, expect, saveEnv, restoreEnv */
+
+const request = require('supertest');
+const app = require('../../app');
+const { getRoutes } = require('../../src/routes');
+const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { crossTimeframeCooldown } = require('../../src/services/alerts/crossTimeframeCooldown');
+const alertStorageService = require('../../src/services/storage/AlertStorageService');
+
+const DAILY_SELL = 'BINANCE:BTCUSDT(D) cambió a señal de VENTA';
+const FOUR_HOUR_SELL = 'BINANCE:BTCUSDT(240) pasó a señal de VENTA';
+const FOUR_HOUR_BUY = 'BINANCE:BTCUSDT(240) pasó a señal de COMPRA';
+
+describe('Alert cross-timeframe duplicate suppression endpoint behavior', () => {
+	let savedEnv;
+	let mockTelegramSendMessage;
+	let mockBot;
+
+	beforeEach(async () => {
+		savedEnv = saveEnv();
+		Object.assign(process.env, {
+			WEBHOOK_API_KEY: 'test-key',
+			ENABLE_TELEGRAM_BOT: 'true',
+			ENABLE_WHATSAPP_ALERTS: 'false',
+			ENABLE_DISCORD_ALERTS: 'false',
+			BOT_TOKEN: 'test-bot-token',
+			TELEGRAM_CHAT_ID: '123456789',
+			ENABLE_GEMINI_GROUNDING: 'false',
+			ENABLE_ALERT_CROSS_TF_SUPPRESSION: 'true',
+			ALERT_CROSS_TF_WINDOW_MS: '60000',
+		});
+
+		jest.clearAllMocks();
+		crossTimeframeCooldown.reset();
+
+		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'test-msg-id' });
+		mockBot = {
+			telegram: {
+				sendMessage: mockTelegramSendMessage,
+				getMe: jest.fn().mockResolvedValue({ id: 123456789, username: 'TestBot' }),
+			},
+		};
+
+		await initializeNotificationServices(mockBot);
+		app.use('/api', getRoutes(mockBot));
+	});
+
+	afterEach(() => {
+		restoreEnv(savedEnv);
+		crossTimeframeCooldown.reset();
+		if (app._router && app._router.stack && app._router.stack.length > 0) {
+			app._router.stack.pop();
+		}
+	});
+
+	function post(text) {
+		return request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text });
+	}
+
+	it('collapses a D + 240 same-direction pair into a single delivery', async () => {
+		const first = await post(DAILY_SELL).expect(200);
+		expect(first.body.suppressedRepeat).toBeUndefined();
+		expect(first.body.suppressionReason).toBeUndefined();
+		expect(first.body.deliveredChannels).toEqual(['telegram']);
+
+		const second = await post(FOUR_HOUR_SELL).expect(200);
+		expect(second.body.success).toBe(true);
+		expect(second.body.suppressedRepeat).toBe(true);
+		expect(second.body.suppressionReason).toBe('cross_timeframe_duplicate');
+		expect(second.body.results).toEqual([]);
+		expect(second.body.deliveredChannels).toEqual([]);
+		expect(second.body.requestedChannels).toEqual(['telegram']);
+
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
+		expect(crossTimeframeCooldown.getStats().suppressedCount).toBe(1);
+	});
+
+	it('collapses a 240 + D pair too — the collapse is not order-dependent', async () => {
+		await post(FOUR_HOUR_SELL).expect(200);
+		const second = await post(DAILY_SELL).expect(200);
+
+		expect(second.body.suppressedRepeat).toBe(true);
+		expect(second.body.suppressionReason).toBe('cross_timeframe_duplicate');
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
+	});
+
+	it('never collapses an opposite-side flip, and the flip clears the stale entry', async () => {
+		await post(DAILY_SELL).expect(200);
+
+		// Opposite side => a different store key, so it is never collapsed.
+		const flip = await post(FOUR_HOUR_BUY).expect(200);
+		expect(flip.body.suppressedRepeat).toBeUndefined();
+		expect(flip.body.deliveredChannels).toEqual(['telegram']);
+
+		// The flip cleared the pre-flip SELL entry, so a SELL that returns inside
+		// the window is delivered rather than swallowed by the earlier signal.
+		const backToSell = await post(FOUR_HOUR_SELL).expect(200);
+		expect(backToSell.body.suppressedRepeat).toBeUndefined();
+
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(3);
+		expect(crossTimeframeCooldown.getStats().suppressedCount).toBe(0);
+	});
+
+	it('leaves different symbols and different exchanges alone', async () => {
+		await post(DAILY_SELL).expect(200);
+		await post('BINANCE:ETHUSDT(240) pasó a señal de VENTA').expect(200);
+		await post('NASDAQ:NVDA(240) cambió a señal de VENTA').expect(200);
+
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(3);
+		expect(crossTimeframeCooldown.getStats().suppressedCount).toBe(0);
+	});
+
+	it('does not collapse when the flag is disabled (default behavior)', async () => {
+		process.env.ENABLE_ALERT_CROSS_TF_SUPPRESSION = 'false';
+
+		await post(DAILY_SELL).expect(200);
+		const second = await post(FOUR_HOUR_SELL).expect(200);
+
+		expect(second.body.suppressedRepeat).toBeUndefined();
+		expect(second.body.suppressionReason).toBeUndefined();
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(2);
+	});
+
+	it('delivers again once the window has elapsed', async () => {
+		process.env.ALERT_CROSS_TF_WINDOW_MS = '0';
+
+		await post(DAILY_SELL).expect(200);
+		const second = await post(FOUR_HOUR_SELL).expect(200);
+
+		expect(second.body.suppressedRepeat).toBeUndefined();
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(2);
+	});
+
+	it('still delivers a dry run and does not consume the store', async () => {
+		const dryRun = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: DAILY_SELL, dryRun: true })
+			.expect(200);
+		expect(dryRun.body.dryRun).toBe(true);
+
+		// The dry run returned before the gate, so the live pair still collapses.
+		const live = await post(DAILY_SELL).expect(200);
+		expect(live.body.suppressedRepeat).toBeUndefined();
+		const collapsed = await post(FOUR_HOUR_SELL).expect(200);
+		expect(collapsed.body.suppressedRepeat).toBe(true);
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
+	});
+
+	it('persists the suppression marker so audit and replay stay complete', async () => {
+		const saveAlert = jest.spyOn(alertStorageService, 'saveAlert');
+		await post(DAILY_SELL).expect(200);
+		await post(FOUR_HOUR_SELL).expect(200);
+
+		const suppressedCall = saveAlert.mock.calls.find(([payload]) => payload.suppressedRepeat === true);
+		expect(suppressedCall).toBeDefined();
+		expect(suppressedCall[0]).toMatchObject({
+			text: FOUR_HOUR_SELL,
+			suppressedRepeat: true,
+			suppressionReason: 'cross_timeframe_duplicate',
+		});
+
+		const deliveredCall = saveAlert.mock.calls.find(([payload]) => payload.text === DAILY_SELL);
+		expect(deliveredCall[0].suppressionReason).toBeNull();
+		saveAlert.mockRestore();
+	});
+});

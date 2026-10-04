@@ -91,6 +91,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_SIGNAL_CLASS_MARKER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_ALERT_CROSS_TF_SUPPRESSION: { type: 'boolean', defaultValue: false },
+	ALERT_CROSS_TF_WINDOW_MS: { type: 'number', defaultValue: 60000, integer: true, min: 0, max: 600000 },
 	JOB_BACKLOG_ALERT_THRESHOLD_MS: { type: 'number', defaultValue: 900000, integer: true, min: 1000, max: 86400000 },
 	JOB_BACKLOG_PAGE_COOLDOWN_MS: { type: 'number', defaultValue: 900000, integer: true, min: 1000, max: 86400000 },
 	JOB_BACKLOG_PROBE_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },

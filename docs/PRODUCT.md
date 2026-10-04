@@ -39,6 +39,7 @@ Each capability lists: one-line description, primary endpoint or command, status
 | Langfuse-managed prompts | `ENABLE_LANGFUSE_PROMPTS=true` | opt-in | — |
 | Per-channel routing override | `channels`, `telegramChatId`, `whatsappChatId`, `telegramThreadId` | live | — |
 | Same-signal repeat suppression | `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true` | opt-in | — |
+| Cross-timeframe duplicate collapse | `ENABLE_ALERT_CROSS_TF_SUPPRESSION=true` | opt-in | — |
 | Header metadata footer | `ENABLE_MESSAGE_FOOTER_METADATA=true` | opt-in | — |
 
 ### Track whether alerts made money

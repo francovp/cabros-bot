@@ -27,6 +27,7 @@ const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteCo
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
+const { crossTimeframeCooldown } = require('../../../../services/alerts/crossTimeframeCooldown');
 const { alertModeration } = require('../../../../services/alerts/alertModeration');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
@@ -341,21 +342,25 @@ function postAlert(botOrGetter) {
 			// reservation is made before delivery so overlapping requests cannot
 			// both send; failed channels remain retryable.
 			let suppressedRepeat = false;
+			let suppressionReason = null;
 			let reservation = null;
 			let deliveryRouting = routing;
 			let repeatCooldownOptions;
+			const crossTimeframeSuppressionEnabled = crossTimeframeCooldown.isEnabled();
+			const parsedSignal = (signalRepeatCooldown.isEnabled() || crossTimeframeSuppressionEnabled)
+				? parseTradingViewSignal(alert.text)
+				: null;
+			// Unsupported timeframes normalize to the default timeframe, so
+			// they must never enter either cooldown store: a raw token like
+			// "3M" collapses to "1h" and stays unsuppressed, while "4H"
+			// legitimately maps to the 4h bar via the TIMEFRAME_MAP.
+			const hasUsableTimeframe = Boolean(
+				parsedSignal
+			&& parsedSignal.rawTimeframe
+			&& Object.prototype.hasOwnProperty.call(TIMEFRAME_MAP, parsedSignal.rawTimeframe)
+			&& TIMEFRAME_MAP[parsedSignal.rawTimeframe] === parsedSignal.timeframe,
+			);
 			if (signalRepeatCooldown.isEnabled()) {
-				const parsedSignal = parseTradingViewSignal(alert.text);
-				// Unsupported timeframes normalize to the default timeframe, so
-				// they must never enter the cooldown store: a raw token like
-				// "3M" collapses to "1h" and stays unsuppressed, while "4H"
-				// legitimately maps to the 4h bar via the TIMEFRAME_MAP.
-				const hasUsableTimeframe = Boolean(
-					parsedSignal
-					&& parsedSignal.rawTimeframe
-					&& Object.prototype.hasOwnProperty.call(TIMEFRAME_MAP, parsedSignal.rawTimeframe)
-					&& TIMEFRAME_MAP[parsedSignal.rawTimeframe] === parsedSignal.timeframe,
-				);
 				const cooldownChannelNames = requestedChannels.length > 0
 					? requestedChannels
 					: ['telegram', 'whatsapp', 'discord'];
@@ -413,6 +418,24 @@ function postAlert(botOrGetter) {
 							};
 						}
 					}
+				}
+			}
+
+			// Issue #1103: same symbol + same direction on two timeframes seconds apart
+			// (BINANCE:BTCUSDT(D) VENTA then BINANCE:BTCUSDT(240) VENTA) is one trading
+			// idea; CB-230 cannot catch it because its key includes timeframe. Runs after
+			// the CB-230 gate so an already-suppressed request is not double-booked.
+			if (crossTimeframeSuppressionEnabled && !suppressedRepeat && parsedSignal && hasUsableTimeframe) {
+				const crossVerdict = crossTimeframeCooldown.reserve(parsedSignal);
+				if (crossVerdict.suppressed) {
+					suppressedRepeat = true;
+					suppressionReason = crossVerdict.reason;
+					crossTimeframeCooldown.recordSuppression();
+					console.log(
+						`[Alert] Cross-timeframe duplicate suppressed for ${crossVerdict.key} `
+					+ `(${crossVerdict.suppressedTimeframe} vs already-delivered ${crossVerdict.conflictingTimeframe}, `
+					+ `${Math.round(crossVerdict.elapsedMs / 1000)}s elapsed)`,
+					);
 				}
 			}
 
@@ -543,6 +566,7 @@ function postAlert(botOrGetter) {
 				results,
 				enriched,
 				suppressedRepeat: suppressedRepeat || undefined,
+				suppressionReason: suppressionReason || undefined,
 				tokenUsage: tokenUsageJSON,
 				requestedChannels,
 				deliveredChannels,
@@ -580,6 +604,7 @@ function postAlert(botOrGetter) {
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
 				suppressedRepeat,
+				suppressionReason,
 				signalClass: alert.signalClass,
 				source: body.source || 'webhook-alert',
 				telegramChatId: routing.telegramChatId,

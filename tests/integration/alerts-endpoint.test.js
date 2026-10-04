@@ -813,7 +813,7 @@ describe('Alerts API Integration Tests', () => {
 			includeEnrichment: false,
 		});
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
+		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,suppressionReason,tokenUsage,text');
 		expect(res.text).toContain("'=alert-1,,-42,'@webhook");
 		expect(res.text).toContain('"\'=@SUM(1,1), ""quoted""\r\n+next"');
 		expect(res.text).not.toContain('=alert-1,-42,@webhook');
@@ -852,7 +852,7 @@ describe('Alerts API Integration Tests', () => {
 			.expect(200);
 
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
+		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,suppressionReason,tokenUsage,text');
 		expect(res.text).toContain('news-123,req-news-456,2026-06-06T12:00:00.000Z,news-monitor,news_event,true,false,false,not_applicable,price_surge,0.85,0.75,fresh');
 		expect(res.text).toContain('BTCUSDT: Bitcoin surges past 100k');
 	});
@@ -1006,6 +1006,34 @@ describe('Alerts API Integration Tests', () => {
 		expect(res.text).toContain('enrichmentData');
 		expect(res.text).toContain('alert-csv-enrich-1');
 		expect(res.text).toContain('""sentiment"":""BULLISH""');
+	});
+
+	it('returns the cross-timeframe suppression marker on the alert detail endpoint', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-collapsed',
+			receivedAt: '2026-08-31T00:00:25.845Z',
+			text: 'BINANCE:BTCUSDT(240) pasó a señal de VENTA',
+			enriched: false,
+			enrichmentData: null,
+			tokenUsage: null,
+			deliveryResults: [],
+			source: 'webhook',
+			useTradingViewData: false,
+			suppressedRepeat: true,
+			suppressionReason: 'cross_timeframe_duplicate',
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/alert-collapsed')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(res.body.alert).toMatchObject({
+			id: 'alert-collapsed',
+			suppressedRepeat: true,
+			suppressionReason: 'cross_timeframe_duplicate',
+			deliveryResults: [],
+		});
 	});
 
 	it('returns a single stored alert by id', async () => {

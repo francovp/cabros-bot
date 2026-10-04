@@ -537,6 +537,56 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.alertSignalRepeatSuppression.enabled).toBe(true);
 	});
 
+	it('reports alert cross-timeframe suppression as disabled by default', async () => {
+		delete process.env.ENABLE_ALERT_CROSS_TF_SUPPRESSION;
+		delete process.env.ALERT_CROSS_TF_WINDOW_MS;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertCrossTimeframeSuppression).toBe(false);
+		expect(response.body.dependencies.alertCrossTimeframeSuppression).toEqual({
+			enabled: false,
+			suppressedCount: expect.any(Number),
+			lastSuppressedAt: null,
+			activeTrackedSignals: 0,
+			windowMs: 60000,
+		});
+	});
+
+	it('reports alert cross-timeframe suppression and its effective window when enabled', async () => {
+		process.env.ENABLE_ALERT_CROSS_TF_SUPPRESSION = 'true';
+		process.env.ALERT_CROSS_TF_WINDOW_MS = '45000';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertCrossTimeframeSuppression).toBe(true);
+		expect(response.body.dependencies.alertCrossTimeframeSuppression).toMatchObject({
+			enabled: true,
+			windowMs: 45000,
+			suppressedCount: expect.any(Number),
+			lastSuppressedAt: null,
+			activeTrackedSignals: expect.any(Number),
+		});
+	});
+
+	it('falls back to the default cross-timeframe window for an out-of-range value', async () => {
+		process.env.ENABLE_ALERT_CROSS_TF_SUPPRESSION = 'true';
+		process.env.ALERT_CROSS_TF_WINDOW_MS = '99999999';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.alertCrossTimeframeSuppression.windowMs).toBe(60000);
+	});
+
 	it('reports safe Firebase Remote Config load metadata without values and honest readiness', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 
