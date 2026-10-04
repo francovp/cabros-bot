@@ -176,6 +176,18 @@ const streamResponse = ({ status = 200, retryAfter, done = false } = {}) => ({
 	},
 });
 
+// An established stream that stays open and never emits, matching a real event
+// stream between events. A reader that keeps resolving { done: false } instead
+// would spin the client's read loop without yielding and starve the event loop.
+const idleStreamResponse = () => ({
+	ok: true,
+	status: 200,
+	headers: { get: () => null },
+	body: {
+		getReader: () => ({ read: () => new Promise(() => {}) }),
+	},
+});
+
 function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase, location = {} }) {
 	const body = new FakeElement('body');
 	const elementsById = {};
@@ -202,6 +214,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 	const downloads = [];
 	const timers = new Map();
 	const timerDelays = new Map();
+	const timerHistory = [];
 	const titleHistory = [''];
 	const document = {
 		body,
@@ -272,6 +285,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 			const id = timers.size + 1;
 			timers.set(id, fn);
 			timerDelays.set(id, delay);
+			timerHistory.push(delay);
 			return id;
 		},
 		clearTimeout: (id) => { timers.delete(id); timerDelays.delete(id); },
@@ -310,6 +324,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		downloads,
 		timers,
 		timerDelays,
+		timerHistory,
 		titleHistory,
 		historyCalls,
 		location: windowLocation,
@@ -389,6 +404,106 @@ describe('admin browser client', () => {
 		await flush();
 
 		expect([...browser.timerDelays.values()]).toContain(2500);
+	});
+
+	// GH-1201: `fetch` on an SSE endpoint only settles once response headers
+	// arrive, so a connection that never flushes headers left the handshake
+	// pending forever and the console sat on "Connecting…" without reconnecting.
+	it('aborts and reconnects a stalled SSE handshake instead of hanging on Connecting', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/admin/events') {
+					// Resolve only when the handshake deadline aborts us.
+					return new Promise((_resolve, reject) => {
+						options.signal.addEventListener('abort', () => {
+							const error = new Error('The operation was aborted');
+							error.name = 'AbortError';
+							reject(error);
+						});
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await browser.elementsById['save-key'].dispatch('click');
+		await flush();
+
+		// The only armed timer must be the handshake deadline: the request is
+		// still pending, so no reconnect backoff exists yet.
+		expect([...browser.timerDelays.values()]).toEqual([15000]);
+		expect(browser.elementsById['sse-label'].textContent).toBe('Connecting…');
+
+		// Fire the handshake deadline.
+		const [handshakeTimer] = [...browser.timers.keys()];
+		await browser.timers.get(handshakeTimer)();
+		await flush();
+
+		expect(browser.elementsById['sse-label'].textContent).toBe('Reconnecting…');
+	});
+
+	it('clears the handshake deadline once headers arrive so an idle stream stays live', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/admin/events') return idleStreamResponse();
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await browser.elementsById['save-key'].dispatch('click');
+		await flush();
+
+		expect(browser.elementsById['sse-label'].textContent).toBe('Live');
+		// The deadline must be armed for the handshake and then disarmed: an SSE
+		// body is legitimately idle between events, so a surviving timer would
+		// tear down a healthy stream.
+		expect(browser.timerHistory).toContain(15000);
+		expect(browser.timers.size).toBe(0);
+	});
+
+	// GH-1201: `aborted` alone cannot separate an intentional teardown from our
+	// own handshake deadline. `disconnectSse()` nulls `sseAbortController`, so
+	// ownership ("am I still the current stream?") is the discriminator.
+	// Collapsing this back to `if (aborted) return` makes the handshake deadline
+	// above convert a hang into a permanently dead stream that never reconnects.
+	it('does not reconnect when an intentional disconnect aborts the handshake', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/admin/events') {
+					return new Promise((_resolve, reject) => {
+						options.signal.addEventListener('abort', () => {
+							const error = new Error('The operation was aborted');
+							error.name = 'AbortError';
+							reject(error);
+						});
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await browser.elementsById['save-key'].dispatch('click');
+		await flush();
+		expect([...browser.timerDelays.values()]).toEqual([15000]);
+
+		// clear-key is the unconditional operator teardown (sign-out routes to the
+		// same disconnectSse()): it aborts the controller and clears ownership.
+		await browser.elementsById['clear-key'].dispatch('click');
+		await flush();
+
+		expect(browser.elementsById['sse-label'].textContent).toBe('Offline');
+		// No reconnect backoff may be armed behind a deliberate disconnect, and
+		// the handshake deadline must be disarmed with the controller it guarded.
+		expect([...browser.timerDelays.values()]).toEqual([]);
 	});
 
 	it('renders an operational overview from the status response', async () => {
