@@ -817,6 +817,57 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('Last error at');
 	});
 
+	it('renders durable storage readiness counters so an operator can tell unverified from misconfigured', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: { symbolAnalysisStorage: true },
+			dependencies: {
+				symbolAnalysisStorage: {
+					enabled: true,
+					configured: true,
+					ready: false,
+					status: 'unverified',
+					readiness: 'unverified',
+					failOpen: true,
+					collection: 'symbolAnalyses',
+					retentionDays: 7,
+					writesAttempted: 0,
+					writesSucceeded: 0,
+					writesFailed: 0,
+					readsAttempted: 2,
+					readsSucceeded: 2,
+					readsFailed: 0,
+					consecutiveFailures: 0,
+					lastWriteAt: null,
+					lastFailureAt: null,
+					lastErrorReason: null,
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Symbol analysis storage');
+		expect(view.textContent).toContain('Readinessunverified');
+		expect(view.textContent).toContain('Fail opentrue');
+		expect(view.textContent).toContain('CollectionsymbolAnalyses');
+		expect(view.textContent).toContain('Retention (days)7');
+		expect(view.textContent).toContain('Writes attempted0');
+		expect(view.textContent).toContain('Writes succeeded0');
+		expect(view.textContent).toContain('Reads attempted2');
+		expect(view.textContent).toContain('Reads succeeded2');
+	});
+
 	it('includes nested profiling health in dependency attention', async () => {
 		const status = {
 			service: { name: 'cabros-bot', environment: 'production' },
