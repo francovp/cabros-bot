@@ -2860,6 +2860,184 @@ describe('admin browser client', () => {
 		expect(findButton(form, 'Copy details').hidden).toBe(false);
 	});
 
+	it('renders nested multi-timeframe timeframes, alignment, and recommendation from the endpoint shape', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:BTCUSDT',
+						timeframe: '1D',
+						analysisStatus: 'complete',
+						analysis: {
+							decision: {
+								action: 'SELL',
+								confidence: 'HIGH',
+								dataSufficient: true,
+								reasons: ['Confluencia: SELL'],
+								warnings: [],
+							},
+							multi_timeframe: {
+								timeframes: { '1W': { bias: 'bearish' }, '1D': { bias: 'bearish', rsi: 77.9 } },
+								alignment: { status: 'ALIGNED', confidence: 'HIGH' },
+								recommendation: { action: 'SELL' },
+							},
+						},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('symbol-analysis-result'));
+		expect(verdict).toBeDefined();
+		expect(verdict.textContent).toContain('Multi-timeframe Analysis');
+		// The endpoint populates multi_timeframe.timeframes[].bias; treating the
+		// top-level envelope keys as timeframes both drops these and mislabels
+		// `alignment` as a trading interval.
+		expect(verdict.textContent).toContain('1W: Bearish');
+		expect(verdict.textContent).toContain('1D: Bearish');
+		expect(verdict.textContent).toContain('Alignment: ALIGNED');
+		expect(verdict.textContent).toContain('Alignment confidence: HIGH');
+		expect(verdict.textContent).toContain('Recommendation: SELL');
+		expect(verdict.textContent).not.toContain('alignment: ALIGNED');
+		expect(verdict.textContent).not.toContain('Timeframes:');
+
+		const recommendationBadge = find(verdict, (node) => node.tagName === 'SPAN'
+			&& node.textContent === 'Recommendation: SELL');
+		expect(recommendationBadge.className).toContain('status-danger');
+	});
+
+	it('still renders a legacy flat multi-timeframe map without alignment or recommendation', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:ETHUSDT',
+						timeframe: '4h',
+						analysis: {
+							decision: { action: 'BUY', confidence: 0.7, dataSufficient: true, reasons: [], warnings: [] },
+							multi_timeframe: { '4h': { trend: 'BULLISH' }, '1W': { direction: 'NEUTRAL' } },
+						},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('symbol-analysis-result'));
+		expect(verdict).toBeDefined();
+		expect(verdict.textContent).toContain('4h: BULLISH');
+		expect(verdict.textContent).toContain('1W: NEUTRAL');
+		expect(verdict.textContent).not.toContain('Alignment:');
+		expect(verdict.textContent).not.toContain('Recommendation:');
+	});
+
+	it('renders categorical decision confidence labels instead of dropping them', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({
+						success: true,
+						symbol: 'NASDAQ:NVDA',
+						timeframe: '1D',
+						analysis: {
+							decision: { action: 'BUY', confidence: 'HIGH', dataSufficient: true, reasons: [], warnings: [] },
+						},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('symbol-analysis-result'));
+		expect(verdict).toBeDefined();
+		expect(verdict.textContent).toContain('Confidence: HIGH');
+		expect(verdict.textContent).not.toContain('NaN');
+		expect(find(verdict, (node) => node.tagName === 'SPAN' && node.textContent === 'Confidence: HIGH').className)
+			.toContain('status-ready');
+	});
+
+	it('renders a bounded neutral confidence label and ignores non-scalar confidence values', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:BTCUSDT',
+						timeframe: '1D',
+						analysis: {
+							decision: {
+								action: 'NO_TRADE',
+								confidence: 'medium',
+								dataSufficient: false,
+								reasons: [],
+								warnings: [],
+							},
+						},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('symbol-analysis-result'));
+		expect(verdict.textContent).toContain('Confidence: Medium');
+
+		// Arrays and objects are not labels; they must not render as "[object Object]".
+		const objectBrowser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:BTCUSDT',
+						timeframe: '1D',
+						analysis: { decision: { action: 'NO_TRADE', confidence: { score: 3 }, dataSufficient: false } },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(objectBrowser, 'analysis');
+		const objectForm = findForm(objectBrowser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		await objectForm.dispatch('submit');
+		await flush();
+		const objectVerdict = find(objectForm, (node) => node.className.includes('symbol-analysis-result'));
+		expect(objectVerdict.textContent).not.toContain('Confidence');
+		expect(objectVerdict.textContent).not.toContain('[object');
+	});
+
 	it('renders NO_TRADE decision action and warning chips when data is insufficient or neutral', async () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => {
