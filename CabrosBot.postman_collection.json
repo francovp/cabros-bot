@@ -831,6 +831,208 @@
       ]
     },
     {
+      "name": "Get Status - idempotency storage readiness (issue #1111)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Issue #1111 enables durable webhook idempotency in production. Every Firestore failure in `IdempotencyStorageService` falls open to in-memory idempotency, so before this change a deployment that could not reach Firestore reported the same `ready` verdict as a working one. `configured` is credential shape only; `ready` is true only after an observed durable operation and `status` is `unverified` until one is observed."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('idempotency storage is not ready on the strength of credential shape', function () {",
+              "  const store = pm.response.json().dependencies.idempotencyStorage;",
+              "  pm.expect(pm.response.code).to.eql(200);",
+              "  pm.expect(store).to.be.an('object');",
+              "  pm.expect(store.enabled).to.eql(true);",
+              "  pm.expect(store.configured).to.eql(true);",
+              "  pm.expect(store.ready).to.eql(false);",
+              "  pm.expect(store.status).to.eql('unverified');",
+              "  pm.expect(store.readiness).to.eql('unverified');",
+              "});",
+              "pm.test('mode and backend report intent while ready reports proof', function () {",
+              "  const store = pm.response.json().dependencies.idempotencyStorage;",
+              "  pm.expect(store.mode).to.eql('durable');",
+              "  pm.expect(store.backend).to.eql('firestore');",
+              "  pm.expect(store.failOpen).to.eql(true);",
+              "  pm.expect(store.collection).to.eql('idempotency_keys');",
+              "});",
+              "pm.test('a degraded verdict never leaks the Firestore project path', function () {",
+              "  const raw = pm.response.text();",
+              "  pm.expect(raw).to.not.include('projects/');",
+              "  pm.expect(raw).to.not.include('console.firebase.google.com');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 unverified - enabled and configured, nothing persisted yet",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firestoreIdempotency\": true\n  },\n  \"dependencies\": {\n    \"idempotencyStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"unverified\",\n      \"mode\": \"durable\",\n      \"backend\": \"firestore\",\n      \"failOpen\": true,\n      \"readiness\": \"unverified\",\n      \"collection\": \"idempotency_keys\",\n      \"operationsAttempted\": 0,\n      \"operationsSucceeded\": 0,\n      \"operationsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 ready - a durable reservation has succeeded",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firestoreIdempotency\": true\n  },\n  \"dependencies\": {\n    \"idempotencyStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"mode\": \"durable\",\n      \"backend\": \"firestore\",\n      \"failOpen\": true,\n      \"readiness\": \"verified\",\n      \"collection\": \"idempotency_keys\",\n      \"operationsAttempted\": 47,\n      \"operationsSucceeded\": 47,\n      \"operationsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": \"2026-10-04T08:31:12.904Z\",\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 degraded - falling back to in-memory, alerts still delivered",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firestoreIdempotency\": true\n  },\n  \"dependencies\": {\n    \"idempotencyStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"degraded\",\n      \"mode\": \"durable\",\n      \"backend\": \"firestore\",\n      \"failOpen\": true,\n      \"readiness\": \"degraded\",\n      \"collection\": \"idempotency_keys\",\n      \"operationsAttempted\": 52,\n      \"operationsSucceeded\": 44,\n      \"operationsFailed\": 8,\n      \"consecutiveFailures\": 8,\n      \"lastSuccessAt\": \"2026-10-04T08:29:03.117Z\",\n      \"lastFailureAt\": \"2026-10-04T08:31:14.882Z\",\n      \"lastErrorReason\": \"firestore_unavailable\"\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 disabled - gate off, in-memory idempotency",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firestoreIdempotency\": false\n  },\n  \"dependencies\": {\n    \"idempotencyStorage\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"mode\": \"ephemeral\",\n      \"backend\": \"memory\",\n      \"failOpen\": true,\n      \"readiness\": \"unverified\",\n      \"collection\": \"idempotency_keys\",\n      \"operationsAttempted\": 0,\n      \"operationsSucceeded\": 0,\n      \"operationsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "Run Self-Test",
       "request": {
         "method": "POST",

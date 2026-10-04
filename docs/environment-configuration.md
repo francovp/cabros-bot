@@ -138,7 +138,7 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 - `ALERT_STORAGE_RETENTION_DAYS` - Retention for `alerts` and `alertReplays` records in days (`1`-`3650`, default: `90`). New records get `expiresAt`; run `bash ops/configure-firestore-alert-retention.sh` once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
 - **Backup & Disaster Recovery**: To safeguard high-value analytical history (`alerts`, `alertReplays`, `tradingSignalOutcomes`, `scannerPresets`) against permanent TTL deletion, automated scheduled workflows (`.github/workflows/firestore-backup.yml`), managed GCS exports (`ops/export-firestore-managed.sh`), and selective JSONL exports (`pnpm run backup:firestore`, `pnpm run restore:firestore`) are provided. See [`docs/firestore-backup-and-restore.md`](firestore-backup-and-restore.md) for the complete runbook and restore procedures.
 - `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`)
-- `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`)
+- `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`). **Enabled in production** via `render.yaml` on the web service only (issue #1111). Read [`dependencies.idempotencyStorage`](#verifying-idempotency-storage-is-actually-durable) before treating it as working.
 - `ENABLE_FIRESTORE_ALERT_FEEDBACK` - Enable Firestore persistence for trader alert feedback (👍/👎 verdicts from inline keyboard callbacks) (`true` or `false`, default: `false`). Disabled falls back to a process-local in-memory surface so the summary endpoints still return aggregate counts in development.
 - `ALERT_FEEDBACK_RETENTION_DAYS` - Retention for `alertFeedback` records in days (`1`-`3650`, default: `90`, matches alert retention). New records get `expiresAt`; backfill + native TTL can be enabled via `ops/configure-firestore-alert-retention.sh` once per Firebase project.
 - `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
@@ -175,6 +175,42 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
 - `status: "degraded"` with `lastErrorReason` — the provider rejected the call. A `twelve_data_misconfigured` reason is the signal to replace or fix the key; `twelve_data_rate_limited` means raise `EQUITY_MARKET_DATA_RPM` budget or reduce signal volume.
 
 Counters (`requestsAttempted`, `requestsSucceeded`, `requestsFailed`, `consecutiveFailures`) and timestamps (`lastSuccessAt`, `lastFailureAt`) are process-local and reset on restart, so `unverified` is also the normal state immediately after every deploy. There is no startup probe: a probe would spend provider quota on every restart purely to manufacture a green checkmark, and on the 8-RPM free tier that is a real cost for no new information.
+
+#### Verifying idempotency storage is actually durable
+
+`ENABLE_FIRESTORE_IDEMPOTENCY=true` is **enabled in production** (issue #1111, declared on the web service in `render.yaml`), but the gate alone is not proof that duplicates are suppressed. `IdempotencyStorageService` is fail-open by design: every Firestore error is logged and swallowed, and the request continues with in-memory idempotency. A deployment whose credentials look valid but cannot reach Firestore behaves exactly as it did before the flag existed, so the reported state is derived from observed durable work instead:
+
+| Field | Meaning |
+| :--- | :--- |
+| `featureFlags.firestoreIdempotency` | The `ENABLE_FIRESTORE_IDEMPOTENCY` gate only. |
+| `dependencies.idempotencyStorage.configured` | Credential **shape** only. Not proof that reservations persist. |
+| `dependencies.idempotencyStorage.status` | `disabled`, `misconfigured`, `unverified`, `ready`, or `degraded`. |
+| `dependencies.idempotencyStorage.ready` | `true` only after an observed **successful** durable operation. |
+| `dependencies.idempotencyStorage.readiness` | `unverified` / `verified` / `degraded` from the observed-operation window. |
+| `dependencies.idempotencyStorage.mode` / `backend` | Configured **intent** (`durable`/`firestore`), unchanged by a failure. |
+| `dependencies.idempotencyStorage.failOpen` | Always `true`: a degraded verdict still delivers alerts, it just cannot suppress a duplicate after a restart or across replicas. |
+| `dependencies.idempotencyStorage.lastErrorReason` | Closed enum: `firestore_not_initialized` or `firestore_unavailable`. Never provider text. |
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
+  | jq '{flag: .featureFlags.firestoreIdempotency, dep: .dependencies.idempotencyStorage}'
+```
+
+- `status: "unverified"` — the normal state right after a deploy, before the first keyed request has been served. Send one idempotent webhook with an `idempotency-key` and re-check.
+- `status: "ready"` — proven durable.
+- `status: "degraded"` — falling back to in-memory. `firestore_unavailable` points at the Firestore SDK or network path; `firestore_not_initialized` points at the credential loader, and is the signal to check `FIREBASE_SERVICE_ACCOUNT_JSON` / `GOOGLE_APPLICATION_CREDENTIALS`. `consecutiveFailures` clears on the next success, so a transient outage self-heals without a restart.
+
+Counters (`operationsAttempted`, `operationsSucceeded`, `operationsFailed`, `consecutiveFailures`) and timestamps are process-local and reset on restart. A status read never counts as a durable attempt.
+
+**Prerequisite — TTL on `idempotency_keys`.** Every document carries `expiresAt`, but Firestore only deletes on it once the TTL policy exists, and Firestore TTL deletion is eventually consistent (up to ~24 h) and only removes documents that are *already* expired. `getEntry()` lazily deletes a document it reads after expiry, which is a safety net rather than a cleanup strategy: a key that is never replayed is never read. Run once per Firebase project:
+
+```bash
+bash ops/configure-operational-collection-retention.sh   # covers idempotency_keys
+```
+
+Until that runs, the collection grows without bound. This is the same eventual deletion the other operational collections depend on, and it is a deployment step — it is not something this repository can apply for you.
+
+**Rollback.** Set the variable back to `false` and redeploy; the service falls back to in-memory idempotency on the next request and no code change is needed. Nothing is lost that matters — unexpired reservations simply stop being shared, so a duplicate is possible again, which is the pre-#1111 behaviour.
 - `SIGNAL_OUTCOME_WORKER_ROLE` - Scheduler role: `web` preserves the local/web timer, `worker` enables only the dedicated worker entrypoint, and `disabled` prevents scheduler startup (default: `web`)
 - `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access. Service accounts only; an ADC document supplied inline is rejected with an actionable error because ADC is resolved from a file or the managed runtime, never from an inline value.
 - `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization. Required when credentials resolve through Application Default Credentials, since `authorized_user` and `external_account` documents carry no project id of their own.
