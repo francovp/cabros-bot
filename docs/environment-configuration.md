@@ -420,9 +420,21 @@ The response and audit logs include only sanitized order metadata. API credentia
 #### Scanner Preset Storage
 
 - `ENABLE_FIRESTORE_SCANNER_PRESETS` - Enable the scanner-preset Firestore persistence gate independently from alert storage, job storage, and outcome tracking (default: `false`)
-- When Firestore is initialized and writes succeed, scanner-preset responses and `/api/status` report `storage.mode: "durable"` with `backend: "firestore"`.
-- When the flag is disabled, or Firestore initialization/write fails, the service reports `storage.mode: "ephemeral"` with `backend: "memory"`; presets in this mode can be lost on restart or redeploy.
-- `dependencies.scannerPresetStorage` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `mode`, and `backend` without secrets. A `misconfigured` status means a Firestore gate is enabled but the client is unavailable.
+- `storage.mode` and `storage.backend` are **intent-derived**: they report the configured target and stay `durable`/`firestore` whenever the flag is on and credentials are present. They only report `ephemeral`/`memory` when the flag is off or credentials are unusable — the two cases where presets really are lost on restart or redeploy. Do not read `memory` as "the flag is off": that confusion is what made a transient Firestore error look like a disabled feature in [#1342](https://github.com/francovp/cabros-bot/issues/1342).
+- `dependencies.scannerPresetStorage` reports `status` so the three causes an operator must act on differently stay distinguishable, and `configured`/`ready` are not the same question:
+
+| `status` | Meaning | Operator action |
+| :--- | :--- | :--- |
+| `disabled` | `ENABLE_FIRESTORE_SCANNER_PRESETS` is not `true`. | Nothing; presets are ephemeral by choice. |
+| `misconfigured` | The gate is on but credentials are genuinely absent or rejected. | Fix Firebase credentials. This is the only status that means "check your credentials". |
+| `unverified` | No durable operation has been observed yet. Not a failure, and not health — the normal state immediately after a restart. | None. |
+| `ready` | A durable read or write has actually succeeded. | None. |
+| `degraded` | A durable operation failed and nothing has answered since. `lastErrorReason` names the class. | Investigate Firestore reachability; `consecutiveFailures` clears on the next success. |
+
+- `configured` is credential **shape** only. `ready` is the proof question and is true only after an observed durable read or write, so a deployment whose key looks valid but cannot reach Firestore reports `degraded` instead of `ready`. `GET /api/status` and `GET /api/capabilities` prove it with a bounded, single-flight durable read (rate-limited to one probe per 5s so polling cannot amplify Firestore reads), so **no prior write is required**.
+- Alongside the verdict: `readiness`, `failOpen` (always `true` — preset CRUD keeps serving from the in-memory mirror), `collection`, the `operationsAttempted`/`operationsSucceeded`/`operationsFailed`/`consecutiveFailures` counters, `lastSuccessAt`/`lastFailureAt`, and a closed-enum `lastErrorReason` (`firestore_not_initialized`, `firestore_unavailable`, `firestore_probe_timeout`) that never contains a provider message.
+- `pendingWrites`, `inFlightWrites`, `pendingDeletes`, `oldestPendingWriteAt`, and `lastReadFellBack` report local unsynced workload. They are deliberately **not** part of the verdict: an unsynced record is a pending-sync fact, not a store fault, so a record left behind by a failed write can never pin the process to `ephemeral`. Watch `pendingWrites > 0` with a rising `oldestPendingWriteAt` as the signal that records are at risk of being lost on restart.
+- The readiness counters are process-local and reset on restart. The probe issues the same indexed `orderBy('createdAt','desc')` query `listPresets()` uses, bounded to one document, so it needs no composite index beyond the single-field sort the list already requires.
 
 #### Scanner Preset Optimistic Concurrency
 

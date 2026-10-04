@@ -283,14 +283,21 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.firestoreScannerPresets).toBe(false);
-		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+		expect(response.body.dependencies.scannerPresetStorage).toEqual(expect.objectContaining({
 			enabled: false,
 			configured: false,
 			ready: false,
 			status: 'disabled',
 			mode: 'ephemeral',
 			backend: 'memory',
-		});
+			failOpen: true,
+			collection: 'scannerPresets',
+			pendingWrites: 0,
+			inFlightWrites: 0,
+			pendingDeletes: 0,
+			oldestPendingWriteAt: null,
+			lastReadFellBack: false,
+		}));
 	});
 
 	it('reports firestoreChatPreferences feature flag and dependency status when disabled and enabled', async () => {
@@ -324,14 +331,30 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.firestoreScannerPresets).toBe(true);
-		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+		// `ready` here is proven by the bounded durable read `/api/status` runs, not
+		// inferred from credential shape (#1342). The observed counters are a
+		// process-local window that only a restart clears, so they are asserted by type.
+		expect(response.body.dependencies.scannerPresetStorage).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
 			ready: true,
 			status: 'ready',
+			readiness: 'verified',
 			mode: 'durable',
 			backend: 'firestore',
-		});
+			failOpen: true,
+			collection: 'scannerPresets',
+			operationsAttempted: expect.any(Number),
+			operationsSucceeded: expect.any(Number),
+			operationsFailed: 0,
+			consecutiveFailures: 0,
+			lastSuccessAt: expect.any(String),
+			pendingWrites: 0,
+			inFlightWrites: 0,
+			pendingDeletes: 0,
+			oldestPendingWriteAt: null,
+			lastReadFellBack: false,
+		}));
 	});
 
 	it('does not report durable scanner presets from the alert storage gate', async () => {
@@ -344,14 +367,21 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.firestoreScannerPresets).toBe(false);
-		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+		expect(response.body.dependencies.scannerPresetStorage).toEqual(expect.objectContaining({
 			enabled: false,
 			configured: false,
 			ready: false,
 			status: 'disabled',
 			mode: 'ephemeral',
 			backend: 'memory',
-		});
+			failOpen: true,
+			collection: 'scannerPresets',
+			pendingWrites: 0,
+			inFlightWrites: 0,
+			pendingDeletes: 0,
+			oldestPendingWriteAt: null,
+			lastReadFellBack: false,
+		}));
 	});
 
 	it('reports scanner preset storage as misconfigured without usable credentials', async () => {
@@ -365,14 +395,57 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+		expect(response.body.dependencies.scannerPresetStorage).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: false,
 			ready: false,
 			status: 'misconfigured',
 			mode: 'ephemeral',
 			backend: 'memory',
-		});
+			failOpen: true,
+			collection: 'scannerPresets',
+			pendingWrites: 0,
+			inFlightWrites: 0,
+			pendingDeletes: 0,
+			oldestPendingWriteAt: null,
+		}));
+	});
+
+	it('reports degraded durable scanner preset storage after a durable read failure', async () => {
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		// Prove durability first, which also arms the probe cooldown so the verdict below
+		// reflects the read failure rather than a fresh probe.
+		await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key')
+			.expect(200);
+
+		admin.__mockGet.mockRejectedValueOnce(new Error('Temporary Firestore outage'));
+		await request(app)
+			.get('/api/scanner-presets')
+			.set('x-api-key', 'status-key')
+			.expect(200);
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.scannerPresetStorage).toEqual(expect.objectContaining({
+			enabled: true,
+			// Credentials are valid, so this is a store fault and not `misconfigured`
+			// (#1342): the operator must not be sent to fix credentials that work.
+			configured: true,
+			ready: false,
+			status: 'degraded',
+			mode: 'durable',
+			backend: 'firestore',
+			lastErrorReason: 'firestore_unavailable',
+			consecutiveFailures: 1,
+			lastReadFellBack: true,
+		}));
 	});
 
 	it('reports Cloudflare AI Gateway as disabled by default', async () => {
