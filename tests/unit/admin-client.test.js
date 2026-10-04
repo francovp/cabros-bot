@@ -5770,6 +5770,106 @@ describe('structured analysis forms', () => {
 			expect(playground.elements.body.value).toContain('BINANCE:BTCUSDT');
 		});
 
+		it('keeps the Playground submit locked across an operation switch while a request is pending', async () => {
+			let pendingResolver;
+			const dispatched = [];
+			const browser = createBrowser({
+				fetchImpl: (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/webhook/alert')) {
+						dispatched.push(url);
+						return new Promise((resolve) => { pendingResolver = resolve; });
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const submitButton = find(playground, (node) => node.tagName === 'BUTTON' && node.textContent === 'Send request');
+			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
+
+			select.value = optionValue('POST /api/webhook/alert');
+			await select.dispatch('change');
+			await playground.dispatch('submit');
+			await flush();
+
+			expect(dispatched.length).toBe(1);
+			expect(submitButton.disabled).toBe(true);
+
+			// Switching operations re-renders the fields while the first request is still in flight.
+			select.value = optionValue('POST /api/webhook/volume-confirmation');
+			await select.dispatch('change');
+			await flush();
+			expect(submitButton.disabled).toBe(true);
+
+			// A second dispatch attempt must not reach the network while the first is pending.
+			await playground.dispatch('submit');
+			await flush();
+			expect(dispatched.length).toBe(1);
+
+			pendingResolver(response({ success: true, messageId: '12345' }));
+			await flush();
+
+			expect(dispatched.length).toBe(1);
+			expect(submitButton.disabled).toBe(false);
+		});
+
+		it('keeps the Playground submit locked when filtering auto-selects another operation during a pending request', async () => {
+			let pendingResolver;
+			const dispatched = [];
+			const browser = createBrowser({
+				fetchImpl: (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/webhook/alert')) {
+						dispatched.push(url);
+						return new Promise((resolve) => { pendingResolver = resolve; });
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const submitButton = find(playground, (node) => node.tagName === 'BUTTON' && node.textContent === 'Send request');
+			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
+
+			select.value = optionValue('POST /api/webhook/alert');
+			await select.dispatch('change');
+			await playground.dispatch('submit');
+			await flush();
+			expect(dispatched.length).toBe(1);
+
+			// Filter-driven selection re-renders through populateOptions() rather than the select.
+			const filter = playground.elements.filterOperations;
+			filter.value = 'volume-confirmation';
+			await filter.dispatch('input');
+			await flush();
+
+			expect(select.value).toBe(optionValue('POST /api/webhook/volume-confirmation'));
+			expect(submitButton.disabled).toBe(true);
+
+			await playground.dispatch('submit');
+			await flush();
+			expect(dispatched.length).toBe(1);
+
+			pendingResolver(response({ success: true, messageId: '12345' }));
+			await flush();
+
+			expect(dispatched.length).toBe(1);
+			expect(submitButton.disabled).toBe(false);
+		});
+
 		it('renders structured results and provides collapsible raw JSON toggle', async () => {
 			const browser = createBrowser({
 				fetchImpl: async (url) => {

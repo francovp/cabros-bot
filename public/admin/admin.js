@@ -5396,6 +5396,12 @@ const renderPlayground = (contract, view) => {
 	form.append(filterLabel, selectLabel, fields, buttonRow, resultHost, output, rawToggle, historySection);
 	view.append(form);
 
+	let pendingRequestCount = 0;
+	const isSubmitLocked = () => pendingRequestCount > 0;
+	const syncSubmitLockedState = () => {
+		button.disabled = isSubmitLocked() || !definitions[Number(select.value)];
+	};
+
 	const saveCurrentInputs = (def) => {
 		if (!def) return;
 		const key = `${def.method} ${def.path}`;
@@ -5420,7 +5426,12 @@ const renderPlayground = (contract, view) => {
 			curlButton.disabled = true;
 			return;
 		}
-		button.disabled = false;
+		// Every re-render path (operation switch, filter auto-select, history restore)
+		// lands here, so this is the single place that decides whether a dispatch is
+		// allowed. `pendingRequestCount` is the source of truth: a request that outlives
+		// this re-render must keep the shared submit button locked so a second alert,
+		// replay, or order mutation cannot be dispatched behind it.
+		button.disabled = isSubmitLocked();
 		curlButton.disabled = false;
 		button.className = definition.confirm ? 'destructive-action' : '';
 
@@ -5591,6 +5602,9 @@ const renderPlayground = (contract, view) => {
 
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
+		// A disabled submit button does not stop implicit submission (Enter in a text
+		// input) or a programmatic submit, so the lock is also enforced here.
+		if (isSubmitLocked()) return;
 		resultHost.replaceChildren();
 		lastRawJson = '';
 		showResult(rawOutput, '');
@@ -5640,6 +5654,8 @@ const renderPlayground = (contract, view) => {
 		let responseOk = false;
 		let responseData = null;
 
+		pendingRequestCount += 1;
+		syncSubmitLockedState();
 		sendRequest({
 			definition,
 			path: resolvedPath,
@@ -5702,6 +5718,10 @@ const renderPlayground = (contract, view) => {
 				status: responseStatus ? `HTTP ${responseStatus}` : 'Network error',
 				ok: false,
 			});
+		}).finally(() => {
+			// Runs after sendRequest's own finally, so this is the authoritative write.
+			pendingRequestCount = Math.max(0, pendingRequestCount - 1);
+			syncSubmitLockedState();
 		});
 	});
 
