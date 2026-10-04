@@ -339,6 +339,61 @@ describe('ops/external-uptime-monitor.js', () => {
 		});
 	});
 
+	describe('unparseable invocation still reports DOWN', () => {
+		it('never emits status "up" alongside an internal-error verdict', async () => {
+			// A monitor that cannot read its own argv has proven nothing about the
+			// target. The catch block's recovery probe may legitimately observe a
+			// healthy endpoint, but that probe is not the verdict: reporting it as
+			// one would put status 'up' beside a MONITOR_INTERNAL_ERROR.
+			const stdout = createWritable();
+			const exitCode = await monitor.main({
+				argv: ['--bogus-flag'],
+				env: {},
+				fetchImpl: routerFetch({ '/healthcheck': HEALTHCHECK_OK, '/docs': DOCS_OK }),
+				stdout,
+			});
+
+			const emitted = parseSingleJsonLine(stdout.text());
+			expect(exitCode).toBe(7);
+			expect(emitted.exitCode).toBe(7);
+			expect(emitted.reason).toBe('MONITOR_INTERNAL_ERROR');
+			expect(emitted.status).toBe('down');
+		});
+
+		it('announces DOWN, not a recovery, when it does page', async () => {
+			// previousConclusion is hardcoded 'unknown' on this path, so paging
+			// stays enabled and the verdict it announces must be the down verdict.
+			// A status of 'up' here silently suppressed the page entirely.
+			const stdout = createWritable();
+			const pageBodies = [];
+			const healthy = routerFetch({ '/healthcheck': HEALTHCHECK_OK, '/docs': DOCS_OK });
+			const exitCode = await monitor.main({
+				argv: ['--bogus-flag'],
+				env: {
+					TELEGRAM_BOT_TOKEN: 'test-token',
+					TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: '-100999',
+				},
+				fetchImpl: async (url, init) => {
+					if (String(url).includes('api.telegram.org')) {
+						pageBodies.push(String(init && init.body));
+						return jsonResponse({ ok: true });
+					}
+					return healthy(url, init);
+				},
+				stdout,
+			});
+
+			const emitted = parseSingleJsonLine(stdout.text());
+			expect(exitCode).toBe(7);
+			expect(emitted.paging.attempted).toBe(true);
+			expect(emitted.paging.delivered).toBe(true);
+			expect(pageBodies).toHaveLength(1);
+			expect(pageBodies[0]).toContain('Uptime monitor: DOWN');
+			expect(pageBodies[0]).toContain('MONITOR_INTERNAL_ERROR');
+			expect(pageBodies[0]).not.toContain('RECOVERED');
+		});
+	});
+
 	describe('shouldPage transition decision', () => {
 		it('pages when production goes down and the previous run was healthy', () => {
 			expect(monitor.shouldPage({ ok: false, previousConclusion: 'success' })).toBe('down');

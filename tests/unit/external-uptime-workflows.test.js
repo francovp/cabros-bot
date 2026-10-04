@@ -142,7 +142,7 @@ describe('external uptime monitor workflow', () => {
 		// `inputs.force_page` would evaluate to "disabled" and silently switch the
 		// paging channel off for every scheduled run.
 		const code = stripComments(content);
-		expect(code).toContain("github.event_name == 'workflow_dispatch'");
+		expect(code).toContain('github.event_name == \'workflow_dispatch\'');
 		expect(code).toMatch(/UPTIME_MONITOR_DISABLE_PAGE:.*event_name[^\n]*&&[^\n]*&& '1' \|\| '0'/);
 	});
 

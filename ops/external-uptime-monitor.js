@@ -648,6 +648,11 @@ async function main(deps = {}) {
 		result = await run({ baseUrl: '' }, { fetchImpl, env, now: deps.now });
 		result.reason = 'MONITOR_INTERNAL_ERROR';
 		result.exitCode = EXIT_CODES.MONITOR_INTERNAL_ERROR;
+		// The probe below only re-establishes that fetch works; it is not the
+		// verdict, so it must not decide `status`. Leaving the recovered verdict
+		// here emitted status 'up' beside a MONITOR_INTERNAL_ERROR and suppressed
+		// the down page this path is meant to send.
+		result.status = 'down';
 	}
 
 	try {
