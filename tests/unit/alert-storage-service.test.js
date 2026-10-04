@@ -2576,6 +2576,24 @@ describe('AlertStorageService', () => {
 							},
 						],
 					},
+					sentimentCalibration: {
+						sampleCount: 0,
+						evaluated: false,
+						saturated: false,
+						reason: 'no_samples',
+						min: null,
+						max: null,
+						p10: null,
+						p50: null,
+						p90: null,
+						spread: null,
+						distinctValueCount: 0,
+						bucketCount: 0,
+						buckets: [],
+						topBandCount: 0,
+						topBandShare: null,
+						rawScoreCapCount: 0,
+					},
 					tokenUsage: {
 						inputTokens: 10,
 						outputTokens: 20,
@@ -3046,6 +3064,190 @@ describe('AlertStorageService', () => {
 						},
 					},
 				],
+			});
+		});
+
+		describe('sentimentCalibration', () => {
+			function scoreDoc(id, sentimentScore, extra = {}) {
+				return buildQueryDoc(id, {
+					receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+					enriched: true,
+					source: 'webhook',
+					enrichmentData: { symbol: 'BTCUSDT', sentiment_score: sentimentScore, ...extra },
+				});
+			}
+
+			it('reports no samples and an explicit reason for an empty window', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({ empty: true, docs: [] });
+
+				const result = await AlertStorageService.summarizeAlerts({
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+				});
+
+				expect(result.enrichment.sentimentCalibration.sampleCount).toBe(0);
+				expect(result.enrichment.sentimentCalibration.evaluated).toBe(false);
+				expect(result.enrichment.sentimentCalibration.saturated).toBe(false);
+				expect(result.enrichment.sentimentCalibration.reason).toBe('no_samples');
+				expect(result.enrichment.sentimentCalibration.rawScoreCapCount).toBe(0);
+			});
+
+			it('flags the issue #1031 production shape as saturated', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				const saturated = [
+					...Array(42).fill(0.85),
+					...Array(33).fill(0.8),
+					...Array(10).fill(0.75),
+					...Array(3).fill(0.7),
+					...Array(4).fill(0.65),
+					...Array(4).fill(0.6),
+					...Array(1).fill(0.55),
+				];
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: saturated.map((value, index) => scoreDoc(`alert-${index}`, value)),
+				});
+
+				const result = await AlertStorageService.summarizeAlerts({
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+				});
+
+				const calibration = result.enrichment.sentimentCalibration;
+				expect(calibration.sampleCount).toBe(97);
+				expect(calibration.evaluated).toBe(true);
+				expect(calibration.saturated).toBe(true);
+				expect(calibration.reason).toBe('top_band_concentration');
+				expect(calibration.topBandCount).toBe(85);
+				expect(calibration.distinctValueCount).toBe(7);
+				expect(calibration.bucketCount).toBe(4);
+				expect(calibration.p10).toBeCloseTo(0.7, 6);
+				expect(calibration.p90).toBeCloseTo(0.85, 6);
+			});
+
+			it('reports a healthy window without warning', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				const scores = [];
+				for (let i = 0; i < 40; i += 1) {
+					scores.push((i % 10) / 10 + 0.05);
+				}
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: scores.map((value, index) => scoreDoc(`spread-${index}`, value)),
+				});
+
+				const result = await AlertStorageService.summarizeAlerts({
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+				});
+
+				const calibration = result.enrichment.sentimentCalibration;
+				expect(calibration.sampleCount).toBe(40);
+				expect(calibration.saturated).toBe(false);
+				expect(calibration.reason).toBeNull();
+				expect(calibration.bucketCount).toBeGreaterThanOrEqual(4);
+			});
+
+			it('uses the absolute value of a negative score', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						scoreDoc('bearish', -0.9),
+						scoreDoc('bullish', 0.2),
+						scoreDoc('neutral', 0),
+					],
+				});
+
+				const result = await AlertStorageService.summarizeAlerts({
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+				});
+
+				const calibration = result.enrichment.sentimentCalibration;
+				expect(calibration.sampleCount).toBe(3);
+				expect(calibration.min).toBe(0);
+				expect(calibration.max).toBeCloseTo(0.9, 6);
+				// Below the sample floor, so saturation is not declared.
+				expect(calibration.evaluated).toBe(false);
+				expect(calibration.reason).toBe('insufficient_sample');
+			});
+
+			it('counts how many alerts the CB-238 zero-source cap rewrote', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						scoreDoc('capped', 0.55, { sentiment_score_raw: 0.9 }),
+						scoreDoc('capped-two', -0.55, { sentiment_score_raw: -0.85 }),
+						scoreDoc('uncapped', 0.3),
+					],
+				});
+
+				const result = await AlertStorageService.summarizeAlerts({
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+				});
+
+				expect(result.enrichment.sentimentCalibration.rawScoreCapCount).toBe(2);
+			});
+
+			it('ignores plain alerts and malformed stored scores', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						buildQueryDoc('plain-alert', {
+							receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+							enriched: false,
+							source: 'webhook',
+							enrichmentData: { sentiment_score: 0.9 },
+						}),
+						scoreDoc('nan-score', 'not-a-number'),
+						scoreDoc('null-score', null),
+						scoreDoc('good-score', 0.3),
+					],
+				});
+
+				const result = await AlertStorageService.summarizeAlerts({
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+				});
+
+				expect(result.enrichment.sentimentCalibration.sampleCount).toBe(1);
+				expect(result.enrichment.sentimentCalibration.max).toBeCloseTo(0.3, 6);
+			});
+
+			it('never lets an unreadable score break the summary', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						scoreDoc('weird', 0.4),
+						buildQueryDoc('bad-enrichment', {
+							receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+							enriched: true,
+							source: 'webhook',
+							enrichmentData: 'not-an-object',
+						}),
+					],
+				});
+
+				const result = await AlertStorageService.summarizeAlerts({
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+				});
+
+				expect(result.totalAlerts).toBe(2);
+				expect(result.enrichment.sentimentCalibration.sampleCount).toBe(1);
 			});
 		});
 

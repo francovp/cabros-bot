@@ -3951,6 +3951,205 @@ describe('admin browser client', () => {
 		expect(summaryForm.textContent).toContain('Filters changed');
 	});
 
+	describe('sentiment calibration panel', () => {
+		function summaryWithCalibration(calibration) {
+			return {
+				success: true,
+				summary: {
+					totalAlerts: 97,
+					window: {},
+					enrichment: {
+						enrichedAlerts: 97,
+						plainAlerts: 0,
+						sentimentCalibration: calibration,
+						riskMetadataCoverage: { denominator: 97, fields: {} },
+					},
+				},
+			};
+		}
+
+		async function loadSummary(browser, calibration) {
+			await flush();
+			await selectView(browser, 'alerts');
+			const form = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+			await form.dispatch('submit');
+			await flush();
+			return form;
+		}
+
+		it('surfaces a saturated verdict with the rule that fired', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.startsWith('/api/alerts/summary')) {
+						return response(summaryWithCalibration({
+							sampleCount: 97,
+							evaluated: true,
+							saturated: true,
+							reason: 'top_band_concentration',
+							min: 0.55,
+							max: 0.85,
+							p10: 0.7,
+							p50: 0.8,
+							p90: 0.85,
+							spread: 0.15,
+							distinctValueCount: 7,
+							bucketCount: 4,
+							buckets: [
+								{ lowerBound: 0.5, upperBound: 0.6, count: 5 },
+								{ lowerBound: 0.8, upperBound: 0.9, count: 45 },
+							],
+							topBandCount: 85,
+							topBandShare: 0.876289,
+							rawScoreCapCount: 13,
+						}));
+					}
+					return response({});
+				},
+			});
+
+			const form = await loadSummary(browser);
+
+			const text = form.textContent;
+			expect(text).toContain('Sentiment calibration');
+			expect(text).toContain('Saturated');
+			expect(text).toContain('top_band_concentration');
+			expect(text).toContain('0.75');
+			expect(text).toContain('13');
+			const panel = find(form, (node) => node.className.includes('sentiment-calibration'));
+			expect(panel).toBeDefined();
+			expect(find(panel, (node) => node.className.includes('status-danger'))).toBeDefined();
+		});
+
+		it('surfaces a healthy verdict', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.startsWith('/api/alerts/summary')) {
+						return response(summaryWithCalibration({
+							sampleCount: 120,
+							evaluated: true,
+							saturated: false,
+							reason: null,
+							min: 0.15,
+							max: 0.9,
+							p10: 0.25,
+							p50: 0.45,
+							p90: 0.85,
+							spread: 0.6,
+							distinctValueCount: 34,
+							bucketCount: 8,
+							buckets: [],
+							topBandCount: 46,
+							topBandShare: 0.383333,
+							rawScoreCapCount: 4,
+						}));
+					}
+					return response({});
+				},
+			});
+
+			const form = await loadSummary(browser);
+
+			expect(form.textContent).toContain('Sentiment calibration');
+			expect(form.textContent).toContain('Spread');
+			const panel = find(form, (node) => node.className.includes('sentiment-calibration'));
+			expect(panel).toBeDefined();
+			expect(find(panel, (node) => node.className.includes('status-ready'))).toBeDefined();
+		});
+
+		it('distinguishes an unevaluated window from a healthy one', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.startsWith('/api/alerts/summary')) {
+						return response(summaryWithCalibration({
+							sampleCount: 3,
+							evaluated: false,
+							saturated: false,
+							reason: 'insufficient_sample',
+							min: 0.55,
+							max: 0.55,
+							p10: 0.55,
+							p50: 0.55,
+							p90: 0.55,
+							spread: 0,
+							distinctValueCount: 1,
+							bucketCount: 1,
+							buckets: [],
+							topBandCount: 0,
+							topBandShare: 0,
+							rawScoreCapCount: 0,
+						}));
+					}
+					return response({});
+				},
+			});
+
+			const form = await loadSummary(browser);
+
+			const text = form.textContent;
+			expect(text).toContain('Sentiment calibration');
+			expect(text).toContain('insufficient_sample');
+			// Must not read as healthy: a small window is a non-verdict, not a pass.
+			expect(text).not.toContain('Healthy');
+			const panel = find(form, (node) => node.className.includes('sentiment-calibration'));
+			expect(panel).toBeDefined();
+			expect(find(panel, (node) => node.className.includes('status-disabled'))).toBeDefined();
+			expect(find(panel, (node) => node.className.includes('status-ready'))).toBeUndefined();
+		});
+
+		it('omits the panel entirely when the API reports no calibration block', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.startsWith('/api/alerts/summary')) {
+						return response({ success: true, summary: { totalAlerts: 1, window: {}, enrichment: { enrichedAlerts: 1 } } });
+					}
+					return response({});
+				},
+			});
+
+			const form = await loadSummary(browser);
+
+			expect(form.textContent).not.toContain('Sentiment calibration');
+		});
+
+		it('renders untrusted reason text as text, never as markup', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.startsWith('/api/alerts/summary')) {
+						return response(summaryWithCalibration({
+							sampleCount: 30,
+							evaluated: true,
+							saturated: true,
+							reason: '<img src=x onerror=alert(1)>',
+							min: 0.8,
+							max: 0.8,
+							p10: 0.8,
+							p50: 0.8,
+							p90: 0.8,
+							spread: 0,
+							distinctValueCount: 1,
+							bucketCount: 1,
+							buckets: [],
+							topBandCount: 30,
+							topBandShare: 1,
+							rawScoreCapCount: 0,
+						}));
+					}
+					return response({});
+				},
+			});
+
+			const form = await loadSummary(browser);
+
+			expect(form.querySelectorAll('img')).toHaveLength(0);
+			expect(form.textContent).toContain('<img src=x onerror=alert(1)>');
+		});
+	});
+
 	it('renders dedicated outcomes filters and follows the returned before cursor', async () => {
 		let outcomesPage = 0;
 		const requests = [];

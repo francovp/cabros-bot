@@ -39,6 +39,7 @@ export interface EnrichedAlert {
   sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   sentiment_score: number;
   sentiment_score_raw?: number;
+  sentiment_score_evidence?: string;
   current_price?: number | null;
   price_data?: PriceData | null;
   insights: string[];

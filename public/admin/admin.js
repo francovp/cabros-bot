@@ -2380,6 +2380,107 @@ const getAlertReportQuery = (fields, { format, includeText } = {}) => Object.fro
 	}).filter(([, value]) => value !== undefined && value !== ''),
 );
 
+// Verdict tones for the sentiment calibration panel. A window too small to
+// judge is deliberately NOT green: `insufficient_sample` is the absence of
+// evidence, and rendering it as a pass would read as reassurance.
+const SENTIMENT_CALIBRATION_TONES = {
+	spread_collapse: 'status-danger',
+	top_band_concentration: 'status-danger',
+	insufficient_sample: 'status-disabled',
+	no_samples: 'status-disabled',
+};
+
+const SENTIMENT_CALIBRATION_LABELS = {
+	spread_collapse: 'Spread collapsed',
+	top_band_concentration: 'Top-band concentration',
+	insufficient_sample: 'Not enough samples',
+	no_samples: 'No samples',
+};
+
+const formatScore = (value) => {
+	const numeric = asFiniteNumber(value);
+	return numeric === null ? '—' : numeric.toFixed(2);
+};
+
+const renderSentimentCalibration = (enrichment) => {
+	const calibration = asObject(enrichment && enrichment.sentimentCalibration);
+	if (!calibration || !('sampleCount' in calibration)) return null;
+
+	const reason = typeof calibration.reason === 'string' && calibration.reason ? calibration.reason : null;
+	const saturated = calibration.saturated === true;
+	const evaluated = calibration.evaluated === true;
+	const verdict = saturated ? 'Saturated' : (evaluated ? 'Healthy' : 'Not evaluated');
+	const tone = saturated
+		? 'status-danger'
+		: (reason ? (SENTIMENT_CALIBRATION_TONES[reason] || 'status-disabled') : 'status-ready');
+
+	const spread = asFiniteNumber(calibration.spread);
+	const topBandShare = asFiniteNumber(calibration.topBandShare);
+	const section = element('section', { className: 'dashboard-section sentiment-calibration' });
+
+	const header = element('div', { className: 'section-header' });
+	header.append(
+		element('h3', { text: 'Sentiment calibration' }),
+		element('span', {
+			className: `status-badge ${tone}`,
+			text: verdict,
+			attributes: { role: 'status' },
+		}),
+	);
+	section.append(header);
+
+	const grid = element('div', { className: 'metric-grid' });
+	const topBandPct = topBandShare === null ? '—' : `${Math.round(topBandShare * 100)}%`;
+	grid.append(
+		createMetricCard(
+			'Scores in window',
+			formatJobValue(calibration.sampleCount),
+			`${formatJobValue(calibration.distinctValueCount)} distinct · ${formatJobValue(calibration.bucketCount)} buckets`,
+		),
+		createMetricCard(
+			'Spread (p90 − p10)',
+			spread === null ? '—' : spread.toFixed(2),
+			`p10 ${formatScore(calibration.p10)} · p90 ${formatScore(calibration.p90)}`,
+		),
+		createMetricCard('Range', `${formatScore(calibration.min)} → ${formatScore(calibration.max)}`, `p50 ${formatScore(calibration.p50)}`),
+		createMetricCard('At or above 0.75', topBandPct, `${formatJobValue(calibration.topBandCount)} of ${formatJobValue(calibration.sampleCount)} scores`),
+		createMetricCard(
+			'Zero-source capped',
+			formatJobValue(calibration.rawScoreCapCount),
+			calibration.rawScoreCapCount
+				? 'Cap is live in this deployment'
+				: 'No capped alerts in this window',
+		),
+	);
+	section.append(grid);
+
+	const details = element('p', { className: 'metric-meta' });
+	details.append(element('span', { text: reason ? `Rule: ${reason}` : 'Rule: none (healthy)' }));
+	section.append(details);
+
+	const buckets = Array.isArray(calibration.buckets) ? calibration.buckets : [];
+	if (buckets.length) {
+		const table = element('table', { className: 'data-table' });
+		const head = element('tr');
+		['Band', 'Count'].forEach((label) => head.append(element('th', { text: label })));
+		table.append(head);
+		buckets.forEach((bucket) => {
+			const row = element('tr');
+			const detail = asObject(bucket);
+			const lower = asFiniteNumber(detail.lowerBound);
+			const upper = asFiniteNumber(detail.upperBound);
+			row.append(
+				element('td', { text: lower === null || upper === null ? '—' : `${lower.toFixed(1)} – ${upper.toFixed(1)}` }),
+				element('td', { text: formatJobValue(detail.count) }),
+			);
+			table.append(row);
+		});
+		section.append(table);
+	}
+
+	return section;
+};
+
 const renderAlertSummaryBlocks = (data) => {
 	const wrap = element('div', { className: 'dashboard summary-blocks' });
 	const summary = asObject(data && data.summary);
@@ -2412,6 +2513,13 @@ const renderAlertSummaryBlocks = (data) => {
 			`${formatJobValue(enrichment.plainAlerts)} plain · denominator ${formatJobValue(coverage.denominator)}`,
 		),
 	);
+
+	// Appended before the coverage sections so a saturated score is the first
+	// thing an operator reads: it invalidates every per-alert score above it.
+	const calibrationPanel = renderSentimentCalibration(enrichment);
+	if (calibrationPanel) {
+		wrap.append(calibrationPanel);
+	}
 
 	const channels = Object.entries(asObject(delivery.byChannel));
 	if (channels.length) {

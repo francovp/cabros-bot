@@ -18,10 +18,25 @@ const REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS = Object.freeze([
 	'setup_type',
 	'risk_reward_ratio',
 ]);
+/**
+ * Markers the `alert-enrichment` prompt must carry to be considered calibrated.
+ *
+ * These replaced the older `0.9+ / 0.6-0.8 / corroborating sources` triple. That
+ * rubric had no reference anchor and no justification field, which is how
+ * production ended up with 87.6% of scores at or above 0.75 (issue #1031). The
+ * anchors are now absolute band values and the model must name its choice, so
+ * the markers are the band values plus the required field.
+ *
+ * The local fallback is inspected by the same function, so the two stay in
+ * lockstep: a Langfuse prompt that has not been republished after #1031 reports
+ * `schemaDriftDetected` until it carries the anchors and the justification
+ * field. That flag is the intended rollout signal, not a failure.
+ */
 const REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE = Object.freeze([
-	'0.9+',
-	'0.6-0.8',
-	'corroborating sources',
+	'sentiment_score_evidence',
+	'0.90',
+	'0.60',
+	'0.30',
 ]);
 
 function inspectAlertEnrichmentRiskSchema(promptName, content) {
