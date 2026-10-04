@@ -585,6 +585,53 @@ describe('OpenAPI contract', () => {
 			expect(noBarriersAlert.target).toBeUndefined();
 		});
 	});
+
+	describe('TestAlertRequest.text non-empty contract (GH-1157)', () => {
+		// postTestAlert() forwards a caller-supplied body.text straight to
+		// validateAlert(), which throws for any falsy or blank string and the handler
+		// maps to 400 INVALID_REQUEST. A schema that still accepts "" lets a validator
+		// or generated client build a request the endpoint always rejects.
+		it('rejects an empty string on the test-alert probe text', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+			const text = contract.components.schemas.TestAlertRequest.properties.text;
+
+			expect(text.type).toBe('string');
+			expect(text.minLength).toBe(1);
+			expect(text.description).toContain('non-empty');
+		});
+
+		it('keeps the probe text optional so omitting it still uses the default marker', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+			const schema = contract.components.schemas.TestAlertRequest;
+
+			// The handler only substitutes its own smoke-probe marker when text is
+			// absent, so requiring the field would break the documented minimal
+			// `{}` request body.
+			expect(schema.required).toBeUndefined();
+			expect(contract.components.requestBodies.TestAlert.required).toBe(false);
+			expect(contract.components.requestBodies.TestAlert.content['application/json'].examples.minimal.value)
+				.toEqual({});
+		});
+
+		it('bounds every optional string field the runtime validates for emptiness', () => {
+			// Generalises GH-1157: an optional string with neither `pattern` nor
+			// `minLength` is unbounded below, so it accepts "" while the handler
+			// rejects it. telegramChatId/whatsappChatId already carried minLength 1;
+			// text did not.
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+			const properties = contract.components.schemas.TestAlertRequest.properties;
+
+			const unbounded = Object.entries(properties)
+				.filter(([, schema]) => schema.type === 'string' && !schema.pattern)
+				.filter(([, schema]) => schema.minLength !== 1)
+				.map(([name]) => name);
+
+			expect(unbounded).toEqual([]);
+		});
+	});
 });
 
 describe('status dependency contract drift', () => {
