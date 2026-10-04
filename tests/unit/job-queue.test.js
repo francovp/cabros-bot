@@ -275,4 +275,176 @@ describe('JobQueue', () => {
 
 		expect(status.durableQueuedCount).toBe(0);
 	});
+
+	describe('broker readiness probe (#1117)', () => {
+		function healthyQueueClass() {
+			return jest.fn(() => ({
+				add: jest.fn().mockResolvedValue({ id: 'job-1' }),
+				waitUntilReady: jest.fn().mockResolvedValue(undefined),
+				close: jest.fn().mockResolvedValue(undefined),
+			}));
+		}
+
+		it('reports a healthy broker as ready without requiring an enqueued job', async () => {
+			// The cutover validation in #1117 asserts status "ready" right after
+			// flipping JOB_EXECUTION_MODE. Readiness used to be set only as a side
+			// effect of _getQueue(), which runs on the first enqueue, so a freshly
+			// cut-over and completely idle deployment reported "not_started" and
+			// looked like a failed enablement.
+			process.env = {
+				...savedEnv,
+				JOB_EXECUTION_MODE: 'render-worker',
+				REDIS_URL: 'redis://queue.example:6379',
+			};
+
+			const queue = new JobQueue({ QueueClass: healthyQueueClass(), RedisClass: jest.fn(() => ({ disconnect: jest.fn() })) });
+
+			expect(queue.getStatus({}).status).toBe('not_started');
+
+			await expect(queue.probeBrokerReadiness()).resolves.toMatchObject({ reachable: true });
+
+			const status = queue.getStatus({});
+			expect(status.status).toBe('ready');
+			expect(status.ready).toBe(true);
+			expect(status.brokerReachable).toBe(true);
+			expect(typeof status.lastBrokerProbeAt).toBe('string');
+			expect(status.lastBrokerProbeErrorCode).toBeNull();
+		});
+
+		it('distinguishes an unreachable broker from a broker that was never probed', async () => {
+			// isConfigured() only string-checks REDIS_URL, so a dead broker and a
+			// healthy one used to report an identical enabled/configured/ready/status
+			// tuple. An operator could not tell a working cut-over from a broken one
+			// without waiting for a job to fail.
+			process.env = {
+				...savedEnv,
+				JOB_EXECUTION_MODE: 'render-worker',
+				REDIS_URL: 'redis://queue.example:6379',
+			};
+
+			const failingWaitUntilReady = jest.fn().mockRejectedValue(new Error('connect ECONNREFUSED'));
+			const QueueClass = jest.fn(() => ({ waitUntilReady: failingWaitUntilReady, close: jest.fn() }));
+			const queue = new JobQueue({ QueueClass, RedisClass: jest.fn(() => ({ disconnect: jest.fn() })) });
+
+			expect(queue.getStatus({}).brokerReachable).toBeNull();
+
+			await expect(queue.probeBrokerReadiness()).resolves.toMatchObject({ reachable: false });
+
+			const status = queue.getStatus({});
+			expect(status.status).toBe('unreachable');
+			expect(status.ready).toBe(false);
+			expect(status.brokerReachable).toBe(false);
+			expect(status.lastBrokerProbeErrorCode).toBeTruthy();
+			expect(status.configured).toBe(true);
+		});
+
+		it('skips the probe and reports misconfigured when no broker URL is set', async () => {
+			process.env = { ...savedEnv, JOB_EXECUTION_MODE: 'render-worker' };
+			delete process.env.REDIS_URL;
+
+			const QueueClass = healthyQueueClass();
+			const queue = new JobQueue({ QueueClass, RedisClass: jest.fn(() => ({ disconnect: jest.fn() })) });
+
+			await expect(queue.probeBrokerReadiness()).resolves.toMatchObject({ reachable: false, skipped: true });
+
+			const status = queue.getStatus({});
+			expect(status.status).toBe('misconfigured');
+			expect(status.brokerReachable).toBeNull();
+			expect(QueueClass).not.toHaveBeenCalled();
+		});
+
+		it('bounds a stalled broker with JOB_QUEUE_PROBE_TIMEOUT_MS and fails open', async () => {
+			process.env = {
+				...savedEnv,
+				JOB_EXECUTION_MODE: 'render-worker',
+				REDIS_URL: 'redis://queue.example:6379',
+				JOB_QUEUE_PROBE_TIMEOUT_MS: '25',
+			};
+
+			// A broker that accepts the connection but never completes the handshake:
+			// the probe must give up on its own deadline instead of hanging a
+			// status request or blocking startup.
+			const QueueClass = jest.fn(() => ({
+				waitUntilReady: () => new Promise(() => {}),
+				close: jest.fn(),
+			}));
+			const queue = new JobQueue({ QueueClass, RedisClass: jest.fn(() => ({ disconnect: jest.fn() })) });
+
+			await expect(queue.probeBrokerReadiness()).resolves.toMatchObject({ reachable: false });
+			expect(queue.getStatus({}).status).toBe('unreachable');
+		});
+
+		it('falls back to the documented probe deadline when the configured value is malformed', async () => {
+			process.env = {
+				...savedEnv,
+				JOB_EXECUTION_MODE: 'render-worker',
+				REDIS_URL: 'redis://queue.example:6379',
+				JOB_QUEUE_PROBE_TIMEOUT_MS: 'not-a-number',
+			};
+
+			const QueueClass = jest.fn(() => ({
+				waitUntilReady: () => new Promise(() => {}),
+				close: jest.fn(),
+			}));
+			const queue = new JobQueue({ QueueClass, RedisClass: jest.fn(() => ({ disconnect: jest.fn() })) });
+
+			jest.useFakeTimers();
+			try {
+				let settled = false;
+				const probe = queue.probeBrokerReadiness().then((result) => {
+					settled = true;
+					return result;
+				});
+
+				// The default is 5000ms, so a NaN or 0 deadline would have blown
+				// through this and reported a verdict immediately.
+				await jest.advanceTimersByTimeAsync(4999);
+				expect(settled).toBe(false);
+
+				await jest.advanceTimersByTimeAsync(2);
+				await expect(probe).resolves.toMatchObject({
+					reachable: false,
+					errorCode: 'JOB_QUEUE_PROBE_TIMEOUT',
+				});
+			} finally {
+				jest.useRealTimers();
+			}
+		});
+
+		it('single-flights concurrent probes so one deployment connects once', async () => {
+			process.env = {
+				...savedEnv,
+				JOB_EXECUTION_MODE: 'render-worker',
+				REDIS_URL: 'redis://queue.example:6379',
+			};
+
+			const QueueClass = healthyQueueClass();
+			const queue = new JobQueue({ QueueClass, RedisClass: jest.fn(() => ({ disconnect: jest.fn() })) });
+
+			const [first, second] = await Promise.all([
+				queue.probeBrokerReadiness(),
+				queue.probeBrokerReadiness(),
+			]);
+
+			expect(first).toMatchObject({ reachable: true });
+			expect(second).toMatchObject({ reachable: true });
+			expect(QueueClass).toHaveBeenCalledTimes(1);
+		});
+
+		it('never throws out of the probe so a status call cannot fail', async () => {
+			process.env = {
+				...savedEnv,
+				JOB_EXECUTION_MODE: 'render-worker',
+				REDIS_URL: 'redis://queue.example:6379',
+			};
+
+			const QueueClass = jest.fn(() => {
+				throw new Error('redis constructor exploded');
+			});
+			const queue = new JobQueue({ QueueClass, RedisClass: jest.fn(() => ({ disconnect: jest.fn() })) });
+
+			await expect(queue.probeBrokerReadiness()).resolves.toMatchObject({ reachable: false });
+			expect(() => queue.getStatus({})).not.toThrow();
+		});
+	});
 });

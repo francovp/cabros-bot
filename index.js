@@ -41,6 +41,7 @@ const { registerAlertActionHandlers } = require('./src/lib/telegramAlertActions'
 const { registerAuthMiddleware: registerTelegramCommandAuth } = require('./src/lib/telegramCommandAuth');
 const { jobService } = require('./src/services/jobs/JobService');
 const { jobBacklogService } = require('./src/services/jobs/JobBacklogService');
+const { jobQueue } = require('./src/services/jobs/JobQueue');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
 const { whatsAppCommandBridgeService } = require('./src/services/notification/WhatsAppCommandBridgeService');
@@ -125,6 +126,20 @@ async function bootstrapApplication() {
 	scannerPresetSchedulerService.startWorker();
 	// Start background job backlog monitor if enabled
 	jobBacklogService.startMonitor();
+	// Prove broker connectivity at boot so /api/capabilities reports a real queue
+	// verdict on an idle deployment. Without this, readiness only ever became true
+	// as a side effect of the first enqueue, so a correct render-worker cut-over
+	// read as "not_started" and an operator could not tell it apart from a broker
+	// that was configured but unreachable.
+	void jobQueue.probeBrokerReadiness().then((result) => {
+		if (result.skipped) {
+			return;
+		}
+		console.log(
+			`Job queue broker ${result.reachable ? 'reachable' : 'UNREACHABLE'}` +
+			(result.reachable ? '' : ` (lastErrorCode=${result.errorCode})`)
+		);
+	});
 	// Start background user price alert worker if enabled
 	userPriceAlertService.setBotGetter(() => bot);
 	userPriceAlertService.startWorker({ source: 'web' });

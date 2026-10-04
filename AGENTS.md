@@ -2018,6 +2018,22 @@ The dedicated `/admin` Status view now renders the existing `/api/status` respon
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
 
+## Job Queue Broker Readiness (Issue #1117)
+
+`JobQueue` runs a bounded, fail-open **broker readiness probe** at web startup when `JOB_EXECUTION_MODE=render-worker`, and projects the verdict onto `dependencies.jobExecutionQueue` as `brokerReachable` / `lastBrokerProbeAt` / `lastBrokerProbeErrorCode`, with `status` now one of `disabled`, `misconfigured`, `not_started`, `unreachable`, `ready`.
+
+**`configured` is not health.** `isConfigured()` only string-checks `REDIS_URL`. Before this change, `ready` was set as a side effect of `_getQueue()`, which runs on the first `enqueue()`, so a correctly cut-over but completely idle deployment reported `not_started` — the exact state an operator would read as "the enablement failed" — and an unreachable broker reported an identical `enabled/configured/ready/status` tuple. This is the same class of defect #1285 fixed for Firestore read health: a readiness assertion must exercise the operation it claims to be available, not a cheaper proxy.
+
+**`null` and `false` are different verdicts.** `brokerReachable` is `null` until a probe has actually run, and stays `null` whenever queue mode is disabled or unconfigured (there is no broker to have a verdict about). `false` means a probe ran and the broker did not answer. Collapsing the two reintroduces the exact ambiguity above. `getStatus()` also reports `unreachable` in preference to `not_started` once a probe has failed, because a known-bad broker must never read as an unstarted one.
+
+**The probe is fail-open and bounded.** `probeBrokerReadiness()` is single-flight, bounded by `JOB_QUEUE_PROBE_TIMEOUT_MS` (default `5000`, malformed values fall back to the default), uses an `unref`'d timer so it cannot hold the process open, and never throws — a broker that accepts TCP but never completes the Redis handshake yields `unreachable` instead of stalling boot or a `/api/status` request. It warms the same queue the first `enqueue()` would create, so it does not double-connect. `close()` resets the probe verdict so a stale `reachable: true` cannot outlive the connection.
+
+**The render-worker cutover stays an operator step.** `render.yaml` keeps the web service on `JOB_EXECUTION_MODE=local` while the jobs worker runs `render-worker`, because the Key Value broker is on a paid `starter` plan. Flipping the web service in the blueprint would make job creation fail closed with `503 JOB_QUEUE_UNAVAILABLE` on any deployment without a broker. The full queue contract (`JOB_QUEUE_*`) is now declared on **both** services at the in-code defaults, mirrored `fromService` web → worker, so it is dashboard-visible and cannot silently diverge between the two processes.
+
+**Coverage**: `tests/unit/job-queue.test.js` (probe reachability, unreachable-vs-unprobed, `misconfigured` skip, bounded deadline, malformed-value default, single-flight, never-throws), `tests/integration/status-endpoint.test.js` (`ready`/`unreachable`/misconfigured projection and no broker-URL leak), `tests/unit/render-blueprint.test.js` (queue contract declared on both services and mirrored, web stays on `local`), `tests/unit/postman-collection.test.js` + `tests/integration/openapi-docs.test.js` (published contract).
+
+**Remaining for the platform owner**: provisioning the paid `cabros-crypto-bot-telegram-queue` Key Value, deploying the jobs worker, and flipping web `JOB_EXECUTION_MODE=render-worker`. That is billing-gated deployment work, not an application code change.
+
 ## Async Job Backlog Depth & Operator Paging (Issue #578)
 
 `JobBacklogService` reports durable async-job backlog depth on `/api/status` and `/api/capabilities` under `dependencies.jobExecutionQueue` and pages `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` when non-terminal queued jobs accumulate while workers are stalled or offline. Broker readiness cannot distinguish a *ready but undrained* queue from a healthy one, so depth is reported alongside readiness.
