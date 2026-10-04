@@ -305,10 +305,20 @@ pnpm test:firebase
 `dryRun` defaults to `true` and validates the request without submitting. Set `dryRun: false` only after enabling the feature and explicitly selecting the intended environment. The default environment is Spot Testnet; `live` is never selected implicitly. Live requests require `idempotency-key` (or `x-idempotency-key`) or an explicit `clientOrderId`; a matching request is replayed and a changed payload returns `409 IDEMPOTENCY_CONFLICT`. Send decimal quantities, prices, and quote amounts as strings when exact precision matters; the service preserves those values through validation, submission, and reconciliation by disabling Binance SDK response beautification. MARKET orders must omit `timeInForce`; Binance order-test validation runs for LIMIT dynamic price filters and account-dependent filters such as `MAX_POSITION` and `MAX_NUM_ORDERS`. Definitive Binance rejections, including pre-execution timestamp and throttling failures, return `400 BINANCE_ORDER_REJECTED`; a recovered Binance order that does not match the request returns `409 BINANCE_ORDER_CONFLICT`; transient order-test failures return retryable `502 BINANCE_VALIDATION_FAILED`. A live request with an idempotency key derives a deterministic Binance `clientOrderId`; after cache expiration or process restart, the service reconciles that ID before submitting again. If Binance submission status is ambiguous, including Binance execution-unknown code `-1006`, the API returns `503 BINANCE_ORDER_STATUS_UNKNOWN` and replays that result for the same key; reconcile the order before retrying with a new key.
 
 The response and audit logs include only sanitized order metadata. API credentials are never returned or logged.
+
 - `ENABLE_LLM_ALERT_ENRICHMENT` - Enable optional secondary LLM enrichment (`true` or `false`, default: `false`)
 - `AZURE_LLM_ENDPOINT` - Azure AI Inference endpoint URL (required if enrichment enabled)
 - `AZURE_LLM_KEY` - Azure AI Inference API key (required if enrichment enabled)
 - `AZURE_LLM_MODEL` - Azure AI LLM model name (e.g., `gpt-4o`, required if enrichment enabled)
+
+#### Binance Order Mutation Audit
+
+- `ENABLE_BINANCE_ORDER_AUDIT` - Persist a structured audit record for every Binance order mutation in the `binanceOrderAudit` Firestore collection (`true` or `false`, default: `false`; Remote Config supported)
+- `BINANCE_ORDER_AUDIT_RETENTION_DAYS` - Retention window in days applied to each audit document before Firestore TTL expiry (default: `30`, range: `1`-`365`; Remote Config supported)
+
+`GET /api/status` and `GET /api/capabilities` expose `featureFlags.binanceOrderAudit` and `dependencies.binanceOrderAudit`. `dependencies.binanceOrderAudit` reports `enabled`, `configured`, `ready`, `status` (`ready`, `misconfigured`, or `disabled`), `collection`, and `retentionDays`. `configured` reflects Firestore credential readiness **independently** of the gate, so an operator can distinguish "credentials present but audit off" (`enabled: false`, `configured: true`, `status: "disabled"`) from "audit on but storage unconfigured" (`enabled: true`, `configured: false`, `status: "misconfigured"`), where order mutations still execute but produce no audit trail. Operator identifiers are stored only as PBKDF2 hashes; no operator identifier, exchange credential, or API key is ever returned in the status payload.
+
+Audit writes are fail-open: a failed audit write is logged as a warning and never blocks or rejects an order.
 
 #### Runtime Error Monitoring (005-sentry-runtime-errors)
 

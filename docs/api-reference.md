@@ -204,6 +204,21 @@ The dedicated worker also persists the same non-sensitive heartbeat to `workerHe
 
 When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`demo`/`live` environment, allow-listed symbols, and readiness state.
 
+`featureFlags.binanceOrderAudit` reports `ENABLE_BINANCE_ORDER_AUDIT` (environment value or Remote Config override), and `dependencies.binanceOrderAudit` reports the audit trail's readiness, Firestore collection, and retention days:
+
+```json
+"binanceOrderAudit": {
+  "enabled": false,
+  "configured": true,
+  "ready": false,
+  "status": "disabled",
+  "collection": "binanceOrderAudit",
+  "retentionDays": 30
+}
+```
+
+`configured` reports Firestore credential readiness independently of the gate, so the pair is diagnostic rather than redundant: `enabled: false` with `configured: true` means "audit is off although credentials exist" (turn it on when you want the trail), while `enabled: true` with `configured: false` reports `status: "misconfigured"` — orders still execute but produce **no** audit record, which is the state worth alerting on. `status` is `ready` only when both hold. The block never exposes an operator identifier (stored only as a PBKDF2 hash), an exchange credential, or an API key. See [Environment Configuration](environment-configuration.md#binance-order-mutation-audit).
+
 ### GET /api/public/status
 
 Public, unauthenticated, secrets-free status snapshot for external monitoring widgets, status pages, and trader self-checks. No API key is required and the endpoint is mounted before the global rate limiter so monitoring traffic never consumes the ordinary bucket. The endpoint returns:
