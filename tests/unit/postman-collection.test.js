@@ -567,6 +567,77 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
 	});
 
+	it('documents unverified, ready, degraded and disabled idempotency storage variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - idempotency storage readiness (issue #1111)');
+
+		expect(item).toBeDefined();
+
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const ready = item.response.find((res) => res.name.includes('a durable reservation has succeeded'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const disabled = item.response.find((res) => res.name.includes('gate off'));
+
+		// Issue #1111 acceptance: credential shape must not be reported as proof that
+		// duplicate suppression works, because every Firestore failure falls open.
+		expect(unverified.code).toBe(200);
+		expect(JSON.parse(unverified.body).dependencies.idempotencyStorage).toEqual({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'unverified',
+			mode: 'durable',
+			backend: 'firestore',
+			failOpen: true,
+			readiness: 'unverified',
+			collection: 'idempotency_keys',
+			operationsAttempted: 0,
+			operationsSucceeded: 0,
+			operationsFailed: 0,
+			consecutiveFailures: 0,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorReason: null,
+		});
+
+		expect(ready.code).toBe(200);
+		expect(JSON.parse(ready.body).dependencies.idempotencyStorage).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			operationsSucceeded: 47,
+			consecutiveFailures: 0,
+		});
+
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.idempotencyStorage).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			// Intent is unchanged while durability is broken, and the fallback is stated.
+			mode: 'durable',
+			backend: 'firestore',
+			failOpen: true,
+			lastErrorReason: 'firestore_unavailable',
+		});
+
+		expect(disabled.code).toBe(200);
+		expect(JSON.parse(disabled.body).dependencies.idempotencyStorage).toMatchObject({
+			enabled: false,
+			ready: false,
+			status: 'disabled',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
+
+		// Every documented variant must be free of the provider text that Firestore
+		// embeds in its error messages.
+		for (const response of item.response) {
+			expect(response.body).not.toContain('projects/');
+			expect(response.body).not.toContain('console.firebase.google.com');
+		}
+	});
+
 	it('documents degraded, healthy, and omitted firestore read-metric variants', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const item = findItem(collection.item, 'Get Status - firestore read metrics (degraded read path)');
