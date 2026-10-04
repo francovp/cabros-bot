@@ -3,10 +3,12 @@
 # Verifies the deployment for a given PR number, and optionally validates new
 # endpoints exposed by the PR. Production is also verifiable.
 #
-# PR deployment URL is resolved via the GitHub Deployments API using the
-# companion script get-pr-deployment-url.sh, which returns the environment_url
-# of the latest success/active deployment and falls back to the Railway pattern
-# when no GitHub deployment is found:
+# PR deployment URL is resolved dynamically from the GitHub Deployments API via
+# the companion script get-pr-deployment-url.sh, which returns the
+# environment_url of the latest success/active deployment regardless of the
+# hosting provider (Railway, OpenClaw, Tailscale, Fly.io, ...) and falls back to
+# the Railway host pattern, with a warning, only when no GitHub deployment
+# exists:
 #   https://cabros-bot-cabros-bot-pr-<pr-number>.up.railway.app
 #
 # Production (master):    https://cabros-bot-production.up.railway.app
@@ -18,12 +20,14 @@
 #   ./verify-preview.sh 359 "/healthcheck,/openapi.json" "abc1234..."
 #
 # EXPECTED_SHA (optional):
-#   When provided, the script fetches the SHA of the latest GitHub deployment
-#   for the PR and compares it to EXPECTED_SHA. A mismatch triggers a stale-
-#   deploy warning and exits non-zero, which routes issue-automator to Step 6.5.
+#   When provided, the script reads the SHA of the latest GitHub deployment for
+#   the PR (provider-independent) and compares it to EXPECTED_SHA. A mismatch
+#   triggers a stale-deploy warning and exits non-zero, which routes
+#   issue-automator to Step 6.5.
 #   Obtain the PR head SHA with: gh pr view <N> --json headRefOid --jq .headRefOid
 #
-# Railway and GitHub Deployments are the supported preview-status sources.
+# Preview host sources: the GitHub Deployments API (primary, any provider) with
+# the Railway host pattern as fallback.
 
 set -euo pipefail
 
@@ -91,7 +95,7 @@ if [ -n "$EXPECTED_SHA" ] && [ "$PR_NUMBER" != "production" ] && [ "$PR_NUMBER" 
       echo "Error: Stale deploy detected for PR #${PR_NUMBER}." >&2
       echo "  Expected SHA : ${EXPECTED_SHA}" >&2
       echo "  Deployed SHA : ${DEPLOYED_SHA}" >&2
-      echo "  The Railway preview is not serving the PR head commit. Trigger Step 6.5 recovery." >&2
+      echo "  The resolved preview (${PREVIEW_URL}) is not serving the PR head commit. Trigger Step 6.5 recovery." >&2
       exit 2  # exit 2 = stale deploy (distinct from general endpoint failure exit 1)
     else
       echo "SHA match: deployed ${DEPLOYED_SHA:0:10} matches expected ${EXPECTED_SHA:0:10}."
