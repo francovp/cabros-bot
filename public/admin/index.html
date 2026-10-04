@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/admin/admin.css">
 </head>
 <body>
+  <a class="skip-link" href="#view">Skip to workspace</a>
   <main class="console-shell">
     <aside class="console-sidebar">
       <div class="brand-lockup">
@@ -26,15 +27,15 @@
         <button data-view="jobs" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg>Jobs</button>
         <button data-view="orders" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18"/><path d="M3 12h18"/><path d="M3 17h12"/><circle cx="19" cy="17" r="1.5"/></svg>Orders</button>
         <button data-view="analysis" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M18.5 15.5l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9z"/></svg>Analysis</button>
-        <button data-view="playground" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4.5l13 7.5-13 7.5z"/></svg>Playground</button>
+        <button data-view="playground" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4.5l13 7.5-13 7.5z"/></svg>Operations</button>
       </nav>
-      <p class="sidebar-note">Protected operator console</p>
+      <p class="sidebar-note">Workspace · Cabros Bot</p>
     </aside>
     <section class="console-content">
       <header class="topbar">
         <div>
           <p class="eyebrow">Operator workspace</p>
-          <p class="topbar-title">Monitor, diagnose and trigger safely</p>
+          <p class="topbar-title">Your operations, at a glance</p>
         </div>
         <div class="topbar-actions">
           <div id="sse-status" class="sse-indicator disconnected" title="Real-time stream: Offline" role="status" aria-live="polite">
@@ -74,10 +75,12 @@
         </form>
         <p id="key-state" class="request-state" aria-live="polite"></p>
       </section>
-      <section id="view" aria-live="polite" tabindex="-1"></section>
+      <section id="view" tabindex="-1" aria-live="polite"></section>
     </section>
     <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
   </main>
+  <script src="/admin/vue.runtime.global.prod.js" defer></script>
+  <script src="/admin/admin-components.js" defer></script>
   <script src="/admin/admin-request.js" defer></script>
   <script src="/admin/admin.js" defer></script>
 </body>

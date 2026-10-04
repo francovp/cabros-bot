@@ -1,4 +1,5 @@
 const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoSymbol');
+const { userPriceAlertCmd } = require('./commands/handlers/core/userPriceAlertHandler');
 const { jobService } = require('../services/jobs/JobService');
 const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
@@ -64,6 +65,7 @@ const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	silencio: { max: 20, windowMs: 60_000 },
 	umbral: { max: 20, windowMs: 60_000 },
 	categorias: { max: 20, windowMs: 60_000 },
+	alerta: { max: 10, windowMs: 60_000 },
 });
 const TELEGRAM_COMMAND_ALIASES = Object.freeze({
 	analysis: 'analisis',
@@ -73,6 +75,7 @@ const TELEGRAM_COMMAND_ALIASES = Object.freeze({
 	quiet: 'silencio',
 	threshold: 'umbral',
 	categories: 'categorias',
+	alert: 'alerta',
 });
 const MAX_TELEGRAM_COMMAND_RATE_LIMIT = 1_000;
 const MAX_TELEGRAM_COMMAND_WINDOW_MS = 86_400_000;
@@ -950,6 +953,8 @@ function buildHelpMessage() {
 		'*🤖 Comandos disponibles en Cabros Bot*',
 		'',
 		'• `/precio <simbolo>` — Consulta el precio en Binance o Twelve Data \\(ej: `/precio BTCUSDT`, `/precio NVDA`\\)',
+		'• `/alerta <simbolo> <operador> <precio>` — Configura o gestiona alertas de precio \\(alias: `/alert`\\)',
+		'  _Opciones: `/alerta BTCUSDT < 60000`, `/alerta list`, `/alerta cancel <id>`_',
 		'• `/cryptobot id` — Muestra el Chat ID actual de Telegram',
 		'• `/analisis <simbolos>` — Crea un análisis técnico en TradingView \\(alias: `/analysis`\\)',
 		'  _Opciones: `timeframe=1D`, `mtf=true`, `timeoutMs=300000`_',
@@ -1084,6 +1089,7 @@ async function replyValidationError(context, error) {
 
 module.exports = {
 	getPrice,
+	userPriceAlertCmd,
 	cryptoBotCmd,
 	expandedAnalysisCmd,
 	marketScannerCmd,

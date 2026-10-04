@@ -44,7 +44,7 @@
     }
   ],
   "paths": {
-"/api/public/status": {
+    "/api/public/status": {
       "get": {
         "tags": [
           "Operations"
@@ -53,9 +53,6 @@
         "description": "Returns a redacted, secrets-free snapshot of service name/version, uptime, enabled notification channels, and dependency readiness booleans. No API key required. Cached for 30 seconds per process. Returns 503 when the process is still bootstrapping or shutting down.",
         "operationId": "getPublicStatus",
         "responses": {
-                "408": {
-                  "$ref": "#/components/responses/RequestTimeout"
-                },
           "200": {
             "description": "Public status snapshot",
             "content": {
@@ -75,16 +72,27 @@
                     "shuttingDown": false
                   },
                   "channels": {
-                    "enabled": ["telegram"]
+                    "enabled": [
+                      "telegram"
+                    ]
                   },
                   "dependencies": {
-                    "gemini": { "ready": true },
-                    "tradingview": { "ready": true },
-                    "firestore": { "ready": true }
+                    "gemini": {
+                      "ready": true
+                    },
+                    "tradingview": {
+                      "ready": true
+                    },
+                    "firestore": {
+                      "ready": true
+                    }
                   }
                 }
               }
             }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
           },
           "503": {
             "description": "Service is not yet ready (bootstrap pending or shutdown draining)",
@@ -105,7 +113,7 @@
           "Operations"
         ],
         "summary": "Service healthcheck",
-        "description": "Default behavior returns 200 with `uptime` JSON only. With `?deep=true`, the endpoint reuses the existing channel readiness logic from `/api/status` dependencies and returns 200 when every enabled channel is ready, 503 when any enabled channel is degraded (with `degradedChannels` and per-channel readiness). The endpoint is never API-key protected.",
+        "description": "Default behavior returns 200 with `uptime` JSON only. With `?deep=true`, the endpoint reuses the existing channel readiness logic from `/api/status` dependencies and returns 200 when every enabled channel is ready, 503 when any enabled channel is degraded. With `?depth=readiness`, it runs bounded external dependency probes (Firestore, Gemini, TradingView MCP, Binance, Telegram) and always returns 200 with the dependency report. The endpoint is never API-key protected.",
         "operationId": "getHealthcheck",
         "parameters": [
           {
@@ -116,6 +124,18 @@
               "type": "boolean"
             },
             "description": "When `true`, include channel readiness and return 503 if any enabled channel is degraded."
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "readiness"
+              ]
+            },
+            "description": "Set to `readiness` to receive the external dependency validation report. This surface is advisory: it always returns HTTP 200 and reports degradation in the body's `ready` field, so a flaky third-party provider can never pull a healthy replica out of load-balancer rotation. Use `/ready?depth=dependencies` when you need a traffic-gating 503."
           }
         ],
         "responses": {
@@ -130,14 +150,92 @@
                     },
                     {
                       "$ref": "#/components/schemas/DeepHealthcheck"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReadinessReport"
                     }
                   ]
+                },
+                "examples": {
+                  "depthReadiness": {
+                    "summary": "?depth=readiness — always 200; degradation is reported in the body",
+                    "value": {
+                      "ready": true,
+                      "failClosed": false,
+                      "checkedAt": "2026-08-31T02:30:00.000Z",
+                      "latencyMs": 412,
+                      "dependencies": {
+                        "firestore": {
+                          "ready": true,
+                          "backend": "firestore",
+                          "latencyMs": 53
+                        },
+                        "gemini": {
+                          "ready": true,
+                          "backend": "gemini",
+                          "latencyMs": 124
+                        },
+                        "tradingViewMcp": {
+                          "ready": true,
+                          "backend": "tradingview_mcp",
+                          "latencyMs": 18
+                        },
+                        "binance": {
+                          "ready": true,
+                          "backend": "binance",
+                          "latencyMs": 36
+                        },
+                        "telegram": {
+                          "ready": true,
+                          "backend": "telegram",
+                          "latencyMs": 22
+                        }
+                      }
+                    }
+                  },
+                  "depthReadinessDegraded": {
+                    "summary": "?depth=readiness with a degraded provider — still 200 (advisory)",
+                    "value": {
+                      "ready": false,
+                      "failClosed": false,
+                      "checkedAt": "2026-08-31T02:30:00.000Z",
+                      "latencyMs": 3011,
+                      "dependencies": {
+                        "firestore": {
+                          "ready": true,
+                          "backend": "firestore",
+                          "latencyMs": 53
+                        },
+                        "gemini": {
+                          "ready": false,
+                          "latencyMs": 3001,
+                          "error": "timeout_after_3000ms"
+                        },
+                        "tradingViewMcp": {
+                          "ready": true,
+                          "backend": "tradingview_mcp",
+                          "latencyMs": 18
+                        },
+                        "binance": {
+                          "ready": true,
+                          "backend": "binance",
+                          "latencyMs": 36
+                        },
+                        "telegram": {
+                          "ready": false,
+                          "enabled": false,
+                          "skipped": true,
+                          "reason": "telegram_disabled"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "503": {
-            "description": "One or more enabled channels are degraded, or readiness evaluation failed.",
+            "description": "Only `?deep=true` returns 503: one or more enabled notification channels are degraded, or readiness evaluation failed. The `?depth=readiness` variant never returns 503.",
             "content": {
               "application/json": {
                 "schema": {
@@ -155,30 +253,254 @@
           "Operations"
         ],
         "summary": "Get bootstrap readiness",
-        "description": "Returns 200 only after required startup components have completed bootstrap. Returns 503 while pending or after a bootstrap failure. This endpoint checks bootstrap completion, not continuous external provider health.",
+        "description": "Two shapes, selected by `depth`. Without it, the bootstrap gate: 200 only after required startup components have completed bootstrap, 503 while pending or failed (`BootstrapReadiness`). With `?depth=dependencies`, the bootstrap verdict is ANDed with bounded external dependency probes for Firestore, Gemini, TradingView MCP, Binance, and Telegram, returning 503 when either the bootstrap is not ready or a considered dependency is unhealthy (`ReadinessReport`, which also echoes `status`, `components` and `bootstrapReady`). This endpoint checks neither continuous external provider health by default nor anything else implicitly. For an advisory, always-200 dependency report use `/healthcheck?depth=readiness`.",
         "operationId": "getReadiness",
         "responses": {
           "200": {
-            "description": "Bootstrap completed successfully.",
+            "description": "Dependency report produced.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BootstrapReadiness"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/BootstrapReadiness"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReadinessReport"
+                    }
+                  ]
+                },
+                "examples": {
+                  "dependenciesHealthy": {
+                    "summary": "/ready?depth=dependencies — bootstrap ready AND every considered dependency healthy",
+                    "value": {
+                      "ready": true,
+                      "failClosed": true,
+                      "status": "ready",
+                      "bootstrapReady": true,
+                      "components": {
+                        "telegramBot": {
+                          "status": "disabled"
+                        },
+                        "notificationServices": {
+                          "status": "ready"
+                        },
+                        "newsMonitor": {
+                          "status": "disabled"
+                        }
+                      },
+                      "checkedAt": "2026-08-31T02:30:00.000Z",
+                      "latencyMs": 412,
+                      "dependencies": {
+                        "firestore": {
+                          "ready": true,
+                          "backend": "firestore",
+                          "latencyMs": 53
+                        },
+                        "gemini": {
+                          "ready": true,
+                          "backend": "gemini",
+                          "latencyMs": 124
+                        },
+                        "tradingViewMcp": {
+                          "ready": true,
+                          "backend": "tradingview_mcp",
+                          "latencyMs": 18
+                        },
+                        "binance": {
+                          "ready": true,
+                          "backend": "binance",
+                          "latencyMs": 36
+                        },
+                        "telegram": {
+                          "ready": true,
+                          "backend": "telegram",
+                          "latencyMs": 22
+                        }
+                      }
+                    }
+                  },
+                  "bootstrapReady": {
+                    "summary": "Bare /ready — bootstrap gate only, no provider probes",
+                    "value": {
+                      "status": "ready",
+                      "ready": true,
+                      "startedAt": "2026-08-31T02:29:52.000Z",
+                      "completedAt": "2026-08-31T02:29:53.000Z",
+                      "failedAt": null,
+                      "error": null,
+                      "components": {
+                        "telegramBot": {
+                          "status": "disabled"
+                        },
+                        "notificationServices": {
+                          "status": "ready"
+                        },
+                        "newsMonitor": {
+                          "status": "disabled"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           },
           "503": {
-            "description": "Bootstrap is pending or failed.",
+            "description": "At least one considered dependency is unhealthy (fail-closed variant only).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BootstrapReadiness"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/BootstrapReadiness"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReadinessReport"
+                    }
+                  ]
+                },
+                "examples": {
+                  "bootstrapPending": {
+                    "summary": "Bare /ready — bootstrap still pending (503)",
+                    "value": {
+                      "status": "pending",
+                      "ready": false,
+                      "startedAt": "2026-08-31T02:29:50.000Z",
+                      "completedAt": null,
+                      "failedAt": null,
+                      "error": null,
+                      "components": {
+                        "telegramBot": {
+                          "status": "pending"
+                        },
+                        "notificationServices": {
+                          "status": "pending"
+                        },
+                        "newsMonitor": {
+                          "status": "pending"
+                        }
+                      }
+                    }
+                  },
+                  "dependenciesDegraded": {
+                    "summary": "/ready?depth=dependencies — dependency degraded (503)",
+                    "value": {
+                      "ready": false,
+                      "failClosed": true,
+                      "status": "ready",
+                      "bootstrapReady": true,
+                      "components": {
+                        "telegramBot": {
+                          "status": "disabled"
+                        },
+                        "notificationServices": {
+                          "status": "ready"
+                        },
+                        "newsMonitor": {
+                          "status": "disabled"
+                        }
+                      },
+                      "checkedAt": "2026-08-31T02:30:05.000Z",
+                      "latencyMs": 3011,
+                      "dependencies": {
+                        "firestore": {
+                          "ready": true,
+                          "backend": "firestore",
+                          "latencyMs": 84
+                        },
+                        "gemini": {
+                          "ready": false,
+                          "error": "timeout_after_3000ms",
+                          "latencyMs": 3000
+                        },
+                        "tradingViewMcp": {
+                          "ready": true,
+                          "backend": "tradingview_mcp",
+                          "latencyMs": 22
+                        },
+                        "binance": {
+                          "ready": false,
+                          "error": "binance_http_451",
+                          "latencyMs": 124
+                        },
+                        "telegram": {
+                          "ready": false,
+                          "enabled": false,
+                          "skipped": true,
+                          "reason": "telegram_not_initialized"
+                        }
+                      }
+                    }
+                  },
+                  "bootstrapPendingBlocksDependencies": {
+                    "summary": "/ready?depth=dependencies — bootstrap still pending, so the gate stays 503 even though every dependency is healthy",
+                    "value": {
+                      "ready": false,
+                      "failClosed": true,
+                      "status": "pending",
+                      "bootstrapReady": false,
+                      "components": {
+                        "telegramBot": {
+                          "status": "pending"
+                        },
+                        "notificationServices": {
+                          "status": "ready"
+                        },
+                        "newsMonitor": {
+                          "status": "disabled"
+                        }
+                      },
+                      "checkedAt": "2026-08-31T02:30:06.000Z",
+                      "latencyMs": 88,
+                      "dependencies": {
+                        "firestore": {
+                          "ready": true,
+                          "backend": "firestore",
+                          "latencyMs": 53
+                        },
+                        "gemini": {
+                          "ready": true,
+                          "backend": "gemini",
+                          "latencyMs": 124
+                        },
+                        "tradingViewMcp": {
+                          "ready": true,
+                          "backend": "tradingview_mcp",
+                          "latencyMs": 18
+                        },
+                        "binance": {
+                          "ready": true,
+                          "backend": "binance",
+                          "latencyMs": 36
+                        },
+                        "telegram": {
+                          "ready": true,
+                          "backend": "telegram",
+                          "latencyMs": 22
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "dependencies"
+              ]
+            },
+            "description": "Set to `dependencies` to layer external provider probes on top of the bootstrap gate. This variant fails closed: it returns 503 when any considered dependency is unhealthy, so it is suitable as a load-balancer readiness gate."
+          }
+        ]
       }
     },
     "/api/webhook/alert": {
@@ -320,6 +642,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -380,6 +705,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -405,7 +733,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "502": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/MarketScannerBadGateway"
           },
           "503": {
             "$ref": "#/components/responses/MaintenanceMode"
@@ -444,11 +772,11 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
-          "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
-          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -463,6 +791,11 @@
           },
           {
             "ApiKeyQuery": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ]
       }
@@ -487,11 +820,11 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
-          "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
-          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -509,6 +842,11 @@
           },
           {
             "ApiKeyQuery": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ]
       }
@@ -2089,6 +2427,9 @@
           },
           {
             "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -2129,6 +2470,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -3392,18 +3736,36 @@
               "application/json": {
                 "schema": {
                   "oneOf": [
-                    { "$ref": "#/components/schemas/SelfTestResult" },
+                    {
+                      "$ref": "#/components/schemas/SelfTestResult"
+                    },
                     {
                       "type": "object",
                       "properties": {
-                        "status": { "type": "string", "enum": ["unknown"] },
-                        "message": { "type": "string" },
-                        "requestId": { "type": "string" },
-                        "cached": { "type": "boolean" }
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "unknown"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "cached": {
+                          "type": "boolean"
+                        }
                       }
                     }
                   ]
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -3418,11 +3780,22 @@
           }
         },
         "security": [
-          { "ApiKeyHeader": [] },
-          { "ApiKeyQuery": [] },
-          { "FirebaseBearerAuth": [] }
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
         ],
-        "x-admin-role": "admin.viewer"
+        "x-admin-role": "admin.viewer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/selftest/run": {
@@ -3435,10 +3808,15 @@
         "operationId": "postSelfTestRun",
         "parameters": [
           {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          },
+          {
             "name": "only",
             "in": "query",
             "required": false,
-            "schema": { "type": "string" },
+            "schema": {
+              "type": "string"
+            },
             "description": "Comma-separated check ids to scope the run to. Unknown ids return a fail result."
           }
         ],
@@ -3449,7 +3827,9 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "only": { "type": "string" }
+                  "only": {
+                    "type": "string"
+                  }
                 }
               }
             }
@@ -3460,7 +3840,14 @@
             "description": "Self-test result.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/SelfTestResult" }
+                "schema": {
+                  "$ref": "#/components/schemas/SelfTestResult"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -3478,9 +3865,15 @@
           }
         },
         "security": [
-          { "ApiKeyHeader": [] },
-          { "ApiKeyQuery": [] },
-          { "FirebaseBearerAuth": [] }
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
         ],
         "x-admin-role": "admin.operator"
       }
@@ -3936,7 +4329,7 @@
           "minLength": 1,
           "maxLength": 128
         },
-        "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Echoed in the response and persisted on stored alerts."
+        "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Returned as the X-Request-Id response header on every non-exempt route, included in structured request logs, and persisted on stored alerts. Handlers that build their own response body may also echo it as `requestId`; middleware-generated errors such as an authentication failure do not include it in the body."
       },
       "NewsAnalysisSymbol": {
         "name": "symbol",
@@ -4174,14 +4567,24 @@
             "schema": {
               "$ref": "#/components/schemas/MessageRequest"
             },
-            "example": {
-              "message": "Deployment completed",
-              "channels": [
-                "telegram",
-                "whatsapp",
-                "discord"
-              ],
-              "idempotencyKey": "generic-message-demo-1"
+            "examples": {
+              "default": {
+                "value": {
+                  "message": "Deployment completed",
+                  "channels": [
+                    "telegram",
+                    "whatsapp",
+                    "discord"
+                  ],
+                  "idempotencyKey": "generic-message-demo-1"
+                }
+              },
+              "dryValidate": {
+                "value": {
+                  "message": "Custom notification payload to estimate before dispatch",
+                  "dryValidate": true
+                }
+              }
             }
           }
         }
@@ -4666,6 +5069,9 @@
                 "false"
               ]
             }
+          },
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         },
         "content": {
@@ -4736,6 +5142,11 @@
               "code": "UNAUTHORIZED"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "MaintenanceMode": {
@@ -4749,6 +5160,11 @@
               "error": "MAINTENANCE_MODE",
               "message": "Service is temporarily unavailable for maintenance"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -4782,6 +5198,11 @@
                 }
               }
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -4820,6 +5241,11 @@
               }
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "Error": {
@@ -4834,6 +5260,11 @@
               "code": "INVALID_REQUEST"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "IdempotencyConflict": {
@@ -4847,6 +5278,11 @@
               "error": "Idempotency key was reused with a different payload",
               "code": "IDEMPOTENCY_CONFLICT"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -4863,6 +5299,11 @@
               "message": "Request body exceeds maximum size of 256kb",
               "limit": "256kb"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -4975,6 +5416,9 @@
               "type": "string",
               "example": "\"3\""
             }
+          },
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         },
         "content": {
@@ -5040,6 +5484,9 @@
                 "false"
               ]
             }
+          },
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         },
         "content": {
@@ -5054,6 +5501,55 @@
                   "properties": {
                     "idempotencyReplayed": {
                       "type": "boolean"
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "description": "True when the inbound message exceeded MAX_MESSAGE_LENGTH (4000) and was clipped before delivery. Caller can detect silent content loss; downstream delivery proceeds with the truncated text."
+                    },
+                    "originalLength": {
+                      "type": "integer",
+                      "description": "Inbound message character count before truncation. Only present when truncated=true.",
+                      "minimum": 4001
+                    },
+                    "deliveredLength": {
+                      "type": "integer",
+                      "description": "Character count of the text actually passed to the notification channels. Only present when truncated=true.",
+                      "minimum": 1
+                    },
+                    "dryValidate": {
+                      "type": "boolean",
+                      "description": "True when the request was executed in dry-run validation mode without sending notifications."
+                    },
+                    "delivered": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "List of channels that successfully delivered the message."
+                    },
+                    "channelDetails": {
+                      "type": "object",
+                      "description": "Detailed per-channel delivery results including chunk counts when messages are split.",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "success": {
+                            "type": "boolean"
+                          },
+                          "messageId": {
+                            "type": "string"
+                          },
+                          "chunks": {
+                            "type": "integer"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "estimatedChunks": {
+                      "$ref": "#/components/schemas/EstimatedChunks"
                     }
                   }
                 }
@@ -5070,6 +5566,71 @@
                       "success": true,
                       "messageId": "tg-msg-123",
                       "durationMs": 450
+                    }
+                  ]
+                }
+              },
+              "dryValidate": {
+                "value": {
+                  "success": true,
+                  "dryValidate": true,
+                  "estimatedChunks": {
+                    "telegram": 1,
+                    "whatsapp": 3,
+                    "discord": 25
+                  }
+                }
+              },
+              "chunked": {
+                "value": {
+                  "success": true,
+                  "results": [
+                    {
+                      "channel": "telegram",
+                      "success": true,
+                      "messageId": "tg-msg-123"
+                    },
+                    {
+                      "channel": "whatsapp",
+                      "success": true,
+                      "messageId": "wa-msg-456",
+                      "splitMessageCount": 3
+                    }
+                  ],
+                  "delivered": [
+                    "telegram",
+                    "whatsapp"
+                  ],
+                  "channelDetails": {
+                    "telegram": {
+                      "success": true,
+                      "messageId": "tg-msg-123"
+                    },
+                    "whatsapp": {
+                      "success": true,
+                      "messageId": "wa-msg-456",
+                      "chunks": 3
+                    }
+                  },
+                  "estimatedChunks": {
+                    "telegram": 1,
+                    "whatsapp": 3,
+                    "discord": 25
+                  }
+                }
+              },
+              "truncated": {
+                "summary": "Inbound message exceeded MAX_MESSAGE_LENGTH",
+                "value": {
+                  "success": true,
+                  "truncated": true,
+                  "originalLength": 6000,
+                  "deliveredLength": 4003,
+                  "results": [
+                    {
+                      "channel": "telegram",
+                      "success": true,
+                      "messageId": "tg-msg-123"
                     }
                   ]
                 }
@@ -5105,6 +5666,11 @@
               "code": "IDEMPOTENCY_CONFLICT"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "DeliveryResult": {
@@ -5125,6 +5691,11 @@
                 }
               ]
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5185,6 +5756,61 @@
               "$ref": "#/components/schemas/JsonObject"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
+      "MarketScannerBadGateway": {
+        "description": "The endpoint can return 502 in two distinct shapes. (1) TRADINGVIEW_MCP_UNAVAILABLE: the readiness gate skipped every scan because the process-local TradingView MCP circuit breaker is open after recent HTTP 5xx or request failures, so no scanner call was attempted. (2) ALL_SCANS_FAILED: the scans were attempted and every one failed at the provider.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/JsonObject"
+            },
+            "examples": {
+              "mcpUnavailable": {
+                "summary": "502 TRADINGVIEW_MCP_UNAVAILABLE (scans skipped, nothing attempted)",
+                "value": {
+                  "success": false,
+                  "code": "TRADINGVIEW_MCP_UNAVAILABLE",
+                  "error": "TradingView MCP is currently unavailable (circuit breaker: open, lastError: http_5xx). Scans skipped.",
+                  "scanResults": [
+                    {
+                      "scan": "top_gainers",
+                      "status": "skipped",
+                      "reason": "TradingView MCP is currently unavailable (circuit breaker: open, lastError: http_5xx). Scans skipped."
+                    }
+                  ],
+                  "timedOut": false
+                }
+              },
+              "allScansFailed": {
+                "summary": "502 ALL_SCANS_FAILED (scans attempted, every one failed)",
+                "value": {
+                  "success": false,
+                  "code": "ALL_SCANS_FAILED",
+                  "error": "TradingView MCP failed for all requested scans.",
+                  "scanResults": [
+                    {
+                      "scan": "top_gainers",
+                      "status": "error",
+                      "error": "TradingView MCP request failed",
+                      "errorCategory": "request_failed"
+                    }
+                  ],
+                  "timedOut": false
+                }
+              }
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "SymbolAnalysisResult": {
@@ -5195,6 +5821,11 @@
               "$ref": "#/components/schemas/SymbolAnalysisResult"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "VolumeConfirmationResult": {
@@ -5204,6 +5835,11 @@
             "schema": {
               "$ref": "#/components/schemas/VolumeConfirmationResult"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5334,14 +5970,14 @@
                         "formattedMessage": "BTCUSDT breakout above resistance (confidence 0.85).",
                         "timestamp": 1724745600000,
                         "marketContext": {
-                          "price": 68500.0,
+                          "price": 68500,
                           "change24h": 2.4,
                           "volume24h": 18500000000,
                           "source": "binance",
                           "timestamp": 1724745599000
                         },
-                        "stop": 67130.0,
-                        "target": 71925.0
+                        "stop": 67130,
+                        "target": 71925
                       },
                       "deliveryResults": [],
                       "cached": false,
@@ -5416,6 +6052,11 @@
                 }
               }
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -5559,6 +6200,20 @@
                     "timeoutRequests": 0
                   }
                 },
+                "grounding": {
+                  "enabled": true,
+                  "configured": true,
+                  "ready": true,
+                  "status": "ready",
+                  "metrics": {
+                    "totalRequests": 1234,
+                    "successRequests": 1180,
+                    "failureRequests": 40,
+                    "timeoutRequests": 14,
+                    "successRate": 0.956,
+                    "uptimeSince": "2026-08-25T10:00:00Z"
+                  }
+                },
                 "tradingViewMcp": {
                   "enabled": true,
                   "configured": true,
@@ -5691,10 +6346,7 @@
         "description": "Request processing exceeded the global request-deadline ceiling",
         "headers": {
           "X-Request-Id": {
-            "description": "Unique identifier assigned to the request",
-            "schema": {
-              "type": "string"
-            }
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         },
         "content": {
@@ -5943,56 +6595,134 @@
       }
     },
     "schemas": {
-"PublicStatus": {
+      "RateLimitHeaders": {
+        "type": "object",
+        "description": "Standard X-RateLimit-* response headers emitted by the global rate limiter on every protected /api response (success and throttled). The webhook ingest endpoints use an isolated 1,000-request bucket; ordinary /api endpoints use RATE_LIMIT_MAX.",
+        "required": [
+          "X-RateLimit-Limit",
+          "X-RateLimit-Remaining",
+          "X-RateLimit-Reset"
+        ],
+        "properties": {
+          "X-RateLimit-Limit": {
+            "type": "string",
+            "description": "Maximum requests per window for the current bucket.",
+            "examples": [
+              "1000"
+            ]
+          },
+          "X-RateLimit-Remaining": {
+            "type": "string",
+            "description": "Requests remaining in the current window. Zero on a throttled response.",
+            "examples": [
+              "999"
+            ]
+          },
+          "X-RateLimit-Reset": {
+            "type": "string",
+            "description": "Unix timestamp (seconds) when the current window resets.",
+            "examples": [
+              "1756819200"
+            ]
+          }
+        }
+      },
+      "PublicStatus": {
         "type": "object",
         "description": "Public, unauthenticated service status snapshot. Intentionally omits credentials, configuration details, per-channel counters, feature flags, and operator identifiers.",
-        "required": ["service", "status", "channels", "dependencies"],
+        "required": [
+          "service",
+          "status",
+          "channels",
+          "dependencies"
+        ],
         "properties": {
-          "service": { "$ref": "#/components/schemas/PublicStatusService" },
-          "status": { "$ref": "#/components/schemas/PublicStatusBody" },
-          "channels": { "$ref": "#/components/schemas/PublicStatusChannels" },
-          "dependencies": { "$ref": "#/components/schemas/PublicStatusDependencies" }
+          "service": {
+            "$ref": "#/components/schemas/PublicStatusService"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PublicStatusBody"
+          },
+          "channels": {
+            "$ref": "#/components/schemas/PublicStatusChannels"
+          },
+          "dependencies": {
+            "$ref": "#/components/schemas/PublicStatusDependencies"
+          }
         }
       },
-"PublicStatusBody": {
+      "PublicStatusBody": {
         "type": "object",
         "description": "Process lifecycle signal reported in the public snapshot.",
-        "required": ["ok", "uptimeSeconds", "lastUpdated", "shuttingDown"],
+        "required": [
+          "ok",
+          "uptimeSeconds",
+          "lastUpdated",
+          "shuttingDown"
+        ],
         "properties": {
-          "ok": { "type": "boolean" },
-          "uptimeSeconds": { "type": "integer", "minimum": 0 },
-          "lastUpdated": { "type": "string", "format": "date-time" },
-          "shuttingDown": { "type": "boolean" }
+          "ok": {
+            "type": "boolean"
+          },
+          "uptimeSeconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastUpdated": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "shuttingDown": {
+            "type": "boolean"
+          }
         }
       },
-"PublicStatusChannels": {
+      "PublicStatusChannels": {
         "type": "object",
         "description": "Notification channels currently enabled and ready. Order is not significant.",
-        "required": ["enabled"],
+        "required": [
+          "enabled"
+        ],
         "properties": {
           "enabled": {
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["telegram", "whatsapp", "discord"]
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
             }
           }
         }
       },
-"PublicStatusDependencies": {
+      "PublicStatusDependencies": {
         "type": "object",
         "description": "Subset of dependency readiness flags safe for public, unauthenticated consumption.",
-        "required": ["gemini", "tradingview", "firestore"],
+        "required": [
+          "gemini",
+          "tradingview",
+          "firestore"
+        ],
         "properties": {
-          "gemini": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" },
-          "tradingview": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" },
-          "firestore": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" }
+          "gemini": {
+            "$ref": "#/components/schemas/PublicStatusDependencyFlag"
+          },
+          "tradingview": {
+            "$ref": "#/components/schemas/PublicStatusDependencyFlag"
+          },
+          "firestore": {
+            "$ref": "#/components/schemas/PublicStatusDependencyFlag"
+          }
         }
       },
-"PublicStatusDependencyFlag": {
+      "PublicStatusDependencyFlag": {
         "type": "object",
         "description": "Boolean readiness flag for a single dependency in the public, unauthenticated status snapshot. No credentials, configuration details, or provider metadata are exposed.",
-        "required": ["ready"],
+        "required": [
+          "ready"
+        ],
         "properties": {
           "ready": {
             "type": "boolean",
@@ -6000,26 +6730,58 @@
           }
         }
       },
-"PublicStatusNotReady": {
+      "PublicStatusNotReady": {
         "type": "object",
         "description": "Returned with HTTP 503 when the public snapshot cannot be served because the process is still bootstrapping or shutting down.",
-        "required": ["service", "status", "channels", "dependencies", "error", "code"],
+        "required": [
+          "service",
+          "status",
+          "channels",
+          "dependencies",
+          "error",
+          "code"
+        ],
         "properties": {
-          "service": { "$ref": "#/components/schemas/PublicStatusService" },
-          "status": { "$ref": "#/components/schemas/PublicStatusBody" },
-          "channels": { "$ref": "#/components/schemas/PublicStatusChannels" },
-          "dependencies": { "$ref": "#/components/schemas/PublicStatusDependencies" },
-          "error": { "type": "string" },
-          "code": { "type": "string", "enum": ["SERVICE_NOT_READY"] }
+          "service": {
+            "$ref": "#/components/schemas/PublicStatusService"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PublicStatusBody"
+          },
+          "channels": {
+            "$ref": "#/components/schemas/PublicStatusChannels"
+          },
+          "dependencies": {
+            "$ref": "#/components/schemas/PublicStatusDependencies"
+          },
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "SERVICE_NOT_READY"
+            ]
+          }
         }
       },
-"PublicStatusService": {
+      "PublicStatusService": {
         "type": "object",
         "description": "Service identity exposed in the public snapshot. Build commit and environment are intentionally omitted.",
-        "required": ["name", "version"],
+        "required": [
+          "name",
+          "version"
+        ],
         "properties": {
-          "name": { "type": "string" },
-          "version": { "type": ["string", "null"] }
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       },
       "JsonObject": {
@@ -6545,11 +7307,21 @@
       "FirestoreWriteMetrics": {
         "type": "object",
         "description": "In-memory counters for Firestore persistence attempts on alert storage, alert replays, and tradingviewJobs. Counters reset on process restart, never block delivery, and the field is omitted entirely from /api/status when nothing has been recorded yet. Mirrors DeliveryMetricsService for write-path observability so silent persistence failures cannot masquerade as 'Firestore ready'.",
-        "required": ["window", "writesAttempted", "writesSucceeded", "writesFailed", "successRate", "byDomain"],
+        "required": [
+          "window",
+          "writesAttempted",
+          "writesSucceeded",
+          "writesFailed",
+          "successRate",
+          "byDomain"
+        ],
         "properties": {
           "window": {
             "type": "object",
-            "required": ["startedAt", "durationMs"],
+            "required": [
+              "startedAt",
+              "durationMs"
+            ],
             "properties": {
               "startedAt": {
                 "type": "string",
@@ -6591,7 +7363,12 @@
       },
       "FirestoreWriteDomainMetrics": {
         "type": "object",
-        "required": ["success", "failure", "total", "successRate"],
+        "required": [
+          "success",
+          "failure",
+          "total",
+          "successRate"
+        ],
         "properties": {
           "success": {
             "type": "integer",
@@ -6617,68 +7394,173 @@
       "SelfTestResult": {
         "type": "object",
         "description": "Self-test diagnostic suite result. Sensitive evidence is redacted server-side; secrets are never returned.",
-        "required": ["status", "summary", "checks", "startedAt", "finishedAt", "durationMs", "requestId"],
+        "required": [
+          "status",
+          "summary",
+          "checks",
+          "startedAt",
+          "finishedAt",
+          "durationMs",
+          "requestId"
+        ],
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["pass", "warn", "fail"]
+            "enum": [
+              "pass",
+              "warn",
+              "fail"
+            ]
           },
           "summary": {
             "type": "object",
-            "required": ["pass", "warn", "fail", "skipped"],
+            "required": [
+              "pass",
+              "warn",
+              "fail",
+              "skipped"
+            ],
             "properties": {
-              "pass": { "type": "integer", "format": "int64" },
-              "warn": { "type": "integer", "format": "int64" },
-              "fail": { "type": "integer", "format": "int64" },
-              "skipped": { "type": "integer", "format": "int64" }
+              "pass": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "warn": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "fail": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "skipped": {
+                "type": "integer",
+                "format": "int64"
+              }
             }
           },
           "checks": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/SelfTestCheck" }
+            "items": {
+              "$ref": "#/components/schemas/SelfTestCheck"
+            }
           },
           "service": {
             "type": "object",
             "nullable": true,
             "properties": {
-              "name": { "type": "string" },
-              "version": { "type": "string" },
-              "commit": { "type": "string", "nullable": true },
-              "uptimeSec": { "type": "integer" },
-              "nodeVersion": { "type": "string" }
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "commit": {
+                "type": "string",
+                "nullable": true
+              },
+              "uptimeSec": {
+                "type": "integer"
+              },
+              "nodeVersion": {
+                "type": "string"
+              }
             }
           },
-          "startedAt": { "type": "string", "format": "date-time" },
-          "finishedAt": { "type": "string", "format": "date-time" },
-          "durationMs": { "type": "integer", "format": "int64" },
-          "requestId": { "type": "string" },
-          "cached": { "type": "boolean" },
-          "expired": { "type": "boolean" }
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "durationMs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "cached": {
+            "type": "boolean"
+          },
+          "expired": {
+            "type": "boolean"
+          }
         }
       },
       "SelfTestCheck": {
         "type": "object",
-        "required": ["id", "status", "message", "durationMs"],
+        "required": [
+          "id",
+          "status",
+          "message",
+          "durationMs"
+        ],
         "properties": {
-          "id": { "type": "string" },
+          "id": {
+            "type": "string"
+          },
           "status": {
             "type": "string",
-            "enum": ["pass", "warn", "fail", "skipped"]
+            "enum": [
+              "pass",
+              "warn",
+              "fail",
+              "skipped"
+            ]
           },
-          "message": { "type": "string" },
-          "durationMs": { "type": "integer", "format": "int64" },
-          "evidence": { "nullable": true }
+          "message": {
+            "type": "string"
+          },
+          "durationMs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "evidence": {
+            "nullable": true
+          }
         }
       },
       "SelfTestStatus": {
         "type": "object",
         "description": "Self-test dependency status surfaced under /api/status.dependencies.selfTest.",
-        "required": ["lastStatus", "ttlSec"],
+        "required": [
+          "lastStatus",
+          "ttlSec"
+        ],
         "properties": {
-          "lastRunAt": { "type": ["string", "null"], "format": "date-time" },
-          "lastStatus": { "type": ["string", "null"], "enum": ["pass", "warn", "fail", "unknown", null] },
-          "ttlSec": { "type": "integer" },
-          "ageMs": { "type": ["integer", "null"], "format": "int64" }
+          "lastRunAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastStatus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "pass",
+              "warn",
+              "fail",
+              "unknown",
+              null
+            ]
+          },
+          "ttlSec": {
+            "type": "integer"
+          },
+          "ageMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
         }
       },
       "BootstrapReadiness": {
@@ -8327,6 +9209,36 @@
               ]
             }
           },
+          "symbolRoutes": {
+            "type": "object",
+            "minProperties": 1,
+            "description": "Optional per-symbol channel routing. A dispatch is produced only for a symbol that matches one of the configured keys (case-insensitive, bare or `EXCHANGE:SYMBOL`). Matched symbols are delivered to their configured channels; text that mentions no configured route key is delivered normally via the request-level `channels` or the enabled-channel broadcast.",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^(?:[A-Za-z][A-Za-z0-9_]{1,15}:)?[A-Za-z0-9._-]{2,20}$"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "required": [
+                "channels"
+              ],
+              "properties": {
+                "channels": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "telegram",
+                      "whatsapp",
+                      "discord"
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
           "telegramChatId": {
             "type": "string",
             "minLength": 1,
@@ -8414,8 +9326,38 @@
             "type": "string",
             "minLength": 1,
             "description": "Optional replay key; snake_case body form."
+          },
+          "dryValidate": {
+            "type": "boolean",
+            "description": "Optional validation mode; when true, validates the request and returns per-channel estimatedChunks without sending notifications."
           }
         }
+      },
+      "EstimatedChunks": {
+        "type": "object",
+        "description": "Estimated message chunk count per channel based on provider-specific payload limits.",
+        "properties": {
+          "telegram": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Estimated chunk count for Telegram (single chunk for standard messages)."
+          },
+          "whatsapp": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Estimated chunk count for WhatsApp based on 20,000 character limit."
+          },
+          "discord": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Estimated chunk count for Discord based on 2,000 character limit."
+          }
+        },
+        "required": [
+          "telegram",
+          "whatsapp",
+          "discord"
+        ]
       },
       "ExpandedAnalysisRequest": {
         "type": "object",
@@ -9379,6 +10321,113 @@
           }
         }
       },
+      "NewsGroundingCalibration": {
+        "type": "object",
+        "description": "Grounding-derived source metadata used to calibrate the news-monitor confidence score. `qualityTier` and `qualityPenalty` were added in issue #1230 and are always present; `qualityTier` is `null` and `qualityPenalty` is `1` when no tier was resolved (no grounding sources, or grounding derivation failed).",
+        "properties": {
+          "grounding_used": {
+            "type": "boolean",
+            "description": "True when the actual grounding search results were available to derive source metadata from."
+          },
+          "model_source_count": {
+            "type": "number",
+            "description": "Source count as emitted by the model, before grounding override."
+          },
+          "model_source_freshness": {
+            "type": "number",
+            "description": "Source freshness score as emitted by the model, before grounding override."
+          },
+          "model_source_quality": {
+            "type": "number",
+            "description": "Source quality score as emitted by the model, before grounding override."
+          },
+          "effective_source_count": {
+            "type": "number",
+            "description": "Source count actually used for the source-count penalty."
+          },
+          "effective_source_freshness": {
+            "type": "number",
+            "description": "Freshness score actually used for the freshness penalty."
+          },
+          "effective_source_quality": {
+            "type": "number",
+            "description": "Quality score actually used for the source-authority penalty."
+          },
+          "freshness_unknown": {
+            "type": "boolean",
+            "description": "True when grounding sources carried no explicit dates, so a conservative unknown-freshness penalty was applied."
+          },
+          "qualityTier": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "high",
+              "medium",
+              "low",
+              "unknown"
+            ],
+            "description": "Weakest (most penalty-bearing) domain-quality tier present in the grounding sources. `null` when no tier was resolved."
+          },
+          "qualityPenalty": {
+            "type": "number",
+            "description": "Bounded multiplicative penalty applied to the additive-penalty-adjusted confidence. Always <= 1, so the quality step can only reduce a score. `1` means no penalty was applied.",
+            "example": 0.85
+          },
+          "actual_source_count": {
+            "type": "number",
+            "description": "Number of grounding search results returned."
+          },
+          "actual_source_quality": {
+            "type": "number",
+            "description": "Average domain-quality score across the grounding sources (0..1)."
+          },
+          "actual_source_freshness": {
+            "type": "number",
+            "description": "Average freshness score across the dated grounding sources (0..1)."
+          },
+          "actual_quality_tiers": {
+            "type": "object",
+            "description": "Per-tier counts across the grounding sources.",
+            "properties": {
+              "high": {
+                "type": "number"
+              },
+              "medium": {
+                "type": "number"
+              },
+              "low": {
+                "type": "number"
+              },
+              "unknown": {
+                "type": "number"
+              }
+            }
+          },
+          "actual_source_domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Normalized hostnames classified from the grounding sources."
+          },
+          "actual_stale_sources": {
+            "type": "number",
+            "description": "Grounding sources older than the freshness window."
+          },
+          "actual_dated_sources": {
+            "type": "number",
+            "description": "Grounding sources that carried an explicit date."
+          },
+          "has_explicit_dates": {
+            "type": "boolean",
+            "description": "True when at least one grounding source carried an explicit date."
+          },
+          "actual_freshness_reason": {
+            "type": "string",
+            "description": "Human-readable freshness classification used for the penalty decision."
+          }
+        }
+      },
       "NewsAlert": {
         "type": "object",
         "description": "Structured news alert payload returned by `/api/news-monitor`. Optional numeric `stop` and `target` risk barriers are present whenever a finite, on-side-of-entry value is available from market context or `deriveBarriers()`; otherwise they are omitted.",
@@ -9410,6 +10459,19 @@
             "items": {
               "type": "string"
             }
+          },
+          "sourceQualityTier": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low",
+              "unknown"
+            ],
+            "description": "Weakest domain-quality tier resolved from the grounding sources (issue #1230). Present only when grounding returned at least one source. The tier drives a bounded multiplicative confidence penalty (`high` x1, `medium` x0.95, `low` x0.85, `unknown` x1). `unknown` is reported for auditing but applies no penalty: it means the domain is not in the classification lists, which cover only ~56 domains, so penalizing it would reduce confidence whenever a reputable outlet is added to an otherwise well-sourced set. The penalty is applied after the additive source-count, freshness, and authority penalties. Omitted when no tier was resolved (no grounding, or zero grounding sources), in which case no quality penalty is applied."
+          },
+          "calibration": {
+            "$ref": "#/components/schemas/NewsGroundingCalibration"
           },
           "formattedMessage": {
             "type": "string"
@@ -9532,12 +10594,26 @@
                     ],
                     "description": "Sanitized TradingView MCP outcome for this alert."
                   },
+                  "exchange": {
+                    "type": "string",
+                    "description": "Exchange prefix reported by the upstream screener, unchanged by outbound MCP venue aliasing (GH-591)."
+                  },
+                  "requestedExchange": {
+                    "type": "string",
+                    "description": "Exchange prefix that was requested by the screener for the outbound TradingView MCP call. Alias resolution never rewrites this value (GH-591)."
+                  },
+                  "requestedExchangeMappedTo": {
+                    "type": "string",
+                    "description": "Venue the outbound TradingView MCP call was actually sent to when the screener's exchange prefix had no equivalent venue on the MCP server (for example 'BATS' -> 'NASDAQ'). Omitted when no alias was applied (GH-591)."
+                  },
                   "levelsSource": {
                     "type": "string",
                     "enum": [
-                      "gemini-grounding"
+                      "gemini-grounding",
+                      "fallback-trade-plan",
+                      "derived-quote"
                     ],
-                    "description": "Provenance of technical_levels. Set to 'gemini-grounding' only when Gemini-parsed fallback levels are emitted because TradingView MCP data was absent or failed; omitted when MCP-derived levels win (GH-509 / CB-226)."
+                    "description": "Provenance of the emitted risk levels (invalidation_level / target_level / risk_reward_ratio). Set to 'gemini-grounding' only when Gemini-parsed fallback levels are emitted because TradingView MCP data was absent or failed; omitted when MCP-derived levels win (GH-509 / CB-226). Set to 'fallback-trade-plan' when TradingView MCP supplied the price but its ATR-derived risk block was rejected (zero, non-finite, or failing the side/positivity checks) and the secondary heuristic timeframe risk plan was used instead (GH-1229). Set to 'derived-quote' when levels were derived from the MCP quote because neither provider returned a usable block."
                   },
                   "current_price": {
                     "type": [
@@ -9617,6 +10693,10 @@
                 },
                 "success": {
                   "type": "boolean"
+                },
+                "symbol": {
+                  "type": "string",
+                  "description": "Symbol whose configured route produced this delivery result. Present when symbolRoutes is used."
                 },
                 "error": {
                   "type": "string"
@@ -10418,7 +11498,7 @@
       },
       "Status": {
         "type": "object",
-       "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.newsMonitorClassifier reports ENABLE_NEWS_MONITOR_CLASSIFIER and defaults to false; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations.",
+        "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.newsMonitorClassifier reports ENABLE_NEWS_MONITOR_CLASSIFIER and defaults to false; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations.",
         "properties": {
           "readiness": {
             "$ref": "#/components/schemas/BootstrapReadiness"
@@ -10442,6 +11522,9 @@
             "type": "object",
             "additionalProperties": true,
             "properties": {
+              "tradingViewMcp": {
+                "$ref": "#/components/schemas/TradingViewMcpRuntimeStatus"
+              },
               "firestoreWriteMetrics": {
                 "$ref": "#/components/schemas/FirestoreWriteMetrics"
               },
@@ -10450,6 +11533,9 @@
               },
               "firebaseRemoteConfig": {
                 "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
+              },
+              "jobExecutionQueue": {
+                "$ref": "#/components/schemas/JobExecutionQueueDependency"
               },
               "notificationRedrive": {
                 "$ref": "#/components/schemas/NotificationRedriveDependency"
@@ -10470,6 +11556,85 @@
           }
         }
       },
+      "TradingViewMcpRuntimeStatus": {
+        "type": "object",
+        "description": "Fail-open TradingView MCP runtime telemetry. Terminal provider outages are classified as provider_unavailable and do not consume same-operation retries; provider response bodies and URLs are never exposed.",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "unknown",
+              "ready",
+              "degraded"
+            ]
+          },
+          "lastCheckedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastSuccessAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastFailureAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastErrorCategory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "timeout",
+              "http_5xx",
+              "http_4xx",
+              "invalid_response",
+              "provider_unavailable",
+              "circuit_breaker_open",
+              "request_failed",
+              null
+            ]
+          },
+          "lastHttpStatusCode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 100,
+            "maximum": 599
+          },
+          "successCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failureCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": true
+      },
       "FirebaseRemoteConfigDependency": {
         "type": "object",
         "description": "Safe runtime metadata for Firebase Remote Config server-side template loader without returning remote parameter values or secrets.",
@@ -10477,6 +11642,7 @@
           "enabled",
           "configured",
           "ready",
+          "templatePublished",
           "status",
           "source",
           "templateVersion",
@@ -10497,7 +11663,11 @@
           },
           "ready": {
             "type": "boolean",
-            "description": "True only after a successful, fresh server template load; false if uninitialized, disabled, misconfigured, failed, or stale."
+            "description": "True only after a successful, fresh server template load; false if uninitialized, disabled, misconfigured, failed, or stale. `enabled` and `configured` being true does NOT imply readiness."
+          },
+          "templatePublished": {
+            "type": "boolean",
+            "description": "True only when the `firebase-server` namespace template has been fetched successfully at least once. Distinguishes 'wired up' (enabled + configured) from 'actually serving remote values' (issue #598)."
           },
           "status": {
             "type": "string",
@@ -10546,9 +11716,19 @@
               "unsupported_sdk",
               "load_failed",
               "stale",
+              "template_not_published",
+              "permission_denied",
+              "unauthenticated",
+              "failed_precondition",
+              "internal_error",
+              "aborted",
+              "resource_exhausted",
+              "invalid_argument",
+              "invalid_value",
+              "unknown_error",
               null
             ],
-            "description": "Sanitized error category if the last load failed or values are stale (timeout, credentials, unsupported_sdk, load_failed, stale), or null."
+            "description": "Sanitized error category if the last load failed, returned values are stale, or a successful load produced values that failed schema validation (`invalid_value`), or null. `template_not_published` means the `firebase-server` namespace has no template yet and must be published (see the deploy:firebase-remote-config:server workflow); it is distinct from a transient `load_failed`."
           },
           "consecutiveFailures": {
             "type": "integer",
@@ -10574,12 +11754,26 @@
           "configured": {
             "type": "array",
             "description": "Channel names the operator configured, regardless of runtime readiness.",
-            "items": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] }
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
           },
           "unconfigured": {
             "type": "array",
             "description": "Channel names the operator never configured (missing credentials, webhook URL, or chat id).",
-            "items": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] }
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
           }
         },
         "additionalProperties": false
@@ -10597,16 +11791,37 @@
         ],
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean", "description": "True when at least one chat id is authorized." },
+          "enabled": {
+            "type": "boolean",
+            "description": "True when at least one chat id is authorized."
+          },
           "allowlistSource": {
             "type": "string",
-            "enum": ["TELEGRAM_ALLOWED_CHAT_IDS", "TELEGRAM_CHAT_ID"],
+            "enum": [
+              "TELEGRAM_ALLOWED_CHAT_IDS",
+              "TELEGRAM_CHAT_ID"
+            ],
             "description": "Which variable supplied the allowlist; falls back to TELEGRAM_CHAT_ID when the explicit list is unset."
           },
-          "allowlistSize": { "type": "integer", "minimum": 0 },
-          "deniedSinceStart": { "type": "integer", "minimum": 0, "description": "Lifetime count of denied commands that produced a log line; cooldown-suppressed repeats are not counted." },
-          "trackedDeniedSenders": { "type": "integer", "minimum": 0, "description": "Chat ids currently held in the bounded log-cooldown cache." },
-          "deniedSenderCacheLimit": { "type": "integer", "minimum": 1, "description": "Maximum entries retained in the cooldown cache; oldest entries are evicted first." }
+          "allowlistSize": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deniedSinceStart": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Lifetime count of denied commands that produced a log line; cooldown-suppressed repeats are not counted."
+          },
+          "trackedDeniedSenders": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Chat ids currently held in the bounded log-cooldown cache."
+          },
+          "deniedSenderCacheLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum entries retained in the cooldown cache; oldest entries are evicted first."
+          }
         }
       },
       "NotificationRedriveDependency": {
@@ -11448,6 +12663,271 @@
           "processingTimeMs": {
             "type": "integer"
           }
+        }
+      },
+      "JobExecutionQueueDependency": {
+        "type": "object",
+        "description": "Async job execution queue readiness plus durable backlog depth. Reports bounded broker counts and non-terminal durable queued rows so an operator can tell a ready-but-undrained queue apart from a healthy one. No Redis URL, broker credential, or chat destination is ever exposed.",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "local",
+              "render-worker",
+              "firestore-poller"
+            ],
+            "description": "Active job execution mode."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether a broker-backed queue is enabled for this process."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether the queue transport is configured."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "Whether the queue can currently accept work."
+          },
+          "status": {
+            "type": "string",
+            "description": "Coarse queue state (for example ready, degraded, disabled)."
+          },
+          "queueName": {
+            "type": "string",
+            "description": "BullMQ queue name. Never contains credentials."
+          },
+          "enqueued": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Process-local enqueue counter."
+          },
+          "claimed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Process-local claim counter."
+          },
+          "completed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Process-local completion counter."
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Process-local failure counter."
+          },
+          "lastErrorCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sanitized last queue error code, or null. Never contains credentials."
+          },
+          "lastEnqueuedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this process last enqueued a job, or null."
+          },
+          "waitingCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Broker jobs waiting to be processed."
+          },
+          "delayedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Broker jobs in a delayed state."
+          },
+          "failedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Broker jobs in a failed state."
+          },
+          "activeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Broker jobs currently being processed."
+          },
+          "durableQueuedCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Non-terminal durable jobs in a queued state. Reported as a lower bound when the bounded probe truncates or rotates its scan, and null when the last sweep could not observe durable state."
+          },
+          "durableProbeSucceeded": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the last sweep actually observed durable state. False means the durable depth is unknown rather than zero, so an unreadable backlog is not read as a drained one. Null before the first probe."
+          },
+          "durableQueuedTruncated": {
+            "type": "boolean",
+            "description": "True when the bounded durable scan reached its page cap, meaning durableQueuedCount is a lower bound and additional queued jobs may exist."
+          },
+          "durableScanRotated": {
+            "type": "boolean",
+            "description": "True when the durable scan resumed from a rotation cursor, so it covered only part of the collection and durableQueuedCount and oldestQueuedAgeMs are lower bounds."
+          },
+          "durableCycleComplete": {
+            "type": "boolean",
+            "description": "True when this sweep resumed from a cursor left by an earlier capped sweep and then reached the end of the collection, so the closing sweep and the windows it tiled with cover the whole collection. Recovery additionally requires every window in that cycle to be below the alert threshold, re-evaluated at the closing sweep's own clock."
+          },
+          "oldestQueuedAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Age in milliseconds of the oldest queued job, or null when the backlog is empty or the probe failed."
+          },
+          "backlogMonitorEnabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether ENABLE_JOB_BACKLOG_MONITOR permits backlog probing. Null before the monitor reports. False means depth is not being observed."
+          },
+          "backlogMonitorRunning": {
+            "type": "boolean",
+            "description": "Whether this process has an active backlog probe timer."
+          },
+          "backlogAlert": {
+            "type": "object",
+            "description": "Operator paging state for the durable backlog. A failed probe never clears this latch, so a transient storage error cannot emit a false all-clear.",
+            "properties": {
+              "active": {
+                "type": "boolean",
+                "description": "Whether a backlog alert is currently latched."
+              },
+              "thresholdMs": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Configured oldest-queued-age threshold in milliseconds."
+              },
+              "pagedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "description": "When the current alert was last paged, or null."
+              },
+              "lastRecoveryAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "description": "When the last all-clear was paged, or null."
+              }
+            }
+          }
+        }
+      },
+      "ReadinessDependencyStatus": {
+        "type": "object",
+        "description": "Per-dependency status block. Disabled dependencies are reported as `skipped: true`; failing dependencies include a sanitized `error` string and the per-dep latency.",
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "skipped": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "backend": {
+            "type": "string"
+          },
+          "latencyMs": {
+            "type": "number"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "ReadinessReport": {
+        "type": "object",
+        "description": "Structured dependency validation report returned by `/ready` and `/healthcheck?depth=readiness`. Disabled features are reported as `skipped: true` and do not count toward the overall `ready` verdict. No environment variable changes are required to enable the probe.",
+        "required": [
+          "ready",
+          "checkedAt",
+          "latencyMs",
+          "dependencies"
+        ],
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "description": "True when every considered (non-skipped) dependency reports `ready: true`."
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "latencyMs": {
+            "type": "number",
+            "description": "Total wall-clock time spent running all probes in parallel."
+          },
+          "dependencies": {
+            "type": "object",
+            "required": [
+              "firestore",
+              "gemini",
+              "tradingViewMcp",
+              "binance",
+              "telegram"
+            ],
+            "properties": {
+              "firestore": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              },
+              "gemini": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              },
+              "tradingViewMcp": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              },
+              "binance": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              },
+              "telegram": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              }
+            }
+          },
+          "status": {
+            "type": "string",
+            "description": "Bootstrap status. Only present on the `/ready?depth=dependencies` variant."
+          },
+          "components": {
+            "type": "object",
+            "description": "Per-component bootstrap state. Only present on the `/ready?depth=dependencies` variant."
+          },
+          "bootstrapReady": {
+            "type": "boolean",
+            "description": "Bootstrap gate verdict, ANDed with the dependency verdict. Only present on the `/ready?depth=dependencies` variant."
+          }
+        }
+      }
+    },
+    "headers": {
+      "XRequestIdResponseHeader": {
+        "description": "Unique identifier assigned to the request. Echoes the inbound `x-request-id` when supplied. Set as a response header on every non-exempt route; handlers that build their own response body may also echo it as `requestId`. Absent on routes exempted through `REQUEST_DEADLINE_EXEMPT_PATHS`.",
+        "schema": {
+          "type": "string"
         }
       }
     }

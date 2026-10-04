@@ -170,6 +170,15 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 - `JOB_QUEUE_CLAIM_LEASE_MS` - Firestore claim lease and heartbeat interval (default: `60000` ms)
 - `JOB_QUEUE_CONNECT_TIMEOUT_MS` - Redis connection timeout (default: `5000` ms)
 
+#### Async Job Backlog Monitoring
+
+- `ENABLE_JOB_BACKLOG_MONITOR` - Enable the periodic background async job backlog depth probe and operator paging (`true` or `false`, default: `true`)
+- `JOB_BACKLOG_ALERT_THRESHOLD_MS` - Age in milliseconds at which the oldest queued job triggers an operator page (`1000`-`86400000`, default: `900000` / 15m, Remote Config supported)
+- `JOB_BACKLOG_PAGE_COOLDOWN_MS` - Cooldown in milliseconds between repeated backlog pages so a sustained stall cannot storm the operator (`1000`-`86400000`, default: `900000` / 15m, Remote Config supported)
+- `JOB_BACKLOG_PROBE_INTERVAL_MS` - Interval in milliseconds between background backlog depth probes (`1000`-`3600000`, default: `60000` / 1m, Remote Config supported)
+
+The probe reads BullMQ waiting/delayed/failed/active counts plus a bounded Firestore count of non-terminal `queued` durable rows, and surfaces them on `GET /api/status` and `GET /api/capabilities` under `dependencies.jobExecutionQueue` (`waitingCount`, `delayedCount`, `failedCount`, `activeCount`, `durableQueuedCount`, `oldestQueuedAgeMs`, `backlogAlert`). No Redis URL or credential is exposed. When `oldestQueuedAgeMs` crosses the threshold, the monitor pages `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` once per cooldown window and sends a single all-clear when the backlog drains. All probing and paging fails open: a probe or notification failure never blocks job intake or alert delivery.
+
 `render.yaml` provisions a starter Background Worker and Key Value store. The web service remains on `JOB_EXECUTION_MODE=local` by default; switching it to `render-worker` requires the worker, Redis, and Firestore credentials to be available. For deployments without Redis, `JOB_EXECUTION_MODE=firestore-poller` allows dedicated workers to poll Firestore directly without extra infrastructure. The API returns `503 JOB_QUEUE_UNAVAILABLE` instead of accepting a job when durable storage or queue requirements are not met. If enqueue acknowledgement and deterministic Redis reconciliation both fail in `render-worker` mode, it returns `503 JOB_QUEUE_ACCEPTANCE_UNKNOWN` with the durably stored `jobId`; the worker periodically re-enqueues durable queued rows, retries retained failed BullMQ jobs, and recovers expired claims after Redis recovers.
 
 Unfiltered signal outcome summaries include `shadowModeMetrics` with full coverage buckets and per-window hit-rate metrics. The `exchangeBreakdown` and `providerBreakdown` maps carry `received`, `eligible`, `evaluated`, `pending`, and `unavailable` counts. Target and stop hit rates use barrier-eligible denominators: evaluated outcomes without a configured target or stop (`null`/non-positive) are excluded from the corresponding rate instead of counted as misses, and `windows[*].targetEligibleWindows` / `windows[*].stopEligibleWindows` expose each window's eligible denominator. Filtered alert summaries/exports omit shadow-mode metrics because that service has no matching source/enrichment filters. Equity signals only enter the eligible/evaluated population when the opt-in Twelve Data provider is configured; otherwise they remain explicitly unavailable.
@@ -203,6 +212,27 @@ The allow-list contains news thresholds, timeouts, concurrency, quota retries, T
 
 The service loads once at startup and refreshes on the bounded cadence; it does not fetch Remote Config per alert. `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS` remains environment-only because the worker timer is created during process startup and is not a request-time setting. Disabled, unavailable, timed-out, stale, malformed, or invalid values fail open to the current environment/default behavior. The server-side Remote Config API is currently a Firebase Preview feature, so monitor its quota and error rate before enabling it in production. `firebase-admin` is upgraded to the Node 24-compatible 12.x line (`^12.1.0`, lockfile resolution `12.7.0`).
 
+##### Publishing the server template (`firebase-server` namespace)
+
+Enabling `ENABLE_FIREBASE_REMOTE_CONFIG` alone does **not** activate remote tuning: the flag and valid credentials only mean the loader is *wired up*. A template must also be published to the **`firebase-server`** namespace, which is the exact namespace `admin.remoteConfig().initServerTemplate()` reads.
+
+- Publish with `pnpm run deploy:firebase-remote-config:server` locally, or by running the **Deploy Firebase Remote Config Server Template** workflow (`.github/workflows/firebase-remote-config.yml`, `workflow_dispatch`) against `master`. The workflow uses the `FIREBASE_SERVICE_ACCOUNT_JSON` Actions secret and the `FIREBASE_PROJECT_ID` repository variable (default `cabros-bot`).
+- **Namespace contract**: the publish target is `projects/{projectId}/namespaces/firebase-server/serverRemoteConfig`. Publishing to the default/client namespace (`/remoteConfig`) is a silent no-op for this loader — the template appears in the console while the service keeps reading an empty server template forever.
+- The `firebase-server` namespace does not exist until the first publish, so the script bootstraps it with `If-Match: *`. A pre-publish `getServerTemplate()` that returns `remote-config/not-found` is the expected bootstrap state, not a failure.
+
+Verify activation through `GET /api/status` → `dependencies.firebaseRemoteConfig`:
+
+| Field | Meaning |
+| --- | --- |
+| `enabled` / `configured` | The loader is wired up. Neither implies remote values are being served. |
+| `templatePublished` | `true` only after at least one successful template load. `false` means nothing was ever fetched. |
+| `ready` | `true` only after a **successful and still-fresh** load. |
+| `source` | `remote` only when live remote overrides are in use; `environment`/`default` mean they are not. |
+| `lastErrorCategory` | `template_not_published` means the `firebase-server` namespace has no template and must be published. This is distinct from a transient `load_failed`; `permission_denied` and `unauthenticated` mean the service account lacks the server-template permission. |
+| `consecutiveFailures` | Consecutive failed loads; reset to `0` on success. |
+
+In the inert state (`templatePublished: false, ready: false, source: "environment", lastErrorCategory: "template_not_published"`) every value comes from the environment fallback — intended fail-open behavior; the alert path is never blocked.
+
 #### Firestore Emulator Integration Tests
 
 The optional `pnpm test:firebase` command runs the Firestore-backed integration suite against the local Firebase emulator using the `demo-cabros` project ID. It covers the Admin SDK storage paths, idempotency transactions, async jobs, scanner presets, signal outcomes, and deny-by-default client rules.
@@ -220,6 +250,7 @@ pnpm test:firebase
 #### Server Configuration
 
 - `PORT` - HTTP server port (default: `80`)
+- HTTP server timeouts are fixed at 10 seconds for headers, 120 seconds for complete requests, and 30 seconds for keep-alive connections to bound slow-client resource use. Node only enforces `headersTimeout` when its periodic connection checker fires, so `connectionsCheckingInterval` is also fixed at 5 seconds (Node's 30s default would defer rejection to ~30s). Because the sweep is aligned to server start rather than to each connection, a slow-header client is rejected within a worst case of **15 seconds** (`headersTimeout + connectionsCheckingInterval`), not exactly 10 (see `src/lib/serverTimeouts.js`).
 - `SHUTDOWN_TIMEOUT_MS` - Maximum graceful shutdown budget in milliseconds (default: `10000`, hard cap: `30000`); after the deadline active jobs receive a bounded finalization attempt and are persisted as retryable cancellations, remaining HTTP connections are force-closed, and the process exits
 - `RENDER` - Render.com deployment flag (used internally)
 - `IS_PULL_REQUEST` - Render preview environment flag (disables bot in PRs)
@@ -229,7 +260,7 @@ pnpm test:firebase
 - `RAILWAY_GIT_COMMIT_SHA` / `RAILWAY_GIT_REPO_OWNER` / `RAILWAY_GIT_REPO_NAME` - Railway GitHub deployment metadata used for release and deployment notifications
 - `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel/Railway, and `false` for direct deployments)
 - `REQUEST_TIMEOUT_MS` - Hard request-deadline ceiling for mounted `/api` routes in milliseconds (default: `30000`, valid range: `1000`-`120000`; invalid values fall back to the default). The timeout returns `408 REQUEST_TIMEOUT` with a request ID.
-- `REQUEST_DEADLINE_EXEMPT_PATHS` - Optional comma-separated paths excluded from the deadline; `/healthcheck`, `/ready`, `/openapi.json`, and `/docs` are always exempt. Per-endpoint deadlines such as `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` and `MARKET_SCANNER_TIMEOUT_MS` remain the operation-specific soft budgets inside the global ceiling.
+- `REQUEST_DEADLINE_EXEMPT_PATHS` - Optional comma-separated paths excluded from the deadline; `/healthcheck`, `/ready`, `/openapi.json`, and `/docs` (including its static asset subtree) are always exempt. This is the single exemption vocabulary shared with structured request logging, so a path added here is silenced in both the deadline and the request log — see [Structured Request Logging](monitoring.md#structured-request-logging-gh-665). Per-endpoint deadlines such as `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` and `MARKET_SCANNER_TIMEOUT_MS` remain the operation-specific soft budgets inside the global ceiling.
 - `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes; invalid values use the default)
 - `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default). Webhook and MCP ingest endpoints (`/api/webhook/alert`, `/api/webhook/message`, `/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, `/api/webhook/volume-confirmation`, `/api/webhook/symbol-analysis`, and `/api/news-monitor`) use an isolated finite bucket of 1,000 requests per window so TradingView and scanner bursts do not consume the ordinary client bucket; API-key validation still applies. Public documentation and admin console assets (`/openapi.json`, `/docs`, `/admin`, and associated static assets) are mounted before the rate limiter and are exempt from the global rate limit budget, mirroring `/healthcheck` and `/ready`.
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production). The logger automatically masks sensitive plain-object keys, bare-scalar secrets preceded by sensitive labels, URL query secrets, embedded JSON strings, Authorization/Bearer credentials, Telegram bot tokens, Discord webhook tokens, OpenAI keys, and dynamically registered request-scoped secrets via `registerSecretValue` / `clearSecretValue`.

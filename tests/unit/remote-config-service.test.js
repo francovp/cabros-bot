@@ -705,5 +705,189 @@ describe('RemoteConfigService', () => {
 			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_MAINTENANCE_MODE: false });
 			expect(listener).toHaveBeenCalledTimes(1);
 		});
+
+		// Regression coverage for issue #598: the server template has never been
+		// published, so initServerTemplate().load() rejects with
+		// remote-config/not-found on every refresh. The status must stay
+		// explicitly unready, must not claim the feature is live, and must
+		// surface a distinguishable category instead of the opaque
+		// `load_failed` that hid an unpublishable template.
+		describe('unpublished server template (issue #598)', () => {
+			function notFoundError() {
+				const error = new Error('Server template not found');
+				error.code = 'remote-config/not-found';
+				error.hasCode = (code) => `remote-config/${code}` === error.code;
+				return error;
+			}
+
+			it('classifies remote-config/not-found as template_not_published instead of load_failed', async () => {
+				process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+				mockTemplate({}, { load: jest.fn().mockRejectedValue(notFoundError()) });
+				alertStorageService.getFirestore.mockReturnValue({});
+
+				await expect(remoteConfigService.loadNow()).resolves.toBe(false);
+
+				expect(remoteConfigService.getStatus().lastErrorCategory).toBe('template_not_published');
+			});
+
+			it('classifies hasCode-based not-found errors without a .code string', async () => {
+				process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+				const error = new Error('Server template not found');
+				error.code = 'remote-config/not-found';
+				error.hasCode = (code) => code === 'not-found';
+				mockTemplate({}, { load: jest.fn().mockRejectedValue(error) });
+				alertStorageService.getFirestore.mockReturnValue({});
+
+				await expect(remoteConfigService.loadNow()).resolves.toBe(false);
+
+				expect(remoteConfigService.getStatus().lastErrorCategory).toBe('template_not_published');
+			});
+
+			it('keeps remote-config/permission-denied and /unauthenticated distinct from not-found', async () => {
+				process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+				mockTemplate({}, { load: jest.fn().mockRejectedValue(Object.assign(new Error('denied'), {
+					code: 'remote-config/permission-denied',
+				})) });
+				alertStorageService.getFirestore.mockReturnValue({});
+
+				await expect(remoteConfigService.loadNow()).resolves.toBe(false);
+
+				expect(remoteConfigService.getStatus().lastErrorCategory).toBe('permission_denied');
+			});
+
+			it('never reports ready or status ready while the template has never loaded', async () => {
+				process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+				mockTemplate({}, { load: jest.fn().mockRejectedValue(notFoundError()) });
+				alertStorageService.getFirestore.mockReturnValue({});
+
+				await remoteConfigService.loadNow();
+				const status = remoteConfigService.getStatus();
+
+				expect(status.enabled).toBe(true);
+				expect(status.configured).toBe(true);
+				expect(status.ready).toBe(false);
+				expect(status.status).toBe('degraded');
+				expect(status.lastSuccessfulLoad).toBeNull();
+				expect(status.source).toBe('environment');
+				expect(status.consecutiveFailures).toBe(1);
+				// Distinguishes "wired up" from "actually serving remote values".
+				expect(status.templatePublished).toBe(false);
+			});
+
+			it('marks templatePublished true only after a real load', () => {
+				process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+				alertStorageService.getFirestore.mockReturnValue({});
+
+				expect(remoteConfigService.getStatus().templatePublished).toBe(false);
+
+				remoteConfigService._setRemoteOverridesForTesting({ NEWS_ALERT_THRESHOLD: 0.9 });
+				expect(remoteConfigService.getStatus().templatePublished).toBe(true);
+			});
+
+			it('does not report ready for a stale template even though it once loaded', () => {
+				process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+				process.env.FIREBASE_REMOTE_CONFIG_MAX_AGE_MS = '10';
+				alertStorageService.getFirestore.mockReturnValue({});
+
+				remoteConfigService._setRemoteOverridesForTesting(
+					{ NEWS_ALERT_THRESHOLD: 0.9 },
+					Date.now() - 5000,
+				);
+
+				const status = remoteConfigService.getStatus();
+				expect(status.ready).toBe(false);
+				expect(status.status).toBe('degraded');
+				expect(status.lastErrorCategory).toBe('stale');
+				expect(status.templatePublished).toBe(true);
+			});
+
+			it('stays fail-open: environment defaults are used and no startup is blocked', async () => {
+				process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+				mockTemplate({}, { load: jest.fn().mockRejectedValue(notFoundError()) });
+				alertStorageService.getFirestore.mockReturnValue({});
+
+				await expect(remoteConfigService.start()).resolves.toBe(true);
+
+				const config = remoteConfigService.getRuntimeConfig();
+				expect(config.NEWS_ALERT_THRESHOLD).toBe(0.7);
+				expect(config.TRADINGVIEW_MCP_TIMEOUT_MS).toBe(12000);
+				remoteConfigService.stop();
+			});
+
+			it('reports ready only after an actual successful load following an unpublished failure', async () => {
+				process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+				const load = jest.fn()
+					.mockRejectedValueOnce(notFoundError())
+					.mockResolvedValueOnce(undefined);
+				mockTemplate({ NEWS_ALERT_THRESHOLD: 0.9 }, { load, versionNumber: '3' });
+				alertStorageService.getFirestore.mockReturnValue({});
+
+				await expect(remoteConfigService.loadNow()).resolves.toBe(false);
+				expect(remoteConfigService.getStatus().ready).toBe(false);
+				expect(remoteConfigService.getStatus().lastErrorCategory).toBe('template_not_published');
+
+				await expect(remoteConfigService.loadNow()).resolves.toBe(true);
+				const status = remoteConfigService.getStatus();
+				expect(status.ready).toBe(true);
+				expect(status.status).toBe('ready');
+				expect(status.source).toBe('remote');
+				expect(status.lastErrorCategory).toBeNull();
+				expect(status.consecutiveFailures).toBe(0);
+			});
+
+			it('recovers from template_not_published to load_failed only on a genuinely different failure', async () => {
+				process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+				const load = jest.fn()
+					.mockRejectedValueOnce(notFoundError())
+					.mockRejectedValueOnce(new Error('socket hang up'));
+				mockTemplate({}, { load });
+				alertStorageService.getFirestore.mockReturnValue({});
+
+				await remoteConfigService.loadNow();
+				expect(remoteConfigService.getStatus().lastErrorCategory).toBe('template_not_published');
+
+				await remoteConfigService.loadNow();
+				const status = remoteConfigService.getStatus();
+				expect(status.lastErrorCategory).toBe('load_failed');
+				expect(status.consecutiveFailures).toBe(2);
+				expect(status.ready).toBe(false);
+			});
+		});
+	});
+
+	it('supports user price alert parameters via Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({
+			ENABLE_USER_PRICE_ALERTS: true,
+			USER_PRICE_ALERT_EVALUATION_INTERVAL_MS: 30000,
+			USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT: 25,
+			USER_PRICE_ALERT_MAX_PER_CHAT: 15,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.ENABLE_USER_PRICE_ALERTS).toBe(true);
+		expect(config.USER_PRICE_ALERT_EVALUATION_INTERVAL_MS).toBe(30000);
+		expect(config.USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT).toBe(25);
+		expect(config.USER_PRICE_ALERT_MAX_PER_CHAT).toBe(15);
+	});
+
+	it('supports JOB_BACKLOG_* parameters via Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({
+			JOB_BACKLOG_ALERT_THRESHOLD_MS: 600000,
+			JOB_BACKLOG_PAGE_COOLDOWN_MS: 1200000,
+			JOB_BACKLOG_PROBE_INTERVAL_MS: 30000,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.JOB_BACKLOG_ALERT_THRESHOLD_MS).toBe(600000);
+		expect(config.JOB_BACKLOG_PAGE_COOLDOWN_MS).toBe(1200000);
+		expect(config.JOB_BACKLOG_PROBE_INTERVAL_MS).toBe(30000);
 	});
 });

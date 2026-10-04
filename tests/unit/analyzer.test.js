@@ -589,4 +589,78 @@ describe('Analyzer - Grounding Calibration Surface', () => {
 		expect(alert.calibration).toBeUndefined();
 		expect(alert.confidence_reason).toBeDefined();
 	});
+
+	// Issue #1230: surface the source-quality tier so an operator can audit WHY
+	// an alert cleared NEWS_ALERT_THRESHOLD.
+	it('should surface the source quality tier for operator auditing', () => {
+		const analysis = baseAnalysis({
+			calibration: {
+				grounding_used: true,
+				actual_source_count: 3,
+				actual_quality_tiers: { high: 0, medium: 0, low: 3, unknown: 0 },
+				qualityTier: 'low',
+				qualityPenalty: 0.85,
+			},
+		});
+		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
+
+		expect(alert.calibration.qualityTier).toBe('low');
+		expect(alert.calibration.qualityPenalty).toBe(0.85);
+		expect(alert.sourceQualityTier).toBe('low');
+
+		const message = analyzer.formatAlertMessage('BTCUSDT', analysis, null);
+		expect(message).toMatch(/Source Quality:/);
+		expect(message).toMatch(/low/);
+	});
+
+	it('renders the source quality audit line into the DELIVERED payload (enriched.extraText)', () => {
+		// formatAlertMessage() has no production call site — production renders
+		// alert.enriched through formatEnriched(), which prints extraText. Without
+		// this the operator never sees why an alert cleared the threshold.
+		const analysis = baseAnalysis({
+			calibration: {
+				grounding_used: true,
+				actual_source_count: 3,
+				actual_quality_tiers: { high: 0, medium: 0, low: 3, unknown: 0 },
+				qualityTier: 'low',
+				qualityPenalty: 0.85,
+			},
+		});
+		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
+
+		expect(alert.enriched.extraText).toMatch(/Source Quality: low \(x0\\\.85\)/);
+	});
+
+	it('escapes the source quality audit line for MarkdownV2 delivery', () => {
+		// extraText is emitted verbatim by MarkdownV2Formatter, so `(` `)` and `.`
+		// are reserved characters — unescaped they make Telegram reject the whole
+		// message, not just the appended line.
+		const analysis = baseAnalysis({
+			calibration: {
+				grounding_used: true,
+				actual_source_count: 3,
+				actual_quality_tiers: { high: 0, medium: 0, low: 3, unknown: 0 },
+				qualityTier: 'low',
+				qualityPenalty: 0.85,
+			},
+		});
+		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
+		const line = alert.enriched.extraText.split('\n').find(l => l.includes('Source Quality'));
+
+		// The interpolated VALUE is escaped (`0.85` -> `0\.85`); the surrounding
+		// `_italic_` and `(x…)` parentheses are authored markup, not data.
+		expect(line).toBe('_Source Quality: low (x0\\.85)_');
+	});
+
+	it('should omit the quality tier line when no tier was resolved', () => {
+		const analysis = baseAnalysis({
+			calibration: { grounding_used: true, actual_source_count: 0, qualityTier: null, qualityPenalty: 1 },
+		});
+		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
+
+		expect(alert.sourceQualityTier).toBeUndefined();
+
+		const message = analyzer.formatAlertMessage('BTCUSDT', analysis, null);
+		expect(message).not.toContain('Source Quality:');
+	});
 });
