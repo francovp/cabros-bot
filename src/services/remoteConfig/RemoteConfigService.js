@@ -369,7 +369,18 @@ function getRemoteValue(config, key, schema) {
 		if (typeof value.asString !== 'function') {
 			return { present: false };
 		}
-		const parsed = parseValue(value.asString(), schema, undefined);
+		const raw = value.asString();
+		// A blank remote value carries no tuning, so it is an absent override
+		// rather than a malformed one. The published template ships
+		// `SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES` as an intentional empty string,
+		// which is that parameter's own schema default; reporting it as invalid
+		// would pin `lastErrorCategory: "invalid_value"` on every load and mask a
+		// genuinely malformed value. `buildDefaultConfig()` already supplies the
+		// default for any parameter the template leaves blank.
+		if (typeof raw === 'string' && raw.trim() === '') {
+			return { present: false };
+		}
+		const parsed = parseValue(raw, schema, undefined);
 		return parsed === undefined ? { present: true, valid: false } : { present: true, value: parsed };
 	} catch (error) {
 		return { present: true, valid: false };

@@ -15,6 +15,7 @@ const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
+const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -806,6 +807,99 @@ describe('Status endpoints', () => {
 			global.fetch = originalFetch;
 			equityMarketDataService._resetReadinessForTesting();
 		}
+	});
+
+	// Issue #1111 enables durable idempotency in production. Every Firestore error in
+	// `IdempotencyStorageService` is swallowed into in-memory fallback, so before the
+	// proven-readiness change a deployment that could not reach Firestore reported the
+	// same `ready` verdict as a working one and the enablement was unverifiable.
+	it('reports idempotency storage as unverified while credentials only look valid', async () => {
+		process.env.ENABLE_FIRESTORE_IDEMPOTENCY = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
+		idempotencyStorageService._resetForTesting();
+
+		try {
+			const response = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.firestoreIdempotency).toBe(true);
+			expect(response.body.dependencies.idempotencyStorage).toEqual({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'unverified',
+				mode: 'durable',
+				backend: 'firestore',
+				failOpen: true,
+				readiness: 'unverified',
+				collection: 'idempotency_keys',
+				operationsAttempted: 0,
+				operationsSucceeded: 0,
+				operationsFailed: 0,
+				consecutiveFailures: 0,
+				lastSuccessAt: null,
+				lastFailureAt: null,
+				lastErrorReason: null,
+			});
+		} finally {
+			idempotencyStorageService._resetForTesting();
+		}
+	});
+
+	it('surfaces a durable idempotency failure through /api/status as degraded', async () => {
+		process.env.ENABLE_FIRESTORE_IDEMPOTENCY = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
+		idempotencyStorageService._resetForTesting();
+
+		try {
+			// The firebase-admin double has no `runTransaction`, so the reservation
+			// rejects exactly the way an unreachable Firestore would.
+			await idempotencyStorageService.reserveEntry('status-key-replay', 'hash', 300000);
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.idempotencyStorage).toMatchObject({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'degraded',
+				readiness: 'degraded',
+				failOpen: true,
+				operationsAttempted: 1,
+				operationsFailed: 1,
+				consecutiveFailures: 1,
+				lastErrorReason: 'firestore_unavailable',
+			});
+		} finally {
+			idempotencyStorageService._resetForTesting();
+		}
+	});
+
+	it('reports idempotency storage as ephemeral when the gate is off', async () => {
+		delete process.env.ENABLE_FIRESTORE_IDEMPOTENCY;
+		delete process.env.ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE;
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		idempotencyStorageService._resetForTesting();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firestoreIdempotency).toBe(false);
+		expect(response.body.dependencies.idempotencyStorage).toMatchObject({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
 	});
 
 	it('reports Firestore job storage as disabled by default', async () => {

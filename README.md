@@ -274,6 +274,23 @@ Paging is deduplicated by cooldown and only latches after confirmed delivery; a 
 
 `readiness`, the `requestsAttempted`/`requestsSucceeded`/`requestsFailed`/`consecutiveFailures` counters, and the `lastSuccessAt`/`lastFailureAt` timestamps expose the observed window, which is process-local and resets on restart — so `unverified` is the normal state right after every deploy. There is deliberately no startup probe: it would burn provider quota on every restart purely to manufacture a green checkmark. See [Environment Configuration](docs/environment-configuration.md#verifying-equity-market-data-is-actually-working).
 
+### Durable Webhook Idempotency
+`ENABLE_FIRESTORE_IDEMPOTENCY=true` is enabled in production, so TradingView replays are suppressed across process restarts and replicas instead of re-delivering alerts and re-paying MCP/Gemini budget. Reservations and cached responses live in the server-side-only `idempotency_keys` collection under a SHA-256 hash of the key — the raw caller key is never stored or logged — and each reservation carries a `claimToken` so a late completion cannot overwrite a newer owner's record.
+
+Setting the variable is **necessary but not sufficient**, because this layer is fail-open: every Firestore error is swallowed and the request continues with in-memory idempotency. A deployment that cannot reach Firestore therefore behaves exactly as it did before the flag existed, so `dependencies.idempotencyStorage` reports observed work rather than credential shape:
+
+| `status` | Meaning |
+| :--- | :--- |
+| `disabled` | `ENABLE_FIRESTORE_IDEMPOTENCY` is not `true`. |
+| `misconfigured` | Enabled, but Firestore credentials are absent or unreadable. |
+| `unverified` | Configured, but no durable operation has succeeded yet. Not a failure — and not health. It is the normal state right after every deploy. |
+| `ready` | A durable reservation has actually been persisted. |
+| `degraded` | Falling back to in-memory idempotency. `lastErrorReason` names the class. |
+
+`mode`/`backend` keep reporting configured *intent* (`durable`/`firestore`) so the target stays visible while broken, and `failOpen` is always `true`: a degraded deployment still delivers alerts, it just cannot suppress a duplicate after a restart or across replicas. `consecutiveFailures` clears on the next success, so a transient outage self-heals without a restart. Counters are process-local and a status read never counts as a durable attempt.
+
+`expiresAt` on each document is only honoured once Firestore's TTL policy exists, so run `bash ops/configure-operational-collection-retention.sh` once per Firebase project; until then the collection grows without bound. Rollback is `false` plus a redeploy — no code change. See [Environment Configuration](docs/environment-configuration.md#verifying-idempotency-storage-is-actually-durable).
+
 ### Market Scanner MCP Fast-Fail Gate
 `POST /api/webhook/market-scanner-alert` checks the process-local TradingView MCP status before running its sequential scans. If the status is `degraded` with `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, it skips every scan and returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with each scan as `status: "skipped"`. The endpoint returns `502` in two shapes: `TRADINGVIEW_MCP_UNAVAILABLE` (skipped, nothing attempted) and `ALL_SCANS_FAILED` (attempted, all failed). The gate keys on the breaker's time-based state so that after `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses the next request is allowed through as a recovery probe — a transient outage self-heals without a restart. See [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert).
 

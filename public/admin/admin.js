@@ -601,6 +601,9 @@ let sseReconnectTimer = null;
 let sseReconnectAttempts = 0;
 const sseListeners = new Set();
 const MAX_SSE_RECONNECT_DELAY_MS = 30000;
+// Bounds the SSE handshake only, not the stream body. An event stream is
+// legitimately idle between events, so this must not become a read deadline.
+const SSE_HANDSHAKE_TIMEOUT_MS = 15000;
 
 const getRetryAfterMs = (response) => {
 	const rawValue = response?.headers?.get?.('retry-after');
@@ -736,12 +739,20 @@ const setupSseStream = async () => {
 	const controller = new AbortController();
 	sseAbortController = controller;
 
+	let handshakeTimer = setTimeout(() => controller.abort(), SSE_HANDSHAKE_TIMEOUT_MS);
+	const clearHandshakeTimer = () => {
+		if (handshakeTimer === null) return;
+		clearTimeout(handshakeTimer);
+		handshakeTimer = null;
+	};
+
 	try {
 		const response = await fetch(streamUrl, {
 			method: 'GET',
 			headers,
 			signal: controller.signal,
 		});
+		clearHandshakeTimer();
 
 		if (!response.ok) {
 			const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
@@ -815,7 +826,14 @@ const setupSseStream = async () => {
 			}
 		}
 	} catch (error) {
-		if (controller.signal.aborted) {
+		clearHandshakeTimer();
+		// `aborted` alone cannot separate an intentional teardown from our own
+		// handshake deadline. disconnectSse() and a newer setupSseStream() both
+		// clear sseAbortController, so ownership is the discriminator: while we
+		// still own it, our own abort is a stall that must reconnect. Collapsing
+		// this to `if (aborted) return` turns the handshake deadline above into a
+		// permanently dead stream.
+		if (controller.signal.aborted && sseAbortController !== controller) {
 			return;
 		}
 		console.error('SSE stream error:', error);
