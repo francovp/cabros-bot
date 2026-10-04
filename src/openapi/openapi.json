@@ -13005,23 +13005,29 @@
           },
           "falsePositiveProxy": {
             "type": "object",
+            "description": "False-positive proxy measured over DELIVERED alerts only. Analyses that never sent an alert are excluded, because the proxy tracks delivered-alert outcomes rather than raw analysis scores. A delivered alert is counted as a false positive when no subsequent delivered alert for the same symbol arrived within 24h.",
             "required": [
-              "totalHighConfidenceAlerts",
-              "falsePositiveAlerts",
-              "falsePositiveRatePercent"
+              "threshold",
+              "totalEvaluated",
+              "noFollowupCount",
+              "ratePercent"
             ],
             "properties": {
-              "totalHighConfidenceAlerts": {
-                "type": "integer"
+              "threshold": {
+                "type": "number",
+                "description": "Confidence threshold applied to delivered alerts. Defaults to 0.7."
               },
-              "falsePositiveAlerts": {
-                "type": "integer"
+              "totalEvaluated": {
+                "type": "integer",
+                "description": "Number of delivered alerts at or above the threshold with a non-`none` event category that were evaluated for a follow-up."
               },
-              "falsePositiveRatePercent": {
-                "type": "number"
+              "noFollowupCount": {
+                "type": "integer",
+                "description": "Evaluated delivered alerts that had no subsequent delivered alert for the same symbol within 24h."
               },
-              "description": {
-                "type": "string"
+              "ratePercent": {
+                "type": "number",
+                "description": "`noFollowupCount / totalEvaluated` as a percentage, rounded to two decimals. Zero when nothing was evaluated."
               }
             }
           },
