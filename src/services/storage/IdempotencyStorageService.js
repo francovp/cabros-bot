@@ -68,6 +68,7 @@ function getFirestore() {
 			console.warn(
 				`[IdempotencyStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`
 			);
+			db = null;
 			return null;
 		}
 

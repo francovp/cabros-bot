@@ -1542,6 +1542,7 @@ function getFirestore() {
 			console.warn(
 				`[AlertStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`
 			);
+			db = null;
 			return null;
 		}
 

@@ -124,6 +124,7 @@ class ChatPreferenceService {
 				console.warn(
 					`[ChatPreferenceService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`
 				);
+				this._db = null;
 				return null;
 			}
 

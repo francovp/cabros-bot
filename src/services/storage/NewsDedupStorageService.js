@@ -107,6 +107,7 @@ function getFirestore() {
 			console.warn(
 				`[NewsDedupStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`
 			);
+			db = null;
 			return null;
 		}
 
