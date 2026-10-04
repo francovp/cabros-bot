@@ -65,6 +65,11 @@ services:
   - key: ENABLE_FIRESTORE_SCANNER_PRESETS
     value: true
     previewValue: false
+  # Server-side Remote Config. Enabled on every compute service that starts the
+  # loader so they cannot evaluate different effective configs. Previews stay off.
+  - key: ENABLE_FIREBASE_REMOTE_CONFIG
+    value: true
+    previewValue: false
   - key: REDIS_URL
     fromService:
       name: cabros-crypto-bot-telegram-queue
@@ -83,6 +88,9 @@ services:
   envVars:
   - key: JOB_EXECUTION_MODE
     value: render-worker
+  - key: ENABLE_FIREBASE_REMOTE_CONFIG
+    value: true
+    previewValue: false
   - key: ENABLE_NOTIFICATION_REDRIVE
     fromService:
       name: cabros-crypto-bot-telegram-iac
@@ -387,7 +395,8 @@ services:
   - key: ENABLE_SIGNAL_OUTCOME_TRACKING
     sync: false
   - key: ENABLE_FIREBASE_REMOTE_CONFIG
-    sync: false
+    value: true
+    previewValue: false
   - key: ENABLE_SENTRY
     sync: false
   - key: SENTRY_DSN
