@@ -2210,6 +2210,49 @@ Only then does the endpoint return `502 TRADINGVIEW_MCP_UNAVAILABLE` with every 
 
 **Coverage:** `tests/unit/market-scanner.test.js` covers fail-fast while open, the half-open recovery probe, unknown-breaker fail-open, and the non-outage category; `tests/integration/market-scanner-endpoint.test.js` covers the endpoint-level 502 skip, the transient-failure self-recovery round trip, the `ALL_SCANS_FAILED` attempt path, and the two-variant OpenAPI 502 contract. No new environment variable, Remote Config key, or feature flag was added.
 
+## Persisted Gemini-Grounding Entry Price (GH-599 / Issue #599)
+
+Alert-enrichment now persists an optional numeric `current_price` (with optional `price_currency`) sourced from grounded snippets, propagates it through `AlertStorageService`, and uses it both as a deterministic entry-price fallback for `SignalOutcomeService.recordSignal()` and as the basis for a deterministic `risk_reward_ratio` recompute. The goal: 37/37 enriched alerts that previously had `risk_reward_ratio: 0%` and landed in `missing_entry_price` for BINANCE now become gradeable whenever grounding returns a price.
+
+**Core Components**:
+- `src/services/prompts/defaults/alert-enrichment.user.txt` — adds `current_price` (number, optional, `>0`) and `price_currency` (ISO-4217 string, optional) fields plus an "Entry price context" rubric that explicitly tells the model to omit the field when no snippet is available (omission is the preferred and correct output).
+- `src/services/prompts/PromptService.js` — `REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS` is unchanged; the new fields are intentionally **excluded** from `inspectAlertEnrichmentRiskSchema()` so legacy Langfuse prompts that pre-date the change MUST NOT be flagged as drift. The prompt text now ships the markers, so newly synced prompts will start including them.
+- `src/services/grounding/gemini.js` — `parseOptionalCurrentPrice()` accepts finite positive numbers and clean numeric strings (`"3240.51"` → `3240.51`); rejects `0`, negatives, `NaN`, `Infinity`, booleans, and unparseable strings. `parseOptionalPriceCurrency()` normalizes the 2-5 letter ISO-4217-style code and drops invalid values without dropping the underlying `current_price`. `price_currency` is dropped entirely when `current_price` is absent.
+- `src/services/storage/AlertStorageService.js`:
+  - `sanitizeEnrichmentData()` now also strips invalid `current_price` / `price_currency` (same drop rules as the parser) so a stray bad value can never reach Firestore.
+  - `applyDeterministicRiskReward(enrichmentData, side)` computes `(target-entry)/(entry-invalidation)` for `BUY` and `(entry-target)/(invalidation-entry)` for `SELL` when entry/invalidation/target are all finite positives and `risk_reward_ratio` is missing or invalid. Positive numeric and non-empty string model ratios are preserved; the new `risk_reward_ratio_source: "computed"` field only appears when the service filled the value in.
+  - `formatAlertDocument()` and `formatExportRecord()` surface top-level `currentPrice` / `priceCurrency` mirrors so list/detail/export reads can address the field without diving into `enrichmentData`.
+  - `saveAlert()` accepts a `side` parameter (parsed from `parseTradingViewSignal`) so deterministic R:R math knows the trade direction.
+- `src/controllers/webhooks/handlers/alert/grounding.js` — propagates Gemini entry price and currency through both adapters, preserving the MCP price when present and using `priceSource: 'gemini-grounding'` otherwise. Price provenance is independent of risk-level provenance.
+- `src/controllers/webhooks/handlers/alert/alert.js` — passes parsed signal `side` to persistence for deterministic R:R. The existing outcome price resolver consumes the adapter's explicit price provenance and preserves Binance/Twelve Data derived-quote attribution.
+- `src/services/storage/SignalOutcomeService.js` — unchanged at the type level; the existing `entryPriceSource` field and `entryPriceSourceBreakdown` aggregation automatically pick up the new `'gemini-grounding'` bucket as soon as `recordSignal()` propagates it.
+
+**Configuration**:
+- No new environment variable. No Remote Config key. No new endpoint. No new feature flag. The change is purely additive and gated by the existing `ENABLE_GEMINI_GROUNDING` flag; when grounding is disabled the new fields never appear.
+
+**Where to look first when extending or debugging**:
+- `src/services/prompts/defaults/alert-enrichment.user.txt` for the schema/rubric.
+- `src/services/grounding/gemini.js` (`parseOptionalCurrentPrice`, `parseOptionalPriceCurrency`) for parser validation.
+- `src/services/storage/AlertStorageService.js` (`sanitizeEnrichmentData`, `applyDeterministicRiskReward`, `formatAlertDocument`, `formatExportRecord`) for the persistence contract.
+- `src/controllers/webhooks/handlers/alert/grounding.js` for price propagation; `alert.js` for outcome provenance and persistence-side wiring.
+- `tests/unit/gemini-client.test.js` (`current_price and price_currency parsing (GH-599)`), `tests/unit/alert-storage-service.test.js` (`current_price, price_currency, and deterministic R:R (GH-599)` + `current_price read fields (GH-599)`), `tests/unit/alert-webhook-request-id.test.js` (`GH-599 Gemini-grounding entry-price fallback for recordSignal`), and `tests/unit/prompt-service.test.js` (`GH-599: does NOT mark alert-enrichment prompt as drift when only current_price / price_currency are missing`) for coverage.
+
+**Coverage**:
+- `pnpm test -- tests/unit/gemini-client.test.js`
+- `pnpm test -- tests/unit/alert-storage-service.test.js`
+- `pnpm test -- tests/unit/alert-handler.test.js`
+- `pnpm test -- tests/unit/alert-webhook-request-id.test.js`
+- `pnpm test -- tests/unit/prompt-service.test.js`
+
+**Validation plan (per issue #599)**:
+1. Unit tests cover: prompt schema fixture with `current_price`; parser rejection of `0`, negative, `NaN`, strings; persistence propagation (`sanitizeEnrichmentData`, `applyDeterministicRiskReward`, read-API mirrors); signal-outcome fallback path; deterministic R:R math; `entryPriceSourceBreakdown` shape (verified by reading `entryPriceSource` field as a generic string and observing the new `'gemini-grounding'` bucket at the contract level — the existing `SignalOutcomeService` aggregation is unchanged).
+2. Production observation window (post-deploy): compare `riskMetadataCoverage.risk_reward_ratio.percentage` before/after (baseline 0%) and `eligibilityBreakdown.missing_entry_price` (baseline 10/38).
+
+**Rollout check**:
+- Pre-deploy: ensure the deployed Langfuse `alert-enrichment` prompt is synced to a version that includes the `current_price` and `price_currency` markers. Legacy prompts continue to work — `parseOptionalCurrentPrice` returns `undefined` when the field is absent and the rest of the pipeline is unchanged.
+- Post-deploy: confirm `GET /api/status` reports `geminiGrounding` ready, then observe `enrichment.riskMetadataCoverage.risk_reward_ratio.percentage` rise from baseline 0% toward the projected ceiling, and `entryPriceSourceBreakdown.gemini-grounding` start appearing in `GET /api/outcomes/summary`.
+
+No endpoint, environment variable, or Remote Config key was added. OpenAPI, Postman examples, list/detail mirrors, and JSONL/CSV exports include the additive price fields.
 ## Stored-Alert Read Health and the `__name__` Descending Composite Index (Issue #1285)
 
 `GET /api/alerts`, `/api/alerts/summary`, `/api/alerts/export`, and replay all answer `503 STORAGE_UNAVAILABLE` when Firestore rejects the **query**, even though every write succeeds. This is the second time this repository has been bitten by the same Firestore indexing rule (the first was `userPriceAlertService`'s sweep), so the rule is now recorded here as a hard constraint.
@@ -2222,3 +2265,4 @@ Only then does the endpoint return `502 TRADINGVIEW_MCP_UNAVAILABLE` with every 
 - **Coverage**: `tests/unit/firestore-error-categories.test.js`, the read-metric block in `tests/unit/firestore-write-metrics-service.test.js`, the `#1285` blocks in `tests/unit/alert-storage-service.test.js` / `tests/integration/status-endpoint.test.js` / `tests/integration/healthcheck-readiness.test.js` / `tests/integration/alerts-endpoint.test.js`, and the two new Postman assertions in `tests/unit/postman-collection.test.js`. Docs: `docs/troubleshooting.md` runbook, `docs/api-reference.md` read-health section, `docs/alerts.md` index requirement.
 
 No environment variable or Remote Config key was added. `FirestoreWriteMetricsService.js` remains space-indented to match its own existing style (75 pre-existing `indent` findings, lint is `continue-on-error`); it was not reformatted to keep this diff readable.
+
