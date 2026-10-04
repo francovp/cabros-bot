@@ -5608,14 +5608,18 @@ const renderPlayground = (contract, view) => {
 			if (el) pathValues[name] = el.value;
 		});
 
+		let submittedBody = form.elements.body ? form.elements.body.value : undefined;
+		const submittedQuery = form.elements.query ? form.elements.query.value : undefined;
+
 		let query;
 		let body;
 		try {
 			if (form.elements.query) {
-				query = window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query'));
+				query = window.CabrosAdminRequest.validateQuery(parseJson(submittedQuery, 'Query'));
 			}
 			if (form.elements.body) {
 				body = getRequestBody(definition, form);
+				submittedBody = form.elements.body.value;
 			}
 		} catch (error) {
 			showError(output, error.message);
@@ -5624,8 +5628,8 @@ const renderPlayground = (contract, view) => {
 				path: definition.path,
 				resolvedPath,
 				pathValues,
-				query: form.elements.query ? form.elements.query.value : undefined,
-				body: form.elements.body ? form.elements.body.value : undefined,
+				query: submittedQuery,
+				body: submittedBody,
 				status: 'Validation error',
 				ok: false,
 			});
@@ -5667,8 +5671,8 @@ const renderPlayground = (contract, view) => {
 				path: definition.path,
 				resolvedPath,
 				pathValues,
-				query: form.elements.query ? form.elements.query.value : undefined,
-				body: form.elements.body ? form.elements.body.value : undefined,
+				query: submittedQuery,
+				body: submittedBody,
 				status: responseStatus ? `HTTP ${responseStatus}` : '200 OK',
 				ok: responseOk !== false,
 			});
@@ -5697,8 +5701,8 @@ const renderPlayground = (contract, view) => {
 				path: definition.path,
 				resolvedPath,
 				pathValues,
-				query: form.elements.query ? form.elements.query.value : undefined,
-				body: form.elements.body ? form.elements.body.value : undefined,
+				query: submittedQuery,
+				body: submittedBody,
 				status: responseStatus ? `HTTP ${responseStatus}` : 'Network error',
 				ok: false,
 			});
