@@ -141,6 +141,92 @@ PRODUCTION_EXPECTED_COMMIT=$(git rev-parse origin/master) \
 ops/production-smoke-probe.sh
 ```
 
+### External Uptime Monitoring
+
+Every check described above lives *inside* the deployment, which is exactly the blind spot that cost six days of alert flow: on 2026-08-31 the hosting platform removed the production deployment platform-side (trial expiry) and `https://cabros-bot-production.up.railway.app` started answering `404 {"status":"error","code":404,"message":"Application not found"}`. Nothing outside the platform noticed, because there was no longer anything running to notice — including the in-repo smoke probe, which had been failing for an unrelated reason (issue #971) and whose failure looked identical to a routine misconfiguration.
+
+The external monitor closes that gap. It runs from GitHub Actions, so it survives the deployment being removed, and it is **secretless**: `/healthcheck` is mounted in `app.js` before `validateApiKey` and before the rate limiter, so no API key is needed and the monitor cannot degrade into a silent no-op when a secret was never provisioned.
+
+| Layer | Where it runs | Credentials | Detects |
+| --- | --- | --- | --- |
+| External uptime monitor (`external-uptime-monitor.yml`) | GitHub Actions, every 5 min | none | Platform-side removal, DNS/TLS failure, process death, ingress that answers 200 without the app |
+| Uptime watchdog (`external-uptime-watchdog.yml`) | GitHub Actions, every 15 min offset | `GITHUB_TOKEN` | The monitor itself stopped running (no failed run ⇒ no GitHub notification) |
+| Production smoke probe (`production-smoke-probe.yml`) | GitHub Actions, every 15 min | `WEBHOOK_API_KEY` | Stale deploy, authenticated routes, dependency readiness |
+| Optional third-party SaaS monitor | Provider's own infrastructure | provider account | Hosting provider *and* GitHub Actions both unavailable |
+
+The probe script is `ops/external-uptime-monitor.js`. Run it locally with `pnpm run uptime:monitor` or `node ops/external-uptime-monitor.js --no-page`; it prints one line of JSON and exits non-zero when the target is down.
+
+Repository variables (all optional — each has a working default, so an unset variable degrades to the default rather than to a broken monitor):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `UPTIME_MONITOR_BASE_URL` | `https://cabros-bot-production.up.railway.app` | Production origin to probe. Update this on any platform or host change. |
+| `UPTIME_MONITOR_CHECK_DOCS` | `true` | Also probe the public `/docs` contract. |
+| `UPTIME_MONITOR_TIMEOUT_MS` | `10000` | Per-request deadline in milliseconds. |
+| `UPTIME_WATCHDOG_MAX_AGE_MINUTES` | `30` | How stale the last monitor run may be before the watchdog fails. |
+
+Repository secrets (both optional; paging is disabled until both are set):
+
+| Secret | Purpose |
+| --- | --- |
+| `TELEGRAM_BOT_TOKEN` | Admin-notifications bot token used for the transition page. |
+| `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` | Admin chat that receives the page. |
+
+Exit codes:
+
+| Code | Reason | Meaning |
+| --- | --- | --- |
+| `0` | `UP` | Healthcheck answered 200 with the application payload. |
+| `3` | `HEALTHCHECK_UNREACHABLE` | DNS/connection failure, timeout, or non-200. This is the platform-removal case. |
+| `4` | `HEALTHCHECK_BODY_UNEXPECTED` | HTTP 200 that is not this application — a proxy placeholder or CDN interstitial never reads as up. |
+| `5` | `DOCS_UNREACHABLE` | `/healthcheck` is fine but the public `/docs` contract is not, which catches a half-migrated ingress. |
+| `6` | `BASE_URL_INVALID` | Missing, non-HTTP(S), or credential-bearing target. |
+| `7` | `MONITOR_INTERNAL_ERROR` | The monitor itself broke. Reported as DOWN — a broken monitor must never report UP. |
+
+Alert routing:
+
+1. **Primary, zero configuration.** A non-zero exit fails the scheduled job, and GitHub notifies repository admins of failed workflows. This works with no secrets at all.
+2. **Optional Telegram page.** The script pages the admin chat once when the verdict transitions into DOWN, and once when it recovers. It deliberately does *not* re-page on every interval of a continuing outage — GitHub already reports each failing run, and a page every five minutes for six days is how an alert channel gets ignored. The previous run's conclusion is read from the Actions API and passed as `--previous-conclusion`; a manual `workflow_dispatch` run does not page unless `force_page` is set, so an operator test run cannot page the real chat.
+3. Paging is fail-open: a Telegram failure is recorded as `paging_failed` and never changes the probe verdict or exit code.
+
+**Verifying detection.** With the monitor merged, a failing probe is observable immediately:
+
+```bash
+node ops/external-uptime-monitor.js --base-url=https://<deliberately-wrong-host> --no-page; echo "exit=$?"
+# {"status":"down","reason":"HEALTHCHECK_UNREACHABLE","exitCode":3,...}
+# exit=3
+```
+
+To confirm the paging path end to end, run the workflow manually against a known-bad host with `force_page: true`, then confirm the page arrived and that the next scheduled run (previous conclusion now `failure`) does **not** page again.
+
+#### Registering a third-party uptime service
+
+The in-repo monitor covers a GitHub Actions outage; a hosted uptime service additionally covers a GitHub outage, and is the only layer that does not depend on this repository. Register the following with any provider that offers an HTTP uptime check (Better Stack, UptimeRobot, StatusCake, or equivalent — check the provider's current interval and quota before choosing):
+
+| Field | Value |
+| --- | --- |
+| Monitor URL | `https://<production-host>/healthcheck` |
+| Method | `GET` |
+| Interval | 5 minutes (or the shortest the plan allows) |
+| Expect | status `200` |
+| Optional second monitor | `https://<production-host>/docs`, expect `200` |
+| Alert contacts | Operator email, plus a Telegram alert via the provider's Telegram integration or an outbound webhook to a private relay |
+| Paused on deploy? | **No.** A deploy pause must not silence the check; confirm the new deployment on the in-repo monitor instead. |
+
+Never give a third-party monitor the production `WEBHOOK_API_KEY`. The liveness probe needs no credential, and a provider holding that key would turn a monitoring account compromise into full alert-injection capability.
+
+#### Platform migration re-activation checklist
+
+A migration is exactly how the last monitor was lost: the new host was never registered, and the old monitor's target was deleted with the old deployment. Run this list every time the hosting platform, the production host, or the plan changes:
+
+- [ ] Set `UPTIME_MONITOR_BASE_URL` to the new production origin (repository variable).
+- [ ] Confirm `node ops/external-uptime-monitor.js --base-url=<new origin> --no-page` exits `0`.
+- [ ] Update the third-party provider's monitor URL (if one is registered), and re-confirm it reports UP.
+- [ ] Update `PRODUCTION_BASE_URL`, the smoke probe's dependency list, `docs/environment-configuration.md`, `README.md`, and `AGENTS.md` to the new origin.
+- [ ] Trigger `workflow_dispatch` on `external-uptime-monitor.yml` and confirm the run is green.
+- [ ] Watch one `external-uptime-watchdog.yml` run pass, so the monitor is known to be scheduled.
+- [ ] Confirm the previous platform's domain is intentionally released, not merely abandoned.
+
 ### Logs
 
 The application logs to stdout:
