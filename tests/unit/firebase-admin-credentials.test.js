@@ -58,6 +58,7 @@ const EXTERNAL_ACCOUNT = JSON.stringify({
 });
 
 const FAKE_ADMIN = {
+	apps: [],
 	credential: {
 		cert: jest.fn((sa) => ({ __cert__: true, sa })),
 		applicationDefault: jest.fn(() => ({ __applicationDefault__: true })),
@@ -491,6 +492,188 @@ describe('firebaseAdminCredentials helper', () => {
 			});
 			const options = helper.buildFirebaseAppOptions();
 			expect(options).toEqual({});
+		});
+	});
+
+	// Issue #1128 regression: a single `null` for both "nothing configured" and
+	// "configured but invalid" let storage callers initialize the app with `{}`,
+	// entering the SDK default-auth path instead of failing fast to in-memory.
+	describe('resolveFirebaseAdminCredentials status distinction (issue #1128)', () => {
+		function unconfiguredEnv() {
+			return {
+				FIREBASE_SERVICE_ACCOUNT_JSON: '',
+				GOOGLE_APPLICATION_CREDENTIALS: '',
+				HOME: '/nonexistent-home',
+				APPDATA: '',
+			};
+		}
+
+		it('reports UNCONFIGURED (not INVALID) when no credential source is set', () => {
+			const helper = loadHelper(unconfiguredEnv());
+			const resolved = helper.resolveFirebaseAdminCredentials();
+
+			expect(resolved.status).toBe(helper.CREDENTIAL_STATUS.UNCONFIGURED);
+			expect(resolved.credentials).toBeNull();
+			expect(resolved.appOptions).toEqual({});
+			expect(resolved.error).toBeNull();
+		});
+
+		it('reports UNCONFIGURED for a FIREBASE_PROJECT_ID-only deployment (ADC path)', () => {
+			const helper = loadHelper({ ...unconfiguredEnv(), FIREBASE_PROJECT_ID: 'adc-project' });
+			const resolved = helper.resolveFirebaseAdminCredentials();
+
+			expect(resolved.status).toBe(helper.CREDENTIAL_STATUS.CONFIGURED);
+			expect(resolved.credentials.source).toBe('adc');
+			expect(resolved.appOptions).toEqual({ projectId: 'adc-project' });
+		});
+
+		it('reports CONFIGURED with app options when inline JSON is valid', () => {
+			const helper = loadHelper({ FIREBASE_SERVICE_ACCOUNT_JSON: VALID_INLINE });
+			const resolved = helper.resolveFirebaseAdminCredentials();
+
+			expect(resolved.status).toBe(helper.CREDENTIAL_STATUS.CONFIGURED);
+			expect(resolved.credentials.source).toBe('inline_json');
+			expect(resolved.appOptions.credential).toEqual(expect.anything());
+			expect(resolved.appOptions.projectId).toBe('demo-project');
+			expect(resolved.error).toBeNull();
+		});
+
+		it('reports INVALID with a null appOptions for malformed inline JSON', () => {
+			const helper = loadHelper({ FIREBASE_SERVICE_ACCOUNT_JSON: MALFORMED_JSON });
+			const resolved = helper.resolveFirebaseAdminCredentials();
+
+			expect(resolved.status).toBe(helper.CREDENTIAL_STATUS.INVALID);
+			expect(resolved.credentials).toBeNull();
+			expect(resolved.appOptions).toBeNull();
+			expect(resolved.error).toBeInstanceOf(helper.FirebaseAdminCredentialsError);
+			expect(resolved.error.code).toBe('FIREBASE_CREDENTIALS_INVALID_JSON');
+		});
+
+		it('reports INVALID for an unreadable GOOGLE_APPLICATION_CREDENTIALS path', () => {
+			const helper = loadHelper({
+				...unconfiguredEnv(),
+				GOOGLE_APPLICATION_CREDENTIALS: '/tmp/__definitely-not-a-real-credentials-file__.json',
+			});
+			const resolved = helper.resolveFirebaseAdminCredentials();
+
+			expect(resolved.status).toBe(helper.CREDENTIAL_STATUS.INVALID);
+			expect(resolved.appOptions).toBeNull();
+			expect(resolved.error.code).toBe('FIREBASE_CREDENTIALS_UNREADABLE_FILE');
+		});
+
+		it('reports INVALID for a credential file containing malformed JSON', () => {
+			const tmpFile = path.join(__dirname, '__fixtures__', 'mock-sa-broken.json');
+			fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
+			fs.writeFileSync(tmpFile, MALFORMED_JSON);
+
+			const helper = loadHelper({
+				...unconfiguredEnv(),
+				GOOGLE_APPLICATION_CREDENTIALS: tmpFile,
+			});
+			const resolved = helper.resolveFirebaseAdminCredentials();
+			fs.unlinkSync(tmpFile);
+
+			expect(resolved.status).toBe(helper.CREDENTIAL_STATUS.INVALID);
+			expect(resolved.appOptions).toBeNull();
+			expect(resolved.error).toBeInstanceOf(helper.FirebaseAdminCredentialsError);
+		});
+
+		it('reports INVALID when the SDK rejects a malformed credential document', () => {
+			// The real `credential.cert()` throws for a service-account document missing
+			// required fields; the shared manual mock never throws, so simulate it here.
+			const rejectingAdmin = {
+				credential: {
+					cert: jest.fn(() => {
+						throw new Error('Service account object must contain a string "private_key" property.');
+					}),
+				},
+				initializeApp: jest.fn(),
+			};
+			const helper = loadHelper({ FIREBASE_SERVICE_ACCOUNT_JSON: MISSING_PRIVATE_KEY });
+			helper._setAdminForTests(rejectingAdmin);
+
+			const resolved = helper.resolveFirebaseAdminCredentials();
+
+			expect(resolved.status).toBe(helper.CREDENTIAL_STATUS.INVALID);
+			expect(resolved.appOptions).toBeNull();
+			expect(resolved.error.code).toBe('FIREBASE_CREDENTIALS_LOAD_FAILED');
+			expect(resolved.error.cause).toBeInstanceOf(Error);
+		});
+
+		it('does not fall back to the ADC path when FIREBASE_PROJECT_ID accompanies invalid JSON', () => {
+			const helper = loadHelper({
+				FIREBASE_SERVICE_ACCOUNT_JSON: MALFORMED_JSON,
+				FIREBASE_PROJECT_ID: 'override-project',
+			});
+			const resolved = helper.resolveFirebaseAdminCredentials();
+
+			expect(resolved.status).toBe(helper.CREDENTIAL_STATUS.INVALID);
+			expect(resolved.appOptions).toBeNull();
+		});
+
+		it('reports INVALID for an inline non-service-account document', () => {
+			// Issue #1127 refuses ADC auth for an inline authorized_user document; #1128
+		// requires that refusal to also skip initialization instead of reaching initializeApp({}).
+			const helper = loadHelper({ FIREBASE_SERVICE_ACCOUNT_JSON: AUTHORIZED_USER });
+			const resolved = helper.resolveFirebaseAdminCredentials();
+
+			expect(resolved.status).toBe(helper.CREDENTIAL_STATUS.INVALID);
+			expect(resolved.appOptions).toBeNull();
+			expect(resolved.error.code).toBe('FIREBASE_CREDENTIALS_UNSUPPORTED_TYPE');
+			expect(FAKE_ADMIN.credential.applicationDefault).not.toHaveBeenCalled();
+		});
+	});
+
+	describe('initializeFirebaseAdminApp (issue #1128)', () => {
+		function unconfiguredEnv() {
+			return {
+				FIREBASE_SERVICE_ACCOUNT_JSON: '',
+				GOOGLE_APPLICATION_CREDENTIALS: '',
+				HOME: '/nonexistent-home',
+				APPDATA: '',
+			};
+		}
+
+		it('does NOT call initializeApp when configured credentials fail validation', () => {
+			const helper = loadHelper({ FIREBASE_SERVICE_ACCOUNT_JSON: MALFORMED_JSON });
+
+			const result = helper.initializeFirebaseAdminApp({ admin: FAKE_ADMIN });
+
+			expect(result.ok).toBe(false);
+			expect(result.status).toBe(helper.CREDENTIAL_STATUS.INVALID);
+			expect(FAKE_ADMIN.initializeApp).not.toHaveBeenCalled();
+		});
+
+		it('still calls initializeApp({}) for an unconfigured ADC deployment', () => {
+			const helper = loadHelper(unconfiguredEnv());
+
+			const result = helper.initializeFirebaseAdminApp({ admin: FAKE_ADMIN });
+
+			expect(result.ok).toBe(true);
+			expect(result.status).toBe(helper.CREDENTIAL_STATUS.UNCONFIGURED);
+			expect(FAKE_ADMIN.initializeApp).toHaveBeenCalledWith({});
+		});
+
+		it('passes the resolved credential to initializeApp when configuration is valid', () => {
+			const helper = loadHelper({ FIREBASE_SERVICE_ACCOUNT_JSON: VALID_INLINE });
+
+			const result = helper.initializeFirebaseAdminApp({ admin: FAKE_ADMIN });
+
+			expect(result.ok).toBe(true);
+			expect(FAKE_ADMIN.initializeApp).toHaveBeenCalledWith(
+				expect.objectContaining({ credential: expect.anything(), projectId: 'demo-project' })
+			);
+		});
+
+		it('reuses an already-initialized app and does not re-resolve credentials', () => {
+			const helper = loadHelper({ FIREBASE_SERVICE_ACCOUNT_JSON: MALFORMED_JSON });
+			const admin = { apps: [{ name: '[DEFAULT]' }], initializeApp: jest.fn() };
+
+			const result = helper.initializeFirebaseAdminApp({ admin });
+
+			expect(result.ok).toBe(true);
+			expect(result.status).toBe(helper.CREDENTIAL_STATUS.ALREADY_INITIALIZED);
+			expect(admin.initializeApp).not.toHaveBeenCalled();
 		});
 	});
 });

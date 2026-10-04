@@ -35,6 +35,11 @@
  * malformed — `loadFirebaseAdminCredentialsOrNull()` swallows the throw and
  * returns null for the common storage call sites that already fail-open.
  *
+ * That single `null` is ambiguous, so storage callers use
+ * `resolveFirebaseAdminCredentials()` (or the `initializeFirebaseAdminApp()`
+ * wrapper) which separates UNCONFIGURED from INVALID instead of initializing
+ * the app with `{}` after a failed credential check (issue #1128).
+ *
  * @module services/storage/firebaseAdminCredentials
  */
 
@@ -46,6 +51,13 @@ const REQUIRED_FIELDS = ['project_id', 'private_key', 'client_email'];
 const SERVICE_ACCOUNT_TYPE = 'service_account';
 const CREDENTIAL_TYPE_CERT = 'cert';
 const CREDENTIAL_TYPE_APPLICATION_DEFAULT = 'application_default';
+
+const CREDENTIAL_STATUS = Object.freeze({
+	CONFIGURED: 'configured',
+	UNCONFIGURED: 'unconfigured',
+	INVALID: 'invalid',
+	ALREADY_INITIALIZED: 'already_initialized',
+});
 
 class FirebaseAdminCredentialsError extends Error {
 	constructor(message, options = {}) {
@@ -357,21 +369,83 @@ function loadFirebaseAdminCredentials(options = {}) {
  * behavior (return null on credential errors).
  */
 function loadFirebaseAdminCredentialsOrNull(options = {}) {
+	const resolved = resolveFirebaseAdminCredentials(options);
+	if (resolved.status === CREDENTIAL_STATUS.INVALID) {
+		warnOnce(`${resolved.error.message} — Firebase admin credentials unavailable; continuing with in-memory fallback.`);
+	}
+	return resolved.credentials;
+}
+
+/**
+ * Resolve credentials while preserving the difference between "no credential
+ * source configured" (ADC default-auth is still legitimate) and "a configured
+ * source failed validation" (nothing to fall back to). `appOptions` is `null`
+ * only for INVALID, so a caller cannot initialize the app with `{}` after a
+ * configured credential failure.
+ *
+ * @param {Object} [options]
+ * @param {NodeJS.ProcessEnv} [options.env]
+ * @returns {{status: string, credentials: Object|null, appOptions: Object|null, error: Error|null}}
+ */
+function resolveFirebaseAdminCredentials(options = {}) {
 	try {
-		const result = loadFirebaseAdminCredentials(options);
-		return result;
-	} catch (error) {
-		if (error instanceof FirebaseAdminCredentialsError) {
-			warnOnce(`${error.message} — Firebase admin credentials unavailable; continuing with in-memory fallback.`);
-		} else {
-			warnOnce(`Unexpected error loading Firebase admin credentials: ${error.message}`);
+		const credentials = loadFirebaseAdminCredentials(options);
+		if (!credentials) {
+			return {
+				status: CREDENTIAL_STATUS.UNCONFIGURED,
+				credentials: null,
+				appOptions: {},
+				error: null,
+			};
 		}
-		return null;
+		return {
+			status: CREDENTIAL_STATUS.CONFIGURED,
+			credentials,
+			appOptions: toFirebaseAppOptions(credentials),
+			error: null,
+		};
+	} catch (error) {
+		const wrapped = error instanceof FirebaseAdminCredentialsError
+			? error
+			: new FirebaseAdminCredentialsError(
+				'Unexpected error loading Firebase admin credentials: ' + error.message,
+				{ code: 'FIREBASE_CREDENTIALS_LOAD_FAILED', cause: error }
+			);
+		return {
+			status: CREDENTIAL_STATUS.INVALID,
+			credentials: null,
+			appOptions: null,
+			error: wrapped,
+		};
 	}
 }
 
-function buildFirebaseAppOptions(options = {}) {
-	const loaded = options.loaded || loadFirebaseAdminCredentialsOrNull();
+/**
+ * Shared Firebase Admin bootstrap for storage callers. Leaves the SDK untouched
+ * and returns `ok: false` when credentials are configured but invalid, so the
+ * caller falls back to memory instead of paying for SDK default-auth discovery.
+ *
+ * @param {Object} [options]
+ * @param {Object} [options.admin] - firebase-admin module (defaults to the loaded one)
+ * @param {NodeJS.ProcessEnv} [options.env]
+ * @returns {{ok: boolean, status: string, error: Error|null}}
+ */
+function initializeFirebaseAdminApp(options = {}) {
+	const admin = options.admin || getAdminModule();
+	if (admin.apps.length) {
+		return { ok: true, status: CREDENTIAL_STATUS.ALREADY_INITIALIZED, error: null };
+	}
+
+	const resolved = resolveFirebaseAdminCredentials({ env: options.env });
+	if (!resolved.appOptions) {
+		return { ok: false, status: resolved.status, error: resolved.error };
+	}
+
+	admin.initializeApp(resolved.appOptions);
+	return { ok: true, status: resolved.status, error: null };
+}
+
+function toFirebaseAppOptions(loaded) {
 	const appOptions = {};
 	if (loaded && loaded.credential) {
 		appOptions.credential = loaded.credential;
@@ -382,10 +456,25 @@ function buildFirebaseAppOptions(options = {}) {
 	return appOptions;
 }
 
+/**
+ * @deprecated Returns `{}` for both UNCONFIGURED and INVALID — the ambiguity
+ * issue #1128 removes. Use initializeFirebaseAdminApp() or
+ * resolveFirebaseAdminCredentials() instead.
+ */
+function buildFirebaseAppOptions(options = {}) {
+	if (options.loaded) {
+		return toFirebaseAppOptions(options.loaded);
+	}
+	return resolveFirebaseAdminCredentials(options).appOptions || {};
+}
+
 module.exports = {
 	loadFirebaseAdminCredentials,
 	loadFirebaseAdminCredentialsOrNull,
+	resolveFirebaseAdminCredentials,
+	initializeFirebaseAdminApp,
 	buildFirebaseAppOptions,
+	CREDENTIAL_STATUS,
 	FirebaseAdminCredentialsError,
 	_resetWarningStateForTests: resetWarningStateForTests,
 	_setAdminForTests: setAdminForTests,

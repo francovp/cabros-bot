@@ -132,3 +132,28 @@ Symptom: `GET /api/alerts`, `/api/alerts/summary`, `/api/alerts/export`, and rep
 5. **Do not chase credentials for a `failed_precondition`.** If `firestoreWriteMetrics` shows writes succeeding, the credential is demonstrably valid; the rejection is per-query.
 
 > The provider's own message (which contains the project/database path and the index definition) is written to the log only and is never returned in a response body or a status payload. Grep the logs for `[AlertStorageService]` with the `category` to find the exact provider detail.
+
+### Configured Firebase Credentials Rejected at Startup
+
+Symptom: after a credential change, durable features (alert storage, idempotency, news dedup, chat preferences) silently serve from memory. Alerts still deliver and requests still succeed, but nothing is persisted and restarts lose state. One warning per affected service names the problem:
+
+```
+[AlertStorageService] Firebase credentials are configured but invalid (FIREBASE_CREDENTIALS_INVALID_JSON); skipping Firestore and using in-memory fallback.
+```
+
+This is deliberate fail-fast behavior (issue #1128). When a credential source **is** configured but fails validation, the service does not call `admin.initializeApp({})`. Initializing with empty options would drop the process into the Firebase SDK's default-auth discovery path, where the first read or write pays for authentication and network round-trips and then fails — instead of rejecting the misconfiguration at startup.
+
+| `code` | Meaning | Fix |
+| :--- | :--- | :--- |
+| `FIREBASE_CREDENTIALS_INVALID_JSON` | `FIREBASE_SERVICE_ACCOUNT_JSON` is not valid JSON | Re-export the service-account JSON; it must be a single-line JSON object |
+| `FIREBASE_CREDENTIALS_MISSING_FIELDS` | `project_id`, `private_key`, or `client_email` absent | Include all three fields (camelCase aliases are accepted) |
+| `FIREBASE_CREDENTIALS_INVALID_KEY` | `private_key` is not a valid PEM key | Check that the value kept its literal `\n` escapes |
+| `FIREBASE_CREDENTIALS_UNREADABLE_FILE` | `GOOGLE_APPLICATION_CREDENTIALS` is not a readable regular file | Verify the path exists inside the container and the process can read it |
+| `FIREBASE_CREDENTIALS_UNSUPPORTED_TYPE` | Inline `FIREBASE_SERVICE_ACCOUNT_JSON` holds an `authorized_user` / `external_account` document | Store the credentials in a file and point `GOOGLE_APPLICATION_CREDENTIALS` at it, or provide a service-account JSON inline |
+| `FIREBASE_CREDENTIALS_LOAD_FAILED` | The credential parsed but the SDK rejected the document | Usually a truncated or re-encoded key; re-download the service-account JSON |
+
+Distinguish this from an unconfigured deployment: with **no** credential source at all the behavior is unchanged and intentional — the app still calls `initializeApp({})` so Application Default Credentials (managed runtimes, the well-known `gcloud` file) keep working. The shared helper reports that case as `unconfigured`, not `invalid`.
+
+`isFirestoreConfigured()` in `src/services/storage/firestoreConfig.js` is the independent credential-*shape* check behind `dependencies.firestore.configured` on `/api/status`. A deployment can report `configured: true` and still fail here, because it validates shape rather than proving the SDK can use the document.
+
+No endpoint, environment variable, or Remote Config key changed with this behavior; it is a startup-time fail-fast guard on the existing fail-open paths.
