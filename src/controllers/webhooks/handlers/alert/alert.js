@@ -122,11 +122,9 @@ async function attachInlineKeyboardAfterPersistence({ manager, results, routing,
 
 async function processEnrichment(alert, options) {
 	const { tokenUsage, useTradingViewData, parentSpan, parsedSignal } = options;
-	// `postAlert` parses the same signal for repeat-suppression/persistence/outcome
-	// eligibility; this function only needs to know whether the text is a TradingView
-	// signal at all. Reuse that parse when it is supplied so enrichment and persistence
-	// agree on the trade direction used for deterministic risk/reward (GH-599); fall back
-	// to a local parse for any direct caller that has none.
+	// `postAlert` parses the same signal for repeat-suppression/persistence/outcome eligibility.
+	// Reuse that parse when supplied so enrichment and persistence agree on the trade direction
+	// used for deterministic risk/reward (GH-599); fall back to a local parse for direct callers.
 	const parsed = parsedSignal || parseTradingViewSignal(alert.text);
 	const hasTradingViewSignal = Boolean(parsed);
 	const runtimeConfig = getRuntimeConfig();

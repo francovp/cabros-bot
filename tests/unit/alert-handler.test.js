@@ -222,6 +222,10 @@ describe('Alert Handler', () => {
 		expect(result.risk_reward_ratio).toBeCloseTo(2, 4);
 		// The MCP price still wins as the emitted entry price.
 		expect(result.current_price).toBe(110);
+		// The internal selection key must never leak into the payload. This is the half of
+		// the design the case above exercises: the grounded entry (100) is carried under an
+		// internal name so the spread cannot overwrite the MCP-preferred price (110).
+		expect(result).not.toHaveProperty('riskLevelsEntryPrice');
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
@@ -271,6 +275,8 @@ describe('Alert Handler', () => {
 
 		expect(result.levelsSource).toBe('derived-quote');
 		expect(result.current_price).toBe(110);
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
 
 	it.each([

@@ -67,17 +67,13 @@ function pickSetupType(...values) {
 }
 
 // GH-599: a provider block counts as complete when it carries both directional levels and
-// a usable risk/reward ratio. `risk_reward_ratio` is deliberately NOT relaxed to "any two
-// of three fields": an MCP ATR block legitimately omits `current_price` (its levels come
-// from the analysis, not from a quoted entry), and relaxing the ratio here would make such
-// a block look incomplete and replace real ATR levels with a timeframe heuristic.
-//
-// What the ratio relaxation actually fixes is handled in `completeGroundedRiskMetadata`:
-// a GROUNDED block that has an entry price plus both levels but no ratio is completed
-// arithmetically instead of being discarded. See the call sites for the ordering.
+// a usable risk/reward ratio. The ratio requirement stays deliberately strict because an MCP
+// ATR block legitimately omits `current_price` (its levels come from the analysis, not from a
+// quoted entry), and relaxing it here would let a timeframe heuristic displace real ATR levels.
+// Repairing a grounded block that is missing only the ratio is `completeGroundedRiskMetadata`'s job.
 function hasCompleteRiskMetadata(value = {}) {
-return ['invalidation_level', 'target_level', 'risk_reward_ratio']
-	.every(field => isOptionalRiskValue(value[field]));
+	return ['invalidation_level', 'target_level', 'risk_reward_ratio']
+		.every(field => isOptionalRiskValue(value[field]));
 }
 
 // GH-599: complete a grounded block that has both levels and an entry price but is missing
@@ -89,13 +85,10 @@ return ['invalidation_level', 'target_level', 'risk_reward_ratio']
 // side of entry (a BUY whose stop is above entry has no R:R to express).
 // `computeDeterministicRiskReward` already encodes exactly those rejections.
 //
-// The caller-supplied `parsedSignal` is the SAME object the handler passes to persistence and
-// outcome eligibility. Deriving the side independently here once made the adapter and
-// `applyDeterministicRiskReward` disagree, and because the adapter's ratio is trusted as
-// already-valid at persist time, a wrong-direction side here would be persisted unchallenged.
-// Accepts either a provider block (which carries `current_price`) or the internal
-	// selection record from `selectRiskMetadata()` (which carries `riskLevelsEntryPrice`,
-	// see there for why it is not named `current_price`).
+// Accepts either a provider block (carrying `current_price`) or the internal selection
+// record from `selectRiskMetadata()` (carrying `riskLevelsEntryPrice`). The caller's parse is
+// reused so the adapter and `applyDeterministicRiskReward` cannot disagree on `side`: the
+// adapter's ratio is trusted as already-valid at persist time and is never re-checked.
 function completeGroundedRiskMetadata(value = {}, parsedSignal) {
 	const side = parsedSignal && parsedSignal.side ? parsedSignal.side : null;
 	if (!side) {
@@ -133,17 +126,19 @@ function isHeuristicRiskBlock(value = {}) {
 	return value.levelsSource === 'fallback-trade-plan';
 }
 
+// GH-599: a block that has both directional levels plus an entry price is a real provider
+// block even when the optional ratio is absent. Selection must still consider it, otherwise
+// the merge path finds no source at all and the grounded levels never reach the repair branch.
+function isUsableRiskBlock(value = {}) {
+	return hasCompleteRiskMetadata(value)
+		|| (toPositiveFiniteNumber(value.current_price) !== null
+			&& isOptionalRiskValue(value.invalidation_level)
+			&& isOptionalRiskValue(value.target_level));
+}
+
 function selectRiskMetadata(gemini, mcp) {
 	const mcpComplete = hasCompleteRiskMetadata(mcp);
 	const heuristicMcp = mcpComplete && isHeuristicRiskBlock(mcp);
-	// GH-599: a block that has both directional levels plus an entry price is a real
-	// provider block even when the optional ratio is absent — the ratio is filled in
-	// arithmetically by the caller. Excluding those here made the merge path fall straight
-	// through to no source at all, so the grounded levels never reached the repair branch.
-	const isUsableRiskBlock = (block) => hasCompleteRiskMetadata(block)
-		|| (toPositiveFiniteNumber(block.current_price) !== null
-			&& isOptionalRiskValue(block.invalidation_level)
-			&& isOptionalRiskValue(block.target_level));
 	const source = [
 		!heuristicMcp && isUsableRiskBlock(mcp) ? mcp : null,
 		isUsableRiskBlock(gemini) ? gemini : null,
@@ -158,19 +153,17 @@ function selectRiskMetadata(gemini, mcp) {
 		};
 	}
 
+	const entryPrice = toPositiveFiniteNumber(source.current_price);
 	return {
 		invalidation_level: source.invalidation_level,
 		target_level: source.target_level,
 		risk_reward_ratio: source.risk_reward_ratio,
-		// `riskLevelsEntryPrice` is an INTERNAL key, deliberately not named
-		// `current_price`: `optionalRiskMetadata` is spread into the emitted payload after
-		// `current_price` has been resolved (MCP price wins over Gemini), so emitting it here
-		// would silently overwrite the winning entry price with the losing block's. It exists
-		// only so the caller can complete a missing ratio from the same levels it selected
-		// (GH-599).
-		...(toPositiveFiniteNumber(source.current_price) !== null
-			? { riskLevelsEntryPrice: toPositiveFiniteNumber(source.current_price) }
-			: {}),
+		// INTERNAL key, deliberately not named `current_price`: this record is spread into the
+		// emitted payload after `current_price` has been resolved (MCP price wins over Gemini),
+		// so the obvious name would silently overwrite the winning entry price with the losing
+		// block's. It exists only so the caller can complete a missing ratio from the same
+		// levels it selected (GH-599).
+		...(entryPrice !== null ? { riskLevelsEntryPrice: entryPrice } : {}),
 		// Reports WHICH block actually supplied the risk levels, so a caller cannot
 		// describe a rejected heuristic block as the origin of the emitted levels.
 		riskLevelsSource: source === mcp ? (mcp.levelsSource || 'tradingview-mcp') : 'gemini-grounding',
@@ -387,10 +380,6 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched, parsedSignal = n
 		// a block missing the ratio should first be *completed*, not replaced.
 		if (!isOptionalRiskValue(optionalRiskMetadata.risk_reward_ratio)) {
 			const parsed = parsedSignal || parseTradingViewSignal(text);
-			// GH-599: when the selected block already carries both directional levels and an
-			// entry price, its only gap is the optional ratio. Complete it arithmetically so
-			// the provider's real levels survive. Substituting the heuristic plan here is what
-			// silently discarded grounded levels on this merge path.
 			const grounded = completeGroundedRiskMetadata(optionalRiskMetadata, parsed);
 			if (grounded.side) {
 				optionalRiskMetadata = {
