@@ -257,6 +257,14 @@ describe('Postman collection contract', () => {
 		expect(enrichedData.price_data).toEqual({ current_price: 64863.03, high: 65000, low: 64000 });
 	});
 
+	it('does not claim deterministic R:R in the alert dry-run example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const sendAlert = findItem(collection.item, 'POST Send Alert Dry Run (risk metadata)');
+		const enrichedData = JSON.parse(sendAlert.response[0].body).payload.enrichedData;
+
+		expect(enrichedData).not.toHaveProperty('risk_reward_ratio_source');
+	});
+
 	it('aligns Binance MARKET quantity dry-run example with request and runtime response', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const marketSell = findItem(collection.item, 'POST Binance order (valid MARKET quantity dry-run)');
@@ -636,6 +644,62 @@ describe('Postman collection contract', () => {
 			expect(response.body).not.toContain('projects/');
 			expect(response.body).not.toContain('console.firebase.google.com');
 		}
+	});
+
+	it('documents the signal outcome sweep lease observability (issue #1110)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Capabilities - signal outcome sweep lease (issue #1110)');
+
+		expect(item).toBeDefined();
+		expect(item.request.url.raw).toBe('{{baseUrl}}/api/capabilities');
+
+		const winning = item.response.find((res) => res.name.includes('winning evaluator'));
+		const losing = item.response.find((res) => res.name.includes('losing replica'));
+		const lostMidSweep = item.response.find((res) => res.name.includes('ownership lost mid-sweep'));
+
+		// The three fields the PR's stated purpose depends on: an operator has to be
+		// able to identify the winning evaluator from /api/status alone.
+		expect(winning.code).toBe(200);
+		expect(JSON.parse(winning.body).dependencies.signalOutcomeWorker).toMatchObject({
+			leaseMs: 120000,
+			lastRunLeaseHeld: false,
+			leaseHeldSkipCount: 7,
+			lastRunEvaluatedCount: 9,
+		});
+
+		// A replica that never wins the lease is recognisable: the skip counter
+		// climbs while nothing is evaluated.
+		expect(JSON.parse(losing.body).dependencies.signalOutcomeWorker).toMatchObject({
+			leaseMs: 120000,
+			lastRunLeaseHeld: true,
+			leaseHeldSkipCount: 138,
+			lastRunScannedCount: 0,
+			lastRunEvaluatedCount: 0,
+		});
+
+		// Ownership lost mid-sweep: the sweep stopped acting, but it did evaluate
+		// the documents it finished before the renewal proved the lease was gone.
+		expect(JSON.parse(lostMidSweep.body).dependencies.signalOutcomeWorker).toMatchObject({
+			lastRunLeaseHeld: true,
+			leaseHeldSkipCount: 2,
+			lastRunScannedCount: 5,
+			lastRunEvaluatedCount: 2,
+		});
+
+		// The documented lease window must match the service bounds.
+		for (const response of item.response) {
+			const { leaseMs } = JSON.parse(response.body).dependencies.signalOutcomeWorker;
+			expect(leaseMs).toBeGreaterThanOrEqual(10000);
+			expect(leaseMs).toBeLessThanOrEqual(600000);
+			// Lease ownership identity is an internal lock value, never an operator signal.
+			expect(response.body).not.toContain('lockedBy');
+		}
+
+		// Every documented variant must carry runnable assertions, not just examples.
+		const executed = (item.event || []).flatMap((entry) => entry.script.exec).join('\n');
+		expect(executed).toContain('leaseHeldSkipCount');
+		expect(executed).toContain('lastRunLeaseHeld');
+		expect(executed).toContain('leaseMs');
 	});
 
 	it('documents degraded, healthy, and omitted firestore read-metric variants', () => {

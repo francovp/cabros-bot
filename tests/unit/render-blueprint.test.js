@@ -32,6 +32,31 @@ describe('Render signal outcome worker blueprint', () => {
 		expect(workerBlueprint).not.toContain('- key: ENABLE_SENTRY\n    value: true');
 	});
 
+	// Issue #1110 enables signal outcome tracking in production. The flag gates
+	// signal recording, the evaluation sweep and the whole /api/outcomes surface,
+	// so it must be reviewable in the blueprint rather than dashboard-only.
+	// Previews stay off: a preview would record and evaluate against the
+	// production `tradingSignalOutcomes` collection.
+	it('pins signal outcome tracking on the web service with previews off', () => {
+		const blueprint = fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');
+		const webBlueprint = blueprint.slice(0, blueprint.indexOf('- type: worker'));
+
+		expect(webBlueprint).toContain(
+			'- key: ENABLE_SIGNAL_OUTCOME_TRACKING\n    value: true\n    previewValue: false',
+		);
+	});
+
+	// The web service sweeps and the dedicated worker below is the cutover target.
+	// `SignalOutcomeService` claims the sweep with a Firestore lease, so only one of
+	// them acts on a pending signal even while both are enabled.
+	it('declares the web sweep role and the lease duration that keeps the sweep single-writer', () => {
+		const blueprint = fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');
+		const webBlueprint = blueprint.slice(0, blueprint.indexOf('- type: worker'));
+
+		expect(webBlueprint).toContain('- key: SIGNAL_OUTCOME_WORKER_ROLE\n    value: web');
+		expect(webBlueprint).toContain('- key: SIGNAL_OUTCOME_EVALUATION_LEASE_MS\n    value: 120000');
+	});
+
 	// Issue #1111 enables durable webhook idempotency in production. Previews share the
 	// production Firestore project, so a preview that reserved keys would make a
 	// throwaway deployment suppress real production replays.
