@@ -5885,6 +5885,74 @@ describe('structured analysis forms', () => {
 			expect(playground.elements.body.value).toContain('BINANCE:BTCUSDT');
 		});
 
+		it('does not let an empty filter result erase previously cached operation inputs', async () => {
+			const dispatched = [];
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					dispatched.push(url);
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const submitButton = find(playground, (node) => node.tagName === 'BUTTON' && node.textContent === 'Send request');
+			const curlButton = find(playground, (node) => node.tagName === 'BUTTON' && node.textContent.includes('cURL'));
+			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
+			const alertOperation = optionValue('POST /api/webhook/alert');
+			const volumeOperation = optionValue('POST /api/webhook/volume-confirmation');
+
+			select.value = alertOperation;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ message: 'Alert draft that must survive' });
+			await playground.elements.body.dispatch('input');
+
+			select.value = volumeOperation;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ symbol: 'BINANCE:BTCUSDT', timeframe: '4h' });
+			await playground.elements.body.dispatch('input');
+
+			select.value = alertOperation;
+			await select.dispatch('change');
+
+			const filter = playground.elements.filterOperations;
+
+			// A blank `select.value` must mean "no operation selected", never index 0:
+			// `Number('') === 0`, so an unguarded lookup silently resolves to the first
+			// definition and leaves the dispatch controls armed against a route the
+			// operator never picked.
+			filter.value = 'zzz-no-operation-matches';
+			await filter.dispatch('input');
+			expect(select.value).toBe('');
+			expect(playground.elements.body).toBeUndefined();
+			expect(playground.elements.query).toBeUndefined();
+			expect(playground.elements['path-alertId']).toBeUndefined();
+			expect(submitButton.disabled).toBe(true);
+			expect(curlButton.disabled).toBe(true);
+
+			await playground.dispatch('submit');
+			await flush();
+			expect(dispatched).toEqual([]);
+
+			filter.value = 'volume-confirmation';
+			await filter.dispatch('input');
+			expect(select.value).toBe(volumeOperation);
+			expect(playground.elements.body.value).toContain('BINANCE:BTCUSDT');
+
+			select.value = alertOperation;
+			await select.dispatch('change');
+			expect(playground.elements.body.value).toContain('Alert draft that must survive');
+
+			select.value = volumeOperation;
+			await select.dispatch('change');
+			expect(playground.elements.body.value).toContain('BINANCE:BTCUSDT');
+		});
+
 		it('keeps the Playground submit locked across an operation switch while a request is pending', async () => {
 			let pendingResolver;
 			const dispatched = [];
