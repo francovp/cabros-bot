@@ -499,7 +499,7 @@
             "status"
           ]
         },
-        "description": "Issue #1109 enables `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` in production. `enrichment.alertPath` aggregates the whole webhook enrichment path, so it cannot attribute an outcome to the confluence call specifically; `enrichment.confluence` reports the optional confluence calls on their own. Counters are process-local and reset on restart, so all zeros with `enabled: true` is the expected state right after a deploy until an alert exercises the path. Confluence is fail-open: a failure never blocks alert delivery."
+        "description": "Issue #1109 enables `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` in production. `enrichment.alertPath` aggregates the whole webhook enrichment path, so it cannot attribute an outcome to the confluence calls specifically; `enrichment.confluence` reports the optional confluence calls on their own. Those counters are per **call**, not per alert: one enrichment issues up to two calls, each recording exactly one outcome, so `appliedCount + failedCount <= attemptedCount`. Counters are process-local and reset on restart, so all zeros with `enabled: true` is the expected state right after a deploy until an alert exercises the path. Confluence is fail-open: a failure never blocks alert delivery."
       },
       "event": [
         {
@@ -522,7 +522,9 @@
               "    pm.expect(Number.isInteger(c[key])).to.eql(true);",
               "    pm.expect(c[key]).to.be.at.least(0);",
               "  });",
-              "  // An attempt either applied or failed, never both; budget exhaustion is recorded",
+              "  // Counters are per CALL, not per alert: one enrichment issues up to two",
+              "  // confluence calls (combined_analysis, then multi_timeframe_analysis), and",
+              "  // each issued call records exactly one outcome. Budget exhaustion is recorded",
               "  // without an attempt because no call was made.",
               "  pm.expect(c.appliedCount + c.failedCount).to.be.at.most(c.attemptedCount);",
               "});",
@@ -545,10 +547,10 @@
           "body": "{\n  \"featureFlags\": {\n    \"tradingViewConfluenceEnrichment\": true,\n    \"tradingViewConfluenceMultiTimeframe\": true\n  },\n  \"dependencies\": {\n    \"tradingViewMcp\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"status\": \"unknown\",\n      \"enrichment\": {\n        \"lastStatus\": null,\n        \"fullCount\": 0,\n        \"partialCount\": 0,\n        \"failedCount\": 0,\n        \"confluence\": {\n          \"enabled\": true,\n          \"attemptedCount\": 0,\n          \"appliedCount\": 0,\n          \"failedCount\": 0,\n          \"budgetExhaustedCount\": 0,\n          \"lastAppliedAt\": null,\n          \"lastFailureCategory\": null\n        },\n        \"alertPath\": {\n          \"windowMs\": 86400000,\n          \"totalCount\": 0,\n          \"appliedCount\": 0,\n          \"failedCount\": 0,\n          \"appliedRate24h\": 0,\n          \"failureRate24h\": 0\n        }\n      }\n    }\n  }\n}"
         },
         {
-          "name": "200 OK - confluence applied, multi-timeframe call budget-starved",
+          "name": "200 OK - multi-timeframe call budget-starved (4 calls attempted, 3 applied, 1 failed)",
           "status": "OK",
           "code": 200,
-          "body": "{\n  \"featureFlags\": {\n    \"tradingViewConfluenceEnrichment\": true,\n    \"tradingViewConfluenceMultiTimeframe\": true\n  },\n  \"dependencies\": {\n    \"tradingViewMcp\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"status\": \"ready\",\n      \"enrichment\": {\n        \"lastStatus\": \"partial\",\n        \"fullCount\": 1,\n        \"partialCount\": 2,\n        \"failedCount\": 0,\n        \"confluence\": {\n          \"enabled\": true,\n          \"attemptedCount\": 3,\n          \"appliedCount\": 3,\n          \"failedCount\": 0,\n          \"budgetExhaustedCount\": 2,\n          \"lastAppliedAt\": \"2026-10-04T09:41:12.482Z\",\n          \"lastFailureCategory\": null\n        },\n        \"alertPath\": {\n          \"windowMs\": 86400000,\n          \"totalCount\": 3,\n          \"appliedCount\": 3,\n          \"failedCount\": 0,\n          \"appliedRate24h\": 100,\n          \"failureRate24h\": 0\n        }\n      }\n    }\n  }\n}"
+          "body": "{\"featureFlags\":{\"tradingViewConfluenceEnrichment\":true,\"tradingViewConfluenceMultiTimeframe\":true},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"status\":\"ready\",\"enrichment\":{\"lastStatus\":\"partial\",\"fullCount\":1,\"partialCount\":2,\"failedCount\":0,\"confluence\":{\"enabled\":true,\"attemptedCount\":4,\"appliedCount\":3,\"failedCount\":1,\"budgetExhaustedCount\":1,\"lastAppliedAt\":\"2026-10-04T09:41:12.482Z\",\"lastFailureCategory\":\"timeout\"},\"alertPath\":{\"windowMs\":86400000,\"totalCount\":3,\"appliedCount\":3,\"failedCount\":0,\"appliedRate24h\":100,\"failureRate24h\":0}}}}}"
         }
       ]
     },

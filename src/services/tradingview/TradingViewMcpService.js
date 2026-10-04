@@ -736,6 +736,12 @@ class TradingViewMcpService {
 
 			// Respect both the per-call timeout and the overall enrichment budget
 			const combinedSignal = AbortSignal.any([confluenceController.signal, budgetController.signal]);
+			// These counters count CALLS, not enrichments. One alert enrichment issues up
+			// to two confluence calls (combined_analysis, then multi_timeframe_analysis when
+			// enabled), so each call records its own attempt and exactly one outcome. The
+			// alternative - one attempt per enrichment - makes applied+failed<=attempted
+			// arithmetically impossible, because a budget-starved second call would then be
+			// charged to the first call's attempt and be reported as both applied and failed.
 			this._recordConfluenceOutcome({ attempted: true });
 
 			try {
@@ -752,11 +758,13 @@ class TradingViewMcpService {
 						optionalEnrichmentPartial = true;
 						this._recordConfluenceOutcome({ budgetExhausted: true });
 					} else {
+						this._recordConfluenceOutcome({ attempted: true });
 						multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
 							symbol,
 							exchange,
 							signal: combinedSignal,
 						});
+						this._recordConfluenceOutcome({ applied: true });
 						console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
 					}
 				}

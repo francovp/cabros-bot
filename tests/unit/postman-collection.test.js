@@ -1086,4 +1086,26 @@ describe('news-monitor stop/target example (GH-712)', () => {
 		expect(script).toContain('enrichment.alertPath');
 		expect(script).toContain('appliedCount + c.failedCount');
 	});
+
+	// The first version of this example was named for a budget-starved multi-timeframe
+	// call while recording failedCount: 0, so it could not represent the scenario it was
+	// named for and the `pm.test` invariant was never exercised against a failure. These
+	// two assertions pin the example to the case it claims to show.
+	it('exercises the budget-starved multi-timeframe case in the confluence status example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		const example = item.response.find((response) => /multi-timeframe call budget-starved/.test(response.name));
+		expect(example).toBeDefined();
+
+		const body = JSON.parse(example.body);
+		const enrichment = body.dependencies.tradingViewMcp.enrichment;
+		const confluence = enrichment.confluence;
+
+		expect(body.featureFlags.tradingViewConfluenceMultiTimeframe).toBe(true);
+		expect(confluence.failedCount).toBeGreaterThan(0);
+		expect(confluence.lastFailureCategory).not.toBeNull();
+		// Two calls per alert with multi-timeframe on, so the window cannot be 1:1 with alerts.
+		expect(confluence.attemptedCount).toBeGreaterThan(enrichment.alertPath.totalCount);
+		expect(confluence.appliedCount + confluence.failedCount).toBeLessThanOrEqual(confluence.attemptedCount);
+	});
 });

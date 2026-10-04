@@ -12476,7 +12476,7 @@
             "properties": {
               "confluence": {
                 "type": "object",
-                "description": "Confluence enrichment counters. `appliedCount` counts calls that returned confluence data; `budgetExhaustedCount` counts enrichments that reached the confluence stage with the enrichment budget already spent, which is not an attempt. `enabled: true` with every counter at 0 means the gate is on but no alert has exercised it yet.",
+                "description": "Confluence enrichment counters, measured in CALLS rather than alerts: one alert enrichment issues up to two confluence calls (`combined_analysis`, then `multi_timeframe_analysis` when multi-timeframe mode is enabled). Each issued call records exactly one outcome, so `appliedCount + failedCount <= attemptedCount`. `budgetExhaustedCount` counts stages skipped because the enrichment budget was already spent, which is not a call. `enabled: true` with every counter at 0 means the gate is on but no alert has exercised it yet.",
                 "required": [
                   "enabled",
                   "attemptedCount",
@@ -12494,22 +12494,22 @@
                   "attemptedCount": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "Enrichments that reached the combined_analysis call."
+                    "description": "Confluence calls issued. One alert enrichment contributes up to two: one `combined_analysis`, plus one `multi_timeframe_analysis` when multi-timeframe mode is enabled."
                   },
                   "appliedCount": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "Calls that returned confluence data applied to the alert."
+                    "description": "Confluence calls that returned data and were applied to the alert."
                   },
                   "failedCount": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "Confluence calls that failed. Fail-open: a failure never blocks alert delivery."
+                    "description": "Confluence calls that failed. Fail-open: a failure never blocks alert delivery. Because each issued call records exactly one outcome, `appliedCount + failedCount` never exceeds `attemptedCount`."
                   },
                   "budgetExhaustedCount": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "Enrichments that reached the confluence stage with the enrichment budget already spent, so no call was attempted."
+                    "description": "Confluence stages skipped because the enrichment budget was already spent, so no call was issued at that stage. Not a call, and therefore not part of `attemptedCount`."
                   },
                   "lastAppliedAt": {
                     "type": [
