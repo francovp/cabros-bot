@@ -312,6 +312,258 @@ describe('SymbolAnalysisStorageService', () => {
 		});
 	});
 
+	// Issue #1179 turns symbol-analysis persistence on in production. Until this
+	// change, `getStatus()` derived `status: 'ready'` from credential shape alone
+	// (`enabled && configured`), so flipping the flag immediately painted a green
+	// checkmark on a deployment that had never persisted a single analysis — and
+	// because every Firestore error here is swallowed into a `null` return, the
+	// operator had no signal that the enablement was not taking effect. This is the
+	// repo's "shape is not readiness" rule, previously applied to
+	// `firebaseRemoteConfig.ready` (#598), `equityMarketData.ready` (#1116), durable
+	// idempotency (#1111) and Firestore `readHealth` (#1285).
+	describe('durable readiness is proven, not inferred from credential shape (issue #1179)', () => {
+		const originalEnv = { ...process.env };
+
+		// `isFirestoreConfigured()` parses the private key with `createPrivateKey`, so a
+		// placeholder string never reaches `configured: true`. A real throwaway key keeps
+		// these tests on the credential-shape path without checking one into the repo.
+		const TEST_PRIVATE_KEY = crypto.generateKeyPairSync('rsa', {
+			modulusLength: 2048,
+			privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+			publicKeyEncoding: { type: 'spki', format: 'pem' },
+		}).privateKey;
+
+		const VALID_SERVICE_ACCOUNT = JSON.stringify({
+			type: 'service_account',
+			project_id: 'test-project',
+			client_email: 'test@example.com',
+			private_key: TEST_PRIVATE_KEY,
+		});
+
+		// Passes `isFirestoreConfigured()` (project id, client email, parseable key) but is
+		// refused by the credential loader as an inline ADC document — the documented case
+		// from issue #1127, which issue #1128 made a non-`ok` initialization instead of an
+		// `initializeApp({})` default-auth call.
+		const INLINE_AUTHORIZED_USER = JSON.stringify({
+			type: 'authorized_user',
+			project_id: 'test-project',
+			client_email: 'test@example.com',
+			private_key: TEST_PRIVATE_KEY,
+			client_id: 'client-id',
+			client_secret: 'client-secret',
+			refresh_token: 'refresh-token',
+		});
+
+		function enableWithValidCredentials() {
+			process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = VALID_SERVICE_ACCOUNT;
+			admin.__resetApps();
+			SymbolAnalysisStorageService.__resetForTesting();
+		}
+
+		beforeEach(() => {
+			Object.keys(process.env).forEach((key) => {
+				if (!Object.prototype.hasOwnProperty.call(originalEnv, key)) {
+					delete process.env[key];
+				}
+			});
+			Object.assign(process.env, originalEnv);
+			SymbolAnalysisStorageService.__resetForTesting();
+			admin.__resetApps();
+			mockDocSet.mockReset();
+			mockDocSet.mockResolvedValue(undefined);
+			if (typeof mockResetCollectionState === 'function') {
+				mockResetCollectionState();
+			}
+			remoteConfigService._resetForTesting();
+		});
+
+		afterEach(() => {
+			SymbolAnalysisStorageService.__resetForTesting();
+			admin.__resetApps();
+			mockDocSet.mockReset();
+			Object.keys(process.env).forEach((key) => {
+				if (!Object.prototype.hasOwnProperty.call(originalEnv, key)) {
+					delete process.env[key];
+				}
+			});
+			Object.assign(process.env, originalEnv);
+		});
+
+		it('reports disabled and not ready when the flag is off, with no counters touched', () => {
+			delete process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE;
+
+			const status = SymbolAnalysisStorageService.getStatus();
+
+			expect(status.enabled).toBe(false);
+			expect(status.ready).toBe(false);
+			expect(status.status).toBe('disabled');
+			expect(status.readiness).toBe('unverified');
+			expect(status.writesAttempted).toBe(0);
+			expect(status.collection).toBe('symbolAnalyses');
+			expect(status.retentionDays).toBe(7);
+		});
+
+		it('reports unverified, not ready, when enabled and configured but nothing has persisted yet', () => {
+			enableWithValidCredentials();
+
+			const status = SymbolAnalysisStorageService.getStatus();
+
+			expect(status.enabled).toBe(true);
+			expect(status.configured).toBe(true);
+			// The proof question is deliberately separate from the intent question: a fresh
+			// deployment that has never written an analysis is NOT evidence of health.
+			expect(status.ready).toBe(false);
+			expect(status.readiness).toBe('unverified');
+			expect(status.status).toBe('unverified');
+			expect(status.writesAttempted).toBe(0);
+			expect(status.writesSucceeded).toBe(0);
+			expect(status.failOpen).toBe(true);
+		});
+
+		it('reports ready only after an observed successful write', async () => {
+			enableWithValidCredentials();
+
+			await SymbolAnalysisStorageService.recordAnalysis({
+				requestId: 'req-ready',
+				symbol: 'BINANCE:BTCUSDT',
+				decision: { action: 'BUY', confidence: 0.8 },
+			});
+
+			const status = SymbolAnalysisStorageService.getStatus();
+			expect(status.ready).toBe(true);
+			expect(status.readiness).toBe('verified');
+			expect(status.status).toBe('ready');
+			expect(status.writesAttempted).toBe(1);
+			expect(status.writesSucceeded).toBe(1);
+			expect(status.lastWriteAt).toEqual(expect.any(String));
+			expect(status.lastErrorReason).toBeNull();
+		});
+
+		it('reports degraded when a write fails, and self-heals on the next success', async () => {
+			enableWithValidCredentials();
+			mockDocSet.mockRejectedValueOnce(new Error('firestore unavailable'));
+
+			const failedId = await SymbolAnalysisStorageService.recordAnalysis({
+				requestId: 'req-degraded',
+				symbol: 'BINANCE:BTCUSDT',
+			});
+
+			// Fail-open: the caller still gets the analysis response, so the record is dropped.
+			expect(failedId).toBeNull();
+
+			const degraded = SymbolAnalysisStorageService.getStatus();
+			expect(degraded.ready).toBe(false);
+			expect(degraded.readiness).toBe('degraded');
+			expect(degraded.status).toBe('degraded');
+			expect(degraded.writesFailed).toBe(1);
+			expect(degraded.consecutiveFailures).toBe(1);
+
+			await SymbolAnalysisStorageService.recordAnalysis({ requestId: 'req-recovered' });
+
+			const recovered = SymbolAnalysisStorageService.getStatus();
+			expect(recovered.ready).toBe(true);
+			expect(recovered.status).toBe('ready');
+			expect(recovered.consecutiveFailures).toBe(0);
+		});
+
+		it('counts a durable-use attempt even when Firebase initialization is rejected', async () => {
+			process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = INLINE_AUTHORIZED_USER;
+			admin.__resetApps();
+			SymbolAnalysisStorageService.__resetForTesting();
+			const initializeSpy = jest.spyOn(admin, 'initializeApp');
+
+			// `configured` is still true (credential *shape* is valid), so without a recorded
+			// rejection the status would read as an unproven `ready`.
+			expect(SymbolAnalysisStorageService.getStatus().configured).toBe(true);
+			expect(await SymbolAnalysisStorageService.recordAnalysis({ requestId: 'req-bad-creds' })).toBeNull();
+
+			const status = SymbolAnalysisStorageService.getStatus();
+			expect(status.status).toBe('degraded');
+			expect(status.writesAttempted).toBe(1);
+			expect(status.lastErrorReason).toBe('firestore_not_initialized');
+			// Issue #1128: a rejected initialization must never fall through to default auth.
+			expect(initializeSpy).not.toHaveBeenCalled();
+			initializeSpy.mockRestore();
+		});
+
+		it('constrains lastErrorReason to a closed enum so a provider message can never leak', async () => {
+			enableWithValidCredentials();
+			mockDocSet.mockRejectedValueOnce(
+				new Error('Firestore write failed at projects/test-project/databases/(default)/documents/symbolAnalyses/req'),
+			);
+
+			await SymbolAnalysisStorageService.recordAnalysis({ requestId: 'req-leak' });
+
+			const status = SymbolAnalysisStorageService.getStatus();
+			expect(status.lastErrorReason).toBe('firestore_unavailable');
+			expect(JSON.stringify(status)).not.toContain('projects/test-project');
+		});
+
+		it('never registers a durable attempt from a status read alone', () => {
+			enableWithValidCredentials();
+
+			SymbolAnalysisStorageService.getStatus();
+			SymbolAnalysisStorageService.getStatus();
+			const status = SymbolAnalysisStorageService.getStatus();
+
+			// A status poll is not evidence of Firestore health; recording it would let an
+			// operator manufacture `ready` by watching /api/status.
+			expect(status.writesAttempted).toBe(0);
+			expect(status.readsAttempted).toBe(0);
+			expect(status.ready).toBe(false);
+		});
+
+		it('reports misconfigured when enabled without usable credentials', async () => {
+			process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'true';
+			delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+			delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+			process.env.HOME = '/nonexistent-home-for-tests';
+			process.env.GCE_METADATA_HOST = '';
+			process.env.K_SERVICE = '';
+			process.env.FUNCTION_TARGET = '';
+			admin.__resetApps();
+			SymbolAnalysisStorageService.__resetForTesting();
+
+			await SymbolAnalysisStorageService.recordAnalysis({ requestId: 'req-unconfigured' });
+
+			const status = SymbolAnalysisStorageService.getStatus();
+			expect(status.enabled).toBe(true);
+			expect(status.configured).toBe(false);
+			expect(status.status).toBe('misconfigured');
+			expect(status.ready).toBe(false);
+		});
+
+		it('lets gate state win over observed readiness', async () => {
+			enableWithValidCredentials();
+			await SymbolAnalysisStorageService.recordAnalysis({ requestId: 'req-verified' });
+			expect(SymbolAnalysisStorageService.getStatus().status).toBe('ready');
+
+			process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'false';
+			const afterDisable = SymbolAnalysisStorageService.getStatus();
+			expect(afterDisable.status).toBe('disabled');
+			expect(afterDisable.ready).toBe(false);
+			// The observed window survives so an operator can still see what happened.
+			expect(afterDisable.writesSucceeded).toBe(1);
+		});
+
+		it('tracks reads separately from writes so a read cannot imply a write succeeded', async () => {
+			enableWithValidCredentials();
+
+			await SymbolAnalysisStorageService.listAnalyses({ limit: 5 });
+
+			const status = SymbolAnalysisStorageService.getStatus();
+			expect(status.readsAttempted).toBe(1);
+			expect(status.readsSucceeded).toBe(1);
+			expect(status.writesSucceeded).toBe(0);
+			// Persistence is the feature; a successful read proves reachability, not that
+			// analyses are being stored, so it does not flip the verdict to `ready`.
+			expect(status.ready).toBe(false);
+			expect(status.status).toBe('unverified');
+		});
+	});
+
 	describe('listAnalyses()', () => {
 		it('throws FEATURE_DISABLED when disabled', async () => {
 			process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'false';

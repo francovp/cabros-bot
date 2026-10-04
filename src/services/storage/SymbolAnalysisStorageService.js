@@ -4,12 +4,128 @@ const crypto = require('crypto');
 const admin = require('firebase-admin');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { isFirestoreConfigured } = require('./firestoreConfig');
+const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_DAYS = 7;
 const COLLECTION_NAME = 'symbolAnalyses';
 
+/**
+ * Closed enum for `lastErrorReason`. Every Firestore failure in this service is
+ * swallowed into a `null` return so a symbol analysis never fails, which means an
+ * operator has no other way to learn that persistence silently stopped working. The
+ * reason is constrained to this enum so a Firestore error message — which embeds the
+ * fully-qualified project/database path — can never leak into a status response.
+ */
+const REASONS = Object.freeze({
+	NOT_INITIALIZED: 'firestore_not_initialized',
+	UNAVAILABLE: 'firestore_unavailable',
+});
+
+const KNOWN_REASONS = new Set(Object.values(REASONS));
+
+/**
+ * `unverified` is deliberately distinct from `ready` (and from `degraded`): before
+ * the first observed write there is no evidence that analyses are actually stored,
+ * and reporting that as "ready" is what makes the production enablement
+ * unverifiable.
+ */
+const READINESS = Object.freeze({
+	UNVERIFIED: 'unverified',
+	VERIFIED: 'verified',
+	DEGRADED: 'degraded',
+});
+
 let db = null;
+
+/**
+ * Process-local window of observed Firestore outcomes. Readiness is derived from
+ * real work rather than credential shape, so a deployment whose credentials look
+ * valid but cannot reach Firestore reports `degraded` instead of `ready`. Writes and
+ * reads are counted separately: persistence is the feature, so only a successful
+ * write proves the enablement took effect — a successful read proves reachability.
+ * Counters reset on restart and every recorder is fail-open.
+ */
+const durability = {
+	writesAttempted: 0,
+	writesSucceeded: 0,
+	writesFailed: 0,
+	readsAttempted: 0,
+	readsSucceeded: 0,
+	readsFailed: 0,
+	consecutiveFailures: 0,
+	lastWriteAt: null,
+	lastFailureAt: null,
+	lastErrorReason: null,
+};
+
+// Asking for durable storage and not getting it is exactly the event an operator
+// needs to see, so an attempt is counted even when initialization is rejected and
+// `writesFailed` therefore never exceeds `writesAttempted`.
+function _recordWriteAttempt() {
+	durability.writesAttempted += 1;
+}
+
+function _recordWriteSuccess() {
+	durability.writesSucceeded += 1;
+	durability.consecutiveFailures = 0;
+	durability.lastWriteAt = new Date().toISOString();
+	durability.lastErrorReason = null;
+}
+
+function _recordWriteFailure(reason) {
+	durability.writesFailed += 1;
+	durability.consecutiveFailures += 1;
+	durability.lastFailureAt = new Date().toISOString();
+	durability.lastErrorReason = KNOWN_REASONS.has(reason) ? reason : REASONS.UNAVAILABLE;
+}
+
+// A rejected initialization is both the attempt and the failure, because no write
+// ever reached Firestore.
+function _recordInitializationFailure(reason) {
+	durability.writesAttempted += 1;
+	_recordWriteFailure(reason);
+}
+
+function _recordReadAttempt() {
+	durability.readsAttempted += 1;
+}
+
+// A read failure means Firestore is unreachable, which degrades the whole
+// dependency even though the write path is a separate operation, so it shares the
+// consecutive-failure counter that clears on the next successful Firestore operation.
+function _recordReadSuccess() {
+	durability.readsSucceeded += 1;
+	durability.consecutiveFailures = 0;
+	durability.lastErrorReason = null;
+}
+
+function _recordReadFailure(reason) {
+	durability.readsFailed += 1;
+	durability.consecutiveFailures += 1;
+	durability.lastFailureAt = new Date().toISOString();
+	durability.lastErrorReason = KNOWN_REASONS.has(reason) ? reason : REASONS.UNAVAILABLE;
+}
+
+function _resolveReadiness() {
+	if (durability.consecutiveFailures > 0) {
+		return READINESS.DEGRADED;
+	}
+	if (durability.writesSucceeded > 0) {
+		return READINESS.VERIFIED;
+	}
+	return READINESS.UNVERIFIED;
+}
+
+// Telemetry must never be able to fail a symbol analysis: every readiness mutation
+// runs through this guard so a counter error cannot reject the caller.
+function recordDurabilitySafely(record) {
+	try {
+		record();
+	} catch (error) {
+		console.warn('[SymbolAnalysisStorageService] readiness recording failed:', error && error.message);
+	}
+}
 
 function isEnabled() {
 	try {
@@ -99,6 +215,16 @@ function numberOrNull(value) {
 	return Number.isFinite(num) ? num : null;
 }
 
+/**
+ * Initialize Firebase Admin (idempotent) and return the Firestore client, or null
+ * when the feature is off or the configured credentials are invalid.
+ *
+ * A rejected initialization is recorded as a write failure so status reports
+ * `degraded` rather than an unproven `ready`, and it never falls through to
+ * `admin.initializeApp({})`: issue #1128 established that entering the SDK default-auth
+ * path here authenticates with a *different* credential than the operator configured
+ * and pays for discovery on the first read or write.
+ */
 function getFirestore() {
 	if (!isEnabled()) {
 		return null;
@@ -109,22 +235,14 @@ function getFirestore() {
 	}
 
 	try {
-		let credential;
-		if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-			const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-			credential = admin.credential.cert(serviceAccount);
-		}
-
-		const appOptions = {};
-		if (credential) {
-			appOptions.credential = credential;
-		}
-		if (process.env.FIREBASE_PROJECT_ID) {
-			appOptions.projectId = process.env.FIREBASE_PROJECT_ID;
-		}
-
-		if (!admin.apps.length) {
-			admin.initializeApp(appOptions);
+		const initialization = initializeFirebaseAdminApp({ admin });
+		if (!initialization.ok) {
+			console.warn(
+				`[SymbolAnalysisStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and dropping the record.`,
+			);
+			db = null;
+			recordDurabilitySafely(() => _recordInitializationFailure(REASONS.NOT_INITIALIZED));
+			return null;
 		}
 
 		db = admin.firestore();
@@ -132,6 +250,7 @@ function getFirestore() {
 	} catch (error) {
 		console.warn('[SymbolAnalysisStorageService] Failed to initialize Firestore client:', error.message);
 		db = null;
+		recordDurabilitySafely(() => _recordInitializationFailure(REASONS.NOT_INITIALIZED));
 	}
 
 	return db;
@@ -187,6 +306,7 @@ async function recordAnalysis(record = {}) {
 	if (!firestore) {
 		return null;
 	}
+	recordDurabilitySafely(_recordWriteAttempt);
 
 	try {
 		const requestId = (record.requestId && String(record.requestId).trim()) || crypto.randomUUID();
@@ -260,9 +380,11 @@ async function recordAnalysis(record = {}) {
 		});
 
 		await firestore.collection(COLLECTION_NAME).doc(id).set(dataToSave);
+		recordDurabilitySafely(_recordWriteSuccess);
 		return id;
 	} catch (error) {
 		console.warn('[SymbolAnalysisStorageService] Failed to record symbol analysis:', error.message);
+		recordDurabilitySafely(() => _recordWriteFailure(REASONS.UNAVAILABLE));
 		return null;
 	}
 }
@@ -309,7 +431,15 @@ async function summarizeAnalyses({ from, to, limit = 500, symbol, exchange, time
 	const boundedLimit = Math.min(Math.max(1, limit || 500), 1000);
 	query = query.orderBy('createdAt', 'desc').limit(boundedLimit);
 
-	const snapshot = await query.get();
+	recordDurabilitySafely(_recordReadAttempt);
+	let snapshot;
+	try {
+		snapshot = await query.get();
+	} catch (error) {
+		recordDurabilitySafely(() => _recordReadFailure(REASONS.UNAVAILABLE));
+		throw error;
+	}
+	recordDurabilitySafely(_recordReadSuccess);
 	const rawDocs = snapshot && snapshot.docs ? snapshot.docs : [];
 	const items = rawDocs.map(formatSymbolAnalysisDoc);
 
@@ -476,7 +606,15 @@ async function listAnalyses({ from, to, limit = 50, symbol, exchange, timeframe,
 	}
 
 	query = query.limit(boundedLimit);
-	const snapshot = await query.get();
+	recordDurabilitySafely(_recordReadAttempt);
+	let snapshot;
+	try {
+		snapshot = await query.get();
+	} catch (error) {
+		recordDurabilitySafely(() => _recordReadFailure(REASONS.UNAVAILABLE));
+		throw error;
+	}
+	recordDurabilitySafely(_recordReadSuccess);
 	const docs = snapshot && snapshot.docs ? snapshot.docs : [];
 
 	const analyses = docs.map(formatSymbolAnalysisDoc);
@@ -491,22 +629,78 @@ async function listAnalyses({ from, to, limit = 50, symbol, exchange, timeframe,
 	};
 }
 
+/**
+ * Reported storage state for `/api/status` and `/api/capabilities`.
+ *
+ * `enabled`/`configured` stay intent- and shape-derived so an operator can still see
+ * what the deployment was asked to do. `ready` is the proof question: true only after
+ * an observed successful write, and cleared by the first failure until the next
+ * success — so it never latches degraded and needs no restart to recover.
+ *
+ * This must never call `getFirestore()`: a status poll is not evidence of Firestore
+ * health, and recording one would let an operator manufacture `ready` by watching
+ * `/api/status` instead of sending an analysis.
+ *
+ * `failOpen` is always `true` and is stated rather than implied: every Firestore
+ * error is swallowed, so a `degraded` verdict still answers symbol analysis — it just
+ * silently stops building decision history.
+ */
 function getStatus() {
 	const enabled = isEnabled();
 	const configured = isFirestoreConfigured();
-	const ready = enabled && configured;
+	const readiness = _resolveReadiness();
+
+	let status;
+	if (!enabled) {
+		status = 'disabled';
+	} else if (!configured) {
+		status = 'misconfigured';
+	} else if (readiness === READINESS.DEGRADED) {
+		status = 'degraded';
+	} else if (readiness === READINESS.VERIFIED) {
+		status = 'ready';
+	} else {
+		status = READINESS.UNVERIFIED;
+	}
+
 	return {
 		enabled,
 		configured,
-		ready,
-		status: ready ? 'ready' : (enabled ? 'misconfigured' : 'disabled'),
+		ready: status === 'ready',
+		status,
+		readiness,
+		failOpen: true,
 		collection: COLLECTION_NAME,
 		retentionDays: getRetentionDays(),
+		writesAttempted: durability.writesAttempted,
+		writesSucceeded: durability.writesSucceeded,
+		writesFailed: durability.writesFailed,
+		readsAttempted: durability.readsAttempted,
+		readsSucceeded: durability.readsSucceeded,
+		readsFailed: durability.readsFailed,
+		consecutiveFailures: durability.consecutiveFailures,
+		lastWriteAt: durability.lastWriteAt,
+		lastFailureAt: durability.lastFailureAt,
+		lastErrorReason: durability.lastErrorReason,
 	};
 }
 
-function __resetFirestoreClient() {
+function __resetReadinessForTesting() {
+	durability.writesAttempted = 0;
+	durability.writesSucceeded = 0;
+	durability.writesFailed = 0;
+	durability.readsAttempted = 0;
+	durability.readsSucceeded = 0;
+	durability.readsFailed = 0;
+	durability.consecutiveFailures = 0;
+	durability.lastWriteAt = null;
+	durability.lastFailureAt = null;
+	durability.lastErrorReason = null;
+}
+
+function __resetForTesting() {
 	db = null;
+	__resetReadinessForTesting();
 }
 
 module.exports = {
@@ -520,6 +714,10 @@ module.exports = {
 	formatSymbolAnalysisDoc,
 	getFirestore,
 	getStatus,
-	__resetFirestoreClient,
+	__resetReadinessForTesting,
+	__resetForTesting,
+	__resetFirestoreClient: __resetForTesting,
 	COLLECTION_NAME,
+	REASONS,
+	READINESS,
 };
