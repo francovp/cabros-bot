@@ -154,28 +154,20 @@ describe('retryHelper', () => {
 		});
 	});
 
-	describe('shouldRetry option', () => {
-		it('stops retrying when shouldRetry returns false and reports the attempts that ran', async () => {
-			const sendFn = jest.fn().mockResolvedValue({ success: false, channel: 'test', error: 'deterministic miss' });
-
-			const result = await sendWithRetry(sendFn, 3, null, {
-				shouldRetry: attemptResult => attemptResult?.deterministicNoData !== true,
-			});
-
-			expect(sendFn).toHaveBeenCalledTimes(3);
-			expect(result).toEqual(expect.objectContaining({
+	describe('non-retryable results', () => {
+		it('stops after the first attempt when the result is marked non-retryable', async () => {
+			// A deterministic "no data for this symbol/venue" answer (GH-591) never
+			// succeeds on a retry, so the caller marks the result `retryable: false`
+			// and the chain halts. This is the pre-existing stop mechanism; no
+			// second `shouldRetry` hook is needed.
+			const sendFn = jest.fn().mockResolvedValue({
 				success: false,
-				attemptCount: 3,
-				error: 'deterministic miss',
-			}));
-		});
-
-		it('stops after the first attempt for a terminal result', async () => {
-			const sendFn = jest.fn().mockResolvedValue({ success: false, channel: 'test', error: 'no data', deterministicNoData: true });
-
-			const result = await sendWithRetry(sendFn, 3, null, {
-				shouldRetry: attemptResult => attemptResult?.deterministicNoData !== true,
+				channel: 'test',
+				error: 'no data',
+				retryable: false,
 			});
+
+			const result = await sendWithRetry(sendFn, 3, null);
 
 			expect(sendFn).toHaveBeenCalledTimes(1);
 			expect(result).toEqual(expect.objectContaining({
@@ -185,16 +177,18 @@ describe('retryHelper', () => {
 			}));
 		});
 
-		it('preserves default retry behavior when shouldRetry is omitted', async () => {
-			const sendFn = jest.fn()
-				.mockResolvedValueOnce({ success: false, channel: 'test', error: 'transient' })
-				.mockResolvedValue({ success: true, channel: 'test', data: 'ok' });
+		it('still exhausts retries when a deterministic-looking error is retryable', async () => {
+			const sendFn = jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'test',
+				error: 'no data',
+			});
 
-			const result = await sendWithRetry(sendFn, 3, null, { maxRetryDelayMs: 0 });
+			await sendWithRetry(sendFn, 3, null);
 
-			expect(sendFn).toHaveBeenCalledTimes(2);
-			expect(result).toEqual(expect.objectContaining({ success: true, attemptCount: 2 }));
+			expect(sendFn).toHaveBeenCalledTimes(3);
 		});
+
 	});
 
 	describe('sleep', () => {

@@ -320,9 +320,6 @@ module.exports = {
 	deriveAssetContext,
 	deriveCleanSearchQuery,
 	resolveMcpExchange,
-	MCP_EXCHANGE_ALIASES,
-	MCP_SUPPORTED_EXCHANGES,
-	MCP_UNSUPPORTED_EXCHANGES,
 	SUPPORTED_MCP_TIMEFRAMES,
 	TIMEFRAME_MAP,
 };

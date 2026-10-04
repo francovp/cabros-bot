@@ -1953,10 +1953,15 @@ describe('TradingViewMcpService', () => {
 
 			const [, toolArgs] = service._executeCallTool.mock.calls[0];
 			expect(toolArgs).toMatchObject({ symbol: 'TSLA', exchange: 'NASDAQ', timeframe: '1D' });
-			// Stored/derived metadata keeps the exchange the screener actually sent.
-			expect(enriched.exchange).toBe('BATS');
+			// Metadata keeps the exchange the screener actually sent, and the
+			// alias target is reported separately.
 			expect(enriched.requestedExchange).toBe('BATS');
 			expect(enriched.requestedExchangeMappedTo).toBe('NASDAQ');
+			// `exchange` is deliberately absent: emitting it would duplicate
+			// requestedExchange AND pre-empt the fill-from-parse path in alert.js,
+			// which would let a configured default venue (BINANCE) masquerade as a
+			// screener-sent prefix in the persisted alert.
+			expect(enriched).not.toHaveProperty('exchange');
 		});
 
 		it('keeps supported exchanges byte-for-byte unchanged', async () => {

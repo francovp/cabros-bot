@@ -54,10 +54,7 @@ function calculateBackoffDelay(attempt) {
  * @param {Function} sendFn - Async function that returns SendResult or throws
  * @param {number} maxRetries - Maximum retry attempts (default: 3)
  * @param {Object} logger - Logger object with warn() and error() methods (optional)
- * @param {Object} options - Optional { signal, maxRetryDelayMs, shouldRetry }
- *   shouldRetry(result) may return false to stop retrying a deterministic
- *   (non-transient) failure; the current result is returned with the attempt
- *   count that actually ran.
+ * @param {Object} options - Optional { signal, maxRetryDelayMs }
  * @returns {Promise<Object>} SendResult object after success or max retries exhausted
  */
 async function sendWithRetry(sendFn, maxRetries = 3, logger = null, options = {}) {
@@ -92,17 +89,6 @@ async function sendWithRetry(sendFn, maxRetries = 3, logger = null, options = {}
 			}
 			if (signal && signal.aborted) {
 				return buildAbortedResult(signal, lastResult, totalStartTime, attempt);
-			}
-
-			if (attempt < maxRetries && options.shouldRetry && options.shouldRetry(result) === false) {
-				const terminalDurationMs = Date.now() - totalStartTime;
-				return {
-					...lastResult,
-					success: false,
-					error: lastResult?.error || 'Retry suppressed for a terminal result',
-					attemptCount: attempt,
-					durationMs: terminalDurationMs,
-				};
 			}
 
 			if (attempt < maxRetries) {

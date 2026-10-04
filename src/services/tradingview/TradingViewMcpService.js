@@ -637,11 +637,13 @@ class TradingViewMcpService {
 					success: false,
 					channel: 'tradingview-mcp',
 					error: error.message,
-					...(terminal ? { deterministicNoData: true } : {}),
 					// Carry the structural budget marker out of the abort reason so the
 					// retry/caller chain can still recognise our own deadline (GH-630).
 					...(error && error.mcpBudgetExhausted === true ? { mcpBudgetExhausted: true } : {}),
-					retryable: error.category !== 'provider_unavailable',
+					// A deterministic "no data for this symbol/venue" answer will never
+					// succeed on a retry, so stop the chain here rather than adding a
+					// second stop mechanism - retryHelper already halts on retryable:false.
+					retryable: terminal ? false : error.category !== 'provider_unavailable',
 				};
 			} finally {
 				clearTimeout(attemptTimeoutId);
@@ -649,7 +651,6 @@ class TradingViewMcpService {
 		}, cfg.maxRetries, this.logger, {
 			signal: baseSignal,
 			maxRetryDelayMs: retryDelayCapMs,
-			shouldRetry: attemptResult => attemptResult?.deterministicNoData !== true,
 		});
 		cleanBaseBudget();
 
@@ -1396,9 +1397,10 @@ class TradingViewMcpService {
 			extraText,
 			confluenceData: confluenceAnalysis || null,
 			multiTimeframeData: multiTimeframeAnalysis || null,
-			// Exchange metadata always reports the venue the screener sent; the
-			// MCP-only alias target is surfaced separately (#591).
-			exchange: exchangeResolution.requestedExchange || exchange,
+			// Reports the venue the screener sent; the MCP-only alias target is
+			// surfaced separately (#591). `exchange` is deliberately NOT emitted:
+			// it would be an identical duplicate of `requestedExchange`, and leaving
+			// it absent keeps the existing fill-from-parse path unchanged.
 			requestedExchange: exchangeResolution.requestedExchange || exchange,
 			...(exchangeResolution.requestedExchangeMappedTo
 				? { requestedExchangeMappedTo: exchangeResolution.requestedExchangeMappedTo }
