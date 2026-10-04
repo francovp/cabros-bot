@@ -10148,6 +10148,12 @@
               "status": "Unauthorized",
               "code": 401,
               "body": "{\n  \"error\": \"Unauthorized\",\n  \"code\": \"ADMIN_AUTH_REQUIRED\"\n}"
+            },
+            {
+              "name": "Binance Failure",
+              "status": "Bad Gateway",
+              "code": 502,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance balance query failed\",\n  \"code\": \"BINANCE_BALANCE_QUERY_FAILED\"\n}"
             }
           ]
         },
