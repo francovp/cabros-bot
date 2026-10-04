@@ -100,37 +100,46 @@ curl http://localhost/healthcheck
 
 ### Production Smoke Probe
 
-A scheduled GitHub Actions workflow (`.github/workflows/production-smoke-probe.yml`) probes the Railway deployment every 15 minutes and pages the Telegram admin chat on persistent failures. The probe runs `ops/production-smoke-probe.sh`, which:
+A scheduled GitHub Actions workflow (`.github/workflows/production-smoke-probe.yml`) probes the Railway deployment every 15 minutes and pages the Telegram admin chat when production is unreachable. It checks out the repository first, so `ops/production-smoke-probe.sh` is present on the runner. The probe:
 
 - Hits `/healthcheck` (must return HTTP 200).
 - Hits `/api/status` with the `x-api-key` header from the `WEBHOOK_API_KEY` GitHub secret.
-- Asserts `service.commit` matches the latest `master` SHA (catches stale deploys).
+- Asserts `service.commit` matches the expected SHA (catches stale deploys). By default that is the latest `master` SHA; the `workflow_dispatch` `expected_commit` input overrides it.
 - Optionally asserts each dependency in `PRODUCTION_REQUIRE_READY_DEPS` is `ready: true`.
+
+Every run resolves to exactly one **outcome**, so a broken CI setup is never reported as a production outage:
+
+| Outcome | Meaning | Pages the admin chat? |
+| --- | --- | --- |
+| `ok` | Service reachable, healthy, on the expected commit | No |
+| `down` | `/healthcheck` non-200, or `/api/status` unreachable | **Yes** |
+| `stale` | `service.commit` differs from the expected commit (deploy in flight) | No |
+| `degraded` | Reachable, but a required dependency is not ready | No |
+| `unconfigured` | `WEBHOOK_API_KEY` is not set, so the probe never ran | No |
+| `script_missing` | The probe script was absent from the workspace | No |
+| `invalid_args` | The probe rejected its arguments | No |
+| `unknown` | Unclassified non-zero exit | No |
+
+Only `down` pages. Paging a stale deploy or a missing secret would train operators to ignore the one signal that means alerts are not being delivered. Every non-`ok` outcome still fails the job and emits a `::error::` or `::warning::` annotation naming the specific failure.
 
 Configure the probe via GitHub repository variables (no application-owned env vars required):
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PRODUCTION_BASE_URL` | `https://cabros-bot-production.up.railway.app` | Probe target. |
+| `PRODUCTION_BASE_URL` | `https://cabros-bot-production.up.railway.app` | Probe target. The `workflow_dispatch` `base_url` input overrides it. |
 | `PRODUCTION_REQUIRE_READY_DEPS` | empty | Comma-separated dependency names that must be ready (e.g. `tradingViewMcp,firestore`). |
 | `PRODUCTION_PROBE_TIMEOUT` | `15` | Per-request curl timeout (seconds). |
+| `PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES` | `60` | Minimum gap between repeat operator pages during a sustained outage. `0` pages on every run. A malformed value falls back to `60` with a warning. |
 
 Configure the probe via GitHub repository secrets:
 
 | Secret | Purpose |
 | --- | --- |
-| `WEBHOOK_API_KEY` | Sent via the `x-api-key` header. Never appears in URLs, logs, or job summaries. |
-| `TELEGRAM_BOT_TOKEN` | (Optional) Enables admin paging on persistent failures. |
-| `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` | (Optional) Target chat id for admin paging. |
+| `WEBHOOK_API_KEY` | **Required.** Sent via the `x-api-key` header. Never appears in URLs, logs, or job summaries. |
+| `TELEGRAM_BOT_TOKEN` | (Optional) Enables admin paging when production is down. |
+| `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` | (Optional) Target chat id for admin paging. Both Telegram secrets must be set or neither is used. |
 
-Exit codes:
-
-- `0` — probe succeeded
-- `2` — `AUTH_BLOCKED` (missing `WEBHOOK_API_KEY`) or `SECRET_LEAK` (credentials in URL)
-- `3` — `/healthcheck` non-200
-- `4` — `/api/status` request failed or returned non-JSON
-- `5` — `service.commit` does not match the expected SHA (stale deploy)
-- `6` — at least one required dependency is not ready
+The cooldown latch is stored in `.smoke-probe-state/` and carried between runs through the GitHub Actions cache. It latches **only after a confirmed delivery**, so a page that could not be delivered is retried on the next scheduled run, and a successful (`ok`) run clears it so the next outage pages immediately.
 
 Run locally for debugging:
 
@@ -139,6 +148,11 @@ WEBHOOK_API_KEY=$YOUR_KEY \
 PRODUCTION_BASE_URL=https://cabros-bot-production.up.railway.app \
 PRODUCTION_EXPECTED_COMMIT=$(git rev-parse origin/master) \
 ops/production-smoke-probe.sh
+
+# Exercise the paging decision without sending anything.
+PROBE_OUTCOME=down \
+PROBE_DETAIL='HEALTHCHECK_FAILED: /healthcheck returned HTTP 503.' \
+ops/production-smoke-probe-notify.sh
 ```
 
 ### Logs

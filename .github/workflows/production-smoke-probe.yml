@@ -1,22 +1,41 @@
 name: Production Smoke Probe
 
-# Scheduled GitHub Actions workflow that smoke-probes Railway production after
-# each deployment so silent bad deployments page operators via Telegram.
+# Scheduled GitHub Actions workflow that smoke-probes Railway production so a bad
+# or missing deployment pages operators instead of silently killing alert delivery.
 #
 # Configuration:
 #   1. Add GitHub repository variable PRODUCTION_BASE_URL with the canonical
 #      deployment URL (default: https://cabros-bot-production.up.railway.app).
 #   2. Add GitHub secret WEBHOOK_API_KEY (matches the server's validateApiKey).
+#      Required: without it the probe cannot run and the job reports
+#      `probe_unconfigured` rather than a production failure.
 #   3. (Optional) Add GitHub secret TELEGRAM_BOT_TOKEN (admin-notifications
 #      bot) and TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID (target chat id) to
-#      enable admin paging on persistent failures.
+#      enable admin paging when production is unreachable. Without both, a real
+#      outage is reported as `paging_not_configured` and the failed job is the
+#      only signal.
 #   4. (Optional) Override PRODUCTION_EXPECTED_COMMIT, PRODUCTION_REQUIRE_READY_DEPS,
 #      PRODUCTION_PROBE_TIMEOUT, and PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES
 #      via repository variables.
 #
+# Failure classification: every run maps to exactly one outcome, so a broken CI
+# setup is never mistaken for a production outage:
+#   ok              healthy
+#   down             production unreachable or unhealthy  -> pages the admin chat
+#   stale            production serving a different commit (deploy in flight)
+#   degraded         production reachable, a required dependency is not ready
+#   unconfigured     WEBHOOK_API_KEY missing; the probe never ran
+#   script_missing   the probe script was absent; a bug in this workflow
+#   invalid_args     the probe rejected its arguments; a bug in this workflow
+#   unknown          unclassified non-zero exit; reachability unknown
+#
+# Only `down` pages. Paging a stale deploy or a missing secret would teach
+# operators to ignore the one signal that means alerts are not being delivered.
+#
 # Security: WEBHOOK_API_KEY is sent via the `x-api-key` header (never in URLs
-# or query parameters) by piping it into curl through stdin. Job summaries and
-# logs never echo the key.
+# or query parameters) by piping it into curl through stdin. The Telegram bot
+# token and chat id are never echoed; both helper scripts redact them from any
+# provider output they surface. Job summaries and logs never echo these values.
 
 on:
   schedule:
@@ -42,22 +61,44 @@ jobs:
     timeout-minutes: 4
 
     env:
-      PRODUCTION_BASE_URL: ${{ vars.PRODUCTION_BASE_URL || 'https://cabros-bot-production.up.railway.app' }}
+      PRODUCTION_BASE_URL: ${{ github.event.inputs.base_url || vars.PRODUCTION_BASE_URL || 'https://cabros-bot-production.up.railway.app' }}
       PRODUCTION_REQUIRE_READY_DEPS: ${{ vars.PRODUCTION_REQUIRE_READY_DEPS || '' }}
       PRODUCTION_PROBE_TIMEOUT: ${{ vars.PRODUCTION_PROBE_TIMEOUT || '15' }}
+      PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES: ${{ vars.PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES || '60' }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID }}
 
     steps:
+      # The probe script lives in this repository, so the workspace must be
+      # populated before anything invokes it.
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
       - name: Install jq (used by the probe script)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
 
-      - name: Determine the latest master commit SHA
+      - name: Restore the last operator page timestamp
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .smoke-probe-state
+          key: production-smoke-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            production-smoke-probe-
+
+      - name: Determine the expected commit SHA
         id: master-sha
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISPATCH_EXPECTED_COMMIT: ${{ github.event.inputs.expected_commit }}
         run: |
           set -euo pipefail
+          if [[ -n "${DISPATCH_EXPECTED_COMMIT:-}" ]]; then
+            echo "sha=$DISPATCH_EXPECTED_COMMIT" >> "$GITHUB_OUTPUT"
+            echo "Using expected commit from workflow_dispatch input: $DISPATCH_EXPECTED_COMMIT"
+            exit 0
+          fi
           sha=""
           if [[ -n "${GH_TOKEN:-}" ]]; then
             sha="$(curl --silent --show-error --max-time 10 \
@@ -76,6 +117,19 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Latest master SHA: $sha"
 
+      - name: Verify the probe script is available
+        id: preflight
+        run: |
+          set -euo pipefail
+          if [[ ! -f ops/production-smoke-probe.sh ]]; then
+            echo "::error title=Probe script missing::probe_script_missing: ops/production-smoke-probe.sh was not found in the checked-out workspace. This is a bug in the CI workflow, NOT a production outage; the availability gate did not run."
+            echo "outcome=script_missing" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          chmod +x ops/production-smoke-probe.sh ops/production-smoke-probe-notify.sh
+          test -x ops/production-smoke-probe.sh
+          test -x ops/production-smoke-probe-notify.sh
+
       - name: Run the smoke probe against the expected commit
         id: probe
         env:
@@ -84,11 +138,66 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          ops/production-smoke-probe.sh
+          probe_output="$(ops/production-smoke-probe.sh 2>&1)"
           rc=$?
           set -e
-          echo "probe_exit=$rc" >> "$GITHUB_OUTPUT"
-          if [[ "$rc" -ne 0 ]]; then
-            echo "::warning::Smoke probe exited with code $rc"
+          printf '%s\n' "$probe_output"
+          detail="$(printf '%s\n' "$probe_output" | tail -n 1 | tr -d '\r')"
+          case "$rc" in
+            0)
+              outcome=ok
+              ;;
+            2)
+              outcome=unconfigured
+              if [[ "$detail" == *AUTH_BLOCKED* ]]; then
+                detail="AUTH_BLOCKED: the WEBHOOK_API_KEY repository secret is not set, so the probe never reached production"
+              fi
+              echo "::error title=Probe not configured::probe_unconfigured: $detail This is a CI misconfiguration, not a production outage."
+              ;;
+            3|4)
+              outcome=down
+              ;;
+            5)
+              outcome=stale
+              ;;
+            6)
+              outcome=degraded
+              ;;
+            64)
+              outcome=invalid_args
+              ;;
+            127)
+              outcome=script_missing
+              ;;
+            *)
+              outcome=unknown
+              ;;
+          esac
+          {
+            echo "probe_exit=$rc"
+            echo "outcome=$outcome"
+            echo "probe_detail=$detail"
+          } >> "$GITHUB_OUTPUT"
+          if [[ "$outcome" != "ok" ]]; then
+            echo "::warning::Smoke probe exited with code $rc (outcome=$outcome)"
             exit 1
           fi
+
+      - name: Page the admin chat when production is down
+        if: always()
+        env:
+          PROBE_OUTCOME: ${{ steps.preflight.outputs.outcome || steps.probe.outputs.outcome }}
+          PROBE_DETAIL: ${{ steps.probe.outputs.probe_detail }}
+          PROBE_EXIT: ${{ steps.probe.outputs.probe_exit }}
+          PROBE_BASE_URL: ${{ env.PRODUCTION_BASE_URL }}
+          PROBE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PROBE_COOLDOWN_MINUTES: ${{ env.PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES }}
+          PROBE_COOLDOWN_STATE_FILE: .smoke-probe-state/last-page.env
+        run: ops/production-smoke-probe-notify.sh
+
+      - name: Persist the operator page timestamp
+        if: always()
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .smoke-probe-state
+          key: production-smoke-probe-${{ github.run_id }}-${{ github.run_attempt }}

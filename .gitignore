@@ -133,3 +133,6 @@ docs/superpowers/
 # Local browser verification artifacts
 .playwright-cli/
 output/playwright/
+
+# Smoke probe cooldown latch written by the Production Smoke Probe workflow
+.smoke-probe-state/

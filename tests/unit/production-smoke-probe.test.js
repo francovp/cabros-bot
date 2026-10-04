@@ -346,4 +346,135 @@ describe('Production Smoke Probe workflow YAML', () => {
 		const content = readFileSync(workflowPath, 'utf8');
 		expect(content).toContain('ops/production-smoke-probe.sh');
 	});
+
+	// Regression coverage for #971: without a checkout the probe script is absent
+	// on the runner, so every run dies at exit 127 before any HTTP request while
+	// appearing to be a real production failure.
+	describe('repository checkout (issue #971)', () => {
+		it('checks out the repository so the probe script exists on the runner', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toMatch(/uses:\s*actions\/checkout@[0-9a-f]{40}/);
+		});
+
+		it('pins the checkout action to the same SHA used by the other workflows', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toContain(
+				'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+			);
+		});
+
+		it('does not persist the GITHUB_TOKEN credential on disk', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toMatch(/persist-credentials:\s*false/);
+		});
+
+		it('checks out before the probe script is invoked', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			const checkoutIndex = content.search(/uses:\s*actions\/checkout@/);
+			const probeIndex = content.search(/ops\/production-smoke-probe\.sh/);
+			expect(checkoutIndex).toBeGreaterThan(-1);
+			expect(probeIndex).toBeGreaterThan(-1);
+			expect(checkoutIndex).toBeLessThan(probeIndex);
+		});
+
+		it('pins every actions/* reference in the workflow to a full commit SHA', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			const refs = content.match(/uses:\s*[\w-]+\/[\w-]+@([^\s#]+)/g) || [];
+			expect(refs.length).toBeGreaterThan(0);
+			for (const ref of refs) {
+				const pinned = ref.split('@')[1];
+				expect(pinned).toMatch(/^[0-9a-f]{40}$/);
+			}
+		});
+	});
+
+	describe('probe script preflight (issue #971)', () => {
+		it('fails loudly with a distinct probe_script_missing marker instead of exit 127', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toContain('probe_script_missing');
+			expect(content).toContain('::error');
+		});
+
+		it('distinguishes an infra bug from a production outage', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toMatch(/CI|workflow/i);
+			expect(content).toMatch(/NOT a production outage|not a production outage/i);
+		});
+
+		it('verifies the script exists before invoking it', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toMatch(/ops\/production-smoke-probe\.sh/);
+			expect(content).toMatch(/if\s+\[\[\s*!\s+-f\s+ops\/production-smoke-probe\.sh/);
+		});
+	});
+
+	describe('outcome classification (issue #971)', () => {
+		it('maps every probe exit code onto a named outcome', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toContain('outcome=');
+			for (const outcome of ['ok', 'unconfigured', 'down', 'stale', 'degraded']) {
+				expect(content).toContain(`outcome=${outcome}`);
+			}
+		});
+
+		it('reports a missing WEBHOOK_API_KEY secret as probe_unconfigured', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toContain('probe_unconfigured');
+			expect(content).toContain('AUTH_BLOCKED');
+		});
+
+		it('classifies healthcheck and status failures as a production outage', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			// exit 3 = /healthcheck non-200, exit 4 = /api/status unreachable.
+			expect(content).toMatch(/(3\|4\)|\b3\)|\b4\))[\s\S]{0,32}?outcome=down/);
+		});
+
+		it('classifies a commit mismatch as a stale deploy rather than an outage', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toMatch(/5\)\s*outcome=stale/);
+		});
+	});
+
+	describe('admin paging (issue #971)', () => {
+		it('invokes the paging helper after the probe', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toContain('ops/production-smoke-probe-notify.sh');
+		});
+
+		it('passes the probe outcome to the paging helper', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toContain('PROBE_OUTCOME');
+		});
+
+		it('runs the paging step even though the probe step failed', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toMatch(/if:\s*always\(\)/);
+		});
+
+		it('wires the cooldown setting it documents in the header', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toContain('PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES');
+			expect(content).toMatch(
+				/PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES:\s*\$\{\{\s*vars\.PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES/,
+			);
+		});
+
+		it('persists the cooldown latch between scheduled runs', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toMatch(/actions\/cache\/restore@[0-9a-f]{40}/);
+			expect(content).toMatch(/actions\/cache\/save@[0-9a-f]{40}/);
+		});
+	});
+
+	describe('documented knobs actually work (issue #971)', () => {
+		it('honours the base_url dispatch input instead of ignoring it', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toMatch(/github\.event\.inputs\.base_url/);
+		});
+
+		it('honours the expected_commit dispatch input instead of ignoring it', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toMatch(/github\.event\.inputs\.expected_commit/);
+		});
+	});
 });
