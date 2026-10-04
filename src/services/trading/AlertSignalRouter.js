@@ -207,7 +207,17 @@ async function routeAlertToOrder({ alert, parsed, requestId }) {
 		return { executed: false, reason: 'COOLDOWN_ACTIVE' };
 	}
 
-	const idempotencyKey = `auto-trade:${requestId || 'unknown'}:${cooldownKey || symbol}`;
+	// The idempotency key MUST be derived from the signal itself, never from the
+	// per-request id. resolveRequestId() returns a fresh randomUUID() whenever the
+	// caller omits x-request-id (TradingView does not send one), so a key built
+	// from requestId would differ on every webhook retry and the existing
+	// reconcile-before-submit path in placeOrder() would never match — letting a
+	// retried alert submit a second live order.
+	//
+	// Keying on exchange|symbol|timeframe|side means retries of the same signal
+	// collapse onto one Binance clientOrderId, and a genuinely new signal on the
+	// same key correctly reconciles against the prior order instead of stacking.
+	const idempotencyKey = `auto-trade:${cooldownKey || symbol}`;
 
 	try {
 		const result = await binanceOrderService.placeOrder(order, { idempotencyKey });
@@ -217,6 +227,9 @@ async function routeAlertToOrder({ alert, parsed, requestId }) {
 		console.info('[AlertSignalRouter] auto-trade order submitted', {
 			symbol,
 			side,
+			// requestId is log-correlation only; it is deliberately NOT part of
+			// idempotencyKey above. See the comment there.
+			requestId: requestId || null,
 			dryRun: Boolean(result && result.dryRun),
 			environment: result && result.environment,
 			orderId: result && result.order ? result.order.orderId : null,

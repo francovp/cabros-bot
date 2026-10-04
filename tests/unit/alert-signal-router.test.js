@@ -218,7 +218,8 @@ describe('routeAlertToOrder', () => {
 		expect(mockPlaceOrder).toHaveBeenCalledTimes(1);
 		const [body, options] = mockPlaceOrder.mock.calls[0];
 		expect(body.dryRun).toBe(true);
-		expect(options.idempotencyKey).toContain('auto-trade:r1');
+		// Signal-derived, NOT request-derived: see the regression test below.
+		expect(options.idempotencyKey).toBe('auto-trade:autotrade|BINANCE|BTCUSDT|1h|BUY');
 	});
 
 	it('refuses a live order on an unresolvable timeframe', async () => {
@@ -257,6 +258,32 @@ describe('routeAlertToOrder', () => {
 		const second = await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), requestId: 'r2' });
 		expect(second.reason).toBe('COOLDOWN_ACTIVE');
 		expect(mockPlaceOrder).toHaveBeenCalledTimes(1);
+	});
+
+	// Regression: TradingView does not send x-request-id, so resolveRequestId()
+	// mints a fresh UUID per delivery. A key built from requestId therefore
+	// differed on every webhook retry, defeating placeOrder()'s
+	// reconcile-before-submit and allowing a duplicate live order.
+	it('derives the idempotency key from the signal, not the per-request id', async () => {
+		process.env.ENABLE_AUTO_TRADE = 'true';
+		await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), requestId: 'req-A' });
+		__resetForTesting(); // simulate a process restart, losing the cooldown
+		await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), requestId: 'req-B' });
+
+		const keys = mockPlaceOrder.mock.calls.map((call) => call[1].idempotencyKey);
+		expect(keys).toHaveLength(2);
+		expect(new Set(keys).size).toBe(1);
+		expect(keys[0]).toBe('auto-trade:autotrade|BINANCE|BTCUSDT|1h|BUY');
+	});
+
+	it('issues a distinct idempotency key for a different signal', async () => {
+		process.env.ENABLE_AUTO_TRADE = 'true';
+		await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), requestId: 'r1' });
+		__resetForTesting();
+		await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed({ timeframe: '4h' }), requestId: 'r1' });
+
+		const keys = mockPlaceOrder.mock.calls.map((call) => call[1].idempotencyKey);
+		expect(new Set(keys).size).toBe(2);
 	});
 
 	it('does not suppress an opposite-side flip', async () => {
