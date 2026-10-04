@@ -18,7 +18,7 @@
 
 const admin = require('firebase-admin');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
-const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentials');
+const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
 
 const COLLECTION_NAME = 'news-monitor-dedup';
 const DELIVERY_ROUTING_FIELDS = {
@@ -87,7 +87,8 @@ function isEnabled() {
 /**
  * Initialize Firebase Admin (idempotent) and return Firestore client.
  * Reuses existing admin app if already initialized by AlertStorageService.
- * Returns null when the feature is disabled or initialization fails.
+ * Returns null when the feature is disabled, when initialization fails, or when
+ * configured Firebase credentials are invalid (in-memory fallback).
  *
  * @returns {FirebaseFirestore.Firestore | null}
  */
@@ -101,17 +102,12 @@ function getFirestore() {
 	}
 
 	try {
-		const loaded = loadFirebaseAdminCredentialsOrNull();
-		const appOptions = {};
-		if (loaded && loaded.credential) {
-			appOptions.credential = loaded.credential;
-		}
-		if (loaded && loaded.projectId) {
-			appOptions.projectId = loaded.projectId;
-		}
-
-		if (!admin.apps.length) {
-			admin.initializeApp(appOptions);
+		const initialization = initializeFirebaseAdminApp({ admin });
+		if (!initialization.ok) {
+			console.warn(
+				`[NewsDedupStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`
+			);
+			return null;
 		}
 
 		db = admin.firestore();
@@ -441,6 +437,7 @@ module.exports = {
 	deleteEntry,
 	COLLECTION_NAME,
 	// Exported for testing — reset the cached db singleton between tests
+	getFirestore,
 	_resetForTesting() {
 		db = null;
 	},

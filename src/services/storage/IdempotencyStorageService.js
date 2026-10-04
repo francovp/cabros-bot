@@ -26,7 +26,7 @@
 const crypto = require('crypto');
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('./firestoreConfig');
-const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentials');
+const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
 
 const COLLECTION_NAME = 'idempotency_keys';
 const PENDING_STALE_TIMEOUT_MS = 180000; // 3 minutes max pending claim lifetime to cover 120s webhook limits
@@ -48,7 +48,8 @@ function hashKey(key) {
 /**
  * Initialize Firebase Admin (idempotent) and return Firestore client.
  * Reuses existing admin app if initialized by other storage services.
- * Returns null when feature is disabled or credentials missing/invalid.
+ * Returns null when feature is disabled, or when configured Firebase credentials
+ * fail validation (in-memory fallback without touching the SDK).
  *
  * @returns {FirebaseFirestore.Firestore | null}
  */
@@ -62,17 +63,12 @@ function getFirestore() {
 	}
 
 	try {
-		const loaded = loadFirebaseAdminCredentialsOrNull();
-		const appOptions = {};
-		if (loaded && loaded.credential) {
-			appOptions.credential = loaded.credential;
-		}
-		if (loaded && loaded.projectId) {
-			appOptions.projectId = loaded.projectId;
-		}
-
-		if (!admin.apps.length) {
-			admin.initializeApp(appOptions);
+		const initialization = initializeFirebaseAdminApp({ admin });
+		if (!initialization.ok) {
+			console.warn(
+				`[IdempotencyStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`
+			);
+			return null;
 		}
 
 		db = admin.firestore();
@@ -434,6 +430,7 @@ module.exports = {
 	releaseEntry,
 	getEntry,
 	COLLECTION_NAME,
+	getFirestore,
 	_resetForTesting() {
 		db = null;
 	},
