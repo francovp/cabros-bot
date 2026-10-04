@@ -343,6 +343,26 @@ describe('Postman collection contract', () => {
 		}
 	});
 
+	it('documents the empty test-alert text 400 that mirrors the OpenAPI minLength', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Test Alert (Invalid Input - 400 Bad Request)');
+		const example = item.response.find((response) => response.name === '400 Bad Request - Empty Text');
+
+		expect(example).toBeDefined();
+		expect(example.code).toBe(400);
+		expect(JSON.parse(example.body)).toEqual({
+			error: 'Alert text is required and must be a string',
+			code: 'INVALID_REQUEST',
+		});
+		expect(JSON.parse(example.originalRequest.body.raw)).toEqual({ text: '', channels: ['telegram'] });
+
+		const contract = JSON.parse(fs.readFileSync(
+			path.join(__dirname, '../../src/openapi/openapi.json'),
+			'utf8',
+		));
+		expect(contract.components.schemas.TestAlertRequest.properties.text.minLength).toBe(1);
+	});
+
 	it('documents Request Timeout (408) on every affected admin request variant', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const affectedPaths = [

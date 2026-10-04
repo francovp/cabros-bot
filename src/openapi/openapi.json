@@ -7088,7 +7088,8 @@
         "properties": {
           "text": {
             "type": "string",
-            "description": "Optional custom alert probe text. Defaults to formatted smoke alert with timestamp."
+            "minLength": 1,
+            "description": "Optional custom alert probe text. Must be non-empty when provided; an empty string returns 400 INVALID_REQUEST. Defaults to formatted smoke alert with timestamp."
           },
           "channels": {
             "type": "array",
