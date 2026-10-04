@@ -647,7 +647,7 @@ The system provides status and capability querying endpoints to verify service c
 **Failure and Edge Case Behavior**:
 - The API gates checks behind the `validateApiKey` middleware.
 - Dependency checking (like querying the TradingView MCP or testing Firestore credentials) is done safely and returns detailed state status (`ready`, `error`, `unconfigured`) in a clean JSON format.
-- `deliveryMetrics` is fail-open: malformed or missing `durationMs` values are excluded from latency averages without blocking delivery; counters reset on process restart (acceptable for operational monitoring) and never return values for channels that have not recorded any deliveries.
+- `deliveryMetrics` is fail-open: `NotificationManager._recordDeliveryMetrics()` substitutes the total dispatch duration when a channel result's `durationMs` is missing or not a finite number, so those deliveries still count toward the latency averages rather than being excluded; only a duration that is still not a finite, non-negative number when it reaches `DeliveryMetricsService.record()` is left out of the average, and neither layer blocks delivery. Counters reset on process restart (acceptable for operational monitoring) and never return values for channels that have not recorded any deliveries.
 - `firestoreWriteMetrics` is fail-open: increments are wrapped in try/catch and never throw; counters reset on process restart and the `dependencies.firestoreWriteMetrics` object is omitted entirely until at least one write has been attempted.
 
 ## Alert Delivery SLA & Error Budget Metrics (GH-687)
