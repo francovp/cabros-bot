@@ -291,6 +291,23 @@ Setting the variable is **necessary but not sufficient**, because this layer is 
 
 `expiresAt` on each document is only honoured once Firestore's TTL policy exists, so run `bash ops/configure-operational-collection-retention.sh` once per Firebase project; until then the collection grows without bound. Rollback is `false` plus a redeploy — no code change. See [Environment Configuration](docs/environment-configuration.md#verifying-idempotency-storage-is-actually-durable).
 
+### Firebase Admin Auth Readiness
+`ENABLE_FIREBASE_ADMIN_AUTH=true` lets the `/admin` console authenticate with Firebase ID tokens instead of pasting `WEBHOOK_API_KEY` into the browser. `admin.viewer` authorizes reads, `admin.operator` authorizes mutations, and `verifyIdToken(token, true)` fails closed for expired, revoked, disabled, malformed, or wrong-project tokens. Webhook paths are unaffected and still require the API key.
+
+`GET /api/status` and `GET /api/capabilities` expose `featureFlags.firebaseAdminAuth` (the gate) and a non-sensitive `dependencies.adminAuth` block built by `getAdminAuthStatus()`. `verifierConfigured` reports credential **shape** only — the server holds something it *could* verify with — so `ready` is deliberately **not** derived from it. `ready` requires an observed successful `verifyIdToken()`:
+
+| `status` | Meaning |
+| :--- | :--- |
+| `disabled` | `ENABLE_FIREBASE_ADMIN_AUTH` is not `true`. |
+| `misconfigured` | Enabled, but the server has no verifier credentials. |
+| `unverified` | Configured, but no token has verified yet. Not a failure — and not health. It is the normal state right after every deploy. |
+| `ready` | A Firebase ID token has actually verified. |
+| `degraded` | The verifier itself was unavailable (`ADMIN_AUTH_UNAVAILABLE`); an access decision still fails closed. |
+
+**A rejected bearer token is never recorded.** Expired, revoked, wrong-project and random-garbage tokens are indistinguishable to `verifyIdToken()`, so counting them would let any unauthenticated caller flip the dependency to `degraded` with a single request — turning a monitoring surface into a one-request DoS. Only a verifier that cannot be *reached* degrades the block. A verified token **without** an admin role counts as a success, because the token verified and the role decision is an authorization outcome, not a dependency fault.
+
+`getAdminAuthStatus()` is booleans and counters only — the Firebase Web config stays behind `/admin/auth-config` and is never echoed into a status payload, and `/api/public/status` uses an explicit three-dependency allow-list that does not include this block. Counters are process-local and reset on restart, so `unverified` after a deploy is expected. See [API Reference](docs/api-reference.md#get-apistatus).
+
 ### Market Scanner MCP Fast-Fail Gate
 `POST /api/webhook/market-scanner-alert` checks the process-local TradingView MCP status before running its sequential scans. If the status is `degraded` with `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, it skips every scan and returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with each scan as `status: "skipped"`. The endpoint returns `502` in two shapes: `TRADINGVIEW_MCP_UNAVAILABLE` (skipped, nothing attempted) and `ALL_SCANS_FAILED` (attempted, all failed). The gate keys on the breaker's time-based state so that after `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses the next request is allowed through as a recovery probe — a transient outage self-heals without a restart. See [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert).
 

@@ -26,6 +26,105 @@ function collectRequestItems(items, result = []) {
 	return result;
 }
 
+// Minimal `pm` harness that actually EXECUTES a Postman item's test script, so a
+// self-defeating assertion cannot ship. `pm.expect(raw).to.not.include('apiKey')`
+// reads as a no-credential-leak guard, but every /api/status body carries the
+// documented field name `apiKeyFallbackConfigured`, so it always fails in
+// Postman. The contract assertions in this file check `/authDomain/i` instead,
+// which is why nothing in CI can see that defect class. An unsupported matcher
+// throws rather than silently passing, so widening the subset is deliberate.
+function createPmHarness(response, onResult) {
+	const buildChain = (actual, negated) => {
+		const check = (passed, description) => {
+			if (passed === negated) {
+				throw new Error(`expected ${description} to ${negated ? 'NOT ' : ''}hold`);
+			}
+		};
+		const chain = {
+			get to() { return chain; },
+			get be() { return chain; },
+			get been() { return chain; },
+			get that() { return chain; },
+			get which() { return chain; },
+			get and() { return chain; },
+			get has() { return chain; },
+			get have() { return chain; },
+			get is() { return chain; },
+			get deep() { return chain; },
+			get not() { return buildChain(actual, !negated); },
+			eql(expected) {
+				check(
+					JSON.stringify(actual) === JSON.stringify(expected),
+					`${JSON.stringify(actual)} to eql ${JSON.stringify(expected)}`,
+				);
+				return chain;
+			},
+			equal(expected) { return chain.eql(expected); },
+			include(expected) {
+				const passed = typeof actual === 'string'
+					? actual.includes(expected)
+					: Array.isArray(actual) && actual.includes(expected);
+				check(passed, `${JSON.stringify(actual)} to include ${JSON.stringify(expected)}`);
+				return chain;
+			},
+			property(key) {
+				check(
+					actual !== null && actual !== undefined
+						&& Object.prototype.hasOwnProperty.call(actual, key),
+					`${JSON.stringify(actual)} to have property "${key}"`,
+				);
+				return chain;
+			},
+			an(type) {
+				const observed = Array.isArray(actual) ? 'array' : typeof actual;
+				check(observed === type, `${JSON.stringify(actual)} to be an ${type} (got ${observed})`);
+				return chain;
+			},
+			a(type) { return chain.an(type); },
+			above(limit) {
+				check(typeof actual === 'number' && actual > limit, `${actual} to be above ${limit}`);
+				return chain;
+			},
+			least(limit) {
+				check(typeof actual === 'number' && actual >= limit, `${actual} to be at least ${limit}`);
+				return chain;
+			},
+			below(limit) {
+				check(typeof actual === 'number' && actual < limit, `${actual} to be below ${limit}`);
+				return chain;
+			},
+		};
+		return chain;
+	};
+
+	return {
+		test(name, fn) {
+			try {
+				fn();
+				onResult({ name, passed: true, error: null });
+			} catch (error) {
+				onResult({ name, passed: false, error: error.message });
+			}
+		},
+		expect(actual) { return buildChain(actual, false); },
+		response: {
+			code: response.code,
+			text: () => response.body,
+			json: () => JSON.parse(response.body),
+		},
+	};
+}
+
+function runItemTestScript(item, response) {
+	const script = (item.event || []).find((event) => event.listen === 'test');
+	if (!script) throw new Error(`item "${item.name}" has no test script`);
+	const results = [];
+
+	const run = new Function('pm', script.script.exec.join('\n'));
+	run(createPmHarness(response, (result) => results.push(result)));
+	return results;
+}
+
 describe('Postman collection contract', () => {
 	it('documents Firebase admin configuration and bearer-auth status access', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
@@ -720,6 +819,26 @@ describe('Postman collection contract', () => {
 			const raw = res.body;
 			expect(raw).not.toMatch(/apikey/i);
 			expect(raw).not.toMatch(/sk-[a-z0-9]/i);
+		}
+	});
+
+	it('ships executable Postman assertions that actually pass on every documented response', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - Firebase admin auth readiness (issue #1134)');
+
+		// Only the 200 variants: the script asserts on `dependencies.adminAuth`,
+		// which the documented 401 error envelope intentionally does not carry.
+		const successes = item.response.filter((res) => res.code === 200);
+		expect(successes).toHaveLength(5);
+
+		for (const res of successes) {
+			const results = runItemTestScript(item, { code: res.code, body: res.body });
+			const failures = results.filter((result) => !result.passed);
+
+			expect({
+				example: res.name,
+				failures: failures.map((failure) => `${failure.name}: ${failure.error}`),
+			}).toEqual({ example: res.name, failures: [] });
 		}
 	});
 
