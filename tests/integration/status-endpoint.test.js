@@ -1392,6 +1392,63 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	// ── Issue #1285 ──────────────────────────────────────────────────────────
+	// `ready` used to be derived from credential *shape* alone, so a deployment
+	// whose writes succeeded while every ordered read was rejected still reported
+	// `ready: true`. These pin the read-aware verdict.
+	it('omits firestoreReadMetrics until a read has actually been observed', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies).not.toHaveProperty('firestoreReadMetrics');
+	});
+
+	it('reports Firestore not ready with a sanitized category when the read path is broken', async () => {
+		firestoreWriteMetricsService.recordReadFailure('alerts', 'failed_precondition');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readHealth: 'degraded',
+			lastReadErrorCategory: 'failed_precondition',
+		});
+		expect(response.body.dependencies.firestoreReadMetrics).toMatchObject({
+			readHealth: 'degraded',
+			readsFailed: 1,
+			lastErrorCategory: 'failed_precondition',
+		});
+		// Alias surface must carry the same verdict.
+		const capabilities = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+		expect(capabilities.body.dependencies.firestore).toMatchObject({
+			ready: false,
+			status: 'degraded',
+		});
+	});
+
+	it('keeps Firestore ready when the read path has only ever succeeded', async () => {
+		firestoreWriteMetricsService.recordReadSuccess('alerts');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readHealth: 'healthy',
+		});
+	});
+
 	it('does not treat a bare Google project id as Firestore ADC readiness', async () => {
 		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;

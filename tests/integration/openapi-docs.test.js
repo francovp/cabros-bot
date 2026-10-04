@@ -75,6 +75,31 @@ describe('public OpenAPI documentation', () => {
 		expect(client.text).not.toContain(process.env.WEBHOOK_API_KEY);
 	});
 
+	describe('hosting asset sync', () => {
+		const fs = require('fs');
+		const path = require('path');
+
+		// Compares the source asset with its generated copy in memory. It must
+		// NOT call buildHosting(): the copier writes into the worktree, and the
+		// clean-worktree invariant forbids a test from mutating tracked files.
+		const ASSETS = ['admin.js', 'admin.css'];
+
+		it.each(ASSETS)('public/admin/%s matches its src/admin source byte for byte', (file) => {
+			const source = fs.readFileSync(path.join(__dirname, '../../src/admin', file));
+			const built = fs.readFileSync(path.join(__dirname, '../../public/admin', file));
+
+			expect(built.equals(source)).toBe(true);
+		});
+
+		it('serves the same bytes that the source asset declares', async () => {
+			const served = await request(app).get('/admin/admin.js');
+			const source = fs.readFileSync(path.join(__dirname, '../../src/admin/admin.js'), 'utf8');
+
+			expect(served.status).toBe(200);
+			expect(served.text).toBe(source);
+		});
+	});
+
 	describe('rate limit exemption', () => {
 		const rateLimiter = require('../../src/lib/rateLimiter');
 

@@ -34,14 +34,14 @@ Comprehensive guides and technical documentation are maintained inside the [`doc
 | **[API Reference](docs/api-reference.md)** | Core system endpoints (`/healthcheck`, `/ready`, `/api/status`, `/api/public/status`), browser admin auth, and Firebase Hosting. |
 | **[Webhook Alerts API](docs/webhooks.md)** | TradingView webhook endpoints (`/api/webhook/alert`, `/expanded-analysis-alert`, `/volume-confirmation`, `/symbol-analysis`, `/market-scanner-alert`). |
 | **[Asynchronous Jobs API](docs/jobs.md)** | Background TradingView analysis jobs (`/api/jobs/tradingview-analysis`, retry, status polling, BullMQ worker). |
-| **[Stored Alerts API](docs/alerts.md)** | Stored alert query, cursor pagination, JSON/CSV export, analytics summary, user feedback, and safe replay mechanics. |
+| **[Stored Alerts API](docs/alerts.md)** | Stored alert query, cursor pagination, JSON/CSV export, analytics summary, sentiment score calibration, user feedback, and safe replay mechanics. |
 | **[Signal Outcomes Tracking](docs/signal-outcomes.md)** | Signal outcome lifecycle (CB-199), evaluation windows (1h, 4h, 1D, 1W), MFE/MAE excursions, and calibration API. |
 | **[TradingView MCP Integration](docs/tradingview-mcp.md)** | Streamable HTTP endpoint setup, symbol resolution, timeframe mapping, and multi-timeframe technical confluence. |
-| **[AI Grounding & Prompts](docs/ai-grounding.md)** | Gemini Grounding (001), enrichment flow, token spend tracking, and Langfuse prompt management. |
+| **[AI Grounding & Prompts](docs/ai-grounding.md)** | Gemini Grounding (001), enrichment flow, reference-calibrated sentiment anchors, the zero-source score cap, token spend tracking, and Langfuse prompt management. |
 | **[Multi-Channel Alerts](docs/notifications.md)** | Multi-channel delivery rules (Telegram, WhatsApp, Discord), MarkdownV2 escaping, URL shortening, and dead-letter redrive. |
 | **[Telegram Commands](docs/commands.md)** | Interactive bot commands (`/help`, `/precio`, `/cryptobot`, `/analisis`, `/scanner`, `/jobs`, `/noticias`), throttling, and forum topic routing. |
 | **[News Monitoring](docs/news-monitor.md)** | Event detection engine, confidence scoring, persistent deduplication, secondary LLM refinement, and volume throttling. |
-| **[Observability & Monitoring](docs/monitoring.md)** | Sentry runtime error monitoring (005), health probes, production smoke probes, structured JSON logging, structured per-request HTTP access logs, and Firestore write metrics. |
+| **[Observability & Monitoring](docs/monitoring.md)** | Sentry runtime error monitoring (005), health probes, production smoke probes, structured JSON logging, structured per-request HTTP access logs, and Firestore write/read metrics. |
 | **[Deployment & Operations](docs/deployment.md)** | Render.com web services and BullMQ workers, preview PR environments, ngrok local tunneling, and Docker/Devcontainer. |
 | **[Troubleshooting Guide](docs/troubleshooting.md)** | Diagnostic checklists and recovery runbooks for news monitoring, messaging channels, URL shortening, and retries. |
 | **[Firestore Backup & Restore](docs/firestore-backup-and-restore.md)** | Procedures and scripts for backing up and restoring Firestore operational collections. |
@@ -180,6 +180,17 @@ Notifications are dispatched concurrently across enabled channels. For Discord, 
 
 ### AI Provider Routing & Grounding
 When configuring AI providers, `MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing, whereas `ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities. Gemini Grounding provides web search citations and confidence scores for market alerts. See [AI Grounding & Prompts](docs/ai-grounding.md).
+
+### Sentiment Score Calibration
+
+Enriched `sentiment_score` is scored against five fixed reference anchors (`0.90` multi-source major catalyst, `0.75` corroborated, `0.60` partial, `0.45` routine, `0.30` negligible) and the model must justify its choice in `sentiment_score_evidence`. Without a reference point the score saturated — 87.6% of production scores sat at or above 0.75, which made the field useless for ranking alerts or tuning thresholds.
+
+Two guards keep that from silently returning:
+
+- **Prompt anchors** — a Langfuse `alert-enrichment` prompt that has not been republished reports `promptProvenance.schemaDriftDetected: true` with the missing markers listed in `missingCalibrationGuidance`. That flag is the rollout signal, not a failure.
+- **Saturation telemetry** — `enrichment.sentimentCalibration` in `GET /api/alerts/summary` reports `saturated` plus the rule that fired (`spread_collapse` when `p90 - p10` collapses, `top_band_concentration` when ≥75% of scores pile into the top band). Both rules are needed: the reported production failure had a `p90 - p10` of `0.15`, so a spread-only guard would have stayed silent. `insufficient_sample` and `no_samples` mean no verdict was declared rather than that the window is healthy. `rawScoreCapCount` reports how many alerts the zero-source cap rewrote, which is how you confirm the cap is live in the deployment you are querying.
+
+A process-local window in `src/services/grounding/gemini.js` emits one structured warning per hour when it saturates; it is a fast early warning only, and a restart clears it. See [Stored Alerts](docs/alerts.md#sentiment-score-calibration) and [AI Grounding & Prompts](docs/ai-grounding.md#sentiment-score-calibration).
 
 ### News Monitoring Volume Throttling
 The news monitor endpoint reports volume throttling status in its response payload:

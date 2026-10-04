@@ -104,10 +104,27 @@ const VIEW_TITLES = {
 	outcomes: 'Outcomes',
 	presets: 'Presets',
 	jobs: 'Jobs',
+	orders: 'Orders',
 	analysis: 'Analysis',
 	playground: 'Playground',
 };
 const CONSOLE_TITLE_BASE = 'Cabros Bot Console';
+
+// Closed set: a `view` value outside it must fall back, never render a blank workspace.
+const DEFAULT_CONSOLE_VIEW = 'overview';
+const FIREBASE_SIGN_IN_LANDING_VIEW = 'status';
+const CONSOLE_VIEW_NAMES = Object.freeze(Object.keys(VIEW_TITLES));
+
+// Scope prefixes keep the alerts summary and export filter sets independent, because
+// they are two separate forms with separate defaults.
+const FILTER_SCOPE_VIEWS = Object.freeze({
+	'alerts.list': 'alerts',
+	'alerts.summary': 'alerts',
+	'alerts.export': 'alerts',
+	'outcomes.list': 'outcomes',
+	'outcomes.summary': 'outcomes',
+	'outcomes.calibration': 'outcomes',
+});
 
 const DEFAULT_BACKEND_ORIGIN = 'https://openclaw.tail5e4271.ts.net';
 const ALLOWED_BACKEND_ORIGINS = new Set([
@@ -142,10 +159,94 @@ const getApiBaseUrl = () => {
 	return '';
 };
 
+const getWindowLocation = () => (typeof window !== 'undefined' && window.location ? window.location : null);
+
+const readConsoleSearch = () => {
+	try {
+		const location = getWindowLocation();
+		return location && typeof location.search === 'string' ? location.search : '';
+	} catch (_) {
+		return '';
+	}
+};
+
+const readConsoleParams = () => {
+	try {
+		return new URLSearchParams(readConsoleSearch());
+	} catch (_) {
+		return new URLSearchParams();
+	}
+};
+
+const resolveConsoleView = (value) => {
+	const name = typeof value === 'string' ? value.trim() : '';
+	return CONSOLE_VIEW_NAMES.includes(name) ? name : DEFAULT_CONSOLE_VIEW;
+};
+
+const readConsoleUrlState = () => {
+	const params = readConsoleParams();
+	const requested = params.get('view');
+	const view = resolveConsoleView(requested);
+	return {
+		view,
+		viewRequested: requested !== null,
+		viewRecognised: view === requested,
+		params,
+	};
+};
+
+const filterParamsForView = (view, params) => {
+	const source = params || readConsoleParams();
+	const carried = {};
+	Object.keys(FILTER_SCOPE_VIEWS).forEach((scope) => {
+		if (FILTER_SCOPE_VIEWS[scope] !== view) return;
+		const prefix = `${scope}.`;
+		source.forEach((value, key) => {
+			if (key.startsWith(prefix)) carried[key] = value;
+		});
+	});
+	return carried;
+};
+
+const buildConsoleUrl = (view, filterParams = {}) => {
+	const location = getWindowLocation();
+	let pathname = '';
+	try {
+		pathname = (location && location.pathname) || '';
+	} catch (_) {
+		pathname = '';
+	}
+	const params = new URLSearchParams();
+	readConsoleParams().forEach((value, key) => {
+		const ownsFilterScope = Object.keys(FILTER_SCOPE_VIEWS).some((scope) => key.startsWith(`${scope}.`));
+		if (key !== 'view' && !ownsFilterScope) params.set(key, value);
+	});
+	params.set('view', view);
+	Object.entries(filterParams).forEach(([key, value]) => {
+		if (value !== undefined && value !== null && value !== '') params.set(key, value);
+	});
+	const search = params.toString();
+	return `${pathname}${search ? `?${search}` : ''}`;
+};
+
+const writeConsoleUrl = (url, { replace = false } = {}) => {
+	const history = typeof window !== 'undefined' ? window.history : null;
+	if (!history) return false;
+	try {
+		if (replace && typeof history.replaceState === 'function') history.replaceState({}, '', url);
+		else if (!replace && typeof history.pushState === 'function') history.pushState({}, '', url);
+		else return false;
+		return true;
+	} catch (_) {
+		return false;
+	}
+};
+
 let contractPromise;
 let authConfigPromise;
 let firebaseSdkPromise;
 let detachActiveViewPoll = null;
+let currentConsoleView = DEFAULT_CONSOLE_VIEW;
 let authState = { enabled: false, auth: null, user: null, role: null };
 
 const CONTRACT_TIMEOUT_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.CONTRACT_TIMEOUT_MS
@@ -480,7 +581,11 @@ const setupFirebaseAuth = async (config) => {
 				}
 				showSignedInState();
 				setupSseStream();
-				navigateToView('status');
+				const requested = readConsoleUrlState();
+				navigateToView(
+					requested.viewRequested ? requested.view : FIREBASE_SIGN_IN_LANDING_VIEW,
+					{ history: 'replace' },
+				);
 			} catch (error) {
 				disconnectSse();
 				showAuthState('Unable to verify the signed-in account.', true);
@@ -977,6 +1082,15 @@ const DECISION_ACTION_TONES = {
 	neutral: 'status-disabled',
 };
 
+const CONFIDENCE_TONES = {
+	high: 'status-ready',
+	medium: 'status-active',
+	moderate: 'status-active',
+	low: 'status-danger',
+};
+
+const MTF_ENVELOPE_KEYS = ['timeframes', 'alignment', 'recommendation'];
+
 const JOB_ACTIVE_STATUSES = ['pending', 'processing'];
 const JOB_STATUS_TONES = {
 	completed: 'status-ready',
@@ -1172,12 +1286,23 @@ const symbolAnalysisResult = (data) => {
 			text: `Status: ${displayLabel(data.analysisStatus)}`,
 		}));
 	}
+
+	// The endpoint returns categorical confidence labels, so the numeric-only
+	// meter path must not be the only consumer or confidence disappears entirely.
+	const confidence = asFiniteNumber(decision.confidence);
+	const confidenceLabel = confidence === null ? asLabelValue(decision.confidence) : '';
+	if (confidenceLabel) {
+		const tone = CONFIDENCE_TONES[confidenceLabel.toLowerCase()] || 'status-unknown';
+		badges.append(element('span', {
+			className: `status-badge ${tone}`,
+			text: `Confidence: ${displayLabel(confidenceLabel)}`,
+		}));
+	}
 	if (badges.children.length) panel.append(badges);
 
 	const identity = [data.symbol || analysis.symbol, data.timeframe || analysis.timeframe].filter(Boolean).join(' · ');
 	if (identity) panel.append(element('p', { className: 'request-state', text: identity }));
 
-	const confidence = asFiniteNumber(decision.confidence);
 	if (confidence !== null) {
 		const normConfidence = confidence > 1 ? confidence / 100 : confidence;
 		panel.append(createMeter(normConfidence, `${Math.round(normConfidence * 100)}% confidence`));
@@ -1268,13 +1393,36 @@ const symbolAnalysisResult = (data) => {
 		const mtfBlock = element('div', { className: 'detail-block' });
 		mtfBlock.append(element('h4', { text: 'Multi-timeframe Analysis' }));
 		const mtfChips = element('div', { className: 'chip-grid' });
-		Object.entries(mtf).forEach(([tf, tfData]) => {
+		const alignment = asObject(mtf.alignment);
+		const recommendation = asObject(mtf.recommendation);
+		const timeframes = asObject(mtf.timeframes);
+		// The endpoint nests the breakdown under `timeframes` beside sibling
+		// `alignment` and `recommendation` keys. Reading those siblings as
+		// timeframes renders the envelope and hides every real trend.
+		const timeframeEntries = Object.entries(Object.keys(timeframes).length ? timeframes : mtf)
+			.filter(([key]) => !MTF_ENVELOPE_KEYS.includes(key));
+		timeframeEntries.forEach(([tf, tfData]) => {
 			const tfObj = asObject(tfData);
-			const tfTrend = tfObj.trend || tfObj.direction || tfObj.status || (typeof tfData === 'string' ? tfData : null);
+			const tfTrend = tfObj.bias || tfObj.trend || tfObj.direction || tfObj.status || asLabelValue(tfData);
 			if (tfTrend) {
 				mtfChips.append(element('span', { className: 'capability-chip', text: `${tf}: ${displayLabel(tfTrend)}` }));
 			}
 		});
+
+		const alignmentStatus = asLabelValue(alignment.status);
+		if (alignmentStatus) {
+			mtfChips.append(element('span', { className: 'capability-chip', text: `Alignment: ${displayLabel(alignmentStatus)}` }));
+		}
+		const alignmentConfidence = asLabelValue(alignment.confidence);
+		if (alignmentConfidence) {
+			mtfChips.append(element('span', { className: 'capability-chip', text: `Alignment confidence: ${displayLabel(alignmentConfidence)}` }));
+		}
+		const recommendedAction = asLabelValue(recommendation.action) || asLabelValue(mtf.recommendation);
+		if (recommendedAction) {
+			const tone = DECISION_ACTION_TONES[recommendedAction.toLowerCase()] || 'status-unknown';
+			mtfChips.append(element('span', { className: `status-badge ${tone}`, text: `Recommendation: ${displayLabel(recommendedAction)}` }));
+		}
+
 		if (mtfChips.children.length) {
 			mtfBlock.append(mtfChips);
 			panel.append(mtfBlock);
@@ -1389,6 +1537,13 @@ const analysisReportResult = (data) => {
 };
 
 const asFiniteNumber = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+
+const LABEL_VALUE_MAX_LENGTH = 40;
+
+const asLabelValue = (value) => {
+	if (typeof value !== 'string') return '';
+	return value.trim().slice(0, LABEL_VALUE_MAX_LENGTH);
+};
 
 const sentimentBadge = (enrichment) => {
 	const sentiment = enrichment && typeof enrichment === 'object' ? String(enrichment.sentiment || '') : '';
@@ -2006,6 +2161,7 @@ const createAlertListForm = () => {
 	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
 	const source = addField(form, 'Source', 'source', { placeholder: 'webhook' });
 	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
+	registerFilterScope('alerts.list', { limit, before, source, enriched });
 	[
 		['', 'All alerts'],
 		['true', 'Enriched only'],
@@ -2338,7 +2494,66 @@ const reportWindowDefaults = () => {
 	};
 };
 
-const addAlertReportFilters = (form, { requiredWindow = false } = {}) => {
+let activeFilterScopes = [];
+
+const resetFilterScopes = () => {
+	activeFilterScopes = [];
+};
+
+const registerFilterScope = (scope, fields) => {
+	if (FILTER_SCOPE_VIEWS[scope]) {
+		activeFilterScopes.push({ scope, fields: { ...fields } });
+	}
+	return fields;
+};
+
+const readFilterValue = (input) => {
+	if (!input) return '';
+	if (input.type === 'checkbox') return input.checked ? 'true' : '';
+	return typeof input.value === 'string' ? input.value : '';
+};
+
+const collectFilterParams = (view) => {
+	const collected = {};
+	activeFilterScopes.forEach(({ scope, fields }) => {
+		if (view && FILTER_SCOPE_VIEWS[scope] !== view) return;
+		Object.entries(fields).forEach(([name, input]) => {
+			const value = readFilterValue(input);
+			if (value !== '') collected[`${scope}.${name}`] = value;
+		});
+	});
+	return collected;
+};
+
+const applyFilterParams = (params) => {
+	if (!params) return;
+	activeFilterScopes.forEach(({ scope, fields }) => {
+		Object.entries(fields).forEach(([name, input]) => {
+			const key = `${scope}.${name}`;
+			if (!input || !params.has(key)) return;
+			const value = params.get(key);
+			if (input.type === 'checkbox') input.checked = value === 'true';
+			else input.value = value;
+		});
+	});
+};
+
+const syncConsoleUrlFromFilters = () => {
+	writeConsoleUrl(buildConsoleUrl(currentConsoleView, collectFilterParams(currentConsoleView)), { replace: true });
+};
+
+const bindFilterScopeListeners = () => {
+	activeFilterScopes.forEach(({ fields }) => {
+		Object.values(fields).forEach((input) => {
+			if (!input || typeof input.addEventListener !== 'function' || input.consoleFilterBound) return;
+			input.consoleFilterBound = true;
+			input.addEventListener('input', syncConsoleUrlFromFilters);
+			input.addEventListener('change', syncConsoleUrlFromFilters);
+		});
+	});
+};
+
+const addAlertReportFilters = (form, { requiredWindow = false, scope } = {}) => {
 	const defaults = reportWindowDefaults();
 	const from = addField(form, 'From', 'from', {
 		type: 'datetime-local', value: defaults.from, required: requiredWindow,
@@ -2358,7 +2573,7 @@ const addAlertReportFilters = (form, { requiredWindow = false } = {}) => {
 		option.value = value;
 		enriched.append(option);
 	});
-	return { from, to, limit, source, enriched };
+	return registerFilterScope(scope, { from, to, limit, source, enriched });
 };
 
 const toIsoTimestamp = (value, label) => {
@@ -2379,6 +2594,107 @@ const getAlertReportQuery = (fields, { format, includeText } = {}) => Object.fro
 		includeText,
 	}).filter(([, value]) => value !== undefined && value !== ''),
 );
+
+// Verdict tones for the sentiment calibration panel. A window too small to
+// judge is deliberately NOT green: `insufficient_sample` is the absence of
+// evidence, and rendering it as a pass would read as reassurance.
+const SENTIMENT_CALIBRATION_TONES = {
+	spread_collapse: 'status-danger',
+	top_band_concentration: 'status-danger',
+	insufficient_sample: 'status-disabled',
+	no_samples: 'status-disabled',
+};
+
+const SENTIMENT_CALIBRATION_LABELS = {
+	spread_collapse: 'Spread collapsed',
+	top_band_concentration: 'Top-band concentration',
+	insufficient_sample: 'Not enough samples',
+	no_samples: 'No samples',
+};
+
+const formatScore = (value) => {
+	const numeric = asFiniteNumber(value);
+	return numeric === null ? '—' : numeric.toFixed(2);
+};
+
+const renderSentimentCalibration = (enrichment) => {
+	const calibration = asObject(enrichment && enrichment.sentimentCalibration);
+	if (!calibration || !('sampleCount' in calibration)) return null;
+
+	const reason = typeof calibration.reason === 'string' && calibration.reason ? calibration.reason : null;
+	const saturated = calibration.saturated === true;
+	const evaluated = calibration.evaluated === true;
+	const verdict = saturated ? 'Saturated' : (evaluated ? 'Healthy' : 'Not evaluated');
+	const tone = saturated
+		? 'status-danger'
+		: (reason ? (SENTIMENT_CALIBRATION_TONES[reason] || 'status-disabled') : 'status-ready');
+
+	const spread = asFiniteNumber(calibration.spread);
+	const topBandShare = asFiniteNumber(calibration.topBandShare);
+	const section = element('section', { className: 'dashboard-section sentiment-calibration' });
+
+	const header = element('div', { className: 'section-header' });
+	header.append(
+		element('h3', { text: 'Sentiment calibration' }),
+		element('span', {
+			className: `status-badge ${tone}`,
+			text: verdict,
+			attributes: { role: 'status' },
+		}),
+	);
+	section.append(header);
+
+	const grid = element('div', { className: 'metric-grid' });
+	const topBandPct = topBandShare === null ? '—' : `${Math.round(topBandShare * 100)}%`;
+	grid.append(
+		createMetricCard(
+			'Scores in window',
+			formatJobValue(calibration.sampleCount),
+			`${formatJobValue(calibration.distinctValueCount)} distinct · ${formatJobValue(calibration.bucketCount)} buckets`,
+		),
+		createMetricCard(
+			'Spread (p90 − p10)',
+			spread === null ? '—' : spread.toFixed(2),
+			`p10 ${formatScore(calibration.p10)} · p90 ${formatScore(calibration.p90)}`,
+		),
+		createMetricCard('Range', `${formatScore(calibration.min)} → ${formatScore(calibration.max)}`, `p50 ${formatScore(calibration.p50)}`),
+		createMetricCard('At or above 0.75', topBandPct, `${formatJobValue(calibration.topBandCount)} of ${formatJobValue(calibration.sampleCount)} scores`),
+		createMetricCard(
+			'Zero-source capped',
+			formatJobValue(calibration.rawScoreCapCount),
+			calibration.rawScoreCapCount
+				? 'Cap is live in this deployment'
+				: 'No capped alerts in this window',
+		),
+	);
+	section.append(grid);
+
+	const details = element('p', { className: 'metric-meta' });
+	details.append(element('span', { text: reason ? `Rule: ${reason}` : 'Rule: none (healthy)' }));
+	section.append(details);
+
+	const buckets = Array.isArray(calibration.buckets) ? calibration.buckets : [];
+	if (buckets.length) {
+		const table = element('table', { className: 'data-table' });
+		const head = element('tr');
+		['Band', 'Count'].forEach((label) => head.append(element('th', { text: label })));
+		table.append(head);
+		buckets.forEach((bucket) => {
+			const row = element('tr');
+			const detail = asObject(bucket);
+			const lower = asFiniteNumber(detail.lowerBound);
+			const upper = asFiniteNumber(detail.upperBound);
+			row.append(
+				element('td', { text: lower === null || upper === null ? '—' : `${lower.toFixed(1)} – ${upper.toFixed(1)}` }),
+				element('td', { text: formatJobValue(detail.count) }),
+			);
+			table.append(row);
+		});
+		section.append(table);
+	}
+
+	return section;
+};
 
 const renderAlertSummaryBlocks = (data) => {
 	const wrap = element('div', { className: 'dashboard summary-blocks' });
@@ -2412,6 +2728,13 @@ const renderAlertSummaryBlocks = (data) => {
 			`${formatJobValue(enrichment.plainAlerts)} plain · denominator ${formatJobValue(coverage.denominator)}`,
 		),
 	);
+
+	// Appended before the coverage sections so a saturated score is the first
+	// thing an operator reads: it invalidates every per-alert score above it.
+	const calibrationPanel = renderSentimentCalibration(enrichment);
+	if (calibrationPanel) {
+		wrap.append(calibrationPanel);
+	}
 
 	const channels = Object.entries(asObject(delivery.byChannel));
 	if (channels.length) {
@@ -2485,7 +2808,7 @@ const createAlertSummaryForm = () => {
 		element('h3', { text: definition.label }),
 		element('code', { text: `${definition.method} ${definition.path}` }),
 	);
-	const fields = addAlertReportFilters(form);
+	const fields = addAlertReportFilters(form, { scope: 'alerts.summary' });
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	const output = element('div', { className: 'response-block', text: 'No request sent.' });
@@ -2559,7 +2882,7 @@ const createAlertExportForm = () => {
 		element('h3', { text: definition.label }),
 		element('code', { text: `${definition.method} ${definition.path}` }),
 	);
-	const fields = addAlertReportFilters(form, { requiredWindow: true });
+	const fields = addAlertReportFilters(form, { requiredWindow: true, scope: 'alerts.export' });
 	const format = addField(form, 'Format', 'format', { tag: 'select' });
 	[['jsonl', 'JSONL'], ['csv', 'CSV']].forEach(([value, text]) => {
 		const option = element('option', { text });
@@ -2860,6 +3183,7 @@ const createOutcomesListForm = () => {
 	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
 	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
+	registerFilterScope('outcomes.list', { symbol, exchange, status, window: windowField, from, to, limit, before });
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
@@ -3090,6 +3414,7 @@ const createOutcomesSummaryForm = () => {
 	const from = addField(form, 'From', 'from', { placeholder: 'ISO-8601 timestamp' });
 	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
+	registerFilterScope('outcomes.summary', { symbol, exchange, status, window: windowField, from, to, limit });
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
@@ -3245,6 +3570,7 @@ const createOutcomesCalibrationForm = () => {
 	const from = addField(form, 'From', 'from', { placeholder: 'ISO-8601 timestamp' });
 	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 1000, value: 1000 });
+	registerFilterScope('outcomes.calibration', { symbol, exchange, window: windowField, from, to, limit });
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
@@ -5070,6 +5396,12 @@ const renderPlayground = (contract, view) => {
 	form.append(filterLabel, selectLabel, fields, buttonRow, resultHost, output, rawToggle, historySection);
 	view.append(form);
 
+	let pendingRequestCount = 0;
+	const isSubmitLocked = () => pendingRequestCount > 0;
+	const syncSubmitLockedState = () => {
+		button.disabled = isSubmitLocked() || !definitions[Number(select.value)];
+	};
+
 	const saveCurrentInputs = (def) => {
 		if (!def) return;
 		const key = `${def.method} ${def.path}`;
@@ -5094,7 +5426,12 @@ const renderPlayground = (contract, view) => {
 			curlButton.disabled = true;
 			return;
 		}
-		button.disabled = false;
+		// Every re-render path (operation switch, filter auto-select, history restore)
+		// lands here, so this is the single place that decides whether a dispatch is
+		// allowed. `pendingRequestCount` is the source of truth: a request that outlives
+		// this re-render must keep the shared submit button locked so a second alert,
+		// replay, or order mutation cannot be dispatched behind it.
+		button.disabled = isSubmitLocked();
 		curlButton.disabled = false;
 		button.className = definition.confirm ? 'destructive-action' : '';
 
@@ -5265,6 +5602,9 @@ const renderPlayground = (contract, view) => {
 
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
+		// A disabled submit button does not stop implicit submission (Enter in a text
+		// input) or a programmatic submit, so the lock is also enforced here.
+		if (isSubmitLocked()) return;
 		resultHost.replaceChildren();
 		lastRawJson = '';
 		showResult(rawOutput, '');
@@ -5314,6 +5654,8 @@ const renderPlayground = (contract, view) => {
 		let responseOk = false;
 		let responseData = null;
 
+		pendingRequestCount += 1;
+		syncSubmitLockedState();
 		sendRequest({
 			definition,
 			path: resolvedPath,
@@ -5376,6 +5718,10 @@ const renderPlayground = (contract, view) => {
 				status: responseStatus ? `HTTP ${responseStatus}` : 'Network error',
 				ok: false,
 			});
+		}).finally(() => {
+			// Runs after sendRequest's own finally, so this is the authoritative write.
+			pendingRequestCount = Math.max(0, pendingRequestCount - 1);
+			syncSubmitLockedState();
 		});
 	});
 
@@ -6115,6 +6461,7 @@ const renderView = async (name) => {
 	const view = document.getElementById('view');
 	if (typeof detachActiveViewPoll === 'function') detachActiveViewPoll();
 	detachActiveViewPoll = null;
+	resetFilterScopes();
 	view.replaceChildren(createLoadingState('Loading API contract…'));
 	try {
 		const contract = await loadContract();
@@ -6238,19 +6585,46 @@ const renderView = async (name) => {
 	}
 };
 
-const navigateToView = (name) => {
+const navigateToView = (name, { history: historyMode = 'push' } = {}) => {
 	if (authState.enabled && !authState.user) return showSignedOutState();
+	const target = resolveConsoleView(name);
+	currentConsoleView = target;
+	markActiveView(target);
+	setViewTitle(target);
+	if (historyMode !== 'none') {
+		const carried = historyMode === 'push' ? {} : filterParamsForView(target, readConsoleParams());
+		writeConsoleUrl(buildConsoleUrl(target, carried), { replace: historyMode === 'replace' });
+	}
+	return renderView(target).then(() => {
+		applyFilterParams(readConsoleParams());
+		bindFilterScopeListeners();
+		moveFocusToView(target);
+	});
+};
+
+const handleConsolePopState = () => {
+	navigateToView(readConsoleUrlState().view, { history: 'none' });
+};
+
+const canonicaliseConsoleUrl = () => {
+	const state = readConsoleUrlState();
+	if (!state.viewRequested || state.viewRecognised) return;
+	writeConsoleUrl(buildConsoleUrl(state.view, filterParamsForView(state.view, state.params)), { replace: true });
+};
+
+const markActiveView = (name) => {
+	if (typeof document === 'undefined' || !document) return;
 	const buttons = document.querySelectorAll('[data-view]');
 	buttons.forEach((button) => button.removeAttribute('aria-current'));
 	[...buttons].find((button) => button.dataset.view === name)?.setAttribute('aria-current', 'page');
-	setViewTitle(name);
-	return renderView(name).then(() => moveFocusToView(name));
 };
 
 const setViewTitle = (name) => {
 	if (typeof document === 'undefined' || !document) return;
 	const label = VIEW_TITLES[name] || (name ? name[0].toUpperCase() + name.slice(1) : '');
 	document.title = label ? `${label} · ${CONSOLE_TITLE_BASE}` : CONSOLE_TITLE_BASE;
+	const status = getElement('view-status');
+	if (status) status.textContent = label ? `${label} view` : '';
 };
 
 const moveFocusToView = (name) => {
@@ -6311,6 +6685,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 	const view = getElement('view');
 	if (view) view.replaceChildren(createLoadingState('Checking authentication…'));
 	document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigateToView(button.dataset.view)));
+	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+		window.addEventListener('popstate', handleConsolePopState);
+	}
+	canonicaliseConsoleUrl();
 
 	getElement('connection-form')?.addEventListener('submit', (event) => {
 		event.preventDefault();
@@ -6336,7 +6714,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 	setHidden('legacy-connection', false);
 	setupLegacyConsole();
 	if (getElement('api-key')?.value) setupSseStream();
-	setViewTitle('overview');
-	renderView('overview').then(() => moveFocusToView('overview'));
+	navigateToView(readConsoleUrlState().view, { history: 'none' });
 
 });
