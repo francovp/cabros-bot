@@ -35,6 +35,7 @@ const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService
 const { adminSseService } = require('../sse/AdminSseService');
 const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
 const { deriveAssetContext } = require('../tradingview/parseTradingViewSignal');
+const { analyzeSentimentScoreDistribution } = require('../grounding/sentimentDistribution');
 
 function createEmptySignalClassCounts() {
 	return {
@@ -529,6 +530,66 @@ function createEvidenceCoverageBucket() {
 		totalSourceCount: 0,
 		averageSourceCount: 0,
 	};
+}
+
+// ---------------------------------------------------------------------------
+// Sentiment calibration — is the emitted sentiment_score still able to rank
+// alerts? (issue #1031). Production saw 87.6% of enriched scores at or above
+// 0.75, which makes the field useless for threshold tuning and outcome-gated
+// ranking. The durable view lives here rather than only in the process-local
+// gemini.js window so it survives a restart.
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the stored `sentiment_score` magnitude, tolerating the camelCase alias
+ * and a legacy string value. Returns null when nothing usable is stored, so a
+ * malformed legacy record is excluded from the sample instead of widening the
+ * distribution or throwing mid-summary.
+ */
+function readStoredSentimentScore(enrichmentData) {
+	if (!enrichmentData || typeof enrichmentData !== 'object' || Array.isArray(enrichmentData)) {
+		return null;
+	}
+	const raw = Number.isFinite(enrichmentData.sentiment_score)
+		? enrichmentData.sentiment_score
+		: enrichmentData.sentimentScore;
+	const numeric = typeof raw === 'string' && raw.trim() ? Number(raw) : raw;
+	if (typeof numeric !== 'number' || !Number.isFinite(numeric)) {
+		return null;
+	}
+	return Math.min(1, Math.abs(numeric));
+}
+
+function createEmptySentimentCalibration() {
+	return {
+		sampleCount: 0,
+		evaluated: false,
+		saturated: false,
+		reason: 'no_samples',
+		min: null,
+		max: null,
+		p10: null,
+		p50: null,
+		p90: null,
+		spread: null,
+		distinctValueCount: 0,
+		bucketCount: 0,
+		buckets: [],
+		topBandCount: 0,
+		topBandShare: null,
+		rawScoreCapCount: 0,
+	};
+}
+
+function buildSentimentCalibration(sentimentScores, rawScoreCapCount) {
+	let report;
+	try {
+		report = analyzeSentimentScoreDistribution(sentimentScores);
+	} catch (error) {
+		console.warn('[AlertStorageService] Sentiment calibration analysis failed:', error.message);
+		report = analyzeSentimentScoreDistribution([]);
+	}
+	return { ...report, rawScoreCapCount };
 }
 
 function getSourceCount(enrichmentData) {
@@ -2472,6 +2533,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 				...createEvidenceCoverageBucket(),
 				byPromptProvenance: [],
 			},
+			sentimentCalibration: createEmptySentimentCalibration(),
 			tokenUsage: {
 				inputTokens: 0,
 				outputTokens: 0,
@@ -2497,6 +2559,8 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
 	const channelLatencySamples = {};
+	const sentimentScores = [];
+	let rawScoreCapCount = 0;
 
 	for (const doc of docs) {
 		const data = doc.data() || {};
@@ -2519,6 +2583,17 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 			summary.enrichment.enrichedAlerts += 1;
 			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData);
 			recordEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage, data.enrichmentData);
+
+			const storedScore = readStoredSentimentScore(data.enrichmentData);
+			if (storedScore !== null) {
+				sentimentScores.push(storedScore);
+				// `sentiment_score_raw` only exists when CB-238 rewrote the score, so
+				// counting it reports how much of the window is capped rather than
+				// model-emitted.
+				if (Number.isFinite(data.enrichmentData.sentiment_score_raw)) {
+					rawScoreCapCount += 1;
+				}
+			}
 		} else {
 			summary.byFeatureFlag.plain += 1;
 			summary.enrichment.plainAlerts += 1;
@@ -2577,6 +2652,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 
 	finalizeRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage);
 	finalizeEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage);
+	summary.enrichment.sentimentCalibration = buildSentimentCalibration(sentimentScores, rawScoreCapCount);
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
 	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
 	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);
