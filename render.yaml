@@ -61,6 +61,10 @@ services:
   - key: ENABLE_FIRESTORE_JOB_STORAGE
     value: true
     previewValue: false
+  # Durable scanner presets: web service only, previews off. See AGENTS.md.
+  - key: ENABLE_FIRESTORE_SCANNER_PRESETS
+    value: true
+    previewValue: false
   - key: REDIS_URL
     fromService:
       name: cabros-crypto-bot-telegram-queue
