@@ -431,6 +431,47 @@ describe('JobQueue', () => {
 			expect(QueueClass).toHaveBeenCalledTimes(1);
 		});
 
+		it('recovers a frozen boot-time failure once a later broker read succeeds', async () => {
+			// The verdict used to be written only inside probeBrokerReadiness(),
+			// which index.js calls exactly once at bootstrap. JobBacklogService
+			// re-proves broker health every JOB_BACKLOG_PROBE_INTERVAL_MS through
+			// getJobCounts(), but that evidence was discarded, so a broker that
+			// blipped during deploy stayed 'unreachable' forever. Worse, queueReady
+			// flipped true on the next successful connect, publishing the
+			// self-contradictory payload ready:true + status:'unreachable' that
+			// appears in no documented state.
+			process.env = {
+				...savedEnv,
+				JOB_EXECUTION_MODE: 'render-worker',
+				REDIS_URL: 'redis://queue.example:6379',
+			};
+
+			// First connect refuses; the broker "recovers" for every connect after.
+			const failingWaitUntilReady = jest.fn()
+				.mockRejectedValueOnce(new Error('connect ECONNREFUSED'))
+				.mockResolvedValue(undefined);
+			const QueueClass = jest.fn(() => ({
+				waitUntilReady: failingWaitUntilReady,
+				getJobCounts: jest.fn().mockResolvedValue({ waiting: 0, delayed: 0, failed: 0, active: 0, paused: 0 }),
+				close: jest.fn(),
+			}));
+			const queue = new JobQueue({ QueueClass, RedisClass: jest.fn(() => ({ disconnect: jest.fn() })) });
+
+			await expect(queue.probeBrokerReadiness()).resolves.toMatchObject({ reachable: false });
+			expect(queue.getStatus({})).toMatchObject({ status: 'unreachable', ready: false, brokerReachable: false });
+
+			// Exactly what JobBacklogService calls on its periodic sweep.
+			await expect(queue.getJobCounts()).resolves.toMatchObject({ waiting: 0 });
+
+			const recovered = queue.getStatus({});
+			expect(recovered.status).toBe('ready');
+			expect(recovered.brokerReachable).toBe(true);
+			expect(recovered.lastBrokerProbeErrorCode).toBeNull();
+			// ready:true beside status:'unreachable' is not a documented state, so
+			// the two fields must agree no matter which call sequence produced them.
+			expect(recovered.ready && recovered.status === 'unreachable').toBe(false);
+		});
+
 		it('never throws out of the probe so a status call cannot fail', async () => {
 			process.env = {
 				...savedEnv,

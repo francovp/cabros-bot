@@ -137,7 +137,7 @@ async function bootstrapApplication() {
 		}
 		console.log(
 			`Job queue broker ${result.reachable ? 'reachable' : 'UNREACHABLE'}` +
-			(result.reachable ? '' : ` (lastErrorCode=${result.errorCode})`)
+			(result.reachable ? '' : ` (lastErrorCode=${result.errorCode})`),
 		);
 	});
 	// Start background user price alert worker if enabled

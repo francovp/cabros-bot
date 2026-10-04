@@ -303,11 +303,7 @@ class JobQueue {
 			const timeoutMs = getPositiveInteger(process.env.JOB_QUEUE_PROBE_TIMEOUT_MS, DEFAULT_PROBE_TIMEOUT_MS, 120000);
 			try {
 				await withTimeout(this._getQueue(), timeoutMs);
-				this.brokerProbe = {
-					reachable: true,
-					lastProbeAt: new Date().toISOString(),
-					lastErrorCode: null,
-				};
+				this._markBrokerReachable();
 				return { reachable: true };
 			} catch (error) {
 				this._recordError(error);
@@ -324,6 +320,25 @@ class JobQueue {
 
 		this.probePromise = probe;
 		return probe;
+	}
+
+	_markBrokerReachable() {
+		// Any successful connect is authoritative, not just the boot-time probe.
+		// probeBrokerReadiness() runs exactly once (index.js bootstrap), so without
+		// this a broker that merely blipped during deploy stayed 'unreachable' for
+		// the process lifetime even after JobBacklogService's periodic
+		// getJobCounts() re-proved the same connectivity -- and the cutover runbook
+		// tells operators to roll back to `local` on 'unreachable'. Because
+		// queueReady is only set on the same branch as this call, it also keeps
+		// `ready: true` from ever being published beside `status: 'unreachable'`.
+		if (this.brokerProbe.reachable === true) {
+			return;
+		}
+		this.brokerProbe = {
+			reachable: true,
+			lastProbeAt: new Date().toISOString(),
+			lastErrorCode: null,
+		};
 	}
 
 	getStatus(backlog = null) {
@@ -450,6 +465,7 @@ class JobQueue {
 		try {
 			await this.readyPromise;
 			this.queueReady = true;
+			this._markBrokerReachable();
 			return this.queue;
 		} catch (error) {
 			this._recordError(error);
