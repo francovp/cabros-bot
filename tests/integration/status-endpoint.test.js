@@ -580,6 +580,44 @@ describe('Status endpoints', () => {
 		}));
 	});
 
+	// Issue #598: production reported `enabled: true, configured: true` with a
+	// never-loaded server template. The status contract must make the
+	// unready-but-configured state explicit so an operator cannot mistake
+	// "wired up" for "actually serving remote values".
+	it('reports an explicit unready state while the server template has never loaded', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const remoteConfig = response.body.dependencies.firebaseRemoteConfig;
+
+		expect(remoteConfig.ready).toBe(false);
+		expect(remoteConfig.lastSuccessfulLoad).toBeNull();
+		expect(remoteConfig.status).not.toBe('ready');
+		expect(response.body.featureFlags.firebaseRemoteConfig).toBe(true);
+		// `enabled` + `configured` alone must not read as "template is live".
+		expect(remoteConfig.templatePublished).toBe(false);
+	});
+
+	it('keeps /api/capabilities readiness consistent with /api/status', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+
+		const statusResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		const capabilitiesResponse = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(statusResponse.status).toBe(200);
+		expect(capabilitiesResponse.status).toBe(200);
+		expect(capabilitiesResponse.body.dependencies.firebaseRemoteConfig)
+			.toEqual(statusResponse.body.dependencies.firebaseRemoteConfig);
+	});
+
 	it('reports signal outcome tracking from the canonical environment variable', async () => {
 		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 

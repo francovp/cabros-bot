@@ -1,5 +1,7 @@
 name: Deploy Firebase Remote Config Server Template
 
+# Publishes firebase-remote-config-template.json to the `firebase-server` namespace
+# that initServerTemplate() reads. Full contract: AGENTS.md.
 on:
   workflow_dispatch:
 

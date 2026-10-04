@@ -354,6 +354,66 @@
       ]
     },
     {
+      "name": "Get Status - remote config unready (issue #598)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing the in-memory per-channel deliveryMetrics section. Counters reset on process restart; the section is omitted entirely until at least one channel records a delivery result."
+      },
+      "response": [
+        {
+          "name": "Remote Config enabled but server template never published",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            },
+            "description": "Protected status request exposing the in-memory per-channel deliveryMetrics section. Counters reset on process restart; the section is omitted entirely until at least one channel records a delivery result."
+          },
+          "status": "OK",
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\"featureFlags\":{\"firebaseRemoteConfig\":true},\"dependencies\":{\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"templatePublished\":false,\"status\":\"degraded\",\"source\":\"environment\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":\"template_not_published\",\"consecutiveFailures\":17,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}",
+          "description": "Enabled and configured, but the `firebase-server` namespace template has never been published, so no remote value is ever served. `ready:false`, `templatePublished:false` and `lastErrorCategory:\"template_not_published\"` make this distinguishable from 'wired up'. Fix: run the `Deploy Firebase Remote Config Server Template` workflow (`pnpm run deploy:firebase-remote-config:server`), which publishes to the `firebase-server` namespace. Runtime values fall back to environment/defaults."
+        }
+      ]
+    },
+    {
       "name": "Get Public Status",
       "request": {
         "method": "GET",
