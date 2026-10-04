@@ -281,6 +281,31 @@ esac
 		expect(result.stderr).toContain('HEALTHCHECK_FAILED');
 		expect(result.stderr).toContain('503');
 	});
+
+	it('reports a transport failure as a single 000 rather than concatenating the fallback', () => {
+		// curl emits '000' via --write-out *and* exits non-zero, which is what makes
+		// the script's `|| echo '000'` fallback render "HTTP 000000".
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s' "000"
+exit 6
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir });
+		expect(result.status).toBe(3);
+		expect(result.stderr).toContain('HEALTHCHECK_FAILED');
+		expect(result.stderr).toContain('HTTP 000.');
+		expect(result.stderr).not.toContain('000000');
+	});
 });
 
 describe('Production Smoke Probe workflow YAML', () => {

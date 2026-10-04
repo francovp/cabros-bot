@@ -111,12 +111,23 @@ STATUS_URL="${BASE_URL}${STATUS_PATH}"
 PROBE_TMPDIR="$(mktemp -d -t cabros-probe-XXXXXX)"
 trap 'rm -rf "$PROBE_TMPDIR"' EXIT
 
+# A failed transfer makes curl exit non-zero *and* still emit its --write-out
+# code, so the `|| echo '000'` fallback appends a second 000 and the outage
+# renders as "HTTP 000000". Anything not exactly three digits collapses to 000.
+normalize_http_code() {
+	if [[ ! "$1" =~ ^[0-9]{3}$ ]]; then
+		printf '000'
+		return
+	fi
+	printf '%s' "$1"
+}
+
 # Step 1: /healthcheck must return HTTP 200. Use -o /dev/null so the body is
 # not echoed to job summaries.
-HEALTHCHECK_HTTP="$(printf 'x-api-key: %s\n' "$WEBHOOK_API_KEY" | \
+HEALTHCHECK_HTTP="$(normalize_http_code "$(printf 'x-api-key: %s\n' "$WEBHOOK_API_KEY" | \
 	curl --silent --show-error --max-time "$PROBE_TIMEOUT" \
 		--write-out '%{http_code}' --output "$PROBE_TMPDIR/healthcheck.body" \
-		-H 'accept: application/json' -H @- "$HEALTHCHECK_URL" || echo '000')"
+		-H 'accept: application/json' -H @- "$HEALTHCHECK_URL" || echo '000')")"
 
 if [[ "$HEALTHCHECK_HTTP" != "200" ]]; then
 	echo "HEALTHCHECK_FAILED: $HEALTHCHECK_PATH returned HTTP $HEALTHCHECK_HTTP." >&2
@@ -124,10 +135,10 @@ if [[ "$HEALTHCHECK_HTTP" != "200" ]]; then
 fi
 
 # Step 2: /api/status returns the deployment commit and dependency status.
-STATUS_HTTP="$(printf 'x-api-key: %s\n' "$WEBHOOK_API_KEY" | \
+STATUS_HTTP="$(normalize_http_code "$(printf 'x-api-key: %s\n' "$WEBHOOK_API_KEY" | \
 	curl --silent --show-error --max-time "$PROBE_TIMEOUT" \
 		--write-out '%{http_code}' --output "$PROBE_TMPDIR/status.json" \
-		-H 'accept: application/json' -H @- "$STATUS_URL" || echo '000')"
+		-H 'accept: application/json' -H @- "$STATUS_URL" || echo '000')")"
 
 if [[ "$STATUS_HTTP" != "200" ]]; then
 	echo "STATUS_UNREACHABLE: $STATUS_PATH returned HTTP $STATUS_HTTP." >&2
