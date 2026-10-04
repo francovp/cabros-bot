@@ -25,6 +25,15 @@ const LOCK_DOCUMENT_ID = 'singleton';
 const DEFAULT_LEASE_MS = 120000;
 const MIN_LEASE_MS = 10000;
 const MAX_LEASE_MS = 600000;
+// Renewal cadence floor, and the fallback for an invalid explicit override.
+// `options.leaseRenewIntervalMs` exists so a test can drive a renewal inside a
+// sweep without waiting out the production cadence.
+const MIN_LEASE_RENEW_INTERVAL_MS = 1000;
+const LEASE_RENEWAL = Object.freeze({
+	ACQUIRED: 'acquired',
+	LOST: 'lost',
+	UNDETERMINED: 'undetermined',
+});
 const LEASE_WRITE_TIMEOUT_MS = 5000;
 // Lease ownership identity. Not a secret; never log it.
 const LEASE_WORKER_ID = crypto.randomUUID();
@@ -527,7 +536,7 @@ function getLeaseMs() {
 		process.env.SIGNAL_OUTCOME_EVALUATION_LEASE_MS,
 		DEFAULT_LEASE_MS,
 		MIN_LEASE_MS,
-		MAX_LEASE_MS
+		MAX_LEASE_MS,
 	);
 }
 
@@ -575,7 +584,7 @@ async function acquireSweepLease(nowMs, leaseMs) {
 				return true;
 			}),
 			LEASE_WRITE_TIMEOUT_MS,
-			`Signal outcome lease acquire timed out after ${LEASE_WRITE_TIMEOUT_MS}ms`
+			`Signal outcome lease acquire timed out after ${LEASE_WRITE_TIMEOUT_MS}ms`,
 		);
 		return Boolean(acquired);
 	} catch (error) {
@@ -586,35 +595,40 @@ async function acquireSweepLease(nowMs, leaseMs) {
 }
 
 async function renewSweepLease(nowMs, leaseMs) {
+	// Renewal answers two different questions, and they must not collapse into one
+	// boolean: LOST means this process provably does not own the sweep and must stop
+	// acting, while UNDETERMINED means the lease could not be checked at all, which
+	// stays fail-open so a Firestore blip cannot disable outcome evaluation.
 	const firestore = getLeaseFirestore();
 	if (!firestore || typeof firestore.runTransaction !== 'function') {
-		return false;
+		return LEASE_RENEWAL.UNDETERMINED;
 	}
 
 	const durationMs = parseBoundedInteger(leaseMs, DEFAULT_LEASE_MS, MIN_LEASE_MS, MAX_LEASE_MS);
 
 	try {
-		return await awaitWithTimeout(
+		const renewal = await awaitWithTimeout(
 			firestore.runTransaction(async (tx) => {
 				const docRef = firestore.collection(LOCK_COLLECTION_NAME).doc(LOCK_DOCUMENT_ID);
 				const doc = await tx.get(docRef);
-				if (!doc.exists) return false;
+				if (!doc.exists) return LEASE_RENEWAL.LOST;
 				const data = doc.data() || {};
 				if (data.lockedBy && data.lockedBy !== LEASE_WORKER_ID) {
-					return false;
+					return LEASE_RENEWAL.LOST;
 				}
 				tx.set(docRef, {
 					lockedUntil: new Date(nowMs + durationMs).toISOString(),
 					updatedAt: new Date(nowMs).toISOString(),
 				}, { merge: true });
-				return true;
+				return LEASE_RENEWAL.ACQUIRED;
 			}),
 			LEASE_WRITE_TIMEOUT_MS,
-			`Signal outcome lease renew timed out after ${LEASE_WRITE_TIMEOUT_MS}ms`
+			`Signal outcome lease renew timed out after ${LEASE_WRITE_TIMEOUT_MS}ms`,
 		);
+		return renewal;
 	} catch (error) {
 		console.warn('[SignalOutcomeService] Lease renew failed:', error.message);
-		return false;
+		return LEASE_RENEWAL.UNDETERMINED;
 	}
 }
 
@@ -643,7 +657,7 @@ async function releaseSweepLease(completedAtMs) {
 				}, { merge: true });
 			}),
 			LEASE_WRITE_TIMEOUT_MS,
-			`Signal outcome lease release timed out after ${LEASE_WRITE_TIMEOUT_MS}ms`
+			`Signal outcome lease release timed out after ${LEASE_WRITE_TIMEOUT_MS}ms`,
 		);
 	} catch (error) {
 		console.warn('[SignalOutcomeService] Lease release failed:', error.message);
@@ -1018,7 +1032,9 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 	let errorCount = 0;
 	let regionBlockedCount = 0;
 	let leaseRenewHandle = null;
+	let leaseRenewPromise = Promise.resolve();
 	let leaseAcquired = false;
+	let leaseLost = false;
 
 	try {
 		const firestore = AlertStorageService.getFirestore();
@@ -1057,9 +1073,26 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		}
 		lastRunLeaseHeld = false;
 
-		const renewIntervalMs = Math.max(1000, Math.floor(leaseMs / 2));
+		const renewIntervalMs = options.leaseRenewIntervalMs !== undefined && options.leaseRenewIntervalMs !== null
+			? parsePositiveInteger(options.leaseRenewIntervalMs, MIN_LEASE_RENEW_INTERVAL_MS)
+			: Math.max(MIN_LEASE_RENEW_INTERVAL_MS, Math.floor(leaseMs / 2));
+		// The renewal verdict is the only proof this process still owns the sweep,
+		// so it is recorded instead of discarded. Renewals are serialized on one
+		// chain, and `finally` awaits it, so ownership is never classified while a
+		// renewal is still in flight.
 		leaseRenewHandle = setInterval(() => {
-			renewSweepLease(Date.now(), leaseMs).catch(() => {});
+			leaseRenewPromise = leaseRenewPromise
+				.then(() => renewSweepLease(Date.now(), leaseMs))
+				.then((renewal) => {
+					if (renewal !== LEASE_RENEWAL.LOST) {
+						return;
+					}
+					leaseLost = true;
+					console.warn('[SignalOutcomeService] Lost signal outcome sweep lease ownership mid-sweep. Halting sweep so only one replica prices signals.');
+				})
+				.catch((error) => {
+					console.warn('[SignalOutcomeService] Lease renewal sweep failed:', error.message);
+				});
 		}, renewIntervalMs);
 		if (leaseRenewHandle && typeof leaseRenewHandle.unref === 'function') {
 			leaseRenewHandle.unref();
@@ -1092,6 +1125,9 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		let sweepDeadlineExceeded = false;
 
 		for (const doc of snapshot.docs) {
+			if (leaseLost) {
+				break;
+			}
 			if (Date.now() - startTime >= effectiveMaxDurationMs || sweepDeadlineExceeded) {
 				console.warn(`[SignalOutcomeService] Outcome evaluation sweep max duration budget (${effectiveMaxDurationMs}ms) exceeded. Halting sweep.`);
 				break;
@@ -1648,7 +1684,14 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 			clearInterval(leaseRenewHandle);
 			leaseRenewHandle = null;
 		}
+		// Settle the renewal already in flight before deciding whether this sweep
+		// ran as the lease holder; renewSweepLease never rejects.
+		await leaseRenewPromise;
 		if (leaseAcquired) {
+			if (leaseLost) {
+				leaseHeldSkipCount++;
+				lastRunLeaseHeld = true;
+			}
 			await releaseSweepLease(Date.now());
 		}
 		isEvaluating = false;
@@ -1690,6 +1733,21 @@ function runScheduledSweep() {
 }
 
 /**
+ * A sweep that outlives its own lease can be legitimately taken over mid-run, which
+ * is the only way two replicas both price the same pending signal. Neither value is
+ * validated against the other anywhere, and the sweep budget is Remote Config
+ * eligible while the lease is environment-only, so warn rather than clamp.
+ */
+function warnIfLeaseDoesNotOutliveSweepBudget() {
+	const leaseMs = getLeaseMs();
+	const maxDurationMs = parseTimerInterval(getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 30000);
+	if (leaseMs > maxDurationMs) {
+		return;
+	}
+	console.warn(`[SignalOutcomeService] SIGNAL_OUTCOME_EVALUATION_LEASE_MS (${leaseMs}ms) does not exceed the sweep duration budget (${maxDurationMs}ms). A sweep can outlive its lease and be taken over mid-run.`);
+}
+
+/**
  * Start background autonomous evaluation worker if signal outcome tracking is enabled.
  */
 function startWorker(options = {}) {
@@ -1717,6 +1775,8 @@ function startWorker(options = {}) {
 	}
 
 	activeIntervalMs = intervalMs;
+
+	warnIfLeaseDoesNotOutliveSweepBudget();
 
 	// Trigger initial sweep non-blockingly after server readiness
 	Promise.resolve().then(() => {
@@ -2959,6 +3019,7 @@ module.exports = {
 	acquireSweepLease,
 	renewSweepLease,
 	releaseSweepLease,
+	LEASE_RENEWAL,
 	parseEntryPriceSources,
 	getEntryPriceSourceChains,
 	COLLECTION_NAME,

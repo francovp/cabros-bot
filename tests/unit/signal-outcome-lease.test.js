@@ -34,6 +34,8 @@ jest.mock('binance', () => {
 
 const LOCK_COLLECTION = 'signalOutcomeLocks';
 
+const { LEASE_RENEWAL } = SignalOutcomeService;
+
 // Builds a Firestore double that supports the transaction-backed lease while
 // delegating every other collection operation to the shared firebase-admin mock.
 // `lockState` is shared by reference so a test can simulate a second replica
@@ -110,6 +112,7 @@ describe('SignalOutcomeService distributed sweep lease', () => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_LEASE_MS;
+		delete process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS;
 		lockState = {};
 		mockGetKlines.mockResolvedValue([
 			[1600000000000, '50000', '51000', '49500', '50500', '100'],
@@ -123,6 +126,7 @@ describe('SignalOutcomeService distributed sweep lease', () => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_LEASE_MS;
+		delete process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS;
 	});
 
 	function enableTracking() {
@@ -267,6 +271,143 @@ describe('SignalOutcomeService distributed sweep lease', () => {
 		});
 	});
 
+	describe('renewSweepLease()', () => {
+		it('extends the lease it still owns', async () => {
+			jest.spyOn(AlertStorageService, 'getFirestore')
+				.mockReturnValue(createLeaseAwareFirestore(lockState));
+
+			await expect(SignalOutcomeService.acquireSweepLease(Date.now(), 60000)).resolves.toBe(true);
+			const acquiredUntil = lockState.lockedUntil;
+
+			await expect(SignalOutcomeService.renewSweepLease(Date.now() + 30000, 60000))
+				.resolves.toBe(LEASE_RENEWAL.ACQUIRED);
+
+			// Pushed out, so a long sweep is not taken over while it is still working.
+			expect(lockState.lockedUntil).not.toBe(acquiredUntil);
+			expect(new Date(lockState.lockedUntil).getTime()).toBeGreaterThan(
+				new Date(acquiredUntil).getTime(),
+			);
+		});
+
+		it('reports ownership lost when another replica now holds the lease', async () => {
+			jest.spyOn(AlertStorageService, 'getFirestore')
+				.mockReturnValue(createLeaseAwareFirestore(lockState));
+
+			lockState.lockedBy = 'other-replica-worker-id';
+			lockState.lockedUntil = new Date(Date.now() + 60000).toISOString();
+			const stolenUntil = lockState.lockedUntil;
+
+			await expect(SignalOutcomeService.renewSweepLease(Date.now(), 60000))
+				.resolves.toBe(LEASE_RENEWAL.LOST);
+
+			// Nothing written: the losing replica must not rewrite the winner's lock.
+			expect(lockState.lockedBy).toBe('other-replica-worker-id');
+			expect(lockState.lockedUntil).toBe(stolenUntil);
+		});
+
+		it('reports ownership lost when the lease document no longer exists', async () => {
+			jest.spyOn(AlertStorageService, 'getFirestore')
+				.mockReturnValue(createLeaseAwareFirestore(lockState));
+
+			// The acquire path creates the document, so a missing one mid-sweep is
+			// external interference and ownership cannot be proven.
+			await expect(SignalOutcomeService.renewSweepLease(Date.now(), 60000))
+				.resolves.toBe(LEASE_RENEWAL.LOST);
+		});
+
+		it.each([
+			['no Firestore at all', null],
+			['a Firestore without transaction support', {}],
+		])('stays undetermined with %s', async (_label, firestore) => {
+			jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(firestore);
+
+			// Deliberately not LOST: an unchecked lease is not proof of ownership
+			// loss, and failing closed here would let a Firestore blip stop
+			// outcome evaluation entirely.
+			await expect(SignalOutcomeService.renewSweepLease(Date.now(), 60000))
+				.resolves.toBe(LEASE_RENEWAL.UNDETERMINED);
+		});
+
+		it('stays undetermined when the lease transaction throws', async () => {
+			jest.spyOn(AlertStorageService, 'getFirestore')
+				.mockReturnValue(createLeaseAwareFirestore(lockState, { transactionError: 'lease-unavailable' }));
+
+			await expect(SignalOutcomeService.renewSweepLease(Date.now(), 60000))
+				.resolves.toBe(LEASE_RENEWAL.UNDETERMINED);
+		});
+	});
+
+	describe('mid-sweep ownership loss', () => {
+		it('stops acting on signals once a renewal proves the lease is gone', async () => {
+			enableTracking();
+			global.__firebaseAdminMockState.collections.set(
+				SignalOutcomeService.COLLECTION_NAME,
+				new Map([seedPendingSignal('sig_1'), seedPendingSignal('sig_2')]),
+			);
+
+			const firestore = createLeaseAwareFirestore(lockState);
+			jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(firestore);
+
+			// Slow the first document long enough for the renewal to land.
+			let call = 0;
+			mockGetKlines.mockImplementation(() => {
+				call += 1;
+				return new Promise((resolve) => {
+					setTimeout(() => resolve([
+						[1600000000000, '50000', '51000', '49500', '50500', '100'],
+					]), call === 1 ? 60 : 0);
+				});
+			});
+
+			// Another replica takes the lease while this sweep is pricing sig_1.
+			setTimeout(() => {
+				lockState.lockedBy = 'other-replica-worker-id';
+				lockState.lockedUntil = new Date(Date.now() + 60000).toISOString();
+			}, 20);
+
+			const result = await SignalOutcomeService.evaluatePendingOutcomes({
+				leaseMs: 60000,
+				leaseRenewIntervalMs: 30,
+			});
+
+			// sig_1 finished before ownership was lost; sig_2 must not be touched.
+			expect(result.evaluatedCount).toBe(1);
+			expect(mockGetKlines).toHaveBeenCalledTimes(1);
+
+			// The sweep is reported as not having run as the lease holder, even
+			// though it did evaluate one signal before losing ownership.
+			const status = SignalOutcomeService.getWorkerStatus();
+			expect(status.lastRunLeaseHeld).toBe(true);
+			expect(status.leaseHeldSkipCount).toBe(1);
+			expect(status.lastRunEvaluatedCount).toBe(1);
+
+			// The winner's lock is never cleared by the losing replica.
+			expect(lockState.lockedBy).toBe('other-replica-worker-id');
+		});
+
+		it('keeps the sweep result unchanged while the renewal keeps succeeding', async () => {
+			enableTracking();
+			global.__firebaseAdminMockState.collections.set(
+				SignalOutcomeService.COLLECTION_NAME,
+				new Map([seedPendingSignal('sig_1')]),
+			);
+
+			jest.spyOn(AlertStorageService, 'getFirestore')
+				.mockReturnValue(createLeaseAwareFirestore(lockState));
+
+			const result = await SignalOutcomeService.evaluatePendingOutcomes({
+				leaseMs: 60000,
+				leaseRenewIntervalMs: 30,
+			});
+
+			expect(result.evaluatedCount).toBe(1);
+			const status = SignalOutcomeService.getWorkerStatus();
+			expect(status.lastRunLeaseHeld).toBe(false);
+			expect(status.leaseHeldSkipCount).toBe(0);
+			expect(lockState.lockedBy).toBeNull();
+		});
+	});
+
 	describe('lease duration configuration', () => {
 		it('defaults to a lease that covers the sweep budget', () => {
 			expect(SignalOutcomeService.getLeaseMs()).toBe(120000);
@@ -294,6 +435,28 @@ describe('SignalOutcomeService distributed sweep lease', () => {
 
 			process.env.SIGNAL_OUTCOME_EVALUATION_LEASE_MS = '600000';
 			expect(SignalOutcomeService.getLeaseMs()).toBe(600000);
+		});
+
+		it('warns at startup when the lease does not outlast the sweep budget', () => {
+			enableTracking();
+			const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			process.env.SIGNAL_OUTCOME_EVALUATION_LEASE_MS = '10000';
+			process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS = '30000';
+
+			SignalOutcomeService.startWorker({ source: 'web', intervalMs: 60000 });
+
+			expect(warn).toHaveBeenCalledWith(expect.stringContaining('does not exceed the sweep duration budget'));
+		});
+
+		it('stays silent at startup when the lease outlasts the sweep budget', () => {
+			enableTracking();
+			const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			process.env.SIGNAL_OUTCOME_EVALUATION_LEASE_MS = '120000';
+			process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS = '30000';
+
+			SignalOutcomeService.startWorker({ source: 'web', intervalMs: 60000 });
+
+			expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('does not exceed the sweep duration budget'));
 		});
 	});
 

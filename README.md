@@ -264,9 +264,9 @@ Paging is deduplicated by cooldown and only latches after confirmed delivery; a 
 
 The production topology names **two** candidate evaluators: the web service (`SIGNAL_OUTCOME_WORKER_ROLE=web`) and the paid dedicated worker `cabros-crypto-bot-signal-outcome-worker` (`SIGNAL_OUTCOME_WORKER_ROLE=worker`). `startWorker()` only compares a process's own role, so role gating alone does not stop both from sweeping. `SignalOutcomeService` therefore claims the sweep with a Firestore lease in `signalOutcomeLocks`:
 
-- **One evaluator wins.** The replica that loses the claim skips with `reason: "lease-held"` and issues **no** market-data calls, so a pending signal is never priced and written twice — which would double Binance / Gemini / Twelve Data quota spend. An expired lease is taken over rather than skipped forever.
-- **The lease fails open.** If Firestore is unavailable or the lease write throws, the sweep proceeds exactly as before. A lock-service blip must never be able to silently stop outcome evaluation.
-- **It is observable.** `dependencies.signalOutcomeWorker` reports `leaseMs`, `lastRunLeaseHeld` and `leaseHeldSkipCount`, so `leaseHeldSkipCount` climbing on one replica while the other reports `lastRunEvaluatedCount` growth identifies the active evaluator without guessing from the dashboard.
+- **One evaluator wins.** The replica that loses the claim skips with `reason: "lease-held"` and issues **no** market-data calls, so a pending signal is never priced and written twice — which would double Binance / Gemini / Twelve Data quota spend. Ownership is re-checked while the sweep runs, and a renewal that proves the lease was taken over mid-sweep **halts** the sweep before the next document. An expired lease is taken over rather than skipped forever.
+- **The lease fails open.** If Firestore is unavailable or the lease write cannot be attempted, the sweep proceeds exactly as before. A lock-service blip must never be able to silently stop outcome evaluation. Only *proven* ownership loss stops a sweep.
+- **It is observable.** `dependencies.signalOutcomeWorker` reports `leaseMs`, `lastRunLeaseHeld` and `leaseHeldSkipCount`, so `leaseHeldSkipCount` climbing on one replica while the other reports `lastRunEvaluatedCount` growth identifies the active evaluator without guessing from the dashboard. Both counters are also rendered on the `/admin` Status explorer card.
 
 Verify the rollout on the deployed service rather than trusting the flag:
 

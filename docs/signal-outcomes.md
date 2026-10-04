@@ -251,16 +251,17 @@ Query empirical confidence calibration feedback metrics comparing news-monitor a
 Each sweep is therefore claimed with a Firestore lease in the `signalOutcomeLocks` collection:
 
 - The replica that loses the claim skips with `reason: "lease-held"` and makes no market-data calls, so a pending signal is never evaluated twice.
+- Ownership is also checked while the sweep runs. A renewal that proves the lease was taken over mid-sweep **halts** the sweep before the next document, so a losing replica stops pricing signals rather than finishing the batch.
 - An expired lease is taken over rather than skipped indefinitely.
-- If Firestore is unavailable or the lease write fails, the sweep **proceeds anyway**. A lock-service failure degrades to single-process behaviour instead of stopping outcome evaluation.
-- Duration: `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` (`10000`-`600000`, default `120000`).
+- If Firestore is unavailable or the lease write cannot be attempted, the sweep **proceeds anyway**. A lock-service failure degrades to single-process behaviour instead of stopping outcome evaluation. Only *proven* ownership loss stops a sweep; an unchecked lease is not proof of loss.
+- Duration: `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` (`10000`-`600000`, default `120000`). The worker warns at startup if the lease does not exceed `SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS`, because a sweep that outlives its own lease can legitimately be taken over mid-run.
 
 Check `GET /api/status` (or `/api/capabilities`) under `dependencies.signalOutcomeWorker`:
 
 | Field | Meaning |
 | :--- | :--- |
 | `leaseMs` | Configured lease duration. |
-| `lastRunLeaseHeld` | The most recent sweep was skipped because another replica held the lease. |
-| `leaseHeldSkipCount` | How many sweeps this process has skipped this way since start. |
+| `lastRunLeaseHeld` | The most recent sweep did not run to completion as the lease holder. |
+| `leaseHeldSkipCount` | Cumulative sweeps since start that did not run to completion as the lease holder. |
 
-A replica whose `leaseHeldSkipCount` keeps climbing while its `lastRunEvaluatedCount` stays at `0` is not the evaluator — that is how you identify which process is actually doing the work. A `lastRunAt` that never advances, or counters stuck at zero, means the sweep is not running at all regardless of what `featureFlags.signalOutcomeTracking` reports.
+A sweep halted by a lost lease can still report a non-zero `lastRunEvaluatedCount` for the documents it finished before ownership moved on — the abort is counted, not the individual documents. A replica whose `leaseHeldSkipCount` keeps climbing while its `lastRunEvaluatedCount` stays at `0` is not the evaluator — that is how you identify which process is actually doing the work. A `lastRunAt` that never advances, or counters stuck at zero, means the sweep is not running at all regardless of what `featureFlags.signalOutcomeTracking` reports.
