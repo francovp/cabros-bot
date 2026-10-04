@@ -133,6 +133,19 @@ describe('Render signal outcome worker blueprint', () => {
 		// the ephemeral default instead of opening a second writer on the collection.
 		expect(workerBlueprint).not.toContain('ENABLE_FIRESTORE_IDEMPOTENCY');
 	});
+
+	// Issue #1109 enables confluence enrichment in production. The flag was already
+	// present in the worker block as a `fromService` mirror of a value the web service
+	// never set, so the Blueprint looked configured while the only service that reaches
+	// it — the one serving POST /api/webhook/alert — kept the `false` default.
+	it('enables confluence enrichment on the web service with previews off', () => {
+		const blueprint = fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');
+		const webBlueprint = blueprint.slice(0, blueprint.indexOf('- type: worker'));
+
+		expect(webBlueprint).toContain(
+			'- key: ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT\n    value: true\n    previewValue: false',
+		);
+	});
 });
 
 /**

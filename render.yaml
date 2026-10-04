@@ -119,6 +119,10 @@ services:
     sync: false
   - key: LANGFUSE_SECRET_KEY
     sync: false
+  # TradingView confluence enrichment: web service only, previews off. See AGENTS.md.
+  - key: ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT
+    value: true
+    previewValue: false
   - key: REDIS_URL
     fromService:
       name: cabros-crypto-bot-telegram-queue

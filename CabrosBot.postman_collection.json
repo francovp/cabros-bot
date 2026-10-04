@@ -479,6 +479,80 @@
       ]
     },
     {
+      "name": "Get Status - confluence enrichment counters",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Issue #1109 enables `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` in production. `enrichment.alertPath` aggregates the whole webhook enrichment path, so it cannot attribute an outcome to the confluence call specifically; `enrichment.confluence` reports the optional confluence calls on their own. Counters are process-local and reset on restart, so all zeros with `enabled: true` is the expected state right after a deploy until an alert exercises the path. Confluence is fail-open: a failure never blocks alert delivery."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('confluence counters are reported separately from aggregate alert-path rates', function () {",
+              "  const enrichment = pm.response.json().dependencies.tradingViewMcp.enrichment;",
+              "  pm.expect(pm.response.code).to.eql(200);",
+              "  pm.expect(enrichment).to.be.an('object');",
+              "  pm.expect(enrichment.confluence).to.be.an('object');",
+              "  pm.expect(enrichment.alertPath).to.be.an('object');",
+              "});",
+              "pm.test('confluence counters are non-negative integers and never claim more work than was attempted', function () {",
+              "  const c = pm.response.json().dependencies.tradingViewMcp.enrichment.confluence;",
+              "  pm.expect(c.enabled).to.be.a('boolean');",
+              "  ['attemptedCount', 'appliedCount', 'failedCount', 'budgetExhaustedCount'].forEach(function (key) {",
+              "    pm.expect(c[key]).to.be.a('number');",
+              "    pm.expect(Number.isInteger(c[key])).to.eql(true);",
+              "    pm.expect(c[key]).to.be.at.least(0);",
+              "  });",
+              "  // An attempt either applied or failed, never both; budget exhaustion is recorded",
+              "  // without an attempt because no call was made.",
+              "  pm.expect(c.appliedCount + c.failedCount).to.be.at.most(c.attemptedCount);",
+              "});",
+              "pm.test('confluence failure telemetry stays a closed category and leaks no provider error', function () {",
+              "  const c = pm.response.json().dependencies.tradingViewMcp.enrichment.confluence;",
+              "  pm.expect([null, 'timeout', 'http_5xx', 'http_4xx', 'invalid_response', 'provider_unavailable', 'circuit_breaker_open', 'request_failed', 'unknown_error']).to.include(c.lastFailureCategory);",
+              "  const raw = pm.response.text();",
+              "  pm.expect(raw).to.not.include('combined_analysis failed');",
+              "  pm.expect(raw).to.not.include('projects/');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 OK - confluence enabled, counters zeroed before first alert",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"featureFlags\": {\n    \"tradingViewConfluenceEnrichment\": true,\n    \"tradingViewConfluenceMultiTimeframe\": true\n  },\n  \"dependencies\": {\n    \"tradingViewMcp\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"status\": \"unknown\",\n      \"enrichment\": {\n        \"lastStatus\": null,\n        \"fullCount\": 0,\n        \"partialCount\": 0,\n        \"failedCount\": 0,\n        \"confluence\": {\n          \"enabled\": true,\n          \"attemptedCount\": 0,\n          \"appliedCount\": 0,\n          \"failedCount\": 0,\n          \"budgetExhaustedCount\": 0,\n          \"lastAppliedAt\": null,\n          \"lastFailureCategory\": null\n        },\n        \"alertPath\": {\n          \"windowMs\": 86400000,\n          \"totalCount\": 0,\n          \"appliedCount\": 0,\n          \"failedCount\": 0,\n          \"appliedRate24h\": 0,\n          \"failureRate24h\": 0\n        }\n      }\n    }\n  }\n}"
+        },
+        {
+          "name": "200 OK - confluence applied, multi-timeframe call budget-starved",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"featureFlags\": {\n    \"tradingViewConfluenceEnrichment\": true,\n    \"tradingViewConfluenceMultiTimeframe\": true\n  },\n  \"dependencies\": {\n    \"tradingViewMcp\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"status\": \"ready\",\n      \"enrichment\": {\n        \"lastStatus\": \"partial\",\n        \"fullCount\": 1,\n        \"partialCount\": 2,\n        \"failedCount\": 0,\n        \"confluence\": {\n          \"enabled\": true,\n          \"attemptedCount\": 3,\n          \"appliedCount\": 3,\n          \"failedCount\": 0,\n          \"budgetExhaustedCount\": 2,\n          \"lastAppliedAt\": \"2026-10-04T09:41:12.482Z\",\n          \"lastFailureCategory\": null\n        },\n        \"alertPath\": {\n          \"windowMs\": 86400000,\n          \"totalCount\": 3,\n          \"appliedCount\": 3,\n          \"failedCount\": 0,\n          \"appliedRate24h\": 100,\n          \"failureRate24h\": 0\n        }\n      }\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
       "name": "Get Status - grounding operational metrics",
       "request": {
         "method": "GET",

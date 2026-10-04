@@ -1050,4 +1050,40 @@ describe('news-monitor stop/target example (GH-712)', () => {
 		expect(alert.stop).toBeGreaterThan(0);
 		expect(alert.target).toBeGreaterThan(alert.stop);
 	});
+
+	// Issue #1109. Re-validating the examples here keeps them honest against the same
+	// invariants their `pm.test` scripts assert, instead of drifting from them.
+	it('Get Status - confluence enrichment counters examples satisfy the counter invariants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		expect(item).toBeDefined();
+
+		const allowedFailureCategories = [
+			null, 'timeout', 'http_5xx', 'http_4xx', 'invalid_response',
+			'provider_unavailable', 'circuit_breaker_open', 'request_failed', 'unknown_error',
+		];
+
+		for (const response of item.response) {
+			const body = JSON.parse(response.body);
+			const confluence = body.dependencies.tradingViewMcp.enrichment.confluence;
+
+			expect(confluence.enabled).toBe(true);
+			expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
+			expect(allowedFailureCategories).toContain(confluence.lastFailureCategory);
+			expect(confluence.appliedCount + confluence.failedCount)
+				.toBeLessThanOrEqual(confluence.attemptedCount);
+			expect(response.body).not.toContain('combined_analysis failed');
+			expect(response.body).not.toContain('projects/');
+		}
+	});
+
+	it('Get Status - confluence enrichment counters asserts the block is separate from alertPath', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		const script = item.event.find((entry) => entry.listen === 'test').script.exec.join('\n');
+
+		expect(script).toContain('enrichment.confluence');
+		expect(script).toContain('enrichment.alertPath');
+		expect(script).toContain('appliedCount + c.failedCount');
+	});
 });

@@ -1301,6 +1301,114 @@ describe('TradingViewMcpService', () => {
 		expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Confluence enrichment failed'));
 	});
 
+	// Issue #1109 turns this flag on in production. `enrichment.alertPath` aggregates
+	// the whole alert path, so it cannot distinguish a working confluence call from a
+	// base `coin_analysis` call that succeeded on its own. These make it provable.
+	describe('confluence enrichment counters (issue #1109)', () => {
+		const buildService = (extra = {}) => new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			...extra,
+		});
+		const stubCoinAnalysis = service => {
+			service.callCoinAnalysis = jest.fn().mockResolvedValue({
+				price_data: { current_price: 65000 },
+				market_sentiment: { overall_rating: 4, momentum: 'Bullish' },
+				market_structure: { trend: 'Bullish', trend_score: 4 },
+			});
+		};
+		const readConfluence = service => service.getStatus({ enabled: true }).enrichment.confluence;
+
+		it('reports a zeroed block with enabled=true before any alert is enriched', () => {
+			process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'true';
+
+			expect(readConfluence(buildService())).toEqual({
+				enabled: true,
+				attemptedCount: 0,
+				appliedCount: 0,
+				failedCount: 0,
+				budgetExhaustedCount: 0,
+				lastAppliedAt: null,
+				lastFailureCategory: null,
+			});
+		});
+
+		it('counts an attempt and an application when combined_analysis succeeds', async () => {
+			process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'true';
+			const service = buildService();
+			stubCoinAnalysis(service);
+			service.callCombinedAnalysis = jest.fn().mockResolvedValue({
+				confluence: { recommendation: 'BUY', confidence: 70, signals_agree: true },
+			});
+
+			await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+			expect(readConfluence(service)).toMatchObject({
+				enabled: true,
+				attemptedCount: 1,
+				appliedCount: 1,
+				failedCount: 0,
+			});
+			expect(typeof readConfluence(service).lastAppliedAt).toBe('string');
+		});
+
+		it('counts a failure with a sanitized category and never leaks the provider error', async () => {
+			process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'true';
+			const service = buildService();
+			stubCoinAnalysis(service);
+			service.callCombinedAnalysis = jest.fn().mockRejectedValue(
+				new Error('combined_analysis failed for projects/cabros-bot/databases/(default)'),
+			);
+
+			await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+			const confluence = readConfluence(service);
+			expect(confluence).toMatchObject({ attemptedCount: 1, appliedCount: 0, failedCount: 1 });
+			expect(confluence.lastFailureCategory).toBeTruthy();
+			expect(JSON.stringify(confluence)).not.toContain('cabros-bot');
+			expect(JSON.stringify(confluence)).not.toContain('combined_analysis failed');
+		});
+
+		it('records a budget exhaustion without counting an attempt that never ran', async () => {
+			process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'true';
+			const service = buildService({ enrichmentBudgetMs: 20 });
+			stubCoinAnalysis(service);
+			service.callCoinAnalysis.mockImplementation(
+				() => new Promise(resolve => setTimeout(() => resolve({
+					price_data: { current_price: 65000 },
+					market_sentiment: { overall_rating: 4, momentum: 'Bullish' },
+					market_structure: { trend: 'Bullish', trend_score: 4 },
+				}), 40)),
+			);
+			service.callCombinedAnalysis = jest.fn();
+
+			await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+			expect(service.callCombinedAnalysis).not.toHaveBeenCalled();
+			expect(readConfluence(service)).toMatchObject({
+				attemptedCount: 0,
+				appliedCount: 0,
+				budgetExhaustedCount: 1,
+			});
+		});
+
+		it('never lets a counter error reject the enrichment', async () => {
+			process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'true';
+			const service = buildService();
+			stubCoinAnalysis(service);
+			service.callCombinedAnalysis = jest.fn().mockResolvedValue({
+				confluence: { recommendation: 'BUY', confidence: 70, signals_agree: true },
+			});
+			service._getErrorCategory = () => { throw new Error('telemetry exploded'); };
+
+			const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+			expect(result.confluenceData).not.toBeNull();
+		});
+	});
+
 	it('adds multi-timeframe metadata when confluence multi-timeframe mode is configured', async () => {
 		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'true';
 		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'true';
