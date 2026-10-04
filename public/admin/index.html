@@ -75,13 +75,15 @@
         </form>
         <p id="key-state" class="request-state" aria-live="polite"></p>
       </section>
-      <section id="view" tabindex="-1" aria-live="polite"></section>
+      <p id="view-status" class="request-state" role="status" aria-live="polite" aria-atomic="true"></p>
+      <section id="view" tabindex="-1"></section>
     </section>
     <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
   </main>
   <script src="/admin/vue.runtime.global.prod.js" defer></script>
   <script src="/admin/admin-components.js" defer></script>
   <script src="/admin/admin-request.js" defer></script>
+  <script src="/admin/admin-charts.js" defer></script>
   <script src="/admin/admin.js" defer></script>
 </body>
 </html>
