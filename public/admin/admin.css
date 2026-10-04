@@ -267,10 +267,21 @@ cabros-fields, cabros-result { display: block; min-width: 0; }
 .toast.toast-error { border-left: 4px solid var(--danger); }
 .toast.toast-info { border-left: 4px solid var(--accent); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+/* `left`/`top` are load-bearing, not cosmetic: `width` is only a *minimum* for boxes whose used
+   width is content-driven (a display: table resolves to max(specified, min-content)), so a
+   content-sized absolutely positioned box with auto offsets can push past the right edge and
+   widen the page. Parking it a long way to the left keeps any element inside the layout it
+   cannot affect, because leftward overflow does not grow scrollWidth in LTR. */
+.visually-hidden { position: absolute; left: -9999px; top: auto; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
 .chart-figure { margin: 0; padding: .85rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--chart-surface); display: grid; gap: .6rem; min-width: 0; }
 .chart-figure-inline { padding: .35rem .5rem; gap: 0; }
+/* `min-width: 0` stops the flex/grid item from inheriting `auto`, which would size the item to
+   the graphic's minimum and push the overflow back out onto the page. */
+.chart-scroll { min-width: 0; overflow-x: auto; overflow-y: hidden; }
 .chart-svg { display: block; width: 100%; height: auto; max-width: 100%; overflow: visible; }
+/* A chart scaled to a phone width renders 11-12px viewBox text at roughly 4px. Holding a floor
+   keeps the labels readable and lets the card pan instead, which stays a contained scroll. */
+.chart-line-svg, .chart-bar-svg { min-width: 36rem; max-width: none; }
 .chart-sparkline-svg { height: 2rem; }
 .chart-donut-svg { max-width: 22rem; justify-self: center; }
 .chart-series-1 { --chart-series-color: var(--chart-series-1); }

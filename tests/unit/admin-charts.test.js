@@ -114,6 +114,23 @@ const svgOf = (root) => {
 
 const classesOf = (node) => String(node.className || '').split(/\s+/).filter(Boolean);
 
+const viewBoxOf = (root) => {
+	const box = String(svgOf(root).getAttribute('viewBox') || '').split(/\s+/).map(Number);
+	return { width: box[2], height: box[3] };
+};
+
+// A `display: table` box resolves its used width to max(specified, min-content), so the class
+// must never land on one: an absolutely positioned table sized by its content widens the page.
+const tablesWithVisuallyHidden = (root) => byTag(root, 'table')
+	.filter((table) => classesOf(table).includes('visually-hidden'));
+
+const textBoxes = (root) => byTag(root, 'text').map((text) => ({
+	text: text.textContent,
+	x: Number(text.getAttribute('x')),
+	anchor: text.getAttribute('text-anchor'),
+	fontSize: classesOf(text).includes('chart-category-text') ? 12 : 11,
+}));
+
 // Every emitted attribute must be a real coordinate, never NaN/Infinity/undefined.
 const expectNoBrokenNumbers = (root) => {
 	walk(root, (node) => {
@@ -165,10 +182,24 @@ describe('admin chart primitives', () => {
 		it('ships an equivalent visually hidden data table with the same numbers', () => {
 			const node = charts.sparkline([10, 31, 12], { label: 'Alerts per hour' });
 			const table = byTag(node, 'table')[0];
+			const holder = table.parentNode;
 
-			expect(classesOf(table)).toEqual(expect.arrayContaining(['chart-data-table', 'visually-hidden']));
+			expect(classesOf(table)).toEqual(expect.arrayContaining(['chart-data-table']));
+			expect(classesOf(holder)).toEqual(expect.arrayContaining(['visually-hidden']));
+			expect(holder.tagName).not.toBe('TABLE');
 			expect(byTag(table, 'caption')[0].textContent).toBe('Alerts per hour values');
 			expect(tableRows(table)).toEqual([['1', '10'], ['2', '31'], ['3', '12']]);
+		});
+
+		it('keeps the hidden table inside the holder so it is still exposed to assistive tech', () => {
+			const node = charts.sparkline([10, 31, 12], { label: 'Alerts per hour' });
+			const holder = node.children[1];
+			const table = byTag(holder, 'table');
+
+			expect(classesOf(holder)).toEqual(expect.arrayContaining(['visually-hidden']));
+			expect(table).toHaveLength(1);
+			expect(byTag(table[0], 'tr')).toHaveLength(4);
+			expect(byTag(table[0], 'caption')).toHaveLength(1);
 		});
 
 		it('honours a custom value formatter in both the label and the table', () => {
@@ -310,6 +341,41 @@ describe('admin chart primitives', () => {
 			]);
 			expectNoBrokenNumbers(node);
 		});
+
+		it('widens the left gutter for a verbose y formatter so the tick text still fits inside it', () => {
+			const gutterFor = (points, formatY) => {
+				const node = charts.lineChart([{ label: 'Alerts', points }], { xKey: 'hour', yKey: 'count', formatY });
+				const ticks = textBoxes(node).filter((item) => item.anchor === 'end');
+				const gridStart = Number(byTag(node, 'line').find((line) => classesOf(line).includes('chart-grid-line')).getAttribute('x1'));
+				const widest = Math.max(...ticks.map((item) => item.text.length * item.fontSize * 0.6));
+
+				expect(widest).toBeLessThanOrEqual(gridStart - 8);
+				return gridStart;
+			};
+			const small = [{ hour: '13:00', count: 3 }, { hour: '14:00', count: 42 }];
+			const large = [{ hour: '13:00', count: 1234567 }, { hour: '14:00', count: 42 }];
+
+			expect(gutterFor(small, (value) => String(value))).toBe(56);
+			expect(gutterFor(large, (value) => `${value.toLocaleString('en-US')} alerts`)).toBeGreaterThan(56);
+		});
+
+		it('keeps every painted label inside the viewBox for a verbose y formatter', () => {
+			const node = charts.lineChart([{ label: 'Alerts', points: [{ hour: '13:00', count: 1234567 }] }], {
+				xKey: 'hour',
+				yKey: 'count',
+				formatY: (value) => `${value.toLocaleString('en-US')} alerts`,
+			});
+			const { width } = viewBoxOf(node);
+
+			textBoxes(node).forEach((item) => {
+				const estimatedWidth = item.text.length * item.fontSize * 0.6;
+				const from = item.anchor === 'end' ? item.x - estimatedWidth : item.x - estimatedWidth / 2;
+
+				expect(from).toBeGreaterThanOrEqual(0);
+			});
+			expect(viewBoxOf(node).width).toBe(width);
+			expectNoBrokenNumbers(node);
+		});
 	});
 
 	describe('barChart', () => {
@@ -403,6 +469,90 @@ describe('admin chart primitives', () => {
 			expect(labels).toEqual(expect.arrayContaining(['BTCUSDT', 'ETHUSDT', '—']));
 			expect(byTag(node, 'rect')).toHaveLength(0);
 			expect(tableRows(byTag(node, 'details')[0])).toEqual([['BTCUSDT', '—'], ['ETHUSDT', '—']]);
+		});
+
+		it('widens the left gutter for a long category label instead of painting it outside the figure', () => {
+			const long = 'BINANCE:BTCUSDT-PERP-ALPHA-EXTREME';
+			const node = charts.barChart([{ label: long, value: 5 }], { valueKey: 'value' });
+			const { width } = viewBoxOf(node);
+			const painted = textBoxes(node).find((item) => item.text.startsWith('BINANCE'));
+			const estimatedWidth = painted.text.length * painted.fontSize * 0.6;
+
+			expect(painted.anchor).toBe('end');
+			expect(painted.x - estimatedWidth).toBeGreaterThan(0);
+			expect(painted.x).toBeLessThan(width);
+		});
+
+		it('truncates an over-long category label on the graphic but keeps the full name in the table and aria-label', () => {
+			const long = 'BINANCE:BTCUSDT-PERP-ALPHA-EXTREME';
+			const node = charts.barChart([{ label: long, value: 5 }], { valueKey: 'value' });
+			const painted = textBoxes(node).find((item) => item.anchor === 'end');
+
+			expect(painted.text.length).toBeLessThan(long.length);
+			expect(painted.text.endsWith('…')).toBe(true);
+			expect(tableRows(byTag(node, 'details')[0])).toEqual([[long, '5']]);
+			expect(svgOf(node).getAttribute('aria-label')).toContain(long);
+		});
+
+		it('grows the left gutter with the longest label and leaves short-label charts untouched', () => {
+			const gutterFor = (label) => textBoxes(charts.barChart([{ label, value: 5 }], { valueKey: 'value' }))
+				.find((item) => item.anchor === 'end').x;
+
+			expect(gutterFor('BTCUSDT')).toBe(140);
+			expect(gutterFor('BINANCE:BTCUSDT-PERP-ALPHA-EXTREME')).toBeGreaterThan(140);
+		});
+
+		it('widens the right gutter for a verbose value formatter so value labels stay inside', () => {
+			const node = charts.barChart(
+				[{ label: 'A', value: 1234567 }],
+				{ valueKey: 'value', formatValue: (value) => `${value.toLocaleString('en-US')} alerts` },
+			);
+			const { width } = viewBoxOf(node);
+			const painted = textBoxes(node).find((item) => item.text === '1,234,567 alerts' && item.anchor === 'start');
+
+			expect(painted.x + painted.text.length * painted.fontSize * 0.6).toBeLessThan(width);
+		});
+
+		it('keeps a negative bar value label clear of its category name on the shared baseline', () => {
+			const node = charts.barChart([
+				{ label: 'FX_IDC:USDCLP(D)', value: -42 },
+				{ label: 'BINANCE:BTCUSDT', value: 9 },
+			], { valueKey: 'value', formatValue: (value) => `${value} alerts` });
+			const boxes = textBoxes(node);
+			const extent = (item) => {
+				const w = item.text.length * item.fontSize * 0.6;
+
+				return item.anchor === 'end' ? [item.x - w, item.x] : [item.x, item.x + w];
+			};
+			const names = boxes.filter((item) => item.text.endsWith('D)') || item.text === 'BINANCE:BTCUSDT');
+			const negativeValue = boxes.find((item) => item.text === '-42 alerts');
+
+			expect(negativeValue.anchor).toBe('end');
+			const [nameLeft, nameRight] = extent(names[0]);
+			const [valueLeft] = extent(negativeValue);
+			expect(valueLeft).toBeGreaterThan(nameRight);
+			expect(nameLeft).toBeGreaterThan(0);
+		});
+
+		it('keeps every painted label inside the viewBox for negatives, missing values and long names', () => {
+			const node = charts.barChart([
+				{ label: 'BINANCE:BTCUSDT-PERP-ALPHA-EXTREME', value: -1234567 },
+				{ label: 'Missing', value: 'nope' },
+				{ label: 'Zero', value: 0 },
+			], { valueKey: 'value', formatValue: (value) => String(value) });
+			const { width } = viewBoxOf(node);
+
+			textBoxes(node).forEach((item) => {
+				const estimatedWidth = item.text.length * item.fontSize * 0.6;
+				const [from, to] = item.anchor === 'end'
+					? [item.x - estimatedWidth, item.x]
+					: item.anchor === 'middle'
+						? [item.x - estimatedWidth / 2, item.x + estimatedWidth / 2]
+						: [item.x, item.x + estimatedWidth];
+				expect(from).toBeGreaterThanOrEqual(0);
+				expect(to).toBeLessThanOrEqual(width);
+			});
+			expectNoBrokenNumbers(node);
 		});
 	});
 
@@ -517,6 +667,60 @@ describe('admin chart primitives', () => {
 		});
 	});
 
+	describe('layout invariants', () => {
+		const renderAll = (fresh) => [
+			fresh.sparkline([1, 5, 3], { label: 'Spark' }),
+			fresh.lineChart([{ label: 'Alerts', points: [{ x: 1, y: 3 }, { x: 2, y: 9 }] }], { xKey: 'x', yKey: 'y' }),
+			fresh.barChart([{ label: 'BTCUSDT', value: 9 }, { label: 'ETHUSDT', value: 4 }], { valueKey: 'value' }),
+			fresh.donutChart([{ label: 'Up', value: 9 }, { label: 'Down', value: 4 }]),
+		];
+
+		it('never applies .visually-hidden directly to a table in any chart', () => {
+			const { charts: fresh } = loadCharts();
+
+			renderAll(fresh).forEach((node) => {
+				expect(tablesWithVisuallyHidden(node)).toEqual([]);
+			});
+		});
+
+		it('parks .visually-hidden off the left edge so its own width can never widen the page', () => {
+			// `width: 1px` is only a minimum for some display types, and leftward overflow does
+			// not grow scrollWidth, so the offset is what makes the helper safe on any element.
+			const rule = CSS.match(/^\.visually-hidden \{([^}]*)\}/m)[1];
+
+			expect(rule).toMatch(/(?:^|;)\s*left:\s*-\d/);
+			expect(rule).not.toMatch(/(?:^|;)\s*left:\s*auto/);
+			expect(rule).toMatch(/(?:^|;)\s*top:\s*auto/);
+		});
+
+		it('puts line and bar graphics in a contained scroller with min-width:0 so overflow stays inside the card', () => {
+			const { charts: fresh } = loadCharts();
+			const [spark, line, bars, donut] = renderAll(fresh);
+			const scrollerOf = (node) => node.children.find((child) => classesOf(child).includes('chart-scroll'));
+
+			[line, bars].forEach((node) => {
+				const scroller = scrollerOf(node);
+
+				expect(scroller).toBeDefined();
+				expect(svgOf(scroller)).toBeDefined();
+				expect(svgOf(scroller).getAttribute('preserveAspectRatio')).toBe('xMinYMin meet');
+			});
+			expect(scrollerOf(spark)).toBeUndefined();
+			expect(scrollerOf(donut)).toBeUndefined();
+			expect(CSS).toMatch(/\.chart-scroll \{[^}]*min-width: 0/);
+			expect(CSS).toMatch(/\.chart-scroll \{[^}]*overflow-x: auto/);
+		});
+
+		it('declares a minimum graphic width so axis text cannot scale below a readable size', () => {
+			const rule = CSS.match(/\.chart-line-svg,\s*\.chart-bar-svg \{([^}]*)\}/)[1];
+			const floor = Number(rule.match(/min-width:\s*([\d.]+)rem/)[1]);
+			const viewBoxWidth = Number(SOURCE.match(/LINE_VIEWBOX = \{ width: (\d+)/)[1]);
+
+			expect(floor * 16 / viewBoxWidth * 11).toBeGreaterThanOrEqual(8);
+			expect(rule).toMatch(/max-width: none/);
+		});
+	});
+
 	describe('CSP and asset constraints', () => {
 		it('never touches innerHTML, outerHTML or insertAdjacentHTML while rendering', () => {
 			const { charts: fresh } = loadCharts();
@@ -599,6 +803,12 @@ describe('admin chart primitives', () => {
 			const built = path.join(__dirname, '../../public/admin/admin-charts.js');
 			expect(fs.existsSync(built)).toBe(true);
 			expect(fs.readFileSync(built, 'utf8')).toBe(SOURCE);
+		});
+
+		it('keeps public/admin/admin.css byte-identical to the source stylesheet', () => {
+			const built = path.join(__dirname, '../../public/admin/admin.css');
+			expect(fs.existsSync(built)).toBe(true);
+			expect(fs.readFileSync(built, 'utf8')).toBe(CSS);
 		});
 	});
 });

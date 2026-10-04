@@ -27,6 +27,17 @@
 	const DONUT_VIEWBOX = { width: 320, height: 220 };
 	const DEFAULT_EMPTY_TEXT = 'No data available to chart.';
 	const MISSING = '—';
+	const AXIS_FONT_SIZE = 11;
+	const CATEGORY_FONT_SIZE = 12;
+	// Average sans-serif advance as a fraction of the font size. SVG text has no measurable
+	// width before layout, so the gutters below are derived from this estimate: reserving too
+	// much only narrows the plot, reserving too little paints a label outside the figure.
+	const GLYPH_ADVANCE = 0.6;
+	const MAX_CATEGORY_CHARS = 26;
+	// The hand-tuned gutters, kept as floors so charts with short labels render exactly as
+	// before; a long label or a verbose formatter only ever grows them.
+	const LINE_PAD = { top: 16, right: 18, bottom: 34, left: 56 };
+	const BAR_PAD = { top: 12, right: 72, bottom: 26, left: 150 };
 
 	const applyAttributes = (node, attributes = {}) => {
 		Object.entries(attributes).forEach(([name, value]) => {
@@ -154,11 +165,33 @@
 		return details;
 	};
 
+	// The hidden table gets a block holder rather than the class on the table itself. A
+	// `display: table` box resolves its used width to max(specified, min-content), so an
+	// absolutely positioned table sized by its own content widens the page it lives on.
+	const hiddenTable = (caption, headers, rows) => {
+		const holder = htmlElement('div', 'visually-hidden');
+		holder.append(dataTable(caption, headers, rows));
+		return holder;
+	};
+
 	const figure = (className, children) => {
 		const node = htmlElement('figure', className);
 		node.append(...children);
 		return node;
 	};
+
+	// Graphics that carry text hold a minimum width in CSS, so this contained scroller is what
+	// absorbs the extra width on a narrow viewport. `min-width: 0` on the holder in CSS is what
+	// stops the graphic from widening the page instead of the card.
+	const scrollable = (svg) => {
+		const wrapper = htmlElement('div', 'chart-scroll');
+		wrapper.append(svg);
+		return wrapper;
+	};
+
+	const textWidth = (text, fontSize) => String(text).length * fontSize * GLYPH_ADVANCE;
+	const widestText = (texts, fontSize) => texts.reduce((widest, text) => Math.max(widest, textWidth(text, fontSize)), 0);
+	const ellipsise = (text) => (text.length > MAX_CATEGORY_CHARS ? `${text.slice(0, MAX_CATEGORY_CHARS - 1)}…` : text);
 
 	const sparkline = (values, options = {}) => {
 		const list = Array.isArray(values) ? values : [];
@@ -213,10 +246,10 @@
 
 		return figure('chart-figure chart-figure-inline', [
 			svg,
-			dataTable(`${label} values`, ['Point', 'Value'], points.map((point) => [
+			hiddenTable(`${label} values`, ['Point', 'Value'], points.map((point) => [
 				String(point.index + 1),
 				format(point.value),
-			]), 'chart-data-table visually-hidden'),
+			])),
 		]);
 	};
 
@@ -239,9 +272,6 @@
 		const formatY = formatter(options.formatY);
 		const label = options.label || 'Series over time';
 		const { width, height } = LINE_VIEWBOX;
-		const pad = { top: 16, right: 18, bottom: 34, left: 56 };
-		const plotWidth = width - pad.left - pad.right;
-		const plotHeight = height - pad.top - pad.bottom;
 		const longest = list.reduce((widest, entry) => Math.max(widest, entry.points.length), 0);
 
 		const { min: dataMin, max: dataMax } = extent(list.flatMap((entry) => entry.points.map((point) => point.value)));
@@ -250,6 +280,15 @@
 		const flat = dataMax === dataMin;
 		const min = flat ? dataMin - 1 : Math.min(0, dataMin);
 		const max = flat ? dataMax + 1 : dataMax;
+		const ticks = niceTicks(min, max);
+		// Tick labels are right-anchored just inside the gutter rather than at x=0, so every
+		// painted label stays inside the viewBox and the card needs no overflow to show them.
+		const pad = {
+			...LINE_PAD,
+			left: Math.max(LINE_PAD.left, Math.ceil(widestText(ticks.map((tick) => formatY(tick)), AXIS_FONT_SIZE) + 8)),
+		};
+		const plotWidth = width - pad.left - pad.right;
+		const plotHeight = height - pad.top - pad.bottom;
 		const y = (value) => scale(value, min, max, pad.top + plotHeight, pad.top);
 		const x = (index) => scale(index, 0, Math.max(1, longest - 1), pad.left, pad.left + plotWidth);
 
@@ -267,11 +306,12 @@
 			viewBox: `0 0 ${width} ${height}`,
 			width: '100%',
 			height,
+			preserveAspectRatio: 'xMinYMin meet',
 			role: 'img',
 			'aria-label': `${label}, ${rangeText}${plural(longest, 'point')}. ${summary}.`,
 		});
 
-		niceTicks(min, max).forEach((tick) => {
+		ticks.forEach((tick) => {
 			svg.append(svgElement('line', {
 				class: 'chart-grid-line',
 				x1: pad.left,
@@ -279,7 +319,7 @@
 				y1: round(y(tick)),
 				y2: round(y(tick)),
 			}));
-			svg.append(svgText(formatY(tick), { x: 0, y: round(y(tick)) + 4, 'text-anchor': 'end' }));
+			svg.append(svgText(formatY(tick), { x: pad.left - 8, y: round(y(tick)) + 4, 'text-anchor': 'end' }));
 		});
 
 		svg.append(svgElement('line', {
@@ -329,7 +369,7 @@
 		});
 
 		return figure('chart-figure', [
-			svg,
+			scrollable(svg),
 			disclosure(label, ['Series', xKey || 'Point', yKey || 'Value'], list.flatMap((entry) => entry.points.map((point) => [
 				entry.label,
 				displayText(point.x),
@@ -365,7 +405,26 @@
 		const min = Math.min(0, dataMin);
 		const max = Math.max(0, dataMax);
 		const { width } = BAR_VIEWBOX;
-		const pad = { top: 12, right: 72, bottom: 26, left: 150 };
+		const ticks = niceTicks(min, max);
+		const tickTexts = ticks.map((tick) => formatValue(tick));
+		// A negative bar paints its value label to the left of the bar, so the category name has
+		// to clear it. With only positive bars the label is on the right of the bar and 10 units
+		// of gutter are enough.
+		const negativeTexts = rows.filter((row) => row.value !== null && row.value < 0).map((row) => formatValue(row.value));
+		const categoryGap = 10 + (negativeTexts.length ? Math.ceil(widestText(negativeTexts, AXIS_FONT_SIZE)) + 6 : 0);
+		// The left gutter has to clear the right-anchored category name and half of the leftmost
+		// gridline tick; the right gutter the value label that follows each bar.
+		const pad = {
+			...BAR_PAD,
+			left: Math.max(BAR_PAD.left, Math.min(Math.ceil(Math.max(
+				widestText(rows.map((row) => ellipsise(row.name)), CATEGORY_FONT_SIZE) + categoryGap,
+				widestText(tickTexts, AXIS_FONT_SIZE) / 2,
+			) + 6), Math.round(width * 0.45))),
+			right: Math.max(BAR_PAD.right, Math.ceil(widestText(
+				[...rows.map((row) => formatValue(row.value)), ...tickTexts],
+				AXIS_FONT_SIZE,
+			) + 12)),
+		};
 		// Height follows the row count so a three-category breakdown does not render inside
 		// a mostly empty 280px box.
 		const height = pad.top + rows.length * BAR_ROW_HEIGHT + pad.bottom;
@@ -378,11 +437,12 @@
 			viewBox: `0 0 ${width} ${height}`,
 			width: '100%',
 			height,
+			preserveAspectRatio: 'xMinYMin meet',
 			role: 'img',
 			'aria-label': `${label}. ${plural(rows.length, 'category')}, ${describeExtremes(rows.map((row) => ({ value: row.value, at: row.name })), formatValue)}.`,
 		});
 
-		niceTicks(min, max).forEach((tick) => {
+		ticks.forEach((tick) => {
 			const position = round(scale(tick, min, max, pad.left, pad.left + plotWidth));
 			svg.append(svgElement('line', {
 				class: 'chart-grid-line',
@@ -401,7 +461,7 @@
 		rows.forEach((row, index) => {
 			const top = pad.top + index * BAR_ROW_HEIGHT;
 			const baseline = top + trackHeight / 2 + 4;
-			svg.append(svgText(row.name, { x: pad.left - 10, y: baseline, 'text-anchor': 'end' }, 'chart-category-text'));
+			svg.append(svgText(ellipsise(row.name), { x: pad.left - categoryGap, y: baseline, 'text-anchor': 'end' }, 'chart-category-text'));
 			if (row.value === null) {
 				svg.append(svgText(MISSING, { x: zero + 8, y: baseline }));
 				return;
@@ -425,7 +485,7 @@
 		});
 
 		return figure('chart-figure', [
-			svg,
+			scrollable(svg),
 			disclosure(label, ['Category', valueKey], rows.map((row) => [row.name, formatValue(row.value)])),
 		]);
 	};
