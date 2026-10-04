@@ -75,6 +75,21 @@ services:
   - key: JOB_EXECUTION_MODE
     value: local
     previewValue: local
+  # BullMQ queue contract. Declared at the code defaults so an operator can see and
+  # change them in the Render dashboard; until the paid Key Value is provisioned
+  # these match the in-code defaults exactly, so declaring them changes nothing.
+  - key: JOB_QUEUE_ATTEMPTS
+    value: 5
+  - key: JOB_QUEUE_BACKOFF_MS
+    value: 30000
+  - key: JOB_QUEUE_CONCURRENCY
+    value: 1
+  - key: JOB_QUEUE_CLAIM_LEASE_MS
+    value: 60000
+  - key: JOB_QUEUE_CONNECT_TIMEOUT_MS
+    value: 5000
+  - key: JOB_QUEUE_PROBE_TIMEOUT_MS
+    value: 5000
   - key: ENABLE_FIRESTORE_JOB_STORAGE
     value: true
     previewValue: false
@@ -105,6 +120,38 @@ services:
   envVars:
   - key: JOB_EXECUTION_MODE
     value: render-worker
+  # Mirrored from web so both sides resolve the same queue contract; the values
+  # below are the in-code defaults.
+  - key: JOB_QUEUE_ATTEMPTS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: JOB_QUEUE_ATTEMPTS
+  - key: JOB_QUEUE_BACKOFF_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: JOB_QUEUE_BACKOFF_MS
+  - key: JOB_QUEUE_CONCURRENCY
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: JOB_QUEUE_CONCURRENCY
+  - key: JOB_QUEUE_CLAIM_LEASE_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: JOB_QUEUE_CLAIM_LEASE_MS
+  - key: JOB_QUEUE_CONNECT_TIMEOUT_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: JOB_QUEUE_CONNECT_TIMEOUT_MS
+  - key: JOB_QUEUE_PROBE_TIMEOUT_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: JOB_QUEUE_PROBE_TIMEOUT_MS
   - key: ENABLE_FIREBASE_REMOTE_CONFIG
     value: true
     previewValue: false

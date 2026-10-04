@@ -3,6 +3,66 @@
 const fs = require('fs');
 const path = require('path');
 
+describe('Render BullMQ job queue blueprint (#1117)', () => {
+	const blueprint = fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');
+
+	function serviceBlock(name) {
+		const start = blueprint.indexOf(`\n  name: ${name}\n`);
+		expect(start).toBeGreaterThan(-1);
+		const nextService = blueprint.indexOf('\n- type: ', start);
+		return nextService === -1 ? blueprint.slice(start) : blueprint.slice(start, nextService);
+	}
+
+	const QUEUE_CONTRACT_VARS = [
+		'JOB_QUEUE_ATTEMPTS',
+		'JOB_QUEUE_BACKOFF_MS',
+		'JOB_QUEUE_CONCURRENCY',
+		'JOB_QUEUE_CLAIM_LEASE_MS',
+		'JOB_QUEUE_CONNECT_TIMEOUT_MS',
+		'JOB_QUEUE_PROBE_TIMEOUT_MS',
+	];
+
+	it('declares the whole BullMQ queue contract on the web service', () => {
+		// These were previously undeclared in render.yaml, so the queue ran on
+		// invisible in-code defaults with no dashboard-visible way to change them.
+		const web = serviceBlock('cabros-crypto-bot-telegram-iac');
+		for (const key of QUEUE_CONTRACT_VARS) {
+			expect(web).toContain(`- key: ${key}\n`);
+		}
+	});
+
+	it('mirrors the queue contract onto the jobs worker so both sides agree', () => {
+		// A fromService reference for a key the web service does not declare makes
+		// a Render blueprint apply fail, so the two blocks have to move together.
+		const worker = serviceBlock('cabros-crypto-bot-telegram-worker');
+		for (const key of QUEUE_CONTRACT_VARS) {
+			expect(worker).toContain(`- key: ${key}\n    fromService:`);
+			expect(worker).toContain(`envVarKey: ${key}`);
+		}
+	});
+
+	it('keeps the web service on local mode and the worker on render-worker', () => {
+		// The render-worker cutover is a deliberate operator step gated on the paid
+		// Key Value existing; flipping the web service here would return
+		// 503 JOB_QUEUE_UNAVAILABLE for every job on a deployment with no broker.
+		const web = serviceBlock('cabros-crypto-bot-telegram-iac');
+		const worker = serviceBlock('cabros-crypto-bot-telegram-worker');
+
+		expect(web).toContain('- key: JOB_EXECUTION_MODE\n    value: local');
+		expect(web).not.toContain('- key: JOB_EXECUTION_MODE\n    value: render-worker');
+		expect(worker).toContain('- key: JOB_EXECUTION_MODE\n    value: render-worker');
+	});
+
+	it('wires both services to the same Key Value broker', () => {
+		for (const name of ['cabros-crypto-bot-telegram-iac', 'cabros-crypto-bot-telegram-worker']) {
+			expect(serviceBlock(name)).toContain(
+				'- key: REDIS_URL\n    fromService:\n      name: cabros-crypto-bot-telegram-queue\n      type: keyvalue\n      property: connectionString',
+			);
+		}
+		expect(blueprint).toContain('maxmemoryPolicy: noeviction');
+	});
+});
+
 describe('Render signal outcome worker blueprint', () => {
 	it('defines an explicit paid worker with dedicated scheduler role', () => {
 		const blueprint = fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');

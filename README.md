@@ -258,6 +258,53 @@ Paging is deduplicated by cooldown and only latches after confirmed delivery; a 
 | `JOB_BACKLOG_PROBE_TIMEOUT_MS` | `10000` | `1000`–`300000` | Per-dependency probe deadline. Environment-only. |
 | `ENABLE_JOB_BACKLOG_MONITOR` | `true` | — | Master monitor gate. **Environment-only** — a process-startup gate, deliberately excluded from Remote Config. |
 
+### Job Queue Mode & Broker Readiness
+
+`JOB_EXECUTION_MODE` selects where async TradingView jobs execute:
+
+| Mode | Behaviour |
+| :--- | :--- |
+| `local` (default) | Jobs run in-process on the web service. No broker required. |
+| `render-worker` | Jobs are enqueued to BullMQ and executed by `worker.js`. Requires `REDIS_URL` **and** durable Firestore job storage. |
+| `firestore-poller` | Jobs are claimed directly from Firestore without Redis. Requires durable job storage. |
+
+`GET /api/status` and `GET /api/capabilities` report the queue under `dependencies.jobExecutionQueue`. A bounded, fail-open **broker readiness probe** runs at web startup when `JOB_EXECUTION_MODE=render-worker`, so `brokerReachable` is *proven* connectivity rather than the mere presence of a `REDIS_URL` string:
+
+| `status` | Meaning | Operator action |
+| :--- | :--- | :--- |
+| `disabled` | Queue mode is off (`local`). | Nothing. |
+| `misconfigured` | `render-worker` without `REDIS_URL`. | Set `REDIS_URL`. Job creation returns `503 JOB_QUEUE_UNAVAILABLE`. |
+| `not_started` | No probe has run yet. **Not evidence of health.** | Re-check; a fresh process reports this until its probe settles. |
+| `unreachable` | The probe ran and the broker did not answer in time. | Broker is down, misconfigured, or still provisioning. |
+| `ready` | A probe has proven connectivity. | Cutover is validated. |
+
+`configured` only string-checks `REDIS_URL`; do not read it as health. Read `status` / `brokerReachable` instead.
+
+**Cutover runbook** (the `render-worker` switch is deliberately an operator step, not an automatic one):
+
+1. Provision the Key Value broker — `render.yaml` declares `cabros-crypto-bot-telegram-queue` on a **paid** `starter` plan, so this requires billing approval.
+2. Confirm the jobs worker is deployed: `cabros-crypto-bot-telegram-worker` (`JOB_EXECUTION_MODE=render-worker`).
+3. Set `JOB_EXECUTION_MODE=render-worker` on the **web** service and redeploy it.
+4. Verify before sending any job traffic:
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
+  "$BASE_URL/api/capabilities" \
+  | jq '{flag: .featureFlags.jobExecutionWorker, dep: .dependencies.jobExecutionQueue | {mode, status, brokerReachable}}'
+# Expected: flag true, mode "render-worker", status "ready", brokerReachable true
+```
+
+If `status` is `unreachable`, roll the web service back to `local` first — in `render-worker` mode job creation fails closed with `503 JOB_QUEUE_UNAVAILABLE` while the broker is down.
+
+| Variable | Default | Bounds | Purpose |
+| :--- | :--- | :--- | :--- |
+| `JOB_QUEUE_ATTEMPTS` | `5` | `1`–`20` | BullMQ delivery attempts per job. |
+| `JOB_QUEUE_BACKOFF_MS` | `30000` | positive | Exponential backoff base between attempts. |
+| `JOB_QUEUE_CONCURRENCY` | `1` | `1`–`20` | Jobs the worker processes in parallel. |
+| `JOB_QUEUE_CLAIM_LEASE_MS` | `60000` | positive | Durable claim lease held by an executing worker. |
+| `JOB_QUEUE_CONNECT_TIMEOUT_MS` | `5000` | positive | Broker connect timeout for the queue connection. |
+| `JOB_QUEUE_PROBE_TIMEOUT_MS` | `5000` | `1`–`120000` | Startup readiness-probe deadline. Environment-only — a safety deadline, excluded from Firebase Remote Config. |
+
 ### Signal Outcome Single-Evaluator Guarantee
 
 `ENABLE_SIGNAL_OUTCOME_TRACKING=true` is enabled in production. It gates three things at once — recording signals on the alert path, the evaluation sweep, and the whole `/api/outcomes` surface — so it is pinned in `render.yaml` rather than left to the Render dashboard, where an operator reading the repo could not tell which process was actually enabled.
