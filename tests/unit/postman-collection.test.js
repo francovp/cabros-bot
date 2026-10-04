@@ -652,6 +652,61 @@ describe('Postman collection contract', () => {
 		}
 	});
 
+	it('documents cloudflareAig routing states for GET Status', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - cloudflareAig routing (issue #1115)');
+
+		expect(item).toBeDefined();
+
+		const inactive = item.response.find((res) => res.name.includes('inactive'));
+		const routed = item.response.find((res) => res.name.includes('ready - gateway is the routed'));
+		const misconfigured = item.response.find((res) => res.name.includes('misconfigured'));
+
+		// Issue #1115 acceptance: ENABLE_CLOUDFLARE_AIG alone does not route traffic, so
+		// credentials present under another provider must document ready:false/inactive
+		// rather than the ready:true the flag-plus-credentials steps used to produce.
+		expect(inactive.code).toBe(200);
+		expect(JSON.parse(inactive.body).dependencies.cloudflareAig).toMatchObject({
+			enabled: true,
+			configured: true,
+			routed: false,
+			provider: 'gemini',
+			ready: false,
+			status: 'inactive',
+		});
+
+		expect(routed.code).toBe(200);
+		expect(JSON.parse(routed.body).dependencies.cloudflareAig).toMatchObject({
+			enabled: true,
+			configured: true,
+			routed: true,
+			provider: 'cloudflare',
+			ready: true,
+			status: 'ready',
+		});
+
+		expect(misconfigured.code).toBe(200);
+		expect(JSON.parse(misconfigured.body).dependencies.cloudflareAig).toMatchObject({
+			enabled: true,
+			configured: false,
+			routed: true,
+			provider: 'cloudflare',
+			ready: false,
+			status: 'misconfigured',
+		});
+
+		for (const res of [inactive, routed, misconfigured]) {
+			const cf = JSON.parse(res.body).dependencies.cloudflareAig;
+			expect(cf.routed).toBe(cf.provider === 'cloudflare');
+			if (cf.ready) {
+				expect(cf.status).toBe('ready');
+				expect(cf.routed).toBe(true);
+			}
+			expect(res.body).not.toMatch(/CF_AIG_TOKEN/);
+			expect(res.body).not.toMatch(/CF_AIG_BASE_URL/);
+		}
+	});
+
 	it('documents both STORAGE_UNAVAILABLE classifications for GET List Alerts', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const item = findItem(collection.item, 'GET List Alerts');

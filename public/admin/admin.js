@@ -991,6 +991,7 @@ const statusNeedsAttention = (detail) => hasStatus({ status: effectiveStatus(det
 const statusDetailFields = [
 	['configured', 'Configured'],
 	['enabled', 'Enabled'],
+	['routed', 'Routed'],
 	['environment', 'Environment'],
 	['allowedSymbols', 'Allowed symbols'],
 	['maxNotionalConfigured', 'Max notional configured'],
