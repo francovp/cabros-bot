@@ -179,7 +179,7 @@ See the [Telegram Commands Reference](docs/commands.md) for aliases, throttling 
 Notifications are dispatched concurrently across enabled channels. For Discord, transient rate limits and server errors are retried according to `DISCORD_MAX_RETRIES` and bounded by `DISCORD_MAX_TOTAL_RETRY_WAIT_MS`. Long messages exceeding platform limits are automatically split into sequential chunks with preserved markdown formatting. See [Multi-Channel Alerts Guide](docs/notifications.md).
 
 ### AI Provider Routing & Grounding
-When configuring AI providers, `MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing, whereas `ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities. Gemini Grounding provides web search citations and confidence scores for market alerts. See [AI Grounding & Prompts](docs/ai-grounding.md).
+When configuring AI providers, `MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing, whereas `ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities. Because the flag alone does not route traffic, `dependencies.cloudflareAig` reports `provider` and `routed` alongside `ready`: credentials present while another provider is selected yield `ready: false` and `status: "inactive"`, so an operator can never read `ready` as proof that requests traverse the gateway. Gemini Grounding provides web search citations and confidence scores for market alerts. See [AI Grounding & Prompts](docs/ai-grounding.md).
 
 ### Sentiment Score Calibration
 

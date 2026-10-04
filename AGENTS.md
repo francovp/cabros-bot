@@ -1463,7 +1463,7 @@ This feature introduces integration of the official `openai` SDK to interact wit
 
 **Configuration**:
 - `MODEL_PROVIDER=cloudflare` — Selects Cloudflare AI Gateway for runtime LLM routing when credentials validate.
-- `ENABLE_CLOUDFLARE_AIG` — Set to `'true'` only to expose Cloudflare readiness in `/api/status` and `/api/capabilities`; it does not select the runtime provider.
+- `ENABLE_CLOUDFLARE_AIG` — Set to `'true'` only to expose Cloudflare readiness in `/api/status` and `/api/capabilities`; it does not select the runtime provider. Issue #1115: `dependencies.cloudflareAig` also reports `provider` (the selected `MODEL_PROVIDER`) and `routed` (`MODEL_PROVIDER === 'cloudflare'`), and `ready` requires all three of enabled, configured, and routed. Credentials present while another provider is selected report `ready: false` / `status: "inactive"` instead of the previous `ready: true`, which let the documented enablement steps claim readiness while every request still went to that provider. Runtime routing additionally swaps Gemini Grounding for OpenAI-compatible chat completions, which carry no GoogleSearch tool and bypass the `GEMINI_MODEL_NAME_FALLBACK` path.
 - `CF_AIG_TOKEN` — Cloudflare API Gateway access token.
 - `CF_AIG_BASE_URL` — Cloudflare gateway compatibility base URL.
 - `CF_AIG_MODEL` — The gateway target model (e.g., `google-ai-studio/gemini-2.5-flash`). Falls back to `google-ai-studio/gemini-2.5-flash` for status reporting and runtime configuration checks.
