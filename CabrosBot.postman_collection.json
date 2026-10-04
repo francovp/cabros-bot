@@ -343,7 +343,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"telegramCommandAuth\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false,\"alertScheduler\":false,\"notificationRedrive\":false,\"firestoreChatPreferences\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true,\"newsMonitorClassifier\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"jobExecutionQueue\":{\"mode\":\"local\",\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"queueName\":\"tradingview-jobs\",\"enqueued\":0,\"claimed\":0,\"completed\":0,\"failed\":0,\"lastErrorCode\":null,\"lastEnqueuedAt\":null,\"waitingCount\":0,\"delayedCount\":0,\"failedCount\":0,\"activeCount\":0,\"durableQueuedCount\":0,\"durableQueuedTruncated\":false,\"durableScanRotated\":false,\"durableProbeSucceeded\":null,\"durableCycleComplete\":false,\"oldestQueuedAgeMs\":null,\"backlogAlert\":{\"active\":false,\"thresholdMs\":900000,\"pagedAt\":null,\"lastRecoveryAt\":null},\"backlogMonitorEnabled\":true,\"backlogMonitorRunning\":false},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0,\"entryPriceSources\":{\"configured\":false,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"twelve-data\"]}},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"alertScheduler\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":10,\"scheduleCount\":0,\"activeCount\":0,\"lastRunAt\":null,\"lastRunDurationMs\":null,\"lastRunExecutedCount\":0,\"lastRunErrorCount\":0,\"lastError\":null,\"schedules\":[]},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"telegramCommandAuth\":{\"enabled\":true,\"allowlistSource\":\"TELEGRAM_ALLOWED_CHAT_IDS\",\"allowlistSize\":1,\"deniedSinceStart\":0,\"trackedDeniedSenders\":0,\"deniedSenderCacheLimit\":1000},\"selfTest\":{\"lastRunAt\":null,\"lastStatus\":\"unknown\",\"ttlSec\":3600,\"ageMs\":null},\"newsMonitorDedup\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"mode\":\"in-memory\",\"backend\":null,\"cacheSize\":{\"entries\":0,\"maxEntries\":5000,\"evictionCount\":0,\"deliveryLocks\":0,\"deliveryLockMaxEntries\":1000,\"deliveryLockEvictionCount\":0,\"urlShortenerCache\":{\"size\":0,\"maxEntries\":1000,\"evictionCount\":0},\"urlShortenerServiceFailures\":{\"size\":0,\"maxEntries\":32,\"evictionCount\":0}}},\"chatPreferences\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cachedCount\":0,\"cacheTtlMs\":60000,\"retentionDays\":90},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"}}}"
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"telegramCommandAuth\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false,\"alertScheduler\":false,\"notificationRedrive\":false,\"firestoreChatPreferences\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true,\"newsMonitorClassifier\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"jobExecutionQueue\":{\"mode\":\"local\",\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"queueName\":\"tradingview-jobs\",\"brokerReachable\":null,\"lastBrokerProbeAt\":null,\"lastBrokerProbeErrorCode\":null,\"enqueued\":0,\"claimed\":0,\"completed\":0,\"failed\":0,\"lastErrorCode\":null,\"lastEnqueuedAt\":null,\"waitingCount\":0,\"delayedCount\":0,\"failedCount\":0,\"activeCount\":0,\"durableQueuedCount\":0,\"durableQueuedTruncated\":false,\"durableScanRotated\":false,\"durableProbeSucceeded\":null,\"durableCycleComplete\":false,\"oldestQueuedAgeMs\":null,\"backlogAlert\":{\"active\":false,\"thresholdMs\":900000,\"pagedAt\":null,\"lastRecoveryAt\":null},\"backlogMonitorEnabled\":true,\"backlogMonitorRunning\":false},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0,\"entryPriceSources\":{\"configured\":false,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"twelve-data\"]}},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"alertScheduler\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":10,\"scheduleCount\":0,\"activeCount\":0,\"lastRunAt\":null,\"lastRunDurationMs\":null,\"lastRunExecutedCount\":0,\"lastRunErrorCount\":0,\"lastError\":null,\"schedules\":[]},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"telegramCommandAuth\":{\"enabled\":true,\"allowlistSource\":\"TELEGRAM_ALLOWED_CHAT_IDS\",\"allowlistSize\":1,\"deniedSinceStart\":0,\"trackedDeniedSenders\":0,\"deniedSenderCacheLimit\":1000},\"selfTest\":{\"lastRunAt\":null,\"lastStatus\":\"unknown\",\"ttlSec\":3600,\"ageMs\":null},\"newsMonitorDedup\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"mode\":\"in-memory\",\"backend\":null,\"cacheSize\":{\"entries\":0,\"maxEntries\":5000,\"evictionCount\":0,\"deliveryLocks\":0,\"deliveryLockMaxEntries\":1000,\"deliveryLockEvictionCount\":0,\"urlShortenerCache\":{\"size\":0,\"maxEntries\":1000,\"evictionCount\":0},\"urlShortenerServiceFailures\":{\"size\":0,\"maxEntries\":32,\"evictionCount\":0}}},\"chatPreferences\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cachedCount\":0,\"cacheTtlMs\":60000,\"retentionDays\":90},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"}}}"
         },
         {
           "name": "200 degraded provider unavailable telemetry",
@@ -831,7 +831,7 @@
       ]
     },
     {
-      "name": "Get Status - idempotency storage readiness (issue #1111)",
+      "name": "Get Capabilities - job queue broker readiness (#1117)",
       "request": {
         "method": "GET",
         "header": [
@@ -842,16 +842,16 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/api/status",
+          "raw": "{{baseUrl}}/api/capabilities",
           "host": [
             "{{baseUrl}}"
           ],
           "path": [
             "api",
-            "status"
+            "capabilities"
           ]
         },
-        "description": "Issue #1111 enables durable webhook idempotency in production. Every Firestore failure in `IdempotencyStorageService` falls open to in-memory idempotency, so before this change a deployment that could not reach Firestore reported the same `ready` verdict as a working one. `configured` is credential shape only; `ready` is true only after an observed durable operation and `status` is `unverified` until one is observed."
+        "description": "Issue #1117 (render-worker cutover validation). Before this change, queue readiness was only set as a side effect of the first enqueue, so a correctly cut-over but idle deployment reported status \"not_started\" and could not be distinguished from a broker that was configured but unreachable — the documented validation step could never pass. A bounded, fail-open broker readiness probe now runs at web startup, so brokerReachable is proven connectivity rather than the mere presence of REDIS_URL. Run this against the deployment immediately after flipping JOB_EXECUTION_MODE=render-worker, before accepting any job traffic: status must be \"ready\"."
       },
       "event": [
         {
@@ -859,27 +859,41 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('idempotency storage is not ready on the strength of credential shape', function () {",
-              "  const store = pm.response.json().dependencies.idempotencyStorage;",
+              "pm.test('job queue status is always a known value', function () {",
+              "  const q = pm.response.json().dependencies.jobExecutionQueue;",
               "  pm.expect(pm.response.code).to.eql(200);",
-              "  pm.expect(store).to.be.an('object');",
-              "  pm.expect(store.enabled).to.eql(true);",
-              "  pm.expect(store.configured).to.eql(true);",
-              "  pm.expect(store.ready).to.eql(false);",
-              "  pm.expect(store.status).to.eql('unverified');",
-              "  pm.expect(store.readiness).to.eql('unverified');",
+              "  pm.expect(q).to.be.an('object');",
+              "  pm.expect(['disabled','misconfigured','not_started','unreachable','ready']).to.include(q.status);",
               "});",
-              "pm.test('mode and backend report intent while ready reports proof', function () {",
-              "  const store = pm.response.json().dependencies.idempotencyStorage;",
-              "  pm.expect(store.mode).to.eql('durable');",
-              "  pm.expect(store.backend).to.eql('firestore');",
-              "  pm.expect(store.failOpen).to.eql(true);",
-              "  pm.expect(store.collection).to.eql('idempotency_keys');",
+              "pm.test('an unprobed broker is never reported as healthy', function () {",
+              "  const q = pm.response.json().dependencies.jobExecutionQueue;",
+              "  pm.expect(q.ready).to.eql(false);",
+              "  pm.expect(q.status).to.not.eql('ready');",
+              "  if (q.status === 'unreachable') {",
+              "    pm.expect(q.brokerReachable).to.eql(false);",
+              "    pm.expect(q.ready).to.eql(false);",
+              "    pm.expect(q.lastBrokerProbeErrorCode).to.be.a('string');",
+              "  }",
+              "  if (q.status === 'not_started') {",
+              "    pm.expect(q.brokerReachable).to.eql(null);",
+              "  }",
+              "  if (q.status === 'ready') {",
+              "    pm.expect(q.brokerReachable).to.eql(true);",
+              "    pm.expect(q.lastBrokerProbeAt).to.be.a('string');",
+              "    pm.expect(q.lastBrokerProbeErrorCode).to.eql(null);",
+              "  }",
               "});",
-              "pm.test('a degraded verdict never leaks the Firestore project path', function () {",
+              "pm.test('a disabled queue never claims a broker verdict', function () {",
+              "  const q = pm.response.json().dependencies.jobExecutionQueue;",
+              "  if (q.status === 'disabled' || q.status === 'misconfigured') {",
+              "    pm.expect(q.brokerReachable).to.eql(null);",
+              "  }",
+              "});",
+              "pm.test('broker readiness never leaks the Redis URL', function () {",
               "  const raw = pm.response.text();",
-              "  pm.expect(raw).to.not.include('projects/');",
-              "  pm.expect(raw).to.not.include('console.firebase.google.com');",
+              "  pm.expect(raw).to.not.include('redis://');",
+              "  pm.expect(raw).to.not.include('rediss://');",
+              "  pm.expect(raw).to.not.include('@');",
               "});"
             ]
           }
@@ -887,7 +901,7 @@
       ],
       "response": [
         {
-          "name": "200 unverified - enabled and configured, nothing persisted yet",
+          "name": "200 ready - render-worker cutover validated",
           "originalRequest": {
             "method": "GET",
             "header": [
@@ -898,13 +912,13 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/status",
+              "raw": "{{baseUrl}}/api/capabilities",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "status"
+                "capabilities"
               ]
             }
           },
@@ -919,11 +933,11 @@
               "value": "application/json"
             }
           ],
-          "body": "{\n  \"featureFlags\": {\n    \"firestoreIdempotency\": true\n  },\n  \"dependencies\": {\n    \"idempotencyStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"unverified\",\n      \"mode\": \"durable\",\n      \"backend\": \"firestore\",\n      \"failOpen\": true,\n      \"readiness\": \"unverified\",\n      \"collection\": \"idempotency_keys\",\n      \"operationsAttempted\": 0,\n      \"operationsSucceeded\": 0,\n      \"operationsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
-          "response": []
+          "body": "{\n  \"featureFlags\": {\n    \"jobExecutionWorker\": true\n  },\n  \"dependencies\": {\n    \"jobExecutionQueue\": {\n      \"mode\": \"render-worker\",\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"queueName\": \"tradingview-jobs\",\n      \"brokerReachable\": true,\n      \"lastBrokerProbeAt\": \"2026-10-04T12:00:00.000Z\",\n      \"lastBrokerProbeErrorCode\": null,\n      \"enqueued\": 0,\n      \"claimed\": 0,\n      \"completed\": 0,\n      \"failed\": 0,\n      \"lastErrorCode\": null,\n      \"lastEnqueuedAt\": null,\n      \"waitingCount\": 0,\n      \"delayedCount\": 0,\n      \"failedCount\": 0,\n      \"activeCount\": 0,\n      \"durableQueuedCount\": 0,\n      \"durableQueuedTruncated\": false,\n      \"durableScanRotated\": false,\n      \"durableCycleComplete\": false,\n      \"durableProbeSucceeded\": null,\n      \"oldestQueuedAgeMs\": null,\n      \"backlogAlert\": {\n        \"active\": false,\n        \"thresholdMs\": 900000,\n        \"pagedAt\": null,\n        \"lastRecoveryAt\": null\n      },\n      \"backlogMonitorEnabled\": true,\n      \"backlogMonitorRunning\": true\n    }\n  }\n}",
+          "_postman_previewlanguage": "json"
         },
         {
-          "name": "200 ready - a durable reservation has succeeded",
+          "name": "200 unreachable - broker configured but not answering",
           "originalRequest": {
             "method": "GET",
             "header": [
@@ -934,13 +948,13 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/status",
+              "raw": "{{baseUrl}}/api/capabilities",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "status"
+                "capabilities"
               ]
             }
           },
@@ -955,11 +969,11 @@
               "value": "application/json"
             }
           ],
-          "body": "{\n  \"featureFlags\": {\n    \"firestoreIdempotency\": true\n  },\n  \"dependencies\": {\n    \"idempotencyStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"mode\": \"durable\",\n      \"backend\": \"firestore\",\n      \"failOpen\": true,\n      \"readiness\": \"verified\",\n      \"collection\": \"idempotency_keys\",\n      \"operationsAttempted\": 47,\n      \"operationsSucceeded\": 47,\n      \"operationsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": \"2026-10-04T08:31:12.904Z\",\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
-          "response": []
+          "body": "{\n  \"featureFlags\": {\n    \"jobExecutionWorker\": true\n  },\n  \"dependencies\": {\n    \"jobExecutionQueue\": {\n      \"mode\": \"render-worker\",\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"unreachable\",\n      \"queueName\": \"tradingview-jobs\",\n      \"brokerReachable\": false,\n      \"lastBrokerProbeAt\": \"2026-10-04T12:00:00.000Z\",\n      \"lastBrokerProbeErrorCode\": \"JOB_QUEUE_PROBE_TIMEOUT\",\n      \"enqueued\": 0,\n      \"claimed\": 0,\n      \"completed\": 0,\n      \"failed\": 0,\n      \"lastErrorCode\": null,\n      \"lastEnqueuedAt\": null,\n      \"waitingCount\": 0,\n      \"delayedCount\": 0,\n      \"failedCount\": 0,\n      \"activeCount\": 0,\n      \"durableQueuedCount\": 0,\n      \"durableQueuedTruncated\": false,\n      \"durableScanRotated\": false,\n      \"durableCycleComplete\": false,\n      \"durableProbeSucceeded\": null,\n      \"oldestQueuedAgeMs\": null,\n      \"backlogAlert\": {\n        \"active\": false,\n        \"thresholdMs\": 900000,\n        \"pagedAt\": null,\n        \"lastRecoveryAt\": null\n      },\n      \"backlogMonitorEnabled\": true,\n      \"backlogMonitorRunning\": true\n    }\n  }\n}",
+          "_postman_previewlanguage": "json"
         },
         {
-          "name": "200 degraded - falling back to in-memory, alerts still delivered",
+          "name": "200 not_started - broker not probed yet",
           "originalRequest": {
             "method": "GET",
             "header": [
@@ -970,13 +984,13 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/status",
+              "raw": "{{baseUrl}}/api/capabilities",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "status"
+                "capabilities"
               ]
             }
           },
@@ -991,11 +1005,11 @@
               "value": "application/json"
             }
           ],
-          "body": "{\n  \"featureFlags\": {\n    \"firestoreIdempotency\": true\n  },\n  \"dependencies\": {\n    \"idempotencyStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"degraded\",\n      \"mode\": \"durable\",\n      \"backend\": \"firestore\",\n      \"failOpen\": true,\n      \"readiness\": \"degraded\",\n      \"collection\": \"idempotency_keys\",\n      \"operationsAttempted\": 52,\n      \"operationsSucceeded\": 44,\n      \"operationsFailed\": 8,\n      \"consecutiveFailures\": 8,\n      \"lastSuccessAt\": \"2026-10-04T08:29:03.117Z\",\n      \"lastFailureAt\": \"2026-10-04T08:31:14.882Z\",\n      \"lastErrorReason\": \"firestore_unavailable\"\n    }\n  }\n}",
-          "response": []
+          "body": "{\n  \"featureFlags\": {\n    \"jobExecutionWorker\": true\n  },\n  \"dependencies\": {\n    \"jobExecutionQueue\": {\n      \"mode\": \"render-worker\",\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"not_started\",\n      \"queueName\": \"tradingview-jobs\",\n      \"brokerReachable\": null,\n      \"lastBrokerProbeAt\": \"2026-10-04T12:00:00.000Z\",\n      \"lastBrokerProbeErrorCode\": null,\n      \"enqueued\": 0,\n      \"claimed\": 0,\n      \"completed\": 0,\n      \"failed\": 0,\n      \"lastErrorCode\": null,\n      \"lastEnqueuedAt\": null,\n      \"waitingCount\": 0,\n      \"delayedCount\": 0,\n      \"failedCount\": 0,\n      \"activeCount\": 0,\n      \"durableQueuedCount\": 0,\n      \"durableQueuedTruncated\": false,\n      \"durableScanRotated\": false,\n      \"durableCycleComplete\": false,\n      \"durableProbeSucceeded\": null,\n      \"oldestQueuedAgeMs\": null,\n      \"backlogAlert\": {\n        \"active\": false,\n        \"thresholdMs\": 900000,\n        \"pagedAt\": null,\n        \"lastRecoveryAt\": null\n      },\n      \"backlogMonitorEnabled\": true,\n      \"backlogMonitorRunning\": true\n    }\n  }\n}",
+          "_postman_previewlanguage": "json"
         },
         {
-          "name": "200 disabled - gate off, in-memory idempotency",
+          "name": "200 disabled - local mode unchanged",
           "originalRequest": {
             "method": "GET",
             "header": [
@@ -1006,13 +1020,13 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/status",
+              "raw": "{{baseUrl}}/api/capabilities",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "status"
+                "capabilities"
               ]
             }
           },
@@ -1027,8 +1041,8 @@
               "value": "application/json"
             }
           ],
-          "body": "{\n  \"featureFlags\": {\n    \"firestoreIdempotency\": false\n  },\n  \"dependencies\": {\n    \"idempotencyStorage\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"mode\": \"ephemeral\",\n      \"backend\": \"memory\",\n      \"failOpen\": true,\n      \"readiness\": \"unverified\",\n      \"collection\": \"idempotency_keys\",\n      \"operationsAttempted\": 0,\n      \"operationsSucceeded\": 0,\n      \"operationsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
-          "response": []
+          "body": "{\n  \"featureFlags\": {\n    \"jobExecutionWorker\": false\n  },\n  \"dependencies\": {\n    \"jobExecutionQueue\": {\n      \"mode\": \"local\",\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"queueName\": \"tradingview-jobs\",\n      \"brokerReachable\": null,\n      \"lastBrokerProbeAt\": \"2026-10-04T12:00:00.000Z\",\n      \"lastBrokerProbeErrorCode\": null,\n      \"enqueued\": 0,\n      \"claimed\": 0,\n      \"completed\": 0,\n      \"failed\": 0,\n      \"lastErrorCode\": null,\n      \"lastEnqueuedAt\": null,\n      \"waitingCount\": 0,\n      \"delayedCount\": 0,\n      \"failedCount\": 0,\n      \"activeCount\": 0,\n      \"durableQueuedCount\": 0,\n      \"durableQueuedTruncated\": false,\n      \"durableScanRotated\": false,\n      \"durableCycleComplete\": false,\n      \"durableProbeSucceeded\": null,\n      \"oldestQueuedAgeMs\": null,\n      \"backlogAlert\": {\n        \"active\": false,\n        \"thresholdMs\": 900000,\n        \"pagedAt\": null,\n        \"lastRecoveryAt\": null\n      },\n      \"backlogMonitorEnabled\": true,\n      \"backlogMonitorRunning\": true\n    }\n  }\n}",
+          "_postman_previewlanguage": "json"
         }
       ]
     },
@@ -1386,7 +1400,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true,\"notificationRedrive\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true,\"newsMonitorClassifier\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000},\"toolMetrics\":{}},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"signalOutcomeWorker\":{\"entryPriceSources\":{\"configured\":true,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"mcp\",\"binance\",\"gemini\"]}},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"},\"jobExecutionQueue\":{\"mode\":\"local\",\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"queueName\":\"tradingview-jobs\",\"enqueued\":0,\"claimed\":0,\"completed\":0,\"failed\":0,\"lastErrorCode\":null,\"lastEnqueuedAt\":null,\"waitingCount\":0,\"delayedCount\":0,\"failedCount\":0,\"activeCount\":0,\"durableQueuedCount\":0,\"durableQueuedTruncated\":false,\"durableScanRotated\":false,\"durableProbeSucceeded\":null,\"durableCycleComplete\":false,\"oldestQueuedAgeMs\":null,\"backlogAlert\":{\"active\":false,\"thresholdMs\":900000,\"pagedAt\":null,\"lastRecoveryAt\":null},\"backlogMonitorEnabled\":true,\"backlogMonitorRunning\":false}}}"
+          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true,\"notificationRedrive\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true,\"newsMonitorClassifier\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000},\"toolMetrics\":{}},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"signalOutcomeWorker\":{\"entryPriceSources\":{\"configured\":true,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"mcp\",\"binance\",\"gemini\"]}},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"},\"jobExecutionQueue\":{\"mode\":\"local\",\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"queueName\":\"tradingview-jobs\",\"brokerReachable\":null,\"lastBrokerProbeAt\":null,\"lastBrokerProbeErrorCode\":null,\"enqueued\":0,\"claimed\":0,\"completed\":0,\"failed\":0,\"lastErrorCode\":null,\"lastEnqueuedAt\":null,\"waitingCount\":0,\"delayedCount\":0,\"failedCount\":0,\"activeCount\":0,\"durableQueuedCount\":0,\"durableQueuedTruncated\":false,\"durableScanRotated\":false,\"durableProbeSucceeded\":null,\"durableCycleComplete\":false,\"oldestQueuedAgeMs\":null,\"backlogAlert\":{\"active\":false,\"thresholdMs\":900000,\"pagedAt\":null,\"lastRecoveryAt\":null},\"backlogMonitorEnabled\":true,\"backlogMonitorRunning\":false}}}"
         }
       ]
     },
@@ -8695,7 +8709,7 @@
                 "test-alert"
               ]
             },
-            "description": "Trigger 400 Bad Request by supplying invalid channels or malformed payload."
+            "description": "Trigger 400 Bad Request by supplying invalid channels, an empty text probe (rejected by the TestAlertRequest.text minLength: 1 schema and by validateAlert at runtime), or another malformed payload."
           },
           "response": [
             {
@@ -8726,6 +8740,48 @@
                 "body": {
                   "mode": "raw",
                   "raw": "{\n  \"channels\": [\"invalid_channel\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/test-alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "test-alert"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "400 Bad Request - Empty Text",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"error\": \"Alert text is required and must be a string\",\n  \"code\": \"INVALID_REQUEST\"\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"\",\n  \"channels\": [\"telegram\"]\n}"
                 },
                 "url": {
                   "raw": "{{baseUrl}}/api/admin/test-alert",
@@ -12295,6 +12351,208 @@
             }
           ],
           "body": "{\n  \"dependencies\": {\n    \"equityMarketData\": {\n      \"provider\": \"twelve-data\",\n      \"enabled\": true,\n      \"configured\": true,\n      \"timeoutMs\": 5000,\n      \"rpm\": 8,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"readiness\": \"verified\",\n      \"requestsAttempted\": 14,\n      \"requestsSucceeded\": 14,\n      \"requestsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": \"2026-10-04T14:11:03.117Z\",\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
+      "name": "Get Status - idempotency storage readiness (issue #1111)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Issue #1111 enables durable webhook idempotency in production. Every Firestore failure in `IdempotencyStorageService` falls open to in-memory idempotency, so before this change a deployment that could not reach Firestore reported the same `ready` verdict as a working one. `configured` is credential shape only; `ready` is true only after an observed durable operation and `status` is `unverified` until one is observed."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('idempotency storage is not ready on the strength of credential shape', function () {",
+              "  const store = pm.response.json().dependencies.idempotencyStorage;",
+              "  pm.expect(pm.response.code).to.eql(200);",
+              "  pm.expect(store).to.be.an('object');",
+              "  pm.expect(store.enabled).to.eql(true);",
+              "  pm.expect(store.configured).to.eql(true);",
+              "  pm.expect(store.ready).to.eql(false);",
+              "  pm.expect(store.status).to.eql('unverified');",
+              "  pm.expect(store.readiness).to.eql('unverified');",
+              "});",
+              "pm.test('mode and backend report intent while ready reports proof', function () {",
+              "  const store = pm.response.json().dependencies.idempotencyStorage;",
+              "  pm.expect(store.mode).to.eql('durable');",
+              "  pm.expect(store.backend).to.eql('firestore');",
+              "  pm.expect(store.failOpen).to.eql(true);",
+              "  pm.expect(store.collection).to.eql('idempotency_keys');",
+              "});",
+              "pm.test('a degraded verdict never leaks the Firestore project path', function () {",
+              "  const raw = pm.response.text();",
+              "  pm.expect(raw).to.not.include('projects/');",
+              "  pm.expect(raw).to.not.include('console.firebase.google.com');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 unverified - enabled and configured, nothing persisted yet",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firestoreIdempotency\": true\n  },\n  \"dependencies\": {\n    \"idempotencyStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"unverified\",\n      \"mode\": \"durable\",\n      \"backend\": \"firestore\",\n      \"failOpen\": true,\n      \"readiness\": \"unverified\",\n      \"collection\": \"idempotency_keys\",\n      \"operationsAttempted\": 0,\n      \"operationsSucceeded\": 0,\n      \"operationsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 ready - a durable reservation has succeeded",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firestoreIdempotency\": true\n  },\n  \"dependencies\": {\n    \"idempotencyStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"mode\": \"durable\",\n      \"backend\": \"firestore\",\n      \"failOpen\": true,\n      \"readiness\": \"verified\",\n      \"collection\": \"idempotency_keys\",\n      \"operationsAttempted\": 47,\n      \"operationsSucceeded\": 47,\n      \"operationsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": \"2026-10-04T08:31:12.904Z\",\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 degraded - falling back to in-memory, alerts still delivered",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firestoreIdempotency\": true\n  },\n  \"dependencies\": {\n    \"idempotencyStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"degraded\",\n      \"mode\": \"durable\",\n      \"backend\": \"firestore\",\n      \"failOpen\": true,\n      \"readiness\": \"degraded\",\n      \"collection\": \"idempotency_keys\",\n      \"operationsAttempted\": 52,\n      \"operationsSucceeded\": 44,\n      \"operationsFailed\": 8,\n      \"consecutiveFailures\": 8,\n      \"lastSuccessAt\": \"2026-10-04T08:29:03.117Z\",\n      \"lastFailureAt\": \"2026-10-04T08:31:14.882Z\",\n      \"lastErrorReason\": \"firestore_unavailable\"\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 disabled - gate off, in-memory idempotency",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firestoreIdempotency\": false\n  },\n  \"dependencies\": {\n    \"idempotencyStorage\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"mode\": \"ephemeral\",\n      \"backend\": \"memory\",\n      \"failOpen\": true,\n      \"readiness\": \"unverified\",\n      \"collection\": \"idempotency_keys\",\n      \"operationsAttempted\": 0,\n      \"operationsSucceeded\": 0,\n      \"operationsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
+          "response": []
         }
       ]
     }

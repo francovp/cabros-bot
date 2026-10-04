@@ -3,10 +3,12 @@
 # Verifies the deployment for a given PR number, and optionally validates new
 # endpoints exposed by the PR. Production is also verifiable.
 #
-# PR deployment URL is resolved via the GitHub Deployments API using the
-# companion script get-pr-deployment-url.sh, which returns the environment_url
-# of the latest success/active deployment and falls back to the Railway pattern
-# when no GitHub deployment is found:
+# PR deployment URL is resolved dynamically from the GitHub Deployments API via
+# the companion script get-pr-deployment-url.sh, which returns the
+# environment_url of the latest success/active deployment regardless of the
+# hosting provider (Railway, OpenClaw, Tailscale, Fly.io, ...) and falls back to
+# the Railway host pattern, with a warning, only when no GitHub deployment
+# exists:
 #   https://cabros-bot-cabros-bot-pr-<pr-number>.up.railway.app
 #
 # Production (master):    https://cabros-bot-production.up.railway.app
@@ -22,12 +24,14 @@
 #   is the PR head commit, and that the URL actually serves it:
 #     1. Bound-record check — EXPECTED_SHA is compared against the sha of the
 #        *selected* deployment (the one whose status supplied the URL), not
-#        against the newest deployment record.
+#        against the newest deployment record. That sha comes from the GitHub
+#        Deployments API and is therefore provider-independent.
 #     2. Served-build check — the commit the running service reports at
 #        /api/status (`service.commit`) is compared against EXPECTED_SHA.
-#   Either mismatch exits 2, which routes issue-automator to Step 6.5. The second
-#   check is skipped with a warning when it cannot be proven (no WEBHOOK_API_KEY,
-#   auth-gated status endpoint, or a status payload without service.commit).
+#   Either mismatch triggers a stale-deploy warning and exits 2, which routes
+#   issue-automator to Step 6.5. The second check is skipped with a warning when
+#   it cannot be proven (no WEBHOOK_API_KEY, auth-gated status endpoint, or a
+#   status payload without service.commit).
 #   Obtain the PR head SHA with: gh pr view <N> --json headRefOid --jq .headRefOid
 #
 # Exit codes:
@@ -45,7 +49,8 @@
 #   Defaults to DEFAULT_ALLOWED_HOSTS below; set it to extend (or replace) the
 #   list when a preview runs on another host, without editing this script.
 #
-# Railway and GitHub Deployments are the supported preview-status sources.
+# Preview host sources: the GitHub Deployments API (primary, any provider) with
+# the Railway host pattern as fallback.
 
 set -euo pipefail
 
@@ -249,7 +254,8 @@ if [ -n "$EXPECTED_SHA" ] && [ "$PR_NUMBER" != "production" ] && [ "$PR_NUMBER" 
       echo "  Deployment ID    : ${DEPLOYMENT_ID} (state=${DEPLOYMENT_STATE})" >&2
       echo "  URL              : ${PREVIEW_URL}" >&2
       echo "  The newest deployment for this PR does not match the PR head, and the" >&2
-      echo "  URL resolves to an older successful deployment. Trigger Step 6.5 recovery." >&2
+      echo "  resolved preview URL is an older successful deployment." >&2
+      echo "  Trigger Step 6.5 recovery." >&2
       exit 2  # exit 2 = stale deploy (distinct from general endpoint failure exit 1)
     fi
   else

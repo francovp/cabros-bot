@@ -933,12 +933,91 @@ describe('Status endpoints', () => {
 			// here pins the published contract rather than one layer's projection.
 			durableScanRotated: expect.any(Boolean),
 			durableCycleComplete: expect.any(Boolean),
+			// A misconfigured queue has no broker to have a verdict about, so the
+			// probe fields stay null rather than reporting a fabricated false.
+			brokerReachable: null,
+			lastBrokerProbeAt: null,
+			lastBrokerProbeErrorCode: null,
 			backlogAlert: {
 				active: false,
 				thresholdMs: expect.any(Number),
 			},
 		});
 		expect(JSON.stringify(response.body.dependencies.jobExecutionQueue)).not.toContain('redis://');
+	});
+
+	it('reports the broker probe verdict so a render-worker cutover is verifiable', async () => {
+		const { jobQueue } = require('../../src/services/jobs/JobQueue');
+		const probe = jest.spyOn(jobQueue, 'probeBrokerReadiness').mockResolvedValue({ reachable: true });
+
+		try {
+			process.env.JOB_EXECUTION_MODE = 'render-worker';
+			process.env.REDIS_URL = 'redis://queue.example:6379';
+			// Mirrors a healthy boot probe without needing a live Redis in the suite.
+			jobQueue.queueReady = true;
+			jobQueue.brokerProbe = {
+				reachable: true,
+				lastProbeAt: '2026-10-04T12:00:00.000Z',
+				lastErrorCode: null,
+			};
+
+			const response = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.jobExecutionWorker).toBe(true);
+			// This is the payload issue #1117 asks an operator to check after the
+			// cutover; it has to read "ready" without a job having been enqueued.
+			expect(response.body.dependencies.jobExecutionQueue).toMatchObject({
+				mode: 'render-worker',
+				enabled: true,
+				configured: true,
+				ready: true,
+				status: 'ready',
+				brokerReachable: true,
+				lastBrokerProbeAt: '2026-10-04T12:00:00.000Z',
+				lastBrokerProbeErrorCode: null,
+			});
+			expect(JSON.stringify(response.body.dependencies.jobExecutionQueue)).not.toContain('redis://');
+		} finally {
+			probe.mockRestore();
+			jobQueue.queueReady = false;
+			jobQueue.brokerProbe = { reachable: null, lastProbeAt: null, lastErrorCode: null };
+			delete process.env.REDIS_URL;
+		}
+	});
+
+	it('reports an unreachable broker as distinct from an unprobed one', async () => {
+		const { jobQueue } = require('../../src/services/jobs/JobQueue');
+
+		try {
+			process.env.JOB_EXECUTION_MODE = 'render-worker';
+			process.env.REDIS_URL = 'redis://queue.example:6379';
+			jobQueue.brokerProbe = {
+				reachable: false,
+				lastProbeAt: '2026-10-04T12:00:00.000Z',
+				lastErrorCode: 'JOB_QUEUE_PROBE_TIMEOUT',
+			};
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			// `configured` only proves REDIS_URL is a non-empty string, so without a
+			// distinct verdict an operator cannot tell this from a healthy cutover.
+			expect(response.body.dependencies.jobExecutionQueue).toMatchObject({
+				configured: true,
+				ready: false,
+				status: 'unreachable',
+				brokerReachable: false,
+				lastBrokerProbeErrorCode: 'JOB_QUEUE_PROBE_TIMEOUT',
+			});
+			expect(JSON.stringify(response.body.dependencies.jobExecutionQueue)).not.toContain('queue.example');
+		} finally {
+			jobQueue.brokerProbe = { reachable: null, lastProbeAt: null, lastErrorCode: null };
+			delete process.env.REDIS_URL;
+		}
 	});
 
 	it('reports firestore-poller mode execution readiness without Redis', async () => {

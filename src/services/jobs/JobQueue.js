@@ -5,6 +5,7 @@ const JOB_NAME = 'tradingview-job';
 const DEFAULT_ATTEMPTS = 5;
 const DEFAULT_BACKOFF_MS = 30000;
 const DEFAULT_CONCURRENCY = 1;
+const DEFAULT_PROBE_TIMEOUT_MS = 5000;
 
 function getPositiveInteger(value, fallback, max = Number.MAX_SAFE_INTEGER) {
 	const parsed = Number(value);
@@ -21,6 +22,22 @@ function isQueueExecutionEnabled() {
 
 function isBrokerConfigured() {
 	return typeof process.env.REDIS_URL === 'string' && process.env.REDIS_URL.trim().length > 0;
+}
+
+function withTimeout(promise, timeoutMs) {
+	let timer;
+	const timeout = new Promise((_resolve, reject) => {
+		timer = setTimeout(() => {
+			const error = new Error('The job queue broker probe timed out.');
+			error.code = 'JOB_QUEUE_PROBE_TIMEOUT';
+			reject(error);
+		}, timeoutMs);
+		if (typeof timer.unref === 'function') {
+			timer.unref();
+		}
+	});
+
+	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 class JobQueueUnavailableError extends Error {
@@ -54,6 +71,15 @@ class JobQueue {
 		this.queueReady = false;
 		this.accepting = true;
 		this.readyPromise = null;
+		// reachable is null until a probe has actually run, which is deliberately
+		// distinct from false: an unprobed queue has no evidence either way, and
+		// collapsing the two would let a dead broker read as an unstarted one.
+		this.brokerProbe = {
+			reachable: null,
+			lastProbeAt: null,
+			lastErrorCode: null,
+		};
+		this.probePromise = null;
 		this.metrics = {
 			enqueued: 0,
 			claimed: 0,
@@ -231,6 +257,8 @@ class JobQueue {
 		this.queueConnection = null;
 		this.queueReady = false;
 		this.readyPromise = null;
+		this.brokerProbe = { reachable: null, lastProbeAt: null, lastErrorCode: null };
+		this.probePromise = null;
 		this.backlogService = null;
 	}
 
@@ -262,13 +290,74 @@ class JobQueue {
 		return { waiting: 0, delayed: 0, failed: 0, active: 0, paused: 0 };
 	}
 
+	async probeBrokerReadiness() {
+		if (!this.isEnabled() || !this.isConfigured()) {
+			return { reachable: false, skipped: true };
+		}
+
+		if (this.probePromise) {
+			return this.probePromise;
+		}
+
+		const probe = (async () => {
+			const timeoutMs = getPositiveInteger(process.env.JOB_QUEUE_PROBE_TIMEOUT_MS, DEFAULT_PROBE_TIMEOUT_MS, 120000);
+			try {
+				await withTimeout(this._getQueue(), timeoutMs);
+				this._markBrokerReachable();
+				return { reachable: true };
+			} catch (error) {
+				this._recordError(error);
+				this.brokerProbe = {
+					reachable: false,
+					lastProbeAt: new Date().toISOString(),
+					lastErrorCode: this.metrics.lastErrorCode,
+				};
+				return { reachable: false, errorCode: this.metrics.lastErrorCode };
+			} finally {
+				this.probePromise = null;
+			}
+		})();
+
+		this.probePromise = probe;
+		return probe;
+	}
+
+	_markBrokerReachable() {
+		// Any successful connect is authoritative, not just the boot-time probe.
+		// probeBrokerReadiness() runs exactly once (index.js bootstrap), so without
+		// this a broker that merely blipped during deploy stayed 'unreachable' for
+		// the process lifetime even after JobBacklogService's periodic
+		// getJobCounts() re-proved the same connectivity -- and the cutover runbook
+		// tells operators to roll back to `local` on 'unreachable'. Because
+		// queueReady is only set on the same branch as this call, it also keeps
+		// `ready: true` from ever being published beside `status: 'unreachable'`.
+		if (this.brokerProbe.reachable === true) {
+			return;
+		}
+		this.brokerProbe = {
+			reachable: true,
+			lastProbeAt: new Date().toISOString(),
+			lastErrorCode: null,
+		};
+	}
+
 	getStatus(backlog = null) {
 		const mode = process.env.JOB_EXECUTION_MODE || 'local';
 		const enabled = this.isEnabled();
 		const configured = this.isConfigured();
+		// Stays null unless the broker is actually expected to be probed, so a
+		// disabled or unconfigured queue never claims a broker verdict it has no
+		// evidence for.
+		const brokerReachable = enabled && configured ? this.brokerProbe.reachable : null;
 		let status = 'disabled';
 		if (enabled) {
-			status = configured ? (this.queueReady ? 'ready' : 'not_started') : 'misconfigured';
+			if (!configured) {
+				status = 'misconfigured';
+			} else if (this.brokerProbe.reachable === false) {
+				status = 'unreachable';
+			} else {
+				status = this.queueReady ? 'ready' : 'not_started';
+			}
 		}
 
 		let resolvedBacklog = backlog;
@@ -290,6 +379,11 @@ class JobQueue {
 			ready: enabled && this.queueReady,
 			status,
 			queueName: QUEUE_NAME,
+			// Proven broker connectivity from an actual probe, as opposed to
+			// `configured`, which only string-checks REDIS_URL.
+			brokerReachable,
+			lastBrokerProbeAt: this.brokerProbe.lastProbeAt,
+			lastBrokerProbeErrorCode: this.brokerProbe.lastErrorCode,
 			enqueued: this.metrics.enqueued,
 			claimed: this.metrics.claimed,
 			completed: this.metrics.completed,
@@ -371,6 +465,7 @@ class JobQueue {
 		try {
 			await this.readyPromise;
 			this.queueReady = true;
+			this._markBrokerReachable();
 			return this.queue;
 		} catch (error) {
 			this._recordError(error);

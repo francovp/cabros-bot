@@ -106,18 +106,19 @@ fi
 # Fetch the PR branch ref so we can search deployments by ref
 PR_BRANCH="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefName --jq .headRefName 2>/dev/null || true)"
 
-# Walks the deployments matching "$1" newest-first and returns the first one
-# whose latest status is success/active and carries an environment_url.
+# Walks the deployments at the "$1" deployments endpoint newest-first and returns
+# the first one whose latest status is success/active and carries an
+# environment_url.
 #
 # On stdout: <deployment_id>\t<sha>\t<state>\t<url> — the deployment id and sha
 # come from the deployment record, the state and url from that same
 # deployment's newest status, so the two can never describe different builds.
 resolve_from_query() {
-  local query="$1"
+  local endpoint="$1"
   local rows dep_id dep_sha status_info state url
 
   # One call for both id and sha: the deployment list carries the commit.
-  rows="$(gh api "repos/${REPO}/deployments?${query}&per_page=5" \
+  rows="$(gh api "${endpoint}&per_page=5" \
     --jq '.[] | "\(.id)\t\(.sha // "")"' 2>/dev/null || true)"
   [ -z "$rows" ] && return 1
 
@@ -144,10 +145,16 @@ resolve_from_query() {
   return 1
 }
 
+# The two named probes of the resolver contract (environment name first, branch
+# ref second). Both delegate to one walker so the deployment id, sha, state and
+# url can never come from different records.
+resolve_from_environment() { resolve_from_query "repos/${REPO}/deployments?environment=${1}"; }
+resolve_from_ref() { resolve_from_query "repos/${REPO}/deployments?ref=${1}"; }
+
 # 1. Try canonical environment name
 ENV_NAME="cabros-bot-pr-${PR_NUMBER}"
 BOUND=""
-if BOUND="$(resolve_from_query "environment=${ENV_NAME}")" && [ -n "$BOUND" ]; then
+if BOUND="$(resolve_from_environment "$ENV_NAME")" && [ -n "$BOUND" ]; then
   emit_selection \
     "$(printf '%s' "$BOUND" | cut -f4-)" \
     "$(printf '%s' "$BOUND" | cut -f2)" \
@@ -159,7 +166,7 @@ fi
 
 # 2. Try by branch ref if we have one
 if [ -n "$PR_BRANCH" ]; then
-  BOUND="$(resolve_from_query "ref=${PR_BRANCH}" || true)"
+  BOUND="$(resolve_from_ref "$PR_BRANCH" || true)"
   if [ -n "$BOUND" ]; then
     emit_selection \
       "$(printf '%s' "$BOUND" | cut -f4-)" \

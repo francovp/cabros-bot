@@ -41,7 +41,7 @@ Comprehensive guides and technical documentation are maintained inside the [`doc
 | **[Multi-Channel Alerts](docs/notifications.md)** | Multi-channel delivery rules (Telegram, WhatsApp, Discord), MarkdownV2 escaping, URL shortening, and dead-letter redrive. |
 | **[Telegram Commands](docs/commands.md)** | Interactive bot commands (`/help`, `/precio`, `/cryptobot`, `/analisis`, `/scanner`, `/jobs`, `/noticias`), throttling, and forum topic routing. |
 | **[News Monitoring](docs/news-monitor.md)** | Event detection engine, confidence scoring, persistent deduplication, secondary LLM refinement, and volume throttling. |
-| **[Observability & Monitoring](docs/monitoring.md)** | Sentry runtime error monitoring (005), health probes, production smoke probes, structured JSON logging, structured per-request HTTP access logs, and Firestore write/read metrics. |
+| **[Observability & Monitoring](docs/monitoring.md)** | Sentry runtime error monitoring (005), health probes, external uptime monitoring, production smoke probes, structured JSON logging, structured per-request HTTP access logs, and Firestore write/read metrics. |
 | **[Deployment & Operations](docs/deployment.md)** | Render.com web services and BullMQ workers, preview PR environments, ngrok local tunneling, and Docker/Devcontainer. |
 | **[Troubleshooting Guide](docs/troubleshooting.md)** | Diagnostic checklists and recovery runbooks for news monitoring, messaging channels, URL shortening, and retries. |
 | **[Firestore Backup & Restore](docs/firestore-backup-and-restore.md)** | Procedures and scripts for backing up and restoring Firestore operational collections. |
@@ -258,6 +258,53 @@ Paging is deduplicated by cooldown and only latches after confirmed delivery; a 
 | `JOB_BACKLOG_PROBE_TIMEOUT_MS` | `10000` | `1000`–`300000` | Per-dependency probe deadline. Environment-only. |
 | `ENABLE_JOB_BACKLOG_MONITOR` | `true` | — | Master monitor gate. **Environment-only** — a process-startup gate, deliberately excluded from Remote Config. |
 
+### Job Queue Mode & Broker Readiness
+
+`JOB_EXECUTION_MODE` selects where async TradingView jobs execute:
+
+| Mode | Behaviour |
+| :--- | :--- |
+| `local` (default) | Jobs run in-process on the web service. No broker required. |
+| `render-worker` | Jobs are enqueued to BullMQ and executed by `worker.js`. Requires `REDIS_URL` **and** durable Firestore job storage. |
+| `firestore-poller` | Jobs are claimed directly from Firestore without Redis. Requires durable job storage. |
+
+`GET /api/status` and `GET /api/capabilities` report the queue under `dependencies.jobExecutionQueue`. A bounded, fail-open **broker readiness probe** runs at web startup when `JOB_EXECUTION_MODE=render-worker`, so `brokerReachable` is *proven* connectivity rather than the mere presence of a `REDIS_URL` string:
+
+| `status` | Meaning | Operator action |
+| :--- | :--- | :--- |
+| `disabled` | Queue mode is off (`local`). | Nothing. |
+| `misconfigured` | `render-worker` without `REDIS_URL`. | Set `REDIS_URL`. Job creation returns `503 JOB_QUEUE_UNAVAILABLE`. |
+| `not_started` | No probe has run yet. **Not evidence of health.** | Re-check; a fresh process reports this until its probe settles. |
+| `unreachable` | The probe ran and the broker did not answer in time. | Broker is down, misconfigured, or still provisioning. |
+| `ready` | A probe has proven connectivity. | Cutover is validated. |
+
+`configured` only string-checks `REDIS_URL`; do not read it as health. Read `status` / `brokerReachable` instead.
+
+**Cutover runbook** (the `render-worker` switch is deliberately an operator step, not an automatic one):
+
+1. Provision the Key Value broker — `render.yaml` declares `cabros-crypto-bot-telegram-queue` on a **paid** `starter` plan, so this requires billing approval.
+2. Confirm the jobs worker is deployed: `cabros-crypto-bot-telegram-worker` (`JOB_EXECUTION_MODE=render-worker`).
+3. Set `JOB_EXECUTION_MODE=render-worker` on the **web** service and redeploy it.
+4. Verify before sending any job traffic:
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
+  "$BASE_URL/api/capabilities" \
+  | jq '{flag: .featureFlags.jobExecutionWorker, dep: .dependencies.jobExecutionQueue | {mode, status, brokerReachable}}'
+# Expected: flag true, mode "render-worker", status "ready", brokerReachable true
+```
+
+If `status` is `unreachable`, roll the web service back to `local` first — in `render-worker` mode job creation fails closed with `503 JOB_QUEUE_UNAVAILABLE` while the broker is down.
+
+| Variable | Default | Bounds | Purpose |
+| :--- | :--- | :--- | :--- |
+| `JOB_QUEUE_ATTEMPTS` | `5` | `1`–`20` | BullMQ delivery attempts per job. |
+| `JOB_QUEUE_BACKOFF_MS` | `30000` | positive | Exponential backoff base between attempts. |
+| `JOB_QUEUE_CONCURRENCY` | `1` | `1`–`20` | Jobs the worker processes in parallel. |
+| `JOB_QUEUE_CLAIM_LEASE_MS` | `60000` | positive | Durable claim lease held by an executing worker. |
+| `JOB_QUEUE_CONNECT_TIMEOUT_MS` | `5000` | positive | Broker connect timeout for the queue connection. |
+| `JOB_QUEUE_PROBE_TIMEOUT_MS` | `5000` | `1`–`120000` | Startup readiness-probe deadline. Environment-only — a safety deadline, excluded from Firebase Remote Config. |
+
 ### Signal Outcome Single-Evaluator Guarantee
 
 `ENABLE_SIGNAL_OUTCOME_TRACKING=true` is enabled in production. It gates three things at once — recording signals on the alert path, the evaluation sweep, and the whole `/api/outcomes` surface — so it is pinned in `render.yaml` rather than left to the Render dashboard, where an operator reading the repo could not tell which process was actually enabled.
@@ -321,6 +368,14 @@ Setting the variable is **necessary but not sufficient**, because this layer is 
 `mode`/`backend` keep reporting configured *intent* (`durable`/`firestore`) so the target stays visible while broken, and `failOpen` is always `true`: a degraded deployment still delivers alerts, it just cannot suppress a duplicate after a restart or across replicas. `consecutiveFailures` clears on the next success, so a transient outage self-heals without a restart. Counters are process-local and a status read never counts as a durable attempt.
 
 `expiresAt` on each document is only honoured once Firestore's TTL policy exists, so run `bash ops/configure-operational-collection-retention.sh` once per Firebase project; until then the collection grows without bound. Rollback is `false` plus a redeploy — no code change. See [Environment Configuration](docs/environment-configuration.md#verifying-idempotency-storage-is-actually-durable).
+
+### External Uptime Monitoring
+
+Production liveness is checked from **outside** the deployment. `.github/workflows/external-uptime-monitor.yml` probes the public `GET /healthcheck` every 5 minutes from GitHub Actions using `ops/external-uptime-monitor.js`; `.github/workflows/external-uptime-watchdog.yml` asserts the monitor itself is still being scheduled. `/healthcheck` is mounted before `validateApiKey`, so the monitor needs **no API key** — which is deliberate, since a monitor that silently no-ops because a secret was never provisioned is what hid the six-day platform-side outage in issue #1107.
+
+Configure it with the repository variables `UPTIME_MONITOR_BASE_URL`, `UPTIME_MONITOR_CHECK_DOCS`, `UPTIME_MONITOR_TIMEOUT_MS`, and `UPTIME_WATCHDOG_MAX_AGE_MINUTES`; optionally add the `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` secrets to page on a down/recovery transition. A non-zero probe exit fails the workflow, which is GitHub's own zero-configuration alert channel. Run `pnpm run uptime:monitor --no-page` to reproduce the verdict locally.
+
+**Any platform or host change must update `UPTIME_MONITOR_BASE_URL` and re-register the third-party uptime monitor** — see the platform migration re-activation checklist in [Observability & Monitoring](docs/monitoring.md#external-uptime-monitoring).
 
 ### Market Scanner MCP Fast-Fail Gate
 `POST /api/webhook/market-scanner-alert` checks the process-local TradingView MCP status before running its sequential scans. If the status is `degraded` with `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, it skips every scan and returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with each scan as `status: "skipped"`. The endpoint returns `502` in two shapes: `TRADINGVIEW_MCP_UNAVAILABLE` (skipped, nothing attempted) and `ALL_SCANS_FAILED` (attempted, all failed). The gate keys on the breaker's time-based state so that after `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses the next request is allowed through as a recovery probe — a transient outage self-heals without a restart. See [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert).

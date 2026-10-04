@@ -687,6 +687,18 @@ No new environment variable, endpoint, Remote Config key, or notification contra
 
 No new environment variable, endpoint, Remote Config key, or notification contract was added; this is a non-secret operational status addition.
 
+## External Uptime Monitoring (Issue #1107)
+
+Production liveness is detected from **outside** the deployment. On 2026-08-31 the hosting platform removed the production deployment platform-side (trial expiry); the public URL answered `404 {"status":"error","code":404,"message":"Application not found"}` and nothing detected it for six days, because every check that lived inside the deployment — including the self-reported `/healthcheck` and the in-repo smoke probe — was structurally blind to it.
+
+- `ops/external-uptime-monitor.js` — dependency-free Node CLI that probes the public `GET /healthcheck` (and optionally `/docs`) with native `fetch` + `AbortController` bounds and prints one line of JSON. `.github/workflows/external-uptime-monitor.yml` runs it every 5 minutes; `.github/workflows/external-uptime-watchdog.yml` asserts the monitor is still being scheduled.
+- **The monitor is secretless by design and must stay that way.** `/healthcheck` is mounted in `app.js` before `validateApiKey` and before the rate limiter, so no API key is required. The in-repo smoke probe (`ops/production-smoke-probe.sh`) is the *authenticated* layer and needs `WEBHOOK_API_KEY`; keeping the two separate is what stops an unset secret from hollowing the external detector (the #971 failure class).
+- **A `200` that is not the application is a failure.** `HEALTHCHECK_BODY_UNEXPECTED` (exit `4`) fires when the body does not carry the `uptime` field, so a proxy placeholder, CDN interstitial, or platform removal page can never read as healthy. Exit codes are a closed enum: `0 UP`, `3 HEALTHCHECK_UNREACHABLE`, `4 HEALTHCHECK_BODY_UNEXPECTED`, `5 DOCS_UNREACHABLE`, `6 BASE_URL_INVALID`, `7 MONITOR_INTERNAL_ERROR`. `7` exists so a broken monitor reports DOWN; it must never exit `0`.
+- **Alert routing.** A non-zero exit fails the scheduled job, which is GitHub's own zero-configuration notification. The optional Telegram page is fail-open, fires only on a DOWN transition and on recovery (never once per interval during a continuing outage), and is driven by the previous run's conclusion read from the Actions API. A `workflow_dispatch` run does not page unless `force_page` is set.
+- **Not an application-owned environment variable.** `UPTIME_MONITOR_BASE_URL`, `UPTIME_MONITOR_CHECK_DOCS`, `UPTIME_MONITOR_TIMEOUT_MS` and `UPTIME_WATCHDOG_MAX_AGE_MINUTES` are GitHub **repository variables**, and the two Telegram values are repository **secrets**. Nothing was added to `.env.example`, `RemoteConfigService`, `firebase-remote-config-template.json`, `src/openapi/openapi.json` or `CabrosBot.postman_collection.json`: no application runtime, endpoint, flag, or response shape changed, and no secret is committed.
+- **Coverage**: `tests/unit/external-uptime-monitor.test.js` (exit-code enum, body-contract honesty, timeout, base-URL sanitization, `shouldPage` truth table, fail-open secret-free paging, plus process-level CLI tests that would have caught an entrypoint ignoring `argv`) and `tests/unit/external-uptime-workflows.test.js` (pinned `actions/checkout` + `persist-credentials: false`, no `continue-on-error` / `|| true` on the probe step, no `WEBHOOK_API_KEY`, watchdog cron phase distinct from the monitor's, exit codes and variables documented).
+- **Platform changes are a checklist, not a code change.** Updating `UPTIME_MONITOR_BASE_URL`, the third-party provider monitor, and the documented origins is a required step of any migration — see the re-activation checklist in `docs/monitoring.md`.
+
 ## Multi-Channel Notification Architecture (002-whatsapp-alerts)
 
 The alert delivery system now supports parallel delivery to multiple channels (Telegram, WhatsApp) without blocking. Key patterns:
@@ -2022,6 +2034,22 @@ The dedicated `/admin` Status view now renders the existing `/api/status` respon
 - `public/admin/admin.js` / `public/admin/admin.css` — Hosting build output synchronized with source assets.
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
+
+## Job Queue Broker Readiness (Issue #1117)
+
+`JobQueue` runs a bounded, fail-open **broker readiness probe** at web startup when `JOB_EXECUTION_MODE=render-worker`, and projects the verdict onto `dependencies.jobExecutionQueue` as `brokerReachable` / `lastBrokerProbeAt` / `lastBrokerProbeErrorCode`, with `status` now one of `disabled`, `misconfigured`, `not_started`, `unreachable`, `ready`.
+
+**`configured` is not health.** `isConfigured()` only string-checks `REDIS_URL`. Before this change, `ready` was set as a side effect of `_getQueue()`, which runs on the first `enqueue()`, so a correctly cut-over but completely idle deployment reported `not_started` — the exact state an operator would read as "the enablement failed" — and an unreachable broker reported an identical `enabled/configured/ready/status` tuple. This is the same class of defect #1285 fixed for Firestore read health: a readiness assertion must exercise the operation it claims to be available, not a cheaper proxy.
+
+**`null` and `false` are different verdicts.** `brokerReachable` is `null` until a probe has actually run, and stays `null` whenever queue mode is disabled or unconfigured (there is no broker to have a verdict about). `false` means a probe ran and the broker did not answer. Collapsing the two reintroduces the exact ambiguity above. `getStatus()` also reports `unreachable` in preference to `not_started` once a probe has failed, because a known-bad broker must never read as an unstarted one.
+
+**The probe is fail-open and bounded.** `probeBrokerReadiness()` is single-flight, bounded by `JOB_QUEUE_PROBE_TIMEOUT_MS` (default `5000`, malformed values fall back to the default), uses an `unref`'d timer so it cannot hold the process open, and never throws — a broker that accepts TCP but never completes the Redis handshake yields `unreachable` instead of stalling boot or a `/api/status` request. It warms the same queue the first `enqueue()` would create, so it does not double-connect. `close()` resets the probe verdict so a stale `reachable: true` cannot outlive the connection.
+
+**The render-worker cutover stays an operator step.** `render.yaml` keeps the web service on `JOB_EXECUTION_MODE=local` while the jobs worker runs `render-worker`, because the Key Value broker is on a paid `starter` plan. Flipping the web service in the blueprint would make job creation fail closed with `503 JOB_QUEUE_UNAVAILABLE` on any deployment without a broker. The full queue contract (`JOB_QUEUE_*`) is now declared on **both** services at the in-code defaults, mirrored `fromService` web → worker, so it is dashboard-visible and cannot silently diverge between the two processes.
+
+**Coverage**: `tests/unit/job-queue.test.js` (probe reachability, unreachable-vs-unprobed, `misconfigured` skip, bounded deadline, malformed-value default, single-flight, never-throws), `tests/integration/status-endpoint.test.js` (`ready`/`unreachable`/misconfigured projection and no broker-URL leak), `tests/unit/render-blueprint.test.js` (queue contract declared on both services and mirrored, web stays on `local`), `tests/unit/postman-collection.test.js` + `tests/integration/openapi-docs.test.js` (published contract).
+
+**Remaining for the platform owner**: provisioning the paid `cabros-crypto-bot-telegram-queue` Key Value, deploying the jobs worker, and flipping web `JOB_EXECUTION_MODE=render-worker`. That is billing-gated deployment work, not an application code change.
 
 ## Async Job Backlog Depth & Operator Paging (Issue #578)
 

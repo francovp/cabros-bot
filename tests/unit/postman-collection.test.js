@@ -343,6 +343,26 @@ describe('Postman collection contract', () => {
 		}
 	});
 
+	it('documents the empty test-alert text 400 that mirrors the OpenAPI minLength', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Test Alert (Invalid Input - 400 Bad Request)');
+		const example = item.response.find((response) => response.name === '400 Bad Request - Empty Text');
+
+		expect(example).toBeDefined();
+		expect(example.code).toBe(400);
+		expect(JSON.parse(example.body)).toEqual({
+			error: 'Alert text is required and must be a string',
+			code: 'INVALID_REQUEST',
+		});
+		expect(JSON.parse(example.originalRequest.body.raw)).toEqual({ text: '', channels: ['telegram'] });
+
+		const contract = JSON.parse(fs.readFileSync(
+			path.join(__dirname, '../../src/openapi/openapi.json'),
+			'utf8',
+		));
+		expect(contract.components.schemas.TestAlertRequest.properties.text.minLength).toBe(1);
+	});
+
 	it('documents Request Timeout (408) on every affected admin request variant', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const affectedPaths = [
@@ -573,6 +593,68 @@ describe('Postman collection contract', () => {
 		expect(unauthorized).toBeDefined();
 		expect(unauthorized.code).toBe(401);
 		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
+	});
+
+	it('documents the job queue broker readiness variants for the #1117 cutover', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Capabilities - job queue broker readiness (#1117)');
+
+		expect(item).toBeDefined();
+
+		const queueOf = (res) => JSON.parse(res.body).dependencies.jobExecutionQueue;
+		const ready = item.response.find((res) => res.name.includes('ready -'));
+		const unreachable = item.response.find((res) => res.name.includes('unreachable'));
+		const notStarted = item.response.find((res) => res.name.includes('not_started'));
+		const disabled = item.response.find((res) => res.name.includes('disabled -'));
+
+		// The acceptance step in #1117 is a curl against /api/capabilities, so the
+		// request must hit that exact path.
+		expect(item.request.url.path).toEqual(['api', 'capabilities']);
+		expect(JSON.parse(ready.body).featureFlags.jobExecutionWorker).toBe(true);
+
+		expect(queueOf(ready)).toMatchObject({
+			mode: 'render-worker',
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			brokerReachable: true,
+			lastBrokerProbeAt: '2026-10-04T12:00:00.000Z',
+			lastBrokerProbeErrorCode: null,
+		});
+
+		// configured stays true because REDIS_URL is a non-empty string; only the
+		// probe verdict can distinguish this from the healthy case above.
+		expect(queueOf(unreachable)).toMatchObject({
+			configured: true,
+			ready: false,
+			status: 'unreachable',
+			brokerReachable: false,
+			lastBrokerProbeErrorCode: 'JOB_QUEUE_PROBE_TIMEOUT',
+		});
+
+		expect(queueOf(notStarted)).toMatchObject({
+			ready: false,
+			status: 'not_started',
+			brokerReachable: null,
+		});
+
+		expect(queueOf(disabled)).toMatchObject({
+			mode: 'local',
+			enabled: false,
+			status: 'disabled',
+			brokerReachable: null,
+		});
+
+		const scripts = JSON.stringify(item.event);
+		expect(scripts).toContain('unreachable');
+		expect(scripts).toContain('brokerReachable');
+		expect(scripts).toContain('redis://');
+
+		for (const res of item.response) {
+			expect(res.body).not.toContain('queue.example');
+			expect(res.body).not.toContain('redis://');
+		}
 	});
 
 	it('documents unverified, ready, degraded and disabled idempotency storage variants', () => {
