@@ -13225,7 +13225,7 @@
           },
           "brokerReachable": {
             "type": ["boolean", "null"],
-            "description": "Result of the bounded broker readiness probe: true once a probe has proven connectivity, false when the last probe failed or was skipped, and null when the broker has never been probed or queue mode is disabled. Unlike `configured`, this is evidence rather than configuration shape."
+            "description": "Result of the bounded broker readiness probe: true once a probe has proven connectivity, false when the last probe ran and the broker did not answer, and null when no probe has produced a verdict — which includes queue mode being disabled, a missing broker URL (misconfigured), and an enabled+configured queue whose probe has not settled yet. Unlike `configured`, this is evidence rather than configuration shape."
           },
           "lastBrokerProbeAt": {
             "type": ["string", "null"],
