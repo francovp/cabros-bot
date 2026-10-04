@@ -652,6 +652,101 @@ describe('Postman collection contract', () => {
 		}
 	});
 
+	it('documents Firebase admin auth gate and proven readiness states for GET Status', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - Firebase admin auth readiness (issue #1134)');
+
+		expect(item).toBeDefined();
+
+		const disabled = item.response.find((res) => res.name.includes('disabled'));
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const ready = item.response.find((res) => res.name.includes('ready'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const misconfigured = item.response.find((res) => res.name.includes('misconfigured'));
+		const unauthorized = item.response.find((res) => res.code === 401);
+
+		// The gate must be mirrored exactly into featureFlags, or a client
+		// cannot reconcile the flag with the dependency it drives.
+		for (const res of [disabled, unverified, ready, degraded, misconfigured]) {
+			const body = JSON.parse(res.body);
+			expect(body.featureFlags.firebaseAdminAuth).toBe(body.dependencies.adminAuth.enabled);
+			expect(body.dependencies.adminAuth).not.toHaveProperty('config');
+		}
+
+		// Shape is not readiness: the pre-verification state documents as
+		// unverified, exactly like equityMarketData in issue #1116.
+		expect(JSON.parse(unverified.body).dependencies.adminAuth).toMatchObject({
+			enabled: true,
+			provider: 'firebase',
+			signIn: 'email-password',
+			verifierConfigured: true,
+			browserConfigConfigured: true,
+			ready: false,
+			status: 'unverified',
+			verificationSuccessCount: 0,
+			consecutiveFailures: 0,
+		});
+
+		expect(JSON.parse(ready.body).dependencies.adminAuth).toMatchObject({
+			ready: true,
+			status: 'ready',
+			verificationSuccessCount: 12,
+		});
+
+		// Only verifier-unavailability degrades the dependency. The degraded
+		// example must therefore carry no verification success, since a
+		// rejected bearer token is never counted as a failure.
+		expect(JSON.parse(degraded.body).dependencies.adminAuth).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			verifierConfigured: true,
+			verificationSuccessCount: 0,
+			verifierUnavailableCount: 3,
+			consecutiveFailures: 3,
+		});
+
+		expect(JSON.parse(misconfigured.body).dependencies.adminAuth).toMatchObject({
+			verifierConfigured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+
+		expect(JSON.parse(disabled.body).dependencies.adminAuth).toMatchObject({
+			enabled: false,
+			provider: null,
+			verifierConfigured: false,
+			ready: false,
+			status: 'disabled',
+		});
+
+		expect(unauthorized.code).toBe(401);
+		expect(JSON.parse(unauthorized.body)).toMatchObject({
+			success: false,
+			code: 'ADMIN_AUTH_REQUIRED',
+		});
+
+		for (const res of [disabled, unverified, ready, degraded, misconfigured]) {
+			expect(res.body).not.toMatch(/private_key/);
+			expect(res.body).not.toMatch(/service_account/);
+			expect(res.body).not.toMatch(/authDomain/i);
+		}
+	});
+
+	it('documents the admin auth gate in the primary status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+
+		for (const name of ['Get Status', 'Get Capabilities']) {
+			const item = findItem(collection.item, name);
+			const body = JSON.parse(item.response[0].body);
+			expect(body.featureFlags.firebaseAdminAuth).toBe(false);
+			expect(body.dependencies.adminAuth).toMatchObject({
+				enabled: false,
+				ready: false,
+				status: 'disabled',
+			});
+		}
+	});
+
 	it('documents both STORAGE_UNAVAILABLE classifications for GET List Alerts', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const item = findItem(collection.item, 'GET List Alerts');

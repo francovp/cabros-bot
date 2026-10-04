@@ -343,7 +343,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"telegramCommandAuth\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false,\"alertScheduler\":false,\"notificationRedrive\":false,\"firestoreChatPreferences\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true,\"newsMonitorClassifier\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"jobExecutionQueue\":{\"mode\":\"local\",\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"queueName\":\"tradingview-jobs\",\"enqueued\":0,\"claimed\":0,\"completed\":0,\"failed\":0,\"lastErrorCode\":null,\"lastEnqueuedAt\":null,\"waitingCount\":0,\"delayedCount\":0,\"failedCount\":0,\"activeCount\":0,\"durableQueuedCount\":0,\"durableQueuedTruncated\":false,\"durableScanRotated\":false,\"durableProbeSucceeded\":null,\"durableCycleComplete\":false,\"oldestQueuedAgeMs\":null,\"backlogAlert\":{\"active\":false,\"thresholdMs\":900000,\"pagedAt\":null,\"lastRecoveryAt\":null},\"backlogMonitorEnabled\":true,\"backlogMonitorRunning\":false},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0,\"entryPriceSources\":{\"configured\":false,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"twelve-data\"]}},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"alertScheduler\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":10,\"scheduleCount\":0,\"activeCount\":0,\"lastRunAt\":null,\"lastRunDurationMs\":null,\"lastRunExecutedCount\":0,\"lastRunErrorCount\":0,\"lastError\":null,\"schedules\":[]},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"telegramCommandAuth\":{\"enabled\":true,\"allowlistSource\":\"TELEGRAM_ALLOWED_CHAT_IDS\",\"allowlistSize\":1,\"deniedSinceStart\":0,\"trackedDeniedSenders\":0,\"deniedSenderCacheLimit\":1000},\"selfTest\":{\"lastRunAt\":null,\"lastStatus\":\"unknown\",\"ttlSec\":3600,\"ageMs\":null},\"newsMonitorDedup\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"mode\":\"in-memory\",\"backend\":null,\"cacheSize\":{\"entries\":0,\"maxEntries\":5000,\"evictionCount\":0,\"deliveryLocks\":0,\"deliveryLockMaxEntries\":1000,\"deliveryLockEvictionCount\":0,\"urlShortenerCache\":{\"size\":0,\"maxEntries\":1000,\"evictionCount\":0},\"urlShortenerServiceFailures\":{\"size\":0,\"maxEntries\":32,\"evictionCount\":0}}},\"chatPreferences\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cachedCount\":0,\"cacheTtlMs\":60000,\"retentionDays\":90},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"}}}"
+          "body": "{\n  \"service\": {\n    \"name\": \"cabros-bot\",\n    \"version\": \"0.1.0\"\n  },\n  \"featureFlags\": {\n    \"telegramBot\": true,\n    \"telegramCommandAuth\": true,\n    \"whatsappAlerts\": false,\n    \"geminiGrounding\": false,\n    \"newsMonitor\": false,\n    \"newsMonitorTestMode\": false,\n    \"tradingViewVolumeConfirmation\": false,\n    \"firestoreJobStorage\": false,\n    \"messageFooterMetadata\": true,\n    \"firestoreIdempotency\": false,\n    \"equityMarketData\": false,\n    \"firebaseRemoteConfig\": false,\n    \"jobExecutionWorker\": false,\n    \"alertScheduler\": false,\n    \"notificationRedrive\": false,\n    \"firestoreChatPreferences\": false,\n    \"tokenCostBudget\": false,\n    \"signalClassMarker\": true,\n    \"newsMonitorClassifier\": false,\n    \"firebaseAdminAuth\": false\n  },\n  \"dependencies\": {\n    \"geminiQuota\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"cooldownActive\": false,\n      \"remainingCooldownMs\": 0,\n      \"lastTriggeredAt\": null,\n      \"triggersTotal\": 0,\n      \"braveFallbacksDuringCooldown\": 0,\n      \"lastBraveFallbackAt\": null,\n      \"metrics\": {\n        \"totalRequests\": 0,\n        \"successRequests\": 0,\n        \"failureRequests\": 0,\n        \"timeoutRequests\": 0\n      }\n    },\n    \"groundingCoalescing\": {\n      \"enabled\": false,\n      \"windowMs\": 0,\n      \"activeEntries\": 0,\n      \"hits\": 0,\n      \"misses\": 0,\n      \"failures\": 0\n    },\n    \"jobExecutionQueue\": {\n      \"mode\": \"local\",\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"queueName\": \"tradingview-jobs\",\n      \"enqueued\": 0,\n      \"claimed\": 0,\n      \"completed\": 0,\n      \"failed\": 0,\n      \"lastErrorCode\": null,\n      \"lastEnqueuedAt\": null,\n      \"waitingCount\": 0,\n      \"delayedCount\": 0,\n      \"failedCount\": 0,\n      \"activeCount\": 0,\n      \"durableQueuedCount\": 0,\n      \"durableQueuedTruncated\": false,\n      \"durableScanRotated\": false,\n      \"durableProbeSucceeded\": null,\n      \"durableCycleComplete\": false,\n      \"oldestQueuedAgeMs\": null,\n      \"backlogAlert\": {\n        \"active\": false,\n        \"thresholdMs\": 900000,\n        \"pagedAt\": null,\n        \"lastRecoveryAt\": null\n      },\n      \"backlogMonitorEnabled\": true,\n      \"backlogMonitorRunning\": false\n    },\n    \"tradingViewMcp\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"lastCheckedAt\": null,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorCategory\": null,\n      \"successCount\": 0,\n      \"failureCount\": 0,\n      \"circuitBreaker\": {\n        \"state\": \"closed\",\n        \"consecutiveFailures\": 0,\n        \"openedAt\": null,\n        \"lastStateChangeAt\": null,\n        \"failureThreshold\": 5,\n        \"cooldownMs\": 600000\n      }\n    },\n    \"tradingViewVolumeConfirmation\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"lastCheckedAt\": null,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorCategory\": null,\n      \"successCount\": 0,\n      \"failureCount\": 0,\n      \"circuitBreaker\": {\n        \"state\": \"closed\",\n        \"consecutiveFailures\": 0,\n        \"openedAt\": null,\n        \"lastStateChangeAt\": null,\n        \"failureThreshold\": 5,\n        \"cooldownMs\": 600000\n      }\n    },\n    \"firestoreJobStorage\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\"\n    },\n    \"signalOutcomeWorker\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"role\": \"web\",\n      \"running\": false,\n      \"shutdownRequested\": false,\n      \"lastRunScannedCount\": 0,\n      \"lastRunPendingCount\": 0,\n      \"lastRunEvaluatedCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"entryPriceSources\": {\n        \"configured\": false,\n        \"crypto\": [\n          \"mcp\",\n          \"binance\",\n          \"gemini\"\n        ],\n        \"equity\": [\n          \"twelve-data\"\n        ]\n      }\n    },\n    \"equityMarketData\": {\n      \"provider\": null,\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"supportedExchanges\": [\n        \"BATS\",\n        \"NASDAQ\",\n        \"NYSE\",\n        \"AMEX\",\n        \"NYSE ARCA\",\n        \"FX_IDC\",\n        \"SPCFD\"\n      ],\n      \"timeoutMs\": 5000\n    },\n    \"idempotencyStorage\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"mode\": \"ephemeral\",\n      \"backend\": \"memory\"\n    },\n    \"firebaseRemoteConfig\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"source\": \"disabled\",\n      \"templateVersion\": null,\n      \"lastSuccessfulLoad\": null,\n      \"lastErrorCategory\": null,\n      \"consecutiveFailures\": 0,\n      \"refreshIntervalMs\": 900000,\n      \"maxAgeMs\": 3600000\n    },\n    \"alertScheduler\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"role\": \"web\",\n      \"running\": false,\n      \"intervalMs\": 60000,\n      \"batchLimit\": 10,\n      \"scheduleCount\": 0,\n      \"activeCount\": 0,\n      \"lastRunAt\": null,\n      \"lastRunDurationMs\": null,\n      \"lastRunExecutedCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"lastError\": null,\n      \"schedules\": []\n    },\n    \"notificationRedrive\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"role\": \"web\",\n      \"workerRole\": \"web\",\n      \"running\": false,\n      \"intervalMs\": 60000,\n      \"batchLimit\": 50,\n      \"maxAttempts\": 5,\n      \"maxAgeMs\": 3600000,\n      \"pendingCount\": 0,\n      \"deliveredCount\": 0,\n      \"exhaustedCount\": 0,\n      \"zeroChannelBroadcasts\": 0,\n      \"lastRunAt\": null,\n      \"lastSweepAt\": null,\n      \"lastRunDurationMs\": null,\n      \"lastRunScannedCount\": 0,\n      \"lastRunRedrivenCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"lastRunExhaustedCount\": 0,\n      \"lastSweepResult\": null\n    },\n    \"telegramCommandAuth\": {\n      \"enabled\": true,\n      \"allowlistSource\": \"TELEGRAM_ALLOWED_CHAT_IDS\",\n      \"allowlistSize\": 1,\n      \"deniedSinceStart\": 0,\n      \"trackedDeniedSenders\": 0,\n      \"deniedSenderCacheLimit\": 1000\n    },\n    \"selfTest\": {\n      \"lastRunAt\": null,\n      \"lastStatus\": \"unknown\",\n      \"ttlSec\": 3600,\n      \"ageMs\": null\n    },\n    \"newsMonitorDedup\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"mode\": \"in-memory\",\n      \"backend\": null,\n      \"cacheSize\": {\n        \"entries\": 0,\n        \"maxEntries\": 5000,\n        \"evictionCount\": 0,\n        \"deliveryLocks\": 0,\n        \"deliveryLockMaxEntries\": 1000,\n        \"deliveryLockEvictionCount\": 0,\n        \"urlShortenerCache\": {\n          \"size\": 0,\n          \"maxEntries\": 1000,\n          \"evictionCount\": 0\n        },\n        \"urlShortenerServiceFailures\": {\n          \"size\": 0,\n          \"maxEntries\": 32,\n          \"evictionCount\": 0\n        }\n      }\n    },\n    \"chatPreferences\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"cachedCount\": 0,\n      \"cacheTtlMs\": 60000,\n      \"retentionDays\": 90\n    },\n    \"tokenCostBudget\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"dailySpendUsd\": 0,\n      \"budgetUsd\": 5,\n      \"utilizationPct\": 0,\n      \"alertsSent\": 0,\n      \"lastResetAt\": \"2026-03-29T00:00:00.000Z\"\n    },\n    \"adminAuth\": {\n      \"enabled\": false,\n      \"provider\": null,\n      \"signIn\": null,\n      \"browserConfigConfigured\": false,\n      \"verifierConfigured\": false,\n      \"apiKeyFallbackConfigured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"verificationSuccessCount\": 0,\n      \"verifierUnavailableCount\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastUnavailableAt\": null\n    }\n  }\n}"
         },
         {
           "name": "200 degraded provider unavailable telemetry",
@@ -1184,7 +1184,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true,\"notificationRedrive\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true,\"newsMonitorClassifier\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000},\"toolMetrics\":{}},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"signalOutcomeWorker\":{\"entryPriceSources\":{\"configured\":true,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"mcp\",\"binance\",\"gemini\"]}},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"},\"jobExecutionQueue\":{\"mode\":\"local\",\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"queueName\":\"tradingview-jobs\",\"enqueued\":0,\"claimed\":0,\"completed\":0,\"failed\":0,\"lastErrorCode\":null,\"lastEnqueuedAt\":null,\"waitingCount\":0,\"delayedCount\":0,\"failedCount\":0,\"activeCount\":0,\"durableQueuedCount\":0,\"durableQueuedTruncated\":false,\"durableScanRotated\":false,\"durableProbeSucceeded\":null,\"durableCycleComplete\":false,\"oldestQueuedAgeMs\":null,\"backlogAlert\":{\"active\":false,\"thresholdMs\":900000,\"pagedAt\":null,\"lastRecoveryAt\":null},\"backlogMonitorEnabled\":true,\"backlogMonitorRunning\":false}}}"
+          "body": "{\n  \"featureFlags\": {\n    \"tradingViewVolumeConfirmation\": true,\n    \"firestoreJobStorage\": true,\n    \"newsMonitorTestMode\": false,\n    \"messageFooterMetadata\": true,\n    \"cloudflareAig\": false,\n    \"equityMarketData\": false,\n    \"firebaseRemoteConfig\": true,\n    \"notificationRedrive\": false,\n    \"tokenCostBudget\": false,\n    \"signalClassMarker\": true,\n    \"newsMonitorClassifier\": false,\n    \"firebaseAdminAuth\": false\n  },\n  \"dependencies\": {\n    \"geminiQuota\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"cooldownActive\": false,\n      \"remainingCooldownMs\": 0,\n      \"lastTriggeredAt\": null,\n      \"triggersTotal\": 0,\n      \"braveFallbacksDuringCooldown\": 0,\n      \"lastBraveFallbackAt\": null,\n      \"metrics\": {\n        \"totalRequests\": 0,\n        \"successRequests\": 0,\n        \"failureRequests\": 0,\n        \"timeoutRequests\": 0\n      }\n    },\n    \"tradingViewMcp\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"unknown\",\n      \"lastCheckedAt\": null,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorCategory\": null,\n      \"successCount\": 0,\n      \"failureCount\": 0,\n      \"circuitBreaker\": {\n        \"state\": \"closed\",\n        \"consecutiveFailures\": 0,\n        \"openedAt\": null,\n        \"lastStateChangeAt\": null,\n        \"failureThreshold\": 5,\n        \"cooldownMs\": 600000\n      },\n      \"toolMetrics\": {}\n    },\n    \"tradingViewVolumeConfirmation\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"circuitBreaker\": {\n        \"state\": \"closed\",\n        \"consecutiveFailures\": 0,\n        \"openedAt\": null,\n        \"lastStateChangeAt\": null,\n        \"failureThreshold\": 5,\n        \"cooldownMs\": 600000\n      }\n    },\n    \"firestoreJobStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\"\n    },\n    \"cloudflareAig\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\"\n    },\n    \"equityMarketData\": {\n      \"provider\": null,\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"supportedExchanges\": [\n        \"BATS\",\n        \"NASDAQ\",\n        \"NYSE\",\n        \"AMEX\",\n        \"NYSE ARCA\",\n        \"FX_IDC\",\n        \"SPCFD\"\n      ],\n      \"timeoutMs\": 5000\n    },\n    \"firebaseRemoteConfig\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"source\": \"remote\",\n      \"templateVersion\": \"7\",\n      \"lastSuccessfulLoad\": \"2026-08-02T08:30:00.000Z\",\n      \"lastErrorCategory\": null,\n      \"consecutiveFailures\": 0,\n      \"refreshIntervalMs\": 900000,\n      \"maxAgeMs\": 3600000\n    },\n    \"signalOutcomeWorker\": {\n      \"entryPriceSources\": {\n        \"configured\": true,\n        \"crypto\": [\n          \"mcp\",\n          \"binance\",\n          \"gemini\"\n        ],\n        \"equity\": [\n          \"mcp\",\n          \"binance\",\n          \"gemini\"\n        ]\n      }\n    },\n    \"notificationRedrive\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"role\": \"web\",\n      \"workerRole\": \"web\",\n      \"running\": false,\n      \"intervalMs\": 60000,\n      \"batchLimit\": 50,\n      \"maxAttempts\": 5,\n      \"maxAgeMs\": 3600000,\n      \"pendingCount\": 0,\n      \"deliveredCount\": 0,\n      \"exhaustedCount\": 0,\n      \"zeroChannelBroadcasts\": 0,\n      \"lastRunAt\": null,\n      \"lastSweepAt\": null,\n      \"lastRunDurationMs\": null,\n      \"lastRunScannedCount\": 0,\n      \"lastRunRedrivenCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"lastRunExhaustedCount\": 0,\n      \"lastSweepResult\": null\n    },\n    \"tokenCostBudget\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"dailySpendUsd\": 0,\n      \"budgetUsd\": 5,\n      \"utilizationPct\": 0,\n      \"alertsSent\": 0,\n      \"lastResetAt\": \"2026-03-29T00:00:00.000Z\"\n    },\n    \"jobExecutionQueue\": {\n      \"mode\": \"local\",\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"queueName\": \"tradingview-jobs\",\n      \"enqueued\": 0,\n      \"claimed\": 0,\n      \"completed\": 0,\n      \"failed\": 0,\n      \"lastErrorCode\": null,\n      \"lastEnqueuedAt\": null,\n      \"waitingCount\": 0,\n      \"delayedCount\": 0,\n      \"failedCount\": 0,\n      \"activeCount\": 0,\n      \"durableQueuedCount\": 0,\n      \"durableQueuedTruncated\": false,\n      \"durableScanRotated\": false,\n      \"durableProbeSucceeded\": null,\n      \"durableCycleComplete\": false,\n      \"oldestQueuedAgeMs\": null,\n      \"backlogAlert\": {\n        \"active\": false,\n        \"thresholdMs\": 900000,\n        \"pagedAt\": null,\n        \"lastRecoveryAt\": null\n      },\n      \"backlogMonitorEnabled\": true,\n      \"backlogMonitorRunning\": false\n    },\n    \"adminAuth\": {\n      \"enabled\": false,\n      \"provider\": null,\n      \"signIn\": null,\n      \"browserConfigConfigured\": false,\n      \"verifierConfigured\": false,\n      \"apiKeyFallbackConfigured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"verificationSuccessCount\": 0,\n      \"verifierUnavailableCount\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastUnavailableAt\": null\n    }\n  }\n}"
         }
       ]
     },
@@ -11922,6 +11922,292 @@
             }
           ],
           "body": "{\n  \"dependencies\": {\n    \"equityMarketData\": {\n      \"provider\": \"twelve-data\",\n      \"enabled\": true,\n      \"configured\": true,\n      \"timeoutMs\": 5000,\n      \"rpm\": 8,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"readiness\": \"verified\",\n      \"requestsAttempted\": 14,\n      \"requestsSucceeded\": 14,\n      \"requestsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": \"2026-10-04T14:11:03.117Z\",\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
+      "name": "Get Status - Firebase admin auth readiness (issue #1134)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Issue #1134: `ENABLE_FIREBASE_ADMIN_AUTH` gates opt-in Firebase ID-token authentication for the browser admin console and had no runtime visibility in `/api/status` or `/api/capabilities`. It is now reported as `featureFlags.firebaseAdminAuth` plus a non-sensitive `dependencies.adminAuth` block. Shape is not readiness, the same rule this repository already applies to `firebaseRemoteConfig.ready` (#598), `equityMarketData.ready` (#1116) and Firestore `readHealth` (#1285): `verifierConfigured` is credential shape only, so `ready` is true only after a `verifyIdToken()` call has actually succeeded in this process and `status` is `unverified` until one is observed. A REJECTED bearer token is deliberately never recorded, because `verifyIdToken()` rejects an expired, revoked, wrong-project and random-garbage token indistinguishably — recording it would let any unauthenticated caller force a false `degraded` verdict with one request. Gate state and knowably-absent credentials take precedence over observed health, and counters are process-local, so `unverified` is the normal state right after a deploy. The Firebase Web configuration is served by `/admin/auth-config` and is never echoed here."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('admin auth readiness is exposed on both the gate and the dependency', function () {",
+              "  const body = pm.response.json();",
+              "  pm.expect(pm.response.code).to.eql(200);",
+              "  pm.expect(body.featureFlags).to.have.property('firebaseAdminAuth');",
+              "  pm.expect(body.dependencies.adminAuth).to.be.an('object');",
+              "  pm.expect(body.dependencies.adminAuth.enabled).to.eql(body.featureFlags.firebaseAdminAuth);",
+              "  pm.expect(['disabled', 'misconfigured', 'unverified', 'ready', 'degraded'])",
+              "    .to.include(body.dependencies.adminAuth.status);",
+              "});",
+              "pm.test('a present credential alone never yields ready', function () {",
+              "  const adminAuth = pm.response.json().dependencies.adminAuth;",
+              "  if (adminAuth.verifierConfigured && adminAuth.verificationSuccessCount === 0) {",
+              "    pm.expect(adminAuth.ready).to.eql(false);",
+              "    pm.expect(adminAuth.status).to.eql('unverified');",
+              "  }",
+              "});",
+              "pm.test('ready requires an observed successful verification', function () {",
+              "  const adminAuth = pm.response.json().dependencies.adminAuth;",
+              "  if (adminAuth.ready) {",
+              "    pm.expect(adminAuth.status).to.eql('ready');",
+              "    pm.expect(adminAuth.verificationSuccessCount).to.be.above(0);",
+              "    pm.expect(adminAuth.verifierConfigured).to.eql(true);",
+              "  }",
+              "  if (adminAuth.status === 'ready' || adminAuth.status === 'degraded') {",
+              "    pm.expect(adminAuth.ready).to.eql(adminAuth.status === 'ready');",
+              "  }",
+              "  if (adminAuth.status === 'degraded') {",
+              "    pm.expect(adminAuth.verifierUnavailableCount).to.be.above(0);",
+              "    pm.expect(adminAuth.consecutiveFailures).to.be.above(0);",
+              "  }",
+              "});",
+              "pm.test('the disabled gate hides every downstream verdict', function () {",
+              "  const adminAuth = pm.response.json().dependencies.adminAuth;",
+              "  if (adminAuth.enabled === false) {",
+              "    pm.expect(adminAuth.status).to.eql('disabled');",
+              "    pm.expect(adminAuth.ready).to.eql(false);",
+              "    pm.expect(adminAuth.verifierConfigured).to.eql(false);",
+              "    pm.expect(adminAuth.provider).to.eql(null);",
+              "  }",
+              "});",
+              "pm.test('the status payload never echoes the Firebase Web configuration', function () {",
+              "  const raw = pm.response.text();",
+              "  ['FIREBASE_WEB_API_KEY','authDomain','apiKey','service_account','private_key'].forEach(function (field) {",
+              "    pm.expect(raw).to.not.include(field);",
+              "  });",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 disabled - ENABLE_FIREBASE_ADMIN_AUTH is off",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firebaseAdminAuth\": false\n  },\n  \"dependencies\": {\n    \"adminAuth\": {\n      \"enabled\": false,\n      \"provider\": null,\n      \"signIn\": null,\n      \"browserConfigConfigured\": false,\n      \"verifierConfigured\": false,\n      \"apiKeyFallbackConfigured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"verificationSuccessCount\": 0,\n      \"verifierUnavailableCount\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastUnavailableAt\": null\n    }\n  }\n}"
+        },
+        {
+          "name": "200 unverified - gate on, credential shape present, no sign-in observed yet",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firebaseAdminAuth\": true\n  },\n  \"dependencies\": {\n    \"adminAuth\": {\n      \"enabled\": true,\n      \"provider\": \"firebase\",\n      \"signIn\": \"email-password\",\n      \"browserConfigConfigured\": true,\n      \"verifierConfigured\": true,\n      \"apiKeyFallbackConfigured\": true,\n      \"ready\": false,\n      \"status\": \"unverified\",\n      \"verificationSuccessCount\": 0,\n      \"verifierUnavailableCount\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastUnavailableAt\": null\n    }\n  }\n}"
+        },
+        {
+          "name": "200 ready - a Firebase ID token actually verified",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firebaseAdminAuth\": true\n  },\n  \"dependencies\": {\n    \"adminAuth\": {\n      \"enabled\": true,\n      \"provider\": \"firebase\",\n      \"signIn\": \"email-password\",\n      \"browserConfigConfigured\": true,\n      \"verifierConfigured\": true,\n      \"apiKeyFallbackConfigured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"verificationSuccessCount\": 12,\n      \"verifierUnavailableCount\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": \"2026-10-04T09:00:00.000Z\",\n      \"lastUnavailableAt\": null\n    }\n  }\n}"
+        },
+        {
+          "name": "200 degraded - the Firebase Admin SDK could not initialize",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firebaseAdminAuth\": true\n  },\n  \"dependencies\": {\n    \"adminAuth\": {\n      \"enabled\": true,\n      \"provider\": \"firebase\",\n      \"signIn\": \"email-password\",\n      \"browserConfigConfigured\": false,\n      \"verifierConfigured\": true,\n      \"apiKeyFallbackConfigured\": true,\n      \"ready\": false,\n      \"status\": \"degraded\",\n      \"verificationSuccessCount\": 0,\n      \"verifierUnavailableCount\": 3,\n      \"consecutiveFailures\": 3,\n      \"lastSuccessAt\": null,\n      \"lastUnavailableAt\": \"2026-10-04T09:05:00.000Z\"\n    }\n  }\n}"
+        },
+        {
+          "name": "200 misconfigured - gate on without server-side verifier credentials",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firebaseAdminAuth\": true\n  },\n  \"dependencies\": {\n    \"adminAuth\": {\n      \"enabled\": true,\n      \"provider\": \"firebase\",\n      \"signIn\": \"email-password\",\n      \"browserConfigConfigured\": false,\n      \"verifierConfigured\": false,\n      \"apiKeyFallbackConfigured\": true,\n      \"ready\": false,\n      \"status\": \"misconfigured\",\n      \"verificationSuccessCount\": 0,\n      \"verifierUnavailableCount\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastUnavailableAt\": null\n    }\n  }\n}"
+        },
+        {
+          "name": "401 Unauthorized - missing or invalid API key",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 401,
+            "description": ""
+          },
+          "code": 401,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"success\": false,\n  \"error\": \"Unauthorized\",\n  \"code\": \"ADMIN_AUTH_REQUIRED\",\n  \"requestId\": \"0f1c9f2e-6a4d-4f0b-9a1e-2c5d7e8f9a01\",\n  \"retryable\": false\n}"
         }
       ]
     }
