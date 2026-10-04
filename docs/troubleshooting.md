@@ -119,16 +119,19 @@ Symptom: `GET /api/alerts`, `/api/alerts/summary`, `/api/alerts/export`, and rep
 
 2. **Check `dependencies.firestore.readHealth` on `/api/status`.** `degraded` forces `ready: false` and `status: "degraded"`, which is the authoritative signal that the read path — not the credentials — is broken. `unknown` means no read has been attempted yet, which is *not* evidence of health.
 
-3. **Missing composite index (the usual cause).** Stored-alert reads order by `receivedAt` **and** `FieldPath.documentId()` so pagination has a deterministic tie-breaker. Firestore applies a free final `__name__` **ascending** sort, so ordering `__name__` **descending** requires the composite index `alerts { receivedAt DESC, __name__ DESC }` declared in `firestore.indexes.json`. Adding the declaration to the file does **not** create it in the live project:
+3. **Missing composite index (the usual cause).** Stored-alert reads order by `receivedAt` **and** `FieldPath.documentId()` so pagination has a deterministic tie-breaker. Firestore applies a free final `__name__` **ascending** sort, so ordering `__name__` **descending** requires the composite index `alerts { receivedAt DESC, __name__ DESC }` declared in `firestore.indexes.json`. Adding the declaration to the file does **not** create it in the live project — audit and deploy it with the repo helper, which is dry-run by default:
 
    ```bash
-   firebase deploy --only firestore:indexes --project <project-id>
+   pnpm run deploy:firestore:indexes                 # audit only, exits 1 if not ready
+   pnpm run deploy:firestore:indexes -- --apply      # deploy, then wait for READY
    ```
 
-   Composite indexes build asynchronously and a query is rejected until the build reaches `READY`. Confirm with `firebase firestore:indexes` or the Firebase console. Only `receivedAt`-ordered `alerts` queries need it; `GET /api/alerts/:alertId` reads a document by id and is unaffected.
+   Composite indexes build asynchronously and a query is rejected until the build reaches `READY`, so the helper polls the Firestore REST API for each index's build state and exits non-zero until every declared index is `READY`. Do **not** confirm with `firebase firestore:indexes`: that command routes its output through `makeIndexSpec()`, which projects each index down to its field list and **drops `state`**, so it cannot distinguish `READY` from `BUILDING` — which is precisely how a completed deploy leaves every read returning `503`.
 
-4. **Confirm the read path with `/ready`.** `GET /ready?depth=dependencies` executes the same indexed read (bounded to one document) and fails closed with `503` while it is broken, so it can be used as an external alert signal. `GET /api/alerts/summary` and `GET /api/alerts` reproduce the fault directly.
+4. **`GET /api/alerts/:alertId` does not need an index — so a `503` there is a different fault.** A detail read is a document get by id, which requires no composite index. If it answers `503`, the cause is **not** the missing-index fault above: read the `category` on the body and act on it (`uninitialized` / `unauthenticated` / `permission_denied` mean the client or its credentials are the problem; `unavailable` / `deadline_exceeded` is usually transient). Note that `GET /api/alerts/zzz-not-real` must answer `404`, never `503` — if it answers `503` the failure happens before any document lookup, so the client itself is unusable. Deploying indexes will not fix that case.
 
-5. **Do not chase credentials for a `failed_precondition`.** If `firestoreWriteMetrics` shows writes succeeding, the credential is demonstrably valid; the rejection is per-query.
+5. **Confirm the read path with `/ready`.** `GET /ready?depth=dependencies` executes the same indexed read (bounded to one document) and fails closed with `503` while it is broken, so it can be used as an external alert signal. `GET /api/alerts/summary` and `GET /api/alerts` reproduce the fault directly.
+
+6. **Do not chase credentials for a `failed_precondition`.** If `firestoreWriteMetrics` shows writes succeeding, the credential is demonstrably valid; the rejection is per-query.
 
 > The provider's own message (which contains the project/database path and the index definition) is written to the log only and is never returned in a response body or a status payload. Grep the logs for `[AlertStorageService]` with the `category` to find the exact provider detail.
