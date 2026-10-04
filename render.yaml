@@ -192,8 +192,15 @@ services:
       name: cabros-crypto-bot-telegram-iac
       type: web
       envVarKey: ENABLE_NEWS_MONITOR_SCHEDULER
+  # Inherited, not hardcoded: the web service owns the sweep role. Hardcoding
+  # `worker` here made `web`/`disabled` on the web service a no-op for this
+  # worker, because startWorker({source:'worker'}) matched the local value
+  # against its own source instead of the configured role. See issue #1136.
   - key: NEWS_MONITOR_SCHEDULER_WORKER_ROLE
-    value: worker
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: NEWS_MONITOR_SCHEDULER_WORKER_ROLE
   - key: NEWS_MONITOR_SCHEDULER_INTERVAL_MS
     fromService:
       name: cabros-crypto-bot-telegram-iac
@@ -251,6 +258,85 @@ services:
       name: cabros-crypto-bot-telegram-iac
       type: web
       envVarKey: NEWS_MONITOR_SCHEDULER_TIMEOUT_MS
+  # LLM provider contract for the sweeps above. analyzeNewsForSymbol() calls
+  # genaiClient.search() and then llmCallv2(); with none of these set the worker
+  # throws "All LLM providers failed. Last error: No providers configured" for
+  # every symbol. GEMINI_MODEL_NAME is load-bearing even though it looks
+  # redundant: llmCallv2() gates the Gemini branch on
+  # MODEL_PROVIDER === 'gemini' && GEMINI_MODEL_NAME, so inheriting only
+  # GEMINI_API_KEY still leaves no configured provider. The alternative-provider
+  # keys are inherited too, so switching MODEL_PROVIDER on the web service does
+  # not produce a worker with no credentials. See issue #1136.
+  - key: MODEL_PROVIDER
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: MODEL_PROVIDER
+  - key: GEMINI_API_KEY
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: GEMINI_API_KEY
+  - key: GEMINI_MODEL_NAME
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: GEMINI_MODEL_NAME
+  - key: GEMINI_MODEL_NAME_FALLBACK
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: GEMINI_MODEL_NAME_FALLBACK
+  - key: GROUNDING_MODEL_NAME
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: GROUNDING_MODEL_NAME
+  - key: BRAVE_SEARCH_API_KEY
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: BRAVE_SEARCH_API_KEY
+  - key: OPENROUTER_API_KEY
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: OPENROUTER_API_KEY
+  - key: OPENROUTER_MODEL
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: OPENROUTER_MODEL
+  - key: AZURE_LLM_KEY
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: AZURE_LLM_KEY
+  - key: AZURE_LLM_ENDPOINT
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: AZURE_LLM_ENDPOINT
+  - key: AZURE_LLM_MODEL
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: AZURE_LLM_MODEL
+  - key: CF_AIG_TOKEN
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: CF_AIG_TOKEN
+  - key: CF_AIG_BASE_URL
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: CF_AIG_BASE_URL
+  - key: CF_AIG_MODEL
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: CF_AIG_MODEL
   - key: NEWS_SYMBOLS_CRYPTO
     fromService:
       name: cabros-crypto-bot-telegram-iac

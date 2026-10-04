@@ -444,7 +444,7 @@ The response and audit logs include only sanitized order metadata. API credentia
 #### News Monitor Scheduler
 
 - `ENABLE_NEWS_MONITOR_SCHEDULER` - Enable built-in recurring execution of news-monitor sweeps (default: `false`)
-- `NEWS_MONITOR_SCHEDULER_WORKER_ROLE` - Scheduler worker role: `web` (default), `worker`, or `disabled`.
+- `NEWS_MONITOR_SCHEDULER_WORKER_ROLE` - Scheduler worker role: `web` (default), `worker`, or `disabled`. **On Render this is configured once on the web service (`cabros-crypto-bot-telegram-iac`) and the jobs worker inherits it**, because the worker runs the sweeps and a role set on the web service would otherwise not reach it.
 - `NEWS_MONITOR_SCHEDULER_INTERVAL_MS` - Background sweep interval in milliseconds (default: `300000`, bounds `10000`-`3600000`).
 - `NEWS_MONITOR_SCHEDULER_BATCH_LIMIT` - Maximum default news-monitor symbols processed per sweep (default: `50`, bounds `1`-`500`).
 - `NEWS_MONITOR_SCHEDULER_LEASE_MS` - Distributed concurrency lock lease duration in milliseconds (default: `120000`, bounds `10000`-`600000`).
