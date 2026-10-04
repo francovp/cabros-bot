@@ -1335,6 +1335,116 @@ describe('AlertStorageService', () => {
 				code: 'STORAGE_UNAVAILABLE',
 			});
 		});
+
+		// ── Issue #1285 ──────────────────────────────────────────────────────
+		// Production returned 503 on every read endpoint while writes succeeded
+		// 29/29. `listCollections()` and write/init success both reported the
+		// dependency healthy, and the response message blamed credentials that
+		// were demonstrably working. The suite below pins the four fixes.
+
+		it('declares the composite Firestore index required by the ordered alerts read', () => {
+			const fs = require('fs');
+			const path = require('path');
+			const indexes = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../firestore.indexes.json'), 'utf8'));
+			// Firestore applies a *free* final `__name__` ASC sort, so ordering by
+			// `__name__` DESC on top of `receivedAt` DESC needs this composite. The
+			// mock makes `orderBy` a no-op, so only this declaration can catch a
+			// missing index.
+			const alertIndex = indexes.indexes.find(index => index.collectionGroup === 'alerts'
+				&& index.fields.some(field => field.fieldPath === 'receivedAt' && field.order === 'DESCENDING')
+				&& index.fields.some(field => field.fieldPath === '__name__' && field.order === 'DESCENDING'));
+
+			expect(alertIndex).toBeDefined();
+		});
+
+		it('classifies a rejected query as failed_precondition and flags the missing index', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const missingIndexError = new Error(
+				'9 FAILED_PRECONDITION: The query requires an index. You can create an index here: '
+				+ 'https://console.firebase.google.com/project/cabros-bot/databases/(default)/indexes',
+			);
+			missingIndexError.code = 9;
+			mockGet.mockRejectedValueOnce(missingIndexError);
+
+			const error = await AlertStorageService.listAlerts({ limit: 10 }).catch(err => err);
+
+			expect(error).toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+				category: 'failed_precondition',
+				missingIndex: true,
+			});
+		});
+
+		it('no longer blames credentials when the client initialized but the query was rejected', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const denied = new Error('7 PERMISSION_DENIED: Missing or insufficient permissions.');
+			denied.code = 7;
+			mockGet.mockRejectedValueOnce(denied);
+
+			const error = await AlertStorageService.listAlerts({ limit: 10 }).catch(err => err);
+
+			expect(error.message).not.toMatch(/Check Firestore credentials and project configuration/);
+			expect(error.message).toContain('permission denied');
+		});
+
+		it('still blames credentials when the client itself failed to initialize', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockInitializeApp.mockImplementationOnce(() => {
+				throw new Error('Bad credentials');
+			});
+
+			const error = await AlertStorageService.listAlerts({ limit: 10 }).catch(err => err);
+
+			expect(error).toMatchObject({ code: 'STORAGE_UNAVAILABLE', category: 'uninitialized' });
+			expect(error.message).toContain('Check Firestore credentials and project configuration');
+		});
+
+		it('records the read failure so status can report the read path as degraded', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const denied = new Error('7 PERMISSION_DENIED');
+			denied.code = 7;
+			mockGet.mockRejectedValueOnce(denied);
+
+			await expect(AlertStorageService.listAlerts({ limit: 10 })).rejects.toThrow();
+
+			const snapshot = firestoreWriteMetricsService.getReadSnapshot();
+			expect(snapshot).toMatchObject({
+				readsAttempted: 1,
+				readsFailed: 1,
+				readHealth: 'degraded',
+				lastErrorCategory: 'permission_denied',
+			});
+		});
+	});
+
+	describe('probeOrderedAlertRead()', () => {
+		it('returns null without querying when alert storage is disabled', async () => {
+			await expect(AlertStorageService.probeOrderedAlertRead()).resolves.toBeNull();
+			expect(mockGet).not.toHaveBeenCalled();
+		});
+
+		it('runs the same ordered shape listAlerts uses so a missing index surfaces', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({ empty: true, docs: [] });
+
+			await expect(AlertStorageService.probeOrderedAlertRead()).resolves.toBe(true);
+
+			expect(mockOrderBy).toHaveBeenCalledWith('receivedAt', 'desc');
+			expect(mockOrderBy).toHaveBeenCalledWith(mockDocumentId(), 'desc');
+			expect(mockLimit).toHaveBeenCalledWith(1);
+		});
+
+		it('surfaces the storage error when the indexed read is rejected', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const missingIndexError = new Error('9 FAILED_PRECONDITION: The query requires an index.');
+			missingIndexError.code = 9;
+			mockGet.mockRejectedValueOnce(missingIndexError);
+
+			await expect(AlertStorageService.probeOrderedAlertRead()).rejects.toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+				missingIndex: true,
+			});
+		});
 	});
 
 	describe('getAlertById()', () => {

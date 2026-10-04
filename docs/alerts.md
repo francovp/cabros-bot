@@ -9,7 +9,9 @@ When `ENABLE_FIRESTORE_ALERT_STORAGE=true`, successful `POST /api/webhook/alert`
 Stored `alerts` and `alertReplays` records default to 90 days of retention. The service filters expired records before list, detail, export, and summary responses while Firestore's native TTL deletion is eventual. New records carry an `expiresAt` timestamp; `bash ops/configure-firestore-alert-retention.sh` backfills legacy records from `receivedAt`/`replayedAt` before enabling both TTL policies, shortens existing expiries when the configured deadline is earlier, removes legacy raw replay idempotency keys after hashing them, reports scanned/updated/skipped counts, and fails if a record has no usable timestamp. Replay audit documents retain only a SHA-256 `idempotencyKeyHash`, never the raw key. Inspect the TTL policies with `gcloud firestore fields ttls list`.
 
 All endpoints below require the same `x-api-key` header used by the webhook routes.
-If alert storage is enabled but Firestore credentials/project access are unavailable, they return `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
+If alert storage is enabled but Firestore cannot serve the request, they return `503 STORAGE_UNAVAILABLE` instead of a generic `500`. The body carries a sanitized `category` (and `missingIndex: true` for a missing composite index) so a rejected query is distinguishable from a credential/init failure — see the [runbook](troubleshooting.md#stored-alerts-return-503-storage_unavailable). Both fields are optional.
+
+List, summary, and export order by `receivedAt` **and** `FieldPath.documentId()` for deterministic pagination. Firestore sorts `__name__` ascending for free but requires a composite index for the descending direction, so `alerts { receivedAt DESC, __name__ DESC }` must be declared in `firestore.indexes.json` **and** deployed (`firebase deploy --only firestore:indexes`) or those three endpoints answer `503`. Detail reads (`GET /api/alerts/:alertId`) use a document get and need no index.
 
 #### GET /api/alerts
 
