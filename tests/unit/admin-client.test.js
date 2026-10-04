@@ -976,6 +976,41 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('Alert path failure rate (%)40');
 	});
 
+	it('renders the signal outcome sweep lease counters in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				signalOutcomeWorker: {
+					status: 'ready',
+					role: 'web',
+					leaseMs: 120000,
+					lastRunLeaseHeld: true,
+					leaseHeldSkipCount: 138,
+					lastRunEvaluatedCount: 0,
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		// Without these the operator cannot tell which replica is evaluating, which
+		// is the whole reason the counters exist.
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Lease (ms)120000');
+		expect(view.textContent).toContain('Last run lease heldtrue');
+		expect(view.textContent).toContain('Lease-held skips138');
+	});
+
 	it('waits for an API key before loading protected overview status', async () => {
 		const requests = [];
 		const browser = createBrowser({
