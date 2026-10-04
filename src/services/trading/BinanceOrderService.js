@@ -568,7 +568,7 @@ function sellableQuantity(symbolOrParams, requestedQtyArg, optionsArg = {}) {
 			minNotional,
 			effectivePrice: price ? String(price).trim() : null,
 			estimatedNotional: '0',
-			adjusted: requestedStr !== null ? '0' !== requestedStr : false,
+			adjusted: requestedStr !== null ? requestedStr !== '0' : false,
 			clampedToBalance,
 			belowMinQty: false,
 			belowMinNotional: false,
