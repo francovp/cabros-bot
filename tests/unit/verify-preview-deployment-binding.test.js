@@ -20,7 +20,9 @@
  *  - Backward compatibility: default `get-pr-deployment-url.sh` output is still
  *    the bare URL.
  *  - Secret hygiene: `WEBHOOK_API_KEY` never reaches a URL, log line, or the
- *    curl invocation log.
+ *    curl invocation log — and never reaches a host that is not an allowlisted
+ *    HTTPS deployment target, because that key is ADMIN_OPERATOR-grade and
+ *    `environment_url` is attacker-influenceable input.
  *
  * Everything is driven by fake `gh`/`curl` binaries on PATH, so the suite never
  * touches the network or the real gh auth state.
@@ -44,6 +46,10 @@ const VERIFY_SCRIPT = join(SCRIPTS_DIR, 'verify-preview.sh');
 
 const HEAD_SHA = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
 const STALE_SHA = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+
+// Mirrors DEFAULT_ALLOWED_HOSTS in verify-preview.sh: the platforms this repo
+// deploys to. Used to prove the operator override appends rather than replaces.
+const DEFAULT_ALLOWED_HOSTS = 'openclaw.tail5e4271.ts.net,*.onrender.com,*.up.railway.app';
 
 // --- Fake gh -------------------------------------------------------------
 // The stub branches on the caller's `--jq` projection so both the current and
@@ -409,5 +415,118 @@ describe('verify-preview.sh deployment/SHA binding', () => {
 		expect(result.stdout).toContain('Verifying deployment for production');
 		expect(result.stdout).toContain('Success: Deployment production is live and healthy');
 		expect(result.invocationLog).not.toContain('/api/status');
+	});
+});
+
+// The deployment status is an untrusted input: `environment_url` is whatever the
+// deployment integration published, so a compromised or misconfigured
+// integration can name any host. `WEBHOOK_API_KEY` is ADMIN_OPERATOR-grade
+// (src/lib/adminAuth.js) — it authorizes POST/DELETE /trading/binance/orders and
+// alert replay — so it must only ever be sent to an HTTPS URL on a host this
+// repository actually deploys to. Sending it anywhere else is a trading-capable
+// credential leaving the trust boundary.
+describe('verify-preview.sh refuses to leak WEBHOOK_API_KEY to an untrusted host', () => {
+	const CANARY_KEY = 'CANARY-ADMIN-OPERATOR-KEY-abc123';
+
+	function runAgainstUrl(url, env) {
+		return runScript(VERIFY_SCRIPT, ['1129', '', HEAD_SHA], {
+			deploymentRows: `2\t${HEAD_SHA}`,
+			statuses: { 2: JSON.stringify({ state: 'success', url }) },
+			// A matching commit, so a leak stays silent unless the assertions
+			// inspect the curl invocation log.
+			servedStatusBody: JSON.stringify({ service: { commit: HEAD_SHA } }),
+			env: { WEBHOOK_API_KEY: CANARY_KEY, ...env },
+		});
+	}
+
+	function expectNoCredentialEgress(result) {
+		expect(result.invocationLog).not.toContain('x-api-key');
+		expect(result.invocationLog).not.toContain(CANARY_KEY);
+		expect(`${result.stdout}${result.stderr}`).not.toContain(CANARY_KEY);
+	}
+
+	it('skips the served-commit check for a plain-HTTP environment_url', () => {
+		const result = runAgainstUrl('http://127.0.0.1:53341');
+
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain('served-commit check skipped');
+		expect(result.stderr).toContain('http://');
+		expect(result.invocationLog).not.toContain('/api/status');
+		expectNoCredentialEgress(result);
+	});
+
+	it('skips the served-commit check for a non-allowlisted HTTPS host', () => {
+		const result = runAgainstUrl('https://deployments.example.com/cabros-bot-pr-1129');
+
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain('served-commit check skipped');
+		expect(result.stderr).toContain('deployments.example.com');
+		expect(result.invocationLog).not.toContain('/api/status');
+		expectNoCredentialEgress(result);
+	});
+
+	it('does not treat an allowlisted suffix as a host prefix', () => {
+		// `https://evil-up.railway.app` ends with the allowed `up.railway.app`
+		// suffix but is a different registrable host, and
+		// `https://up.railway.app.attacker.test` merely starts with one.
+		const prefix = runAgainstUrl('https://evil-up.railway.app');
+		expect(prefix.status).toBe(0);
+		expect(prefix.stderr).toContain('served-commit check skipped');
+		expectNoCredentialEgress(prefix);
+
+		const suffix = runAgainstUrl('https://up.railway.app.attacker.test');
+		expect(suffix.status).toBe(0);
+		expect(suffix.stderr).toContain('served-commit check skipped');
+		expectNoCredentialEgress(suffix);
+	});
+
+	it('refuses a URL that smuggles an allowlisted host into the userinfo', () => {
+		// curl connects to `attacker.test`; the allowlisted host is only in the
+		// userinfo portion a naive substring check would have matched.
+		const result = runAgainstUrl('https://cabros-bot-production.up.railway.app@attacker.test');
+
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain('served-commit check skipped');
+		expect(result.invocationLog).not.toContain('/api/status');
+		expectNoCredentialEgress(result);
+	});
+
+	it('refuses a URL carrying curl glob metacharacters that would fan out', () => {
+		// curl URL globbing expands {a,b} into two requests — both with the
+		// header — unless the URL is rejected (and `-g` is passed).
+		const result = runAgainstUrl('https://cabros-bot-production.up.railway.app/{a,b}');
+
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain('served-commit check skipped');
+		expect(result.invocationLog).not.toContain('/api/status');
+		expectNoCredentialEgress(result);
+	});
+
+	it('honours VERIFY_PREVIEW_ALLOWED_HOSTS for an operator-added preview host', () => {
+		const url = 'https://cabros-bot-pr-1129.internal.tailnet.test';
+		const blocked = runAgainstUrl(url);
+		expect(blocked.status).toBe(0);
+		expect(blocked.stderr).toContain('served-commit check skipped');
+		expectNoCredentialEgress(blocked);
+
+		const allowed = runAgainstUrl(url, {
+			VERIFY_PREVIEW_ALLOWED_HOSTS: `${DEFAULT_ALLOWED_HOSTS},*.internal.tailnet.test`,
+		});
+		expect(allowed.status).toBe(0);
+		expect(allowed.stdout).toContain('Served-build match');
+		expect(allowed.invocationLog).toContain('-H x-api-key: ' + CANARY_KEY);
+	});
+
+	it('still sends the key to the allowlisted hosts this repo deploys to', () => {
+		for (const url of [
+			'https://openclaw.tail5e4271.ts.net/cabros-bot-pr-1129',
+			'https://cabros-crypto-bot-telegram.onrender.com',
+			'https://cabros-bot-production.up.railway.app',
+		]) {
+			const result = runAgainstUrl(url);
+			expect(result.status).toBe(0);
+			expect(result.stdout).toContain('Served-build match');
+			expect(result.invocationLog).toContain('-H x-api-key: ' + CANARY_KEY);
+		}
 	});
 });

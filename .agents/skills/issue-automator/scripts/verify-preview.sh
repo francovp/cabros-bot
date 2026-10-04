@@ -39,6 +39,12 @@
 #   VERIFY_PREVIEW_MAX_ATTEMPTS            — endpoint attempts (default: 3)
 #   VERIFY_PREVIEW_RETRY_DELAY_SECONDS     — pause between attempts (default: 5)
 #
+# Credentialed-probe host allowlist (optional):
+#   VERIFY_PREVIEW_ALLOWED_HOSTS — comma-separated hostnames that may receive
+#   WEBHOOK_API_KEY. Each entry is an exact hostname or a `*.suffix` wildcard.
+#   Defaults to DEFAULT_ALLOWED_HOSTS below; set it to extend (or replace) the
+#   list when a preview runs on another host, without editing this script.
+#
 # Railway and GitHub Deployments are the supported preview-status sources.
 
 set -euo pipefail
@@ -103,9 +109,89 @@ sha_matches() {
   [[ "$actual" == "${expected}"* ]] || [[ "$expected" == "${actual}"* ]]
 }
 
+# Hosts that may receive WEBHOOK_API_KEY: the platforms this repository deploys
+# to. A deployment's environment_url is an untrusted input — the deployment
+# integration supplies it — so an unlisted host means "no credentialed probe",
+# never "send the key anyway".
+DEFAULT_ALLOWED_HOSTS="openclaw.tail5e4271.ts.net,*.onrender.com,*.up.railway.app"
+
+# Exact hostname, or `*.suffix` matched on a label boundary so
+# `evil-up.railway.app` does not satisfy `*.up.railway.app`.
+host_is_allowed() {
+  local host="$1" entry suffix
+  local list="${VERIFY_PREVIEW_ALLOWED_HOSTS:-$DEFAULT_ALLOWED_HOSTS}"
+  local -a entries=()
+  IFS=',' read -ra entries <<< "$list"
+  for entry in "${entries[@]}"; do
+    entry="$(printf '%s' "$entry" | tr '[:upper:]' '[:lower:]' | xargs)"
+    [ -z "$entry" ] && continue
+    case "$entry" in
+      '*'*)
+        suffix="${entry#\*.}"
+        [ -z "$suffix" ] && continue
+        [ "$host" = "$suffix" ] && return 0
+        [[ "$host" == *".${suffix}" ]] && return 0
+        ;;
+      *) [ "$host" = "$entry" ] && return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# Exits 0 when $1 may receive the key; otherwise fills CREDENTIAL_TARGET_REASON
+# with the reason it may not.
+resolve_credential_target() {
+  local url="$1" rest authority host
+  CREDENTIAL_TARGET_REASON=""
+
+  case "$url" in
+    http://*)
+      CREDENTIAL_TARGET_REASON="the URL is plain http://, so the key would cross the wire in cleartext"
+      return 1
+      ;;
+  esac
+
+  # One positive character class, so userinfo (@), query/fragment (?#), curl
+  # glob metacharacters ({}[], which curl expands into extra requests carrying
+  # the header), whitespace and backslashes are all rejected rather than
+  # leniently parsed — there must be no reading of a crafted URL under which
+  # this check passes while curl still connects elsewhere.
+  if ! [[ "$url" =~ ^https://[A-Za-z0-9._~:/-]+$ ]]; then
+    CREDENTIAL_TARGET_REASON="the URL is not a plain https:// URL with an ASCII hostname"
+    return 1
+  fi
+
+  rest="${url#https://}"
+  authority="${rest%%/*}"
+  host="${authority%%:*}"
+  if [[ "$authority" == *:* ]] && ! [[ "${authority##*:}" =~ ^[0-9]+$ ]]; then
+    CREDENTIAL_TARGET_REASON="the URL port is not numeric"
+    return 1
+  fi
+
+  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+  if ! [[ "$host" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
+    CREDENTIAL_TARGET_REASON="the hostname is not a plain ASCII hostname"
+    return 1
+  fi
+
+  if ! host_is_allowed "$host"; then
+    CREDENTIAL_TARGET_REASON="host '${host}' is not in VERIFY_PREVIEW_ALLOWED_HOSTS (${VERIFY_PREVIEW_ALLOWED_HOSTS:-$DEFAULT_ALLOWED_HOSTS})"
+    return 1
+  fi
+
+  return 0
+}
+
 # Asks the deployment already serving PREVIEW_URL which commit it runs.
 # /api/status is admin-gated, so the key travels in the x-api-key header only —
 # never in the URL, the query string, or any printed line.
+#
+# The key is ADMIN_OPERATOR-grade (it authorizes order placement and alert
+# replay), and PREVIEW_URL came from a deployment status, so the credentialed
+# probe is restricted to an allowlisted HTTPS host. curl must not follow
+# redirects (-L would forward the header off-host) and must not expand URL
+# globs (-g), which would repeat the request — header attached — per expansion.
 fetch_served_commit() {
   local status_url="${PREVIEW_URL}/api/status"
   local response curl_exit_code body status_code
@@ -115,8 +201,13 @@ fetch_served_commit() {
     return 1
   fi
 
+  if ! resolve_credential_target "$PREVIEW_URL"; then
+    echo "Warning: refusing to send WEBHOOK_API_KEY to ${PREVIEW_URL}: ${CREDENTIAL_TARGET_REASON} — served-commit check skipped." >&2
+    return 1
+  fi
+
   set +e
-  response="$(curl -s --connect-timeout 10 --max-time 15 -H "x-api-key: ${WEBHOOK_API_KEY}" -w '\n%{http_code}' "$status_url")"
+  response="$(curl -s -g --connect-timeout 10 --max-time 15 -H "x-api-key: ${WEBHOOK_API_KEY}" -w '\n%{http_code}' "$status_url")"
   curl_exit_code=$?
   set -e
 
