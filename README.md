@@ -258,6 +258,37 @@ Paging is deduplicated by cooldown and only latches after confirmed delivery; a 
 | `JOB_BACKLOG_PROBE_TIMEOUT_MS` | `10000` | `1000`–`300000` | Per-dependency probe deadline. Environment-only. |
 | `ENABLE_JOB_BACKLOG_MONITOR` | `true` | — | Master monitor gate. **Environment-only** — a process-startup gate, deliberately excluded from Remote Config. |
 
+### Signal Outcome Single-Evaluator Guarantee
+
+`ENABLE_SIGNAL_OUTCOME_TRACKING=true` is enabled in production. It gates three things at once — recording signals on the alert path, the evaluation sweep, and the whole `/api/outcomes` surface — so it is pinned in `render.yaml` rather than left to the Render dashboard, where an operator reading the repo could not tell which process was actually enabled.
+
+The production topology names **two** candidate evaluators: the web service (`SIGNAL_OUTCOME_WORKER_ROLE=web`) and the paid dedicated worker `cabros-crypto-bot-signal-outcome-worker` (`SIGNAL_OUTCOME_WORKER_ROLE=worker`). `startWorker()` only compares a process's own role, so role gating alone does not stop both from sweeping. `SignalOutcomeService` therefore claims the sweep with a Firestore lease in `signalOutcomeLocks`:
+
+- **One evaluator wins.** The replica that loses the claim skips with `reason: "lease-held"` and issues **no** market-data calls, so a pending signal is never priced and written twice — which would double Binance / Gemini / Twelve Data quota spend. Ownership is re-checked while the sweep runs, and a renewal that proves the lease was taken over mid-sweep **halts** the sweep before the next document. An expired lease is taken over rather than skipped forever.
+- **The lease fails open.** If Firestore is unavailable or the lease write cannot be attempted, the sweep proceeds exactly as before. A lock-service blip must never be able to silently stop outcome evaluation. Only *proven* ownership loss stops a sweep.
+- **It is observable.** `dependencies.signalOutcomeWorker` reports `leaseMs`, `lastRunLeaseHeld` and `leaseHeldSkipCount`, so `leaseHeldSkipCount` climbing on one replica while the other reports `lastRunEvaluatedCount` growth identifies the active evaluator without guessing from the dashboard. Both counters are also rendered on the `/admin` Status explorer card.
+
+Verify the rollout on the deployed service rather than trusting the flag:
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
+  https://cabros-crypto-bot-telegram.onrender.com/api/capabilities \
+  | jq '{flag: .featureFlags.signalOutcomeTracking,
+         enabled: .dependencies.signalOutcomeWorker.enabled,
+         role: .dependencies.signalOutcomeWorker.role,
+         running: .dependencies.signalOutcomeWorker.running,
+         lastRunAt: .dependencies.signalOutcomeWorker.lastRunAt,
+         leaseHeldSkips: .dependencies.signalOutcomeWorker.leaseHeldSkipCount}'
+```
+
+`lastRunAt` advancing with a non-zero `lastRunEvaluatedCount` is the evidence that the sweep actually ran. The flag alone proves nothing: it reports what was configured, not what executed.
+
+| Variable | Default | Bounds | Purpose |
+| :--- | :--- | :--- | :--- |
+| `ENABLE_SIGNAL_OUTCOME_TRACKING` | `false` | — | Master gate for recording, sweeping and `/api/outcomes`. Environment-only. |
+| `SIGNAL_OUTCOME_WORKER_ROLE` | `web` | `web`/`worker`/`disabled` | Which entrypoint may start the sweep. Environment-only. |
+| `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` | `120000` | `10000`–`600000` | Distributed sweep lease duration. Environment-only. |
+
 ### Equity Market Data Readiness
 
 `ENABLE_EQUITY_MARKET_DATA=true` plus `EQUITY_MARKET_DATA_PROVIDER=twelve-data` and `TWELVE_DATA_API_KEY` enables equity outcome evaluation for `BATS`, `NASDAQ`, `NYSE`, `AMEX`, `NYSE ARCA`, `FX_IDC`, and `SPCFD` signals. Setting those variables is **necessary but not sufficient**, so `/api/status` will not report the feature as working on the strength of the key alone.

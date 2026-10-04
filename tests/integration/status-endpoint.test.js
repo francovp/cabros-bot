@@ -656,6 +656,47 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports the sweep lease observability on both status aliases', async () => {
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+		process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'web';
+
+		const status = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		const capabilities = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(status.status).toBe(200);
+		expect(status.body.dependencies.signalOutcomeWorker).toMatchObject({
+			leaseMs: 120000,
+			lastRunLeaseHeld: false,
+			leaseHeldSkipCount: 0,
+		});
+		expect(capabilities.body.dependencies.signalOutcomeWorker).toMatchObject({
+			leaseMs: 120000,
+			lastRunLeaseHeld: false,
+			leaseHeldSkipCount: 0,
+		});
+	});
+
+	it('reports the configured sweep lease duration and never lock ownership', async () => {
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+		process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'web';
+		process.env.SIGNAL_OUTCOME_EVALUATION_LEASE_MS = '45000';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.signalOutcomeWorker.leaseMs).toBe(45000);
+
+		// Lease ownership is an internal lock value and must never reach an operator.
+		expect(response.text).not.toContain('lockedBy');
+		delete process.env.SIGNAL_OUTCOME_EVALUATION_LEASE_MS;
+	});
+
 	it('does not report a disabled local scheduler as ready', async () => {
 		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 		process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'disabled';

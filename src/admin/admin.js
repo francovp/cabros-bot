@@ -1082,6 +1082,9 @@ const statusDetailFields = [
 	['enrichment.alertPath.failedCount', 'Alert path failed'],
 	['enrichment.alertPath.appliedRate24h', 'Alert path applied rate (%)'],
 	['enrichment.alertPath.failureRate24h', 'Alert path failure rate (%)'],
+	['leaseMs', 'Lease (ms)'],
+	['lastRunLeaseHeld', 'Last run lease held'],
+	['leaseHeldSkipCount', 'Lease-held skips'],
 ];
 
 const statusFieldValue = (detail, key) => key.split('.').reduce((value, part) => asObject(value)[part], detail);
