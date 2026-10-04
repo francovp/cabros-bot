@@ -10,9 +10,13 @@ const {
 	DEFAULT_WINDOW_MS,
 	MAX_WINDOW_MS,
 	MAX_ENTRIES,
+	MAX_CHANNELS_PER_ENTRY,
 } = require('../../src/services/alerts/crossTimeframeCooldown');
 
 const { parseTradingViewSignal } = require('../../src/services/tradingview/parseTradingViewSignal');
+
+const CHAT_A = 'telegram:aaaaaaaa';
+const CHAT_B = 'telegram:bbbbbbbb';
 
 function throwingStore(overrides = {}) {
 	const broken = {
@@ -98,10 +102,11 @@ describe('crossTimeframeCooldown', () => {
 			const cooldown = createCrossTimeframeCooldown();
 			const base = 1_000_000_000;
 
-			const first = cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, base);
+			const first = cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, [], base);
 			expect(first.suppressed).toBe(false);
+			expect(first.reservedAt).toBe(base);
 
-			const second = cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, base + 400);
+			const second = cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, [], base + 400);
 			expect(second.suppressed).toBe(true);
 			expect(second.reason).toBe(CROSS_TIMEFRAME_SUPPRESSION_REASON);
 			expect(second.key).toBe('BINANCE|BTCUSDT|SELL');
@@ -115,58 +120,58 @@ describe('crossTimeframeCooldown', () => {
 		it('collapses a burst of same-direction signals across several timeframes into one', () => {
 			const cooldown = createCrossTimeframeCooldown();
 			const base = 5_000_000_000;
-			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'BUY' }, base);
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'BUY' }, base + 100).suppressed).toBe(true);
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1h', side: 'BUY' }, base + 200).suppressed).toBe(true);
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '15m', side: 'BUY' }, base + 300).suppressed).toBe(true);
+			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'BUY' }, [], base);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'BUY' }, [], base + 100).suppressed).toBe(true);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1h', side: 'BUY' }, [], base + 200).suppressed).toBe(true);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '15m', side: 'BUY' }, [], base + 300).suppressed).toBe(true);
 			expect(cooldown.getStats(base + 300).suppressedCount).toBe(0); // counters only move via recordSuppression()
 		});
 
 		it('never suppresses the same timeframe (that stays CB-230 responsibility)', () => {
 			const cooldown = createCrossTimeframeCooldown();
 			const base = 42;
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, base).suppressed).toBe(false);
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, base + 10).suppressed).toBe(false);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, [], base).suppressed).toBe(false);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, [], base + 10).suppressed).toBe(false);
 		});
 
-		it('slides the window from the most recent delivered signal', () => {
+		it('slides the window from the most recent reserved signal', () => {
 			process.env.ALERT_CROSS_TF_WINDOW_MS = '60000';
 			const cooldown = createCrossTimeframeCooldown();
 			const base = 1_000;
-			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, base);
-			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, base + 50_000);
+			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, [], base);
+			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, [], base + 50_000);
 
 			// 70s after the *first* signal but only 20s after the sliding one.
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, base + 70_000).suppressed).toBe(true);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, [], base + 70_000).suppressed).toBe(true);
 			// Past the sliding entry's window.
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, base + 110_001).suppressed).toBe(false);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, [], base + 110_001).suppressed).toBe(false);
 		});
 
 		it('never collapses an opposite-side flip', () => {
 			const cooldown = createCrossTimeframeCooldown();
 			const base = 7_000;
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'BUY' }, base).suppressed).toBe(false);
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, base + 400).suppressed).toBe(false);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'BUY' }, [], base).suppressed).toBe(false);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, [], base + 400).suppressed).toBe(false);
 			// The flip also clears the prior side, so a later same-direction
 			// signal on another timeframe is delivered rather than swallowed.
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'BUY' }, base + 800).suppressed).toBe(false);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'BUY' }, [], base + 800).suppressed).toBe(false);
 		});
 
 		it('delivers again once the window expires', () => {
 			process.env.ALERT_CROSS_TF_WINDOW_MS = '1000';
 			const cooldown = createCrossTimeframeCooldown();
 			const base = 9_000;
-			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, base);
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, base + 999).suppressed).toBe(true);
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, base + 1000).suppressed).toBe(false);
+			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, [], base);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, [], base + 999).suppressed).toBe(true);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, [], base + 1000).suppressed).toBe(false);
 		});
 
 		it('treats a zero window as "never collapse"', () => {
 			process.env.ALERT_CROSS_TF_WINDOW_MS = '0';
 			const cooldown = createCrossTimeframeCooldown();
 			const base = 11_000;
-			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, base);
-			const verdict = cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, base);
+			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, [], base);
+			const verdict = cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, [], base);
 			expect(verdict.windowMs).toBe(0);
 			expect(verdict.suppressed).toBe(false);
 		});
@@ -199,20 +204,20 @@ describe('crossTimeframeCooldown', () => {
 		it('ignores clock rewind instead of suppressing on a negative elapsed time', () => {
 			const cooldown = createCrossTimeframeCooldown();
 			const base = 20_000;
-			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, base);
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, base - 5_000).suppressed).toBe(false);
+			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, [], base);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, [], base - 5_000).suppressed).toBe(false);
 		});
 
 		it('skips signals without a usable timeframe or side', () => {
 			const cooldown = createCrossTimeframeCooldown();
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', side: 'SELL' }).suppressed).toBe(false);
-			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D' }).suppressed).toBe(false);
-			expect(cooldown.reserve(null).suppressed).toBe(false);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', side: 'SELL' }, []).suppressed).toBe(false);
+			expect(cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D' }, []).suppressed).toBe(false);
+			expect(cooldown.reserve(null, []).suppressed).toBe(false);
 		});
 
 		it('fails open when the store throws', () => {
 			const cooldown = createCrossTimeframeCooldown({ store: throwingStore() });
-			const verdict = cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' });
+			const verdict = cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' }, []);
 			expect(verdict.suppressed).toBe(false);
 			expect(verdict.storeError).toBe(true);
 		});
@@ -222,16 +227,24 @@ describe('crossTimeframeCooldown', () => {
 			const cooldown = createCrossTimeframeCooldown({ store });
 			const base = 1_000;
 			for (let index = 0; index <= MAX_ENTRIES + 20; index += 1) {
-				cooldown.reserve({ exchange: 'BINANCE', symbol: `SYM${index}`, timeframe: '1D', side: 'BUY' }, base + index);
+				cooldown.reserve({ exchange: 'BINANCE', symbol: `SYM${index}`, timeframe: '1D', side: 'BUY' }, [], base + index);
 			}
 			expect(store.size).toBeLessThanOrEqual(MAX_ENTRIES);
+		});
+
+		it('caps the destination identities kept per signal', () => {
+			const store = new Map();
+			const cooldown = createCrossTimeframeCooldown({ store });
+			const channels = Array.from({ length: MAX_CHANNELS_PER_ENTRY + 25 }, (_, index) => `telegram:d${index}`);
+			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, channels, 1_000);
+			expect([...store.values()][0].channels.size).toBe(MAX_CHANNELS_PER_ENTRY);
 		});
 
 		it('records suppression counters and resets them', () => {
 			process.env.ALERT_CROSS_TF_WINDOW_MS = '5000';
 			const cooldown = createCrossTimeframeCooldown();
 			const base = 77_000;
-			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, base);
+			cooldown.reserve({ exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' }, [], base);
 			cooldown.recordSuppression();
 			const stats = cooldown.getStats(base + 10);
 			expect(stats.suppressedCount).toBe(1);
@@ -250,6 +263,103 @@ describe('crossTimeframeCooldown', () => {
 		it('reports zero active signals when the store cannot be iterated', () => {
 			const cooldown = createCrossTimeframeCooldown({ store: throwingStore() });
 			expect(cooldown.getStats().activeTrackedSignals).toBe(0);
+		});
+	});
+
+	describe('destination scoping', () => {
+		const SELL_1D = { exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' };
+		const SELL_4H = { exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' };
+
+		it('does not let one chat suppress a signal routed to another chat', () => {
+			const cooldown = createCrossTimeframeCooldown();
+			const base = 1_000;
+			expect(cooldown.reserve(SELL_1D, [CHAT_A], base).suppressed).toBe(false);
+			expect(cooldown.reserve(SELL_4H, [CHAT_B], base + 400).suppressed).toBe(false);
+		});
+
+		it('still collapses for the same destination', () => {
+			const cooldown = createCrossTimeframeCooldown();
+			const base = 1_000;
+			cooldown.reserve(SELL_1D, [CHAT_A], base);
+			expect(cooldown.reserve(SELL_4H, [CHAT_A], base + 400).suppressed).toBe(true);
+		});
+
+		it('collapses only when every requested destination is already held', () => {
+			const cooldown = createCrossTimeframeCooldown();
+			const base = 1_000;
+			cooldown.reserve(SELL_1D, [CHAT_A], base);
+
+			const partial = cooldown.reserve(SELL_4H, [CHAT_A, CHAT_B], base + 400);
+			expect(partial.suppressed).toBe(false);
+			expect(partial.channels).toEqual([CHAT_B]);
+			expect(partial.reservedAt).toBe(base + 400);
+
+			// CHAT_A is still held by the 1D leg, CHAT_B now by this 4h leg, so a
+			// third timeframe arriving for both has nowhere left to go.
+			expect(cooldown.reserve({ ...SELL_4H, timeframe: '1h' }, [CHAT_A, CHAT_B], base + 500).suppressed).toBe(true);
+		});
+
+		it('releases only the requested identity and keeps the delivered one held', () => {
+			const cooldown = createCrossTimeframeCooldown();
+			const base = 1_000;
+			const first = cooldown.reserve(SELL_1D, [CHAT_A], base);
+			const second = cooldown.reserve(SELL_4H, [CHAT_A, CHAT_B], base + 400);
+
+			// CHAT_B was reserved but never notified; CHAT_A was notified earlier.
+			cooldown.release(second.key, second.reservedAt, [CHAT_B]);
+
+			expect(cooldown.reserve({ ...SELL_4H, timeframe: '1h' }, [CHAT_A], base + 500).suppressed).toBe(true);
+			expect(cooldown.reserve({ ...SELL_4H, timeframe: '1h' }, [CHAT_B], base + 500).suppressed).toBe(false);
+			expect(first.key).toBe(second.key);
+		});
+	});
+
+	describe('release', () => {
+		const SELL_1D = { exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1D', side: 'SELL' };
+		const SELL_4H = { exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '4h', side: 'SELL' };
+
+		it('drops the reservation so a failed leg cannot swallow the next signal', () => {
+			const cooldown = createCrossTimeframeCooldown();
+			const base = 1_000;
+			const reservation = cooldown.reserve(SELL_1D, [], base);
+			expect(cooldown.getStats(base).activeTrackedSignals).toBe(1);
+
+			cooldown.release(reservation.key, reservation.reservedAt);
+			expect(cooldown.getStats(base).activeTrackedSignals).toBe(0);
+			expect(cooldown.reserve(SELL_4H, [], base + 400).suppressed).toBe(false);
+		});
+
+		it('never deletes a later legitimate reservation', () => {
+			const cooldown = createCrossTimeframeCooldown();
+			const base = 1_000;
+			const first = cooldown.reserve(SELL_1D, [], base);
+			cooldown.reserve(SELL_1D, [], base + 5_000); // re-armed by a newer leg
+
+			cooldown.release(first.key, first.reservedAt);
+			expect(cooldown.getStats(base + 5_100).activeTrackedSignals).toBe(1);
+			expect(cooldown.reserve(SELL_4H, [], base + 5_100).suppressed).toBe(true);
+		});
+
+		it('ignores a reservation token that no longer matches', () => {
+			const cooldown = createCrossTimeframeCooldown();
+			const base = 1_000;
+			cooldown.reserve(SELL_1D, [], base);
+			cooldown.release('BINANCE|BTCUSDT|SELL', base + 999);
+			expect(cooldown.reserve(SELL_4H, [], base + 100).suppressed).toBe(true);
+		});
+
+		it('is a no-op for a missing key or a missing token', () => {
+			const cooldown = createCrossTimeframeCooldown();
+			const base = 1_000;
+			const reservation = cooldown.reserve(SELL_1D, [], base);
+			expect(() => cooldown.release(null, base)).not.toThrow();
+			expect(() => cooldown.release(reservation.key, null)).not.toThrow();
+			expect(cooldown.getStats(base).activeTrackedSignals).toBe(1);
+		});
+
+		it('fails open when the store throws', () => {
+			const cooldown = createCrossTimeframeCooldown({ store: throwingStore() });
+			expect(() => cooldown.release('BINANCE|BTCUSDT|SELL', 1_000)).not.toThrow();
 		});
 	});
 
@@ -280,7 +390,7 @@ describe('crossTimeframeCooldown', () => {
 			for (const row of exportRows) {
 				const parsed = parseTradingViewSignal(row.text);
 				expect(parsed).not.toBeNull();
-				const verdict = cooldown.reserve(parsed, Date.parse(row.receivedAt));
+				const verdict = cooldown.reserve(parsed, ['telegram:prodchat'], Date.parse(row.receivedAt));
 				expect(verdict.key).toBe('BINANCE|BTCUSDT|SELL');
 				if (verdict.suppressed) {
 					collapsed += 1;

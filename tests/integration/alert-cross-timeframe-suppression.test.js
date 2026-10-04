@@ -53,11 +53,11 @@ describe('Alert cross-timeframe duplicate suppression endpoint behavior', () => 
 		}
 	});
 
-	function post(text) {
+	function post(text, body = {}) {
 		return request(app)
 			.post('/api/webhook/alert')
 			.set('x-api-key', 'test-key')
-			.send({ text });
+			.send({ text, ...body });
 	}
 
 	it('collapses a D + 240 same-direction pair into a single delivery', async () => {
@@ -166,5 +166,83 @@ describe('Alert cross-timeframe duplicate suppression endpoint behavior', () => 
 		const deliveredCall = saveAlert.mock.calls.find(([payload]) => payload.text === DAILY_SELL);
 		expect(deliveredCall[0].suppressionReason).toBeNull();
 		saveAlert.mockRestore();
+	});
+
+	describe('provisional reservations', () => {
+		it('retries delivery after the first leg failed on every channel', async () => {
+			mockTelegramSendMessage.mockRejectedValueOnce(new Error('telegram unavailable'));
+
+			const failed = await post(DAILY_SELL).expect(200);
+			expect(failed.body.deliveredChannels).toEqual([]);
+			expect(failed.body.results[0]).toMatchObject({ channel: 'telegram', success: false });
+			expect(crossTimeframeCooldown.getStats().activeTrackedSignals).toBe(0);
+
+			const callsBeforeRetry = mockTelegramSendMessage.mock.calls.length;
+			const retry = await post(FOUR_HOUR_SELL).expect(200);
+			expect(retry.body.suppressedRepeat).toBeUndefined();
+			expect(retry.body.deliveredChannels).toEqual(['telegram']);
+			expect(mockTelegramSendMessage.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
+		});
+
+		it('retries delivery after the first leg threw during dispatch', async () => {
+			const { postAlert, getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const sendSpy = jest.spyOn(
+				getNotificationManager().channels.get('telegram'),
+				'send',
+			).mockRejectedValueOnce(new Error('dispatch exploded'));
+			const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+			const run = (text) => new Promise((resolve) => {
+				const req = { body: { text }, query: {} };
+				const res = { status: jest.fn().mockReturnThis(), json: (payload) => resolve(payload) };
+				postAlert(mockBot)(req, res).catch(() => resolve(null));
+			});
+
+			const failed = await run(DAILY_SELL);
+			expect(failed.deliveredChannels).toEqual([]);
+			expect(crossTimeframeCooldown.getStats().activeTrackedSignals).toBe(0);
+
+			sendSpy.mockRestore();
+			consoleSpy.mockRestore();
+
+			const retry = await run(FOUR_HOUR_SELL);
+			expect(retry.suppressedRepeat).toBeUndefined();
+			expect(retry.deliveredChannels).toEqual(['telegram']);
+		});
+
+		it('leaves no reservation behind when the deployment cannot deliver at all', async () => {
+			process.env.ENABLE_TELEGRAM_BOT = 'false';
+			process.env.ENABLE_API_ONLY_MODE = 'true';
+			await initializeNotificationServices(mockBot);
+
+			const first = await post(DAILY_SELL).expect(200);
+			expect(first.body.deliveredChannels).toEqual([]);
+			expect(crossTimeframeCooldown.getStats().activeTrackedSignals).toBe(0);
+
+			const second = await post(FOUR_HOUR_SELL).expect(200);
+			expect(second.body.suppressedRepeat).toBeUndefined();
+			expect(crossTimeframeCooldown.getStats().suppressedCount).toBe(0);
+		});
+
+		it('does not let one destination suppress a signal routed to another', async () => {
+			const chatIdsSent = [];
+			mockTelegramSendMessage.mockImplementation(async (_chatId) => {
+				chatIdsSent.push(_chatId);
+				return { message_id: 'test-msg-id' };
+			});
+
+			const first = await post(DAILY_SELL, { telegramChatId: '-1001111111' }).expect(200);
+			expect(first.body.suppressedRepeat).toBeUndefined();
+
+			const second = await post(FOUR_HOUR_SELL, { telegramChatId: '-1002222222' }).expect(200);
+			expect(second.body.suppressedRepeat).toBeUndefined();
+			expect(second.body.deliveredChannels).toEqual(['telegram']);
+			expect(chatIdsSent).toEqual(['-1001111111', '-1002222222']);
+			expect(crossTimeframeCooldown.getStats().suppressedCount).toBe(0);
+
+			// Proves the gate is still armed for that destination.
+			const third = await post('BINANCE:BTCUSDT(60) pasó a señal de VENTA', { telegramChatId: '-1002222222' }).expect(200);
+			expect(third.body.suppressedRepeat).toBe(true);
+			expect(mockTelegramSendMessage).toHaveBeenCalledTimes(2);
+		});
 	});
 });
