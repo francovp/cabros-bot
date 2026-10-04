@@ -1142,7 +1142,8 @@ describe('admin browser client', () => {
 				if (!url.includes('/api/webhook/expanded-analysis-alert')
 					&& !url.includes('/api/news-monitor')
 					&& !url.includes('/api/scanner-presets/')
-					&& !url.includes('/api/webhook/volume-confirmation')) return response({});
+					&& !url.includes('/api/webhook/volume-confirmation')
+					&& !url.includes('/api/webhook/symbol-analysis')) return response({});
 				const signal = options?.signal;
 				signals.push(signal);
 				return new Promise((resolve, reject) => {
@@ -1185,6 +1186,14 @@ describe('admin browser client', () => {
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[3].aborted).toBe(true);
+
+		await selectView(browser, 'analysis');
+		await findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis').dispatch('submit');
+		await flush();
+		expect([...browser.timerDelays.values()]).toContain(150000);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+		expect(signals[4].aborted).toBe(true);
 	});
 
 	it('does not abort slow responses that resolve within the maximum budget for volume-confirmation and alerts', async () => {
