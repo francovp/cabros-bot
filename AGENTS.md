@@ -2307,7 +2307,7 @@ The `issue-automator` merge gate could bless a stale build. `get-pr-deployment-u
 
 `verify-preview.sh` resolves the URL through `--details` and runs two independent checks when `EXPECTED_SHA` is supplied, either mismatch exiting `2` (the pre-existing "stale deploy" code that routes to Step 6.5):
 1. **Bound-record check** — `EXPECTED_SHA` vs. the `sha` of the deployment that produced the probed URL.
-2. **Served-build check** — `EXPECTED_SHA` vs. `service.commit` from `${BASE_URL}/api/status`, the commit the running service reports for itself.
+2. **Served-build check** — `EXPECTED_SHA` vs. `service.commit` from `${PREVIEW_URL}/api/status`, the commit the running service reports for itself.
 
 Both checks are needed and neither substitutes for the other: the record does not prove the URL serves it, and the served build does not prove which deployment the URL was selected from. The served-build check is the only available evidence on the Railway-pattern fallback path, where no GitHub deployment exists. It is **fail-open on missing evidence, fail-closed on proven mismatch** — an absent `WEBHOOK_API_KEY`, an auth-gated/unreachable `/api/status`, or a payload without `service.commit` warns and defers to the bound-record result rather than failing the gate.
 
