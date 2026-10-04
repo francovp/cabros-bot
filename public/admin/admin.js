@@ -6609,6 +6609,14 @@ const formatTradingR = (value) => {
 	return `${numeric > 0 ? '+' : ''}${numeric.toFixed(2)}R`;
 };
 
+// The service reports every percentage at two decimals (parseFloat(toFixed(2))), so
+// a bare interpolation would print "59%" for a pooled average and "59.00%" for a
+// per-window one purely because the pooled value happened to be whole.
+const formatTradingHitRate = (value) => {
+	const numeric = asFiniteNumber(value);
+	return numeric === null ? '—' : `${numeric.toFixed(2)}%`;
+};
+
 const tradingUtcDay = (value) => {
 	if (typeof value !== 'string' || value.trim() === '') return null;
 	const parsed = Date.parse(value);
@@ -6680,6 +6688,60 @@ const firstEvaluatedWindowKey = (records) => {
 	return TRADING_WINDOWS[0];
 };
 
+// SignalOutcomeService.summarizeOutcomes() has no top-level winRatePercent,
+// averageReturnPercent, averageMfePercent or averageMaePercent. Those four live one
+// level down at summary.windows[<window>] (schema WindowStats), alongside
+// totalSignals. Reading the top-level names renders a permanent em dash even when
+// the backend computed the value, so the window block is always resolved first.
+const WINDOW_POOLED_METRICS = ['hitRatePercent', 'averageReturnPercent', 'averageMfePercent', 'averageMaePercent'];
+
+// Each WindowStats percentage is a mean over that window's evaluated
+// (signal, window) observations, and `totalSignals` is exactly that denominator.
+// Weighting by it therefore reproduces the pooled mean across windows rather than
+// an unweighted average of per-window percentages, which would let a window with
+// two observations count as much as one with two hundred.
+const poolWindowStats = (blocks) => {
+	const pooled = { totalSignals: 0 };
+	const sums = {};
+	WINDOW_POOLED_METRICS.forEach((metric) => { sums[metric] = 0; });
+	blocks.forEach((block) => {
+		const total = asFiniteNumber(block.totalSignals);
+		if (total === null || total <= 0) return;
+		pooled.totalSignals += total;
+		WINDOW_POOLED_METRICS.forEach((metric) => {
+			const value = asFiniteNumber(block[metric]);
+			if (value === null) return;
+			sums[metric] += value * total;
+		});
+	});
+	WINDOW_POOLED_METRICS.forEach((metric) => {
+		pooled[metric] = pooled.totalSignals > 0 ? sums[metric] / pooled.totalSignals : null;
+	});
+	return pooled;
+};
+
+// `windowKey` is the raw select value, so '' means "All windows" — and there is no
+// single window block to read then. Pooling keeps the strip informative instead of
+// blank, and `pooled` lets the copy say so rather than implying a one-window number.
+const resolveTradingWindowStats = (summary, windowKey) => {
+	const windows = asObject(summary && summary.windows);
+	const requested = typeof windowKey === 'string' ? windowKey.trim() : '';
+	if (requested) {
+		const stats = asObject(windows[requested]);
+		return { stats, scope: requested, pooled: false, available: Object.keys(stats).length > 0 };
+	}
+	const blocks = TRADING_WINDOWS
+		.map((key) => asObject(windows[key]))
+		.filter((block) => Object.keys(block).length > 0);
+	if (!blocks.length) return { stats: {}, scope: '', pooled: false, available: false };
+	return { stats: poolWindowStats(blocks), scope: 'all windows', pooled: true, available: true };
+};
+
+const describeTradingWindowScope = (resolved) => {
+	if (!resolved || !resolved.available) return '';
+	return resolved.pooled ? 'pooled across all windows' : `${resolved.scope} window`;
+};
+
 const createTradingKpiCard = (label, value, meta, badgeText, tone) => {
 	const card = createMetricCard(label, value, meta);
 	card.className = `${card.className} trading-kpi`;
@@ -6690,15 +6752,18 @@ const createTradingKpiCard = (label, value, meta, badgeText, tone) => {
 	return card;
 };
 
-const renderPaperKpiStrip = (summary, badgeText) => {
+const renderPaperKpiStrip = (summary, badgeText, resolved) => {
 	const grid = element('div', { className: 'metric-grid kpi-strip' });
 	const received = asFiniteNumber(summary.totalSignalsReceived);
 	const evaluated = asFiniteNumber(summary.totalSignalsEvaluated);
 	const coverage = received && received > 0 && evaluated !== null
 		? Math.round((evaluated / received) * 100)
 		: null;
-	const mfe = asFiniteNumber(summary.averageMfePercent);
-	const mae = asFiniteNumber(summary.averageMaePercent);
+	const stats = asObject(resolved && resolved.stats);
+	const scope = describeTradingWindowScope(resolved);
+	const hitRate = asFiniteNumber(stats.hitRatePercent);
+	const mfe = asFiniteNumber(stats.averageMfePercent);
+	const mae = asFiniteNumber(stats.averageMaePercent);
 
 	grid.append(
 		createTradingKpiCard('Signals recorded', formatOrderValue(summary.totalSignalsReceived),
@@ -6707,18 +6772,18 @@ const renderPaperKpiStrip = (summary, badgeText) => {
 		createTradingKpiCard('Coverage', coverage === null ? '—' : `${coverage}%`,
 			`${formatOrderValue(summary.totalSignalsEvaluated)} evaluated of ${formatOrderValue(summary.totalSignalsReceived)}`,
 			badgeText, 'status-disabled'),
-		createTradingKpiCard('Hit rate', summary.winRatePercent !== undefined && summary.winRatePercent !== null ? `${summary.winRatePercent}%` : '—',
-			'Evaluated signals closing above entry',
+		createTradingKpiCard('Hit rate', formatTradingHitRate(hitRate),
+			`Evaluated signals closing above entry${scope ? ` · ${scope}` : ''}`,
 			badgeText, 'status-disabled'),
 		createTradingKpiCard('Expectancy', formatTradingR(summary.expectancyR),
 			'Average R-multiple per evaluated window',
 			badgeText, 'status-disabled'),
-		createTradingKpiCard('Average return', formatTradingPercent(summary.averageReturnPercent),
-			'Paper, per evaluated window',
+		createTradingKpiCard('Average return', formatTradingPercent(stats.averageReturnPercent),
+			`Paper, per evaluated window${scope ? ` · ${scope}` : ''}`,
 			badgeText, 'status-disabled'),
 		createTradingKpiCard('MFE / MAE',
 			mfe === null && mae === null ? '—' : `${mfe === null ? '—' : `${mfe.toFixed(2)}%`} / ${mae === null ? '—' : `${mae.toFixed(2)}%`}`,
-			'Excursion reached vs tolerated',
+			`Excursion reached vs tolerated${scope ? ` · ${scope}` : ''}`,
 			badgeText, 'status-disabled'),
 	);
 	return grid;
@@ -6734,6 +6799,23 @@ const classifyTradingFailure = (status, data) => {
 		return { tone: 'status-unknown', heading: 'Trade ledger temporarily unavailable', body: 'The backend answered but could not produce ledger data right now. This is a transient dependency state, not a disabled feature — retry from the refresh button.' };
 	}
 	return { tone: 'status-danger', heading: 'Trade ledger request failed', body: '' };
+};
+
+// Same reasoning as classifyTradingFailure, applied to the paper summary. A 400 is
+// this console's own malformed request, so telling the operator to enable a flag
+// that is already correct sends them the wrong way; only FEATURE_DISABLED earns
+// that advice.
+const classifyPaperFailure = (status, data) => {
+	if (status === 403 || (data && data.code === 'FEATURE_DISABLED')) {
+		return { tone: 'status-misconfigured', heading: 'Signal outcome tracking is disabled', body: 'Set ENABLE_SIGNAL_OUTCOME_TRACKING=true and redeploy to record paper outcomes.' };
+	}
+	if (status === 503) {
+		return { tone: 'status-unknown', heading: 'Outcome storage temporarily unavailable', body: 'Signal outcome tracking is enabled but its storage could not be read. This is a dependency state, not a disabled feature — retry from the refresh button.' };
+	}
+	if (status === 400) {
+		return { tone: 'status-danger', heading: 'Console sent an invalid filter', body: 'The backend rejected the window filter this console sent. No environment change is needed — the request itself was malformed.' };
+	}
+	return { tone: 'status-danger', heading: 'Outcome summary request failed', body: '' };
 };
 
 const createTradingPanelShell = (className, title, note) => {
@@ -6873,8 +6955,8 @@ const createLiveFeed = () => {
 			row.append(element('span', { className: 'status-badge status-disabled', text: `${key}: ${String(data[key])}` }));
 		});
 		row.append(createTimestamp(Date.now()));
-		feed.prepend ? feed.prepend(row) : feed.children.unshift(row);
-		while (feed.children.length > MAX_ROWS) feed.children.pop();
+		feed.prepend(row);
+		while (feed.children.length > MAX_ROWS && feed.lastElementChild) feed.lastElementChild.remove();
 	});
 	return { panel, unsubscribe };
 };
@@ -7035,47 +7117,66 @@ const createTradingView = (contract) => {
 		}
 	};
 
-	const loadEnvironment = () => sendRequest({
+	const loadEnvironment = (current) => sendRequest({
 		definition: statusDefinition,
 		path: statusDefinition.path,
 		button: refresh,
 		output: environmentOutput,
-		isCurrent: () => generation === generation,
+		isCurrent: () => current === generation,
 		formatResponse: () => '',
 	}).then((status) => applyEnvironment(status));
 
-	const loadPaper = () => sendRequest({
+	const loadPaper = (current) => sendRequest({
 		definition: summaryDefinition,
 		path: summaryDefinition.path,
-		query: { window: windowField.value },
+		query: Object.fromEntries(Object.entries({ window: windowField.value }).filter(([, value]) => value !== '')),
 		button: refresh,
 		output: paperOutput,
-		isCurrent: () => true,
-		captureResponseData: (data) => { renderPaper(data); },
+		isCurrent: () => current === generation,
+		captureResponseData: (data, response) => renderPaper(data, response),
 		formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
 	});
 
-	const renderPaper = (data) => {
-		const summary = asObject(data && data.summary);
-		if (!data || !data.summary) {
-			paperHost.replaceChildren(createEmptyState('No outcome summary available — signal outcome tracking may be disabled.'));
+	const renderPaper = (data, response) => {
+		if (response && response.ok === false) {
+			const classification = classifyPaperFailure(response.status, data);
+			const notice = element('p', { className: 'empty-state' });
+			notice.append(
+				element('span', { className: `status-badge ${classification.tone}`, text: classification.heading }),
+				element('span', { text: ` ${classification.body}` }),
+			);
+			paperHost.replaceChildren(notice);
+			renderCompare(null, null, classification);
 			return;
 		}
-		paperHost.replaceChildren(renderPaperKpiStrip(summary, 'Paper · signals'));
-		renderCompare(summary, null, null);
+		const summary = asObject(data && data.summary);
+		if (!data || !data.summary) {
+			paperHost.replaceChildren(createEmptyState('No outcome summary block in the response.'));
+			renderCompare(null, null, null);
+			return;
+		}
+		const resolved = resolveTradingWindowStats(summary, windowField.value);
+		paperHost.replaceChildren(renderPaperKpiStrip(summary, 'Paper · signals', resolved));
+		renderCompare(summary, null, null, resolved);
 	};
 
-	const renderCompare = (summary, ledger, failure) => {
+	const renderCompare = (summary, ledger, failure, resolved) => {
 		compareHost.replaceChildren();
 		const panel = createTradingPanelShell('paper-vs-real-panel', 'Paper vs real win rate',
 			'Paper results come from evaluated signals; real results require a measured ledger. They are not interchangeable.');
 		const grid = element('div', { className: 'paper-vs-real' });
 
 		const paperColumn = element('div', { className: 'paper-vs-real-column' });
+		paperColumn.append(element('h4', { text: 'Paper (evaluated signals)' }));
+		const paperStats = asObject(resolved && resolved.stats);
+		const paperHitRate = summary ? asFiniteNumber(paperStats.hitRatePercent) : null;
+		const paperScope = describeTradingWindowScope(resolved);
 		paperColumn.append(
-			element('h4', { text: 'Paper (evaluated signals)' }),
-			createTradingKpiCard('Hit rate', summary && summary.winRatePercent !== undefined && summary.winRatePercent !== null ? `${summary.winRatePercent}%` : '—',
-				'From GET /api/outcomes/summary', 'Paper · signals', 'status-disabled'),
+			createTradingKpiCard('Hit rate', formatTradingHitRate(paperHitRate),
+				summary
+					? `From GET /api/outcomes/summary${paperScope ? ` · ${paperScope}` : ''}`
+					: (failure ? failure.heading : 'No paper summary available'),
+				'Paper · signals', 'status-disabled'),
 		);
 
 		const realColumn = element('div', { className: 'paper-vs-real-column' });
@@ -7144,13 +7245,13 @@ const createTradingView = (contract) => {
 		));
 	};
 
-	const loadSignals = () => sendRequest({
+	const loadSignals = (current) => sendRequest({
 		definition: outcomesDefinition,
 		path: outcomesDefinition.path,
 		query: { limit: String(Number(trimFormValue(limit.value)) || 100) },
 		button: refresh,
 		output: analyticsOutput,
-		isCurrent: () => true,
+		isCurrent: () => current === generation,
 		captureResponseData: (data) => {
 			const records = Array.isArray(data && data.outcomes) ? data.outcomes : [];
 			const windowKey = windowField.value || firstEvaluatedWindowKey(records);
@@ -7160,13 +7261,13 @@ const createTradingView = (contract) => {
 			+ `${data && Array.isArray(data.outcomes) ? `${data.outcomes.length} signal records` : 'no records returned'}`,
 	});
 
-	const loadAudit = () => sendRequest({
+	const loadAudit = (current) => sendRequest({
 		definition: auditDefinition,
 		path: auditDefinition.path,
 		query: { limit: '20' },
 		button: auditButton,
 		output: audit.output,
-		isCurrent: () => true,
+		isCurrent: () => current === generation,
 		captureResponseData: (data) => {
 			audit.list.replaceChildren();
 			renderOrderAudit(audit.list, data);
@@ -7178,10 +7279,10 @@ const createTradingView = (contract) => {
 		const current = ++generation;
 		refresh.disabled = true;
 		return Promise.all([
-			loadEnvironment(),
-			loadPaper(),
-			loadSignals(),
-			loadAudit(),
+			loadEnvironment(current),
+			loadPaper(current),
+			loadSignals(current),
+			loadAudit(current),
 			renderRealPnlPanel(contract, ledgerDefinition, {}, refresh)
 				.then((panel) => realPanelHost.replaceChildren(panel)),
 		]).then(() => {
@@ -7202,7 +7303,7 @@ const createTradingView = (contract) => {
 		field.addEventListener('input', () => { filterNote.textContent = 'Filters changed — refresh trading data to apply.'; });
 	});
 
-	auditButton.addEventListener('click', loadAudit);
+	auditButton.addEventListener('click', () => loadAudit(generation));
 
 	detachActiveViewPoll = () => {
 		generation += 1;
