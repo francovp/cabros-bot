@@ -12,6 +12,9 @@
 // The moduleNameMapper in jest.config.js ensures this resolves to __mocks__/firebase-admin.js
 const admin = require('firebase-admin');
 const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
 const { parseAlertPaginationCursor } = require('../../src/services/storage/alertPaginationCursor');
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
@@ -170,6 +173,33 @@ describe('AlertStorageService', () => {
 			expect(mockInitializeApp).toHaveBeenCalledWith(
 				expect.objectContaining({ projectId: 'my-project' }),
 			);
+		});
+
+		it('initializes durable storage from an authorized-user ADC file with FIREBASE_PROJECT_ID', () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.FIREBASE_PROJECT_ID = 'my-project';
+			const adcFile = path.join(os.tmpdir(), `cabros-adc-${process.pid}-${Date.now()}.json`);
+			fs.writeFileSync(adcFile, JSON.stringify({
+				type: 'authorized_user',
+				client_id: '123.apps.googleusercontent.com',
+				client_secret: 'not-a-real-secret',
+				refresh_token: 'not-a-real-refresh-token',
+			}));
+			process.env.GOOGLE_APPLICATION_CREDENTIALS = adcFile;
+
+			try {
+				const result = AlertStorageService.getFirestore();
+
+				expect(result).not.toBeNull();
+				expect(mockCert).not.toHaveBeenCalled();
+				expect(mockInitializeApp).toHaveBeenCalledWith({
+					credential: { type: 'application_default_credential' },
+					projectId: 'my-project',
+				});
+			} finally {
+				fs.unlinkSync(adcFile);
+				delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+			}
 		});
 
 		it('does not call initializeApp when admin.apps is already populated', () => {

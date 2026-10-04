@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 const { generateKeyPairSync } = require('crypto');
 
@@ -38,10 +39,39 @@ const MISSING_PRIVATE_KEY = JSON.stringify({
 
 const MALFORMED_JSON = '{ "project_id": "demo-project", "type": "service_account" ';
 
+// A `gcloud application-default login` session document. It has no
+// private_key/client_email, so admin.credential.cert() rejects it and only
+// Application Default Credentials can resolve it.
+const AUTHORIZED_USER = JSON.stringify({
+	type: 'authorized_user',
+	client_id: '1234567890.apps.googleusercontent.com',
+	client_secret: 'not-a-real-secret',
+	refresh_token: 'not-a-real-refresh-token',
+	quota_project_id: 'demo-project',
+});
+
+const EXTERNAL_ACCOUNT = JSON.stringify({
+	type: 'external_account',
+	audience: '//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/pool/providers/provider',
+	subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+	credential_source: { file: '/var/run/token' },
+});
+
 const FAKE_ADMIN = {
-	credential: { cert: jest.fn((sa) => ({ __cert__: true, sa })) },
+	credential: {
+		cert: jest.fn((sa) => ({ __cert__: true, sa })),
+		applicationDefault: jest.fn(() => ({ __applicationDefault__: true })),
+	},
 	initializeApp: jest.fn(),
 };
+
+function wellKnownAdcPathFor(configRoot) {
+	return path.join(
+		process.platform === 'win32' ? configRoot : path.join(configRoot, '.config'),
+		'gcloud',
+		'application_default_credentials.json',
+	);
+}
 
 function loadHelper(env) {
 	jest.resetModules();
@@ -57,6 +87,7 @@ describe('firebaseAdminCredentials helper', () => {
 
 	beforeEach(() => {
 		FAKE_ADMIN.credential.cert.mockClear();
+		FAKE_ADMIN.credential.applicationDefault.mockClear();
 		FAKE_ADMIN.initializeApp.mockClear();
 		warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 	});
@@ -188,6 +219,229 @@ describe('firebaseAdminCredentials helper', () => {
 			});
 			const result = helper.loadFirebaseAdminCredentialsOrNull();
 			expect(result).toBeNull();
+		});
+
+		it('never routes a service-account file through Application Default Credentials', () => {
+			const tmpFile = path.join(__dirname, '__fixtures__', 'mock-sa.json');
+			fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
+			fs.writeFileSync(tmpFile, VALID_INLINE);
+
+			const helper = loadHelper({
+				FIREBASE_SERVICE_ACCOUNT_JSON: '',
+				GOOGLE_APPLICATION_CREDENTIALS: tmpFile,
+				HOME: '/nonexistent-home',
+				APPDATA: '',
+			});
+			const result = helper.loadFirebaseAdminCredentials();
+			fs.unlinkSync(tmpFile);
+
+			expect(result.credentialType).toBe('cert');
+			expect(result.credential).toEqual(expect.objectContaining({ __cert__: true }));
+			expect(FAKE_ADMIN.credential.cert).toHaveBeenCalledTimes(1);
+			expect(FAKE_ADMIN.credential.applicationDefault).not.toHaveBeenCalled();
+		});
+	});
+
+	describe('authorized-user Application Default Credentials (issue #1127)', () => {
+		it('delegates an authorized_user GAC file to applicationDefault() instead of cert()', () => {
+			const tmpFile = path.join(__dirname, '__fixtures__', 'mock-adc-authorized-user.json');
+			fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
+			fs.writeFileSync(tmpFile, AUTHORIZED_USER);
+
+			const helper = loadHelper({
+				FIREBASE_SERVICE_ACCOUNT_JSON: '',
+				GOOGLE_APPLICATION_CREDENTIALS: tmpFile,
+				FIREBASE_PROJECT_ID: 'adc-project',
+				HOME: '/nonexistent-home',
+				APPDATA: '',
+			});
+			const result = helper.loadFirebaseAdminCredentials();
+			fs.unlinkSync(tmpFile);
+
+			expect(result.source).toBe('gac_path');
+			expect(result.credentialType).toBe('application_default');
+			expect(FAKE_ADMIN.credential.cert).not.toHaveBeenCalled();
+			expect(FAKE_ADMIN.credential.applicationDefault).toHaveBeenCalledTimes(1);
+			expect(result.credential).toEqual({ __applicationDefault__: true });
+		});
+
+		it('forwards FIREBASE_PROJECT_ID to initializeApp() for an authorized_user GAC file', () => {
+			const tmpFile = path.join(__dirname, '__fixtures__', 'mock-adc-authorized-user.json');
+			fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
+			fs.writeFileSync(tmpFile, AUTHORIZED_USER);
+
+			const helper = loadHelper({
+				FIREBASE_SERVICE_ACCOUNT_JSON: '',
+				GOOGLE_APPLICATION_CREDENTIALS: tmpFile,
+				FIREBASE_PROJECT_ID: 'adc-project',
+				HOME: '/nonexistent-home',
+				APPDATA: '',
+			});
+			const appOptions = helper.buildFirebaseAppOptions();
+			fs.unlinkSync(tmpFile);
+
+			expect(appOptions).toEqual({
+				credential: { __applicationDefault__: true },
+				projectId: 'adc-project',
+			});
+		});
+
+		it('leaves projectId unset for an authorized_user file with no FIREBASE_PROJECT_ID', () => {
+			const tmpFile = path.join(__dirname, '__fixtures__', 'mock-adc-authorized-user.json');
+			fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
+			fs.writeFileSync(tmpFile, AUTHORIZED_USER);
+
+			const helper = loadHelper({
+				FIREBASE_SERVICE_ACCOUNT_JSON: '',
+				GOOGLE_APPLICATION_CREDENTIALS: tmpFile,
+				HOME: '/nonexistent-home',
+				APPDATA: '',
+			});
+			const result = helper.loadFirebaseAdminCredentials();
+			fs.unlinkSync(tmpFile);
+
+			expect(result.credentialType).toBe('application_default');
+			expect(result.projectId).toBeUndefined();
+			expect(FAKE_ADMIN.credential.cert).not.toHaveBeenCalled();
+		});
+
+		it('delegates an authorized_user well-known ADC file to applicationDefault()', () => {
+			const configRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cabros-adc-'));
+			const adcFile = wellKnownAdcPathFor(configRoot);
+			fs.mkdirSync(path.dirname(adcFile), { recursive: true });
+			fs.writeFileSync(adcFile, AUTHORIZED_USER);
+
+			try {
+				const helper = loadHelper({
+					FIREBASE_SERVICE_ACCOUNT_JSON: '',
+					GOOGLE_APPLICATION_CREDENTIALS: '',
+					FIREBASE_PROJECT_ID: 'well-known-project',
+					HOME: configRoot,
+					APPDATA: configRoot,
+				});
+				const result = helper.loadFirebaseAdminCredentials();
+
+				expect(result.source).toBe('adc');
+				expect(result.credentialType).toBe('application_default');
+				expect(result.projectId).toBe('well-known-project');
+				expect(FAKE_ADMIN.credential.cert).not.toHaveBeenCalled();
+				expect(FAKE_ADMIN.credential.applicationDefault).toHaveBeenCalledTimes(1);
+			} finally {
+				fs.rmSync(configRoot, { recursive: true, force: true });
+			}
+		});
+
+		it('still uses cert() for a service-account well-known ADC file', () => {
+			const configRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cabros-adc-'));
+			const adcFile = wellKnownAdcPathFor(configRoot);
+			fs.mkdirSync(path.dirname(adcFile), { recursive: true });
+			fs.writeFileSync(adcFile, VALID_INLINE);
+
+			try {
+				const helper = loadHelper({
+					FIREBASE_SERVICE_ACCOUNT_JSON: '',
+					GOOGLE_APPLICATION_CREDENTIALS: '',
+					FIREBASE_PROJECT_ID: 'well-known-project',
+					HOME: configRoot,
+					APPDATA: configRoot,
+				});
+				const result = helper.loadFirebaseAdminCredentials();
+
+				expect(result.credentialType).toBe('cert');
+				expect(result.projectId).toBe('well-known-project');
+				expect(FAKE_ADMIN.credential.applicationDefault).not.toHaveBeenCalled();
+			} finally {
+				fs.rmSync(configRoot, { recursive: true, force: true });
+			}
+		});
+
+		it('delegates a workload identity federation (external_account) file to applicationDefault()', () => {
+			const tmpFile = path.join(__dirname, '__fixtures__', 'mock-adc-external-account.json');
+			fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
+			fs.writeFileSync(tmpFile, EXTERNAL_ACCOUNT);
+
+			const helper = loadHelper({
+				FIREBASE_SERVICE_ACCOUNT_JSON: '',
+				GOOGLE_APPLICATION_CREDENTIALS: tmpFile,
+				FIREBASE_PROJECT_ID: 'wif-project',
+				HOME: '/nonexistent-home',
+				APPDATA: '',
+			});
+			const result = helper.loadFirebaseAdminCredentials();
+			fs.unlinkSync(tmpFile);
+
+			expect(result.credentialType).toBe('application_default');
+			expect(FAKE_ADMIN.credential.cert).not.toHaveBeenCalled();
+		});
+
+		it('fails open with an actionable error when an authorized_user document is inline', () => {
+			const helper = loadHelper({ FIREBASE_SERVICE_ACCOUNT_JSON: AUTHORIZED_USER });
+
+			expect(() => helper.loadFirebaseAdminCredentials()).toThrow(helper.FirebaseAdminCredentialsError);
+			expect(() => helper.loadFirebaseAdminCredentials()).toThrow(/GOOGLE_APPLICATION_CREDENTIALS/);
+			expect(FAKE_ADMIN.credential.applicationDefault).not.toHaveBeenCalled();
+		});
+
+		it('does not silently substitute another credential for an inline authorized_user document', () => {
+			const helper = loadHelper({ FIREBASE_SERVICE_ACCOUNT_JSON: AUTHORIZED_USER });
+
+			expect(helper.loadFirebaseAdminCredentialsOrNull()).toBeNull();
+			expect(FAKE_ADMIN.credential.cert).not.toHaveBeenCalled();
+			expect(FAKE_ADMIN.credential.applicationDefault).not.toHaveBeenCalled();
+		});
+
+		it('fails open with a typed error when the SDK cannot resolve ADC', () => {
+			const tmpFile = path.join(__dirname, '__fixtures__', 'mock-adc-authorized-user.json');
+			fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
+			fs.writeFileSync(tmpFile, AUTHORIZED_USER);
+
+			const helper = loadHelper({
+				FIREBASE_SERVICE_ACCOUNT_JSON: '',
+				GOOGLE_APPLICATION_CREDENTIALS: tmpFile,
+				FIREBASE_PROJECT_ID: 'adc-project',
+				HOME: '/nonexistent-home',
+				APPDATA: '',
+			});
+			const original = FAKE_ADMIN.credential.applicationDefault;
+			delete FAKE_ADMIN.credential.applicationDefault;
+
+			let thrown;
+			let appOptions;
+			try {
+				helper.loadFirebaseAdminCredentials();
+			} catch (error) {
+				thrown = error;
+			}
+			appOptions = helper.buildFirebaseAppOptions();
+			FAKE_ADMIN.credential.applicationDefault = original;
+			fs.unlinkSync(tmpFile);
+
+			expect(thrown).toBeInstanceOf(helper.FirebaseAdminCredentialsError);
+			expect(thrown.code).toBe('FIREBASE_CREDENTIALS_ADC_UNSUPPORTED');
+			expect(appOptions).toEqual({});
+		});
+
+		it('fails open when ADC resolution itself throws', () => {
+			const tmpFile = path.join(__dirname, '__fixtures__', 'mock-adc-authorized-user.json');
+			fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
+			fs.writeFileSync(tmpFile, AUTHORIZED_USER);
+
+			const helper = loadHelper({
+				FIREBASE_SERVICE_ACCOUNT_JSON: '',
+				GOOGLE_APPLICATION_CREDENTIALS: tmpFile,
+				FIREBASE_PROJECT_ID: 'adc-project',
+				HOME: '/nonexistent-home',
+				APPDATA: '',
+			});
+			FAKE_ADMIN.credential.applicationDefault.mockImplementationOnce(() => {
+				throw new Error('no ADC available');
+			});
+
+			const result = helper.loadFirebaseAdminCredentialsOrNull();
+			fs.unlinkSync(tmpFile);
+
+			expect(result).toBeNull();
+			expect(warnSpy).toHaveBeenCalledTimes(1);
 		});
 	});
 
