@@ -258,6 +258,22 @@ Paging is deduplicated by cooldown and only latches after confirmed delivery; a 
 | `JOB_BACKLOG_PROBE_TIMEOUT_MS` | `10000` | `1000`–`300000` | Per-dependency probe deadline. Environment-only. |
 | `ENABLE_JOB_BACKLOG_MONITOR` | `true` | — | Master monitor gate. **Environment-only** — a process-startup gate, deliberately excluded from Remote Config. |
 
+### Equity Market Data Readiness
+
+`ENABLE_EQUITY_MARKET_DATA=true` plus `EQUITY_MARKET_DATA_PROVIDER=twelve-data` and `TWELVE_DATA_API_KEY` enables equity outcome evaluation for `BATS`, `NASDAQ`, `NYSE`, `AMEX`, `NYSE ARCA`, `FX_IDC`, and `SPCFD` signals. Setting those variables is **necessary but not sufficient**, so `/api/status` will not report the feature as working on the strength of the key alone.
+
+`dependencies.equityMarketData.configured` reflects credential *shape* — gate on, provider selected, key non-empty. A typo'd, revoked, quota-exhausted, or wrong-plan key passes that check, which is why `ready` requires an observed successful provider call instead:
+
+| `status` | Meaning |
+| :--- | :--- |
+| `disabled` | `ENABLE_EQUITY_MARKET_DATA` is not `true`. |
+| `misconfigured` | Enabled, but the provider or API key is missing. |
+| `unverified` | Configured, but no provider call has succeeded yet. Not a failure — and not health. |
+| `ready` | A provider call has actually succeeded. |
+| `degraded` | The provider rejected a call; `lastErrorReason` names the class. |
+
+`readiness`, the `requestsAttempted`/`requestsSucceeded`/`requestsFailed`/`consecutiveFailures` counters, and the `lastSuccessAt`/`lastFailureAt` timestamps expose the observed window, which is process-local and resets on restart — so `unverified` is the normal state right after every deploy. There is deliberately no startup probe: it would burn provider quota on every restart purely to manufacture a green checkmark. See [Environment Configuration](docs/environment-configuration.md#verifying-equity-market-data-is-actually-working).
+
 ### Market Scanner MCP Fast-Fail Gate
 `POST /api/webhook/market-scanner-alert` checks the process-local TradingView MCP status before running its sequential scans. If the status is `degraded` with `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, it skips every scan and returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with each scan as `status: "skipped"`. The endpoint returns `502` in two shapes: `TRADINGVIEW_MCP_UNAVAILABLE` (skipped, nothing attempted) and `ALL_SCANS_FAILED` (attempted, all failed). The gate keys on the breaker's time-based state so that after `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses the next request is allowed through as a recovery probe — a transient outage self-heals without a restart. See [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert).
 

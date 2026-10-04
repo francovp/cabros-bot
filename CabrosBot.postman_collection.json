@@ -11756,6 +11756,174 @@
           "body": "{\"error\":\"Unauthorized\",\"code\":\"ADMIN_AUTH_REQUIRED\"}"
         }
       ]
+    },
+    {
+      "name": "Get Status - equity market data readiness (issue #1116)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Issue #1116: `dependencies.equityMarketData.configured` only reports credential *shape* (gate on, provider selected, key present), so setting `ENABLE_EQUITY_MARKET_DATA=true` plus a key previously reported `ready:true` and `status:\"ready\"` even for a typo'd, revoked, quota-exhausted or wrong-plan key that had never made a successful call. Readiness now requires an observed provider call: `status` is `unverified` before any call is observed, `ready` only after a successful one, and `degraded` after a failed one. The counters, timestamps and sanitized `lastErrorReason` expose the observed window, which resets on process restart."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('equity readiness never claims ready without an observed provider success', function () {",
+              "  const emd = pm.response.json().dependencies.equityMarketData;",
+              "  pm.expect(pm.response.code).to.eql(200);",
+              "  pm.expect(emd).to.be.an('object');",
+              "  pm.expect(['unverified','verified','degraded']).to.include(emd.readiness);",
+              "  if (emd.ready) {",
+              "    pm.expect(emd.status).to.eql('ready');",
+              "    pm.expect(emd.readiness).to.eql('verified');",
+              "    pm.expect(emd.requestsSucceeded).to.be.above(0);",
+              "  }",
+              "});",
+              "pm.test('a present credential alone never yields ready', function () {",
+              "  const emd = pm.response.json().dependencies.equityMarketData;",
+              "  if (emd.configured && emd.requestsSucceeded === 0) {",
+              "    pm.expect(emd.ready).to.eql(false);",
+              "    pm.expect(emd.status).to.not.eql('ready');",
+              "  }",
+              "});",
+              "pm.test('a degraded provider reports a sanitized reason and no leaked key', function () {",
+              "  const emd = pm.response.json().dependencies.equityMarketData;",
+              "  if (emd.status === 'degraded') {",
+              "    pm.expect(emd.ready).to.eql(false);",
+              "    pm.expect(emd.requestsFailed).to.be.above(0);",
+              "    pm.expect(emd.lastErrorReason).to.be.a('string');",
+              "  }",
+              "  pm.expect(pm.response.text()).to.not.include('apikey');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 unverified - key set, no provider call observed",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"dependencies\": {\n    \"equityMarketData\": {\n      \"provider\": \"twelve-data\",\n      \"enabled\": true,\n      \"configured\": true,\n      \"timeoutMs\": 5000,\n      \"rpm\": 8,\n      \"ready\": false,\n      \"status\": \"unverified\",\n      \"readiness\": \"unverified\",\n      \"requestsAttempted\": 0,\n      \"requestsSucceeded\": 0,\n      \"requestsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}"
+        },
+        {
+          "name": "200 degraded - provider rejected the credentials",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"dependencies\": {\n    \"equityMarketData\": {\n      \"provider\": \"twelve-data\",\n      \"enabled\": true,\n      \"configured\": true,\n      \"timeoutMs\": 5000,\n      \"rpm\": 8,\n      \"ready\": false,\n      \"status\": \"degraded\",\n      \"readiness\": \"degraded\",\n      \"requestsAttempted\": 14,\n      \"requestsSucceeded\": 12,\n      \"requestsFailed\": 2,\n      \"consecutiveFailures\": 1,\n      \"lastSuccessAt\": \"2026-10-04T14:02:11.905Z\",\n      \"lastFailureAt\": \"2026-10-04T14:09:48.220Z\",\n      \"lastErrorReason\": \"twelve_data_misconfigured\"\n    }\n  }\n}"
+        },
+        {
+          "name": "200 ready - provider call proven to succeed",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"dependencies\": {\n    \"equityMarketData\": {\n      \"provider\": \"twelve-data\",\n      \"enabled\": true,\n      \"configured\": true,\n      \"timeoutMs\": 5000,\n      \"rpm\": 8,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"readiness\": \"verified\",\n      \"requestsAttempted\": 14,\n      \"requestsSucceeded\": 14,\n      \"requestsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": \"2026-10-04T14:11:03.117Z\",\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}"
+        }
+      ]
     }
   ]
 }

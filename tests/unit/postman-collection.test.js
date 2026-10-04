@@ -604,6 +604,54 @@ describe('Postman collection contract', () => {
 		expect(unauthorized.code).toBe(401);
 	});
 
+	it('documents proven equity market-data readiness states for GET Status', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - equity market data readiness (issue #1116)');
+
+		expect(item).toBeDefined();
+
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const ready = item.response.find((res) => res.name.includes('ready'));
+
+		// Issue #1116 acceptance: a shaped-but-unproven credential must never read as
+		// ready, so the pre-call state is documented as unverified rather than ready.
+		expect(unverified.code).toBe(200);
+		expect(JSON.parse(unverified.body).dependencies.equityMarketData).toMatchObject({
+			configured: true,
+			ready: false,
+			status: 'unverified',
+			readiness: 'unverified',
+			requestsSucceeded: 0,
+			lastErrorReason: null,
+		});
+
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.equityMarketData).toMatchObject({
+			configured: true,
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			consecutiveFailures: 1,
+			lastErrorReason: 'twelve_data_misconfigured',
+		});
+
+		expect(ready.code).toBe(200);
+		expect(JSON.parse(ready.body).dependencies.equityMarketData).toMatchObject({
+			configured: true,
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			requestsSucceeded: 14,
+		});
+
+		for (const res of [unverified, degraded, ready]) {
+			const raw = res.body;
+			expect(raw).not.toMatch(/apikey/i);
+			expect(raw).not.toMatch(/sk-[a-z0-9]/i);
+		}
+	});
+
 	it('documents both STORAGE_UNAVAILABLE classifications for GET List Alerts', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const item = findItem(collection.item, 'GET List Alerts');
