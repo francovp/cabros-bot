@@ -18,10 +18,26 @@
 #   ./verify-preview.sh 359 "/healthcheck,/openapi.json" "abc1234..."
 #
 # EXPECTED_SHA (optional):
-#   When provided, the script fetches the SHA of the latest GitHub deployment
-#   for the PR and compares it to EXPECTED_SHA. A mismatch triggers a stale-
-#   deploy warning and exits non-zero, which routes issue-automator to Step 6.5.
+#   When provided, the script checks that the deployment backing the probed URL
+#   is the PR head commit, and that the URL actually serves it:
+#     1. Bound-record check — EXPECTED_SHA is compared against the sha of the
+#        *selected* deployment (the one whose status supplied the URL), not
+#        against the newest deployment record.
+#     2. Served-build check — the commit the running service reports at
+#        /api/status (`service.commit`) is compared against EXPECTED_SHA.
+#   Either mismatch exits 2, which routes issue-automator to Step 6.5. The second
+#   check is skipped with a warning when it cannot be proven (no WEBHOOK_API_KEY,
+#   auth-gated status endpoint, or a status payload without service.commit).
 #   Obtain the PR head SHA with: gh pr view <N> --json headRefOid --jq .headRefOid
+#
+# Exit codes:
+#   0  endpoints healthy (and EXPECTED_SHA satisfied when provided)
+#   1  one or more endpoint checks failed
+#   2  stale deploy (EXPECTED_SHA mismatch) → Step 6.5 recovery
+#
+# Retry tuning (optional):
+#   VERIFY_PREVIEW_MAX_ATTEMPTS            — endpoint attempts (default: 3)
+#   VERIFY_PREVIEW_RETRY_DELAY_SECONDS     — pause between attempts (default: 5)
 #
 # Railway and GitHub Deployments are the supported preview-status sources.
 
@@ -50,13 +66,24 @@ if [ "$PR_NUMBER" = "production" ] || [ "$PR_NUMBER" = "prod" ] || [ "$PR_NUMBER
   PREVIEW_URL="${PRODUCTION_URL:-https://cabros-bot-production.up.railway.app}"
   LABEL="production"
   EXPECTED_SHA=""  # SHA check not applicable to production
+  DEPLOYMENT_SHA=""
+  DEPLOYMENT_STATE=""
+  DEPLOYMENT_ID=""
+  DEPLOYMENT_SOURCE="production"
 else
   # Validate PR number is numeric when not production
   if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
     echo "Error: PR_NUMBER must be a positive integer or 'production', got '$PR_NUMBER'." >&2
     exit 1
   fi
-  PREVIEW_URL="$("${SCRIPT_DIR}/get-pr-deployment-url.sh" "$PR_NUMBER")"
+  # --details returns the URL together with the identity of the deployment that
+  # produced it, so the SHA compared below always describes the URL we probe.
+  DEPLOYMENT_DETAILS="$("${SCRIPT_DIR}/get-pr-deployment-url.sh" "$PR_NUMBER" --details)"
+  PREVIEW_URL="$(echo "$DEPLOYMENT_DETAILS" | jq -r '.url // empty')"
+  DEPLOYMENT_SHA="$(echo "$DEPLOYMENT_DETAILS" | jq -r '.sha // empty')"
+  DEPLOYMENT_STATE="$(echo "$DEPLOYMENT_DETAILS" | jq -r '.state // empty')"
+  DEPLOYMENT_ID="$(echo "$DEPLOYMENT_DETAILS" | jq -r '.deployment_id // empty')"
+  DEPLOYMENT_SOURCE="$(echo "$DEPLOYMENT_DETAILS" | jq -r '.source // empty')"
   # Normalize: remove trailing slashes to prevent //endpoint concatenation issues
   PREVIEW_URL="${PREVIEW_URL%%/}"
   LABEL="PR #${PR_NUMBER}"
@@ -68,36 +95,88 @@ echo "Verifying deployment for ${LABEL}..."
 echo "Target URL: ${HEALTHCHECK_URL}"
 echo "Base URL: ${PREVIEW_URL}"
 
+# Full or short SHAs are both accepted by the prefix comparison below.
+sha_matches() {
+  local actual="$1" expected="$2"
+  [ -z "$actual" ] && return 1
+  [ -z "$expected" ] && return 1
+  [[ "$actual" == "${expected}"* ]] || [[ "$expected" == "${actual}"* ]]
+}
+
+# Asks the deployment already serving PREVIEW_URL which commit it runs.
+# /api/status is admin-gated, so the key travels in the x-api-key header only —
+# never in the URL, the query string, or any printed line.
+fetch_served_commit() {
+  local status_url="${PREVIEW_URL}/api/status"
+  local response curl_exit_code body status_code
+
+  if [ -z "${WEBHOOK_API_KEY:-}" ]; then
+    echo "Warning: WEBHOOK_API_KEY is unset — cannot read the served commit from ${status_url}." >&2
+    return 1
+  fi
+
+  set +e
+  response="$(curl -s --connect-timeout 10 --max-time 15 -H "x-api-key: ${WEBHOOK_API_KEY}" -w '\n%{http_code}' "$status_url")"
+  curl_exit_code=$?
+  set -e
+
+  if [ "$curl_exit_code" -ne 0 ]; then
+    echo "Warning: could not reach ${status_url} (curl exit ${curl_exit_code}) — served-commit check skipped." >&2
+    return 1
+  fi
+
+  body="$(echo "$response" | sed '$d')"
+  status_code="$(echo "$response" | tail -n1)"
+  if [ "$status_code" != "200" ]; then
+    echo "Warning: ${status_url} returned HTTP ${status_code} — served-commit check skipped." >&2
+    return 1
+  fi
+
+  SERVED_COMMIT="$(echo "$body" | jq -r '.service.commit // empty' 2>/dev/null || true)"
+  if [ -z "$SERVED_COMMIT" ]; then
+    echo "Warning: ${status_url} did not report service.commit — served-commit check skipped." >&2
+    return 1
+  fi
+
+  return 0
+}
+
 # --- Optional SHA staleness check ---
-# If EXPECTED_SHA is provided, compare against the latest GitHub deployment SHA.
-# A mismatch means the deployed revision is not the PR head — trigger stale warning.
+# Two independent checks, because the deployment record alone does not prove the
+# probed URL serves it, and the served build alone does not prove which
+# deployment the URL was selected from.
 if [ -n "$EXPECTED_SHA" ] && [ "$PR_NUMBER" != "production" ] && [ "$PR_NUMBER" != "prod" ] && [ "$PR_NUMBER" != "master" ]; then
-  REPO="${REPO:-francovp/cabros-bot}"
-  PR_BRANCH="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefName --jq .headRefName 2>/dev/null || true)"
-  DEPLOYED_SHA=""
-
-  # Try environment-name-based lookup first, then ref-based
-  ENV_NAME="cabros-bot-pr-${PR_NUMBER}"
-  for QUERY_PARAM in "environment=${ENV_NAME}" "${PR_BRANCH:+ref=${PR_BRANCH}}"; do
-    [ -z "$QUERY_PARAM" ] && continue
-    DEPLOYED_SHA="$(gh api "repos/${REPO}/deployments?${QUERY_PARAM}&per_page=1" \
-      --jq '.[0].sha // empty' 2>/dev/null || true)"
-    [ -n "$DEPLOYED_SHA" ] && break
-  done
-
-  if [ -n "$DEPLOYED_SHA" ]; then
-    # Compare prefix (full SHA vs short SHA both accepted)
-    if [[ "$DEPLOYED_SHA" != "${EXPECTED_SHA}"* ]] && [[ "${EXPECTED_SHA}" != "${DEPLOYED_SHA}"* ]]; then
-      echo "Error: Stale deploy detected for PR #${PR_NUMBER}." >&2
-      echo "  Expected SHA : ${EXPECTED_SHA}" >&2
-      echo "  Deployed SHA : ${DEPLOYED_SHA}" >&2
-      echo "  The Railway preview is not serving the PR head commit. Trigger Step 6.5 recovery." >&2
-      exit 2  # exit 2 = stale deploy (distinct from general endpoint failure exit 1)
+  # 1. Bound-record check: compare against the deployment that supplied the URL.
+  if [ -n "$DEPLOYMENT_SHA" ]; then
+    echo "Selected deployment: id=${DEPLOYMENT_ID} state=${DEPLOYMENT_STATE} sha=${DEPLOYMENT_SHA:0:10}"
+    if sha_matches "$DEPLOYMENT_SHA" "$EXPECTED_SHA"; then
+      echo "SHA match: selected deployment ${DEPLOYMENT_SHA:0:10} matches expected ${EXPECTED_SHA:0:10}."
     else
-      echo "SHA match: deployed ${DEPLOYED_SHA:0:10} matches expected ${EXPECTED_SHA:0:10}."
+      echo "Error: Stale deploy detected for PR #${PR_NUMBER}." >&2
+      echo "  Expected SHA     : ${EXPECTED_SHA}" >&2
+      echo "  Selected SHA     : ${DEPLOYMENT_SHA}" >&2
+      echo "  Deployment ID    : ${DEPLOYMENT_ID} (state=${DEPLOYMENT_STATE})" >&2
+      echo "  URL              : ${PREVIEW_URL}" >&2
+      echo "  The newest deployment for this PR does not match the PR head, and the" >&2
+      echo "  URL resolves to an older successful deployment. Trigger Step 6.5 recovery." >&2
+      exit 2  # exit 2 = stale deploy (distinct from general endpoint failure exit 1)
     fi
   else
-    echo "Warning: Could not fetch deployed SHA for PR #${PR_NUMBER} — skipping staleness check." >&2
+    echo "Warning: could not determine the commit of the selected deployment (source=${DEPLOYMENT_SOURCE}) — relying on the served-build check." >&2
+  fi
+
+  # 2. Served-build check: ask the running service what it actually runs.
+  if fetch_served_commit; then
+    if sha_matches "$SERVED_COMMIT" "$EXPECTED_SHA"; then
+      echo "Served-build match: ${PREVIEW_URL} is serving ${SERVED_COMMIT:0:10}."
+    else
+      echo "Error: Stale deploy detected for PR #${PR_NUMBER}." >&2
+      echo "  Expected SHA     : ${EXPECTED_SHA}" >&2
+      echo "  Served SHA       : ${SERVED_COMMIT}" >&2
+      echo "  URL              : ${PREVIEW_URL}" >&2
+      echo "  The selected preview URL is not serving the PR head commit. Trigger Step 6.5 recovery." >&2
+      exit 2
+    fi
   fi
 fi
 
@@ -121,8 +200,8 @@ normalize_endpoint() {
   echo "$ep"
 }
 
-MAX_ATTEMPTS=3
-DELAY_SECONDS=5
+MAX_ATTEMPTS="${VERIFY_PREVIEW_MAX_ATTEMPTS:-3}"
+DELAY_SECONDS="${VERIFY_PREVIEW_RETRY_DELAY_SECONDS:-5}"
 
 verify_endpoint() {
   local endpoint="$1"

@@ -1981,3 +1981,21 @@ Only then does the endpoint return `502 TRADINGVIEW_MCP_UNAVAILABLE` with every 
 **502 has two documented shapes** (Codex P2). `TRADINGVIEW_MCP_UNAVAILABLE` is the skip path (nothing attempted); `ALL_SCANS_FAILED` is the attempt path (every scan was attempted and failed). Both are enumerated under `components.responses.MarketScannerBadGateway` in `src/openapi/openapi.json`, in `CabrosBot.postman_collection.json`, and in `docs/webhooks.md`.
 
 **Coverage:** `tests/unit/market-scanner.test.js` covers fail-fast while open, the half-open recovery probe, unknown-breaker fail-open, and the non-outage category; `tests/integration/market-scanner-endpoint.test.js` covers the endpoint-level 502 skip, the transient-failure self-recovery round trip, the `ALL_SCANS_FAILED` attempt path, and the two-variant OpenAPI 502 contract. No new environment variable, Remote Config key, or feature flag was added.
+
+## Preview Verification Binds SHA to the Selected Deployment (Issue #1129)
+
+The `issue-automator` merge gate could bless a stale build. `get-pr-deployment-url.sh` walks deployments newest-first and returns the first `success`/`active` status, so a still-`pending` newest deployment was **skipped** in favour of the previous successful one — while `verify-preview.sh` validated `EXPECTED_SHA` against `deployments?...&per_page=1`, i.e. the newest record it had just skipped. The SHA check therefore passed on the pending commit and the health checks ran against an older URL.
+
+**The URL and the commit it is checked against now come from one record.** `get-pr-deployment-url.sh --details` emits a single line of JSON — `{"url":…,"sha":…,"state":…,"deployment_id":…,"source":…}` — where `sha`/`state` are read from the *same* deployment whose status supplied `url`, and `source` is `production`, `github-deployment`, or `railway-fallback`. Both fields are empty when no GitHub deployment was selected. The default (flagless) stdout contract is unchanged: still the bare URL.
+
+`verify-preview.sh` resolves the URL through `--details` and runs two independent checks when `EXPECTED_SHA` is supplied, either mismatch exiting `2` (the pre-existing "stale deploy" code that routes to Step 6.5):
+1. **Bound-record check** — `EXPECTED_SHA` vs. the `sha` of the deployment that produced the probed URL.
+2. **Served-build check** — `EXPECTED_SHA` vs. `service.commit` from `${BASE_URL}/api/status`, the commit the running service reports for itself.
+
+Both checks are needed and neither substitutes for the other: the record does not prove the URL serves it, and the served build does not prove which deployment the URL was selected from. The served-build check is the only available evidence on the Railway-pattern fallback path, where no GitHub deployment exists. It is **fail-open on missing evidence, fail-closed on proven mismatch** — an absent `WEBHOOK_API_KEY`, an auth-gated/unreachable `/api/status`, or a payload without `service.commit` warns and defers to the bound-record result rather than failing the gate.
+
+`WEBHOOK_API_KEY` is read from the environment and sent as the `x-api-key` header only — never in a URL, query string, or printed line (same pattern as `ops/production-smoke-probe.sh`). Retry pacing is tunable through `VERIFY_PREVIEW_MAX_ATTEMPTS` (default `3`) and `VERIFY_PREVIEW_RETRY_DELAY_SECONDS` (default `5`); both defaults are unchanged.
+
+**Coverage**: `tests/unit/verify-preview-deployment-binding.test.js` drives both scripts against fake `gh`/`curl` binaries. It reproduces the reported scenario (newest `pending` + previous `success`) and asserts exit `2` when the selected URL is not serving `EXPECTED_SHA`, plus the served-build mismatch, the short-SHA prefix match, every unprovable-evidence warning, the Railway fallback, and API-key non-leakage. The `gh` stub answers three distinct `--jq` projections so the legacy code path is reproduced faithfully rather than accidentally passing.
+
+No endpoint, OpenAPI, Postman, environment variable, Remote Config key, or feature flag was added; `agents.md` and `AGENTS.md` are the same file.
