@@ -571,6 +571,9 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				lastRunEvaluatedCount: signalOutcomeWorkerStatus.lastRunEvaluatedCount,
 				lastRunPendingCount: signalOutcomeWorkerStatus.lastRunPendingCount,
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
+				leaseMs: signalOutcomeWorkerStatus.leaseMs,
+				lastRunLeaseHeld: signalOutcomeWorkerStatus.lastRunLeaseHeld,
+				leaseHeldSkipCount: signalOutcomeWorkerStatus.leaseHeldSkipCount,
 			},
 			notificationRedrive: notificationRedriveService.getStatus({ skipTelemetrySync }),
 			alertSignalRepeatSuppression: {

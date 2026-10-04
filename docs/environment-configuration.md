@@ -212,6 +212,7 @@ Until that runs, the collection grows without bound. This is the same eventual d
 
 **Rollback.** Set the variable back to `false` and redeploy; the service falls back to in-memory idempotency on the next request and no code change is needed. Nothing is lost that matters — unexpired reservations simply stop being shared, so a duplicate is possible again, which is the pre-#1111 behaviour.
 - `SIGNAL_OUTCOME_WORKER_ROLE` - Scheduler role: `web` preserves the local/web timer, `worker` enables only the dedicated worker entrypoint, and `disabled` prevents scheduler startup (default: `web`)
+- `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` - Distributed sweep lease duration in milliseconds (`10000`-`600000`, integer, default: `120000`). The sweep is claimed in the Firestore `signalOutcomeLocks` collection so exactly one process evaluates a pending signal when more than one has tracking enabled; a replica that loses the claim skips with `reason: "lease-held"` and makes no market-data calls. Fails open to single-process behaviour when Firestore or the lease write is unavailable, so it can never disable evaluation. Reported as `dependencies.signalOutcomeWorker.leaseMs`.
 - `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access. Service accounts only; an ADC document supplied inline is rejected with an actionable error because ADC is resolved from a file or the managed runtime, never from an inline value.
 - `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization. Required when credentials resolve through Application Default Credentials, since `authorized_user` and `external_account` documents carry no project id of their own.
 - `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a credential JSON file for local development. Accepts a service account key (used directly) or an Application Default Credentials document such as the `authorized_user` file written by `gcloud application-default login` or an `external_account` workload-identity config (resolved by the Firebase Admin SDK).
@@ -294,6 +295,30 @@ Verify activation through `GET /api/status` → `dependencies.firebaseRemoteConf
 | `consecutiveFailures` | Consecutive failed loads; reset to `0` on success. |
 
 In the inert state (`templatePublished: false, ready: false, source: "environment", lastErrorCategory: "template_not_published"`) every value comes from the environment fallback — intended fail-open behavior; the alert path is never blocked.
+
+##### Production enablement (issue #1113)
+
+Production enables the gate on **every compute service** in `render.yaml` — the web service, the BullMQ job worker, and the signal-outcome worker — with `previewValue: false`. Two properties follow, and both are load-order dependent rather than code dependent:
+
+- **The gate is declared, not assumed.** `RemoteConfigService.start()` returns `false` immediately when `ENABLE_FIREBASE_REMOTE_CONFIG` is not `true`, so a service that omits the key never loads the template at all and silently keeps evaluating environment values. The gate must be on any process that calls `remoteConfigService.start()`; `getRuntimeConfig()` merges remote overrides only when it is.
+- **A per-service gate is a correctness bug, not a config preference.** `getRuntimeConfig()` merges remote overrides only where the gate is on, so two processes with different gate values evaluate *different* effective configs from the same published template. `SIGNAL_OUTCOME_RETENTION_DAYS` is the sharpest case: the web service stamps `expiresAt` on outcome documents while the signal-outcome worker applies the same window when evaluating them, so a split gate makes the two processes disagree about document lifecycle.
+
+Enabling the gate does not by itself activate remote tuning, so the deploy is a **two-step** rollout:
+
+1. Merge this change. Render applies the blueprint and redeploys. Until a template exists the service reports `status: "degraded"` with `lastErrorCategory: "template_not_published"` — the honest inert state above, with every value still coming from the environment. Nothing is degraded functionally, and this is the expected state between the two steps.
+2. Once the deployment is green, run the **Deploy Firebase Remote Config Server Template** workflow (`workflow_dispatch`, ref `master`). The service then reports `ready: true`, `templatePublished: true`, `source: "remote"`, and `templateVersion` matching the published version.
+
+The publish workflow is deliberately manual and agent-driven publishes are prohibited: a template becomes the live authority for production the moment it lands. Confirm step 2 on each compute service, not only on the web service.
+
+##### After publishing, `render.yaml` no longer owns allow-listed values
+
+This is the main operational consequence of turning the feature on, and it is easy to get wrong.
+
+The Firebase Admin SDK reports a fetched template parameter's `defaultValue` with source `remote` (`ValueImpl('remote', parameterDefaultValue)` in `remote-config.js`), and `RemoteConfigService.getRemoteValue()` accepts any value whose source is `remote`. So **every parameter present in `firebase-remote-config-template.json` becomes a remote override that takes precedence over `process.env`**, even though the template entries look like plain defaults.
+
+Once the template is published, editing an allow-listed key in `render.yaml` or in the Render dashboard has **no effect** on that running process. To change an allow-listed value you must edit `firebase-remote-config-template.json` and re-run the publish workflow. The template is therefore the source of truth for the allow-list after first publish, and `render.yaml` acts only as a fallback for keys the template omits (and for the gate itself).
+
+Keep `firebase-remote-config-template.json` aligned with the intended production values before publishing. A template whose defaults are stale will silently override freshly corrected `render.yaml` values, and `ready: true` will still be reported because the load succeeded.
 
 #### Firestore Emulator Integration Tests
 

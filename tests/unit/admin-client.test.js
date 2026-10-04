@@ -976,6 +976,41 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('Alert path failure rate (%)40');
 	});
 
+	it('renders the signal outcome sweep lease counters in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				signalOutcomeWorker: {
+					status: 'ready',
+					role: 'web',
+					leaseMs: 120000,
+					lastRunLeaseHeld: true,
+					leaseHeldSkipCount: 138,
+					lastRunEvaluatedCount: 0,
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		// Without these the operator cannot tell which replica is evaluating, which
+		// is the whole reason the counters exist.
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Lease (ms)120000');
+		expect(view.textContent).toContain('Last run lease heldtrue');
+		expect(view.textContent).toContain('Lease-held skips138');
+	});
+
 	it('waits for an API key before loading protected overview status', async () => {
 		const requests = [];
 		const browser = createBrowser({
@@ -1142,7 +1177,8 @@ describe('admin browser client', () => {
 				if (!url.includes('/api/webhook/expanded-analysis-alert')
 					&& !url.includes('/api/news-monitor')
 					&& !url.includes('/api/scanner-presets/')
-					&& !url.includes('/api/webhook/volume-confirmation')) return response({});
+					&& !url.includes('/api/webhook/volume-confirmation')
+					&& !url.includes('/api/webhook/symbol-analysis')) return response({});
 				const signal = options?.signal;
 				signals.push(signal);
 				return new Promise((resolve, reject) => {
@@ -1185,6 +1221,14 @@ describe('admin browser client', () => {
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[3].aborted).toBe(true);
+
+		await selectView(browser, 'analysis');
+		await findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis').dispatch('submit');
+		await flush();
+		expect([...browser.timerDelays.values()]).toContain(150000);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+		expect(signals[4].aborted).toBe(true);
 	});
 
 	it('does not abort slow responses that resolve within the maximum budget for volume-confirmation and alerts', async () => {
@@ -5879,6 +5923,74 @@ describe('structured analysis forms', () => {
 			select.value = alertOperation;
 			await select.dispatch('change');
 			expect(playground.elements.body.value).toContain('Original alert payload');
+
+			select.value = volumeOperation;
+			await select.dispatch('change');
+			expect(playground.elements.body.value).toContain('BINANCE:BTCUSDT');
+		});
+
+		it('does not let an empty filter result erase previously cached operation inputs', async () => {
+			const dispatched = [];
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					dispatched.push(url);
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const submitButton = find(playground, (node) => node.tagName === 'BUTTON' && node.textContent === 'Send request');
+			const curlButton = find(playground, (node) => node.tagName === 'BUTTON' && node.textContent.includes('cURL'));
+			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
+			const alertOperation = optionValue('POST /api/webhook/alert');
+			const volumeOperation = optionValue('POST /api/webhook/volume-confirmation');
+
+			select.value = alertOperation;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ message: 'Alert draft that must survive' });
+			await playground.elements.body.dispatch('input');
+
+			select.value = volumeOperation;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ symbol: 'BINANCE:BTCUSDT', timeframe: '4h' });
+			await playground.elements.body.dispatch('input');
+
+			select.value = alertOperation;
+			await select.dispatch('change');
+
+			const filter = playground.elements.filterOperations;
+
+			// A blank `select.value` must mean "no operation selected", never index 0:
+			// `Number('') === 0`, so an unguarded lookup silently resolves to the first
+			// definition and leaves the dispatch controls armed against a route the
+			// operator never picked.
+			filter.value = 'zzz-no-operation-matches';
+			await filter.dispatch('input');
+			expect(select.value).toBe('');
+			expect(playground.elements.body).toBeUndefined();
+			expect(playground.elements.query).toBeUndefined();
+			expect(playground.elements['path-alertId']).toBeUndefined();
+			expect(submitButton.disabled).toBe(true);
+			expect(curlButton.disabled).toBe(true);
+
+			await playground.dispatch('submit');
+			await flush();
+			expect(dispatched).toEqual([]);
+
+			filter.value = 'volume-confirmation';
+			await filter.dispatch('input');
+			expect(select.value).toBe(volumeOperation);
+			expect(playground.elements.body.value).toContain('BINANCE:BTCUSDT');
+
+			select.value = alertOperation;
+			await select.dispatch('change');
+			expect(playground.elements.body.value).toContain('Alert draft that must survive');
 
 			select.value = volumeOperation;
 			await select.dispatch('change');

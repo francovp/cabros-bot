@@ -57,8 +57,21 @@ services:
   - key: NEWS_GEMINI_CONCURRENCY
     value: 3
     previewValue: 3
+  # Signal outcome tracking (GH-1110). Pinned here, not dashboard-only, so the
+  # gate that controls signal recording, the evaluation sweep and the whole
+  # /api/outcomes surface is reviewable in the repo. Previews stay off: a PR
+  # preview would record and evaluate against the production collection.
+  # The web process records signals and sweeps them. The dedicated
+  # cabros-crypto-bot-signal-outcome-worker below remains the cutover target;
+  # the Firestore lease in SignalOutcomeService keeps exactly one of them acting
+  # on a pending signal while both are configured.
+  - key: ENABLE_SIGNAL_OUTCOME_TRACKING
+    value: true
+    previewValue: false
   - key: SIGNAL_OUTCOME_WORKER_ROLE
     value: web
+  - key: SIGNAL_OUTCOME_EVALUATION_LEASE_MS
+    value: 120000
   - key: JOB_EXECUTION_MODE
     value: local
     previewValue: local
@@ -67,6 +80,11 @@ services:
     previewValue: false
   # Durable scanner presets: web service only, previews off. See AGENTS.md.
   - key: ENABLE_FIRESTORE_SCANNER_PRESETS
+    value: true
+    previewValue: false
+  # Server-side Remote Config. Enabled on every compute service that starts the
+  # loader so they cannot evaluate different effective configs. Previews stay off.
+  - key: ENABLE_FIREBASE_REMOTE_CONFIG
     value: true
     previewValue: false
   - key: REDIS_URL
@@ -87,6 +105,9 @@ services:
   envVars:
   - key: JOB_EXECUTION_MODE
     value: render-worker
+  - key: ENABLE_FIREBASE_REMOTE_CONFIG
+    value: true
+    previewValue: false
   - key: ENABLE_NOTIFICATION_REDRIVE
     fromService:
       name: cabros-crypto-bot-telegram-iac
@@ -391,7 +412,8 @@ services:
   - key: ENABLE_SIGNAL_OUTCOME_TRACKING
     sync: false
   - key: ENABLE_FIREBASE_REMOTE_CONFIG
-    sync: false
+    value: true
+    previewValue: false
   - key: ENABLE_SENTRY
     sync: false
   - key: SENTRY_DSN

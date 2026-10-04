@@ -1379,7 +1379,7 @@
             "capabilities"
           ]
         },
-        "description": "Alias for /api/status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters; dependencies.signalOutcomeWorker.entryPriceSources reports the active non-secret crypto/equity provider chains. Remote Config metadata is safe for operational inspection and does not include configured parameter values or secrets."
+        "description": "Alias for /api/status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters; dependencies.signalOutcomeWorker.entryPriceSources reports the active non-secret crypto/equity provider chains; dependencies.signalOutcomeWorker leaseMs/lastRunLeaseHeld/leaseHeldSkipCount report the distributed sweep lease that keeps exactly one evaluator, and identify the winning evaluator from status alone instead of inferring it from the Render dashboard. Remote Config metadata is safe for operational inspection and does not include configured parameter values or secrets."
       },
       "response": [
         {
@@ -1387,6 +1387,177 @@
           "status": "OK",
           "code": 200,
           "body": "{\n  \"featureFlags\": {\n    \"tradingViewVolumeConfirmation\": true,\n    \"firestoreJobStorage\": true,\n    \"newsMonitorTestMode\": false,\n    \"messageFooterMetadata\": true,\n    \"cloudflareAig\": false,\n    \"equityMarketData\": false,\n    \"firebaseRemoteConfig\": true,\n    \"notificationRedrive\": false,\n    \"tokenCostBudget\": false,\n    \"signalClassMarker\": true,\n    \"newsMonitorClassifier\": false,\n    \"firebaseAdminAuth\": false\n  },\n  \"dependencies\": {\n    \"geminiQuota\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"cooldownActive\": false,\n      \"remainingCooldownMs\": 0,\n      \"lastTriggeredAt\": null,\n      \"triggersTotal\": 0,\n      \"braveFallbacksDuringCooldown\": 0,\n      \"lastBraveFallbackAt\": null,\n      \"metrics\": {\n        \"totalRequests\": 0,\n        \"successRequests\": 0,\n        \"failureRequests\": 0,\n        \"timeoutRequests\": 0\n      }\n    },\n    \"tradingViewMcp\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"unknown\",\n      \"lastCheckedAt\": null,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorCategory\": null,\n      \"successCount\": 0,\n      \"failureCount\": 0,\n      \"circuitBreaker\": {\n        \"state\": \"closed\",\n        \"consecutiveFailures\": 0,\n        \"openedAt\": null,\n        \"lastStateChangeAt\": null,\n        \"failureThreshold\": 5,\n        \"cooldownMs\": 600000\n      },\n      \"toolMetrics\": {}\n    },\n    \"tradingViewVolumeConfirmation\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"circuitBreaker\": {\n        \"state\": \"closed\",\n        \"consecutiveFailures\": 0,\n        \"openedAt\": null,\n        \"lastStateChangeAt\": null,\n        \"failureThreshold\": 5,\n        \"cooldownMs\": 600000\n      }\n    },\n    \"firestoreJobStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\"\n    },\n    \"cloudflareAig\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\"\n    },\n    \"equityMarketData\": {\n      \"provider\": null,\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"supportedExchanges\": [\n        \"BATS\",\n        \"NASDAQ\",\n        \"NYSE\",\n        \"AMEX\",\n        \"NYSE ARCA\",\n        \"FX_IDC\",\n        \"SPCFD\"\n      ],\n      \"timeoutMs\": 5000\n    },\n    \"firebaseRemoteConfig\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"source\": \"remote\",\n      \"templateVersion\": \"7\",\n      \"lastSuccessfulLoad\": \"2026-08-02T08:30:00.000Z\",\n      \"lastErrorCategory\": null,\n      \"consecutiveFailures\": 0,\n      \"refreshIntervalMs\": 900000,\n      \"maxAgeMs\": 3600000\n    },\n    \"signalOutcomeWorker\": {\n      \"entryPriceSources\": {\n        \"configured\": true,\n        \"crypto\": [\n          \"mcp\",\n          \"binance\",\n          \"gemini\"\n        ],\n        \"equity\": [\n          \"mcp\",\n          \"binance\",\n          \"gemini\"\n        ]\n      }\n    },\n    \"notificationRedrive\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"role\": \"web\",\n      \"workerRole\": \"web\",\n      \"running\": false,\n      \"intervalMs\": 60000,\n      \"batchLimit\": 50,\n      \"maxAttempts\": 5,\n      \"maxAgeMs\": 3600000,\n      \"pendingCount\": 0,\n      \"deliveredCount\": 0,\n      \"exhaustedCount\": 0,\n      \"zeroChannelBroadcasts\": 0,\n      \"lastRunAt\": null,\n      \"lastSweepAt\": null,\n      \"lastRunDurationMs\": null,\n      \"lastRunScannedCount\": 0,\n      \"lastRunRedrivenCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"lastRunExhaustedCount\": 0,\n      \"lastSweepResult\": null\n    },\n    \"tokenCostBudget\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"dailySpendUsd\": 0,\n      \"budgetUsd\": 5,\n      \"utilizationPct\": 0,\n      \"alertsSent\": 0,\n      \"lastResetAt\": \"2026-03-29T00:00:00.000Z\"\n    },\n    \"jobExecutionQueue\": {\n      \"mode\": \"local\",\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"queueName\": \"tradingview-jobs\",\n      \"enqueued\": 0,\n      \"claimed\": 0,\n      \"completed\": 0,\n      \"failed\": 0,\n      \"lastErrorCode\": null,\n      \"lastEnqueuedAt\": null,\n      \"waitingCount\": 0,\n      \"delayedCount\": 0,\n      \"failedCount\": 0,\n      \"activeCount\": 0,\n      \"durableQueuedCount\": 0,\n      \"durableQueuedTruncated\": false,\n      \"durableScanRotated\": false,\n      \"durableProbeSucceeded\": null,\n      \"durableCycleComplete\": false,\n      \"oldestQueuedAgeMs\": null,\n      \"backlogAlert\": {\n        \"active\": false,\n        \"thresholdMs\": 900000,\n        \"pagedAt\": null,\n        \"lastRecoveryAt\": null\n      },\n      \"backlogMonitorEnabled\": true,\n      \"backlogMonitorRunning\": false\n    },\n    \"adminAuth\": {\n      \"enabled\": false,\n      \"provider\": null,\n      \"signIn\": null,\n      \"browserConfigConfigured\": false,\n      \"verifierConfigured\": false,\n      \"apiKeyFallbackConfigured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"verificationSuccessCount\": 0,\n      \"verifierUnavailableCount\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastUnavailableAt\": null\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
+      "name": "Get Capabilities - signal outcome sweep lease (issue #1110)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/capabilities",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "capabilities"
+          ]
+        },
+        "description": "Issue #1110 pins ENABLE_SIGNAL_OUTCOME_TRACKING=true on the web service and declares a second candidate evaluator, the dedicated cabros-crypto-bot-signal-outcome-worker. Role gating alone cannot stop both from sweeping, so each sweep is claimed with a Firestore lease in `signalOutcomeLocks`. These three fields are how an operator identifies the winning evaluator from status instead of inferring it from the Render dashboard: one replica whose `leaseHeldSkipCount` climbs while its `lastRunEvaluatedCount` stays at zero is not the evaluator."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('the sweep lease observability is present', function () {",
+              "  const worker = pm.response.json().dependencies.signalOutcomeWorker;",
+              "  pm.expect(pm.response.code).to.eql(200);",
+              "  pm.expect(worker).to.be.an('object');",
+              "  pm.expect(worker).to.have.property('leaseMs');",
+              "  pm.expect(worker).to.have.property('lastRunLeaseHeld');",
+              "  pm.expect(worker).to.have.property('leaseHeldSkipCount');",
+              "});",
+              "pm.test('the lease stays inside its documented bounds', function () {",
+              "  const { leaseMs } = pm.response.json().dependencies.signalOutcomeWorker;",
+              "  pm.expect(leaseMs).to.be.within(10000, 600000);",
+              "});",
+              "pm.test('a lease-held sweep is never reported as productive', function () {",
+              "  const worker = pm.response.json().dependencies.signalOutcomeWorker;",
+              "  if (worker.lastRunLeaseHeld === true) {",
+              "    pm.expect(worker.lastRunEvaluatedCount).to.eql(0);",
+              "  }",
+              "  pm.expect(worker.leaseHeldSkipCount).to.be.at.least(0);",
+              "});",
+              "pm.test('the lease never leaks lock ownership', function () {",
+              "  const raw = pm.response.text();",
+              "  pm.expect(raw).to.not.include('lockedBy');",
+              "  pm.expect(raw).to.not.include('signalOutcomeLocks');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 winning evaluator - the lease is held and signals are being evaluated",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/capabilities",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "capabilities"
+              ]
+            },
+            "description": "Issue #1110 pins ENABLE_SIGNAL_OUTCOME_TRACKING=true on the web service and declares a second candidate evaluator, the dedicated cabros-crypto-bot-signal-outcome-worker. Role gating alone cannot stop both from sweeping, so each sweep is claimed with a Firestore lease in `signalOutcomeLocks`. These three fields are how an operator identifies the winning evaluator from status instead of inferring it from the Render dashboard: one replica whose `leaseHeldSkipCount` climbs while its `lastRunEvaluatedCount` stays at zero is not the evaluator."
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"signalOutcomeTracking\": true\n  },\n  \"dependencies\": {\n    \"signalOutcomeWorker\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"role\": \"web\",\n      \"running\": true,\n      \"shutdownRequested\": false,\n      \"intervalMs\": 300000,\n      \"batchLimit\": 50,\n      \"maxDurationMs\": 30000,\n      \"leaseMs\": 120000,\n      \"lastRunLeaseHeld\": false,\n      \"leaseHeldSkipCount\": 7,\n      \"isEvaluating\": false,\n      \"lastRunAt\": \"2026-10-04T08:31:12.904Z\",\n      \"lastRunDurationMs\": 4120,\n      \"lastRunScannedCount\": 12,\n      \"lastRunEvaluatedCount\": 9,\n      \"lastRunPendingCount\": 1,\n      \"lastRunErrorCount\": 0,\n      \"lastRunRegionBlockedCount\": 0\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 losing replica - every sweep skipped because another replica held the lease",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/capabilities",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "capabilities"
+              ]
+            },
+            "description": "Issue #1110 pins ENABLE_SIGNAL_OUTCOME_TRACKING=true on the web service and declares a second candidate evaluator, the dedicated cabros-crypto-bot-signal-outcome-worker. Role gating alone cannot stop both from sweeping, so each sweep is claimed with a Firestore lease in `signalOutcomeLocks`. These three fields are how an operator identifies the winning evaluator from status instead of inferring it from the Render dashboard: one replica whose `leaseHeldSkipCount` climbs while its `lastRunEvaluatedCount` stays at zero is not the evaluator."
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"signalOutcomeTracking\": true\n  },\n  \"dependencies\": {\n    \"signalOutcomeWorker\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"role\": \"web\",\n      \"running\": true,\n      \"shutdownRequested\": false,\n      \"intervalMs\": 300000,\n      \"batchLimit\": 50,\n      \"maxDurationMs\": 30000,\n      \"leaseMs\": 120000,\n      \"lastRunLeaseHeld\": true,\n      \"leaseHeldSkipCount\": 138,\n      \"isEvaluating\": false,\n      \"lastRunAt\": \"2026-10-04T08:31:12.901Z\",\n      \"lastRunDurationMs\": 3,\n      \"lastRunScannedCount\": 0,\n      \"lastRunEvaluatedCount\": 0,\n      \"lastRunPendingCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"lastRunRegionBlockedCount\": 0\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 ownership lost mid-sweep - work stopped after 2 evaluated signals",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/capabilities",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "capabilities"
+              ]
+            },
+            "description": "Issue #1110 pins ENABLE_SIGNAL_OUTCOME_TRACKING=true on the web service and declares a second candidate evaluator, the dedicated cabros-crypto-bot-signal-outcome-worker. Role gating alone cannot stop both from sweeping, so each sweep is claimed with a Firestore lease in `signalOutcomeLocks`. These three fields are how an operator identifies the winning evaluator from status instead of inferring it from the Render dashboard: one replica whose `leaseHeldSkipCount` climbs while its `lastRunEvaluatedCount` stays at zero is not the evaluator."
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"signalOutcomeTracking\": true\n  },\n  \"dependencies\": {\n    \"signalOutcomeWorker\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"role\": \"worker\",\n      \"running\": true,\n      \"shutdownRequested\": false,\n      \"intervalMs\": 300000,\n      \"batchLimit\": 50,\n      \"maxDurationMs\": 30000,\n      \"leaseMs\": 120000,\n      \"lastRunLeaseHeld\": true,\n      \"leaseHeldSkipCount\": 2,\n      \"isEvaluating\": false,\n      \"lastRunAt\": \"2026-10-04T08:33:41.556Z\",\n      \"lastRunDurationMs\": 26180,\n      \"lastRunScannedCount\": 5,\n      \"lastRunEvaluatedCount\": 2,\n      \"lastRunPendingCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"lastRunRegionBlockedCount\": 0\n    }\n  }\n}",
+          "response": []
         }
       ]
     },
@@ -1640,7 +1811,7 @@
               "name": "Enriched payload",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"signalClass\":\"breakout\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"sentiment_score_raw\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"setup_evidence\":\"Price broke above resistance range with volume confirmation\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[]}},\"tokenUsage\":{}}"
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"signalClass\":\"breakout\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"sentiment_score_raw\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"setup_evidence\":\"Price broke above resistance range with volume confirmation\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[],\"current_price\":83000,\"price_currency\":\"USD\",\"priceSource\":\"gemini-grounding\"}},\"tokenUsage\":{}}"
             }
           ]
         },

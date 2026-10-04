@@ -268,6 +268,19 @@ const VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS = typeof window !== 'undefined'
 	? window.CabrosAdminRequest.VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS
 	: (VOLUME_CONFIRMATION_MCP_CALLS * TRADINGVIEW_MCP_MAX_TIMEOUT_MS) + VOLUME_CONFIRMATION_OVERHEAD_MS; // 390000 ms
 
+// Symbol analysis budget breakdown:
+// - ONE createDeadline() signal spans the base analyzeSymbolIdentifier call and the optional
+//   multi_timeframe_analysis / multi_agent_debate calls, so this budget is never multiplied per
+//   MCP call the way volume confirmation is. Worst case is a single min(EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS, 120,000 ms).
+// - Ingress, route handling, symbol validation, and network transport overhead: 30,000 ms
+const SYMBOL_ANALYSIS_BACKEND_BUDGET_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.SYMBOL_ANALYSIS_BACKEND_BUDGET_MS
+	? window.CabrosAdminRequest.SYMBOL_ANALYSIS_BACKEND_BUDGET_MS : 120000;
+const SYMBOL_ANALYSIS_OVERHEAD_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.SYMBOL_ANALYSIS_OVERHEAD_MS
+	? window.CabrosAdminRequest.SYMBOL_ANALYSIS_OVERHEAD_MS : 30000;
+const SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS
+	? window.CabrosAdminRequest.SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS
+	: SYMBOL_ANALYSIS_BACKEND_BUDGET_MS + SYMBOL_ANALYSIS_OVERHEAD_MS; // 150000 ms
+
 // Long-running alert and analysis pipeline budget breakdown:
 // - TradingView MCP enrichment maximum budget: 120,000 ms (TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS max)
 // - Gemini Grounding analysis maximum timeout: 120,000 ms (GROUNDING_TIMEOUT_MS max)
@@ -323,9 +336,11 @@ const getApiRequestTimeout = (definition, options) => {
 		return window.CabrosAdminRequest.getApiRequestTimeout(definition, options);
 	}
 	if (!definition || !definition.path) return API_REQUEST_TIMEOUT_MS;
-	if (definition.path === '/api/webhook/volume-confirmation'
-		|| definition.path === '/api/webhook/symbol-analysis') {
+	if (definition.path === '/api/webhook/volume-confirmation') {
 		return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+	}
+	if (definition.path === '/api/webhook/symbol-analysis') {
+		return SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS;
 	}
 	if (definition.path === '/api/alerts/batch/replay') {
 		let count = 1;
@@ -1082,6 +1097,9 @@ const statusDetailFields = [
 	['enrichment.alertPath.failedCount', 'Alert path failed'],
 	['enrichment.alertPath.appliedRate24h', 'Alert path applied rate (%)'],
 	['enrichment.alertPath.failureRate24h', 'Alert path failure rate (%)'],
+	['leaseMs', 'Lease (ms)'],
+	['lastRunLeaseHeld', 'Last run lease held'],
+	['leaseHeldSkipCount', 'Lease-held skips'],
 ];
 
 const statusFieldValue = (detail, key) => key.split('.').reduce((value, part) => asObject(value)[part], detail);
@@ -5385,6 +5403,17 @@ const renderPlayground = (contract, view) => {
 
 	const definitions = window.CabrosAdminRequest.operationDefinitions(contract);
 
+	// `Number('') === 0`, so a direct `definitions[Number(select.value)]` lookup resolves a
+	// blank selection to the FIRST definition instead of to nothing. Every lookup goes through
+	// this resolver so "no operation matches" is a real no-selection state. Do not inline it.
+	const selectedDefinition = () => {
+		const raw = select.value;
+		if (raw === undefined || raw === null || String(raw).trim() === '') return undefined;
+		const index = Number(raw);
+		if (!Number.isInteger(index) || index < 0) return undefined;
+		return definitions[index];
+	};
+
 	const fields = element('div', { className: 'form-fields' });
 
 	const buttonRow = element('div', { className: 'badge-row playground-actions' });
@@ -5392,7 +5421,7 @@ const renderPlayground = (contract, view) => {
 	button.type = 'submit';
 
 	const buildCurlCommand = () => {
-		const definition = definitions[Number(select.value)];
+		const definition = selectedDefinition();
 		if (!definition) return '';
 		const pathNames = [...definition.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
 		const resolvedPath = pathNames.reduce((acc, name) => {
@@ -5463,7 +5492,7 @@ const renderPlayground = (contract, view) => {
 	let pendingRequestCount = 0;
 	const isSubmitLocked = () => pendingRequestCount > 0;
 	const syncSubmitLockedState = () => {
-		button.disabled = isSubmitLocked() || !definitions[Number(select.value)];
+		button.disabled = isSubmitLocked() || !selectedDefinition();
 	};
 
 	const saveCurrentInputs = (def) => {
@@ -5484,7 +5513,7 @@ const renderPlayground = (contract, view) => {
 
 	const renderFields = () => {
 		fields.replaceChildren();
-		const definition = definitions[Number(select.value)];
+		const definition = selectedDefinition();
 		if (!definition) {
 			button.disabled = true;
 			curlButton.disabled = true;
@@ -5572,12 +5601,20 @@ const renderPlayground = (contract, view) => {
 		} else if (firstAvailableValue !== null) {
 			// Filter-driven selection: save current inputs under the old definition
 			// and update previousDefinition to the newly selected one so subsequent
-			// explicit changes save under the correct operation.
+			// explicit changes save under the correct operation. `previousDefinition`
+			// is null when this filter followed an empty result, which makes this save a
+			// no-op instead of writing the empty form over the last active operation.
 			saveCurrentInputs(previousDefinition);
 			previousDefinition = definitions[Number(firstAvailableValue)];
 			select.value = firstAvailableValue;
 			renderFields();
 		} else {
+			// Nothing matches. Persist the in-flight draft before the fields are torn
+			// down, then clear previousDefinition: leaving it pointing at the operation
+			// that is no longer rendered is what let the next auto-select save the blank
+			// form into that operation's cache.
+			saveCurrentInputs(previousDefinition);
+			previousDefinition = null;
 			select.value = '';
 			renderFields();
 		}
@@ -5626,7 +5663,7 @@ const renderPlayground = (contract, view) => {
 	const restoreHistoryEntry = (entry) => {
 		const targetIndex = definitions.findIndex((d) => d.method === entry.method && d.path === entry.path);
 		if (targetIndex === -1) return;
-		saveCurrentInputs(definitions[Number(select.value)]);
+		saveCurrentInputs(selectedDefinition());
 		if (filterInput.value) {
 			filterInput.value = '';
 			populateOptions('');
@@ -5652,12 +5689,12 @@ const renderPlayground = (contract, view) => {
 	let previousDefinition = definitions[0];
 	select.addEventListener('change', () => {
 		saveCurrentInputs(previousDefinition);
-		previousDefinition = definitions[Number(select.value)];
+		previousDefinition = selectedDefinition();
 		renderFields();
 	});
 
 	fields.addEventListener('input', () => {
-		saveCurrentInputs(definitions[Number(select.value)]);
+		saveCurrentInputs(selectedDefinition());
 	});
 
 	filterInput.addEventListener('input', () => {
@@ -5675,7 +5712,7 @@ const renderPlayground = (contract, view) => {
 		rawCopyButton.hidden = true;
 		rawToggle.hidden = true;
 
-		const definition = definitions[Number(select.value)];
+		const definition = selectedDefinition();
 		if (!definition) return;
 
 		const pathNames = [...definition.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
