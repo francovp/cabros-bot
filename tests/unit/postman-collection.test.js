@@ -257,6 +257,14 @@ describe('Postman collection contract', () => {
 		expect(enrichedData.price_data).toEqual({ current_price: 64863.03, high: 65000, low: 64000 });
 	});
 
+	it('does not claim deterministic R:R in the alert dry-run example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const sendAlert = findItem(collection.item, 'POST Send Alert Dry Run (risk metadata)');
+		const enrichedData = JSON.parse(sendAlert.response[0].body).payload.enrichedData;
+
+		expect(enrichedData).not.toHaveProperty('risk_reward_ratio_source');
+	});
+
 	it('aligns Binance MARKET quantity dry-run example with request and runtime response', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const marketSell = findItem(collection.item, 'POST Binance order (valid MARKET quantity dry-run)');
@@ -567,6 +575,133 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
 	});
 
+	it('documents unverified, ready, degraded and disabled idempotency storage variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - idempotency storage readiness (issue #1111)');
+
+		expect(item).toBeDefined();
+
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const ready = item.response.find((res) => res.name.includes('a durable reservation has succeeded'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const disabled = item.response.find((res) => res.name.includes('gate off'));
+
+		// Issue #1111 acceptance: credential shape must not be reported as proof that
+		// duplicate suppression works, because every Firestore failure falls open.
+		expect(unverified.code).toBe(200);
+		expect(JSON.parse(unverified.body).dependencies.idempotencyStorage).toEqual({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'unverified',
+			mode: 'durable',
+			backend: 'firestore',
+			failOpen: true,
+			readiness: 'unverified',
+			collection: 'idempotency_keys',
+			operationsAttempted: 0,
+			operationsSucceeded: 0,
+			operationsFailed: 0,
+			consecutiveFailures: 0,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorReason: null,
+		});
+
+		expect(ready.code).toBe(200);
+		expect(JSON.parse(ready.body).dependencies.idempotencyStorage).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			operationsSucceeded: 47,
+			consecutiveFailures: 0,
+		});
+
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.idempotencyStorage).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			// Intent is unchanged while durability is broken, and the fallback is stated.
+			mode: 'durable',
+			backend: 'firestore',
+			failOpen: true,
+			lastErrorReason: 'firestore_unavailable',
+		});
+
+		expect(disabled.code).toBe(200);
+		expect(JSON.parse(disabled.body).dependencies.idempotencyStorage).toMatchObject({
+			enabled: false,
+			ready: false,
+			status: 'disabled',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
+
+		// Every documented variant must be free of the provider text that Firestore
+		// embeds in its error messages.
+		for (const response of item.response) {
+			expect(response.body).not.toContain('projects/');
+			expect(response.body).not.toContain('console.firebase.google.com');
+		}
+	});
+
+	it('documents the signal outcome sweep lease observability (issue #1110)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Capabilities - signal outcome sweep lease (issue #1110)');
+
+		expect(item).toBeDefined();
+		expect(item.request.url.raw).toBe('{{baseUrl}}/api/capabilities');
+
+		const winning = item.response.find((res) => res.name.includes('winning evaluator'));
+		const losing = item.response.find((res) => res.name.includes('losing replica'));
+		const lostMidSweep = item.response.find((res) => res.name.includes('ownership lost mid-sweep'));
+
+		// The three fields the PR's stated purpose depends on: an operator has to be
+		// able to identify the winning evaluator from /api/status alone.
+		expect(winning.code).toBe(200);
+		expect(JSON.parse(winning.body).dependencies.signalOutcomeWorker).toMatchObject({
+			leaseMs: 120000,
+			lastRunLeaseHeld: false,
+			leaseHeldSkipCount: 7,
+			lastRunEvaluatedCount: 9,
+		});
+
+		// A replica that never wins the lease is recognisable: the skip counter
+		// climbs while nothing is evaluated.
+		expect(JSON.parse(losing.body).dependencies.signalOutcomeWorker).toMatchObject({
+			leaseMs: 120000,
+			lastRunLeaseHeld: true,
+			leaseHeldSkipCount: 138,
+			lastRunScannedCount: 0,
+			lastRunEvaluatedCount: 0,
+		});
+
+		// Ownership lost mid-sweep: the sweep stopped acting, but it did evaluate
+		// the documents it finished before the renewal proved the lease was gone.
+		expect(JSON.parse(lostMidSweep.body).dependencies.signalOutcomeWorker).toMatchObject({
+			lastRunLeaseHeld: true,
+			leaseHeldSkipCount: 2,
+			lastRunScannedCount: 5,
+			lastRunEvaluatedCount: 2,
+		});
+
+		// The documented lease window must match the service bounds.
+		for (const response of item.response) {
+			const { leaseMs } = JSON.parse(response.body).dependencies.signalOutcomeWorker;
+			expect(leaseMs).toBeGreaterThanOrEqual(10000);
+			expect(leaseMs).toBeLessThanOrEqual(600000);
+			// Lease ownership identity is an internal lock value, never an operator signal.
+			expect(response.body).not.toContain('lockedBy');
+		}
+
+		// Every documented variant must carry runnable assertions, not just examples.
+		const executed = (item.event || []).flatMap((entry) => entry.script.exec).join('\n');
+		expect(executed).toContain('leaseHeldSkipCount');
+		expect(executed).toContain('lastRunLeaseHeld');
+		expect(executed).toContain('leaseMs');
+	});
+
 	it('documents degraded, healthy, and omitted firestore read-metric variants', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const item = findItem(collection.item, 'Get Status - firestore read metrics (degraded read path)');
@@ -602,6 +737,54 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(omitted.body).dependencies.firestore).not.toHaveProperty('readHealth');
 
 		expect(unauthorized.code).toBe(401);
+	});
+
+	it('documents proven equity market-data readiness states for GET Status', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - equity market data readiness (issue #1116)');
+
+		expect(item).toBeDefined();
+
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const ready = item.response.find((res) => res.name.includes('ready'));
+
+		// Issue #1116 acceptance: a shaped-but-unproven credential must never read as
+		// ready, so the pre-call state is documented as unverified rather than ready.
+		expect(unverified.code).toBe(200);
+		expect(JSON.parse(unverified.body).dependencies.equityMarketData).toMatchObject({
+			configured: true,
+			ready: false,
+			status: 'unverified',
+			readiness: 'unverified',
+			requestsSucceeded: 0,
+			lastErrorReason: null,
+		});
+
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.equityMarketData).toMatchObject({
+			configured: true,
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			consecutiveFailures: 1,
+			lastErrorReason: 'twelve_data_misconfigured',
+		});
+
+		expect(ready.code).toBe(200);
+		expect(JSON.parse(ready.body).dependencies.equityMarketData).toMatchObject({
+			configured: true,
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			requestsSucceeded: 14,
+		});
+
+		for (const res of [unverified, degraded, ready]) {
+			const raw = res.body;
+			expect(raw).not.toMatch(/apikey/i);
+			expect(raw).not.toMatch(/sk-[a-z0-9]/i);
+		}
 	});
 
 	it('documents both STORAGE_UNAVAILABLE classifications for GET List Alerts', () => {

@@ -29,7 +29,7 @@
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
-const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentials');
+const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
 const {
@@ -42,6 +42,10 @@ const {
 } = require('./firestoreErrorCategories');
 const { adminSseService } = require('../sse/AdminSseService');
 const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
+const {
+	toPositiveFiniteNumber,
+	computeDeterministicRiskReward,
+} = require('../tradingview/riskRewardMath');
 const { deriveAssetContext } = require('../tradingview/parseTradingViewSignal');
 const { analyzeSentimentScoreDistribution } = require('../grounding/sentimentDistribution');
 
@@ -263,6 +267,16 @@ function formatAlertDocument(doc, options = {}) {
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
 	}
+	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
+		const currentPrice = toPositiveFiniteNumber(data.enrichmentData.current_price);
+		if (currentPrice !== null) {
+			docObj.currentPrice = currentPrice;
+		}
+		const priceCurrency = data.enrichmentData.price_currency;
+		if (typeof priceCurrency === 'string' && /^[A-Z]{2,5}$/.test(priceCurrency.trim().toUpperCase())) {
+			docObj.priceCurrency = priceCurrency.trim().toUpperCase();
+		}
+	}
 	if (typeof data.eventCategory === 'string' && data.eventCategory.trim()) {
 		docObj.eventCategory = data.eventCategory.trim();
 	} else if (data.enrichmentData && typeof (data.enrichmentData.eventCategory || data.enrichmentData.event_category) === 'string' && (data.enrichmentData.eventCategory || data.enrichmentData.event_category).trim()) {
@@ -345,7 +359,88 @@ function sanitizeEnrichmentData(enrichmentData) {
 		}
 	}
 
+	if (Object.prototype.hasOwnProperty.call(sanitized, 'current_price')) {
+		const price = toPositiveFiniteNumber(sanitized.current_price);
+		if (price !== null) {
+			sanitized.current_price = price;
+		} else {
+			delete sanitized.current_price;
+			delete sanitized.price_currency;
+		}
+	}
+	if (Object.prototype.hasOwnProperty.call(sanitized, 'price_currency')) {
+		if (typeof sanitized.price_currency === 'string') {
+			const trimmed = sanitized.price_currency.trim().toUpperCase();
+			if (/^[A-Z]{2,5}$/.test(trimmed)) {
+				sanitized.price_currency = trimmed;
+			} else {
+				delete sanitized.price_currency;
+			}
+		} else {
+			delete sanitized.price_currency;
+		}
+	}
+	if (!Object.prototype.hasOwnProperty.call(sanitized, 'current_price')) {
+		delete sanitized.price_currency;
+	}
+
 	return sanitized;
+}
+
+function applyDeterministicRiskReward(enrichmentData, side) {
+	if (!enrichmentData || typeof enrichmentData !== 'object' || Array.isArray(enrichmentData)) {
+		return enrichmentData;
+	}
+
+	const entry = toPositiveFiniteNumber(enrichmentData.current_price);
+	if (entry === null) {
+		return enrichmentData;
+	}
+
+	const invalidation = toPositiveFiniteNumber(
+		enrichmentData.invalidation_level,
+	);
+	const target = toPositiveFiniteNumber(
+		enrichmentData.target_level,
+	);
+
+	if (invalidation === null || target === null) {
+		return enrichmentData;
+	}
+
+	const existing = enrichmentData.risk_reward_ratio;
+	const existingIsValid = (typeof existing === 'number' && Number.isFinite(existing) && existing > 0)
+		|| (typeof existing === 'string' && existing.trim().length > 0);
+	if (existingIsValid) {
+		return enrichmentData;
+	}
+
+	const deterministic = computeDeterministicRiskReward({
+		entry,
+		invalidation,
+		target,
+		side,
+	});
+
+	if (deterministic === null) {
+		return enrichmentData;
+	}
+
+	// Round for readability, but never round a real ratio away. A ratio below 5e-5 (a
+	// near-flat stop against a target just above entry) rounds to 0 at 4 decimals, and 0
+	// fails the `existingIsValid` test above — so it would be re-derived on every read and
+	// counted as populated coverage while being indistinguishable from a genuine zero grade.
+	// A sub-5e-5 R:R is not actionable either, so drop it rather than persist a bad value.
+	const rounded = Number(deterministic.toFixed(4));
+	if (!(rounded > 0)) {
+		return enrichmentData;
+	}
+
+	return {
+		...enrichmentData,
+		risk_reward_ratio: rounded,
+		risk_reward_ratio_source: 'computed',
+	};
 }
 
 // Firestore Admin SDK rejects `undefined` field values anywhere in a write.
@@ -1167,6 +1262,20 @@ function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
 		record.dedupStatus = data.dedupStatus;
 	}
 
+	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
+		const exportCurrentPrice = toPositiveFiniteNumber(data.enrichmentData.current_price);
+		if (exportCurrentPrice !== null) {
+			record.currentPrice = exportCurrentPrice;
+		}
+		const exportPriceCurrency = data.enrichmentData.price_currency;
+		if (typeof exportPriceCurrency === 'string') {
+			const trimmed = exportPriceCurrency.trim().toUpperCase();
+			if (/^[A-Z]{2,5}$/.test(trimmed)) {
+				record.priceCurrency = trimmed;
+			}
+		}
+	}
+
 	if (includeEnrichment) {
 		record.enrichmentData = formatExportEnrichmentData(data.enrichmentData, data);
 	}
@@ -1517,7 +1626,8 @@ function getRawDocCursorValues(doc) {
 
 /**
  * Initialize Firebase Admin (idempotent) and return Firestore client.
- * Returns null when the feature is disabled or initialization fails.
+ * Returns null when the feature is disabled, when initialization fails, or when
+ * configured Firebase credentials are invalid (in-memory fallback).
  *
  * Credential resolution is delegated to the shared helper at
  * src/services/storage/firebaseAdminCredentials.js, which consolidates
@@ -1536,17 +1646,13 @@ function getFirestore() {
 	}
 
 	try {
-		const loaded = loadFirebaseAdminCredentialsOrNull();
-		const appOptions = {};
-		if (loaded && loaded.credential) {
-			appOptions.credential = loaded.credential;
-		}
-		if (loaded && loaded.projectId) {
-			appOptions.projectId = loaded.projectId;
-		}
-
-		if (!admin.apps.length) {
-			admin.initializeApp(appOptions);
+		const initialization = initializeFirebaseAdminApp({ admin });
+		if (!initialization.ok) {
+			console.warn(
+				`[AlertStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`
+			);
+			db = null;
+			return null;
 		}
 
 		db = admin.firestore();
@@ -1638,6 +1744,7 @@ async function saveAlertInternal(params = {}) {
 		whatsappChatId,
 		discordWebhookUrl,
 		routing,
+		side,
 		alertId: providedAlertId,
 	} = params;
 	if (!isEnabled()) {
@@ -1722,6 +1829,8 @@ async function saveAlertInternal(params = {}) {
 		if (extracted.exchange) {
 			document.exchange = extracted.exchange;
 		}
+
+		document.enrichmentData = applyDeterministicRiskReward(document.enrichmentData, side);
 		if (typeof eventCategory === 'string' && eventCategory.trim()) {
 			document.eventCategory = eventCategory.trim();
 		}

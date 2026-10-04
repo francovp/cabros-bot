@@ -104,10 +104,27 @@ const VIEW_TITLES = {
 	outcomes: 'Outcomes',
 	presets: 'Presets',
 	jobs: 'Jobs',
+	orders: 'Orders',
 	analysis: 'Analysis',
 	playground: 'Playground',
 };
 const CONSOLE_TITLE_BASE = 'Cabros Bot Console';
+
+// Closed set: a `view` value outside it must fall back, never render a blank workspace.
+const DEFAULT_CONSOLE_VIEW = 'overview';
+const FIREBASE_SIGN_IN_LANDING_VIEW = 'status';
+const CONSOLE_VIEW_NAMES = Object.freeze(Object.keys(VIEW_TITLES));
+
+// Scope prefixes keep the alerts summary and export filter sets independent, because
+// they are two separate forms with separate defaults.
+const FILTER_SCOPE_VIEWS = Object.freeze({
+	'alerts.list': 'alerts',
+	'alerts.summary': 'alerts',
+	'alerts.export': 'alerts',
+	'outcomes.list': 'outcomes',
+	'outcomes.summary': 'outcomes',
+	'outcomes.calibration': 'outcomes',
+});
 
 const DEFAULT_BACKEND_ORIGIN = 'https://openclaw.tail5e4271.ts.net';
 const ALLOWED_BACKEND_ORIGINS = new Set([
@@ -142,10 +159,94 @@ const getApiBaseUrl = () => {
 	return '';
 };
 
+const getWindowLocation = () => (typeof window !== 'undefined' && window.location ? window.location : null);
+
+const readConsoleSearch = () => {
+	try {
+		const location = getWindowLocation();
+		return location && typeof location.search === 'string' ? location.search : '';
+	} catch (_) {
+		return '';
+	}
+};
+
+const readConsoleParams = () => {
+	try {
+		return new URLSearchParams(readConsoleSearch());
+	} catch (_) {
+		return new URLSearchParams();
+	}
+};
+
+const resolveConsoleView = (value) => {
+	const name = typeof value === 'string' ? value.trim() : '';
+	return CONSOLE_VIEW_NAMES.includes(name) ? name : DEFAULT_CONSOLE_VIEW;
+};
+
+const readConsoleUrlState = () => {
+	const params = readConsoleParams();
+	const requested = params.get('view');
+	const view = resolveConsoleView(requested);
+	return {
+		view,
+		viewRequested: requested !== null,
+		viewRecognised: view === requested,
+		params,
+	};
+};
+
+const filterParamsForView = (view, params) => {
+	const source = params || readConsoleParams();
+	const carried = {};
+	Object.keys(FILTER_SCOPE_VIEWS).forEach((scope) => {
+		if (FILTER_SCOPE_VIEWS[scope] !== view) return;
+		const prefix = `${scope}.`;
+		source.forEach((value, key) => {
+			if (key.startsWith(prefix)) carried[key] = value;
+		});
+	});
+	return carried;
+};
+
+const buildConsoleUrl = (view, filterParams = {}) => {
+	const location = getWindowLocation();
+	let pathname = '';
+	try {
+		pathname = (location && location.pathname) || '';
+	} catch (_) {
+		pathname = '';
+	}
+	const params = new URLSearchParams();
+	readConsoleParams().forEach((value, key) => {
+		const ownsFilterScope = Object.keys(FILTER_SCOPE_VIEWS).some((scope) => key.startsWith(`${scope}.`));
+		if (key !== 'view' && !ownsFilterScope) params.set(key, value);
+	});
+	params.set('view', view);
+	Object.entries(filterParams).forEach(([key, value]) => {
+		if (value !== undefined && value !== null && value !== '') params.set(key, value);
+	});
+	const search = params.toString();
+	return `${pathname}${search ? `?${search}` : ''}`;
+};
+
+const writeConsoleUrl = (url, { replace = false } = {}) => {
+	const history = typeof window !== 'undefined' ? window.history : null;
+	if (!history) return false;
+	try {
+		if (replace && typeof history.replaceState === 'function') history.replaceState({}, '', url);
+		else if (!replace && typeof history.pushState === 'function') history.pushState({}, '', url);
+		else return false;
+		return true;
+	} catch (_) {
+		return false;
+	}
+};
+
 let contractPromise;
 let authConfigPromise;
 let firebaseSdkPromise;
 let detachActiveViewPoll = null;
+let currentConsoleView = DEFAULT_CONSOLE_VIEW;
 let authState = { enabled: false, auth: null, user: null, role: null };
 
 const CONTRACT_TIMEOUT_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.CONTRACT_TIMEOUT_MS
@@ -166,6 +267,19 @@ const VOLUME_CONFIRMATION_OVERHEAD_MS = typeof window !== 'undefined' && window.
 const VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS
 	? window.CabrosAdminRequest.VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS
 	: (VOLUME_CONFIRMATION_MCP_CALLS * TRADINGVIEW_MCP_MAX_TIMEOUT_MS) + VOLUME_CONFIRMATION_OVERHEAD_MS; // 390000 ms
+
+// Symbol analysis budget breakdown:
+// - ONE createDeadline() signal spans the base analyzeSymbolIdentifier call and the optional
+//   multi_timeframe_analysis / multi_agent_debate calls, so this budget is never multiplied per
+//   MCP call the way volume confirmation is. Worst case is a single min(EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS, 120,000 ms).
+// - Ingress, route handling, symbol validation, and network transport overhead: 30,000 ms
+const SYMBOL_ANALYSIS_BACKEND_BUDGET_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.SYMBOL_ANALYSIS_BACKEND_BUDGET_MS
+	? window.CabrosAdminRequest.SYMBOL_ANALYSIS_BACKEND_BUDGET_MS : 120000;
+const SYMBOL_ANALYSIS_OVERHEAD_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.SYMBOL_ANALYSIS_OVERHEAD_MS
+	? window.CabrosAdminRequest.SYMBOL_ANALYSIS_OVERHEAD_MS : 30000;
+const SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS
+	? window.CabrosAdminRequest.SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS
+	: SYMBOL_ANALYSIS_BACKEND_BUDGET_MS + SYMBOL_ANALYSIS_OVERHEAD_MS; // 150000 ms
 
 // Long-running alert and analysis pipeline budget breakdown:
 // - TradingView MCP enrichment maximum budget: 120,000 ms (TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS max)
@@ -222,9 +336,11 @@ const getApiRequestTimeout = (definition, options) => {
 		return window.CabrosAdminRequest.getApiRequestTimeout(definition, options);
 	}
 	if (!definition || !definition.path) return API_REQUEST_TIMEOUT_MS;
-	if (definition.path === '/api/webhook/volume-confirmation'
-		|| definition.path === '/api/webhook/symbol-analysis') {
+	if (definition.path === '/api/webhook/volume-confirmation') {
 		return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+	}
+	if (definition.path === '/api/webhook/symbol-analysis') {
+		return SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS;
 	}
 	if (definition.path === '/api/alerts/batch/replay') {
 		let count = 1;
@@ -480,7 +596,11 @@ const setupFirebaseAuth = async (config) => {
 				}
 				showSignedInState();
 				setupSseStream();
-				navigateToView('status');
+				const requested = readConsoleUrlState();
+				navigateToView(
+					requested.viewRequested ? requested.view : FIREBASE_SIGN_IN_LANDING_VIEW,
+					{ history: 'replace' },
+				);
 			} catch (error) {
 				disconnectSse();
 				showAuthState('Unable to verify the signed-in account.', true);
@@ -496,6 +616,9 @@ let sseReconnectTimer = null;
 let sseReconnectAttempts = 0;
 const sseListeners = new Set();
 const MAX_SSE_RECONNECT_DELAY_MS = 30000;
+// Bounds the SSE handshake only, not the stream body. An event stream is
+// legitimately idle between events, so this must not become a read deadline.
+const SSE_HANDSHAKE_TIMEOUT_MS = 15000;
 
 const getRetryAfterMs = (response) => {
 	const rawValue = response?.headers?.get?.('retry-after');
@@ -631,12 +754,20 @@ const setupSseStream = async () => {
 	const controller = new AbortController();
 	sseAbortController = controller;
 
+	let handshakeTimer = setTimeout(() => controller.abort(), SSE_HANDSHAKE_TIMEOUT_MS);
+	const clearHandshakeTimer = () => {
+		if (handshakeTimer === null) return;
+		clearTimeout(handshakeTimer);
+		handshakeTimer = null;
+	};
+
 	try {
 		const response = await fetch(streamUrl, {
 			method: 'GET',
 			headers,
 			signal: controller.signal,
 		});
+		clearHandshakeTimer();
 
 		if (!response.ok) {
 			const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
@@ -710,7 +841,14 @@ const setupSseStream = async () => {
 			}
 		}
 	} catch (error) {
-		if (controller.signal.aborted) {
+		clearHandshakeTimer();
+		// `aborted` alone cannot separate an intentional teardown from our own
+		// handshake deadline. disconnectSse() and a newer setupSseStream() both
+		// clear sseAbortController, so ownership is the discriminator: while we
+		// still own it, our own abort is a stall that must reconnect. Collapsing
+		// this to `if (aborted) return` turns the handshake deadline above into a
+		// permanently dead stream.
+		if (controller.signal.aborted && sseAbortController !== controller) {
 			return;
 		}
 		console.error('SSE stream error:', error);
@@ -959,6 +1097,9 @@ const statusDetailFields = [
 	['enrichment.alertPath.failedCount', 'Alert path failed'],
 	['enrichment.alertPath.appliedRate24h', 'Alert path applied rate (%)'],
 	['enrichment.alertPath.failureRate24h', 'Alert path failure rate (%)'],
+	['leaseMs', 'Lease (ms)'],
+	['lastRunLeaseHeld', 'Last run lease held'],
+	['leaseHeldSkipCount', 'Lease-held skips'],
 ];
 
 const statusFieldValue = (detail, key) => key.split('.').reduce((value, part) => asObject(value)[part], detail);
@@ -976,6 +1117,15 @@ const DECISION_ACTION_TONES = {
 	hold: 'status-disabled',
 	neutral: 'status-disabled',
 };
+
+const CONFIDENCE_TONES = {
+	high: 'status-ready',
+	medium: 'status-active',
+	moderate: 'status-active',
+	low: 'status-danger',
+};
+
+const MTF_ENVELOPE_KEYS = ['timeframes', 'alignment', 'recommendation'];
 
 const JOB_ACTIVE_STATUSES = ['pending', 'processing'];
 const JOB_STATUS_TONES = {
@@ -1172,12 +1322,23 @@ const symbolAnalysisResult = (data) => {
 			text: `Status: ${displayLabel(data.analysisStatus)}`,
 		}));
 	}
+
+	// The endpoint returns categorical confidence labels, so the numeric-only
+	// meter path must not be the only consumer or confidence disappears entirely.
+	const confidence = asFiniteNumber(decision.confidence);
+	const confidenceLabel = confidence === null ? asLabelValue(decision.confidence) : '';
+	if (confidenceLabel) {
+		const tone = CONFIDENCE_TONES[confidenceLabel.toLowerCase()] || 'status-unknown';
+		badges.append(element('span', {
+			className: `status-badge ${tone}`,
+			text: `Confidence: ${displayLabel(confidenceLabel)}`,
+		}));
+	}
 	if (badges.children.length) panel.append(badges);
 
 	const identity = [data.symbol || analysis.symbol, data.timeframe || analysis.timeframe].filter(Boolean).join(' · ');
 	if (identity) panel.append(element('p', { className: 'request-state', text: identity }));
 
-	const confidence = asFiniteNumber(decision.confidence);
 	if (confidence !== null) {
 		const normConfidence = confidence > 1 ? confidence / 100 : confidence;
 		panel.append(createMeter(normConfidence, `${Math.round(normConfidence * 100)}% confidence`));
@@ -1268,13 +1429,36 @@ const symbolAnalysisResult = (data) => {
 		const mtfBlock = element('div', { className: 'detail-block' });
 		mtfBlock.append(element('h4', { text: 'Multi-timeframe Analysis' }));
 		const mtfChips = element('div', { className: 'chip-grid' });
-		Object.entries(mtf).forEach(([tf, tfData]) => {
+		const alignment = asObject(mtf.alignment);
+		const recommendation = asObject(mtf.recommendation);
+		const timeframes = asObject(mtf.timeframes);
+		// The endpoint nests the breakdown under `timeframes` beside sibling
+		// `alignment` and `recommendation` keys. Reading those siblings as
+		// timeframes renders the envelope and hides every real trend.
+		const timeframeEntries = Object.entries(Object.keys(timeframes).length ? timeframes : mtf)
+			.filter(([key]) => !MTF_ENVELOPE_KEYS.includes(key));
+		timeframeEntries.forEach(([tf, tfData]) => {
 			const tfObj = asObject(tfData);
-			const tfTrend = tfObj.trend || tfObj.direction || tfObj.status || (typeof tfData === 'string' ? tfData : null);
+			const tfTrend = tfObj.bias || tfObj.trend || tfObj.direction || tfObj.status || asLabelValue(tfData);
 			if (tfTrend) {
 				mtfChips.append(element('span', { className: 'capability-chip', text: `${tf}: ${displayLabel(tfTrend)}` }));
 			}
 		});
+
+		const alignmentStatus = asLabelValue(alignment.status);
+		if (alignmentStatus) {
+			mtfChips.append(element('span', { className: 'capability-chip', text: `Alignment: ${displayLabel(alignmentStatus)}` }));
+		}
+		const alignmentConfidence = asLabelValue(alignment.confidence);
+		if (alignmentConfidence) {
+			mtfChips.append(element('span', { className: 'capability-chip', text: `Alignment confidence: ${displayLabel(alignmentConfidence)}` }));
+		}
+		const recommendedAction = asLabelValue(recommendation.action) || asLabelValue(mtf.recommendation);
+		if (recommendedAction) {
+			const tone = DECISION_ACTION_TONES[recommendedAction.toLowerCase()] || 'status-unknown';
+			mtfChips.append(element('span', { className: `status-badge ${tone}`, text: `Recommendation: ${displayLabel(recommendedAction)}` }));
+		}
+
 		if (mtfChips.children.length) {
 			mtfBlock.append(mtfChips);
 			panel.append(mtfBlock);
@@ -1389,6 +1573,13 @@ const analysisReportResult = (data) => {
 };
 
 const asFiniteNumber = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+
+const LABEL_VALUE_MAX_LENGTH = 40;
+
+const asLabelValue = (value) => {
+	if (typeof value !== 'string') return '';
+	return value.trim().slice(0, LABEL_VALUE_MAX_LENGTH);
+};
 
 const sentimentBadge = (enrichment) => {
 	const sentiment = enrichment && typeof enrichment === 'object' ? String(enrichment.sentiment || '') : '';
@@ -1904,13 +2095,50 @@ const createOverviewDashboard = () => {
 	return dashboard;
 };
 
+// A request can end without an HTTP response at all. Each such end is a distinct
+// operator-facing result, so it is labelled explicitly; an HTTP status is only ever
+// assigned after captureResponseStatus receives a real response.
+const REQUEST_OUTCOMES = {
+	AUTHORIZATION_DENIED: 'authorization_denied',
+	SIGN_IN_EXPIRED: 'sign_in_expired',
+	INVALID_REQUEST: 'invalid_request',
+	CANCELLED: 'cancelled',
+	SUPERSEDED: 'superseded',
+	TIMED_OUT: 'timed_out',
+	NETWORK_ERROR: 'network_error',
+};
+
+const REQUEST_OUTCOME_LABELS = {
+	[REQUEST_OUTCOMES.AUTHORIZATION_DENIED]: 'Not authorized',
+	[REQUEST_OUTCOMES.SIGN_IN_EXPIRED]: 'Sign-in expired',
+	[REQUEST_OUTCOMES.INVALID_REQUEST]: 'Invalid request',
+	[REQUEST_OUTCOMES.CANCELLED]: 'Cancelled',
+	[REQUEST_OUTCOMES.SUPERSEDED]: 'Superseded',
+	[REQUEST_OUTCOMES.TIMED_OUT]: 'Timed out',
+	[REQUEST_OUTCOMES.NETWORK_ERROR]: 'Network error',
+};
+
+const DEFAULT_NO_RESPONSE_LABEL = 'No response';
+
+const describeRequestOutcome = (outcome) => REQUEST_OUTCOME_LABELS[outcome] || DEFAULT_NO_RESPONSE_LABEL;
+
+// fetchWithTimeout aborts via AbortController, so an exceeded client budget rejects with
+// an AbortError — the request may or may not have reached the server, unlike a transport failure.
+const classifyRequestFailure = (error) => (error && error.name === 'AbortError'
+	? REQUEST_OUTCOMES.TIMED_OUT
+	: REQUEST_OUTCOMES.NETWORK_ERROR);
+
 const sendRequest = async ({
-	definition, path, query, body, headers, button, output, formatResponse, parseSuccessResponse, isCurrent, captureResponseStatus, captureResponseData,
+	definition, path, query, body, headers, button, output, formatResponse, parseSuccessResponse, isCurrent, captureResponseStatus, captureResponseData, captureOutcome,
 }) => {
 	const requestIsCurrent = typeof isCurrent === 'function' ? isCurrent : () => true;
+	const recordOutcome = (outcome) => {
+		if (typeof captureOutcome === 'function') captureOutcome(outcome);
+	};
 	const apiKey = getElement('api-key')?.value || '';
 	const requiredRole = definition.requiredRole || (definition.method === 'GET' ? 'admin.viewer' : 'admin.operator');
 	if (authState.enabled && (!authState.user || !window.CabrosAdminRequest.canAccess({ requiredRole }, authState.role))) {
+		recordOutcome(REQUEST_OUTCOMES.AUTHORIZATION_DENIED);
 		showError(output, authState.user ? 'Your admin role cannot perform this operation.' : 'Sign in is required.');
 		return;
 	}
@@ -1919,6 +2147,7 @@ const sendRequest = async ({
 		try {
 			authToken = await authState.user.getIdToken();
 		} catch (error) {
+			recordOutcome(REQUEST_OUTCOMES.SIGN_IN_EXPIRED);
 			showError(output, 'Unable to refresh the admin sign-in. Please sign in again.');
 			return;
 		}
@@ -1939,13 +2168,20 @@ const sendRequest = async ({
 			baseUrl: getApiBaseUrl(),
 		});
 	} catch (error) {
+		recordOutcome(REQUEST_OUTCOMES.INVALID_REQUEST);
 		showError(output, error.message);
 		return;
 	}
 
-	if (!window.CabrosAdminRequest.confirmRequest(definition, (message) => window.confirm(message))) return;
+	if (!window.CabrosAdminRequest.confirmRequest(definition, (message) => window.confirm(message))) {
+		recordOutcome(REQUEST_OUTCOMES.CANCELLED);
+		return;
+	}
 
-	if (!requestIsCurrent()) return;
+	if (!requestIsCurrent()) {
+		recordOutcome(REQUEST_OUTCOMES.SUPERSEDED);
+		return;
+	}
 	button.disabled = true;
 	output.className = 'response-block';
 	output.replaceChildren(
@@ -1988,6 +2224,7 @@ const sendRequest = async ({
 		return response.ok ? data : undefined;
 	} catch (error) {
 		const elapsed = Math.round(performance.now() - started);
+		recordOutcome(classifyRequestFailure(error));
 		if (!requestIsCurrent()) return;
 		showError(output, `${summary}\nNetwork error · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(error.message, apiKey)}`);
 	} finally {
@@ -2006,6 +2243,7 @@ const createAlertListForm = () => {
 	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
 	const source = addField(form, 'Source', 'source', { placeholder: 'webhook' });
 	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
+	registerFilterScope('alerts.list', { limit, before, source, enriched });
 	[
 		['', 'All alerts'],
 		['true', 'Enriched only'],
@@ -2338,7 +2576,66 @@ const reportWindowDefaults = () => {
 	};
 };
 
-const addAlertReportFilters = (form, { requiredWindow = false } = {}) => {
+let activeFilterScopes = [];
+
+const resetFilterScopes = () => {
+	activeFilterScopes = [];
+};
+
+const registerFilterScope = (scope, fields) => {
+	if (FILTER_SCOPE_VIEWS[scope]) {
+		activeFilterScopes.push({ scope, fields: { ...fields } });
+	}
+	return fields;
+};
+
+const readFilterValue = (input) => {
+	if (!input) return '';
+	if (input.type === 'checkbox') return input.checked ? 'true' : '';
+	return typeof input.value === 'string' ? input.value : '';
+};
+
+const collectFilterParams = (view) => {
+	const collected = {};
+	activeFilterScopes.forEach(({ scope, fields }) => {
+		if (view && FILTER_SCOPE_VIEWS[scope] !== view) return;
+		Object.entries(fields).forEach(([name, input]) => {
+			const value = readFilterValue(input);
+			if (value !== '') collected[`${scope}.${name}`] = value;
+		});
+	});
+	return collected;
+};
+
+const applyFilterParams = (params) => {
+	if (!params) return;
+	activeFilterScopes.forEach(({ scope, fields }) => {
+		Object.entries(fields).forEach(([name, input]) => {
+			const key = `${scope}.${name}`;
+			if (!input || !params.has(key)) return;
+			const value = params.get(key);
+			if (input.type === 'checkbox') input.checked = value === 'true';
+			else input.value = value;
+		});
+	});
+};
+
+const syncConsoleUrlFromFilters = () => {
+	writeConsoleUrl(buildConsoleUrl(currentConsoleView, collectFilterParams(currentConsoleView)), { replace: true });
+};
+
+const bindFilterScopeListeners = () => {
+	activeFilterScopes.forEach(({ fields }) => {
+		Object.values(fields).forEach((input) => {
+			if (!input || typeof input.addEventListener !== 'function' || input.consoleFilterBound) return;
+			input.consoleFilterBound = true;
+			input.addEventListener('input', syncConsoleUrlFromFilters);
+			input.addEventListener('change', syncConsoleUrlFromFilters);
+		});
+	});
+};
+
+const addAlertReportFilters = (form, { requiredWindow = false, scope } = {}) => {
 	const defaults = reportWindowDefaults();
 	const from = addField(form, 'From', 'from', {
 		type: 'datetime-local', value: defaults.from, required: requiredWindow,
@@ -2358,7 +2655,7 @@ const addAlertReportFilters = (form, { requiredWindow = false } = {}) => {
 		option.value = value;
 		enriched.append(option);
 	});
-	return { from, to, limit, source, enriched };
+	return registerFilterScope(scope, { from, to, limit, source, enriched });
 };
 
 const toIsoTimestamp = (value, label) => {
@@ -2593,7 +2890,7 @@ const createAlertSummaryForm = () => {
 		element('h3', { text: definition.label }),
 		element('code', { text: `${definition.method} ${definition.path}` }),
 	);
-	const fields = addAlertReportFilters(form);
+	const fields = addAlertReportFilters(form, { scope: 'alerts.summary' });
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	const output = element('div', { className: 'response-block', text: 'No request sent.' });
@@ -2667,7 +2964,7 @@ const createAlertExportForm = () => {
 		element('h3', { text: definition.label }),
 		element('code', { text: `${definition.method} ${definition.path}` }),
 	);
-	const fields = addAlertReportFilters(form, { requiredWindow: true });
+	const fields = addAlertReportFilters(form, { requiredWindow: true, scope: 'alerts.export' });
 	const format = addField(form, 'Format', 'format', { tag: 'select' });
 	[['jsonl', 'JSONL'], ['csv', 'CSV']].forEach(([value, text]) => {
 		const option = element('option', { text });
@@ -2968,6 +3265,7 @@ const createOutcomesListForm = () => {
 	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
 	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
+	registerFilterScope('outcomes.list', { symbol, exchange, status, window: windowField, from, to, limit, before });
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
@@ -3198,6 +3496,7 @@ const createOutcomesSummaryForm = () => {
 	const from = addField(form, 'From', 'from', { placeholder: 'ISO-8601 timestamp' });
 	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
+	registerFilterScope('outcomes.summary', { symbol, exchange, status, window: windowField, from, to, limit });
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
@@ -3353,6 +3652,7 @@ const createOutcomesCalibrationForm = () => {
 	const from = addField(form, 'From', 'from', { placeholder: 'ISO-8601 timestamp' });
 	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 1000, value: 1000 });
+	registerFilterScope('outcomes.calibration', { symbol, exchange, window: windowField, from, to, limit });
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
@@ -5103,6 +5403,17 @@ const renderPlayground = (contract, view) => {
 
 	const definitions = window.CabrosAdminRequest.operationDefinitions(contract);
 
+	// `Number('') === 0`, so a direct `definitions[Number(select.value)]` lookup resolves a
+	// blank selection to the FIRST definition instead of to nothing. Every lookup goes through
+	// this resolver so "no operation matches" is a real no-selection state. Do not inline it.
+	const selectedDefinition = () => {
+		const raw = select.value;
+		if (raw === undefined || raw === null || String(raw).trim() === '') return undefined;
+		const index = Number(raw);
+		if (!Number.isInteger(index) || index < 0) return undefined;
+		return definitions[index];
+	};
+
 	const fields = element('div', { className: 'form-fields' });
 
 	const buttonRow = element('div', { className: 'badge-row playground-actions' });
@@ -5110,7 +5421,7 @@ const renderPlayground = (contract, view) => {
 	button.type = 'submit';
 
 	const buildCurlCommand = () => {
-		const definition = definitions[Number(select.value)];
+		const definition = selectedDefinition();
 		if (!definition) return '';
 		const pathNames = [...definition.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
 		const resolvedPath = pathNames.reduce((acc, name) => {
@@ -5178,6 +5489,12 @@ const renderPlayground = (contract, view) => {
 	form.append(filterLabel, selectLabel, fields, buttonRow, resultHost, output, rawToggle, historySection);
 	view.append(form);
 
+	let pendingRequestCount = 0;
+	const isSubmitLocked = () => pendingRequestCount > 0;
+	const syncSubmitLockedState = () => {
+		button.disabled = isSubmitLocked() || !selectedDefinition();
+	};
+
 	const saveCurrentInputs = (def) => {
 		if (!def) return;
 		const key = `${def.method} ${def.path}`;
@@ -5196,13 +5513,18 @@ const renderPlayground = (contract, view) => {
 
 	const renderFields = () => {
 		fields.replaceChildren();
-		const definition = definitions[Number(select.value)];
+		const definition = selectedDefinition();
 		if (!definition) {
 			button.disabled = true;
 			curlButton.disabled = true;
 			return;
 		}
-		button.disabled = false;
+		// Every re-render path (operation switch, filter auto-select, history restore)
+		// lands here, so this is the single place that decides whether a dispatch is
+		// allowed. `pendingRequestCount` is the source of truth: a request that outlives
+		// this re-render must keep the shared submit button locked so a second alert,
+		// replay, or order mutation cannot be dispatched behind it.
+		button.disabled = isSubmitLocked();
 		curlButton.disabled = false;
 		button.className = definition.confirm ? 'destructive-action' : '';
 
@@ -5279,12 +5601,20 @@ const renderPlayground = (contract, view) => {
 		} else if (firstAvailableValue !== null) {
 			// Filter-driven selection: save current inputs under the old definition
 			// and update previousDefinition to the newly selected one so subsequent
-			// explicit changes save under the correct operation.
+			// explicit changes save under the correct operation. `previousDefinition`
+			// is null when this filter followed an empty result, which makes this save a
+			// no-op instead of writing the empty form over the last active operation.
 			saveCurrentInputs(previousDefinition);
 			previousDefinition = definitions[Number(firstAvailableValue)];
 			select.value = firstAvailableValue;
 			renderFields();
 		} else {
+			// Nothing matches. Persist the in-flight draft before the fields are torn
+			// down, then clear previousDefinition: leaving it pointing at the operation
+			// that is no longer rendered is what let the next auto-select save the blank
+			// form into that operation's cache.
+			saveCurrentInputs(previousDefinition);
+			previousDefinition = null;
 			select.value = '';
 			renderFields();
 		}
@@ -5333,7 +5663,7 @@ const renderPlayground = (contract, view) => {
 	const restoreHistoryEntry = (entry) => {
 		const targetIndex = definitions.findIndex((d) => d.method === entry.method && d.path === entry.path);
 		if (targetIndex === -1) return;
-		saveCurrentInputs(definitions[Number(select.value)]);
+		saveCurrentInputs(selectedDefinition());
 		if (filterInput.value) {
 			filterInput.value = '';
 			populateOptions('');
@@ -5359,12 +5689,12 @@ const renderPlayground = (contract, view) => {
 	let previousDefinition = definitions[0];
 	select.addEventListener('change', () => {
 		saveCurrentInputs(previousDefinition);
-		previousDefinition = definitions[Number(select.value)];
+		previousDefinition = selectedDefinition();
 		renderFields();
 	});
 
 	fields.addEventListener('input', () => {
-		saveCurrentInputs(definitions[Number(select.value)]);
+		saveCurrentInputs(selectedDefinition());
 	});
 
 	filterInput.addEventListener('input', () => {
@@ -5373,13 +5703,16 @@ const renderPlayground = (contract, view) => {
 
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
+		// A disabled submit button does not stop implicit submission (Enter in a text
+		// input) or a programmatic submit, so the lock is also enforced here.
+		if (isSubmitLocked()) return;
 		resultHost.replaceChildren();
 		lastRawJson = '';
 		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		rawToggle.hidden = true;
 
-		const definition = definitions[Number(select.value)];
+		const definition = selectedDefinition();
 		if (!definition) return;
 
 		const pathNames = [...definition.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
@@ -5390,14 +5723,18 @@ const renderPlayground = (contract, view) => {
 			if (el) pathValues[name] = el.value;
 		});
 
+		let submittedBody = form.elements.body ? form.elements.body.value : undefined;
+		const submittedQuery = form.elements.query ? form.elements.query.value : undefined;
+
 		let query;
 		let body;
 		try {
 			if (form.elements.query) {
-				query = window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query'));
+				query = window.CabrosAdminRequest.validateQuery(parseJson(submittedQuery, 'Query'));
 			}
 			if (form.elements.body) {
 				body = getRequestBody(definition, form);
+				submittedBody = form.elements.body.value;
 			}
 		} catch (error) {
 			showError(output, error.message);
@@ -5406,8 +5743,8 @@ const renderPlayground = (contract, view) => {
 				path: definition.path,
 				resolvedPath,
 				pathValues,
-				query: form.elements.query ? form.elements.query.value : undefined,
-				body: form.elements.body ? form.elements.body.value : undefined,
+				query: submittedQuery,
+				body: submittedBody,
 				status: 'Validation error',
 				ok: false,
 			});
@@ -5421,7 +5758,10 @@ const renderPlayground = (contract, view) => {
 		let responseStatus = null;
 		let responseOk = false;
 		let responseData = null;
+		let requestOutcome = null;
 
+		pendingRequestCount += 1;
+		syncSubmitLockedState();
 		sendRequest({
 			definition,
 			path: resolvedPath,
@@ -5440,6 +5780,7 @@ const renderPlayground = (contract, view) => {
 					responseOk = response.ok;
 				}
 			},
+			captureOutcome: (outcome) => { requestOutcome = outcome; },
 			formatResponse: hasStructured
 				? ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`
 				: undefined,
@@ -5449,10 +5790,10 @@ const renderPlayground = (contract, view) => {
 				path: definition.path,
 				resolvedPath,
 				pathValues,
-				query: form.elements.query ? form.elements.query.value : undefined,
-				body: form.elements.body ? form.elements.body.value : undefined,
-				status: responseStatus ? `HTTP ${responseStatus}` : '200 OK',
-				ok: responseOk !== false,
+				query: submittedQuery,
+				body: submittedBody,
+				status: responseStatus ? `HTTP ${responseStatus}` : describeRequestOutcome(requestOutcome),
+				ok: responseOk,
 			});
 
 			const payloadToRender = data || responseData;
@@ -5479,11 +5820,15 @@ const renderPlayground = (contract, view) => {
 				path: definition.path,
 				resolvedPath,
 				pathValues,
-				query: form.elements.query ? form.elements.query.value : undefined,
-				body: form.elements.body ? form.elements.body.value : undefined,
-				status: responseStatus ? `HTTP ${responseStatus}` : 'Network error',
-				ok: false,
+				query: submittedQuery,
+				body: submittedBody,
+				status: responseStatus ? `HTTP ${responseStatus}` : describeRequestOutcome(requestOutcome),
+				ok: responseOk,
 			});
+		}).finally(() => {
+			// Runs after sendRequest's own finally, so this is the authoritative write.
+			pendingRequestCount = Math.max(0, pendingRequestCount - 1);
+			syncSubmitLockedState();
 		});
 	});
 
@@ -6223,6 +6568,7 @@ const renderView = async (name) => {
 	const view = document.getElementById('view');
 	if (typeof detachActiveViewPoll === 'function') detachActiveViewPoll();
 	detachActiveViewPoll = null;
+	resetFilterScopes();
 	view.replaceChildren(createLoadingState('Loading API contract…'));
 	try {
 		const contract = await loadContract();
@@ -6346,19 +6692,46 @@ const renderView = async (name) => {
 	}
 };
 
-const navigateToView = (name) => {
+const navigateToView = (name, { history: historyMode = 'push' } = {}) => {
 	if (authState.enabled && !authState.user) return showSignedOutState();
+	const target = resolveConsoleView(name);
+	currentConsoleView = target;
+	markActiveView(target);
+	setViewTitle(target);
+	if (historyMode !== 'none') {
+		const carried = historyMode === 'push' ? {} : filterParamsForView(target, readConsoleParams());
+		writeConsoleUrl(buildConsoleUrl(target, carried), { replace: historyMode === 'replace' });
+	}
+	return renderView(target).then(() => {
+		applyFilterParams(readConsoleParams());
+		bindFilterScopeListeners();
+		moveFocusToView(target);
+	});
+};
+
+const handleConsolePopState = () => {
+	navigateToView(readConsoleUrlState().view, { history: 'none' });
+};
+
+const canonicaliseConsoleUrl = () => {
+	const state = readConsoleUrlState();
+	if (!state.viewRequested || state.viewRecognised) return;
+	writeConsoleUrl(buildConsoleUrl(state.view, filterParamsForView(state.view, state.params)), { replace: true });
+};
+
+const markActiveView = (name) => {
+	if (typeof document === 'undefined' || !document) return;
 	const buttons = document.querySelectorAll('[data-view]');
 	buttons.forEach((button) => button.removeAttribute('aria-current'));
 	[...buttons].find((button) => button.dataset.view === name)?.setAttribute('aria-current', 'page');
-	setViewTitle(name);
-	return renderView(name).then(() => moveFocusToView(name));
 };
 
 const setViewTitle = (name) => {
 	if (typeof document === 'undefined' || !document) return;
 	const label = VIEW_TITLES[name] || (name ? name[0].toUpperCase() + name.slice(1) : '');
 	document.title = label ? `${label} · ${CONSOLE_TITLE_BASE}` : CONSOLE_TITLE_BASE;
+	const status = getElement('view-status');
+	if (status) status.textContent = label ? `${label} view` : '';
 };
 
 const moveFocusToView = (name) => {
@@ -6419,6 +6792,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 	const view = getElement('view');
 	if (view) view.replaceChildren(createLoadingState('Checking authentication…'));
 	document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigateToView(button.dataset.view)));
+	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+		window.addEventListener('popstate', handleConsolePopState);
+	}
+	canonicaliseConsoleUrl();
 
 	getElement('connection-form')?.addEventListener('submit', (event) => {
 		event.preventDefault();
@@ -6444,7 +6821,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 	setHidden('legacy-connection', false);
 	setupLegacyConsole();
 	if (getElement('api-key')?.value) setupSseStream();
-	setViewTitle('overview');
-	renderView('overview').then(() => moveFocusToView('overview'));
+	navigateToView(readConsoleUrlState().view, { history: 'none' });
 
 });

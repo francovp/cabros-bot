@@ -6251,6 +6251,14 @@
                   "configured": false,
                   "ready": false,
                   "status": "disabled",
+                  "readiness": "unverified",
+                  "requestsAttempted": 0,
+                  "requestsSucceeded": 0,
+                  "requestsFailed": 0,
+                  "consecutiveFailures": 0,
+                  "lastSuccessAt": null,
+                  "lastFailureAt": null,
+                  "lastErrorReason": null,
                   "supportedExchanges": [
                     "BATS",
                     "NASDAQ",
@@ -6262,10 +6270,59 @@
                   ],
                   "timeoutMs": 5000
                 },
+                "idempotencyStorage": {
+                  "enabled": true,
+                  "configured": true,
+                  "ready": false,
+                  "status": "unverified",
+                  "mode": "durable",
+                  "backend": "firestore",
+                  "failOpen": true,
+                  "readiness": "unverified",
+                  "collection": "idempotency_keys",
+                  "operationsAttempted": 0,
+                  "operationsSucceeded": 0,
+                  "operationsFailed": 0,
+                  "consecutiveFailures": 0,
+                  "lastSuccessAt": null,
+                  "lastFailureAt": null,
+"lastErrorReason": null
+                },
+                "signalOutcomeWorker": {
+                  "enabled": true,
+                  "configured": true,
+                  "role": "web",
+                  "running": true,
+                  "shutdownRequested": false,
+                  "intervalMs": 300000,
+                  "batchLimit": 50,
+                  "maxDurationMs": 30000,
+                  "leaseMs": 120000,
+                  "lastRunLeaseHeld": false,
+                  "leaseHeldSkipCount": 7,
+                  "isEvaluating": false,
+                  "lastRunAt": "2026-10-04T08:31:12.904Z",
+                  "lastRunDurationMs": 4120,
+                  "lastRunScannedCount": 12,
+                  "lastRunEvaluatedCount": 9,
+                  "lastRunPendingCount": 1,
+                  "lastRunErrorCount": 0,
+                  "lastRunRegionBlockedCount": 0,
+                  "entryPriceSources": {
+                    "configured": false,
+                    "crypto": [
+                      "mcp",
+                      "binance",
+                      "gemini"
+                    ],
+                    "equity": [
+                      "twelve-data"
+                    ]
+                  }
+                },
                 "firebaseRemoteConfig": {
                   "enabled": false,
                   "configured": false,
-                  "ready": false,
                   "status": "disabled",
                   "source": "disabled",
                   "templateVersion": null,
@@ -8627,7 +8684,54 @@
               "object",
               "null"
             ],
-            "additionalProperties": true
+            "additionalProperties": true,
+            "description": "Persisted enrichment payload. Unlike the dry-run response, this is the document written by `AlertStorageService.saveAlert()`, so it additionally carries the GH-599 computed-provenance fields that are only added at persist time.",
+            "properties": {
+              "current_price": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "Persisted entry-price context. Sourced from TradingView MCP when tradingViewEnrichmentApplied is true, from the alert-enrichment model response over grounded context when only Gemini enrichment ran, or from a derived quote when neither provider supplied a usable price (GH-599). Omitted entirely when no provider returned a finite positive price. Note: this is the model's reading of grounded context, not a snippet-level price extraction, so it carries no field-level citation."
+              },
+              "price_currency": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Uppercased ISO-4217-style currency code declared by the provider alongside current_price (e.g. \"USD\", \"USDT\"). Omitted when current_price is absent, when the derived-quote fallback supplied the price, or when the code fails the 2-5 uppercase-letter validation (GH-599)."
+              },
+              "risk_reward_ratio_source": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "computed",
+                  null
+                ],
+                "description": "Set to 'computed' on the stored document when risk_reward_ratio was deterministically derived at persist time from current_price / invalidation_level / target_level / side, because the provider omitted it or reported a non-positive value that could not be used. Absent (or null) when the value came from the LLM or MCP provider, or when the deterministic computation could not run (GH-599). This field exists only on the persisted document: the dry-run response returns before `applyDeterministicRiskReward()` runs, so a dry-run payload never carries it."
+              },
+              "levelsSource": {
+                "type": "string",
+                "enum": [
+                  "tradingview-mcp",
+                  "gemini-grounding",
+                  "fallback-trade-plan",
+                  "derived-quote"
+                ],
+                "description": "Provenance of the emitted risk levels. 'tradingview-mcp' when the MCP ATR-derived block won (the default for MCP-sourced alerts); 'gemini-grounding' when Gemini-parsed levels were emitted because TradingView MCP data was absent or failed (GH-509 / CB-226); 'fallback-trade-plan' when MCP supplied the price but its ATR-derived block was rejected as zero, non-finite, or failing the side/positivity checks and the secondary heuristic timeframe risk plan was used instead (GH-1229); 'derived-quote' when levels were derived from a fetched quote because neither provider returned a usable block (GH-599)."
+              },
+              "priceSource": {
+                "type": "string",
+                "description": "Provider that supplied the emitted current_price. 'tradingview-mcp' from the MCP quote, 'gemini-grounding' from the alert-enrichment model response over grounded context, 'derived-quote' from a fetched quote fallback. When a risk block was completed arithmetically because it supplied both directional levels but no ratio, the emitted entry is the one that ratio was derived from, so current_price is reported as 'gemini-grounding' and price_currency is omitted: a quote currency describing a different price must not be attached to this one. This keeps (current_price, invalidation_level, target_level, risk_reward_ratio) internally consistent, so the stored ratio can always be recomputed from the stored fields (GH-599).",
+                "enum": [
+                  "tradingview-mcp",
+                  "gemini-grounding",
+                  "derived-quote"
+                ]
+              }
+            }
           },
           "tokenUsage": {
             "type": [
@@ -8699,6 +8803,20 @@
             "type": "integer",
             "minimum": 20001,
             "description": "Length of the original alert text in characters before the 20,000-character cap was applied."
+          },
+          "currentPrice": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Top-level mirror of enrichmentData.current_price when present and finite positive (GH-599 / CB-XXX). Sourced from Gemini grounding snippets when only the alert-enrichment prompt ran, and from TradingView MCP when tradingViewEnrichmentApplied is true."
+          },
+          "priceCurrency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Top-level mirror of enrichmentData.price_currency when currentPrice is present (GH-599 / CB-XXX)."
           }
         }
       },
@@ -10047,6 +10165,201 @@
           }
         }
       },
+      "IdempotencyStorage": {
+        "type": "object",
+        "description": "Durable webhook idempotency state. Every Firestore error in this layer is swallowed so the request falls back to in-memory idempotency, which is why `ready` is proven from observed durable work rather than inferred from credential shape: a deployment whose credentials look valid but cannot reach Firestore reports `degraded`, and a process that has not yet attempted a durable operation reports `unverified`.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "mode",
+          "backend",
+          "failOpen",
+          "readiness",
+          "collection"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "ENABLE_FIRESTORE_IDEMPOTENCY (or the deprecated ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE alias) is true."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Firestore credential shape only. True does not mean durability works."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True only after an observed successful durable operation, and false again from the first failure until the next success. It never implies `configured`."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "unverified",
+              "ready",
+              "degraded"
+            ],
+            "description": "`unverified` is no evidence, not health: it is the normal state right after a restart until the first keyed request is served. Gate state wins over observed provider health."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "durable",
+              "ephemeral"
+            ],
+            "description": "Configured intent: durable means Firestore is the target and ephemeral means the feature is off or unconfigured. Read `ready`/`status` for whether durability is actually in effect."
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          },
+          "failOpen": {
+            "type": "boolean",
+            "description": "Always true. Firestore failures degrade to in-memory idempotency rather than failing the request, so a `degraded` verdict still delivers alerts; it just cannot suppress a duplicate after a restart or across replicas."
+          },
+          "readiness": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "verified",
+              "degraded"
+            ]
+          },
+          "collection": {
+            "type": "string",
+            "description": "Firestore collection holding hashed idempotency reservations. Raw caller keys are never stored as document ids or logged."
+          },
+          "operationsAttempted": {
+            "type": "integer",
+            "description": "Durable use attempts, including attempts whose Firebase initialization was rejected. Never incremented by a status read."
+          },
+          "operationsSucceeded": {
+            "type": "integer"
+          },
+          "operationsFailed": {
+            "type": "integer"
+          },
+          "consecutiveFailures": {
+            "type": "integer",
+            "description": "Cleared by the next success, so a transient outage self-heals without a restart."
+          },
+          "lastSuccessAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastFailureAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastErrorReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "firestore_not_initialized",
+              "firestore_unavailable",
+              null
+            ],
+            "description": "Closed enum so a Firestore error message — which embeds the project and database path — can never reach a status response."
+          }
+        }
+      },
+      "SignalOutcomeWorker": {
+        "type": "object",
+        "description": "Signal outcome evaluation worker state. The evaluation sweep is claimed with a Firestore lease in `signalOutcomeLocks` so exactly one process prices a pending signal when more than one has tracking enabled, which is the production topology (`render.yaml` declares a web-role process and the dedicated `cabros-crypto-bot-signal-outcome-worker`). The lease observability fields identify the winning evaluator from status alone instead of inferring it from the Render dashboard. Lease failures are fail-open: a lease write that cannot be attempted does not stop evaluation.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "ENABLE_SIGNAL_OUTCOME_TRACKING is true."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Firestore credential shape only. True does not mean outcome evaluation can reach its collection."
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "web",
+              "worker",
+              "disabled"
+            ],
+            "description": "Which entrypoint this process is permitted to start the sweep from. Role gating alone does not stop two enabled replicas from sweeping; the lease does."
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "shutdownRequested": {
+            "type": "boolean"
+          },
+          "intervalMs": {
+            "type": "integer",
+            "description": "SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS sweep cadence."
+          },
+          "batchLimit": {
+            "type": "integer",
+            "description": "SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT pending signals scanned per sweep."
+          },
+          "maxDurationMs": {
+            "type": "integer",
+            "description": "SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS sweep duration budget. Independently tunable from the lease, so a lease shorter than this budget can be taken over mid-sweep."
+          },
+          "leaseMs": {
+            "type": "integer",
+            "description": "Effective distributed sweep lease duration in milliseconds. SIGNAL_OUTCOME_EVALUATION_LEASE_MS, default 120000, valid range 10000-600000, environment-only. Values outside the range fall back to the default."
+          },
+          "lastRunLeaseHeld": {
+            "type": "boolean",
+            "description": "The most recent sweep did not run to completion as the lease holder, either because another replica held the lease at claim time or because ownership was lost mid-sweep. A sweep aborted by a lost lease can still report a non-zero lastRunEvaluatedCount for the documents it finished before losing ownership."
+          },
+          "leaseHeldSkipCount": {
+            "type": "integer",
+            "description": "Cumulative sweeps since process start that did not run to completion as the lease holder. One replica whose counter climbs while its lastRunEvaluatedCount stays at zero is not the evaluator."
+          },
+          "isEvaluating": {
+            "type": "boolean"
+          },
+          "lastRunAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "A lastRunAt that never advances means the sweep is not running, whatever featureFlags.signalOutcomeTracking reports."
+          },
+          "lastRunDurationMs": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "lastRunScannedCount": {
+            "type": "integer"
+          },
+          "lastRunEvaluatedCount": {
+            "type": "integer"
+          },
+          "lastRunPendingCount": {
+            "type": "integer"
+          },
+          "lastRunErrorCount": {
+            "type": "integer"
+          },
+          "lastRunRegionBlockedCount": {
+            "type": "integer"
+          },
+          "entryPriceSources": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Effective non-secret crypto and equity entry-price provider chains."
+          }
+        }
+      },
       "ScannerPresetStorage": {
         "type": "object",
         "required": [
@@ -10856,18 +11169,26 @@
                   "levelsSource": {
                     "type": "string",
                     "enum": [
+                      "tradingview-mcp",
                       "gemini-grounding",
                       "fallback-trade-plan",
                       "derived-quote"
                     ],
-                    "description": "Provenance of the emitted risk levels (invalidation_level / target_level / risk_reward_ratio). Set to 'gemini-grounding' only when Gemini-parsed fallback levels are emitted because TradingView MCP data was absent or failed; omitted when MCP-derived levels win (GH-509 / CB-226). Set to 'fallback-trade-plan' when TradingView MCP supplied the price but its ATR-derived risk block was rejected (zero, non-finite, or failing the side/positivity checks) and the secondary heuristic timeframe risk plan was used instead (GH-1229). Set to 'derived-quote' when levels were derived from the MCP quote because neither provider returned a usable block."
+                    "description": "Provenance of the emitted risk levels (invalidation_level / target_level / risk_reward_ratio). 'tradingview-mcp' when the MCP ATR-derived block won, which is the default for MCP-sourced alerts. 'gemini-grounding' only when Gemini-parsed fallback levels are emitted because TradingView MCP data was absent or failed (GH-509 / CB-226). 'fallback-trade-plan' when TradingView MCP supplied the price but its ATR-derived risk block was rejected (zero, non-finite, or failing the side/positivity checks) and the secondary heuristic timeframe risk plan was used instead (GH-1229). 'derived-quote' when levels were derived from the MCP quote because neither provider returned a usable block (GH-599)."
                   },
                   "current_price": {
                     "type": [
                       "number",
                       "null"
                     ],
-                    "description": "Current price supplied by TradingView MCP enrichment; null when unavailable."
+                    "description": "Current entry-price context. Sourced from TradingView MCP when tradingViewEnrichmentApplied is true; sourced from Gemini grounding snippets (alert-enrichment prompt response) when only Gemini enrichment ran (GH-599 / CB-XXX). Null when neither provider supplies a finite positive price."
+                  },
+                  "price_currency": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "ISO-4217-style currency code paired with current_price when supplied by Gemini grounding (e.g. \"USD\", \"USDT\"); null when current_price is absent or currency is not declared (GH-599 / CB-XXX)."
                   },
                   "sentiment_score": {
                     "type": "number",
@@ -11755,7 +12076,7 @@
       },
       "Status": {
         "type": "object",
-        "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.newsMonitorClassifier reports ENABLE_NEWS_MONITOR_CLASSIFIER and defaults to false; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations.",
+        "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters, plus the distributed sweep lease observability that identifies the winning evaluator: leaseMs (SIGNAL_OUTCOME_EVALUATION_LEASE_MS, default 120000, valid range 10000-600000, environment-only), lastRunLeaseHeld and leaseHeldSkipCount, where lastRunLeaseHeld is true whenever the most recent sweep did not run to completion as the lease holder and leaseHeldSkipCount counts those sweeps cumulatively since process start; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.newsMonitorClassifier reports ENABLE_NEWS_MONITOR_CLASSIFIER and defaults to false; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation. equityMarketData.configured reports credential shape only (gate on, provider selected, key present) and must not be read as proof the feature works: equityMarketData.ready is true only after an observed successful provider call, and equityMarketData.status is disabled, misconfigured, unverified before any call is observed, ready, or degraded after a failed call. equityMarketData.readiness plus the requestsAttempted/requestsSucceeded/requestsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and sanitized lastErrorReason expose the observed provider outcome window, which resets on process restart. featureFlags.firestoreIdempotency reports ENABLE_FIRESTORE_IDEMPOTENCY and dependencies.idempotencyStorage reports durable webhook idempotency state; idempotencyStorage.configured is credential shape only and must not be read as proof that duplicates are suppressed, because every Firestore failure in this layer falls open to in-memory idempotency: idempotencyStorage.ready is true only after an observed successful durable operation and idempotencyStorage.status is disabled, misconfigured, unverified before any durable attempt, ready, or degraded after a failure, with mode/backend reporting configured intent and failOpen always true. idempotencyStorage.readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and closed-enum lastErrorReason expose the observed durable outcome window, which resets on process restart. featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters, plus the distributed sweep lease observability that identifies the winning evaluator: leaseMs (SIGNAL_OUTCOME_EVALUATION_LEASE_MS, default 120000, valid range 10000-600000, environment-only), lastRunLeaseHeld and leaseHeldSkipCount, where lastRunLeaseHeld is true whenever the most recent sweep did not run to completion as the lease holder and leaseHeldSkipCount counts those sweeps cumulatively since process start; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation. equityMarketData.configured reports credential shape only (gate on, provider selected, key present) and must not be read as proof the feature works: equityMarketData.ready is true only after an observed successful provider call, and equityMarketData.status is disabled, misconfigured, unverified before any call is observed, ready, or degraded after a failed call. equityMarketData.readiness plus the requestsAttempted/requestsSucceeded/requestsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and sanitized lastErrorReason expose the observed provider outcome window, which resets on process restart. featureFlags.firestoreIdempotency reports ENABLE_FIRESTORE_IDEMPOTENCY and dependencies.idempotencyStorage reports durable webhook idempotency state; idempotencyStorage.configured is credential shape only and must not be read as proof that duplicates are suppressed, because every Firestore failure in this layer falls open to in-memory idempotency: idempotencyStorage.ready is true only after an observed successful durable operation and idempotencyStorage.status is disabled, misconfigured, unverified before any durable attempt, ready, or degraded after a failure, with mode/backend reporting configured intent and failOpen always true. idempotencyStorage.readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and closed-enum lastErrorReason expose the observed durable outcome window, which resets on process restart. featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations.",
         "properties": {
           "readiness": {
             "$ref": "#/components/schemas/BootstrapReadiness"
@@ -11806,8 +12127,14 @@
               "selfTest": {
                 "$ref": "#/components/schemas/SelfTestStatus"
               },
-              "firestoreReadMetrics": {
+"firestoreReadMetrics": {
                 "$ref": "#/components/schemas/FirestoreReadMetrics"
+              },
+              "idempotencyStorage": {
+                "$ref": "#/components/schemas/IdempotencyStorage"
+              },
+              "signalOutcomeWorker": {
+                "$ref": "#/components/schemas/SignalOutcomeWorker"
               },
               "firestore": {
                 "$ref": "#/components/schemas/FirestoreDependency"

@@ -31,6 +31,8 @@ const REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS = Object.freeze([
  * lockstep: a Langfuse prompt that has not been republished after #1031 reports
  * `schemaDriftDetected` until it carries the anchors and the justification
  * field. That flag is the intended rollout signal, not a failure.
+ *
+ * Optional price fields stay outside drift detection for legacy prompts (GH-599).
  */
 const REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE = Object.freeze([
 	'sentiment_score_evidence',

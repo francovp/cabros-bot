@@ -12,6 +12,9 @@
 // The moduleNameMapper in jest.config.js ensures this resolves to __mocks__/firebase-admin.js
 const admin = require('firebase-admin');
 const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
 const { parseAlertPaginationCursor } = require('../../src/services/storage/alertPaginationCursor');
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
@@ -170,6 +173,33 @@ describe('AlertStorageService', () => {
 			expect(mockInitializeApp).toHaveBeenCalledWith(
 				expect.objectContaining({ projectId: 'my-project' }),
 			);
+		});
+
+		it('initializes durable storage from an authorized-user ADC file with FIREBASE_PROJECT_ID', () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.FIREBASE_PROJECT_ID = 'my-project';
+			const adcFile = path.join(os.tmpdir(), `cabros-adc-${process.pid}-${Date.now()}.json`);
+			fs.writeFileSync(adcFile, JSON.stringify({
+				type: 'authorized_user',
+				client_id: '123.apps.googleusercontent.com',
+				client_secret: 'not-a-real-secret',
+				refresh_token: 'not-a-real-refresh-token',
+			}));
+			process.env.GOOGLE_APPLICATION_CREDENTIALS = adcFile;
+
+			try {
+				const result = AlertStorageService.getFirestore();
+
+				expect(result).not.toBeNull();
+				expect(mockCert).not.toHaveBeenCalled();
+				expect(mockInitializeApp).toHaveBeenCalledWith({
+					credential: { type: 'application_default_credential' },
+					projectId: 'my-project',
+				});
+			} finally {
+				fs.unlinkSync(adcFile);
+				delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+			}
 		});
 
 		it('does not call initializeApp when admin.apps is already populated', () => {
@@ -765,6 +795,236 @@ describe('AlertStorageService', () => {
 			const calledWith = mockAdd.mock.calls[0][0];
 			expect(calledWith.enriched).toBe(true);
 		});
+
+		describe('current_price, price_currency, and deterministic R:R (GH-599)', () => {
+			function captureSaveCall() {
+				return mockAdd.mock.calls[mockAdd.mock.calls.length - 1][0];
+			}
+
+			it('persists current_price and price_currency from enrichmentData', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-price' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					enrichmentData: {
+						current_price: 64863.03,
+						price_currency: 'USD',
+						sentiment: 'BULLISH',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData).toEqual(expect.objectContaining({
+					current_price: 64863.03,
+					price_currency: 'USD',
+				}));
+			});
+
+			it('strips invalid current_price values during sanitization', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-bad-price' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					enrichmentData: {
+						current_price: -100,
+						price_currency: 'USD',
+						sentiment: 'BULLISH',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData).not.toHaveProperty('current_price');
+				expect(doc.enrichmentData).not.toHaveProperty('price_currency');
+			});
+
+			it('strips an invalid price_currency without dropping the underlying price', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-bad-currency' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					enrichmentData: {
+						current_price: 50000,
+						price_currency: 'us dollars',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData.current_price).toBe(50000);
+				expect(doc.enrichmentData).not.toHaveProperty('price_currency');
+			});
+
+			it('computes risk_reward_ratio deterministically for a BUY signal when entry/invalidation/target are present', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-buy' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 90,
+						target_level: 130,
+						sentiment: 'BULLISH',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				// (target - entry) / (entry - invalidation) = (130 - 100) / (100 - 90) = 30 / 10 = 3.0
+				expect(doc.enrichmentData.risk_reward_ratio).toBe(3);
+				expect(doc.enrichmentData.risk_reward_ratio_source).toBe('computed');
+			});
+
+			it('computes risk_reward_ratio directionally for a SELL signal', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-sell' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'SELL',
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 120,
+						target_level: 70,
+						sentiment: 'BEARISH',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				// (entry - target) / (invalidation - entry) = (100 - 70) / (120 - 100) = 30 / 20 = 1.5
+				expect(doc.enrichmentData.risk_reward_ratio).toBe(1.5);
+				expect(doc.enrichmentData.risk_reward_ratio_source).toBe('computed');
+			});
+
+			it.each([0, -2])('recomputes a non-positive numeric ratio %s', async (ratio) => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-invalid-ratio' });
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true, side: 'BUY',
+					enrichmentData: { current_price: 100, invalidation_level: 90, target_level: 130, risk_reward_ratio: ratio },
+				}));
+				expect(captureSaveCall().enrichmentData).toMatchObject({ risk_reward_ratio: 3, risk_reward_ratio_source: 'computed' });
+			});
+
+			// A real ratio below 5e-5 rounds to 0 at the 4-decimal readability limit. `0` fails the
+			// `existingIsValid` test, so persisting it would mean re-deriving on every read and
+			// counting a zero as populated coverage — indistinguishable from a genuine 0.0
+			// grade. Such a ratio is not actionable either, so it is dropped rather than stored.
+			it('does not persist a ratio that rounding would collapse to zero', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-subprecision' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true, side: 'BUY',
+					enrichmentData: { current_price: 100, invalidation_level: 50, target_level: 100.0001 },
+				}));
+
+				const doc = captureSaveCall().enrichmentData;
+				// True R:R = 0.0001 / 50 = 2e-6, which `toFixed(4)` renders as 0.
+				expect(doc.risk_reward_ratio).toBeUndefined();
+				expect(doc.risk_reward_ratio_source).toBeUndefined();
+				// The entry and levels the ratio was derived from are still preserved.
+				expect(doc.current_price).toBe(100);
+				expect(doc.invalidation_level).toBe(50);
+			});
+
+			it('does not overwrite an existing valid risk_reward_ratio from the model', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-preserve' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 90,
+						target_level: 130,
+						risk_reward_ratio: 2.5,
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData.risk_reward_ratio).toBe(2.5);
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio_source');
+			});
+
+			it('computes R:R from currency-formatted risk levels', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-formatted' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						current_price: 85000,
+						invalidation_level: '$80,000',
+						target_level: '$90,000',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData.risk_reward_ratio).toBe(1);
+				expect(doc.enrichmentData.risk_reward_ratio_source).toBe('computed');
+			});
+
+			it('preserves a non-empty string risk_reward_ratio from the model', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-string' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 90,
+						target_level: 130,
+						risk_reward_ratio: '2.5:1',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData.risk_reward_ratio).toBe('2.5:1');
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio_source');
+			});
+
+			it('does not compute R:R when entry is missing', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-no-entry' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						invalidation_level: 90,
+						target_level: 130,
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio');
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio_source');
+			});
+
+			it('does not compute R:R when the side is missing for a valid BUY/SELL pair', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-no-side' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 90,
+						target_level: 130,
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio');
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio_source');
+			});
+		});
 	});
 
 	describe('listAlerts()', () => {
@@ -1336,6 +1596,60 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		describe('current_price read fields (GH-599)', () => {
+			it('surfaces currentPrice and priceCurrency on stored enriched alerts', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('gh599-read', {
+						receivedAt: buildTimestamp('2026-08-25T12:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-11-23T12:00:00.000Z'),
+						text: 'ETHUSDT pasó a señal de COMPRA',
+						enriched: true,
+						enrichmentData: {
+							current_price: 3240.51,
+							price_currency: 'USDT',
+						},
+						tokenUsage: null,
+						deliveryResults: [],
+						source: 'webhook',
+						useTradingViewData: false,
+						tradingViewEnrichmentApplied: false,
+					})],
+				});
+
+				const result = await AlertStorageService.listAlerts({ limit: 1 });
+				expect(result.alerts[0].currentPrice).toBe(3240.51);
+				expect(result.alerts[0].priceCurrency).toBe('USDT');
+			});
+
+			it('omits the read fields when stored price is missing or invalid', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('gh599-read-bad', {
+						receivedAt: buildTimestamp('2026-08-25T12:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-11-23T12:00:00.000Z'),
+						text: 'ETHUSDT pasó a señal de COMPRA',
+						enriched: true,
+						enrichmentData: {
+							current_price: -10,
+							price_currency: 'us dollars',
+						},
+						tokenUsage: null,
+						deliveryResults: [],
+						source: 'webhook',
+						useTradingViewData: false,
+						tradingViewEnrichmentApplied: false,
+					})],
+				});
+
+				const result = await AlertStorageService.listAlerts({ limit: 1 });
+				expect(result.alerts[0]).not.toHaveProperty('currentPrice');
+				expect(result.alerts[0]).not.toHaveProperty('priceCurrency');
+			});
+		});
+
 		// ── Issue #1285 ──────────────────────────────────────────────────────
 		// Production returned 503 on every read endpoint while writes succeeded
 		// 29/29. `listCollections()` and write/init success both reported the
@@ -1443,6 +1757,7 @@ describe('AlertStorageService', () => {
 			await expect(AlertStorageService.probeOrderedAlertRead()).rejects.toMatchObject({
 				code: 'STORAGE_UNAVAILABLE',
 				missingIndex: true,
+
 			});
 		});
 	});
@@ -4101,6 +4416,54 @@ describe('AlertStorageService', () => {
 			]);
 			expect(result).toHaveLength(2);
 			expect(mockBatchSet).toHaveBeenCalledTimes(2);
+		});
+	});
+
+	// GH-599: `risk_reward_ratio_source` is added by `saveAlertInternal()` via
+	// `applyDeterministicRiskReward()`, so it exists ONLY on the persisted document. The
+	// dry-run branch returns `enrichedData` before persistence and never gains the field,
+	// so documenting it solely under the dry-run `DeliveryResult` payload published a
+	// provenance tag on a response that cannot contain it, while the stored-alert contract
+	// that CAN contain it stayed undocumented. Anchor the GH-599 fields on `StoredAlert`.
+	describe('GH-599 persisted entry-price contract', () => {
+		const openapi = require('../../src/openapi/openapi.json');
+		const storedAlertEnrichment = openapi.components.schemas.StoredAlert.properties.enrichmentData;
+
+		it('documents current_price and price_currency on stored alert enrichment data', () => {
+			expect(storedAlertEnrichment.properties).toHaveProperty('current_price');
+			expect(storedAlertEnrichment.properties).toHaveProperty('price_currency');
+			// The price is the model's reading of grounded context, not a snippet-level
+			// extraction, so the contract must not imply field-level citation.
+			expect(storedAlertEnrichment.properties.current_price.description).toMatch(/no field-level citation/i);
+		});
+
+		it('documents risk_reward_ratio_source provenance on stored alert enrichment data', () => {
+			expect(storedAlertEnrichment.properties).toHaveProperty('risk_reward_ratio_source');
+			expect(storedAlertEnrichment.properties.risk_reward_ratio_source.description).toMatch(/computed/i);
+			expect(storedAlertEnrichment.properties.risk_reward_ratio_source.description).toMatch(/persist|stored|Firestore/i);
+		});
+
+		it('enumerates every levelsSource and priceSource value the merge path can emit', () => {
+			// `selectRiskMetadata()` falls back to `mcp.levelsSource || 'tradingview-mcp'`,
+			// so `tradingview-mcp` is the value most MCP-sourced alerts actually persist.
+			// An enum missing it marks the commonest production shape invalid.
+			expect(storedAlertEnrichment.properties.levelsSource.enum).toEqual([
+				'tradingview-mcp',
+				'gemini-grounding',
+				'fallback-trade-plan',
+				'derived-quote',
+			]);
+			expect(storedAlertEnrichment.properties.priceSource.enum).toEqual([
+				'tradingview-mcp',
+				'gemini-grounding',
+				'derived-quote',
+			]);
+		});
+
+		it('does not advertise risk_reward_ratio_source as a dry-run response field', () => {
+			const dryRunEnrichment = openapi.components.schemas.DeliveryResult
+				.properties.payload.properties.enrichedData.properties;
+			expect(dryRunEnrichment).not.toHaveProperty('risk_reward_ratio_source');
 		});
 	});
 });

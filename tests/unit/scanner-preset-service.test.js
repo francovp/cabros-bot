@@ -878,4 +878,87 @@ describe('ScannerPresetService', () => {
 		expect(updated.id).toBe(second.id);
 		expect(first.id).not.toBe(second.id);
 	});
+
+	// Issue #1114 enables durable scanner-preset persistence in production. The
+	// stored-alert read path once returned 503 with every write succeeding
+	// because its ordered read needed a composite index nobody had declared
+	// (issue #1285), after the user-price-alert sweep was bitten the same way.
+	// Firestore rejects such a query at runtime while the firebase-admin test
+	// double makes `orderBy` a no-op, so neither this suite nor
+	// `pnpm test:firebase` can observe a missing index. A source-level
+	// assertion is the only guard that can, so pin the durable query shape here.
+	describe('durable query shape stays within Firestore automatic indexes', () => {
+		const DURABLE_QUERY_SOURCES = [
+			'../../src/services/scannerPresets/ScannerPresetService.js',
+			'../../src/services/scannerPresets/ScannerPresetSchedulerService.js',
+		];
+
+		function readCollectionChains(source) {
+			const chains = [];
+			let cursor = 0;
+
+			for (;;) {
+				const start = source.indexOf('.collection(COLLECTION_NAME)', cursor);
+				if (start === -1) {
+					return chains;
+				}
+				const end = source.indexOf(';', start);
+				chains.push(source.slice(start, end === -1 ? source.length : end));
+				cursor = start + 1;
+			}
+		}
+
+		function callNames(chain) {
+			return [...chain.matchAll(/\.([A-Za-z_$][\w$]*)\(/g)].map(match => match[1]);
+		}
+
+		it.each(DURABLE_QUERY_SOURCES)('%s never combines a filter with a sort', sourcePath => {
+			const fs = require('fs');
+			const path = require('path');
+			const source = fs.readFileSync(path.resolve(__dirname, sourcePath), 'utf8');
+
+			const offending = readCollectionChains(source).filter(chain => {
+				const names = callNames(chain);
+				if (names.includes('doc')) {
+					return false;
+				}
+				// Firestore never merges single-field indexes, so an equality
+				// filter sorted on a different field demands a composite.
+				return names.includes('where') && names.includes('orderBy');
+			});
+
+			expect(offending).toEqual([]);
+		});
+
+		it.each(DURABLE_QUERY_SOURCES)('%s never sorts on a descending document id', sourcePath => {
+			const fs = require('fs');
+			const path = require('path');
+			const source = fs.readFileSync(path.resolve(__dirname, sourcePath), 'utf8');
+
+			const offending = readCollectionChains(source).filter(chain => {
+				const descendingDocumentIdSort = chain.match(
+					/\.orderBy\(\s*(?:FieldPath\.documentId\(\)|admin\.firestore\.FieldPath\.documentId\(\)|'__name__'|"__name__")\s*,\s*['"]desc['"]\s*\)/,
+				);
+				return Boolean(descendingDocumentIdSort);
+			});
+
+			expect(offending).toEqual([]);
+		});
+
+		it('declares no scannerPresets composite index, because none is required', () => {
+			const fs = require('fs');
+			const path = require('path');
+			const indexes = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../firestore.indexes.json'), 'utf8'));
+
+			// Every durable query is a point read, a single-field equality, or a
+			// single-field sort, all served by automatic single-field indexes. A
+			// declaration here would mean the query shape changed without anyone
+			// reviewing the index it now requires.
+			const scannerPresetIndexes = indexes.indexes.filter(
+				index => index.collectionGroup === 'scannerPresets',
+			);
+
+			expect(scannerPresetIndexes).toEqual([]);
+		});
+	});
 });

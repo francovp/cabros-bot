@@ -241,3 +241,27 @@ Query empirical confidence calibration feedback metrics comparing news-monitor a
   }
 }
 ```
+
+---
+
+### Evaluation Worker: Single-Evaluator Guarantee
+
+`ENABLE_SIGNAL_OUTCOME_TRACKING=true` (enabled in production) records signals on the alert path and starts the evaluation sweep. The sweep runs in whichever process matches its own `SIGNAL_OUTCOME_WORKER_ROLE` — `web` for the web service, `worker` for the dedicated `cabros-crypto-bot-signal-outcome-worker`, `disabled` to suppress it. Both services are declared in `render.yaml` and may be enabled at the same time.
+
+Each sweep is therefore claimed with a Firestore lease in the `signalOutcomeLocks` collection:
+
+- The replica that loses the claim skips with `reason: "lease-held"` and makes no market-data calls, so a pending signal is never evaluated twice.
+- Ownership is also checked while the sweep runs. A renewal that proves the lease was taken over mid-sweep **halts** the sweep before the next document, so a losing replica stops pricing signals rather than finishing the batch.
+- An expired lease is taken over rather than skipped indefinitely.
+- If Firestore is unavailable or the lease write cannot be attempted, the sweep **proceeds anyway**. A lock-service failure degrades to single-process behaviour instead of stopping outcome evaluation. Only *proven* ownership loss stops a sweep; an unchecked lease is not proof of loss.
+- Duration: `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` (`10000`-`600000`, default `120000`). The worker warns at startup if the lease does not exceed `SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS`, because a sweep that outlives its own lease can legitimately be taken over mid-run.
+
+Check `GET /api/status` (or `/api/capabilities`) under `dependencies.signalOutcomeWorker`:
+
+| Field | Meaning |
+| :--- | :--- |
+| `leaseMs` | Configured lease duration. |
+| `lastRunLeaseHeld` | The most recent sweep did not run to completion as the lease holder. |
+| `leaseHeldSkipCount` | Cumulative sweeps since start that did not run to completion as the lease holder. |
+
+A sweep halted by a lost lease can still report a non-zero `lastRunEvaluatedCount` for the documents it finished before ownership moved on — the abort is counted, not the individual documents. A replica whose `leaseHeldSkipCount` keeps climbing while its `lastRunEvaluatedCount` stays at `0` is not the evaluator — that is how you identify which process is actually doing the work. A `lastRunAt` that never advances, or counters stuck at zero, means the sweep is not running at all regardless of what `featureFlags.signalOutcomeTracking` reports.

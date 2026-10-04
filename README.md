@@ -258,6 +258,70 @@ Paging is deduplicated by cooldown and only latches after confirmed delivery; a 
 | `JOB_BACKLOG_PROBE_TIMEOUT_MS` | `10000` | `1000`–`300000` | Per-dependency probe deadline. Environment-only. |
 | `ENABLE_JOB_BACKLOG_MONITOR` | `true` | — | Master monitor gate. **Environment-only** — a process-startup gate, deliberately excluded from Remote Config. |
 
+### Signal Outcome Single-Evaluator Guarantee
+
+`ENABLE_SIGNAL_OUTCOME_TRACKING=true` is enabled in production. It gates three things at once — recording signals on the alert path, the evaluation sweep, and the whole `/api/outcomes` surface — so it is pinned in `render.yaml` rather than left to the Render dashboard, where an operator reading the repo could not tell which process was actually enabled.
+
+The production topology names **two** candidate evaluators: the web service (`SIGNAL_OUTCOME_WORKER_ROLE=web`) and the paid dedicated worker `cabros-crypto-bot-signal-outcome-worker` (`SIGNAL_OUTCOME_WORKER_ROLE=worker`). `startWorker()` only compares a process's own role, so role gating alone does not stop both from sweeping. `SignalOutcomeService` therefore claims the sweep with a Firestore lease in `signalOutcomeLocks`:
+
+- **One evaluator wins.** The replica that loses the claim skips with `reason: "lease-held"` and issues **no** market-data calls, so a pending signal is never priced and written twice — which would double Binance / Gemini / Twelve Data quota spend. Ownership is re-checked while the sweep runs, and a renewal that proves the lease was taken over mid-sweep **halts** the sweep before the next document. An expired lease is taken over rather than skipped forever.
+- **The lease fails open.** If Firestore is unavailable or the lease write cannot be attempted, the sweep proceeds exactly as before. A lock-service blip must never be able to silently stop outcome evaluation. Only *proven* ownership loss stops a sweep.
+- **It is observable.** `dependencies.signalOutcomeWorker` reports `leaseMs`, `lastRunLeaseHeld` and `leaseHeldSkipCount`, so `leaseHeldSkipCount` climbing on one replica while the other reports `lastRunEvaluatedCount` growth identifies the active evaluator without guessing from the dashboard. Both counters are also rendered on the `/admin` Status explorer card.
+
+Verify the rollout on the deployed service rather than trusting the flag:
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
+  https://cabros-crypto-bot-telegram.onrender.com/api/capabilities \
+  | jq '{flag: .featureFlags.signalOutcomeTracking,
+         enabled: .dependencies.signalOutcomeWorker.enabled,
+         role: .dependencies.signalOutcomeWorker.role,
+         running: .dependencies.signalOutcomeWorker.running,
+         lastRunAt: .dependencies.signalOutcomeWorker.lastRunAt,
+         leaseHeldSkips: .dependencies.signalOutcomeWorker.leaseHeldSkipCount}'
+```
+
+`lastRunAt` advancing with a non-zero `lastRunEvaluatedCount` is the evidence that the sweep actually ran. The flag alone proves nothing: it reports what was configured, not what executed.
+
+| Variable | Default | Bounds | Purpose |
+| :--- | :--- | :--- | :--- |
+| `ENABLE_SIGNAL_OUTCOME_TRACKING` | `false` | — | Master gate for recording, sweeping and `/api/outcomes`. Environment-only. |
+| `SIGNAL_OUTCOME_WORKER_ROLE` | `web` | `web`/`worker`/`disabled` | Which entrypoint may start the sweep. Environment-only. |
+| `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` | `120000` | `10000`–`600000` | Distributed sweep lease duration. Environment-only. |
+
+### Equity Market Data Readiness
+
+`ENABLE_EQUITY_MARKET_DATA=true` plus `EQUITY_MARKET_DATA_PROVIDER=twelve-data` and `TWELVE_DATA_API_KEY` enables equity outcome evaluation for `BATS`, `NASDAQ`, `NYSE`, `AMEX`, `NYSE ARCA`, `FX_IDC`, and `SPCFD` signals. Setting those variables is **necessary but not sufficient**, so `/api/status` will not report the feature as working on the strength of the key alone.
+
+`dependencies.equityMarketData.configured` reflects credential *shape* — gate on, provider selected, key non-empty. A typo'd, revoked, quota-exhausted, or wrong-plan key passes that check, which is why `ready` requires an observed successful provider call instead:
+
+| `status` | Meaning |
+| :--- | :--- |
+| `disabled` | `ENABLE_EQUITY_MARKET_DATA` is not `true`. |
+| `misconfigured` | Enabled, but the provider or API key is missing. |
+| `unverified` | Configured, but no provider call has succeeded yet. Not a failure — and not health. |
+| `ready` | A provider call has actually succeeded. |
+| `degraded` | The provider rejected a call; `lastErrorReason` names the class. |
+
+`readiness`, the `requestsAttempted`/`requestsSucceeded`/`requestsFailed`/`consecutiveFailures` counters, and the `lastSuccessAt`/`lastFailureAt` timestamps expose the observed window, which is process-local and resets on restart — so `unverified` is the normal state right after every deploy. There is deliberately no startup probe: it would burn provider quota on every restart purely to manufacture a green checkmark. See [Environment Configuration](docs/environment-configuration.md#verifying-equity-market-data-is-actually-working).
+
+### Durable Webhook Idempotency
+`ENABLE_FIRESTORE_IDEMPOTENCY=true` is enabled in production, so TradingView replays are suppressed across process restarts and replicas instead of re-delivering alerts and re-paying MCP/Gemini budget. Reservations and cached responses live in the server-side-only `idempotency_keys` collection under a SHA-256 hash of the key — the raw caller key is never stored or logged — and each reservation carries a `claimToken` so a late completion cannot overwrite a newer owner's record.
+
+Setting the variable is **necessary but not sufficient**, because this layer is fail-open: every Firestore error is swallowed and the request continues with in-memory idempotency. A deployment that cannot reach Firestore therefore behaves exactly as it did before the flag existed, so `dependencies.idempotencyStorage` reports observed work rather than credential shape:
+
+| `status` | Meaning |
+| :--- | :--- |
+| `disabled` | `ENABLE_FIRESTORE_IDEMPOTENCY` is not `true`. |
+| `misconfigured` | Enabled, but Firestore credentials are absent or unreadable. |
+| `unverified` | Configured, but no durable operation has succeeded yet. Not a failure — and not health. It is the normal state right after every deploy. |
+| `ready` | A durable reservation has actually been persisted. |
+| `degraded` | Falling back to in-memory idempotency. `lastErrorReason` names the class. |
+
+`mode`/`backend` keep reporting configured *intent* (`durable`/`firestore`) so the target stays visible while broken, and `failOpen` is always `true`: a degraded deployment still delivers alerts, it just cannot suppress a duplicate after a restart or across replicas. `consecutiveFailures` clears on the next success, so a transient outage self-heals without a restart. Counters are process-local and a status read never counts as a durable attempt.
+
+`expiresAt` on each document is only honoured once Firestore's TTL policy exists, so run `bash ops/configure-operational-collection-retention.sh` once per Firebase project; until then the collection grows without bound. Rollback is `false` plus a redeploy — no code change. See [Environment Configuration](docs/environment-configuration.md#verifying-idempotency-storage-is-actually-durable).
+
 ### Market Scanner MCP Fast-Fail Gate
 `POST /api/webhook/market-scanner-alert` checks the process-local TradingView MCP status before running its sequential scans. If the status is `degraded` with `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, it skips every scan and returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with each scan as `status: "skipped"`. The endpoint returns `502` in two shapes: `TRADINGVIEW_MCP_UNAVAILABLE` (skipped, nothing attempted) and `ALL_SCANS_FAILED` (attempted, all failed). The gate keys on the breaker's time-based state so that after `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses the next request is allowed through as a recovery probe — a transient outage self-heals without a restart. See [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert).
 

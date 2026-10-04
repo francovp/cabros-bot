@@ -77,3 +77,20 @@ Behavior notes:
 - **Alert enrichment calibration**: the same inspection also checks the sentiment anchor markers (`sentiment_score_evidence`, `0.90`, `0.60`, `0.30`), reported separately as `missingCalibrationGuidance`. See [Sentiment score calibration](#sentiment-score-calibration).
 
 > **Adding or changing a prompt?** Use the `langfuse-prompt-sync` skill to publish the new version/label. The local fallback under `src/services/prompts/defaults/` and the remote Langfuse prompt must carry the same anchors, or `schemaDriftDetected` stays `true` for the remote copy.
+
+### Persisted Gemini-Grounding Entry Price (GH-599)
+
+The alert-enrichment prompt can now extract an optional `current_price` (with optional `price_currency`) from grounded snippets. Values are validated to be finite positive numbers; any malformed entry is silently dropped (fail-open). When the field is present it propagates through `alert.enriched` and the stored alert document, and is mirrored as top-level `currentPrice` / `priceCurrency` on `GET /api/alerts` and the JSONL/CSV export records.
+
+Outcomes-tracking benefits from this in two ways:
+
+- `signalOutcomeService.recordSignal()` now treats a Gemini-grounding-sourced `current_price` as a valid entry-price fallback when TradingView MCP is absent — `priceSource` is set to `'gemini-grounding'` and `entryPriceSourceBreakdown` gains that bucket in `GET /api/outcomes/summary`, so BINANCE alerts stop landing in `missing_entry_price` whenever grounding returns a price.
+- `AlertStorageService` deterministically derives `risk_reward_ratio` from `current_price`, `invalidation_level`, `target_level`, and the parsed signal `side` whenever the model omitted the ratio. The directional computation matches the trade side (`BUY` ⇒ `(target - entry) / (entry - invalidation)`, `SELL` ⇒ `(entry - target) / (invalidation - entry)`); positive numeric and non-empty string model ratios are preserved, and the new field `risk_reward_ratio_source: "computed"` only appears when we filled it in.
+
+Both changes are purely additive. Existing alert-delivery behavior, MarkdownV2 formatting, and fail-open semantics remain unchanged; when grounding omits `current_price` nothing new is written and all existing fields stay untouched.
+
+### Optional price fields and schema drift (GH-599)
+
+`current_price` and `price_currency` are deliberately **excluded** from `REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS`. That set is what produces `schemaDriftDetected`, so including the price fields would flag every production Langfuse prompt still on the pre-GH-599 schema — the drift guard would punish correct behavior and make the flag useless as a rollout signal. The risk fields remain the drift contract; price fields are validated for shape only when present.
+
+Note the asymmetry this creates, stated plainly in the API contract as well: `current_price` is the model's *reading* of grounded context, not a snippet-level price extraction, so it carries no field-level citation. Field-level citation alignment would require provider-level support and is out of scope for GH-599.
