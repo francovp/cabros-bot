@@ -134,10 +134,10 @@ describe('Render signal outcome worker blueprint', () => {
 		expect(workerBlueprint).not.toContain('ENABLE_FIRESTORE_IDEMPOTENCY');
 	});
 
-	// Issue #1109 enables confluence enrichment in production. The flag was already
-	// present in the worker block as a `fromService` mirror of a value the web service
+	// Issue #1109 enables confluence enrichment in production. Both flags were already
+	// present in the worker block as `fromService` mirrors of values the web service
 	// never set, so the Blueprint looked configured while the only service that reaches
-	// it — the one serving POST /api/webhook/alert — kept the `false` default.
+	// them — the one serving POST /api/webhook/alert — kept the `false` default.
 	it('enables confluence enrichment on the web service with previews off', () => {
 		const blueprint = fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');
 		const webBlueprint = blueprint.slice(0, blueprint.indexOf('- type: worker'));
@@ -145,6 +145,36 @@ describe('Render signal outcome worker blueprint', () => {
 		expect(webBlueprint).toContain(
 			'- key: ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT\n    value: true\n    previewValue: false',
 		);
+	});
+
+	// MTF is a separate key, so it needs its own web-service declaration. Leaving it
+	// as a worker-only mirror made the README's multi-timeframe / "partial" behaviour
+	// unreachable from the merged Blueprint, because a `fromService` mirror whose
+	// `envVarKey` source is never declared upstream resolves to nothing.
+	it('enables the multi-timeframe follow-up call on the web service too', () => {
+		const blueprint = fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');
+		const webBlueprint = blueprint.slice(0, blueprint.indexOf('- type: worker'));
+
+		expect(webBlueprint).toContain(
+			'- key: ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME\n    value: true\n    previewValue: false',
+		);
+	});
+
+	// A `fromService` mirror is only meaningful when the web service declares the key it
+	// points at. Asserting the pair together is what stops the dangling-mirror shape from
+	// coming back one key at a time.
+	it.each([
+		'ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT',
+		'ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME',
+	])('resolves the worker %s mirror to a real web-service value', key => {
+		const blueprint = fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');
+		const webBlueprint = blueprint.slice(0, blueprint.indexOf('- type: worker'));
+		const workerBlueprint = blueprint.slice(blueprint.indexOf('- type: worker'));
+
+		expect(workerBlueprint).toContain(
+			`- key: ${key}\n    fromService:\n      name: cabros-crypto-bot-telegram-iac\n      type: web\n      envVarKey: ${key}`,
+		);
+		expect(webBlueprint).toContain(`- key: ${key}\n    value: true`);
 	});
 });
 
