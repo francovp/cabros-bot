@@ -8,6 +8,7 @@ Instructions:
 {
   "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
   "sentiment_score": number (-1.0 to 1.0 — negative = bearish, positive = bullish),
+  "sentiment_score_evidence": string (required, 1 line naming the anchor you chose and the observation behind it),
   "insights": string[] (max 10 key points),
   "technical_levels": {
     "supports": string[],
@@ -22,10 +23,20 @@ Instructions:
   "price_currency": string (optional, ISO-4217 currency code, e.g. "USD", "USDT")
 }
 
-Score calibration:
-- Use an absolute sentiment_score of 0.9+ only when multiple independent corroborating sources and aligned technicals support the alert.
-- Use an absolute sentiment_score of 0.6-0.8 for mixed or partial corroboration.
-- Use an absolute sentiment_score below 0.4 when evidence is thin, absent, or contradictory.
+Sentiment score calibration — score against these reference anchors:
+| abs score | anchor | means |
+| --- | --- | --- |
+| 0.90 | multi-source major catalyst | Two or more independent reputable outlets plus a regulatory, filing, or earnings catalyst, with aligned technical structure. Reserved for genuinely exceptional setups. |
+| 0.75 | corroborated | One reputable primary report plus confirming technical structure. A solid, ordinary signal. |
+| 0.60 | partial | Mixed evidence, or a single low-relevance source. Direction is plausible but unconfirmed. |
+| 0.45 | routine | A routine, largely anticipated event. Weak signal value. |
+| 0.30 | negligible | Evidence absent, stale, or contradictory. Barely directional. |
+
+- Pick the anchor that matches the evidence, then set `sentiment_score` to that anchor's magnitude carrying the sign of your `sentiment` direction. A score between two anchors is acceptable when the evidence sits between them.
+- Do NOT round up toward a higher anchor to sound more confident. A low-conviction entry on a thin asset and a high-conviction breakout must not receive the same score; if the evidence for both is equally routine, both belong at 0.45 or below.
+- The upper anchors (0.75 and 0.90) are the exception, not the default. Reserve 0.90 for the multi-source major catalyst case described above.
+- `sentiment_score_evidence` is required. Name the anchor you selected and the concrete observation that justifies it, e.g. "0.60 partial — single aggregator headline, no filing, RSI mid-range". A score without this line is treated as uncalibrated.
+- `sentiment: "NEUTRAL"` forces `sentiment_score: 0`. NEUTRAL means genuinely two-sided, not a weak BULLISH or a weak BEARISH; do not report NEUTRAL with a non-zero score.
 
 Setup type rubric:
 - Classify `setup_type` based ONLY on observed market structure from grounded evidence or explicit technical context (e.g. price breaking established range/level = "breakout", price returning to mean/band = "mean_reversion", pullback continuation in established trend = "trend_continuation", exhaustion/failure at major boundary = "reversal").

@@ -130,4 +130,72 @@ describe('FirestoreWriteMetricsService', () => {
 		firestoreWriteMetricsService.resetForTesting();
 		expect(firestoreWriteMetricsService.getSnapshot()).toBeNull();
 	});
+
+	// ── Issue #1285 ──────────────────────────────────────────────────────────
+	// Write counters alone could not detect the outage: every write succeeded
+	// while every read query was rejected. Read health needs its own snapshot so
+	// it can drive `dependencies.firestore.ready` to false.
+	describe('read metrics', () => {
+		it('returns null until a read is recorded so an empty history is never evidence', () => {
+			expect(service.getReadSnapshot()).toBeNull();
+		});
+
+		it('keeps read counters independent from the write snapshot', () => {
+			service.recordWriteSuccess('alerts');
+			service.recordReadSuccess('alerts');
+
+			expect(service.getSnapshot().writesSucceeded).toBe(1);
+			expect(service.getReadSnapshot()).toMatchObject({
+				readsAttempted: 1,
+				readsSucceeded: 1,
+				readHealth: 'healthy',
+			});
+		});
+
+		it('reports degraded read health with a sanitized category on failure', () => {
+			service.recordReadFailure('alerts', 'failed_precondition');
+
+			const snapshot = service.getReadSnapshot();
+			expect(snapshot).toMatchObject({
+				readsAttempted: 1,
+				readsFailed: 1,
+				readHealth: 'degraded',
+				consecutiveReadFailures: 1,
+				lastErrorCategory: 'failed_precondition',
+			});
+			expect(snapshot.successRate).toBe(0);
+			expect(snapshot.byDomain.alerts).toMatchObject({ failure: 1, total: 1 });
+		});
+
+		it('recovers read health on the next successful read without a restart', () => {
+			service.recordReadFailure('alerts', 'failed_precondition');
+			service.recordReadFailure('alerts', 'failed_precondition');
+			expect(service.getReadSnapshot().consecutiveReadFailures).toBe(2);
+
+			service.recordReadSuccess('alerts');
+
+			const snapshot = service.getReadSnapshot();
+			expect(snapshot.readHealth).toBe('healthy');
+			expect(snapshot.consecutiveReadFailures).toBe(0);
+			// The cumulative counters still carry the history.
+			expect(snapshot.readsFailed).toBe(2);
+		});
+
+		it('coerces an unrecognized category to unknown_error instead of trusting it', () => {
+			service.recordReadFailure('alerts', 'not-a-real-category');
+			expect(service.getReadSnapshot().lastErrorCategory).toBe('unknown_error');
+		});
+
+		it('ignores malformed domain arguments (fail-open)', () => {
+			service.recordReadSuccess('');
+			service.recordReadFailure(null, 'unavailable');
+			expect(service.getReadSnapshot()).toBeNull();
+		});
+
+		it('resets read state so tests do not leak health into each other', () => {
+			service.recordReadFailure('alerts', 'unavailable');
+			service.resetForTesting();
+			expect(service.getReadSnapshot()).toBeNull();
+		});
+	});
 });

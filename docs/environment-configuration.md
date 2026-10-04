@@ -149,10 +149,36 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 - `TWELVE_DATA_API_KEY` - Twelve Data API key; sent in the `Authorization` header and never returned by status endpoints
 - `TWELVE_DATA_BASE_URL` - Optional Twelve Data base URL override (default: `https://api.twelvedata.com`)
 - `EQUITY_MARKET_DATA_TIMEOUT_MS` - Per-request equity market-data timeout, capped at 30 seconds (default: `5000`)
+
+#### Verifying equity market data is actually working
+
+Setting `ENABLE_EQUITY_MARKET_DATA=true` and `TWELVE_DATA_API_KEY` is **necessary but not sufficient**, and `/api/status` is deliberately built so it cannot claim otherwise:
+
+| Field | Meaning |
+| :--- | :--- |
+| `featureFlags.equityMarketData` | The `ENABLE_EQUITY_MARKET_DATA` gate only. Says nothing about whether the feature works. |
+| `dependencies.equityMarketData.configured` | Credential **shape** only: gate on, provider selected, key non-empty. Not proof the key works. |
+| `dependencies.equityMarketData.status` | `disabled`, `misconfigured`, `unverified`, `ready`, or `degraded`. |
+| `dependencies.equityMarketData.ready` | `true` only after an observed **successful** provider call. |
+| `dependencies.equityMarketData.readiness` | `unverified` / `verified` / `degraded` from the observed-call window. |
+| `dependencies.equityMarketData.lastErrorReason` | Sanitized failure class, e.g. `twelve_data_misconfigured`, `twelve_data_rate_limited`, `twelve_data_timeout`. |
+
+A typo'd, revoked, quota-exhausted, or wrong-plan key all pass the `configured` check, so `configured: true` must never be read as "equity outcomes are working". Roll the feature out by watching `status` transition `unverified` → `ready` once the first equity evaluation runs:
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
+  | jq '{flag: .featureFlags.equityMarketData, dep: .dependencies.equityMarketData}'
+```
+
+- `status: "unverified"` — the key is configured but no provider call has succeeded yet. Wait for the first evaluation sweep; equity outcomes are evaluated on the signal-outcome cadence, not continuously.
+- `status: "ready"` — proven working.
+- `status: "degraded"` with `lastErrorReason` — the provider rejected the call. A `twelve_data_misconfigured` reason is the signal to replace or fix the key; `twelve_data_rate_limited` means raise `EQUITY_MARKET_DATA_RPM` budget or reduce signal volume.
+
+Counters (`requestsAttempted`, `requestsSucceeded`, `requestsFailed`, `consecutiveFailures`) and timestamps (`lastSuccessAt`, `lastFailureAt`) are process-local and reset on restart, so `unverified` is also the normal state immediately after every deploy. There is no startup probe: a probe would spend provider quota on every restart purely to manufacture a green checkmark, and on the 8-RPM free tier that is a real cost for no new information.
 - `SIGNAL_OUTCOME_WORKER_ROLE` - Scheduler role: `web` preserves the local/web timer, `worker` enables only the dedicated worker entrypoint, and `disabled` prevents scheduler startup (default: `web`)
-- `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access
-- `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization
-- `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a service account JSON file for local development
+- `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access. Service accounts only; an ADC document supplied inline is rejected with an actionable error because ADC is resolved from a file or the managed runtime, never from an inline value.
+- `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization. Required when credentials resolve through Application Default Credentials, since `authorized_user` and `external_account` documents carry no project id of their own.
+- `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a credential JSON file for local development. Accepts a service account key (used directly) or an Application Default Credentials document such as the `authorized_user` file written by `gcloud application-default login` or an `external_account` workload-identity config (resolved by the Firebase Admin SDK).
 
 #### Per-Chat User Preferences
 

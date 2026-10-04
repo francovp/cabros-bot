@@ -14,6 +14,7 @@ const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaMana
 const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
+const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -694,17 +695,64 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.equityMarketData).toBe(true);
+		// Credentials have the right shape, but nothing has called the provider yet, so
+		// the endpoint must not claim equity outcomes are working (#1116).
 		expect(response.body.dependencies.equityMarketData).toEqual({
 			provider: 'twelve-data',
 			enabled: true,
 			configured: true,
-			ready: true,
-			status: 'ready',
+			ready: false,
+			status: 'unverified',
+			readiness: 'unverified',
+			requestsAttempted: 0,
+			requestsSucceeded: 0,
+			requestsFailed: 0,
+			consecutiveFailures: 0,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorReason: null,
 			supportedExchanges: ['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD'],
 			timeoutMs: 5000,
 			rpm: 0,
 		});
 		expect(JSON.stringify(response.body)).not.toContain('secret-equity-key');
+	});
+
+	it('surfaces an equity market-data provider failure through /api/status', async () => {
+		process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+		process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+		process.env.TWELVE_DATA_API_KEY = 'secret-equity-key';
+
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: false,
+			status: 401,
+			headers: new Map(),
+			json: async () => ({ code: 401, message: 'Invalid API key' }),
+		});
+		try {
+			await equityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' })
+				.catch(() => {});
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.equityMarketData).toMatchObject({
+				configured: true,
+				ready: false,
+				status: 'degraded',
+				readiness: 'degraded',
+				requestsAttempted: 1,
+				requestsFailed: 1,
+				lastErrorReason: 'twelve_data_misconfigured',
+			});
+			expect(JSON.stringify(response.body)).not.toContain('secret-equity-key');
+		} finally {
+			global.fetch = originalFetch;
+			equityMarketDataService._resetReadinessForTesting();
+		}
 	});
 
 	it('reports Firestore job storage as disabled by default', async () => {
@@ -1389,6 +1437,63 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+		});
+	});
+
+	// ── Issue #1285 ──────────────────────────────────────────────────────────
+	// `ready` used to be derived from credential *shape* alone, so a deployment
+	// whose writes succeeded while every ordered read was rejected still reported
+	// `ready: true`. These pin the read-aware verdict.
+	it('omits firestoreReadMetrics until a read has actually been observed', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies).not.toHaveProperty('firestoreReadMetrics');
+	});
+
+	it('reports Firestore not ready with a sanitized category when the read path is broken', async () => {
+		firestoreWriteMetricsService.recordReadFailure('alerts', 'failed_precondition');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readHealth: 'degraded',
+			lastReadErrorCategory: 'failed_precondition',
+		});
+		expect(response.body.dependencies.firestoreReadMetrics).toMatchObject({
+			readHealth: 'degraded',
+			readsFailed: 1,
+			lastErrorCategory: 'failed_precondition',
+		});
+		// Alias surface must carry the same verdict.
+		const capabilities = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+		expect(capabilities.body.dependencies.firestore).toMatchObject({
+			ready: false,
+			status: 'degraded',
+		});
+	});
+
+	it('keeps Firestore ready when the read path has only ever succeeded', async () => {
+		firestoreWriteMetricsService.recordReadSuccess('alerts');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readHealth: 'healthy',
 		});
 	});
 

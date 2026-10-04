@@ -4,6 +4,8 @@ const {
 	generateGroundedSummary,
 	generateEnrichedAlert,
 	parseEnrichedAlertResponse,
+	getSentimentScoreDistribution,
+	resetSentimentScoreDistribution,
 } = require('../../src/services/grounding/gemini');
 
 // Use jest.requireActual to preserve NonRetryableProviderError class,
@@ -39,6 +41,7 @@ describe('Gemini Service', () => {
 	beforeEach(() => {
 		jest.resetAllMocks();
 		process.env = { ...originalEnv, GEMINI_MODEL_NAME: 'gemini-2.0-flash' };
+		resetSentimentScoreDistribution();
 	});
 
 	afterEach(() => {
@@ -742,6 +745,164 @@ describe('Gemini Service', () => {
 				text: 'Test alert',
 				searchResults: [],
 			})).rejects.toThrow('Summary generation failed: API error');
+		});
+	});
+
+	describe('sentiment_score_evidence (issue #1031)', () => {
+		it('passes a trimmed anchor justification through to the enriched payload', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				sentiment: 'BULLISH',
+				sentiment_score: 0.6,
+				sentiment_score_evidence: '  0.60 partial - single aggregator headline, no filing  ',
+				insights: [],
+			}));
+
+			expect(result.sentiment_score_evidence).toBe('0.60 partial - single aggregator headline, no filing');
+		});
+
+		it('omits the field when the model does not justify the bracket', () => {
+			for (const value of [undefined, null, '', '   ', 42, {}, [], true]) {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BULLISH',
+					sentiment_score: 0.6,
+					sentiment_score_evidence: value,
+					insights: [],
+				}));
+
+				expect(result).not.toHaveProperty('sentiment_score_evidence');
+			}
+		});
+
+		it('bounds an overlong justification', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				sentiment: 'BULLISH',
+				sentiment_score: 0.6,
+				sentiment_score_evidence: 'x'.repeat(5000),
+				insights: [],
+			}));
+
+			expect(result.sentiment_score_evidence).toHaveLength(240);
+		});
+
+		it('keeps the justification alongside the CB-238 raw-score audit field', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				sentiment: 'BULLISH',
+				sentiment_score: 0.9,
+				sentiment_score_evidence: '0.90 multi-source major catalyst',
+				insights: [],
+			}), []);
+
+			expect(result.sentiment_score).toBe(0.55);
+			expect(result.sentiment_score_raw).toBe(0.9);
+			expect(result.sentiment_score_evidence).toBe('0.90 multi-source major catalyst');
+		});
+
+		it('still falls back to safe defaults when the whole payload is unparseable', () => {
+			const result = parseEnrichedAlertResponse('not json at all');
+
+			expect(result).toEqual({ sentiment: 'NEUTRAL', sentiment_score: 0, insights: [] });
+		});
+	});
+
+	describe('sentiment saturation telemetry (issue #1031)', () => {
+		function parseScore(score, sources = [{ url: 'https://example.com' }]) {
+			return parseEnrichedAlertResponse(JSON.stringify({
+				sentiment: 'BULLISH',
+				sentiment_score: score,
+				insights: [],
+			}), sources);
+		}
+
+		it('records the effective score into the rolling distribution', () => {
+			parseScore(0.3);
+			parseScore(0.9);
+
+			const report = getSentimentScoreDistribution();
+			expect(report.sampleCount).toBe(2);
+			expect(report.min).toBeCloseTo(0.3, 6);
+			expect(report.max).toBeCloseTo(0.9, 6);
+		});
+
+		it('records the capped score, not the pre-cap raw score, for zero-source alerts', () => {
+			parseScore(0.9, []);
+
+			const report = getSentimentScoreDistribution();
+			expect(report.max).toBeCloseTo(0.55, 6);
+		});
+
+		it('stays silent on the empty window', () => {
+			const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			const report = getSentimentScoreDistribution();
+
+			expect(report.saturated).toBe(false);
+			expect(report.reason).toBe('no_samples');
+			expect(warn).not.toHaveBeenCalled();
+			warn.mockRestore();
+		});
+
+		it('warns once when the window saturates and stays silent on a spread window', () => {
+			const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			for (let i = 0; i < 30; i += 1) {
+				parseScore(0.8);
+			}
+			const saturationWarnings = warn.mock.calls.filter(call => String(call[0]).includes('looks saturated'));
+			expect(saturationWarnings).toHaveLength(1);
+			expect(String(saturationWarnings[0][0])).toContain('looks saturated');
+
+			resetSentimentScoreDistribution();
+			warn.mockClear();
+			for (let i = 0; i < 30; i += 1) {
+				parseScore((i % 10) / 10 + 0.05);
+			}
+
+			expect(warn.mock.calls.filter(call => String(call[0]).includes('looks saturated'))).toHaveLength(0);
+			expect(getSentimentScoreDistribution().saturated).toBe(false);
+			warn.mockRestore();
+		});
+
+		it('does not warn on a partially filled window', () => {
+			const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			for (let i = 0; i < 5; i += 1) {
+				parseScore(0.8);
+			}
+
+			expect(warn.mock.calls.filter(call => String(call[0]).includes('looks saturated'))).toHaveLength(0);
+			warn.mockRestore();
+		});
+
+		it('logs recovery once after a saturated window clears', () => {
+			const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+			for (let i = 0; i < 30; i += 1) {
+				parseScore(0.8);
+			}
+			expect(log.mock.calls.filter(call => String(call[0]).includes('recovered'))).toHaveLength(0);
+
+			for (let i = 0; i < 30; i += 1) {
+				parseScore((i % 10) / 10 + 0.05);
+			}
+
+			const recoveryLogs = log.mock.calls.filter(call => String(call[0]).includes('recovered'));
+			expect(recoveryLogs).toHaveLength(1);
+			warn.mockRestore();
+			log.mockRestore();
+		});
+
+		it('never lets telemetry break parsing, and records the directional fallback score', () => {
+			const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			expect(() => parseScore(NaN)).not.toThrow();
+			expect(() => parseScore('high')).not.toThrow();
+
+			// A missing or non-numeric model score falls back to the existing 0.5
+			// directional default, so two samples land in the window.
+			expect(getSentimentScoreDistribution().sampleCount).toBe(2);
+			expect(getSentimentScoreDistribution().max).toBeCloseTo(0.5, 6);
+			warn.mockRestore();
 		});
 	});
 });
