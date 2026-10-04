@@ -306,6 +306,113 @@ exit 6
 		expect(result.stderr).toContain('HTTP 000.');
 		expect(result.stderr).not.toContain('000000');
 	});
+
+	// Regression coverage: an invalid or rotated WEBHOOK_API_KEY used to exit 4,
+	// which the workflow classifies as `down` and therefore pages as a production
+	// outage — while production was healthy and delivering alerts. A 401/403 proves
+	// the server answered and rejected the credential, so it needs its own code.
+	describe('AUTH_REJECTED (a rotated secret is not a production outage)', () => {
+		function installStatusCodeStub(code) {
+			const curlStub = join(tempDir, 'curl');
+			const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --write-out) shift 2 ;;
+    --output) out="$2"; shift 2 ;;
+    -H) shift; shift ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "$url" in
+  */healthcheck)
+    if [ -n "$out" ]; then printf 'OK' > "$out"; fi
+    printf '%s' "200" ;;
+  */api/status)
+    if [ -n "$out" ]; then printf '{"error":"Invalid API key"}' > "$out"; fi
+    printf '%s' "${code}" ;;
+esac
+`;
+			writeFileSync(curlStub, stubBody);
+			chmodSync(curlStub, 0o755);
+		}
+
+		it.each(['401', '403'])(
+			'exits 7 with AUTH_REJECTED (not 4) when /api/status returns %s',
+			(code) => {
+				installStatusCodeStub(code);
+
+				const env = {
+					STUB_HEADERS_LOG: headersLog,
+					STUB_INVOCATION_LOG: invocationLog,
+					WEBHOOK_API_KEY: 'rotated-and-no-longer-valid',
+					PATH: tempDir,
+				};
+				const result = runProbe({ ...env, _tempDir: tempDir });
+				expect(result.status).toBe(7);
+				expect(result.status).not.toBe(4);
+				const output = (result.stdout || '') + (result.stderr || '');
+				expect(output).toContain('AUTH_REJECTED');
+				expect(output).toContain(code);
+				// Must not claim production is unreachable.
+				expect(output).not.toContain('STATUS_UNREACHABLE');
+			},
+		);
+
+		it('never leaks the rejected key while reporting AUTH_REJECTED', () => {
+			installStatusCodeStub('403');
+			const env = {
+				STUB_HEADERS_LOG: headersLog,
+				STUB_INVOCATION_LOG: invocationLog,
+				WEBHOOK_API_KEY: 'rotated-and-no-longer-valid',
+				PATH: tempDir,
+			};
+			const result = runProbe({ ...env, _tempDir: tempDir });
+			const output = (result.stdout || '') + (result.stderr || '');
+			expect(output).not.toContain('rotated-and-no-longer-valid');
+		});
+
+		it.each(['500', '503', '404', '000'])(
+			'still exits 4 for /api/status HTTP %s so real failures keep paging',
+			(code) => {
+				installStatusCodeStub(code);
+				const env = {
+					STUB_HEADERS_LOG: headersLog,
+					STUB_INVOCATION_LOG: invocationLog,
+					WEBHOOK_API_KEY: 'topsecret',
+					PATH: tempDir,
+				};
+				const result = runProbe({ ...env, _tempDir: tempDir });
+				expect(result.status).toBe(4);
+				expect(result.stderr).toContain('STATUS_UNREACHABLE');
+			},
+		);
+
+		it('still exits 3 when /healthcheck itself returns 403', () => {
+			// /healthcheck is unauthenticated by design, so a 401/403 there is a
+			// gateway/server response, not a credential failure.
+			const curlStub = join(tempDir, 'curl');
+			const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s' "403"
+`;
+			writeFileSync(curlStub, stubBody);
+			chmodSync(curlStub, 0o755);
+
+			const env = {
+				STUB_HEADERS_LOG: headersLog,
+				STUB_INVOCATION_LOG: invocationLog,
+				WEBHOOK_API_KEY: 'topsecret',
+				PATH: tempDir,
+			};
+			const result = runProbe({ ...env, _tempDir: tempDir });
+			expect(result.status).toBe(3);
+			expect(result.stderr).toContain('HEALTHCHECK_FAILED');
+		});
+	});
 });
 
 describe('Production Smoke Probe workflow YAML', () => {
@@ -431,6 +538,59 @@ describe('Production Smoke Probe workflow YAML', () => {
 			expect(content).toMatch(/ops\/production-smoke-probe\.sh/);
 			expect(content).toMatch(/if\s+\[\[\s*!\s+-f\s+ops\/production-smoke-probe\.sh/);
 		});
+
+		// A present-but-unusable script must produce the same explicit
+		// script_missing outcome as an absent one, rather than dying on a bare 126.
+		it('reports script_missing when the scripts stay non-executable', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			const lines = content.split('\n');
+			const stepIndex = lines.findIndex((line) => /^\s*id:\s*preflight\s*$/.test(line));
+			expect(stepIndex).toBeGreaterThan(-1);
+			const runIndex = lines.findIndex(
+				(line, index) => index > stepIndex && line.trim() === 'run: |',
+			);
+			expect(runIndex).toBeGreaterThan(-1);
+			const indent = lines[runIndex].replace(/\S.*$/, '');
+			const bodyIndent = `${indent}  `;
+			const body = [];
+			for (let i = runIndex + 1; i < lines.length; i += 1) {
+				if (lines[i].trim() && !lines[i].startsWith(bodyIndent)) break;
+				body.push(lines[i].startsWith(bodyIndent) ? lines[i].slice(bodyIndent.length) : lines[i]);
+			}
+
+			const dir = mkdtempSync(join(tmpdir(), 'cabros-preflight-'));
+			const scriptDir = join(dir, 'ops');
+			require('fs').mkdirSync(scriptDir, { recursive: true });
+			for (const name of [
+				'production-smoke-probe.sh',
+				'production-smoke-probe-notify.sh',
+			]) {
+				writeFileSync(join(scriptDir, name), '#!/usr/bin/env bash\ntrue\n', { mode: 0o644 });
+			}
+			const outputFile = join(dir, 'github-output');
+			writeFileSync(outputFile, '');
+
+			// A `chmod` that reports success without changing the mode: the checkout
+			// is read-only, so the script remains unusable.
+			const binDir = join(dir, 'bin');
+			require('fs').mkdirSync(binDir, { recursive: true });
+			writeFileSync(join(binDir, 'chmod'), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
+
+			const result = spawnSync('bash', ['-c', body.join('\n')], {
+				cwd: dir,
+				env: {
+					...process.env,
+					PATH: `${binDir}:${process.env.PATH}`,
+					GITHUB_OUTPUT: outputFile,
+				},
+				timeout: 10000,
+				encoding: 'utf8',
+			});
+			expect(result.status).not.toBe(0);
+			expect(result.stdout + result.stderr).toContain('probe_script_missing');
+			expect(result.stdout + result.stderr).toMatch(/NOT a production outage/i);
+			expect(readFileSync(outputFile, 'utf8')).toContain('outcome=script_missing');
+		});
 	});
 
 	describe('outcome classification (issue #971)', () => {
@@ -457,6 +617,78 @@ describe('Production Smoke Probe workflow YAML', () => {
 		it('classifies a commit mismatch as a stale deploy rather than an outage', () => {
 			const content = readFileSync(workflowPath, 'utf8');
 			expect(content).toMatch(/5\)\s*outcome=stale/);
+		});
+	});
+
+	// The string-matching assertions above cannot tell whether an exit code is
+	// classified correctly; they passed while a 403 was mapped to `down` and paged
+	// a healthy production as an outage. These tests execute the workflow's own
+	// `case "$rc" in` block in bash and read back the resulting outcome, so a
+	// misclassification fails here instead of in an operator's Telegram chat.
+	describe('exit-code classifier behaves as documented', () => {
+		function classify(rc) {
+			const content = readFileSync(workflowPath, 'utf8');
+			const lines = content.split('\n');
+			const startIndex = lines.findIndex(
+				(line) => /^\s*case "\$rc" in\s*$/.test(line),
+			);
+			expect(startIndex).toBeGreaterThan(-1);
+			const indent = lines[startIndex].match(/^\s*/)[0];
+			const endIndex = lines.findIndex(
+				(line, index) => index > startIndex && line === `${indent}esac`,
+			);
+			expect(endIndex).toBeGreaterThan(-1);
+			const caseBlock = lines.slice(startIndex, endIndex + 1).join('\n');
+
+			const script = [
+				'set -uo pipefail',
+				`rc=${rc}`,
+				'detail="SIMULATED_DETAIL"',
+				caseBlock,
+				'printf \'classified=%s\\n\' "$outcome"',
+			].join('\n');
+			const scriptPath = join(
+				mkdtempSync(join(tmpdir(), 'cabros-classifier-')),
+				'classify.sh',
+			);
+			writeFileSync(scriptPath, script);
+			const result = spawnSync('bash', [scriptPath], {
+				timeout: 10000,
+				encoding: 'utf8',
+			});
+			const match = (result.stdout || '').match(/classified=(\S+)/);
+			return { outcome: match ? match[1] : null, stderr: result.stderr || '' };
+		}
+
+		it.each([
+			[0, 'ok'],
+			[2, 'unconfigured'],
+			[3, 'down'],
+			[4, 'down'],
+			[5, 'stale'],
+			[6, 'degraded'],
+			[7, 'auth_rejected'],
+			[64, 'invalid_args'],
+			[126, 'script_missing'],
+			[127, 'script_missing'],
+			[1, 'unknown'],
+			[9, 'unknown'],
+		])('maps probe exit %i to outcome=%s', (rc, expected) => {
+			expect(classify(rc).outcome).toBe(expected);
+		});
+
+		it('never classifies an exit code as down unless production really failed', () => {
+			// The paging-triggering outcome. Everything a broken CI setup can produce
+			// must land elsewhere, or operators get false outage pages.
+			for (const rc of [2, 7, 64, 126, 127, 1, 9]) {
+				expect(classify(rc).outcome).not.toBe('down');
+			}
+		});
+
+		it('reports a rotated secret as a CI problem in its own annotation', () => {
+			const content = readFileSync(workflowPath, 'utf8');
+			expect(content).toMatch(/7\)[\s\S]{0,400}?outcome=auth_rejected/);
+			expect(content).toContain('probe_auth_rejected');
 		});
 	});
 

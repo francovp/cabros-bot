@@ -25,12 +25,15 @@ name: Production Smoke Probe
 #   stale            production serving a different commit (deploy in flight)
 #   degraded         production reachable, a required dependency is not ready
 #   unconfigured     WEBHOOK_API_KEY missing; the probe never ran
-#   script_missing   the probe script was absent; a bug in this workflow
+#   auth_rejected    /api/status answered 401/403: the secret was rotated or
+#                    never matched. Production is up and serving; CI is wrong
+#   script_missing   the probe script was absent or not executable
 #   invalid_args     the probe rejected its arguments; a bug in this workflow
 #   unknown          unclassified non-zero exit; reachability unknown
 #
-# Only `down` pages. Paging a stale deploy or a missing secret would teach
-# operators to ignore the one signal that means alerts are not being delivered.
+# Only `down` pages. Paging a stale deploy, a missing secret or a rotated secret
+# would train operators to ignore the one signal that means alerts are not
+# being delivered.
 #
 # Security: WEBHOOK_API_KEY is sent via the `x-api-key` header (never in URLs
 # or query parameters) by piping it into curl through stdin. The Telegram bot
@@ -127,8 +130,11 @@ jobs:
             exit 1
           fi
           chmod +x ops/production-smoke-probe.sh ops/production-smoke-probe-notify.sh
-          test -x ops/production-smoke-probe.sh
-          test -x ops/production-smoke-probe-notify.sh
+          if [[ ! -x ops/production-smoke-probe.sh || ! -x ops/production-smoke-probe-notify.sh ]]; then
+            echo "::error title=Probe script not executable::probe_script_missing: ops/production-smoke-probe.sh or ops/production-smoke-probe-notify.sh is present but not executable after chmod. This is a bug in the CI workflow or the repository file mode, NOT a production outage; the availability gate did not run."
+            echo "outcome=script_missing" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
 
       - name: Run the smoke probe against the expected commit
         id: probe
@@ -163,10 +169,14 @@ jobs:
             6)
               outcome=degraded
               ;;
+            7)
+              outcome=auth_rejected
+              echo "::error title=Probe authentication rejected::probe_auth_rejected: $detail Production answered the probe, so this is NOT a production outage: the WEBHOOK_API_KEY repository secret was rotated or never matched the server. Rotate the secret."
+              ;;
             64)
               outcome=invalid_args
               ;;
-            127)
+            126|127)
               outcome=script_missing
               ;;
             *)

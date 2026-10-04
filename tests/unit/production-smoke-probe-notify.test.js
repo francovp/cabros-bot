@@ -9,13 +9,18 @@
  *
  * This suite pins the notification contract:
  *  - only a `down` outcome (production unreachable/unhealthy) pages the admin
- *    chat; stale/degraded/unconfigured/script-missing outcomes never do,
- *    because paging those as an outage trains operators to ignore the page
+ *    chat; stale/degraded/unconfigured/auth_rejected/script-missing outcomes
+ *    never do, because paging those as an outage trains operators to ignore the
+ *    page
+ *  - `auth_rejected` (a rotated WEBHOOK_API_KEY) is reported as a CI problem:
+ *    the server answered and rejected us, so production is up and delivering
  *  - a missing Telegram secret is reported as an explicit "paging not
  *    configured" warning instead of a silent no-op
  *  - the cooldown only latches after a *confirmed* delivery, so a failed page
  *    is retried on the next scheduled run
  *  - recovery (outcome=ok) clears the cooldown so the next outage pages at once
+ *  - PROBE_DRY_RUN exercises the whole decision path without ever contacting the
+ *    Bot API, so the documented local command can never page a real chat
  *  - the bot token and chat id never reach stdout, stderr, or the curl argv log
  *
  * Uses a stub `curl` shim so the test never reaches the Telegram Bot API.
@@ -149,6 +154,7 @@ describe('ops/production-smoke-probe-notify.sh', () => {
 			['stale', 'no_page_expected'],
 			['degraded', 'no_page_expected'],
 			['unconfigured', 'no_page_expected'],
+			['auth_rejected', 'no_page_expected'],
 			['invalid_args', 'no_page_expected'],
 			['script_missing', 'no_page_expected'],
 			['unknown', 'no_page_expected'],
@@ -190,6 +196,26 @@ describe('ops/production-smoke-probe-notify.sh', () => {
 		const output = combined(result);
 		expect(output).toContain('probe_unconfigured');
 		expect(output).toMatch(/not a production outage/i);
+	});
+
+	it('labels a rotated secret as a CI problem and never sends an outage page', () => {
+		// Regression: a 401/403 from /api/status used to be classified `down`, which
+		// paged "Alerts are not being delivered" while production was healthy.
+		const result = runNotify({
+			_tempDir: tempDir,
+			PROBE_OUTCOME: 'auth_rejected',
+			PROBE_DETAIL: 'AUTH_REJECTED: /api/status returned HTTP 403; the WEBHOOK_API_KEY secret does not match the server.',
+			PROBE_COOLDOWN_STATE_FILE: stateFile,
+			TELEGRAM_BOT_TOKEN: TOKEN,
+			TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: CHAT_ID,
+		});
+		expect(result.status).toBe(0);
+		expect(status(result)).toBe('no_page_expected');
+		expect(existsSync(invocationLog)).toBe(false);
+		const output = combined(result);
+		expect(output).toContain('probe_auth_rejected');
+		expect(output).toMatch(/NOT a production outage/i);
+		expect(output).not.toContain('PRODUCTION DOWN');
 	});
 
 	it('reports paging as not configured instead of silently no-opping when Telegram secrets are absent', () => {
@@ -475,5 +501,79 @@ describe('ops/production-smoke-probe-notify.sh', () => {
 		});
 		expect(result.status).toBe(0);
 		expect(readFileSync(outputFile, 'utf8')).toContain('probe_page=not_required');
+	});
+
+	// docs/monitoring.md tells operators to run the notify script with
+	// PROBE_DRY_RUN=1 to "exercise the paging decision without sending anything".
+	// If the gate were below the Telegram-secret check, that documented command
+	// would silently page a real chat for anyone whose shell exports the secrets.
+	describe('dry run', () => {
+		it('sends nothing and reports dry_run even with both Telegram secrets set', () => {
+			const result = runNotify({
+				_tempDir: tempDir,
+				PROBE_OUTCOME: 'down',
+				PROBE_DETAIL: 'HEALTHCHECK_FAILED: /healthcheck returned HTTP 503.',
+				PROBE_DRY_RUN: '1',
+				PROBE_COOLDOWN_STATE_FILE: stateFile,
+				TELEGRAM_BOT_TOKEN: TOKEN,
+				TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: CHAT_ID,
+			});
+			expect(result.status).toBe(0);
+			expect(status(result)).toBe('dry_run');
+			expect(existsSync(invocationLog)).toBe(false);
+			expect(existsSync(payloadLog)).toBe(false);
+			expect(combined(result)).toContain('probe_page_dry_run');
+		});
+
+		it('reports dry_run even when the Telegram secrets are absent', () => {
+			const result = runNotify({
+				_tempDir: tempDir,
+				PROBE_OUTCOME: 'down',
+				PROBE_DRY_RUN: 'true',
+			});
+			expect(status(result)).toBe('dry_run');
+			expect(existsSync(invocationLog)).toBe(false);
+		});
+
+		it('still honours the cooldown decision instead of reporting a send', () => {
+			// Latch set just now, so a real run would be suppressed.
+			writeFileSync(stateFile, `last_page_epoch=${Math.floor(Date.now() / 1000)}\n`);
+			const result = runNotify({
+				_tempDir: tempDir,
+				PROBE_OUTCOME: 'down',
+				PROBE_DRY_RUN: '1',
+				PROBE_COOLDOWN_MINUTES: '60',
+				PROBE_COOLDOWN_STATE_FILE: stateFile,
+				TELEGRAM_BOT_TOKEN: TOKEN,
+				TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: CHAT_ID,
+			});
+			expect(status(result)).toBe('dry_run');
+			// The pre-existing latch must survive a dry run untouched.
+			expect(readFileSync(stateFile, 'utf8')).toContain('last_page_epoch');
+			expect(existsSync(invocationLog)).toBe(false);
+		});
+
+		it('never pages a real chat on the documented dry-run command', () => {
+			const result = runNotify({
+				_tempDir: tempDir,
+				PROBE_OUTCOME: 'down',
+				PROBE_DRY_RUN: '1',
+				PROBE_COOLDOWN_STATE_FILE: stateFile,
+				TELEGRAM_BOT_TOKEN: TOKEN,
+				TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: CHAT_ID,
+			});
+			expect(combined(result)).not.toContain('Paged the Telegram admin chat');
+		});
+
+		it('still pages for real when the dry-run flag is absent', () => {
+			const result = runNotify({
+				_tempDir: tempDir,
+				PROBE_OUTCOME: 'down',
+				PROBE_COOLDOWN_STATE_FILE: stateFile,
+				TELEGRAM_BOT_TOKEN: TOKEN,
+				TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: CHAT_ID,
+			});
+			expect(status(result)).toBe('paged');
+		});
 	});
 });

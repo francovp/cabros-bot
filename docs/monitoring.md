@@ -112,15 +112,18 @@ Every run resolves to exactly one **outcome**, so a broken CI setup is never rep
 | Outcome | Meaning | Pages the admin chat? |
 | --- | --- | --- |
 | `ok` | Service reachable, healthy, on the expected commit | No |
-| `down` | `/healthcheck` non-200, or `/api/status` unreachable | **Yes** |
+| `down` | `/healthcheck` non-200, or `/api/status` non-200 other than 401/403, or unreachable | **Yes** |
 | `stale` | `service.commit` differs from the expected commit (deploy in flight) | No |
 | `degraded` | Reachable, but a required dependency is not ready | No |
 | `unconfigured` | `WEBHOOK_API_KEY` is not set, so the probe never ran | No |
-| `script_missing` | The probe script was absent from the workspace | No |
+| `auth_rejected` | `/api/status` returned 401/403: the `WEBHOOK_API_KEY` secret was rotated or never matched | No |
+| `script_missing` | The probe script was absent from the workspace, or not executable | No |
 | `invalid_args` | The probe rejected its arguments | No |
 | `unknown` | Unclassified non-zero exit | No |
 
-Only `down` pages. Paging a stale deploy or a missing secret would train operators to ignore the one signal that means alerts are not being delivered. Every non-`ok` outcome still fails the job and emits a `::error::` or `::warning::` annotation naming the specific failure.
+Only `down` pages. Paging a stale deploy, a missing secret or a rotated secret would train operators to ignore the one signal that means alerts are not being delivered. Every non-`ok` outcome still fails the job and emits a `::error::` or `::warning::` annotation naming the specific failure.
+
+`auth_rejected` exists because "production did not answer us" and "production answered and rejected us" are different failures. A 401/403 proves the service is up and serving; the only broken thing is the credential in CI, so rotate the secret rather than treating alerts as undelivered. Note that `/healthcheck` is unauthenticated by design, so a 401/403 *there* is a gateway or server response rather than a credential failure and still counts as `down`.
 
 Configure the probe via GitHub repository variables (no application-owned env vars required):
 
@@ -149,7 +152,10 @@ PRODUCTION_BASE_URL=https://cabros-bot-production.up.railway.app \
 PRODUCTION_EXPECTED_COMMIT=$(git rev-parse origin/master) \
 ops/production-smoke-probe.sh
 
-# Exercise the paging decision without sending anything.
+# Exercise the paging decision without sending anything: PROBE_DRY_RUN walks
+# the full decision path (including the cooldown latch) and reports dry_run,
+# so it is safe even when the Telegram secrets are exported in your shell.
+PROBE_DRY_RUN=1 \
 PROBE_OUTCOME=down \
 PROBE_DETAIL='HEALTHCHECK_FAILED: /healthcheck returned HTTP 503.' \
 ops/production-smoke-probe-notify.sh

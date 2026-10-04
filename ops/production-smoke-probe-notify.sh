@@ -17,6 +17,8 @@
 #   stale           service.commit != expected commit (deploy in flight)
 #   degraded        a required dependency is not ready
 #   unconfigured    the probe never ran: WEBHOOK_API_KEY secret missing
+#   auth_rejected   /api/status answered 401/403: the secret was rotated or
+#                   never matched. Production is serving; this is CI's problem
 #   script_missing  the probe never ran: script absent from the workspace
 #   invalid_args    the probe was called with bad arguments
 #   unknown         unclassified non-zero probe exit
@@ -32,12 +34,15 @@
 #   PROBE_COOLDOWN_MINUTES     repeat-page suppression window (default 60)
 #   PROBE_COOLDOWN_STATE_FILE  path holding `last_page_epoch=<unix seconds>`
 #   PROBE_PAGE_TIMEOUT         curl --max-time in seconds (default 15)
+#   PROBE_DRY_RUN              `1` or `true` to run the whole decision path
+#                              (including the cooldown latch) without ever
+#                              contacting the Bot API
 #   TELEGRAM_BOT_TOKEN         admin-notifications bot token
 #   TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID   target chat id
 #
 # Status line (stdout and, when set, $GITHUB_OUTPUT):
 #   probe_page=not_required | no_page_expected | not_configured |
-#              suppressed_cooldown | paged | page_failed
+#              suppressed_cooldown | dry_run | paged | page_failed
 #
 # Always exits 0. Paging is a side effect of the probe's own pass/fail decision;
 # a page that cannot be delivered must not change whether the job passed. The
@@ -51,6 +56,7 @@ PROBE_EXIT="${PROBE_EXIT:-}"
 BASE_URL="${PROBE_BASE_URL:-}"
 RUN_URL="${PROBE_RUN_URL:-}"
 PAGE_TIMEOUT="${PROBE_PAGE_TIMEOUT:-15}"
+DRY_RUN="${PROBE_DRY_RUN:-}"
 DEFAULT_COOLDOWN_MINUTES=60
 STATE_FILE="${PROBE_COOLDOWN_STATE_FILE:-}"
 
@@ -99,6 +105,9 @@ annotate_non_outage() {
 	case "$1" in
 	unconfigured)
 		printf '::error title=Probe not configured::probe_unconfigured: %s The probe never reached production, so this is a CI misconfiguration, not a production outage. Set the WEBHOOK_API_KEY repository secret.\n' "${DETAIL:-WEBHOOK_API_KEY is not set.}"
+		;;
+	auth_rejected)
+		printf '::error title=Probe authentication rejected::probe_auth_rejected: %s Production answered the probe, so this is NOT a production outage: the WEBHOOK_API_KEY repository secret was rotated or never matched the server. Rotate the secret; alert delivery is unaffected.\n' "${DETAIL:-/api/status returned 401/403.}"
 		;;
 	script_missing)
 		printf '::error title=Probe script missing::probe_script_missing: %s This is a bug in the CI workflow (the repository was not checked out), not a production outage. The availability gate did not run.\n' "${DETAIL:-ops/production-smoke-probe.sh was not found in the workspace.}"
@@ -206,6 +215,17 @@ fi
 if [[ "$OUTCOME" != "down" ]]; then
 	annotate_non_outage "$OUTCOME"
 	report no_page_expected
+	write_state "$(read_latched_epoch)"
+	exit 0
+fi
+
+# Dry run first, before the Telegram-secret requirement: the documented way to
+# exercise the paging decision (docs/monitoring.md) must never page a real chat
+# just because the operator's shell happens to export the Telegram secrets. It
+# still walks the cooldown latch, so the decision under test is the real one.
+if [[ "$DRY_RUN" == "1" || "$DRY_RUN" == "true" ]]; then
+	printf '::warning title=Paging dry run::probe_page_dry_run: PROBE_DRY_RUN is set, so production is down but no page was sent to the admin chat. %s\n' "$(redact "${DETAIL:-no detail supplied}")"
+	report dry_run
 	write_state "$(read_latched_epoch)"
 	exit 0
 fi

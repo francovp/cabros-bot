@@ -16,9 +16,18 @@
 #   0   probe succeeded (service reachable + healthy + commit matches)
 #   2   AUTH_BLOCKED — WEBHOOK_API_KEY missing or empty
 #   3   HEALTHCHECK_FAILED — /healthcheck did not return HTTP 200
-#   4   STATUS_UNREACHABLE — /api/status request failed or returned non-JSON
+#   4   STATUS_UNREACHABLE — /api/status failed, returned non-JSON, or returned
+#                            a non-200 other than 401/403
 #   5   COMMIT_MISMATCH — service.commit != expected commit (stale deploy)
 #   6   DEGRADED_DEPENDENCY — at least one required dependency degraded
+#   7   AUTH_REJECTED — /api/status returned 401/403: the server answered and
+#                       rejected this credential, so the secret is rotated or
+#                       mismatched. NOT a production outage
+#
+# The distinction between exit 4 and exit 7 is load-bearing. Exit 4 means
+# production did not answer us, which pages the operator chat; exit 7 means
+# production answered and rejected us, which is a CI/secret problem. Collapsing
+# the two would page "alerts are not being delivered" while they are.
 #
 # Usage:
 #   ops/production-smoke-probe.sh \
@@ -139,6 +148,19 @@ STATUS_HTTP="$(normalize_http_code "$(printf 'x-api-key: %s\n' "$WEBHOOK_API_KEY
 	curl --silent --show-error --max-time "$PROBE_TIMEOUT" \
 		--write-out '%{http_code}' --output "$PROBE_TMPDIR/status.json" \
 		-H 'accept: application/json' -H @- "$STATUS_URL" || echo '000')")"
+
+# A 401/403 means the server is up and answering — it is rejecting *this*
+# credential, so the WEBHOOK_API_KEY secret has been rotated or never matched.
+# That is a CI/secret problem, and it must not share exit 4 with real
+# reachability failures, because exit 4 pages the operator chat.
+#
+# /healthcheck deliberately has no equivalent branch: it is unauthenticated by
+# design, so a 401/403 there is a gateway/server response rather than a
+# credential failure and stays a genuine HEALTHCHECK_FAILED.
+if [[ "$STATUS_HTTP" == "401" || "$STATUS_HTTP" == "403" ]]; then
+	echo "AUTH_REJECTED: $STATUS_PATH returned HTTP $STATUS_HTTP; the WEBHOOK_API_KEY secret does not match the server." >&2
+	exit 7
+fi
 
 if [[ "$STATUS_HTTP" != "200" ]]; then
 	echo "STATUS_UNREACHABLE: $STATUS_PATH returned HTTP $STATUS_HTTP." >&2
