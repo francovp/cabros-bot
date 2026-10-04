@@ -36,6 +36,17 @@ class FakeElement {
 		});
 	}
 
+	// `children` is a plain array here but a live HTMLCollection in the browser, so
+	// anything array-only (Array#pop) type-checks in tests and throws in Chrome.
+	// This getter is what keeps the live feed's trim honest.
+	get lastElementChild() {
+		return this.children[this.children.length - 1] || null;
+	}
+
+	get firstChild() {
+		return this.children[0] || null;
+	}
+
 	append(...nodes) {
 		nodes.forEach((node) => {
 			const selectFirstOption = this.tagName === 'SELECT' && this.children.length === 0;
@@ -52,6 +63,17 @@ class FakeElement {
 		this.children = [];
 		this._text = '';
 		this.append(...nodes);
+	}
+
+	// Present because the console calls prepend() and falls back to an array
+	// unshift() without it. That fallback leaves parentNode unset, which makes a
+	// later lastElementChild.remove() a silent no-op and hangs the live feed's
+	// trim loop. Modelling prepend keeps the fake on the browser's code path.
+	prepend(...nodes) {
+		nodes.reverse().forEach((node) => {
+			node.parentNode = this;
+			this.children.unshift(node);
+		});
 	}
 
 	addEventListener(type, listener) {
@@ -6877,6 +6899,13 @@ describe('structured analysis forms', () => {
 	});
 
 	describe('trading dashboard', () => {
+		const TRADING_WINDOWS_FOR_TEST = ['1h', '4h', '1D', '1W'];
+		// Faithful to SignalOutcomeService.summarizeOutcomes(): the four per-window
+		// averages live under windows[<window>], never at the top level. The
+		// per-window values are deliberately distinct so the pooled "All windows"
+		// figures (hit rate 59.00, return +1.30) differ both from any single window
+		// (1D is 65.00 / +1.25) and from an unweighted mean of the four
+		// percentages (63.75 / +1.44), so a wrong pooling weight cannot pass.
 		const outcomeSummary = (overrides = {}) => ({
 			success: true,
 			summary: {
@@ -6886,11 +6915,26 @@ describe('structured analysis forms', () => {
 				totalSignalsEvaluated: 30,
 				totalSignalsPending: 4,
 				totalSignalsUnavailable: 2,
-				winRatePercent: 58.33,
+				coveragePercent: 75,
+				isCoverageComplete: false,
 				expectancyR: 0.42,
-				averageReturnPercent: 1.25,
-				averageMfePercent: 2.4,
-				averageMaePercent: -0.9,
+				targetHitRatePercent: 55,
+				stopHitRatePercent: 21,
+				populationNote: 'Metrics represent 30 evaluated signals out of 40 total received signals (75% coverage).',
+				exchangeBreakdown: {},
+				providerBreakdown: {},
+				entryPriceSourceBreakdown: {},
+				eligibilityBreakdown: {},
+				windows: {
+					'1h': { totalSignals: 40, hitRatePercent: 50, averageReturnPercent: 1.0, averageMfePercent: 2.0, averageMaePercent: -0.4 },
+					'4h': { totalSignals: 30, hitRatePercent: 60, averageReturnPercent: 1.5, averageMfePercent: 2.4, averageMaePercent: -0.6 },
+					'1D': { totalSignals: 20, hitRatePercent: 65, averageReturnPercent: 1.25, averageMfePercent: 2.6, averageMaePercent: -0.9 },
+					'1W': { totalSignals: 10, hitRatePercent: 80, averageReturnPercent: 2.0, averageMfePercent: 3.0, averageMaePercent: -1.1 },
+				},
+				drawdownProxy: { averageMaxAdverseExcursionPercent: -0.63, absoluteMaxAdverseExcursionPercent: -1.1 },
+				falsePositiveCandidatesCount: 0,
+				falsePositiveCandidates: [],
+				latencyCostMetadata: { averageProcessingTimeMs: 120, tokenUsage: { inputTokens: 0, outputTokens: 0, totalCost: 0 } },
 				...overrides,
 			},
 		});
@@ -6947,6 +6991,7 @@ describe('structured analysis forms', () => {
 		const createTradingBrowser = ({
 			outcomes = defaultOutcomes,
 			summary = outcomeSummary(),
+			summaryStatus = 200,
 			audit = { success: true, records: [], audit: [], pagination: { hasMore: false, limit: 20, nextBefore: null } },
 			status = statusPayload(),
 			ledger,
@@ -6964,7 +7009,16 @@ describe('structured analysis forms', () => {
 					});
 				}
 				if (url === '/openapi.json') return response(apiContract);
-				if (url.startsWith('/api/outcomes/summary')) return response(summary);
+				if (url.startsWith('/api/outcomes/summary')) {
+					// Mirror the server instead of matching on startsWith: an empty
+					// `?window=` is a 400 there (parseWindow('') is null), so a console
+					// that forgets to filter the empty select option fails here.
+					const sent = new URL(url, 'https://console.test').searchParams;
+					if (sent.has('window') && sent.get('window') === '') {
+						return response({ error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.', code: 'INVALID_REQUEST' }, 400);
+					}
+					return response(typeof summary === 'function' ? summary(url) : summary, summaryStatus);
+				}
 				if (url.startsWith('/api/outcomes')) return response(outcomeList(outcomes));
 				if (url.startsWith('/api/trading/binance/orders/audit')) return response(audit);
 				if (url.startsWith('/api/status')) return response(status);
@@ -6982,18 +7036,128 @@ describe('structured analysis forms', () => {
 			return card ? card.textContent : null;
 		};
 
-		it('renders paper P&L KPIs from the server-computed summary, not inferred values', async () => {
+		it('keeps the summary fixture aligned with the published OutcomesSummary schema', () => {
+			const declared = new Set(Object.keys(contract.components.schemas.OutcomesSummary.properties));
+			const declaredWindow = new Set(Object.keys(contract.components.schemas.WindowStats.properties));
+			const summary = outcomeSummary().summary;
+
+			Object.keys(summary).forEach((key) => {
+				expect(declared.has(key)).toBe(true);
+			});
+			Object.entries(summary.windows).forEach(([windowKey, block]) => {
+				expect(TRADING_WINDOWS_FOR_TEST).toContain(windowKey);
+				Object.keys(block).forEach((key) => {
+					expect(declaredWindow.has(key)).toBe(true);
+				});
+			});
+			// The regression this guards: the console read four names the service
+			// never returns, and only a fixture that invented them kept it green.
+			expect(declared.has('winRatePercent')).toBe(false);
+			expect(declared.has('averageReturnPercent')).toBe(false);
+		});
+
+		it('renders paper P&L KPIs from the window block, not names the API never returns', async () => {
 			const browser = createTradingBrowser();
 			await flush();
 			await selectView(browser, 'trading');
 			const view = tradingView(browser);
 
 			expect(kpiText(view, 'Signals recorded')).toContain('40');
-			expect(kpiText(view, 'Hit rate')).toContain('58.33%');
+			// Pooled across all four windows, weighted by each window's own
+			// denominator. 63.75 is the unweighted mean of the same percentages.
+			expect(kpiText(view, 'Hit rate')).toContain('59.00%');
+			expect(kpiText(view, 'Average return')).toContain('+1.30%');
 			expect(kpiText(view, 'Expectancy')).toContain('+0.42R');
-			expect(kpiText(view, 'Average return')).toContain('+1.25%');
 			expect(kpiText(view, 'Coverage')).toContain('75%');
+			expect(kpiText(view, 'Hit rate')).not.toContain('63.75');
+			expect(kpiText(view, 'MFE / MAE')).toContain('2.34% / -0.63%');
 			expect(kpiCards(view).length).toBeGreaterThanOrEqual(6);
+		});
+
+		it('does not 400 its own request when the default All windows filter is selected', async () => {
+			const requests = [];
+			const browser = createTradingBrowser({
+				summary: (url) => {
+					requests.push(url);
+					return outcomeSummary();
+				},
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			const summaryRequest = requests.find((url) => url.startsWith('/api/outcomes/summary'));
+			expect(summaryRequest).toBeTruthy();
+			expect(new URL(summaryRequest, 'https://console.test').searchParams.has('window')).toBe(false);
+			expect(view.textContent).not.toMatch(/HTTP 400/);
+			expect(view.textContent).not.toMatch(/invalid filter/i);
+			expect(kpiText(view, 'Hit rate')).toContain('59.00%');
+		});
+
+		it('reads the selected window block when a window is chosen', async () => {
+			const requests = [];
+			const browser = createTradingBrowser({
+				summary: (url) => {
+					requests.push(url);
+					return outcomeSummary();
+				},
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const windowSelect = findAll(tradingView(browser), (node) => node.name === 'window')[0];
+			windowSelect.value = '1D';
+			await findAll(tradingView(browser), (node) => node.tagName === 'FORM')[0].dispatch('submit');
+			await flush();
+
+			const summaryRequest = requests.filter((url) => url.startsWith('/api/outcomes/summary')).pop();
+			expect(new URL(summaryRequest, 'https://console.test').searchParams.get('window')).toBe('1D');
+			const view = tradingView(browser);
+			// 1D's own figures, not the pooled ones.
+			expect(kpiText(view, 'Hit rate')).toContain('65.00%');
+			expect(kpiText(view, 'Average return')).toContain('+1.25%');
+			expect(kpiText(view, 'Hit rate')).not.toContain('59.00');
+			expect(kpiText(view, 'MFE / MAE')).toContain('2.60% / -0.90%');
+			expect(view.textContent).toContain('1D window');
+		});
+
+		it('blames the console request, not a feature flag, when the summary filter is rejected', async () => {
+			const browser = createTradingBrowser({
+				summary: { error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.', code: 'INVALID_REQUEST' },
+				summaryStatus: 400,
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			expect(view.textContent).toMatch(/invalid filter/i);
+			expect(view.textContent).not.toMatch(/may be disabled/i);
+			expect(view.textContent).not.toMatch(/ENABLE_SIGNAL_OUTCOME_TRACKING/);
+		});
+
+		it('treats a 503 summary as a dependency state rather than a disabled feature', async () => {
+			const browser = createTradingBrowser({
+				summary: { error: 'Storage unavailable', code: 'STORAGE_UNAVAILABLE' },
+				summaryStatus: 503,
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			expect(view.textContent).toMatch(/temporarily unavailable/i);
+			expect(view.textContent).not.toMatch(/ENABLE_SIGNAL_OUTCOME_TRACKING/);
+		});
+
+		it('keeps the paper vs real panel with a named state when the summary fails', async () => {
+			const browser = createTradingBrowser({
+				summary: { error: 'Storage unavailable', code: 'STORAGE_UNAVAILABLE' },
+				summaryStatus: 503,
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const compare = findAll(tradingView(browser), (node) => node.className.includes('paper-vs-real-panel'))[0];
+
+			expect(compare).toBeTruthy();
+			expect(compare.textContent).toMatch(/temporarily unavailable/i);
 		});
 
 		it('labels every KPI card with its environment provenance', async () => {
@@ -7242,7 +7406,9 @@ describe('structured analysis forms', () => {
 			await browser.elementsById['save-key'].dispatch('click');
 			await flush();
 			await selectView(browser, 'trading');
-			const feed = findAll(tradingView(browser), (node) => node.className.includes('live-feed'))[0];
+			// Exact match: an `includes('live-feed')` probe also matches the wrapping
+			// `live-feed-panel` section, whose children are a heading plus the feed.
+			const feed = findAll(tradingView(browser), (node) => node.className === 'live-feed')[0];
 
 			expect(feed).toBeTruthy();
 			expect(feed.textContent).toMatch(/no events yet/i);
@@ -7250,12 +7416,24 @@ describe('structured analysis forms', () => {
 			await stream.emit('alert-delivered', { symbol: 'BTCUSDT', channels: ['telegram'] });
 			await flush();
 			expect(feed.textContent).toContain('BTCUSDT');
-			const afterFirst = feed.children.length;
+			expect(feed.children.length).toBe(1);
+
+			// MAX_ROWS is 40, so the trim is only reachable past that. The old
+			// `feed.children.pop()` threw a TypeError in Chrome because an
+			// HTMLCollection has no pop(); the array-backed fake DOM accepted it,
+			// which is why this needed a real-browser check to find.
+			for (let index = 0; index < 55; index += 1) {
+				await stream.emit('alert-delivered', { symbol: `SYM${index}` });
+			}
+			await flush();
+			expect(feed.children.length).toBe(40);
+			expect(feed.textContent).toContain('SYM54');
+			expect(feed.textContent).not.toContain('BTCUSDT');
 
 			await selectView(browser, 'overview');
 			await stream.emit('delivery-failure', { symbol: 'ETHUSDT', channel: 'whatsapp', error: 'boom' });
 			await flush();
-			expect(feed.children.length).toBe(afterFirst);
+			expect(feed.children.length).toBe(40);
 		});
 	});
 
