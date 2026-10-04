@@ -4128,7 +4128,7 @@
               "name": "Storage mode contract",
               "status": "OK",
               "code": 201,
-              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"readiness\": \"verified\",\n    \"collection\": \"scannerPresets\",\n    \"operationsAttempted\": 12,\n    \"operationsSucceeded\": 12,\n    \"operationsFailed\": 0,\n    \"consecutiveFailures\": 0,\n    \"lastSuccessAt\": \"2026-10-04T13:50:12.481Z\",\n    \"lastFailureAt\": null,\n    \"lastErrorReason\": null,\n    \"pendingWrites\": 0,\n    \"inFlightWrites\": 0,\n    \"pendingDeletes\": 0,\n    \"oldestPendingWriteAt\": null,\n    \"lastReadFellBack\": false\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\"\n  }\n}"
             },
             {
               "name": "Error (invalid name)",
@@ -4140,7 +4140,7 @@
               "name": "Error (duplicate name)",
               "status": "Conflict",
               "code": 409,
-              "body": "{\n  \"error\": \"A scanner preset with this name already exists\",\n  \"code\": \"NAME_CONFLICT\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\"\n  }\n}"
+              "body": "{\n  \"error\": \"A scanner preset with this name already exists\",\n  \"code\": \"NAME_CONFLICT\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"readiness\": \"verified\",\n    \"collection\": \"scannerPresets\",\n    \"operationsAttempted\": 12,\n    \"operationsSucceeded\": 12,\n    \"operationsFailed\": 0,\n    \"consecutiveFailures\": 0,\n    \"lastSuccessAt\": \"2026-10-04T13:50:12.481Z\",\n    \"lastFailureAt\": null,\n    \"lastErrorReason\": null,\n    \"pendingWrites\": 0,\n    \"inFlightWrites\": 0,\n    \"pendingDeletes\": 0,\n    \"oldestPendingWriteAt\": null,\n    \"lastReadFellBack\": false\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\"\n  }\n}"
             },
             {
               "name": "Created with Schedule and Routing",
@@ -4183,7 +4183,13 @@
               "name": "Storage mode contract",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"presets\": []\n}"
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"readiness\": \"verified\",\n    \"collection\": \"scannerPresets\",\n    \"operationsAttempted\": 12,\n    \"operationsSucceeded\": 12,\n    \"operationsFailed\": 0,\n    \"consecutiveFailures\": 0,\n    \"lastSuccessAt\": \"2026-10-04T13:50:12.481Z\",\n    \"lastFailureAt\": null,\n    \"lastErrorReason\": null,\n    \"pendingWrites\": 0,\n    \"inFlightWrites\": 0,\n    \"pendingDeletes\": 0,\n    \"oldestPendingWriteAt\": null,\n    \"lastReadFellBack\": false\n  },\n  \"presets\": []\n}"
+            },
+            {
+              "name": "Storage degraded after a transient Firestore read failure",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": false,\n    \"status\": \"degraded\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"readiness\": \"degraded\",\n    \"collection\": \"scannerPresets\",\n    \"operationsAttempted\": 34,\n    \"operationsSucceeded\": 33,\n    \"operationsFailed\": 1,\n    \"consecutiveFailures\": 1,\n    \"lastSuccessAt\": \"2026-10-04T13:49:58.104Z\",\n    \"lastFailureAt\": \"2026-10-04T13:50:11.902Z\",\n    \"lastErrorReason\": \"firestore_unavailable\",\n    \"pendingWrites\": 1,\n    \"inFlightWrites\": 0,\n    \"pendingDeletes\": 0,\n    \"oldestPendingWriteAt\": \"2026-10-04T13:50:11.902Z\",\n    \"lastReadFellBack\": true\n  },\n  \"presets\": []\n}"
             },
             {
               "name": "Success",
@@ -4221,7 +4227,7 @@
               "name": "Storage mode contract",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"readiness\": \"verified\",\n    \"collection\": \"scannerPresets\",\n    \"operationsAttempted\": 12,\n    \"operationsSucceeded\": 12,\n    \"operationsFailed\": 0,\n    \"consecutiveFailures\": 0,\n    \"lastSuccessAt\": \"2026-10-04T13:50:12.481Z\",\n    \"lastFailureAt\": null,\n    \"lastErrorReason\": null,\n    \"pendingWrites\": 0,\n    \"inFlightWrites\": 0,\n    \"pendingDeletes\": 0,\n    \"oldestPendingWriteAt\": null,\n    \"lastReadFellBack\": false\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\"\n  }\n}"
             },
             {
               "name": "Success",
@@ -4279,7 +4285,7 @@
               "name": "Storage mode contract",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}",
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"readiness\": \"verified\",\n    \"collection\": \"scannerPresets\",\n    \"operationsAttempted\": 12,\n    \"operationsSucceeded\": 12,\n    \"operationsFailed\": 0,\n    \"consecutiveFailures\": 0,\n    \"lastSuccessAt\": \"2026-10-04T13:50:12.481Z\",\n    \"lastFailureAt\": null,\n    \"lastErrorReason\": null,\n    \"pendingWrites\": 0,\n    \"inFlightWrites\": 0,\n    \"pendingDeletes\": 0,\n    \"oldestPendingWriteAt\": null,\n    \"lastReadFellBack\": false\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}",
               "header": [
                 {
                   "key": "ETag",
@@ -4303,19 +4309,19 @@
               "name": "Stale If-Match (412 PRECONDITION_FAILED)",
               "status": "Precondition Failed",
               "code": 412,
-              "body": "{\n  \"success\": false,\n  \"error\": \"If-Match version does not match current preset version (4)\",\n  \"code\": \"PRECONDITION_FAILED\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"If-Match version does not match current preset version (4)\",\n  \"code\": \"PRECONDITION_FAILED\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"readiness\": \"verified\",\n    \"collection\": \"scannerPresets\",\n    \"operationsAttempted\": 12,\n    \"operationsSucceeded\": 12,\n    \"operationsFailed\": 0,\n    \"consecutiveFailures\": 0,\n    \"lastSuccessAt\": \"2026-10-04T13:50:12.481Z\",\n    \"lastFailureAt\": null,\n    \"lastErrorReason\": null,\n    \"pendingWrites\": 0,\n    \"inFlightWrites\": 0,\n    \"pendingDeletes\": 0,\n    \"oldestPendingWriteAt\": null,\n    \"lastReadFellBack\": false\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
             },
             {
               "name": "Locked preset (409 PRESET_LOCKED)",
               "status": "Conflict",
               "code": 409,
-              "body": "{\n  \"success\": false,\n  \"error\": \"Preset is locked by an in-flight sweep until 2026-08-30T20:00:00.000Z\",\n  \"code\": \"PRESET_LOCKED\",\n  \"lockedUntil\": \"2026-08-30T20:00:00.000Z\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"Preset is locked by an in-flight sweep until 2026-08-30T20:00:00.000Z\",\n  \"code\": \"PRESET_LOCKED\",\n  \"lockedUntil\": \"2026-08-30T20:00:00.000Z\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"readiness\": \"verified\",\n    \"collection\": \"scannerPresets\",\n    \"operationsAttempted\": 12,\n    \"operationsSucceeded\": 12,\n    \"operationsFailed\": 0,\n    \"consecutiveFailures\": 0,\n    \"lastSuccessAt\": \"2026-10-04T13:50:12.481Z\",\n    \"lastFailureAt\": null,\n    \"lastErrorReason\": null,\n    \"pendingWrites\": 0,\n    \"inFlightWrites\": 0,\n    \"pendingDeletes\": 0,\n    \"oldestPendingWriteAt\": null,\n    \"lastReadFellBack\": false\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
             },
             {
               "name": "Rename to existing preset name (409 NAME_CONFLICT)",
               "status": "Conflict",
               "code": 409,
-              "body": "{\n  \"success\": false,\n  \"error\": \"A scanner preset with this name already exists\",\n  \"code\": \"NAME_CONFLICT\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Updated Scan\"\n  }\n}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"A scanner preset with this name already exists\",\n  \"code\": \"NAME_CONFLICT\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"readiness\": \"verified\",\n    \"collection\": \"scannerPresets\",\n    \"operationsAttempted\": 12,\n    \"operationsSucceeded\": 12,\n    \"operationsFailed\": 0,\n    \"consecutiveFailures\": 0,\n    \"lastSuccessAt\": \"2026-10-04T13:50:12.481Z\",\n    \"lastFailureAt\": null,\n    \"lastErrorReason\": null,\n    \"pendingWrites\": 0,\n    \"inFlightWrites\": 0,\n    \"pendingDeletes\": 0,\n    \"oldestPendingWriteAt\": null,\n    \"lastReadFellBack\": false\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Updated Scan\"\n  }\n}"
             }
           ]
         },
@@ -4353,13 +4359,13 @@
               "name": "Storage mode contract",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"readiness\": \"verified\",\n    \"collection\": \"scannerPresets\",\n    \"operationsAttempted\": 12,\n    \"operationsSucceeded\": 12,\n    \"operationsFailed\": 0,\n    \"consecutiveFailures\": 0,\n    \"lastSuccessAt\": \"2026-10-04T13:50:12.481Z\",\n    \"lastFailureAt\": null,\n    \"lastErrorReason\": null,\n    \"pendingWrites\": 0,\n    \"inFlightWrites\": 0,\n    \"pendingDeletes\": 0,\n    \"oldestPendingWriteAt\": null,\n    \"lastReadFellBack\": false\n  }\n}"
             },
             {
               "name": "Stale If-Match (412 PRECONDITION_FAILED)",
               "status": "Precondition Failed",
               "code": 412,
-              "body": "{\n  \"success\": false,\n  \"error\": \"If-Match version does not match current preset version (4)\",\n  \"code\": \"PRECONDITION_FAILED\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"If-Match version does not match current preset version (4)\",\n  \"code\": \"PRECONDITION_FAILED\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"readiness\": \"verified\",\n    \"collection\": \"scannerPresets\",\n    \"operationsAttempted\": 12,\n    \"operationsSucceeded\": 12,\n    \"operationsFailed\": 0,\n    \"consecutiveFailures\": 0,\n    \"lastSuccessAt\": \"2026-10-04T13:50:12.481Z\",\n    \"lastFailureAt\": null,\n    \"lastErrorReason\": null,\n    \"pendingWrites\": 0,\n    \"inFlightWrites\": 0,\n    \"pendingDeletes\": 0,\n    \"oldestPendingWriteAt\": null,\n    \"lastReadFellBack\": false\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
             },
             {
               "name": "Success",

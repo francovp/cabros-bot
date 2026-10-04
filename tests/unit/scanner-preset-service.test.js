@@ -13,6 +13,47 @@ const validFirestoreServiceAccountJson = JSON.stringify({
 	private_key: testPrivateKey,
 });
 
+// `mode`/`backend` are intent-derived and must not flip to `memory` while
+// ENABLE_FIRESTORE_SCANNER_PRESETS=true, so these expected shapes are shared by the
+// three gate verdicts an operator must be able to tell apart (#1342).
+const ZEROED_STORAGE_READINESS = {
+	failOpen: true,
+	readiness: 'unverified',
+	collection: 'scannerPresets',
+	operationsAttempted: 0,
+	operationsSucceeded: 0,
+	operationsFailed: 0,
+	consecutiveFailures: 0,
+	lastSuccessAt: null,
+	lastFailureAt: null,
+	lastErrorReason: null,
+	pendingWrites: 0,
+	inFlightWrites: 0,
+	pendingDeletes: 0,
+	oldestPendingWriteAt: null,
+	lastReadFellBack: false,
+};
+
+const DISABLED_STORAGE = {
+	enabled: false,
+	configured: false,
+	ready: false,
+	status: 'disabled',
+	mode: 'ephemeral',
+	backend: 'memory',
+	...ZEROED_STORAGE_READINESS,
+};
+
+const MISCONFIGURED_STORAGE = {
+	enabled: true,
+	configured: false,
+	ready: false,
+	status: 'misconfigured',
+	mode: 'ephemeral',
+	backend: 'memory',
+	...ZEROED_STORAGE_READINESS,
+};
+
 describe('ScannerPresetService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
@@ -37,14 +78,7 @@ describe('ScannerPresetService', () => {
 
 		await service.createPreset({ name: 'Memory-only preset' });
 
-		expect(service.getStorageStatus()).toEqual({
-			enabled: false,
-			configured: false,
-			ready: false,
-			status: 'disabled',
-			mode: 'ephemeral',
-			backend: 'memory',
-		});
+		expect(service.getStorageStatus()).toEqual(DISABLED_STORAGE);
 	});
 
 	it('persists a preset across service instances with the dedicated scanner storage flag', async () => {
@@ -69,17 +103,10 @@ describe('ScannerPresetService', () => {
 	it('reports the in-memory storage mode when durable storage is disabled', () => {
 		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
 
-		expect(new ScannerPresetService().getStorageStatus()).toEqual({
-			enabled: false,
-			configured: false,
-			ready: false,
-			status: 'disabled',
-			mode: 'ephemeral',
-			backend: 'memory',
-		});
+		expect(new ScannerPresetService().getStorageStatus()).toEqual(DISABLED_STORAGE);
 	});
 
-	it('reports ephemeral storage after a Firestore write failure', async () => {
+	it('keeps durable intent and reports degraded after a transient Firestore write failure', async () => {
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
 
 		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
@@ -88,17 +115,25 @@ describe('ScannerPresetService', () => {
 		const created = await service.createPreset({ name: 'Fallback preset' });
 
 		expect(created.name).toBe('Fallback preset');
-		expect(service.getStorageStatus()).toEqual({
+		expect(service.getStorageStatus()).toEqual(expect.objectContaining({
 			enabled: true,
-			configured: false,
+			// Credentials are demonstrably valid, so `misconfigured` — which means
+			// "check your credentials" — would be the wrong thing to report (#1342).
+			configured: true,
 			ready: false,
-			status: 'misconfigured',
-			mode: 'ephemeral',
-			backend: 'memory',
-		});
+			status: 'degraded',
+			readiness: 'degraded',
+			mode: 'durable',
+			backend: 'firestore',
+			operationsFailed: 1,
+			consecutiveFailures: 1,
+			lastErrorReason: 'firestore_unavailable',
+			pendingWrites: 1,
+			lastFailureAt: expect.any(String),
+		}));
 	});
 
-	it('retries Firestore after a transient write failure and reports recovery', async () => {
+	it('recovers the reported verdict after a transient write failure without a restart', async () => {
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
 
 		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
@@ -107,17 +142,20 @@ describe('ScannerPresetService', () => {
 		const service = new ScannerPresetService();
 
 		await service.createPreset({ name: 'First attempt' });
-		expect(service.getStorageStatus().mode).toBe('ephemeral');
+		expect(service.getStorageStatus().status).toBe('degraded');
 
 		await service.createPreset({ name: 'Recovered attempt' });
-		expect(service.getStorageStatus()).toEqual({
+		expect(service.getStorageStatus()).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
 			ready: true,
 			status: 'ready',
+			readiness: 'verified',
 			mode: 'durable',
 			backend: 'firestore',
-		});
+			consecutiveFailures: 0,
+			lastSuccessAt: expect.any(String),
+		}));
 	});
 
 	it('does not report durable storage without usable Firestore credentials', () => {
@@ -126,14 +164,7 @@ describe('ScannerPresetService', () => {
 
 		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
 
-		expect(new ScannerPresetService().getStorageStatus()).toEqual({
-			enabled: true,
-			configured: false,
-			ready: false,
-			status: 'misconfigured',
-			mode: 'ephemeral',
-			backend: 'memory',
-		});
+		expect(new ScannerPresetService().getStorageStatus()).toEqual(MISCONFIGURED_STORAGE);
 	});
 
 	it('clears the unavailable state after a successful Firestore read recovery', async () => {
@@ -145,20 +176,28 @@ describe('ScannerPresetService', () => {
 		const service = new ScannerPresetService();
 
 		await service.listPresets();
-		expect(service.getStorageStatus().mode).toBe('ephemeral');
+		expect(service.getStorageStatus()).toEqual(expect.objectContaining({
+			status: 'degraded',
+			mode: 'durable',
+			backend: 'firestore',
+			lastReadFellBack: true,
+			consecutiveFailures: 1,
+		}));
 
 		await service.listPresets();
-		expect(service.getStorageStatus()).toEqual({
+		expect(service.getStorageStatus()).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
 			ready: true,
 			status: 'ready',
 			mode: 'durable',
 			backend: 'firestore',
-		});
+			consecutiveFailures: 0,
+			lastReadFellBack: false,
+		}));
 	});
 
-	it('keeps presets from failed writes visible and ephemeral after reads recover', async () => {
+	it('keeps presets from failed writes visible and durable after reads recover', async () => {
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
 
 		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
@@ -172,7 +211,181 @@ describe('ScannerPresetService', () => {
 		expect(presets).toEqual([
 			expect.objectContaining({ id: created.id, name: 'Unsynced preset' }),
 		]);
-		expect(service.getStorageStatus().mode).toBe('ephemeral');
+		// The store answered a read, so it is usable; the unsynced record is reported as
+		// pending workload instead of flipping the backend to `memory`.
+		expect(service.getStorageStatus()).toEqual(expect.objectContaining({
+			mode: 'durable',
+			backend: 'firestore',
+			status: 'ready',
+			pendingWrites: 1,
+		}));
+	});
+
+	describe('#1342 status-path durability reporting', () => {
+		it('proves durable readiness from the status path with no prior write', async () => {
+			process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+			const firestoreAdmin = require('firebase-admin');
+			const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+			const service = new ScannerPresetService();
+
+			expect(service.getStorageStatus()).toEqual(expect.objectContaining({
+				status: 'unverified',
+				ready: false,
+				mode: 'durable',
+				backend: 'firestore',
+			}));
+
+			const probed = await service.probeStorageReadiness();
+
+			expect(probed).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: true,
+				status: 'ready',
+				readiness: 'verified',
+				mode: 'durable',
+				backend: 'firestore',
+				operationsAttempted: 1,
+				operationsSucceeded: 1,
+				operationsFailed: 0,
+				consecutiveFailures: 0,
+			}));
+			expect(firestoreAdmin.__mockLimit).toHaveBeenCalledWith(1);
+		});
+
+		it('rate-limits repeat status probes so polling cannot amplify Firestore reads', async () => {
+			process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+			const firestoreAdmin = require('firebase-admin');
+			const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+			const service = new ScannerPresetService();
+
+			await service.probeStorageReadiness();
+			const readsAfterFirstProbe = firestoreAdmin.__mockGet.mock.calls.length;
+			await service.probeStorageReadiness();
+			await service.probeStorageReadiness();
+
+			expect(firestoreAdmin.__mockGet.mock.calls.length).toBe(readsAfterFirstProbe);
+		});
+
+		it('recovers the reported verdict after a transient read failure without a restart', async () => {
+			process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+			const firestoreAdmin = require('firebase-admin');
+			firestoreAdmin.__mockGet.mockRejectedValueOnce(new Error('Temporary Firestore outage'));
+			const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+			const service = new ScannerPresetService();
+
+			const degraded = await service.probeStorageReadiness();
+
+			expect(degraded).toEqual(expect.objectContaining({
+				status: 'degraded',
+				mode: 'durable',
+				backend: 'firestore',
+				consecutiveFailures: 1,
+				lastErrorReason: 'firestore_unavailable',
+				lastReadFellBack: true,
+			}));
+
+			await service.listPresets();
+
+			expect(service.getStorageStatus()).toEqual(expect.objectContaining({
+				status: 'ready',
+				ready: true,
+				mode: 'durable',
+				consecutiveFailures: 0,
+				lastReadFellBack: false,
+			}));
+		});
+
+		it('never reports a probe timeout as a credential misconfiguration', async () => {
+			process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+			const firestoreAdmin = require('firebase-admin');
+			firestoreAdmin.__mockGet.mockReturnValue(new Promise(() => {}));
+			const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+			const service = new ScannerPresetService();
+
+			const timedOut = await service.probeStorageReadiness({ timeoutMs: 10 });
+
+			expect(timedOut).toEqual(expect.objectContaining({
+				configured: true,
+				status: 'degraded',
+				mode: 'durable',
+				lastErrorReason: 'firestore_probe_timeout',
+			}));
+		});
+
+		it('a status-only call performs no read and neither latches nor clears a failure', async () => {
+			process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+			const firestoreAdmin = require('firebase-admin');
+			const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+			const service = new ScannerPresetService();
+
+			expect(service.getStorageStatus()).toEqual(expect.objectContaining({
+				status: 'unverified',
+				operationsAttempted: 0,
+				operationsFailed: 0,
+				lastReadFellBack: false,
+			}));
+			expect(firestoreAdmin.__mockGet).not.toHaveBeenCalled();
+
+			firestoreAdmin.__mockGet.mockRejectedValueOnce(new Error('Temporary Firestore read outage'));
+			await service.listPresets();
+			const latched = service.getStorageStatus();
+
+			expect(latched.status).toBe('degraded');
+			for (let index = 0; index < 3; index += 1) {
+				expect(service.getStorageStatus()).toEqual(latched);
+			}
+		});
+
+		it('a wedged pending write cannot downgrade the reported backend to memory', async () => {
+			process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+			const firestoreAdmin = require('firebase-admin');
+			firestoreAdmin.__mockDocSet.mockRejectedValue(new Error('Permanent Firestore write outage'));
+			const {
+				ScannerPresetService,
+				pendingFirestorePresets,
+			} = require('../../src/services/scannerPresets/ScannerPresetService');
+			const service = new ScannerPresetService();
+
+			await service.createPreset({ name: 'Wedged preset' });
+			expect(pendingFirestorePresets.size).toBe(1);
+
+			const status = service.getStorageStatus();
+
+			expect(status.mode).toBe('durable');
+			expect(status.backend).toBe('firestore');
+			expect(status.status).toBe('degraded');
+			expect(status.pendingWrites).toBe(1);
+			expect(status.oldestPendingWriteAt).toEqual(expect.any(String));
+		});
+
+		it('a wedged pending delete tombstone cannot downgrade the reported backend to memory', async () => {
+			process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+			const firestoreAdmin = require('firebase-admin');
+			firestoreAdmin.__mockDocDelete.mockRejectedValue(new Error('Permanent Firestore delete outage'));
+			const {
+				ScannerPresetService,
+				pendingFirestoreDeletes,
+			} = require('../../src/services/scannerPresets/ScannerPresetService');
+			const service = new ScannerPresetService();
+
+			const created = await service.createPreset({ name: 'Stuck delete preset' });
+			await service.deletePreset(created.id);
+			expect(pendingFirestoreDeletes.has(created.id)).toBe(true);
+
+			const status = service.getStorageStatus();
+
+			expect(status.mode).toBe('durable');
+			expect(status.backend).toBe('firestore');
+			expect(status.pendingDeletes).toBe(1);
+		});
 	});
 
 	it('does not resurrect a queued write after deleting during a Firestore outage', async () => {
@@ -289,7 +502,11 @@ describe('ScannerPresetService', () => {
 		expect(await service.listPresets()).toEqual([
 			expect.objectContaining({ id: created.id, name: 'Newer value' }),
 		]);
-		expect(service.getStorageStatus().mode).toBe('ephemeral');
+		expect(service.getStorageStatus()).toEqual(expect.objectContaining({
+			mode: 'durable',
+			backend: 'firestore',
+			pendingWrites: 1,
+		}));
 	});
 
 	it('keeps a deletion tombstone when deleting an updated preset during an outage', async () => {
@@ -548,7 +765,11 @@ describe('ScannerPresetService', () => {
 		expect(await service.listPresets()).toEqual(expect.arrayContaining([
 			expect.objectContaining({ id: queued.id, name: 'Queued recovery value' }),
 		]));
-		expect(service.getStorageStatus().mode).toBe('ephemeral');
+		expect(service.getStorageStatus()).toEqual(expect.objectContaining({
+			mode: 'durable',
+			backend: 'firestore',
+			inFlightWrites: expect.any(Number),
+		}));
 
 		releaseFlush();
 		await triggerPromise;

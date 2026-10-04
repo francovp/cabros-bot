@@ -641,6 +641,14 @@ async function getApiStatus(req, res) {
 				// Fail-open for status endpoint
 			}
 		}
+		// Prove scanner-preset durability with the bounded read that `/api/status` is
+		// asserting, instead of reporting credential shape as readiness (#1342). Fail-open
+		// and never blocks the response.
+		try {
+			await scannerPresetService.probeStorageReadiness();
+		} catch (_) {
+			// Fail-open for status endpoint
+		}
 		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {
 		console.error('[StatusController] getStatus failed:', error);
