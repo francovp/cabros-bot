@@ -1263,6 +1263,38 @@ Gemini alert enrichment now passes grounded source results into the response par
 
 No new environment variable or Remote Config key was added; the fixed cap is an application safety boundary, not operator tuning.
 
+## Reference-Calibrated Sentiment Anchors & Saturation Guard (Issue #1031)
+
+Production sent 87.6% of enriched `sentiment_score` magnitudes at or above 0.75 (85 of 97 in the reported histogram), producing only 7 distinct values. A near-constant score cannot rank alerts, tune thresholds, or compare signal quality over time, so it was actively harmful to outcome-informed gating (#587), the outcomes leaderboard (#826), and the feedback loop (#704).
+
+**Two rules, not one.** The issue proposed a single `p90 - p10 < 0.1` spread guard, but the histogram it publishes has `p90 - p10 = 0.15` — above that floor. A spread-only guard stays silent on the exact incident it was filed for, because the pathology is upward bunching, not a narrow total range. `src/services/grounding/sentimentDistribution.js` therefore applies both:
+- `spread_collapse` — `p90 - p10` below the floor. The "everything reads 0.8" signature.
+- `top_band_concentration` — at least 75% of samples at or above `0.75`.
+
+Spread collapse is evaluated first and reported first because it is the more severe diagnosis. `distinctValueCount` and `bucketCount` are **diagnostics, never triggers**: anchoring the prompt to score bands intentionally concentrates output onto band centres, so a low distinct-value count measures anchor adherence, not calibration failure. Do not "fix" a low distinct count by adding it as a trigger.
+
+**Sample floor is load-bearing.** `minSamples` (default 20) is what keeps a cold process from declaring saturation, since the in-process window is cleared on restart. `insufficient_sample` and `no_samples` are reported as non-verdicts rather than as healthy, so a small window is never mistaken for a healthy one.
+
+**Observe the effective score, not the raw one.** The rolling window records the post-cap value. Recording `sentiment_score_raw` would make a burst of zero-source alerts look saturated at 0.9 while storage holds 0.55, and would contradict `enrichment.sentimentCalibration`.
+
+**Prompt contract.** `src/services/prompts/defaults/alert-enrichment.user.txt` scores against five reference anchors (`0.90` multi-source major catalyst, `0.75` corroborated, `0.60` partial, `0.45` routine, `0.30` negligible) and requires a `sentiment_score_evidence` line naming the anchor and its observation. That replaced the old `0.9+ / 0.6-0.8 / corroborating sources` marker triple in `REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE`. **Consequence:** a Langfuse prompt not republished after #1031 reports `schemaDriftDetected: true` with the new markers in `missingCalibrationGuidance`. That is the intended rollout signal, not a regression — `resolveLocalPrompt` runs the same inspection, so the two surfaces stay in lockstep. Use the `langfuse-prompt-sync` skill to publish.
+
+**Read the cap's liveness from the summary.** `enrichment.sentimentCalibration.rawScoreCapCount` counts alerts that also stored `sentiment_score_raw`, i.e. alerts the CB-238 zero-source cap rewrote. Non-zero proves the cap is live in the queried deployment; zero means either no capped alerts in the window or a stale build. This is the verification path for #970's Railway cutover.
+
+**CB-238 is unchanged.** The zero-source cap, the signed `sentiment_score_raw` audit field, and sourced-score preservation all still hold and are still covered. `sentiment_score_evidence` is additive and bounded to 240 characters.
+
+**Fail-open.** The detector is pure and returns an empty report on malformed input; the warning path cannot throw and cannot gate enrichment or notification delivery.
+
+**Core components**:
+- `src/services/grounding/sentimentDistribution.js` — pure analyzer plus bounded, age-limited rolling window.
+- `src/services/grounding/gemini.js` — parses/bounds `sentiment_score_evidence`, records the effective score, emits one structured saturation warning per hour plus a recovery line.
+- `src/services/storage/AlertStorageService.js` — `readStoredSentimentScore()` and `buildSentimentCalibration()` populate `summary.enrichment.sentimentCalibration`.
+- `src/services/prompts/defaults/alert-enrichment.user.txt`, `src/services/prompts/PromptService.js`, `src/services/grounding/types.ts` — prompt anchors, drift markers, and the typed field.
+
+**Coverage**: `tests/unit/sentiment-distribution.test.js` (both rules, sample floor, malformed input, bucket boundaries, window eviction/bounds/snapshot-safety, and the exact #1031 histogram), `tests/unit/gemini-client.test.js` (evidence pass-through/omission/bounding, CB-238 raw-field preservation, post-cap observation, single warning, recovery, telemetry never breaks parsing), `tests/unit/alert-storage-service.test.js`, `tests/unit/prompt-service.test.js`, `tests/integration/alerts-endpoint.test.js`.
+
+No new environment variable, Remote Config key, endpoint, feature gate, or auth change was added. Detection thresholds are fixed application safety boundaries, not operator tuning.
+
 ## TradingView MCP Alert-Path Health (CB-241 / Issue #536)
 
 TradingView alert enrichment now exposes an in-process rolling 24-hour `dependencies.tradingViewMcp.enrichment.alertPath` snapshot with total, applied, failed, and percentage counters. The existing MCP circuit-breaker paging remains the single deduplicated admin outage page and continues to fail open. Stored-alert summaries expose `enrichment.tradingViewStatusCounts` with `full`, `partial`, `failed`, `not_applicable`, and `unrecorded`; requested legacy records without a persisted outcome are counted as `unrecorded`.

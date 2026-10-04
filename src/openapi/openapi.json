@@ -8870,6 +8870,9 @@
                   }
                 }
               },
+              "sentimentCalibration": {
+                "$ref": "#/components/schemas/SentimentCalibration"
+              },
               "tokenUsage": {
                 "$ref": "#/components/schemas/JsonObject"
               }
@@ -8887,6 +8890,122 @@
           },
           "feedback": {
             "$ref": "#/components/schemas/AlertFeedbackBlock"
+          }
+        }
+      },
+      "SentimentCalibration": {
+        "type": "object",
+        "description": "Distribution of stored enriched-alert sentiment_score magnitudes in the summary window, used to detect a saturated score that can no longer rank alerts (GH-1031). Scores are read as absolute magnitudes, so a BEARISH score contributes its positive magnitude. Denominator counts only enriched alerts that stored a usable score.",
+        "properties": {
+          "sampleCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Enriched alerts in the window that stored a usable sentiment_score."
+          },
+          "evaluated": {
+            "type": "boolean",
+            "description": "True only when sampleCount reached the sample floor. False means saturation is deliberately not declared because there is too little evidence."
+          },
+          "saturated": {
+            "type": "boolean",
+            "description": "True when the distribution is judged unusable for ranking."
+          },
+          "reason": {
+            "type": ["string", "null"],
+            "enum": [
+              "spread_collapse",
+              "top_band_concentration",
+              "insufficient_sample",
+              "no_samples",
+              null
+            ],
+            "description": "Which rule produced the verdict. null means healthy. spread_collapse is p90 - p10 below the spread floor; top_band_concentration is at least 75% of samples at or above 0.75; insufficient_sample and no_samples mean no verdict was reached."
+          },
+          "min": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Lowest magnitude in the window, or null when there are no samples."
+          },
+          "max": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Highest magnitude in the window, or null when there are no samples."
+          },
+          "p10": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Nearest-rank 10th percentile magnitude."
+          },
+          "p50": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Nearest-rank median magnitude."
+          },
+          "p90": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Nearest-rank 90th percentile magnitude."
+          },
+          "spread": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "p90 - p10. Compared against the spread floor to detect a collapsed distribution."
+          },
+          "distinctValueCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of distinct magnitudes observed. Diagnostic only, never a saturation trigger, because anchoring the prompt to score bands intentionally concentrates output onto band centres."
+          },
+          "bucketCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of non-empty 0.1-wide buckets. Diagnostic only; a post-anchor rollout is expected to occupy at least 4."
+          },
+          "buckets": {
+            "type": "array",
+            "description": "Histogram of magnitudes in 0.1-wide bands, ascending. Only non-empty bands are listed.",
+            "items": {
+              "type": "object",
+              "required": ["lowerBound", "upperBound", "count"],
+              "properties": {
+                "lowerBound": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "upperBound": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "topBandCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Samples at or above the top-band floor (0.75)."
+          },
+          "topBandShare": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "topBandCount divided by sampleCount, or null when there are no samples."
+          },
+          "rawScoreCapCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Alerts in the window that also stored sentiment_score_raw, meaning the zero-source cap (CB-238) rewrote their score. A non-zero value proves the cap is live in this deployment."
           }
         }
       },
@@ -10561,9 +10680,19 @@
                     ],
                     "description": "Current price supplied by TradingView MCP enrichment; null when unavailable."
                   },
+                  "sentiment_score": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1,
+                    "description": "Signed sentiment magnitude, negative for bearish and positive for bullish. NEUTRAL alerts always carry 0. The prompt scores this against fixed reference anchors (0.90 / 0.75 / 0.60 / 0.45 / 0.30, GH-1031) so the value separates strong setups from weak ones; it is clamped to the zero-source cap of 0.55 when grounding returned no sources, with the pre-cap value preserved in sentiment_score_raw."
+                  },
                   "sentiment_score_raw": {
                     "type": "number",
                     "description": "Original signed Gemini sentiment score when the effective score was capped because grounding returned no sources."
+                  },
+                  "sentiment_score_evidence": {
+                    "type": "string",
+                    "description": "Model's justification naming the reference anchor band it scored against and the observation behind that choice (GH-1031). Present when the prompt returns one; bounded to 240 characters. Absent for prompts that predate the anchor rubric."
                   },
                   "price_data": {
                     "type": [
