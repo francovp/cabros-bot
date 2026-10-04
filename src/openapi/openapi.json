@@ -8675,7 +8675,7 @@
               },
               "priceSource": {
                 "type": "string",
-                "description": "Provider that supplied the emitted current_price. 'tradingview-mcp' from the MCP quote, 'gemini-grounding' from the alert-enrichment model response over grounded context, 'derived-quote' from a fetched quote fallback.",
+                "description": "Provider that supplied the emitted current_price. 'tradingview-mcp' from the MCP quote, 'gemini-grounding' from the alert-enrichment model response over grounded context, 'derived-quote' from a fetched quote fallback. When a risk block was completed arithmetically because it supplied both directional levels but no ratio, the emitted entry is the one that ratio was derived from, so current_price is reported as 'gemini-grounding' and price_currency is omitted: a quote currency describing a different price must not be attached to this one. This keeps (current_price, invalidation_level, target_level, risk_reward_ratio) internally consistent, so the stored ratio can always be recomputed from the stored fields (GH-599).",
                 "enum": [
                   "tradingview-mcp",
                   "gemini-grounding",

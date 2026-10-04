@@ -336,6 +336,10 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched, parsedSignal = n
 	try {
 		const gemini = geminiEnriched || {};
 		const mcp = mcpEnriched || {};
+		// Provenance of the entry price actually emitted below. MCP wins by precedence, so
+		// it is the default — but a repaired risk block must be described honestly (see
+		// the GH-599 consistency guard below).
+		let priceSource;
 
 		const { levels: technicalLevels, levelsSource: technicalLevelsSource } = buildMergedTechnicalLevels(gemini, mcp);
 
@@ -363,6 +367,10 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched, parsedSignal = n
 			: (mcp.price_data && typeof mcp.price_data.current_price === 'number' && Number.isFinite(mcp.price_data.current_price) && mcp.price_data.current_price > 0
 				? mcp.price_data.current_price
 				: null);
+		// The price actually emitted. Starts as the MCP-preferred price and may be replaced
+		// by the entry a repaired risk block was derived from, so that the stored
+		// (entry, stop, target, ratio) tuple stays internally consistent.
+		let mcpCurrentPriceForOutput = mcpCurrentPrice;
 
 		// GH-1229: `levelsSource` describes where the emitted risk levels actually came
 		// from. When MCP supplied only a heuristic block and Gemini won the precedence
@@ -386,6 +394,24 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched, parsedSignal = n
 					...optionalRiskMetadata,
 					risk_reward_ratio: grounded.risk_reward_ratio,
 				};
+				// GH-599 consistency guard: the ratio above was derived from the entry that
+				// supplied the LEVELS. Emitting the MCP price alongside it would store a
+				// triple whose ratio is not the ratio of its own fields — e.g. levels from a
+				// grounded 100 and an MCP 110 store ratio 2, while anyone recomputing from the
+				// stored entry gets 0.5. `applyDeterministicRiskReward` short-circuits on an
+				// already-valid ratio, so nothing downstream would catch it.
+				//
+				// The prompt reads `current_price` from grounding snippets, which can be
+				// stale, so this is systematic rather than incidental: the ratio is
+				// systematically computed against the older quote while the document records
+				// the newer one. Prefer the entry the ratio actually used, so the stored
+				// `(entry, stop, target, ratio)` tuple is self-consistent and recomputable.
+				// The grounded levels are the thing this issue exists to preserve, and they
+				// were derived from this same price.
+				if (optionalRiskMetadata.riskLevelsEntryPrice !== null) {
+					mcpCurrentPriceForOutput = optionalRiskMetadata.riskLevelsEntryPrice;
+					priceSource = 'gemini-grounding';
+				}
 			} else if (!hasCompleteRiskMetadata(optionalRiskMetadata) && mcpCurrentPrice && parsed && parsed.side) {
 				const fallback = calculateFallbackRiskLevels(mcpCurrentPrice, parsed.timeframe, parsed.side);
 				if (fallback) {
@@ -395,9 +421,15 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched, parsedSignal = n
 						risk_reward_ratio: fallback.risk_reward_ratio,
 						setup_type: optionalRiskMetadata.setup_type || fallback.setup_type,
 					};
-					if (!levelsSource) {
-						levelsSource = 'derived-quote';
-					}
+					// Unconditional, not `if (!levelsSource)`. This branch REPLACED the
+					// selected block's levels with levels derived from the MCP quote, so the
+					// stamp must describe what was actually emitted. The guard could never be
+					// true anyway: reaching here requires a selected block, and every selected
+					// block sets `riskLevelsSource`. The result was that rejected wrong-side
+					// grounded levels were replaced by heuristic levels still tagged
+					// `gemini-grounding`, which `resolveSignalOutcomePriceSource` then reads as
+					// provider-grounded rather than derived.
+					levelsSource = 'derived-quote';
 				}
 			}
 		}
@@ -412,9 +444,16 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched, parsedSignal = n
 				? { sentiment_score_raw: gemini.sentiment_score_raw }
 				: {}),
 			...(sentimentConflict ? { sentimentConflict: true } : {}),
-			current_price: mcpCurrentPrice ?? gemini.current_price ?? null,
-			...(mcpCurrentPrice !== null
-				? { priceSource: mcp.priceSource || (mcp.levelsSource === 'derived-quote' ? 'derived-quote' : 'tradingview-mcp'), ...(mcp.price_currency ? { price_currency: mcp.price_currency } : {}) }
+			current_price: mcpCurrentPriceForOutput ?? gemini.current_price ?? null,
+			...(mcpCurrentPriceForOutput !== null
+				? {
+					priceSource: priceSource || mcp.priceSource || (mcp.levelsSource === 'derived-quote' ? 'derived-quote' : 'tradingview-mcp'),
+					// A quote currency from MCP describes the MCP price, which is no longer the
+					// emitted one once a repaired block took over the entry. Dropping it is
+					// correct: labelling the grounded entry with the MCP quote asset would
+					// misreport what was stored.
+					...(mcp.price_currency && priceSource === undefined ? { price_currency: mcp.price_currency } : {}),
+				}
 				: (gemini.current_price ? { priceSource: 'gemini-grounding', ...(gemini.price_currency ? { price_currency: gemini.price_currency } : {}) } : {})),
 			...(mcp.price_data ? { price_data: mcp.price_data } : {}),
 			insights,

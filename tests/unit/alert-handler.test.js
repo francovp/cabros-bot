@@ -11,6 +11,7 @@ const { groundAlert } = require('../../src/services/grounding/grounding');
 const { GROUNDING_MODEL_NAME } = require('../../src/services/grounding/config');
 const { validateAlert } = require('../../src/lib/validation');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+const { computeDeterministicRiskReward } = require('../../src/services/tradingview/riskRewardMath');
 
 jest.mock('../../src/services/grounding/grounding');
 jest.mock('../../src/lib/validation');
@@ -220,12 +221,24 @@ describe('Alert Handler', () => {
 		expect(result.invalidation_level).toBe(90);
 		expect(result.target_level).toBe(120);
 		expect(result.risk_reward_ratio).toBeCloseTo(2, 4);
-		// The MCP price still wins as the emitted entry price.
-		expect(result.current_price).toBe(110);
-		// The internal selection key must never leak into the payload. This is the half of
-		// the design the case above exercises: the grounded entry (100) is carried under an
-		// internal name so the spread cannot overwrite the MCP-preferred price (110).
+		// The emitted entry is the one the ratio was derived from, NOT the MCP quote. Emitting
+		// 110 would store a ratio of 2 alongside an entry that makes it 0.5 — a tuple that
+		// cannot be recomputed from its own fields, and one `applyDeterministicRiskReward`
+		// will not catch because it short-circuits on an already-valid ratio.
+		expect(result.current_price).toBe(100);
+		expect(result.priceSource).toBe('gemini-grounding');
+		// The MCP quote currency described the MCP price, which is no longer emitted, so it
+		// must not be attached to the grounded entry.
+		expect(result).not.toHaveProperty('price_currency');
+		// The internal selection key must never leak into the payload.
 		expect(result).not.toHaveProperty('riskLevelsEntryPrice');
+		// The load-bearing invariant: the stored tuple must be self-consistent.
+		expect(computeDeterministicRiskReward({
+			entry: result.current_price,
+			invalidation: result.invalidation_level,
+			target: result.target_level,
+			side: 'BUY',
+		})).toBeCloseTo(result.risk_reward_ratio, 4);
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
@@ -252,6 +265,46 @@ describe('Alert Handler', () => {
 		expect(result.invalidation_level).toBe(90);
 		expect(result.target_level).toBe(120);
 		expect(result.risk_reward_ratio).toBeCloseTo(2, 4);
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	// Regression for a merge-path provenance bug: when wrong-side grounded levels are
+	// rejected, `calculateFallbackRiskLevels` REPLACES the levels with a heuristic derived
+	// off the MCP quote — but the stamp was guarded by `if (!levelsSource)`, which can
+	// never be true in that branch because every selected block sets `riskLevelsSource`.
+	// The result was heuristic levels advertised as `gemini-grounding`, which
+	// `resolveSignalOutcomePriceSource` reads as provider-grounded rather than derived.
+	// The Gemini-only equivalent of this case cannot catch it: that branch hardcodes
+	// `levelsSource: 'derived-quote'`.
+	it('stamps derived-quote when the merge path rejects wrong-side levels for the heuristic plan', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		withMergePath({
+			gemini: {
+				sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100,
+				// BUY whose stop sits above entry: no R:R exists, so the grounded block is
+				// genuinely unusable and the heuristic plan must take over.
+				invalidation_level: 110, target_level: 120,
+				technical_levels: { supports: ['110'], resistances: ['120'] },
+			},
+			mcp: { current_price: 110, insights: [], sources: [], tradingViewEnrichmentApplied: true },
+		});
+		calculateFallbackRiskLevels.mockReturnValue({
+			invalidation_level: 107.25,
+			target_level: 115.5,
+			risk_reward_ratio: 2,
+		});
+
+		const result = await enrichAlert(
+			{ text: 'BINANCE:BTCUSDT(60) pasó una señal de COMPRA' },
+			{ useTradingViewData: true },
+		);
+
+		// The emitted levels ARE the heuristic, so they must say so — not claim the
+		// grounded provenance of the block that was just rejected.
+		expect(result.invalidation_level).toBe(107.25);
+		expect(result.target_level).toBe(115.5);
+		expect(result.levelsSource).toBe('derived-quote');
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});

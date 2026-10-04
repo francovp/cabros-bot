@@ -426,9 +426,19 @@ function applyDeterministicRiskReward(enrichmentData, side) {
 		return enrichmentData;
 	}
 
+	// Round for readability, but never round a real ratio away. A ratio below 5e-5 (a
+	// near-flat stop against a target just above entry) rounds to 0 at 4 decimals, and 0
+	// fails the `existingIsValid` test above — so it would be re-derived on every read and
+	// counted as populated coverage while being indistinguishable from a genuine zero grade.
+	// A sub-5e-5 R:R is not actionable either, so drop it rather than persist a bad value.
+	const rounded = Number(deterministic.toFixed(4));
+	if (!(rounded > 0)) {
+		return enrichmentData;
+	}
+
 	return {
 		...enrichmentData,
-		risk_reward_ratio: Number(deterministic.toFixed(4)),
+		risk_reward_ratio: rounded,
 		risk_reward_ratio_source: 'computed',
 	};
 }

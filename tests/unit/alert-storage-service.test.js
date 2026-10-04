@@ -908,6 +908,28 @@ describe('AlertStorageService', () => {
 				expect(captureSaveCall().enrichmentData).toMatchObject({ risk_reward_ratio: 3, risk_reward_ratio_source: 'computed' });
 			});
 
+			// A real ratio below 5e-5 rounds to 0 at the 4-decimal readability limit. `0` fails the
+			// `existingIsValid` test, so persisting it would mean re-deriving on every read and
+			// counting a zero as populated coverage — indistinguishable from a genuine 0.0
+			// grade. Such a ratio is not actionable either, so it is dropped rather than stored.
+			it('does not persist a ratio that rounding would collapse to zero', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-subprecision' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true, side: 'BUY',
+					enrichmentData: { current_price: 100, invalidation_level: 50, target_level: 100.0001 },
+				}));
+
+				const doc = captureSaveCall().enrichmentData;
+				// True R:R = 0.0001 / 50 = 2e-6, which `toFixed(4)` renders as 0.
+				expect(doc.risk_reward_ratio).toBeUndefined();
+				expect(doc.risk_reward_ratio_source).toBeUndefined();
+				// The entry and levels the ratio was derived from are still preserved.
+				expect(doc.current_price).toBe(100);
+				expect(doc.invalidation_level).toBe(50);
+			});
+
 			it('does not overwrite an existing valid risk_reward_ratio from the model', async () => {
 				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-preserve' });
