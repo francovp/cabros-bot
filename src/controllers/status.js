@@ -21,7 +21,7 @@ const { chatPreferenceService } = require('../services/preferences/ChatPreferenc
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
-const { firestoreWriteMetricsService } = require('../services/storage/FirestoreWriteMetricsService');
+const { firestoreWriteMetricsService, READ_HEALTH } = require('../services/storage/FirestoreWriteMetricsService');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
@@ -114,6 +114,43 @@ function providerDependencyStatus({ enabled, configured, provider = null }) {
 	return {
 		provider,
 		...dependencyStatus({ enabled, configured }),
+	};
+}
+
+/**
+ * Fold observed read health into the Firestore dependency verdict.
+ *
+ * Issue #1285: `dependencies.firestore.ready` was derived purely from
+ * `enabled && configured`, and `configured` only checks that a credential blob
+ * parses with a valid private key. So a deployment whose writes succeeded 29/29
+ * and whose every read query was rejected still reported `ready: true` — the
+ * status endpoint could not distinguish a working Firestore from a broken one.
+ *
+ * Read health is applied only once a read has actually been observed, so the
+ * pre-existing `{ enabled, configured, ready, status }` shape is byte-identical
+ * for deployments that have not read yet. An untouched read path stays
+ * `ready: true` rather than flipping to a state that would imply breakage.
+ */
+function withFirestoreReadHealth(status) {
+	const readMetrics = firestoreWriteMetricsService.getReadSnapshot();
+	if (!readMetrics) {
+		return status;
+	}
+	const base = {
+		...status,
+		readHealth: readMetrics.readHealth,
+	};
+	if (readMetrics.readHealth !== READ_HEALTH.DEGRADED) {
+		return base;
+	}
+	return {
+		...base,
+		ready: false,
+		status: 'degraded',
+		readsFailed: readMetrics.readsFailed,
+		consecutiveReadFailures: readMetrics.consecutiveReadFailures,
+		lastReadErrorCategory: readMetrics.lastErrorCategory,
+		lastReadFailureAt: readMetrics.lastReadFailureAt,
 	};
 }
 
@@ -287,10 +324,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
 		enabled: tradingViewVolumeConfirmationEnabled,
 	});
-	const firestore = dependencyStatus({
+	const firestore = withFirestoreReadHealth(dependencyStatus({
 		enabled: firestoreEnabled,
 		configured: isFirestoreConfigured(),
-	});
+	}));
 	const firestoreJobStorage = dependencyStatus({
 		enabled: firestoreJobStorageEnabled,
 		configured: firestore.configured,
@@ -484,6 +521,9 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			firestoreJobStorage,
 			...(firestoreWriteMetricsService.getSnapshot()
 				? { firestoreWriteMetrics: firestoreWriteMetricsService.getSnapshot() }
+				: {}),
+			...(firestoreWriteMetricsService.getReadSnapshot()
+				? { firestoreReadMetrics: firestoreWriteMetricsService.getReadSnapshot() }
 				: {}),
 			sentry,
 			langfuse,

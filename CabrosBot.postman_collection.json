@@ -631,6 +631,206 @@
       ]
     },
     {
+      "name": "Get Status - firestore read metrics (degraded read path)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Issue #1285: Firestore writes succeeded while every ordered stored-alert read was rejected for a missing composite index, and `dependencies.firestore.ready` stayed `true` because it only reflected credential shape and write/init success. This variant shows the read-aware verdict: `ready:false`, `status:\"degraded\"`, and a sanitized category that names the failing subsystem without any provider text."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Firestore reports not ready while reads are failing', function () {",
+              "  const body = pm.response.json();",
+              "  pm.expect(pm.response.code).to.eql(200);",
+              "  pm.expect(body.dependencies.firestore.ready).to.eql(false);",
+              "  pm.expect(body.dependencies.firestore.status).to.eql('degraded');",
+              "  pm.expect(body.dependencies.firestore.readHealth).to.eql('degraded');",
+              "  pm.expect(body.dependencies.firestore.lastReadErrorCategory).to.eql('failed_precondition');",
+              "});",
+              "pm.test('read metrics are reported with a sanitized category', function () {",
+              "  const metrics = pm.response.json().dependencies.firestoreReadMetrics;",
+              "  pm.expect(metrics).to.be.an('object');",
+              "  pm.expect(metrics.readHealth).to.eql('degraded');",
+              "  pm.expect(metrics.readsFailed).to.be.above(0);",
+              "  pm.expect(metrics.lastErrorCategory).to.eql('failed_precondition');",
+              "});",
+              "pm.test('read metrics never leak the provider message or project path', function () {",
+              "  const raw = pm.response.text();",
+              "  pm.expect(raw).to.not.include('projects/');",
+              "  pm.expect(raw).to.not.include('console.firebase.google.com');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 degraded - index-backed read path broken",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"dependencies\": {\n    \"firestore\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"degraded\",\n      \"readHealth\": \"degraded\",\n      \"readsFailed\": 3,\n      \"consecutiveReadFailures\": 3,\n      \"lastReadErrorCategory\": \"failed_precondition\",\n      \"lastReadFailureAt\": \"2026-09-28T03:41:02.481Z\"\n    },\n    \"firestoreReadMetrics\": {\n      \"window\": {\n        \"startedAt\": \"2026-09-28T03:27:23.117Z\",\n        \"durationMs\": 824215\n      },\n      \"readsAttempted\": 3,\n      \"readsSucceeded\": 0,\n      \"readsFailed\": 3,\n      \"successRate\": 0,\n      \"readHealth\": \"degraded\",\n      \"consecutiveReadFailures\": 3,\n      \"lastReadAt\": \"2026-09-28T03:41:02.481Z\",\n      \"lastReadFailureAt\": \"2026-09-28T03:41:02.481Z\",\n      \"lastErrorCategory\": \"failed_precondition\",\n      \"byDomain\": {\n        \"alerts\": {\n          \"success\": 0,\n          \"failure\": 3,\n          \"total\": 3,\n          \"successRate\": 0\n        }\n      }\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 healthy - read path has only ever succeeded",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"dependencies\": {\n    \"firestore\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"readHealth\": \"healthy\"\n    },\n    \"firestoreReadMetrics\": {\n      \"window\": {\n        \"startedAt\": \"2026-09-28T03:27:23.117Z\",\n        \"durationMs\": 824215\n      },\n      \"readsAttempted\": 12,\n      \"readsSucceeded\": 12,\n      \"readsFailed\": 0,\n      \"successRate\": 1,\n      \"readHealth\": \"healthy\",\n      \"consecutiveReadFailures\": 0,\n      \"lastReadAt\": \"2026-09-28T03:44:19.902Z\",\n      \"lastReadFailureAt\": null,\n      \"lastErrorCategory\": null,\n      \"byDomain\": {\n        \"alerts\": {\n          \"success\": 12,\n          \"failure\": 0,\n          \"total\": 12,\n          \"successRate\": 1\n        }\n      }\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 omitted - no read observed yet",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"dependencies\": {\n    \"firestore\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\"\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "401 unauthorized",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 401,
+            "description": "Unauthorized"
+          },
+          "code": 401,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"error\": \"Unauthorized\",\n  \"code\": \"UNAUTHORIZED\"\n}",
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "Run Self-Test",
       "request": {
         "method": "POST",
@@ -4825,8 +5025,83 @@
                 "api",
                 "alerts"
               ]
+            },
+            "description": "Stored alert list. Issue #1285: these 503 variants are mutually exclusive by `category` — `uninitialized` means the Firestore client never built (credentials/project), while `failed_precondition` with `missingIndex: true` means the client was fine and the ordered `receivedAt`/`__name__` query itself was rejected, which is fixed by deploying the composite indexes declared in `firestore.indexes.json`. The provider message is never returned."
+          },
+          "response": [
+            {
+              "name": "503 rejected query - missing composite index (issue #1285)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts"
+                  ]
+                }
+              },
+              "status": {
+                "code": 503,
+                "description": ""
+              },
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Alert storage is enabled but Firestore is unavailable. Firestore failed precondition: Firestore rejected the query as not executable; a missing composite index is the usual cause. Deploy the composite indexes declared in firestore.indexes.json (firebase deploy --only firestore:indexes).\",\n  \"code\": \"STORAGE_UNAVAILABLE\",\n  \"category\": \"failed_precondition\",\n  \"missingIndex\": true\n}",
+              "response": []
+            },
+            {
+              "name": "503 client uninitialized - check credentials",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts"
+                  ]
+                }
+              },
+              "status": {
+                "code": 503,
+                "description": ""
+              },
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\",\n  \"category\": \"uninitialized\"\n}",
+              "response": []
             }
-          }
+          ]
         },
         {
           "name": "GET List Alerts (include=enrichment_summary)",

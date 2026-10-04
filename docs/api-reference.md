@@ -155,6 +155,41 @@ When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, `/api/webhook/alert` suppres
 
 `dependencies.firestoreWriteMetrics` exposes in-memory per-domain Firestore write counters for `AlertStorageService.saveAlert`/`saveReplayAttempt` and `JobRepository.save`. The section is omitted entirely until at least one write has been recorded and resets on process restart, mirroring the existing `deliveryMetrics` pattern. Counters report `writesAttempted`, `writesSucceeded`, `writesFailed`, overall `successRate`, and a per-domain `byDomain` breakdown with sanitized counts so silent persistence failures can be detected without exposing provider responses or credentials.
 
+### Firestore read health (issue #1285)
+
+Write counters alone could not detect a total read-path outage: every alert write could succeed while every ordered stored-alert read was rejected, and `dependencies.firestore.ready` still returned `true` because `configured` only validates credential *shape*.
+
+`dependencies.firestoreReadMetrics` is the independent read-side counter set, omitted until at least one read has been recorded and reset on process restart. It reports `readsAttempted`, `readsSucceeded`, `readsFailed`, overall `successRate`, a per-domain `byDomain` breakdown, `consecutiveReadFailures`, `lastReadAt`, `lastReadFailureAt`, and a sanitized `lastErrorCategory`.
+
+`readHealth` is the field that drives readiness:
+
+| Value | Meaning | `dependencies.firestore.ready` |
+| :--- | :--- | :--- |
+| `unknown` | No read observed yet — no evidence, not a failure | unchanged (`enabled && configured`) |
+| `healthy` | Last read succeeded | unchanged |
+| `degraded` | Consecutive-failure streak is non-empty | **`false`**, `status: "degraded"` |
+
+While degraded, `dependencies.firestore` additionally carries `readsFailed`, `consecutiveReadFailures`, `lastReadErrorCategory`, and `lastReadFailureAt`. Read health recovers on the first successful read without a process restart.
+
+`lastErrorCategory` is drawn from a closed, sanitized enum — `uninitialized`, `failed_precondition`, `permission_denied`, `unauthenticated`, `unavailable`, `deadline_exceeded`, `not_found`, `resource_exhausted`, `invalid_argument`, `aborted`, `internal`, `unknown_error`. The provider message is **never** returned: Firestore embeds the fully-qualified project/database path and the index definition in it, so both go to the log only.
+
+### Stored-alert `503 STORAGE_UNAVAILABLE`
+
+Stored-alert read endpoints answer `503` with a machine-readable `category` so a rejected query is distinguishable from a credential failure without a Cloud Logging session:
+
+| `category` | Meaning | Fix |
+| :--- | :--- | :--- |
+| `uninitialized` | The Firestore client never built | Check `FIREBASE_SERVICE_ACCOUNT_JSON` / `GOOGLE_APPLICATION_CREDENTIALS` and the project id |
+| `failed_precondition` + `missingIndex: true` | Client was fine; the **query** was rejected for a missing composite index | Deploy the indexes declared in `firestore.indexes.json` |
+| `failed_precondition` | Query rejected for another precondition | Inspect the logged provider message |
+| `permission_denied` | IAM or Firestore security rules rejected the call | Check service-account roles and `firestore.rules` |
+| `unavailable` / `deadline_exceeded` | Backend unreachable or over deadline | Usually transient; retry |
+| `resource_exhausted` | Quota or rate limit | Back off and check quotas |
+
+`category` and `missingIndex` are omitted when the failure could not be classified, so consumers must treat them as optional.
+
+`GET /ready?depth=dependencies` runs the same indexed `alerts` read (bounded to one document) in its Firestore probe, so a missing index fails the gate closed instead of only surfacing on the admin console. The probe replaced `listCollections()`, which is a metadata call that never executes a collection query and therefore could not observe this class of fault. See [Observability & Monitoring](monitoring.md) and [Troubleshooting](troubleshooting.md).
+
 `featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
 
 `notificationChannelIntent` reports the operator-intent view of notification channel configuration (`telegram`, `whatsapp`, `discord`). It mirrors `NotificationChannel.isConfigured()`: a channel counts as `configured` when its enable flag is set **and** its required credentials/chat id/webhook are present — the same `ready` semantics `dependencyStatus` already uses. A channel with a webhook URL present but its enable flag off therefore reports as **not** configured, which is the same verdict the zero-channel admin page reaches because both call that one method. The view answers the question the zero-channel page exists to raise — a channel the operator never set up (`unconfigured`) versus one that is set up but currently failing. The page reports the same two sets, so an operator can reconcile an alert from the page and `/api/status` without inspecting credentials. Only channel names are exposed; never tokens, webhook URLs, or chat IDs.
