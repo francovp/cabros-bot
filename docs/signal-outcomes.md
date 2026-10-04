@@ -241,3 +241,26 @@ Query empirical confidence calibration feedback metrics comparing news-monitor a
   }
 }
 ```
+
+---
+
+### Evaluation Worker: Single-Evaluator Guarantee
+
+`ENABLE_SIGNAL_OUTCOME_TRACKING=true` (enabled in production) records signals on the alert path and starts the evaluation sweep. The sweep runs in whichever process matches its own `SIGNAL_OUTCOME_WORKER_ROLE` — `web` for the web service, `worker` for the dedicated `cabros-crypto-bot-signal-outcome-worker`, `disabled` to suppress it. Both services are declared in `render.yaml` and may be enabled at the same time.
+
+Each sweep is therefore claimed with a Firestore lease in the `signalOutcomeLocks` collection:
+
+- The replica that loses the claim skips with `reason: "lease-held"` and makes no market-data calls, so a pending signal is never evaluated twice.
+- An expired lease is taken over rather than skipped indefinitely.
+- If Firestore is unavailable or the lease write fails, the sweep **proceeds anyway**. A lock-service failure degrades to single-process behaviour instead of stopping outcome evaluation.
+- Duration: `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` (`10000`-`600000`, default `120000`).
+
+Check `GET /api/status` (or `/api/capabilities`) under `dependencies.signalOutcomeWorker`:
+
+| Field | Meaning |
+| :--- | :--- |
+| `leaseMs` | Configured lease duration. |
+| `lastRunLeaseHeld` | The most recent sweep was skipped because another replica held the lease. |
+| `leaseHeldSkipCount` | How many sweeps this process has skipped this way since start. |
+
+A replica whose `leaseHeldSkipCount` keeps climbing while its `lastRunEvaluatedCount` stays at `0` is not the evaluator — that is how you identify which process is actually doing the work. A `lastRunAt` that never advances, or counters stuck at zero, means the sweep is not running at all regardless of what `featureFlags.signalOutcomeTracking` reports.
