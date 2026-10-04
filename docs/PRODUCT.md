@@ -58,6 +58,8 @@ Each capability lists: one-line description, primary endpoint or command, status
 | Capability | Surface | Status | Tracked in |
 |---|---|---|---|
 | Web admin console | `/admin` | live | #842, #843 |
+| Firebase admin sign-in for the console | `ENABLE_FIREBASE_ADMIN_AUTH=true` | opt-in | #1134 |
+| Admin-auth readiness in the status snapshot | `featureFlags.firebaseAdminAuth`, `dependencies.adminAuth` | live | #1134 |
 | Authenticated status snapshot | `GET /api/status` / `/api/capabilities` | live | — |
 | Public OpenAPI contract | `GET /openapi.json`, `GET /docs` | live | — |
 | Idempotency on webhook ingest | `idempotency-key` header | live | — |
