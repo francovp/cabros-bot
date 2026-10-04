@@ -5,6 +5,7 @@ const admin = require('firebase-admin');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { isFirestoreConfigured } = require('./firestoreConfig');
 const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
+const { classifyFirestoreError, describeFirestoreErrorCategory } = require('./firestoreErrorCategories');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_DAYS = 7;
@@ -125,6 +126,40 @@ function recordDurabilitySafely(record) {
 	} catch (error) {
 		console.warn('[SymbolAnalysisStorageService] readiness recording failed:', error && error.message);
 	}
+}
+
+const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
+
+/**
+ * Translate a rejected Firestore read into the storage error the HTTP layer maps
+ * to 503.
+ *
+ * A gRPC failure carries a numeric `code` at best, so rethrowing it left the
+ * controller with no code to match and it answered 500 INTERNAL_ERROR for an
+ * operator-actionable storage fault. The replacement message is built from the
+ * closed category enum rather than from `cause.message`, because Firestore embeds
+ * the fully-qualified project/database path there and the 503 body returns
+ * `error.message` verbatim. A provider error already classified with a string
+ * code is passed through so a genuine `INVALID_REQUEST` is not relabelled.
+ */
+function _createReadUnavailableError(cause) {
+	if (typeof cause?.code === 'string' && cause.code) {
+		return cause;
+	}
+	const category = classifyFirestoreError(cause);
+	const error = new Error(
+		`Symbol analysis storage is enabled but Firestore is unavailable. ${describeFirestoreErrorCategory(category)}`,
+	);
+	error.code = STORAGE_UNAVAILABLE_CODE;
+	error.category = category;
+	if (cause) {
+		error.cause = cause;
+	}
+	console.warn(
+		`[SymbolAnalysisStorageService] Firestore read failed (${category}):`,
+		cause?.message ? cause.message : String(cause),
+	);
+	return error;
 }
 
 function isEnabled() {
@@ -437,7 +472,7 @@ async function summarizeAnalyses({ from, to, limit = 500, symbol, exchange, time
 		snapshot = await query.get();
 	} catch (error) {
 		recordDurabilitySafely(() => _recordReadFailure(REASONS.UNAVAILABLE));
-		throw error;
+		throw _createReadUnavailableError(error);
 	}
 	recordDurabilitySafely(_recordReadSuccess);
 	const rawDocs = snapshot && snapshot.docs ? snapshot.docs : [];
@@ -612,7 +647,7 @@ async function listAnalyses({ from, to, limit = 50, symbol, exchange, timeframe,
 		snapshot = await query.get();
 	} catch (error) {
 		recordDurabilitySafely(() => _recordReadFailure(REASONS.UNAVAILABLE));
-		throw error;
+		throw _createReadUnavailableError(error);
 	}
 	recordDurabilitySafely(_recordReadSuccess);
 	const docs = snapshot && snapshot.docs ? snapshot.docs : [];

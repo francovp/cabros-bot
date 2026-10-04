@@ -597,4 +597,90 @@ describe('SymbolAnalysisStorageService', () => {
 			expect(result.analyses[0].symbol).toBe('BINANCE:BTCUSDT');
 		});
 	});
+
+	// A rejected `query.get()` was rethrown as-is and carries no `code`, so the
+	// controller fell through to its 500 branch instead of the contractual 503.
+	describe('read failure mapping (503 STORAGE_UNAVAILABLE)', () => {
+		const VALID_SERVICE_ACCOUNT = JSON.stringify({
+			type: 'service_account',
+			project_id: 'demo-cabros',
+			client_email: 'firebase-adminsdk@demo-cabros.iam.gserviceaccount.com',
+			private_key: crypto.generateKeyPairSync('rsa', {
+				modulusLength: 2048,
+				privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+				publicKeyEncoding: { type: 'spki', format: 'pem' },
+			}).privateKey,
+		});
+
+		// The fully-qualified project/database path is what makes a raw Firestore
+		// message unsafe to return: it is echoed by the 503 body, which the
+		// controller sends as `error.message`.
+		const providerError = () => {
+			const error = new Error(
+				'5 NOT_FOUND: no matching index found. The query is rejected for projects/test-project/databases/(default).',
+			);
+			error.code = 5;
+			return error;
+		};
+
+		function enableWithReachableCredentials() {
+			process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = VALID_SERVICE_ACCOUNT;
+			admin.__resetApps();
+			SymbolAnalysisStorageService.__resetForTesting();
+		}
+
+		beforeEach(() => {
+			enableWithReachableCredentials();
+		});
+
+		afterEach(() => {
+			admin.__mockGet.mockReset();
+		});
+
+		it('maps a listAnalyses read rejection to STORAGE_UNAVAILABLE without leaking provider text', async () => {
+			admin.__mockGet.mockReturnValue(Promise.reject(providerError()));
+
+			const error = await SymbolAnalysisStorageService.listAnalyses({ limit: 5 }).catch((thrown) => thrown);
+
+			expect(error).toBeInstanceOf(Error);
+			expect(error.code).toBe('STORAGE_UNAVAILABLE');
+			expect(error.message).not.toContain('projects/test-project/databases/(default)');
+			expect(error.message).not.toContain('NOT_FOUND');
+
+			// The observed window still records the failed read so status degrades.
+			const status = SymbolAnalysisStorageService.getStatus();
+			expect(status.readsAttempted).toBe(1);
+			expect(status.readsFailed).toBe(1);
+			expect(status.readsSucceeded).toBe(0);
+			expect(status.status).toBe('degraded');
+			expect(status.lastErrorReason).toBe('firestore_unavailable');
+		});
+
+		it('maps a summarizeAnalyses read rejection to STORAGE_UNAVAILABLE without leaking provider text', async () => {
+			admin.__mockGet.mockReturnValue(Promise.reject(providerError()));
+
+			const error = await SymbolAnalysisStorageService.summarizeAnalyses({ limit: 5 }).catch((thrown) => thrown);
+
+			expect(error).toBeInstanceOf(Error);
+			expect(error.code).toBe('STORAGE_UNAVAILABLE');
+			expect(error.message).not.toContain('projects/test-project/databases/(default)');
+			expect(error.message).not.toContain('NOT_FOUND');
+
+			const status = SymbolAnalysisStorageService.getStatus();
+			expect(status.readsFailed).toBe(1);
+			expect(status.status).toBe('degraded');
+		});
+
+		it('keeps an already-classified code rather than overwriting it', async () => {
+			const original = providerError();
+			original.code = 'INVALID_REQUEST';
+			admin.__mockGet.mockReturnValue(Promise.reject(original));
+
+			const error = await SymbolAnalysisStorageService.listAnalyses({ limit: 5 }).catch((thrown) => thrown);
+
+			expect(error).toBe(original);
+			expect(error.code).toBe('INVALID_REQUEST');
+		});
+	});
 });
