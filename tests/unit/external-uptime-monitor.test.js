@@ -374,7 +374,7 @@ describe('ops/external-uptime-monitor.js', () => {
 					TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: '-100999',
 				},
 				fetchImpl: async (url, init) => {
-					if (String(url).includes('api.telegram.org')) {
+					if (String(url).startsWith('https://api.telegram.org/')) {
 						pageBodies.push(String(init && init.body));
 						return jsonResponse({ ok: true });
 					}
@@ -539,7 +539,7 @@ describe('ops/external-uptime-monitor.js', () => {
 			});
 
 			expect(parseSingleJsonLine(stdout.text()).paging.reason).toBe('paging_disabled');
-			expect(fetchImpl.mock.calls.some(([url]) => String(url).includes('api.telegram.org'))).toBe(false);
+			expect(fetchImpl.mock.calls.some(([url]) => String(url).startsWith('https://api.telegram.org/'))).toBe(false);
 		});
 	});
 
