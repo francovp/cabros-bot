@@ -5,14 +5,26 @@ const app = express();
 const { createCorsMiddleware } = require('./src/lib/cors');
 const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
+const { createCompressionMiddleware } = require('./src/lib/compression');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
 const { getPublicStatus } = require('./src/controllers/publicStatus');
 const { getStatus: getAdminStatus } = require('./src/controllers/status');
 const requestDeadline = require('./src/lib/requestDeadline');
+const requestLogger = require('./src/lib/requestLogger');
 const { buildWebhookBodySize } = require('./src/lib/webhookBodySize');
 
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
+
+// Structured request logging — mounted as the outermost middleware so the
+// emitted line covers every terminal outcome, including CORS rejections,
+// body-parser 413s, request-deadline 408s, rate-limit 429s, and route
+// handlers. It only observes the response lifecycle, so mounting it first
+// never changes status codes, headers, or body content.
+//
+// The logger reuses `req.requestId` when the request deadline already stamped
+// one, so a logged line and the 408 payload always share the same id.
+app.use(requestLogger);
 
 // Apply CORS before body parsers so parser errors, including structured 413
 // responses, retain the same browser-visible headers as successful requests.
@@ -49,6 +61,7 @@ contentSecurityPolicy['connect-src'] = [
 	'https://*.web.app',
 	'https://*.firebaseapp.com',
 	'https://cabros-bot-production.up.railway.app',
+	'https://openclaw.tail5e4271.ts.net',
 ];
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
 app.use(requestDeadline.guard);
@@ -64,6 +77,9 @@ const { handleDependencyReadiness } = require('./src/controllers/readiness');
 // `?depth=dependencies` on /healthcheck and `?depth=readiness` on /ready both
 // fall through to the master contract instead of cross-hijacking.
 const deepHealthcheckHandler = getDeepHealthcheckHandler();
+// HTTP response compression for payloads exceeding 1KB (skips streaming responses)
+app.use(createCompressionMiddleware());
+
 app.use('/healthcheck', (req, res, next) => {
 	if (req.query.depth === 'readiness') {
 		return handleDependencyReadiness(req, res, { failClosed: false });

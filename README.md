@@ -7,6 +7,8 @@
 
 A high-performance crypto, equity, and market intelligence bot service built with Node.js and Express. It connects incoming TradingView alerts and scheduled event monitors with Gemini Grounding, TradingView MCP analysis, and Binance Spot execution, dispatching formatted alerts concurrently across Telegram, WhatsApp, and Discord.
 
+> **New here?** Start with [`docs/PRODUCT.md`](docs/PRODUCT.md) for a human-readable capability map, status legend, and the first-24-hours operator journey. This README is the detailed operator reference.
+
 ---
 
 ## Core Capabilities
@@ -39,7 +41,7 @@ Comprehensive guides and technical documentation are maintained inside the [`doc
 | **[Multi-Channel Alerts](docs/notifications.md)** | Multi-channel delivery rules (Telegram, WhatsApp, Discord), MarkdownV2 escaping, URL shortening, and dead-letter redrive. |
 | **[Telegram Commands](docs/commands.md)** | Interactive bot commands (`/help`, `/precio`, `/cryptobot`, `/analisis`, `/scanner`, `/jobs`, `/noticias`), throttling, and forum topic routing. |
 | **[News Monitoring](docs/news-monitor.md)** | Event detection engine, confidence scoring, persistent deduplication, secondary LLM refinement, and volume throttling. |
-| **[Observability & Monitoring](docs/monitoring.md)** | Sentry runtime error monitoring (005), health probes, production smoke probes, structured JSON logging, and Firestore write metrics. |
+| **[Observability & Monitoring](docs/monitoring.md)** | Sentry runtime error monitoring (005), health probes, production smoke probes, structured JSON logging, structured per-request HTTP access logs, and Firestore write metrics. |
 | **[Deployment & Operations](docs/deployment.md)** | Render.com web services and BullMQ workers, preview PR environments, ngrok local tunneling, and Docker/Devcontainer. |
 | **[Troubleshooting Guide](docs/troubleshooting.md)** | Diagnostic checklists and recovery runbooks for news monitoring, messaging channels, URL shortening, and retries. |
 | **[Firestore Backup & Restore](docs/firestore-backup-and-restore.md)** | Procedures and scripts for backing up and restoring Firestore operational collections. |
@@ -136,6 +138,7 @@ All webhook and mutation endpoints require the `x-api-key` header (configured vi
 | `POST` | `/api/webhook/volume-confirmation` | TradingView volume and momentum confirmation | [Webhook Alerts](docs/webhooks.md#post-apiwebhookvolume-confirmation) |
 | `POST` | `/api/webhook/symbol-analysis` | Immediate multi-timeframe symbol analysis | [Webhook Alerts](docs/webhooks.md#post-apiwebhooksymbol-analysis) |
 | `POST` | `/api/webhook/market-scanner-alert` | Multi-asset market scanner report (gainers/losers) | [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert) |
+| `POST` | `/api/webhook/message` | Generic non-alert message to enabled channels; reports inbound truncation metadata | [Webhook Alerts](docs/webhooks.md#post-apiwebhookmessage) |
 | `POST` | `/api/jobs/tradingview-analysis` | Queue long-running analysis or scanner job | [Jobs API](docs/jobs.md#post-apijobstradingview-analysis) |
 | `GET` | `/api/jobs` | List recent background jobs with status & progress | [Jobs API](docs/jobs.md#get-apijobs) |
 | `GET` | `/api/jobs/:jobId` | Poll background job progress and retrieve result | [Jobs API](docs/jobs.md#get-apijobsjobid) |
@@ -274,6 +277,30 @@ pnpm run lint
 ```
 
 ---
+
+### Updating SHA-pinned GitHub Actions
+
+All `uses:` references in `.github/workflows/*.yml` are pinned to full 40-character commit SHAs (with an inline `# v<major>` comment) for supply-chain hardening — see [issue #803](https://github.com/francovp/cabros-bot/issues/803). Mutable major-version tags can be force-moved by the action owner, so a tag pin is not a reproducible CI reference.
+
+To bump a pinned action to a newer release:
+
+1. Visit `https://github.com/<owner>/<repo>/commits/<major-tag>` (for example, `https://github.com/actions/checkout/commits/v4`).
+2. Copy the latest commit's 40-character SHA.
+3. Update both the SHA and the trailing version comment in every workflow that references the action. The `grep -rEn 'uses:.*@v[0-9]+(\.|$| )' .github/workflows/` check must return zero matches after the change.
+
+A future Dependabot `github-actions` ecosystem entry (proposed in #559) can automate the SHA rewrite on upstream release; until that lands, bump SHAs manually on the cadence above.
+
+### Rate-limit response headers
+
+Every protected `/api` response (success and throttled) carries the standard `X-RateLimit-*` headers so callers can implement adaptive backpressure:
+
+| Header | Value |
+|---|---|
+| `X-RateLimit-Limit` | Max requests per window for the active bucket (`RATE_LIMIT_MAX` or `1000` for `/api/webhook/alert` and `/api/webhook/message`). |
+| `X-RateLimit-Remaining` | Requests remaining in the current window. Zero on a throttled response. |
+| `X-RateLimit-Reset` | Unix timestamp (seconds) when the current window resets. |
+
+Throttled (`429`) responses additionally include the existing `Retry-After` header (seconds) and the `retryAfterSeconds` field in the JSON body. `/healthcheck`, `/ready`, and static asset routes are exempt — the global rate limiter is mounted after them in `app.js`.
 
 ## Architecture Overview
 

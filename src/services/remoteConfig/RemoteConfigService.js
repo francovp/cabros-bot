@@ -314,7 +314,11 @@ function getStatus() {
 	const configured = isFirestoreConfigured();
 	const stale = remoteLoadedAt !== null && !hasFreshRemoteConfig();
 	const effectiveErrorCategory = stale ? 'stale' : lastErrorCategory;
-	const isReady = enabled && configured && lastSuccessfulLoad !== null && hasFreshRemoteConfig() && !stale;
+	// Readiness requires a proven, successful, still-fresh template load. A
+	// feature that is merely `enabled` + `configured` has loaded nothing, so it
+	// must never be reported as serving remote values (issue #598).
+	const hasSuccessfulLoad = typeof lastSuccessfulLoad === 'string' && lastSuccessfulLoad.length > 0;
+	const isReady = Boolean(enabled && configured && hasSuccessfulLoad && hasFreshRemoteConfig() && !stale);
 
 	let status;
 	if (!enabled) {
@@ -334,6 +338,14 @@ function getStatus() {
 		configured,
 		ready: isReady,
 		status,
+		// True once a server template has actually been fetched at least once. Lets an
+		// operator tell "wired up" (enabled+configured) apart from "actually serving
+		// remote values" without inspecting error counters.
+		//
+		// This is deliberately exactly `hasSuccessfulLoad`: an earlier version added
+		// `(enabled && configured && !neverLoaded)`, but `neverLoaded` is `!hasSuccessfulLoad`,
+		// so the second operand was always `hasSuccessfulLoad` and reduced to a no-op.
+		templatePublished: hasSuccessfulLoad,
 		source: getSource(),
 		templateVersion,
 		lastSuccessfulLoad,
@@ -395,6 +407,48 @@ function withTimeout(promise, timeoutMs) {
 	});
 }
 
+/**
+ * Maps firebase-admin Remote Config SDK errors (`remote-config/<code>`, a
+ * `PrefixedFirebaseError`) onto the sanitized status categories exposed by
+ * `/api/status`. Without this, an unpublished server namespace and a genuine
+ * network fault both collapsed into the opaque `load_failed`, which hid the
+ * fact that the template had simply never been published.
+ */
+const SDK_ERROR_CATEGORIES = {
+	'not-found': 'template_not_published',
+	'permission-denied': 'permission_denied',
+	'unauthenticated': 'unauthenticated',
+	'failed-precondition': 'failed_precondition',
+	'internal-error': 'internal_error',
+	'aborted': 'aborted',
+	'resource-exhausted': 'resource_exhausted',
+	'invalid-argument': 'invalid_argument',
+	'unknown-error': 'unknown_error',
+};
+
+function getSdkErrorCode(error) {
+	if (!error) {
+		return null;
+	}
+	// firebase-admin builds codes as `remote-config/<code>` and also exposes
+	// `hasCode()` on PrefixedFirebaseError; support both shapes.
+	const code = typeof error.code === 'string' ? error.code : null;
+	if (code && code.startsWith('remote-config/')) {
+		return code.slice('remote-config/'.length);
+	}
+	// Fallback for SDK-shaped errors that carry `hasCode()` but a non-prefixed `.code`.
+	// `PrefixedFirebaseError.hasCode()` is a pure string comparison and cannot throw,
+	// so this is a single probe rather than a defensive loop over every category.
+	if (typeof error.hasCode === 'function') {
+		for (const candidate of Object.keys(SDK_ERROR_CATEGORIES)) {
+			if (error.hasCode(candidate)) {
+				return candidate;
+			}
+		}
+	}
+	return null;
+}
+
 function getErrorCategory(error) {
 	if (error && error.code === 'REMOTE_CONFIG_TIMEOUT') {
 		return 'timeout';
@@ -405,7 +459,7 @@ function getErrorCategory(error) {
 	if (error && error.code === 'REMOTE_CONFIG_UNSUPPORTED') {
 		return 'unsupported_sdk';
 	}
-	return 'load_failed';
+	return SDK_ERROR_CATEGORIES[getSdkErrorCode(error)] || 'load_failed';
 }
 
 async function loadNow(options = {}) {

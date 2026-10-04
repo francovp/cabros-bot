@@ -29,6 +29,8 @@ You are **Cabros Bot Developer**, an expert Node.js and Express developer specia
 
 This project is a small Express + Telegraf (Telegram) bot service that exposes an HTTP webhook and a Telegram command interface.
 
+> For a human-readable capability map, status legend, and the first-24-hours operator journey, see [`docs/PRODUCT.md`](docs/PRODUCT.md).
+
 ### Key Files & Entry Points
 - `index.js` — App entry. Starts Express server and conditionally launches the Telegraf bot. Important logic for enabling the bot lives here.
 - `instrument.js` — Initializes Sentry logging + monitoring early (loaded by `index.js`).
@@ -187,6 +189,10 @@ For every pull request that adds or changes an application-owned environment var
 5. If the deployment fails, the template is invalid, or Firebase Remote Config cannot load, report the exact failure and preserve the existing environment/default behavior. Never claim the key was synchronized based only on a queued or building deployment.
 
 The Remote Config workflow publishes the server-side template consumed by Firebase Admin `initServerTemplate()`. It requires the `FIREBASE_SERVICE_ACCOUNT_JSON` GitHub Actions secret and uses the `FIREBASE_PROJECT_ID` repository variable when set (default: `cabros-bot`). Never commit credentials or publish environment-only values.
+
+**Server namespace and bootstrap contract (issue #598):** the workflow must publish to the **`firebase-server`** namespace (`projects/{projectId}/namespaces/firebase-server/serverRemoteConfig`), because that is the namespace `initServerTemplate()` reads. Publishing to the default/client namespace (`/remoteConfig`) is a silent no-op: the template shows in the console while the runtime keeps loading an empty server template. Because the `firebase-server` namespace does not exist before the first publish, `scripts/deploy-server-remote-config.js` treats a `remote-config/not-found` pre-publish read as the expected bootstrap state and creates the namespace with `If-Match: *`; any other pre-publish read failure still aborts. `scripts/deploy-server-remote-config.js` also resolves credentials through the application order (`FIREBASE_SERVICE_ACCOUNT_JSON` / `GOOGLE_APPLICATION_CREDENTIALS` / ADC) and falls back to `GCLOUD_PROJECT`/`GOOGLE_CLOUD_PROJECT` for the project id, matching runtime.
+
+**Truthful readiness:** `dependencies.firebaseRemoteConfig.ready` is true only after a *proven, successful, still-fresh* template load, and the new `templatePublished` flag is true only after at least one successful load. `enabled: true` + `configured: true` therefore never reads as "the template is live". A `remote-config/not-found` load rejection is classified as `lastErrorCategory: "template_not_published"` (not the opaque `load_failed`), alongside `permission_denied`, `unauthenticated`, `failed_precondition`, `internal_error`, `aborted`, `resource_exhausted`, `invalid_argument`, and `unknown_error`. Coverage: `tests/unit/remote-config-service.test.js`, `tests/unit/remote-config-publish.test.js`, `tests/integration/status-endpoint.test.js`.
 
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` or `VERCEL_ENV==='preview'` disables it).
 - Process shutdown is coordinated for `SIGINT`/`SIGTERM`: the HTTP server stops accepting new connections, active requests and accepted `JobService` work drain, the news-monitor cache and signal-outcome worker stop, Telegram polling and in-flight handlers drain, and Sentry is flushed last within `SHUTDOWN_TIMEOUT_MS` (default `10000`, hard cap `30000`). If the deadline is exceeded, active jobs receive an independent bounded finalization attempt and are persisted as retryable `cancelled` records before remaining connections are force-closed and the process exits non-zero.
@@ -545,7 +551,7 @@ The system provides asynchronous job endpoints to support executing both `expand
 
 **Failure and Edge Case Behavior**:
 - Sync validation: throws `400` synchronously on invalid inputs before job registration.
-- Idempotency: job-starting POST endpoints reserve the optional `idempotency-key` before validation/worker launch, replay matching responses with `Idempotency-Replay: true` and `idempotencyReplayed: true`, and return `409 IDEMPOTENCY_CONFLICT` when a key is reused with a different request fingerprint. `JOB_QUEUE_ACCEPTANCE_UNKNOWN` 503 responses remain replayable and include the durable `jobId`, so retries do not create a second UUID or queue item. Nested object keys are canonicalized for the fingerprint while array order remains significant. Requests without a key are unchanged.
+- Idempotency: job-starting POST endpoints reserve the optional `idempotency-key` before validation/worker launch, replay matching responses with `Idempotency-Replay: true` and `idempotencyReplayed: true`, and return `409 IDEMPOTENCY_CONFLICT` when a key is reused with a different request fingerprint. `JOB_QUEUE_ACCEPTANCE_UNKNOWN` 503 responses remain replayable and include the durable `jobId`, so retries do not create a second UUID or queue item. Nested object keys are canonicalized for the fingerprint while array order remains significant. Requests without a key are unchanged. A replayed body is also **re-correlated**: `sendCachedResponse` rewrites `requestId` to the replaying request's id, because the cached body carries the *original* request's id while the request deadline, the `X-Request-Id` header, and the structured access log all carry the new one — without the rewrite, one response would advertise a correlation id that appears nowhere in the logs for the replay.
 - Feature checks: returns `404 FEATURE_DISABLED` if market scanner jobs are created but `ENABLE_MARKET_SCANNER` is not `'true'`.
 - Persistence: `createJob()` and `getJob()` are async because job metadata/results may be written to or read from Firestore.
 - Render worker and poller modes: set `JOB_EXECUTION_MODE=render-worker` (with `REDIS_URL` and durable Firestore credentials) for BullMQ queue execution, or `JOB_EXECUTION_MODE=firestore-poller` (with durable Firestore credentials and optional `JOB_POLL_INTERVAL_MS`) for direct Firestore polling without Redis. In queue mode, the web process returns `503 JOB_QUEUE_UNAVAILABLE` when the queue cannot accept work; if enqueue acknowledgement and deterministic reconciliation both fail, it returns `503 JOB_QUEUE_ACCEPTANCE_UNKNOWN` with the durable `jobId`, preserves the queued durable record, and keeps the idempotency response replayable. The worker periodically scans durable `processing`/`queued` rows and expired `claimed`/`running` leases, retries retained failed BullMQ jobs before adding a duplicate stable ID, and recovers queue work after Redis or worker persistence outages. `JOB_QUEUE_*` settings control attempts, backoff, concurrency, leases, and connection timeout. Final BullMQ failures become terminal `failed` jobs and trigger configured failure callbacks; if the terminal transition was already committed, later failure handling still reconciles the configured callback before acknowledgement. Notification delivery writes a durable pre-send/completed checkpoint; a redelivery with an unknown outcome fails closed as `JOB_DELIVERY_RECONCILIATION_REQUIRED` instead of replaying an external side effect, while a post-delivery checkpoint persistence failure preserves the completed outcome and retries the final durable write. The default `local` mode is unchanged.
@@ -702,13 +708,49 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 
 **Dry-run request mode:** Add `dryRun=true` to GET or POST `/api/news-monitor` (query parameter; POST also accepts the boolean body field) to run validation and analysis without notification delivery, deduplication cache reads/claims/writes, or signal-outcome persistence. The response includes `dryRun: true`, generated alerts, intended `requestedChannels`, and an empty `deliveredChannels` array. Dry runs bypass cached results so operators inspect fresh analysis output.
 
+### News Monitor Domain-Quality Confidence Penalty (Issue #1230)
+
+`calibrateNewsConfidence()` in `src/services/grounding/gemini.js` now applies a bounded **multiplicative** domain-quality penalty on top of the existing additive source-count, freshness, and authority penalties.
+
+Previously the `domainQuality` tier classifier (`src/services/grounding/domainQuality.js`, `src/services/grounding/qualityTiers.js`) leaked out of the module without feeding back into confidence: three blog-spam sources scored identically to three reputable financial sources, so a weak signal could clear `NEWS_ALERT_THRESHOLD` on source count alone.
+
+**Penalty pipeline** (in order):
+1. `baseConfidence = 0.6 × event_significance + 0.4 × |sentiment_score|`
+2. Additive penalties (source count, freshness, authority, uncertainty, invalidation hint) → `penaltyAdjustedConfidence`
+3. Multiplicative quality-tier penalty → `qualityPenalty`
+4. Clamp into `[0, 1]`
+
+**Tier multipliers** — the *weakest* (most penalty-bearing) tier present in the source set wins, so one blog-spam source cannot be masked by reputable ones:
+
+| Tier | Multiplier | Rationale |
+|---|---|---|
+| `high` | `×1` | Reputable wire/financial press, regulators, exchange disclosures — baseline, no penalty |
+| `medium` | `×0.95` | Recognizable finance/crypto outlets |
+| `low` | `×0.85` | Aggregator/UGC platforms and low-editorial-control TLDs (`.blog`, `.buzz`, `.xyz`, …) |
+| `unknown` | `×1` (no penalty) | Domain absent from the classification lists (~56 domains total) — unclassified, not judged weak |
+
+**Safety properties** (all covered by tests):
+- **Monotonicity**: every multiplier is `<= 1`, so the calibrated result is **non-increasing** vs. the pre-#1230 value for every input. This is a false-positive *reduction* feature; it can never inflate a score. `tests/unit/event-detection.test.js` asserts this against a fixed matrix of pre-change oracle values.
+- **Fail open**: a missing, blank, or malformed tier is a **no-op** (no penalty, no crash). A throwing `domainQuality` classifier is caught, logged at `warn`, and discarded — calibration falls back to model-emitted metadata exactly as before.
+- **No double-penalty on empty grounding**: when grounding returns zero sources the source-count penalty (`-0.3`) already applies, so the quality step is skipped and `qualityTier` stays `null`.
+- **No threshold change**: `NEWS_ALERT_THRESHOLD` keeps its `0.7` default. The multiplier is applied *before* the threshold comparison, so the effective bar rises for weak-source signals while the configured default is untouched.
+
+**Observability**: `calibration.qualityTier` and `calibration.qualityPenalty` are always present (issue #1230) so an operator can audit *why* an alert cleared the threshold. The resolved tier is also surfaced as `alert.sourceQualityTier` and rendered as a `Source Quality: <tier> (x<multiplier>)` line in the delivered Telegram/WhatsApp message, and as `confidence_reason` text.
+
+**Where to look first**:
+- `src/services/grounding/gemini.js` — `QUALITY_TIER_PENALTIES`, `resolveWeakestQualityTier()`, and the penalty step in `calibrateNewsConfidence()`
+- `src/services/grounding/domainQuality.js` / `qualityTiers.js` — tier classification inputs
+- `src/controllers/webhooks/handlers/newsMonitor/analyzer.js` — `buildAlert()` and `formatAlertMessage()` tier surfacing
+- `tests/unit/event-detection.test.js` — tier-penalty, monotonicity, and fail-open coverage
+- `tests/unit/analyzer.test.js` — alert-payload and message surfacing coverage
+
 **Configuration**:
 - `ENABLE_NEWS_MONITOR` — Feature flag (default: false for safe rollout)
 - `ENABLE_NEWS_MONITOR_TEST_MODE` — Expose news monitor test-mode state in `/api/status` and `/api/capabilities` (default: false)
 - `ENABLE_NEWS_MONITOR_CLASSIFIER` — Optional classifier.dev second pass when Gemini returns `none` (default: false); only recognized categories at or above `NEWS_ALERT_THRESHOLD` are promoted, and request failures preserve `none`. Because it sends the asset symbol and generated headline to an external provider, keep it environment-only and exclude it from Firebase Remote Config. `/api/status` reports its state as `featureFlags.newsMonitorClassifier`.
 - `NEWS_SYMBOLS_CRYPTO` — Default crypto symbols if not provided in request (comma-separated, e.g., "BTCUSDT,ETHUSD")
 - `NEWS_SYMBOLS_STOCKS` — Default stock symbols if not provided in request (comma-separated)
-- `NEWS_ALERT_THRESHOLD` — Confidence score threshold (default: 0.7, range 0.0-1.0)
+- `NEWS_ALERT_THRESHOLD` — Confidence score threshold (default: 0.7, range 0.0-1.0). Unchanged by #1230; the domain-quality multiplier is applied *before* this comparison, so the effective bar rises for weak-source signals without moving the configured default.
 - `NEWS_CACHE_TTL_HOURS` — Cache time-to-live (default: 6 hours)
 - `NEWS_CACHE_MAX_ENTRIES` — Maximum in-memory news-cache entries before LRU eviction (default: `5000`, range `1`-`1000000`; Remote Config supported)
 - `NEWS_DELIVERY_LOCK_MAX_ENTRIES` — Maximum in-memory channel delivery leases (default: `1000`, range `1`-`100000`; active leases are preserved)
@@ -915,7 +957,7 @@ The system uses two complementary terms with specific meanings:
 See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 
 
-- GH-401 / CB-163: `src/admin/admin.js` now validates both the `backend` query parameter and `cabros_backend_origin` localStorage override with an exact HTTPS origin allowlist before using them for API requests. The only allowed override is `https://cabros-bot-production.up.railway.app`; arbitrary origins, wildcards, HTTP URLs, and malformed values fall back to the normal same-origin or hosted-production behavior. `tests/unit/admin-client.test.js` covers rejection of an attacker-controlled override, and the generated Firebase Hosting asset must stay synchronized with `pnpm run build:hosting`.
+- GH-401 / CB-163: `src/admin/admin.js` validates both the `backend` query parameter and `cabros_backend_origin` localStorage override against an exact HTTPS origin allowlist before using them for API requests. Firebase Hosting defaults to `https://openclaw.tail5e4271.ts.net`; the OpenClaw origin and `https://cabros-bot-production.up.railway.app` remain the only allowed overrides. Arbitrary origins, wildcards, HTTP URLs, and malformed values fall back to the same-origin or Firebase-hosted default. `tests/unit/admin-client.test.js` covers rejection of an attacker-controlled override, and the generated Firebase Hosting asset must stay synchronized with `pnpm run build:hosting`.
 - GH-402 / CB-164: the hosted admin console `loadAuthConfig()` fetch is now bounded by an 8-second `AbortController` timeout; an aborted or stalled `/admin/auth-config` request resolves through the existing `{ enabled: true, configured: false }` fallback so the console renders "Firebase sign-in is unavailable" instead of hanging on "Checking authentication…". The vm-based admin client test harness provides controllable timers and a fake `AbortController`, with regression coverage for the stall-then-timeout path in `tests/unit/admin-client.test.js`.
 - GH-366 / CB-150: durable TradingView jobs now receive a one-hour `expiresAt` on terminal Firestore writes; the shared Firestore retention backfill/configuration covers legacy terminal `tradingviewJobs` documents while leaving active jobs untouched. Unit and Firebase Emulator coverage verify terminal expiry and active-job preservation.
 - GH-533 / CB-236: operational Firestore retention now enables native TTL and backfills legacy `notificationDeadLetters` documents using `NOTIFICATION_REDRIVE_MAX_AGE_MS`; existing idempotency and news-dedup retention behavior remains unchanged. Unit coverage verifies the collection mapping.
@@ -1237,6 +1279,28 @@ Issue #630 validation confirmed the configured TradingView MCP endpoint is live;
 
 No new environment variable or Remote Config key was added; the 24-hour window is a fixed operational reporting boundary and existing circuit-breaker controls already provide deduplicated paging.
 
+## TradingView MCP Exchange Alias Resolution (Issue #591)
+
+`resolveMcpExchange()` in `src/services/tradingview/parseTradingViewSignal.js` maps an alert's exchange prefix to a venue the TradingView MCP server actually serves. It runs inside `TradingViewMcpService.enrichFromSignal()` before `coin_analysis` and is a **closed, probe-verified lookup table** with higher priority than suffix-shape inference — never a broadened fuzzy regex, which would remap venues that already work.
+
+- `MCP_EXCHANGE_ALIASES` — `BATS → NASDAQ`, `NASDAQ_DLY → NASDAQ`. Each entry was confirmed live: the source prefix answers `No data found for <SYMBOL> on KUCOIN` while the target returns a full indicator payload.
+- `MCP_UNSUPPORTED_EXCHANGES` — `FX_IDC` and `SPCFD` are deliberately **not** aliased. Every candidate venue was probed and all returned the same KUCOIN miss, so aliasing would fabricate a market. They keep the original prefix and degrade through the normal fail-open path.
+- `MCP_SUPPORTED_EXCHANGES` — The server's advertised venue list, used to flag an unknown-but-unsupported prefix for debug logging only.
+
+**Outbound only.** Alias resolution never rewrites stored metadata. The parsed signal, `deriveAssetContext()` classification (including the GH-320 `FX_IDC`/futures neutrality), and every persisted `exchange` keep the venue the screener sent. The enrichment payload adds `exchange`, `requestedExchange` (both the original) and `requestedExchangeMappedTo` (alias target, omitted when no alias applied).
+
+**Fast-fail.** `isDeterministicNoDataError()` classifies a `no data`/`symbol not found` MCP response as terminal for that attempt, and `sendWithRetry()` gained a `shouldRetry(result)` hook so the base analysis stops after one attempt instead of burning the remaining `TRADINGVIEW_MCP_MAX_RETRIES` backoff. Transport errors, timeouts, HTTP 5xx, and circuit-breaker semantics are unchanged.
+
+**Failure mode addressed.** This change fixes **symbol/exchange resolution**, not transport. A healthy MCP host still returned `No data found for TSLA on KUCOIN` because the exchange argument was unresolvable. See #630 for the complementary MCP handshake defect. Probe evidence (2026-09-28): `BATS:TSLA`/`NASDAQ:TSLA` → fails/succeeds respectively; `GLD:AMEX` and `SPY:NYSEARCA` succeed while `SPY:NASDAQ` does not, confirming the miss is venue-scoped and not a blanket symbol gap.
+
+**Coverage**:
+- `tests/unit/tradingview-signal-parser.test.js` — Alias table, case/padding normalization, supported-venue passthrough, unresolvable-venue degradation, non-string safety, and the guarantee that stored/parsed exchanges are untouched.
+- `tests/unit/tradingview-mcp-service.test.js` — Outbound argument mapping with original-exchange reporting, byte-for-byte pass-through for supported venues, single-attempt spend on a deterministic miss, retry preservation for transport errors, and graceful degradation.
+- `tests/unit/retry-helper.test.js` — `shouldRetry` terminal-result, terminal-from-first-attempt, and default-behavior regression.
+- `docs/tradingview-mcp.md`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` — Contract documentation and dry-run examples.
+
+No new environment variable or Remote Config key was added: the alias table is a code-level contract, not runtime tuning.
+
 ### Testing Patterns
 
 **Test locations**:
@@ -1483,6 +1547,25 @@ The grounding asset-context fallback no longer classifies lowercase ordinary pro
 - `pnpm test -- tests/unit/grounding.test.js`
 - `pnpm test -- tests/unit/ --testTimeout=5000`
 
+## Deterministic Symbol Extraction (Issue #222)
+
+Stored alerts are now indexed by a validated symbol captured at **write time** by `saveAlert()`, so new documents no longer fall back to `unknown` for ordinary TradingView alert text. Production analytics over a 72h window showed 7 of 10 alerts (70%) bucketed as `unknown` plus a bare integer `"53"` and the parse artifact `MASTER` — the integer in particular could have been made "worse-looking-but-better" by loosening extraction, which would have silently corrupted the same `bySymbol` surface this work exists to fix.
+
+- `parseSymbolFromText()` reuses the hardened `deriveAssetContext()` from `src/services/tradingview/parseTradingViewSignal.js` first, rather than adding a parallel regex, so the `aerosol` / `teeth` lowercase-prose guards and `BTC/USDT` slash-pair preservation stay in one place. Because `deriveAssetContext()` intentionally returns null for non-crypto shapes it does not own (a bare `EXCHANGE:SYMBOL`, a 2-character ticker), the pre-existing TradingView patterns are retained as a second, now-validated pass so coverage is not reduced. `deriveAssetContext()`'s own explicit-exchange pattern was widened to `[A-Z_]+` so underscore venues (`FX_IDC`, `CME_MINI`, `CBOT_MINI`) resolve through that shared path instead of the extra regex.
+- `isValidExtractedSymbol()` is the single guard applied to every candidate from every source (`symbol`, `ticker`, `enrichmentData.*`, and text parsing). It rejects non-strings, the `unknown` sentinel, values under 2 characters, numeric-only values, whitespace, backslashes, and malformed slash usage. A single well-formed slash pair (`BTC/USDT`, both sides ≥2 chars) is allowed.
+- An invalid explicit property no longer short-circuits: `extractSymbolAndExchange()` falls through to the remaining sources, so `{ symbol: '53', text: 'BINANCE:ETHUSDT(D)…' }` still yields `ETHUSDT`/`BINANCE`.
+- Extraction never throws — `parseSymbolFromText()` wraps `deriveAssetContext()` in try/catch and returns the unknown sentinel, preserving the fail-open storage path so persistence can never block alert delivery.
+- `unknown` remains the honest fallback for genuinely unparseable text. A symbol is never invented, and a numeric-only or single-character value is never emitted.
+
+**No contract change**: no new environment variable, Remote Config key, endpoint, OpenAPI schema, or Postman variant. Read filtering (`source`, `symbol`, `exchange`, `eventCategory`, `signalClass`) still runs in memory after `receivedAt`-ordered batches, so no new composite Firestore index requirement is introduced. Historical `unknown` documents stay `unknown` — there is no retroactive backfill.
+
+**Coverage**:
+- `tests/unit/alert-storage-service.test.js` — Rejects bare integers, single characters, and numeric-only `EXCHANGE:SYMBOL` values; asserts write-time capture of the symbol; asserts a numeric-only symbol is never persisted; asserts no regression for 2-character tickers, `BTC/USDT`, `aerosol`, and `teeth`; asserts the `bySymbol` summary no longer indexes numeric-only or single-character keys.
+- `tests/unit/tradingview-signal-parser.test.js` — Unchanged and still green; the shared normalizer was not modified.
+
+**Testing**:
+- `pnpm test -- tests/unit/alert-storage-service.test.js tests/integration/alerts-endpoint.test.js --testTimeout=10000`
+
 ## Admin Recent Job Discovery (CB-117 / Issue #283)
 
 The in-app `/admin` Jobs view consumes the existing protected `GET /api/jobs` endpoint with contract-derived status/type filters and the bounded `limit` range. It renders only safe summary fields with DOM text nodes, keeps the API key in the existing `x-api-key` header path, and lets operators pre-fill the existing job-status workflow without bypassing its cancel/retry confirmations.
@@ -1538,7 +1621,7 @@ Raw alert text remains disabled by default and requires an explicit checkbox. Th
 
 **Coverage**:
 - `src/services/tradingview/TradingViewMcpService.js` — Bounded base retry sub-budget, remaining-budget abort propagation, optional fail-open handling, and full/partial/failed runtime counters.
-- `tests/unit/tradingview-mcp-service.test.js` — Covers full-budget base analysis, retry after base timeout, capped retry delays, optional timeout preserving base data, and failed status accounting.
+- `tests/unit/tradingview-mcp-service.test.js` — Covers full-budget base analysis, capped retry delays, optional timeout preserving base data, failed status accounting, the budget-arithmetic guard against a retry collapsing to 1ms (GH-630), and budget-exhaustion classification via the structural `mcpBudgetExhausted` marker rather than message text.
 - `src/services/storage/AlertStorageService.js` — Persists only the allow-listed enrichment outcome status.
 
 `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS`, `TRADINGVIEW_MCP_TIMEOUT_MS`, and `TRADINGVIEW_MCP_MAX_RETRIES` remain the existing environment/Remote Config controls; no new environment variable was added.
@@ -1714,6 +1797,35 @@ No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env va
 - The structured `408` timeout response (`RequestTimeoutError` schema and `RequestTimeout` response component) is formally specified in `src/openapi/openapi.json` for all non-exempt `/api` operation paths.
 - Response examples for `Request Timeout (408)` are documented in `CabrosBot.postman_collection.json` across primary webhook and job ingest operations.
 
+## Structured Request Logging Middleware (GH-665)
+
+`app.js` mounts `src/lib/requestLogger.js` as the outermost middleware so every completed HTTP request emits exactly one structured JSON line with method, path, status code, duration, and correlation id.
+
+**Behavior**
+- One line per terminal outcome, at `console.info` for 2xx/3xx, `console.warn` for 4xx and client-aborted requests, and `console.error` for 5xx. Fields: `method`, `path`, `statusCode`, `durationMs`, `requestId`, `clientIp`, `aborted`, `outcome`.
+- Mounted **before** CORS, body parsing, the request deadline, body-size limits, and the rate limiter, so parser `413`s, CORS rejections, deadline `408`s, rate-limit `429`s, and route handlers are all observed. The middleware only observes the response lifecycle and never writes a status, header, or body, so it cannot change any API contract.
+- **Correlation ids are shared, not duplicated.** The logger resolves the id through `requestDeadline.resolveRequestId(req)`, which prefers `req.requestId` before the inbound `x-request-id`, and stamps `req.requestId` **before** the exemption check. Because the deadline runs later and reuses the header, the log line and the `408` payload always carry the same id — this is the reason the logger must not mint its own id. Stamping before the exemption return matters on its own: an operator can exempt an API route through `REQUEST_DEADLINE_EXEMPT_PATHS`, and `requestDeadline` skips that route without setting `X-Request-Id`, so the id is stamped here and stays in agreement with the `requestId` the handler still returns in its body. Note that the `X-Request-Id` **header** is still absent on an exempt route — that is pre-existing `requestDeadline` behaviour on `master`, not introduced here.
+- `X-Request-Id` is declared as a reusable response-header component (`components.headers.XRequestIdResponseHeader`) and referenced from **the response components**, never beside a `$ref`. A response node holding `$ref` is a Reference Object, and OpenAPI 3.1 requires siblings other than `$ref`/`summary`/`description` to be ignored — `SwaggerParser` merges them anyway, so the document validates while conforming generators silently drop the header. Any handler echoing a `requestId` must source it from `req.requestId`, never a fresh UUID; `GET /api/selftest` and `POST /api/selftest/run` were the last holdouts.
+- **Probe paths are skipped**, reusing the request-deadline exemption vocabulary via `requestDeadline.resolveExemptPaths()` **and** `requestDeadline.isExemptPath()`, which resolves `REQUEST_DEADLINE_EXEMPT_PATHS` plus its defaults (`/healthcheck`, `/ready`, `/openapi.json`, `/docs`). It is resolved **per request**, not frozen at module load, so a path an operator adds to that variable is exempt from both middlewares at once. Both `resolveExemptPaths` and `isExemptPath` were exported for this purpose; **do not fork the list or the predicate** — the logger previously kept a private `matchesExemptPath` copy, which let the two middlewares disagree about `/docs/*` assets. `normalizeExemptPath()` is the single rule applied to both the configured set and incoming requests: lower-case, then strip trailing slashes. Both halves matter, because they are silent failures otherwise — without lower-casing, `REQUEST_DEADLINE_EXEMPT_PATHS=/Internal/Ping` would never match, and without trailing-slash stripping `/api/slow/` would never match a request for `/api/slow`. `/docs` is treated as a **subtree** in `requestDeadline.isExemptPath`, since the Swagger UI page pulls `swagger-ui.css`, `swagger-ui-bundle.js`, `swagger-ui-standalone-preset.js`, and `swagger-initializer.js` from the same router.
+- Paths are normalized by stripping the query string and trailing slashes, so query secrets never reach the log line and `/api/x` and `/api/x/` group together. **Case is preserved** in the emitted path: Firestore document ids are mixed-case and case-sensitive, so lower-casing would make `/api/alerts/:alertId` unsearchable against the id an operator saw in a 404 body.
+- The exemption set is matched through the shared `requestDeadline.isExemptPath`, which is **case-insensitive** and subtree-aware. Express routing is case-insensitive by default, so `/HEALTHCHECK` reaches the healthcheck handler and must not re-enter the logs as a bypass of the probe skip list. Matching and display are deliberately separate concerns.
+- **Sensitive path segments are masked** via `SENSITIVE_PATH_SEGMENTS`, applied by `maskSensitivePathSegments` to the emitted value only. `/api/preferences/:channel/:chatId` carries a Telegram or WhatsApp chat identifier — a personal destination, and the one parameterized segment that is not an opaque document or job id. `logging.js` does not redact it, because the attribute is named `path` and numeric or `@g.us` values do not match its secret patterns. `alertId` (mixed-case Firestore doc id), `jobId` (UUID), and `scanner-presets/:id` stay intact so those paths remain searchable during triage. **Masking must run after exemption matching**: `normalizeRequestPath` returns the unmasked path, `isExemptPath` tests that, and only then is the logged value masked — otherwise an operator who configured `/api/preferences/telegram/123` as exempt would still see it logged, since `:redacted` cannot match the configured entry.
+- `clientIp` is truncated to `a.b.c.x` for IPv4, and IPv6 is reported as `ipv6-redacted` rather than logged in full, keeping client addresses out of logs in usable form.
+- **Event-stream closes are not aborts.** `GET /api/admin/events` is a server-sent-events response held open for the life of the subscription, so it never reaches `writableFinished` and its `close` is the normal end of stream. The admin console aborts its `EventSource` on teardown and on stream replacement (`src/admin/admin.js`), so classifying those as aborts would bury the real client-failure signal. `isSsePath()` matches the SSE route and records its close as `outcome: "completed"` at `info`; every other route keeps the abort semantics below.
+- Client aborts are distinguished from completions via `res.on('finish')` vs. `res.on('close')` and recorded as `outcome: "aborted"` at `warn` — an aborted request is an operational signal, not a client error. The `close` branch reads **`res.writableFinished`, not `res.writableEnded`**: `writableEnded` flips the moment the handler calls `res.end()`, before the bytes reach the socket, so a client disconnecting in that window would otherwise be logged as a clean completion with an understated duration. `finish` always wins the race for a clean response, so `close` seeing `writableFinished === true` implies `finish` never fired.
+- `statusCode` is `0` when `res.headersSent` is false. Node initializes `statusCode` to `200` even when nothing was ever written, so an early client disconnect would otherwise be logged as a phantom success and dashboards grouping by status would invent 200s.
+- `emit()` is wrapped in `try/catch` inside `finalize`. `console.*` is globally replaceable and the listener runs from a Node event emitter outside Express's `try/catch`, so a throwing sink would otherwise crash the process from an observability path.
+
+**Core components**
+- `src/lib/requestLogger.js` — path normalization, id resolution, IP sanitization, level selection, and single-emission finalization.
+- `app.js` — mounts the logger ahead of every other response-producing middleware.
+- `tests/unit/requestLogger.test.js` and `tests/integration/request-logger.test.js` — unit coverage plus supertest coverage for parser rejections, header id reuse, 408/payload id agreement, exempt-path id stamping, address-family masking, and probe-path silence.
+
+**Configuration**
+- No new environment variable. The skip set is derived from `REQUEST_DEADLINE_EXEMPT_PATHS`, and the log level follows `LOG_LEVEL` through the existing `src/lib/logging.js` pipeline, which already applies secret redaction to every emitted line.
+
+No endpoint, OpenAPI, Postman, or Remote Config contract changed.
+
 ## Admin Status Dependency Explorer (Issue #673)
 
 The dedicated `/admin` Status view now renders the existing `/api/status` response as an operational dashboard: overview metrics, delivery-channel cards, expandable dependency cards, enabled-capability chips, and a collapsed raw JSON response with copy support. Dependency cards show safe timing, counters, configuration, provider, error-category, storage, scheduler, and worker fields using DOM text nodes only. Client-side status filters and search sort attention items ahead of healthy dependencies and provide a filtered empty state. The existing overview dashboard continues to use the shared status renderer.
@@ -1763,6 +1875,25 @@ No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract c
 Successful `POST /api/webhook/message` deliveries now reuse `AlertStorageService.saveAlert()` after the response is sent, using `source: webhook-message`. This keeps generic-message deliveries available to the existing alert audit, export, summary, and replay flows when `ENABLE_FIRESTORE_ALERT_STORAGE=true` while preserving fail-open delivery behavior, including unexpected storage promise rejections. Integration coverage verifies the persisted payload and rejection handling; the existing full suite remains green.
 
 No environment variable, Remote Config key, endpoint, OpenAPI, or Postman contract changed.
+
+## Generic Message Chunk Estimates and Dry Validation (GH-614)
+
+`POST /api/webhook/message` exposes per-channel chunk estimation and dry-run validation support:
+- `dryValidate: true` in the JSON request body validates the request and immediately returns `{ success: true, dryValidate: true, estimatedChunks: { telegram, whatsapp, discord } }` without initializing notification services or dispatching messages. Non-boolean `dryValidate` values return `400 Bad Request`.
+- Normal dispatch requests exceeding single-chunk limits on any channel (WhatsApp > 20,000 chars, Discord > 2,000 chars) return additive metadata: `delivered`, `channelDetails`, and `estimatedChunks` alongside `results`. Single-chunk messages retain backwards compatibility returning `{ success: true, results }`.
+- `estimateMessageChunks(text)` in `src/lib/messageHelper.js` provides centralized estimation logic.
+- `tests/unit/message-helper.test.js` and `tests/integration/generic-message-webhook.test.js` cover chunk estimation, dry validation, invalid input, and additive response metadata.
+- `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document `dryValidate` request/response schemas and examples.
+
+## Generic Message Truncation Metadata (GH-602)
+
+`POST /api/webhook/message` reports inbound truncation so callers can detect silent content loss:
+- Inbound `message` values longer than `MAX_MESSAGE_LENGTH` (4,000 characters) are clipped before delivery and emit a `console.warn` line carrying only numeric `originalLength`, `deliveredLength`, and `max` values (no message content, so no injection surface).
+- Truncated responses add `truncated: true`, `originalLength`, and `deliveredLength` alongside `results`. These fields are strictly additive and appear **only** when truncation occurred, so existing `{ success: true, results }` consumers are unaffected for messages that fit.
+- Truncation metadata is independent of the GH-614 chunk-estimation metadata; both may appear on the same response when a long message also exceeds a channel's single-chunk limit.
+- `tests/integration/generic-message-webhook.test.js` covers both branches: metadata omitted when the message fits, metadata present when it does not, and the matching `console.warn` behavior.
+- `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document the conditional fields and both response shapes.
+
 
 ## Telegram Command Rate Limiting (Issue #658)
 

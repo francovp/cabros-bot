@@ -212,6 +212,27 @@ The allow-list contains news thresholds, timeouts, concurrency, quota retries, T
 
 The service loads once at startup and refreshes on the bounded cadence; it does not fetch Remote Config per alert. `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS` remains environment-only because the worker timer is created during process startup and is not a request-time setting. Disabled, unavailable, timed-out, stale, malformed, or invalid values fail open to the current environment/default behavior. The server-side Remote Config API is currently a Firebase Preview feature, so monitor its quota and error rate before enabling it in production. `firebase-admin` is upgraded to the Node 24-compatible 12.x line (`^12.1.0`, lockfile resolution `12.7.0`).
 
+##### Publishing the server template (`firebase-server` namespace)
+
+Enabling `ENABLE_FIREBASE_REMOTE_CONFIG` alone does **not** activate remote tuning: the flag and valid credentials only mean the loader is *wired up*. A template must also be published to the **`firebase-server`** namespace, which is the exact namespace `admin.remoteConfig().initServerTemplate()` reads.
+
+- Publish with `pnpm run deploy:firebase-remote-config:server` locally, or by running the **Deploy Firebase Remote Config Server Template** workflow (`.github/workflows/firebase-remote-config.yml`, `workflow_dispatch`) against `master`. The workflow uses the `FIREBASE_SERVICE_ACCOUNT_JSON` Actions secret and the `FIREBASE_PROJECT_ID` repository variable (default `cabros-bot`).
+- **Namespace contract**: the publish target is `projects/{projectId}/namespaces/firebase-server/serverRemoteConfig`. Publishing to the default/client namespace (`/remoteConfig`) is a silent no-op for this loader — the template appears in the console while the service keeps reading an empty server template forever.
+- The `firebase-server` namespace does not exist until the first publish, so the script bootstraps it with `If-Match: *`. A pre-publish `getServerTemplate()` that returns `remote-config/not-found` is the expected bootstrap state, not a failure.
+
+Verify activation through `GET /api/status` → `dependencies.firebaseRemoteConfig`:
+
+| Field | Meaning |
+| --- | --- |
+| `enabled` / `configured` | The loader is wired up. Neither implies remote values are being served. |
+| `templatePublished` | `true` only after at least one successful template load. `false` means nothing was ever fetched. |
+| `ready` | `true` only after a **successful and still-fresh** load. |
+| `source` | `remote` only when live remote overrides are in use; `environment`/`default` mean they are not. |
+| `lastErrorCategory` | `template_not_published` means the `firebase-server` namespace has no template and must be published. This is distinct from a transient `load_failed`; `permission_denied` and `unauthenticated` mean the service account lacks the server-template permission. |
+| `consecutiveFailures` | Consecutive failed loads; reset to `0` on success. |
+
+In the inert state (`templatePublished: false, ready: false, source: "environment", lastErrorCategory: "template_not_published"`) every value comes from the environment fallback — intended fail-open behavior; the alert path is never blocked.
+
 #### Firestore Emulator Integration Tests
 
 The optional `pnpm test:firebase` command runs the Firestore-backed integration suite against the local Firebase emulator using the `demo-cabros` project ID. It covers the Admin SDK storage paths, idempotency transactions, async jobs, scanner presets, signal outcomes, and deny-by-default client rules.
@@ -239,7 +260,7 @@ pnpm test:firebase
 - `RAILWAY_GIT_COMMIT_SHA` / `RAILWAY_GIT_REPO_OWNER` / `RAILWAY_GIT_REPO_NAME` - Railway GitHub deployment metadata used for release and deployment notifications
 - `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel/Railway, and `false` for direct deployments)
 - `REQUEST_TIMEOUT_MS` - Hard request-deadline ceiling for mounted `/api` routes in milliseconds (default: `30000`, valid range: `1000`-`120000`; invalid values fall back to the default). The timeout returns `408 REQUEST_TIMEOUT` with a request ID.
-- `REQUEST_DEADLINE_EXEMPT_PATHS` - Optional comma-separated paths excluded from the deadline; `/healthcheck`, `/ready`, `/openapi.json`, and `/docs` are always exempt. Per-endpoint deadlines such as `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` and `MARKET_SCANNER_TIMEOUT_MS` remain the operation-specific soft budgets inside the global ceiling.
+- `REQUEST_DEADLINE_EXEMPT_PATHS` - Optional comma-separated paths excluded from the deadline; `/healthcheck`, `/ready`, `/openapi.json`, and `/docs` (including its static asset subtree) are always exempt. This is the single exemption vocabulary shared with structured request logging, so a path added here is silenced in both the deadline and the request log — see [Structured Request Logging](monitoring.md#structured-request-logging-gh-665). Per-endpoint deadlines such as `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` and `MARKET_SCANNER_TIMEOUT_MS` remain the operation-specific soft budgets inside the global ceiling.
 - `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes; invalid values use the default)
 - `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default). Webhook and MCP ingest endpoints (`/api/webhook/alert`, `/api/webhook/message`, `/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, `/api/webhook/volume-confirmation`, `/api/webhook/symbol-analysis`, and `/api/news-monitor`) use an isolated finite bucket of 1,000 requests per window so TradingView and scanner bursts do not consume the ordinary client bucket; API-key validation still applies. Public documentation and admin console assets (`/openapi.json`, `/docs`, `/admin`, and associated static assets) are mounted before the rate limiter and are exempt from the global rate limit budget, mirroring `/healthcheck` and `/ready`.
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production). The logger automatically masks sensitive plain-object keys, bare-scalar secrets preceded by sensitive labels, URL query secrets, embedded JSON strings, Authorization/Bearer credentials, Telegram bot tokens, Discord webhook tokens, OpenAI keys, and dynamically registered request-scoped secrets via `registerSecretValue` / `clearSecretValue`.

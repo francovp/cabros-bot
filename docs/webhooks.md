@@ -290,3 +290,65 @@ so a route cannot resurrect a channel that is still in its repeat-suppression co
 
 Omitting `symbolRoutes` preserves the existing broadcast and request-level routing
 behavior exactly.
+
+### POST /api/webhook/message
+
+Deliver a generic, non-alert message to the enabled notification channels. Use this when the payload is
+operator-authored automation output rather than a TradingView alert or scanner run.
+
+**Request (JSON):**
+```json
+{
+  "message": "Custom notification from automation",
+  "channels": ["telegram", "whatsapp"]
+}
+```
+
+- `message`: Required non-empty string. Values longer than `MAX_MESSAGE_LENGTH` (4,000 characters) are clipped
+  before delivery.
+- `channels`: Optional subset of `telegram`, `whatsapp`, `discord`. Omit it to broadcast to every enabled channel.
+- `telegramChatId` / `telegramThreadId` / `whatsappChatId` / `discordWebhookUrl`: Optional per-channel destination
+  overrides. `telegramThreadId` targets a forum topic (`0` = General).
+- `dryValidate`: Optional boolean. Validates and returns chunk estimates without sending anything.
+- Idempotency: send `idempotency-key` / `x-idempotency-key` (or `idempotencyKey` in the body or query) to replay a
+  prior response instead of re-delivering. Reusing a key with a different payload returns `409`.
+
+**Response (message within 4,000 characters):**
+```json
+{
+  "success": true,
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-msg-123" }
+  ]
+}
+```
+
+**Response (message exceeded 4,000 characters):**
+```json
+{
+  "success": true,
+  "truncated": true,
+  "originalLength": 6000,
+  "deliveredLength": 4003,
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-msg-123" }
+  ]
+}
+```
+
+**Truncation metadata (GH-602).** Inbound messages above `MAX_MESSAGE_LENGTH` are clipped to 4,000 characters plus a
+`'...'` suffix before delivery, so `deliveredLength` is 4,003 in the default configuration. When truncation occurs the
+response adds:
+
+- `truncated`: Always `true` when present. Callers can use it to detect silent content loss.
+- `originalLength`: Inbound character count before clipping (minimum 4,001).
+- `deliveredLength`: Character count of the text actually handed to the notification channels.
+
+These three fields are **strictly additive and appear only when truncation occurred** — a message that fits returns
+`{ success: true, results }` unchanged, so existing integrations are unaffected. Truncation is independent of chunk
+estimation: a long message that also exceeds a channel's single-message limit returns both the truncation fields and
+the `delivered` / `channelDetails` / `estimatedChunks` metadata.
+
+A `console.warn` line records the clip with numeric `originalLength`, `deliveredLength`, and `max` values only; message
+content is never logged. Delivery proceeds with the clipped text regardless — truncation never blocks a send.
+
