@@ -295,6 +295,30 @@ Verify activation through `GET /api/status` → `dependencies.firebaseRemoteConf
 
 In the inert state (`templatePublished: false, ready: false, source: "environment", lastErrorCategory: "template_not_published"`) every value comes from the environment fallback — intended fail-open behavior; the alert path is never blocked.
 
+##### Production enablement (issue #1113)
+
+Production enables the gate on **every compute service** in `render.yaml` — the web service, the BullMQ job worker, and the signal-outcome worker — with `previewValue: false`. Two properties follow, and both are load-order dependent rather than code dependent:
+
+- **The gate is declared, not assumed.** `RemoteConfigService.start()` returns `false` immediately when `ENABLE_FIREBASE_REMOTE_CONFIG` is not `true`, so a service that omits the key never loads the template at all and silently keeps evaluating environment values. The gate must be on any process that calls `remoteConfigService.start()`; `getRuntimeConfig()` merges remote overrides only when it is.
+- **A per-service gate is a correctness bug, not a config preference.** `getRuntimeConfig()` merges remote overrides only where the gate is on, so two processes with different gate values evaluate *different* effective configs from the same published template. `SIGNAL_OUTCOME_RETENTION_DAYS` is the sharpest case: the web service stamps `expiresAt` on outcome documents while the signal-outcome worker applies the same window when evaluating them, so a split gate makes the two processes disagree about document lifecycle.
+
+Enabling the gate does not by itself activate remote tuning, so the deploy is a **two-step** rollout:
+
+1. Merge this change. Render applies the blueprint and redeploys. Until a template exists the service reports `status: "degraded"` with `lastErrorCategory: "template_not_published"` — the honest inert state above, with every value still coming from the environment. Nothing is degraded functionally, and this is the expected state between the two steps.
+2. Once the deployment is green, run the **Deploy Firebase Remote Config Server Template** workflow (`workflow_dispatch`, ref `master`). The service then reports `ready: true`, `templatePublished: true`, `source: "remote"`, and `templateVersion` matching the published version.
+
+The publish workflow is deliberately manual and agent-driven publishes are prohibited: a template becomes the live authority for production the moment it lands. Confirm step 2 on each compute service, not only on the web service.
+
+##### After publishing, `render.yaml` no longer owns allow-listed values
+
+This is the main operational consequence of turning the feature on, and it is easy to get wrong.
+
+The Firebase Admin SDK reports a fetched template parameter's `defaultValue` with source `remote` (`ValueImpl('remote', parameterDefaultValue)` in `remote-config.js`), and `RemoteConfigService.getRemoteValue()` accepts any value whose source is `remote`. So **every parameter present in `firebase-remote-config-template.json` becomes a remote override that takes precedence over `process.env`**, even though the template entries look like plain defaults.
+
+Once the template is published, editing an allow-listed key in `render.yaml` or in the Render dashboard has **no effect** on that running process. To change an allow-listed value you must edit `firebase-remote-config-template.json` and re-run the publish workflow. The template is therefore the source of truth for the allow-list after first publish, and `render.yaml` acts only as a fallback for keys the template omits (and for the gate itself).
+
+Keep `firebase-remote-config-template.json` aligned with the intended production values before publishing. A template whose defaults are stale will silently override freshly corrected `render.yaml` values, and `ready: true` will still be reported because the load succeeded.
+
 #### Firestore Emulator Integration Tests
 
 The optional `pnpm test:firebase` command runs the Firestore-backed integration suite against the local Firebase emulator using the `demo-cabros` project ID. It covers the Admin SDK storage paths, idempotency transactions, async jobs, scanner presets, signal outcomes, and deny-by-default client rules.
