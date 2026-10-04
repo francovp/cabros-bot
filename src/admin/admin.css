@@ -25,6 +25,17 @@
   --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
   --speed-fast: .15s;
   --speed: .2s;
+  /* Measured against --chart-surface: series >= 6.1:1 and --chart-axis 5.78:1 so all chart
+     text clears 4.5:1; --chart-grid stays faint at 1.88:1 to stay subordinate to data ink. */
+  --chart-surface: #ffffff;
+  --chart-grid: #b4bec9;
+  --chart-axis: #596777;
+  --chart-series-1: #196c63;
+  --chart-series-2: #8a4f00;
+  --chart-series-3: #3d5aa9;
+  --chart-series-4: #a0204a;
+  --chart-series-5: #4a6b1f;
+  --chart-series-6: #7a3f9d;
 }
 * { box-sizing: border-box; }
 body { min-height: 100vh; margin: 0; background: var(--page); }
@@ -256,3 +267,42 @@ cabros-fields, cabros-result { display: block; min-width: 0; }
 .toast.toast-error { border-left: 4px solid var(--danger); }
 .toast.toast-info { border-left: 4px solid var(--accent); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+.chart-figure { margin: 0; padding: .85rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--chart-surface); display: grid; gap: .6rem; min-width: 0; }
+.chart-figure-inline { padding: .35rem .5rem; gap: 0; }
+.chart-svg { display: block; width: 100%; height: auto; max-width: 100%; overflow: visible; }
+.chart-sparkline-svg { height: 2rem; }
+.chart-donut-svg { max-width: 22rem; justify-self: center; }
+.chart-series-1 { --chart-series-color: var(--chart-series-1); }
+.chart-series-2 { --chart-series-color: var(--chart-series-2); }
+.chart-series-3 { --chart-series-color: var(--chart-series-3); }
+.chart-series-4 { --chart-series-color: var(--chart-series-4); }
+.chart-series-5 { --chart-series-color: var(--chart-series-5); }
+.chart-series-6 { --chart-series-color: var(--chart-series-6); }
+.chart-line { fill: none; stroke: var(--chart-series-color, var(--chart-series-1)); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.chart-point { fill: var(--chart-series-color, var(--chart-series-1)); }
+.chart-sparkline-line { fill: none; stroke: var(--chart-series-1); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.chart-sparkline-point { fill: var(--chart-series-1); }
+.chart-bar { fill: var(--chart-series-1); }
+.chart-bar-negative { fill: var(--chart-series-4); }
+.chart-grid-line { stroke: var(--chart-grid); stroke-width: 1; shape-rendering: crispEdges; }
+.chart-axis-line { stroke: var(--chart-axis); stroke-width: 1; shape-rendering: crispEdges; }
+.chart-axis-text, .chart-category-text, .chart-donut-caption { fill: var(--chart-axis); font-size: 11px; font-family: inherit; }
+.chart-category-text { font-size: 12px; }
+.chart-donut-total { fill: var(--chart-axis); font-size: 19px; font-weight: 800; font-family: inherit; }
+.chart-donut-track { fill: none; stroke: var(--chart-grid); stroke-width: 22; }
+.chart-donut-slice { fill: none; stroke: var(--chart-series-color, var(--chart-series-1)); stroke-width: 22; transform: rotate(-90deg); transform-origin: 110px 110px; }
+.chart-legend { margin: 0; padding: 0; list-style: none; display: grid; gap: .3rem; }
+.chart-legend-item { display: grid; grid-template-columns: .75rem minmax(0, 1fr) auto; align-items: center; gap: .5rem; font-size: .8rem; }
+.chart-legend-swatch { width: .75rem; height: .75rem; border-radius: .2rem; background: var(--chart-series-color, var(--chart-series-1)); }
+.chart-legend-label { color: var(--muted); overflow-wrap: anywhere; }
+.chart-legend-value { color: var(--chart-axis); font-family: var(--font-mono); font-size: .75rem; }
+.chart-data summary { cursor: pointer; color: var(--muted); font-size: .78rem; }
+.chart-data[open] summary { margin-bottom: .5rem; }
+.chart-data-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
+.chart-data-table caption { text-align: left; padding-bottom: .4rem; color: var(--muted); font-weight: 700; }
+.chart-data-table th, .chart-data-table td { padding: .3rem .45rem; border-bottom: 1px solid var(--border); text-align: left; overflow-wrap: anywhere; }
+.chart-data-table th { color: var(--muted); font-size: .68rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.chart-data-table tr:last-child td { border-bottom: none; }
+.chart-data-table td { font-family: var(--font-mono); }
+.chart-data-table td:first-child { font-family: inherit; }

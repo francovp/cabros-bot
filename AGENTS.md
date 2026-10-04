@@ -1944,6 +1944,25 @@ The `/admin` console provides a dedicated read-only **Orders** view consuming `G
 **Coverage**:
 - `tests/unit/admin-client.test.js` covers recent orders list, single order lookup, identifier validation, DOM sanitization, request invalidation, and environment badges.
 
+## Admin Console Chart Primitives (Issue #1288)
+
+`src/admin/admin-charts.js` is the single SVG chart kit for the `/admin` console. It exports four render functions, each returning a DOM node: `sparkline(values, { label, formatValue, emptyText })`, `lineChart(series, { label, xKey, yKey, formatY, emptyText })`, `barChart(categories, { label, valueKey, formatValue, emptyText })`, and `donutChart(slices, { label, emptyText })`.
+
+**This is the only chart system.** Analytics views build on it (see #1277 for the equity curve). Do not add a charting library or a second set of primitives.
+
+### Invariants & Implementation Details
+- **CSP-safe**: every node is built with `document.createElementNS` + `setAttribute`, and text via `textContent`. No `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, `eval`, CDN, remote font, or external asset of any kind. A charting library cannot be added from a CDN under the helmet CSP in `app.js`, and vendoring one would reintroduce the supply-chain surface `vue.runtime.global.prod.js` already avoids.
+- **Colours come only from CSS custom properties** in the `:root` block of `src/admin/admin.css`: `--chart-surface`, `--chart-grid`, `--chart-axis`, and `--chart-series-1` … `--chart-series-6`. No hex literal exists in the JS. Each `.chart-series-N` class sets `--chart-series-color`, so a series element carries both its role class (`chart-line`, `chart-point`, `chart-donut-slice`, `chart-legend-swatch`) and its palette class. **A class like `chart-line-chart-series-1` matches no rule and silently collapses every series onto series 1** — emit the palette class separately.
+- **Accessibility contract**: every SVG carries `role="img"` plus an `aria-label` that states the finding in words (`Alerts per hour, from 13:00 to 16:00, 4 points. Alerts: high 31 at 14:00, low 9 at 15:00.`), not just the chart type. Chart text uses `--chart-axis` (5.78:1 on `--chart-surface`); the six series hues each measure ≥ 6.1:1, so any two stay distinguishable side by side. Recompute these ratios before recolouring a token.
+- **Every chart ships an equivalent data table**, so the numbers are reachable without seeing the graphic and QA has something concrete to assert against. `lineChart`, `barChart` and `donutChart` use a `<details>` disclosure; `sparkline` uses a `visually-hidden` table because it lives inline in a KPI card.
+- **Edge cases never throw and never divide by zero.** A zero-range domain resolves to the scale midpoint (`scale()` short-circuits `max === min`); a flat line series gets a symmetric domain so it centres instead of pinning to an edge. Non-finite samples collapse to `null`, split polylines into separate runs, and render as `—` in the table. A bar or donut of all zeros renders a truthful zero-length bar / empty track rather than a fabricated full ring.
+- **Domain honesty**: `barChart` anchors its domain on zero so negatives grow leftwards, and a zero category is a zero-length bar. `donutChart` excludes negative shares from the arc geometry but still lists them in the legend and table at `0.0%`.
+- **Labels are never invented**: a bare number is a value under a positional `Category N` name, a bare string is a label with no magnitude (`—`), and only explicit `label`/`name` fields name an object. Falling back to the value field would print the bar's own magnitude as its heading.
+- **Empty input returns the existing `.empty-state` element** with the caller-supplied `emptyText` (default `DEFAULT_EMPTY_TEXT`), never an empty `<svg>`.
+- **Hosting parity**: `src/admin/admin-charts.js` is the source; `public/admin/admin-charts.js` is the build artifact from `pnpm run build:hosting`. Both are committed in sync, and the shell loads `/admin/admin-charts.js` with `defer` before `admin.js`.
+
+**Coverage**: `tests/unit/admin-charts.test.js` — vm-based DOM harness covering all four chart types, empty / single-point / flat-range / negative / non-finite inputs, the `innerHTML`-forbidden sentinel, a source scan asserting no colour literals or remote URLs, the token contract, and source/build parity.
+
 ## Multi-Agent Workflows
 - **Senior Dev Engagement**: When acting as a trainee or assistant in PRs/Issues, actively respond to direct questions or mentions from @gigachad-senior-dev. Provide technical, inquisitive, or helpful responses.
 - **Architectural Boundary (SOC)**: Separate Business Logic from Channel Presentation. Business Logic must produce stable, channel-neutral structured results. Channel Adapters handle the platform-specific formatting (Markdown, escaping, etc.).
