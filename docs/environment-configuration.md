@@ -103,13 +103,44 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 
 #### Langfuse Prompt Management
 
-- `ENABLE_LANGFUSE_PROMPTS` - Fetch runtime prompts from Langfuse (`true` or `false`, default: `false`)
-- `LANGFUSE_PUBLIC_KEY` - Langfuse public key (required when Langfuse prompt management is enabled)
-- `LANGFUSE_SECRET_KEY` - Langfuse secret key (required when Langfuse prompt management is enabled)
-- `LANGFUSE_BASE_URL` - Langfuse base URL (default: `https://cloud.langfuse.com`)
-- `LANGFUSE_PROMPT_LABEL` - Prompt label to fetch (default: `latest` in local/dev/test, `production` in production-like environments)
-- `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` - Prompt cache TTL in seconds (default: `0` for `latest`, `60` for `production`)
+Enabled in production (`render.yaml`: `value: true`, `previewValue: false` on the web service and the jobs worker; credentials are `sync: false` and live in the Render dashboard). Previews stay off so a throwaway PR deploy cannot publish traces against the production Langfuse project.
+
+- `ENABLE_LANGFUSE_PROMPTS` - Fetch runtime prompts from Langfuse (`true` or `false`, default: `false`). Environment-only for Remote Config parity: a process-startup gate.
+- `LANGFUSE_PUBLIC_KEY` - Langfuse public key (required when Langfuse prompt management is enabled). **Secret**: platform secret store only.
+- `LANGFUSE_SECRET_KEY` - Langfuse secret key (required when Langfuse prompt management is enabled). **Secret**: platform secret store only.
+- `LANGFUSE_BASE_URL` - Langfuse base URL (default: `https://cloud.langfuse.com`). Must be an HTTP(S) URL; only its host is reported by `/api/status`. Environment-only: an external destination.
+- `LANGFUSE_PROMPT_LABEL` - Prompt label to fetch (default: `latest` in local/dev/test, `production` in production-like environments; `render.yaml` pins `production`). Environment-only.
+- `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` - Prompt cache TTL in seconds (default: `0` for `latest`, `60` for `production`; `render.yaml` pins `300`). Must be a non-negative integer. Environment-only.
 - Optional local prompt overrides: `SEARCH_QUERY_PROMPT`, `GEMINI_SYSTEM_PROMPT`, `ALERT_ENRICHMENT_SYSTEM_PROMPT`, `NEWS_ANALYSIS_SYSTEM_PROMPT`, and `CONFIDENCE_ENRICHMENT_SYSTEM_PROMPT`. Unset values use the versioned local fallback files.
+
+##### Verifying Langfuse prompts are actually resolving
+
+Setting the flag is **necessary but not sufficient**. Prompt resolution fails **open** to the local prompt file, which is what keeps alert delivery alive — and which also makes a deployment where every alert silently resolves locally indistinguishable from a healthy one. `dependencies.langfuse.configured` is credential *shape* only, so a typo'd, revoked, or wrong-project key satisfies it. `ready` is therefore proven from observed resolutions (issue #1178):
+
+| `status` | Meaning | Operator action |
+|---|---|---|
+| `disabled` | The gate is not `true`. | Nothing; local prompts are the configured intent. |
+| `misconfigured` | Enabled, but a credential is missing or blank. | Set it in the Render dashboard. |
+| `unverified` | Configured, but nothing has resolved yet. **No evidence, not health.** | Wait for the startup probe, then re-check. |
+| `ready` | A managed prompt actually resolved. | Nothing. |
+| `degraded` | A resolution failed; the local file was used. | Read `lastErrorReason`. |
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
+  "$BASE_URL/api/capabilities" \
+  | jq '{flag: .featureFlags.langfusePrompts,
+         dep: .dependencies.langfuse | {status, ready, promptsSucceeded,
+                                         localFallbackCount, lastErrorReason,
+                                         fallingBack: .localFallbackByPrompt}}'
+```
+
+Read `localFallbackCount`, not the flag: it counts resolutions that used the local file *while the gate was on*, and is the number that proves the enablement is doing something. `status: "ready"` with a non-zero `promptsSucceeded` and an empty `fallingBack` map is the evidence the managed prompts are live.
+
+`lastErrorReason` is a closed enum — `langfuse_not_configured`, `langfuse_client_unavailable`, `langfuse_auth_failed`, `langfuse_prompt_not_found`, `langfuse_timeout`, `langfuse_invalid_response`, `langfuse_unavailable` — because a Langfuse error body can embed the project id, base URL, and API key.
+
+**`langfuse_prompt_not_found` is the expected first-deploy failure**: prompts published under `latest` but never under a `production` label make every fetch 404, every alert fall back to the local file, and the deployment still *look* healthy. Publish the label with the [`langfuse-prompt-sync`](../../.agents/skills/langfuse-prompt-sync/SKILL.md) skill. `consecutiveFailures` clears on the next success, so publishing the label self-heals the verdict without a restart.
+
+Unlike equity market data, this feature **does** run a bounded startup probe (5s, `unref`'d, fail-open, non-blocking) that resolves every registered prompt once, precisely so an idle deployment gets a proven verdict instead of `unverified` forever.
 
 #### TradingView MCP Analysis
 

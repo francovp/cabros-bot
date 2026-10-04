@@ -102,6 +102,23 @@ services:
   - key: ENABLE_FIREBASE_REMOTE_CONFIG
     value: true
     previewValue: false
+  # Langfuse dynamic prompts (#1178). Declared on every compute service that can
+  # resolve a prompt, because PromptService falls back to the local file on any
+  # remote failure: a split gate makes two processes silently use different prompt
+  # versions for the same alert. Previews stay off so a throwaway PR deploy cannot
+  # publish traces against the production Langfuse project or consume its quota.
+  # `dependencies.langfuse.ready` is proven from observed resolutions, not this flag.
+  - key: ENABLE_LANGFUSE_PROMPTS
+    value: true
+    previewValue: false
+  - key: LANGFUSE_PROMPT_LABEL
+    value: production
+  - key: LANGFUSE_PROMPT_CACHE_TTL_SECONDS
+    value: 300
+  - key: LANGFUSE_PUBLIC_KEY
+    sync: false
+  - key: LANGFUSE_SECRET_KEY
+    sync: false
   - key: REDIS_URL
     fromService:
       name: cabros-crypto-bot-telegram-queue
@@ -155,6 +172,28 @@ services:
   - key: ENABLE_FIREBASE_REMOTE_CONFIG
     value: true
     previewValue: false
+  # This worker starts `newsMonitorSchedulerService` and `alertSchedulerService`,
+  # which resolve prompts through the same PromptService as the web service, so it
+  # needs the same Langfuse gate or the two processes would use different prompt
+  # versions for the same alert (#1178). The credentials are `sync: false`: an
+  # operator must set them in the Render dashboard for this service.
+  - key: ENABLE_LANGFUSE_PROMPTS
+    value: true
+    previewValue: false
+  - key: LANGFUSE_PROMPT_LABEL
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: LANGFUSE_PROMPT_LABEL
+  - key: LANGFUSE_PROMPT_CACHE_TTL_SECONDS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: LANGFUSE_PROMPT_CACHE_TTL_SECONDS
+  - key: LANGFUSE_PUBLIC_KEY
+    sync: false
+  - key: LANGFUSE_SECRET_KEY
+    sync: false
   - key: ENABLE_NOTIFICATION_REDRIVE
     fromService:
       name: cabros-crypto-bot-telegram-iac

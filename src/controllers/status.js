@@ -30,6 +30,8 @@ const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldow
 const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
 const { alertModeration } = require('../services/alerts/alertModeration');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const { getPromptService } = require('../services/prompts');
+const { getPromptReadiness } = require('../services/prompts/promptReadiness');
 const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStorageService');
 const {
 	isNewsMonitorPaused,
@@ -114,6 +116,33 @@ function providerDependencyStatus({ enabled, configured, provider = null }) {
 	return {
 		provider,
 		...dependencyStatus({ enabled, configured }),
+	};
+}
+
+/**
+ * Issue #1178. `ready` comes from observed prompt resolutions, not from credential
+ * shape, so flipping `ENABLE_LANGFUSE_PROMPTS=true` cannot make a deployment that
+ * falls back to the local prompt file report itself as ready.
+ *
+ * `schemaDrift` is the rollout signal for a Langfuse prompt that has not been
+ * republished after a local-fallback contract change (#1031): it is not a failure,
+ * but it does mean the managed prompt is behind the code.
+ */
+function getLangfusePromptDependencyStatus(langfusePromptsEnabled) {
+	const status = getPromptReadiness().getStatus();
+
+	if (!langfusePromptsEnabled) {
+		return status;
+	}
+
+	const drift = getPromptService().getSchemaDriftStatus();
+	if (Object.keys(drift).length === 0) {
+		return status;
+	}
+
+	return {
+		...status,
+		schemaDrift: Object.values(drift),
 	};
 }
 
@@ -345,10 +374,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			configured: hasValue(process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE),
 		}),
 	};
-	const langfuse = dependencyStatus({
-		enabled: langfusePromptsEnabled,
-		configured: hasValue(process.env.LANGFUSE_PUBLIC_KEY) && hasValue(process.env.LANGFUSE_SECRET_KEY),
-	});
+	const langfuse = getLangfusePromptDependencyStatus(langfusePromptsEnabled);
 	const braveSearch = dependencyStatus({
 		enabled: newsMonitorEnabled && forceBraveSearch,
 		configured: hasValue(process.env.BRAVE_SEARCH_API_KEY),

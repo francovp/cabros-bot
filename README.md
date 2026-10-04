@@ -336,6 +336,55 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 | `SIGNAL_OUTCOME_WORKER_ROLE` | `web` | `web`/`worker`/`disabled` | Which entrypoint may start the sweep. Environment-only. |
 | `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` | `120000` | `10000`–`600000` | Distributed sweep lease duration. Environment-only. |
 
+### Langfuse Dynamic Prompt Readiness
+
+`ENABLE_LANGFUSE_PROMPTS=true` is enabled in production by `render.yaml` on the web service and on the jobs worker (which starts the news-monitor and alert schedulers and therefore resolves the same prompts). Previews keep it off, so a throwaway PR deploy cannot publish traces against the production Langfuse project or spend its quota. The credentials are `sync: false` and must be set in the Render dashboard for each service.
+
+Setting the flag is **necessary but not sufficient**. `PromptService` **fails open to the local prompt file** on any remote failure, which is what keeps alert delivery alive — and it also means a deployment where every alert silently resolves locally looks exactly like a healthy one. `dependencies.langfuse.configured` reflects credential *shape* only; a typo'd, revoked, or wrong-project key passes it. So `ready` requires an observed successful prompt resolution instead:
+
+| `status` | Meaning |
+| :--- | :--- |
+| `disabled` | `ENABLE_LANGFUSE_PROMPTS` is not `true`. Local prompts are the configured intent, not a fallback. |
+| `misconfigured` | Enabled, but a Langfuse credential is missing or blank. |
+| `unverified` | Configured, but no prompt has resolved yet. Not a failure — and not health. |
+| `ready` | At least one managed prompt has actually resolved from Langfuse. |
+| `degraded` | A resolution failed and the local file was used instead. `lastErrorReason` names the class. |
+
+`lastErrorReason` is a **closed enum** (`langfuse_not_configured`, `langfuse_client_unavailable`, `langfuse_auth_failed`, `langfuse_prompt_not_found`, `langfuse_timeout`, `langfuse_invalid_response`, `langfuse_unavailable`) because a Langfuse error body can embed the project id, base URL, and API key; an unrecognized failure collapses to `langfuse_unavailable` and raw provider text never reaches the response. Only the `LANGFUSE_BASE_URL` **host** is reported, never the credentials.
+
+Three counters answer the question the flag cannot:
+
+- **`localFallbackCount`** — how many resolutions used the local file *while the gate was on*. It is always `0` while the gate is off. This is the number that proves the enablement is actually doing something; `localFallbackByPrompt` shows which prompts are behind.
+- **`byPrompt[].langfuse` / `.local` / `.lastVersion`** — per-prompt provenance, so a *partial* rollout is visible and you can see which Langfuse prompt version an alert actually used.
+- **`consecutiveFailures`** — cleared by the next success, so publishing the missing label mid-incident self-heals without a restart.
+
+Unlike equity market data, this feature **does** have a bounded startup probe (5s, `unref`'d, fail-open, non-blocking) that resolves every registered prompt once. Without it an idle deployment would stay `unverified` indefinitely and could not distinguish working prompts from the dominant failure mode of this enablement: valid credentials paired with a `production` label that was never published, so every fetch 404s and every alert falls back to the local file forever.
+
+Verify the rollout on the deployed service rather than trusting the flag:
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
+  https://cabros-bot-telegram.onrender.com/api/capabilities \
+  | jq '{flag: .featureFlags.langfusePrompts,
+         dep: .dependencies.langfuse | {status, ready, label, promptsSucceeded,
+                                         localFallbackCount, lastErrorReason,
+                                         fallingBack: .localFallbackByPrompt}}'
+```
+
+`status: "ready"` with a non-zero `promptsSucceeded` and an empty `fallingBack` map is the evidence the managed prompts are live. `status: "unverified"` right after a deploy is expected until the probe settles.
+
+**`schemaDrift` is a rollout signal, not a failure.** A Langfuse `alert-enrichment` prompt that has not been republished after a local-fallback contract change (for example the #1031 reference anchors) is reported under `dependencies.langfuse.schemaDrift` with the missing markers listed. Use the [`langfuse-prompt-sync`](.agents/skills/langfuse-prompt-sync/SKILL.md) skill to publish. `promptProvenance` on each stored enriched alert carries the same signal per record.
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `ENABLE_LANGFUSE_PROMPTS` | `false` (`render.yaml`: `true` on web + jobs worker) | Master gate for Langfuse prompt resolution. Environment-only — a process-startup gate. |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | — | Project credentials. **Secrets**: Render dashboard only, never a checked-in file. |
+| `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` | Region or self-hosted host. Environment-only — an external destination. |
+| `LANGFUSE_PROMPT_LABEL` | `production` in prod-like envs, `latest` elsewhere | Which label to fetch. Environment-only. |
+| `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` | `0` for `latest`, `60` otherwise (`render.yaml` pins `300`) | Langfuse SDK prompt cache TTL. Environment-only. |
+
+All five are **environment-only** for Remote Config parity: credentials are secrets, `LANGFUSE_BASE_URL` is an external destination, and the gate and label are resolved once at startup.
+
 ### Equity Market Data Readiness
 
 `ENABLE_EQUITY_MARKET_DATA=true` plus `EQUITY_MARKET_DATA_PROVIDER=twelve-data` and `TWELVE_DATA_API_KEY` enables equity outcome evaluation for `BATS`, `NASDAQ`, `NYSE`, `AMEX`, `NYSE ARCA`, `FX_IDC`, and `SPCFD` signals. Setting those variables is **necessary but not sufficient**, so `/api/status` will not report the feature as working on the strength of the key alone.

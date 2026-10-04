@@ -11,6 +11,11 @@ const {
 	PromptKeys,
 	getPromptDefinition,
 } = require('./promptRegistry');
+const {
+	classifyPromptError,
+	getPromptReadiness,
+	recordPromptReadinessSafely,
+} = require('./promptReadiness');
 
 const REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS = Object.freeze([
 	'invalidation_level',
@@ -158,6 +163,10 @@ class PromptService {
 			if (remotePrompt) {
 				return remotePrompt;
 			}
+
+			recordPromptReadinessSafely(
+				() => getPromptReadiness().recordLocalFallback({ promptName: definition.name }),
+			);
 		}
 
 		return this.resolveLocalPrompt(definition, variables, options);
@@ -192,6 +201,10 @@ class PromptService {
 		let client;
 		const usingDefaultClientProvider = this.clientProvider === getLangfuseClient;
 
+		// Asking for a remote prompt and not getting one is the event an operator
+		// needs to see, so this counts even when client initialization is refused.
+		recordPromptReadinessSafely(() => getPromptReadiness().recordAttempt());
+
 		try {
 			client = await this.clientProvider();
 		} catch (error) {
@@ -202,6 +215,9 @@ class PromptService {
 				`langfuse-disabled:${disabledReason}`,
 				`[PromptService] Langfuse prompt management unavailable, using local fallbacks: ${disabledReason}`,
 			);
+			recordPromptReadinessSafely(
+				() => getPromptReadiness().recordFailure(classifyPromptError(error)),
+			);
 			return null;
 		}
 
@@ -211,6 +227,9 @@ class PromptService {
 				this.warnOnce(
 					`langfuse-disabled:${disabledReason}`,
 					`[PromptService] Langfuse prompt management unavailable, using local fallbacks: ${disabledReason}`,
+				);
+				recordPromptReadinessSafely(
+					() => getPromptReadiness().recordFailure(classifyPromptError(disabledReason)),
 				);
 				return null;
 			}
@@ -258,9 +277,19 @@ class PromptService {
 			};
 
 			if (definition.type === 'chat') {
+				recordPromptReadinessSafely(() => getPromptReadiness().recordSuccess({
+					promptName: definition.name,
+					label,
+					version: prompt.version,
+				}));
 				return this.normalizeChatPrompt(compiledPrompt, metadata);
 			}
 
+			recordPromptReadinessSafely(() => getPromptReadiness().recordSuccess({
+				promptName: definition.name,
+				label,
+				version: prompt.version,
+			}));
 			return {
 				type: 'text',
 				text: normalizeMessageContent(compiledPrompt),
@@ -270,6 +299,9 @@ class PromptService {
 			this.warnOnce(
 				`langfuse-fetch:${definition.name}:${error.message}`,
 				`[PromptService] Failed to fetch Langfuse prompt "${definition.name}", using local fallback: ${error.message}`,
+			);
+			recordPromptReadinessSafely(
+				() => getPromptReadiness().recordFailure(classifyPromptError(error)),
 			);
 			return null;
 		}

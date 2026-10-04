@@ -54,7 +54,9 @@ To confirm the cap is live in the deployment you are querying, read `enrichment.
 
 ### How Langfuse Prompt Management Works
 
-When `ENABLE_LANGFUSE_PROMPTS=true`, runtime prompts are fetched from Langfuse through the centralized prompt service in `src/services/prompts/`.
+When `ENABLE_LANGFUSE_PROMPTS=true`, runtime prompts are fetched from Langfuse through the centralized prompt service in `src/services/prompts/`. The flag is enabled in production on the web service and the jobs worker (`render.yaml`), with previews off.
+
+Because resolution fails open, the flag is not evidence that prompts resolve. `dependencies.langfuse` on `/api/status` reports a **proven** verdict — `unverified` until the first successful resolution, then `ready`, or `degraded` with a closed-enum `lastErrorReason` — plus `localFallbackCount`, `byPrompt`, and `localFallbackByPrompt` so a partial rollout is visible. A bounded startup probe resolves every registered prompt once so an idle deployment is not stuck at `unverified`. See [Environment Configuration](environment-configuration.md#verifying-langfuse-prompts-are-actually-resolving).
 
 The local fallback prompts now live as editable text templates under `src/services/prompts/defaults/`, which makes them much easier to review, diff, and version independently from the prompt registry code.
 

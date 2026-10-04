@@ -52,6 +52,7 @@ const { alertSchedulerService } = require('./src/services/scheduler');
 const { adminSseService } = require('./src/services/sse/AdminSseService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
+const { probeManagedPromptReadiness } = require('./src/services/prompts');
 const { configureServerTimeouts } = require('./src/lib/serverTimeouts');
 const Sentry = require('@sentry/node');
 
@@ -116,6 +117,12 @@ async function bootstrapApplication() {
 	if (lifecycle.isShuttingDown()) return;
 
 	void remoteConfigService.start();
+
+	// Proven, bounded and detached: `dependencies.langfuse.ready` on /api/status
+	// needs one observed resolution to flip to true, and without this an idle
+	// deployment could not tell working prompts from a valid-credential /
+	// unpublished-label pair that falls back to the local file forever (#1178).
+	void probeManagedPromptReadiness();
 
 	// Start background signal outcome evaluation worker if enabled
 	SignalOutcomeService.startWorker();

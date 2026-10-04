@@ -12513,6 +12513,238 @@
           "response": []
         }
       ]
+    },
+    {
+      "name": "Get Status - Langfuse prompt readiness (issue #1178)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Issue #1178 enables Langfuse dynamic prompts in production. `PromptService` fails open to the local prompt file on any remote failure, so before this change a deployment where every alert silently resolved locally reported the same `ready` verdict as a working one. `configured` is credential shape only; `ready` is true only after an observed successful prompt resolution, and `status` is `unverified` until one is observed. A bounded startup probe resolves every registered prompt once so an idle deployment still gets a proven verdict."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Langfuse prompt readiness is not claimed on credential shape alone', function () {",
+              "  const body = pm.response.json();",
+              "  const langfuse = body.dependencies.langfuse;",
+              "  pm.expect(pm.response.code).to.eql(200);",
+              "  pm.expect(body.featureFlags.langfusePrompts).to.eql(true);",
+              "  pm.expect(langfuse).to.be.an('object');",
+              "  pm.expect(langfuse.enabled).to.eql(true);",
+              "  pm.expect(langfuse.configured).to.eql(true);",
+              "  pm.expect(langfuse.ready).to.be.oneOf([true, false]);",
+              "  pm.expect(['disabled', 'misconfigured', 'unverified', 'ready', 'degraded']).to.include(langfuse.status);",
+              "  pm.expect(langfuse.ready).to.eql(langfuse.status === 'ready');",
+              "  pm.expect(['unverified', 'verified', 'degraded']).to.include(langfuse.readiness);",
+              "  pm.expect(langfuse.failOpen).to.eql(true);",
+              "});",
+              "pm.test('ready implies at least one observed success', function () {",
+              "  const langfuse = pm.response.json().dependencies.langfuse;",
+              "  if (langfuse.ready) {",
+              "    pm.expect(langfuse.promptsSucceeded).to.be.above(0);",
+              "    pm.expect(langfuse.consecutiveFailures).to.eql(0);",
+              "    pm.expect(langfuse.lastSuccessAt).to.be.a('string');",
+              "  }",
+              "  pm.expect(langfuse.promptsFailed).to.be.at.most(langfuse.promptsAttempted);",
+              "});",
+              "pm.test('a disabled gate reports disabled even with counters present', function () {",
+              "  const langfuse = pm.response.json().dependencies.langfuse;",
+              "  if (!langfuse.enabled) {",
+              "    pm.expect(langfuse.status).to.eql('disabled');",
+              "    pm.expect(langfuse.ready).to.eql(false);",
+              "    pm.expect(langfuse.localFallbackCount).to.eql(0);",
+              "  }",
+              "});",
+              "pm.test('lastErrorReason is a closed enum, never a provider message', function () {",
+              "  const langfuse = pm.response.json().dependencies.langfuse;",
+              "  const allowed = [",
+              "    null, 'langfuse_not_configured', 'langfuse_client_unavailable', 'langfuse_auth_failed',",
+              "    'langfuse_prompt_not_found', 'langfuse_timeout', 'langfuse_invalid_response', 'langfuse_unavailable',",
+              "  ];",
+              "  pm.expect(allowed).to.include(langfuse.lastErrorReason);",
+              "});",
+              "pm.test('the response never exposes Langfuse credentials', function () {",
+              "  const raw = pm.response.text();",
+              "  pm.expect(raw).to.not.include('sk-lf-');",
+              "  pm.expect(raw).to.not.include('pk-lf-');",
+              "  pm.expect(raw).to.not.include('LANGFUSE_SECRET_KEY');",
+              "});",
+              "pm.test('only the Langfuse base URL host is reported', function () {",
+              "  const langfuse = pm.response.json().dependencies.langfuse;",
+              "  if (langfuse.baseUrlHost !== null) {",
+              "    pm.expect(langfuse.baseUrlHost).to.not.include('/');",
+              "    pm.expect(langfuse.baseUrlHost).to.not.include('@');",
+              "  }",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 unverified - enabled and configured, no prompt resolved yet",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"langfusePrompts\": true\n  },\n  \"dependencies\": {\n    \"langfuse\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"unverified\",\n      \"readiness\": \"unverified\",\n      \"failOpen\": true,\n      \"baseUrlHost\": \"cloud.langfuse.com\",\n      \"label\": \"production\",\n      \"cacheTtlSeconds\": 300,\n      \"promptsAttempted\": 0,\n      \"promptsSucceeded\": 0,\n      \"promptsFailed\": 0,\n      \"localFallbackCount\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null,\n      \"byPrompt\": {},\n      \"localFallbackByPrompt\": {}\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 ready - a managed prompt resolved from Langfuse",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"langfusePrompts\": true\n  },\n  \"dependencies\": {\n    \"langfuse\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"readiness\": \"verified\",\n      \"failOpen\": true,\n      \"baseUrlHost\": \"cloud.langfuse.com\",\n      \"label\": \"production\",\n      \"cacheTtlSeconds\": 300,\n      \"promptsAttempted\": 128,\n      \"promptsSucceeded\": 128,\n      \"promptsFailed\": 0,\n      \"localFallbackCount\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": \"2026-10-04T12:00:05.000Z\",\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null,\n      \"byPrompt\": {\n        \"alert-enrichment\": {\n          \"langfuse\": 64,\n          \"local\": 0,\n          \"failures\": 0,\n          \"lastLabel\": \"production\",\n          \"lastVersion\": 12,\n          \"lastErrorReason\": null\n        }\n      },\n      \"localFallbackByPrompt\": {}\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 degraded - production label unpublished, alerts still delivered via local fallback",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"langfusePrompts\": true\n  },\n  \"dependencies\": {\n    \"langfuse\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"degraded\",\n      \"readiness\": \"degraded\",\n      \"failOpen\": true,\n      \"baseUrlHost\": \"cloud.langfuse.com\",\n      \"label\": \"production\",\n      \"cacheTtlSeconds\": 300,\n      \"promptsAttempted\": 140,\n      \"promptsSucceeded\": 128,\n      \"promptsFailed\": 12,\n      \"localFallbackCount\": 12,\n      \"consecutiveFailures\": 12,\n      \"lastSuccessAt\": \"2026-10-04T11:58:41.220Z\",\n      \"lastFailureAt\": \"2026-10-04T12:00:05.901Z\",\n      \"lastErrorReason\": \"langfuse_prompt_not_found\",\n      \"byPrompt\": {\n        \"alert-enrichment\": {\n          \"langfuse\": 64,\n          \"local\": 12,\n          \"failures\": 12,\n          \"lastLabel\": \"production\",\n          \"lastVersion\": null,\n          \"lastErrorReason\": \"langfuse_prompt_not_found\"\n        }\n      },\n      \"localFallbackByPrompt\": {\n        \"alert-enrichment\": 12\n      }\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 disabled - gate off, local prompts are the configured intent",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"langfusePrompts\": false\n  },\n  \"dependencies\": {\n    \"langfuse\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"readiness\": \"unverified\",\n      \"failOpen\": true,\n      \"baseUrlHost\": \"cloud.langfuse.com\",\n      \"label\": \"production\",\n      \"cacheTtlSeconds\": 300,\n      \"promptsAttempted\": 0,\n      \"promptsSucceeded\": 0,\n      \"promptsFailed\": 0,\n      \"localFallbackCount\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null,\n      \"byPrompt\": {},\n      \"localFallbackByPrompt\": {}\n    }\n  }\n}",
+          "response": []
+        }
+      ]
     }
   ]
 }
