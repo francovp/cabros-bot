@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { MainClient } = require('binance');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const TESTNET_BASE_URL = 'https://testnet.binance.vision';
 const DEMO_BASE_URL = 'https://demo-api.binance.com';
@@ -524,8 +525,8 @@ function sellableQuantity(symbolOrParams, requestedQtyArg, optionsArg = {}) {
 			estimatedNotional: '0',
 			adjusted: requestedStr !== null && requestedStr !== '0',
 			clampedToBalance: requestedStr !== null && compareDecimals(requestedStr, '0') > 0,
-			belowMinQty: Boolean(minQty && compareDecimals(minQty, '0') > 0),
-			belowMinNotional: Boolean(minNotional && compareDecimals(minNotional, '0') > 0),
+			belowMinQty: false,
+			belowMinNotional: false,
 			exceedsMaxQty: false,
 			reason: 'ZERO_BALANCE',
 		};
@@ -567,10 +568,10 @@ function sellableQuantity(symbolOrParams, requestedQtyArg, optionsArg = {}) {
 			minNotional,
 			effectivePrice: price ? String(price).trim() : null,
 			estimatedNotional: '0',
-			adjusted: requestedStr !== '0',
+			adjusted: requestedStr !== null ? '0' !== requestedStr : false,
 			clampedToBalance,
-			belowMinQty: Boolean(minQty && compareDecimals(minQty, '0') > 0),
-			belowMinNotional: Boolean(minNotional && compareDecimals(minNotional, '0') > 0),
+			belowMinQty: false,
+			belowMinNotional: false,
 			exceedsMaxQty: false,
 			reason: 'BELOW_STEP_SIZE',
 		};
@@ -1646,7 +1647,7 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 
 			const now = Date.now();
-			const cacheTtlMs = parseBalanceCacheTtl(process.env.BINANCE_BALANCE_CACHE_MS);
+			const cacheTtlMs = parseBalanceCacheTtl(getRuntimeConfig().BINANCE_BALANCE_CACHE_MS);
 			const forceRefresh = query.refresh === true || query.refresh === 'true';
 
 			let rawBalances;
@@ -1768,7 +1769,7 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 
 			let price = options.price;
-			if (!price && options.minNotional === undefined) {
+			if (!price) {
 				try {
 					const client = createClient(config);
 					const avg = await client.getAvgPrice({ symbol: normalizedSymbol });
@@ -1779,13 +1780,13 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 
 			return sellableQuantity({
+				...options,
 				symbol: normalizedSymbol,
 				requestedQuantity,
 				balances,
 				symbolInfo,
 				filters,
 				price,
-				...options,
 			});
 		},
 	};
