@@ -121,12 +121,14 @@ async function attachInlineKeyboardAfterPersistence({ manager, results, routing,
 }
 
 async function processEnrichment(alert, options) {
-	const { tokenUsage, useTradingViewData, parentSpan } = options;
+	const { tokenUsage, useTradingViewData, parentSpan, parsedSignal } = options;
 	// `postAlert` parses the same signal for repeat-suppression/persistence/outcome
 	// eligibility; this function only needs to know whether the text is a TradingView
-	// signal at all, so it derives that here rather than taking a parameter it would
-	// otherwise only forward.
-	const hasTradingViewSignal = Boolean(parseTradingViewSignal(alert.text));
+	// signal at all. Reuse that parse when it is supplied so enrichment and persistence
+	// agree on the trade direction used for deterministic risk/reward (GH-599); fall back
+	// to a local parse for any direct caller that has none.
+	const parsed = parsedSignal || parseTradingViewSignal(alert.text);
+	const hasTradingViewSignal = Boolean(parsed);
 	const runtimeConfig = getRuntimeConfig();
 	const isGeminiEnabled = runtimeConfig.ENABLE_GEMINI_GROUNDING;
 	const isTradingViewMcpEnabled = runtimeConfig.ENABLE_TRADINGVIEW_MCP_ENRICHMENT && useTradingViewData;
@@ -149,7 +151,7 @@ async function processEnrichment(alert, options) {
 
 		try {
 			console.debug('Starting alert enrichment process');
-			const enrichedAlert = await enrichAlert({ text: alert.text }, { tokenUsage, useTradingViewData });
+			const enrichedAlert = await enrichAlert({ text: alert.text }, { tokenUsage, useTradingViewData, parsedSignal: parsed });
 			if (enrichedAlert && typeof enrichedAlert === 'object') {
 				enrichedAlert.tokenUsage = tokenUsage.toJSON();
 				enriched = true;
@@ -315,7 +317,7 @@ function postAlert(botOrGetter) {
 			}
 
 			const tokenUsage = new TokenUsageTracker();
-			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan });
+			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan, parsedSignal });
 
 			const tokenUsageJSON = tokenUsage.toJSON();
 			tokenUsageJSON.formattedSummary = tokenUsage.formatSummary();

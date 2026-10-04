@@ -159,22 +159,95 @@ describe('Alert Handler', () => {
 
 	it('keeps grounded levels for free-text alerts that carry no parseable signal', async () => {
 		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
-		// Free text has no symbol/side, so the real deriveFallbackTradePlan returns null.
 		withGroundingOnly({
 			sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100,
 			invalidation_level: 90, target_level: 120,
 			technical_levels: { supports: ['90'], resistances: ['120'] },
 		});
+		// Faithful to production: `deriveFallbackTradePlan` returns null when the text
+		// yields no symbol/side, so free text can never get a heuristic plan. `withGroundingOnly`
+		// deliberately leaves a heuristic plan mocked in, and this overrides it back to the
+		// real behavior so the assertions below test production reality rather than the mock.
 		deriveFallbackTradePlan.mockResolvedValue(null);
 
 		const result = await enrichAlert({ text: 'Bitcoin is breaking out above 100k resistance' });
 
 		// Without a side the ratio cannot be computed, but the grounded entry price and
-		// levels must still survive rather than be discarded.
+		// levels must still survive rather than be discarded, and no derived-quote
+		// provenance may be stamped on them.
 		expect(result.current_price).toBe(100);
 		expect(result.invalidation_level).toBe(90);
 		expect(result.target_level).toBe(120);
 		expect(result).not.toHaveProperty('risk_reward_ratio');
+		expect(result.priceSource).not.toBe('derived-quote');
+		expect(result).not.toHaveProperty('price_currency');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	// GH-599 regression: the merge path (Gemini + MCP) had its own copy of the discard
+	// logic, so fixing the Gemini-only branch left the same data loss in place whenever
+	// `useTradingViewData=true` — the common production configuration. `hasCompleteRiskMetadata`
+	// requiring the ratio meant a grounded block with entry + both levels was overwritten by
+	// `calculateFallbackRiskLevels`, a per-timeframe percentage heuristic derived off the MCP
+	// price. These two cases cover the realistic degraded-MCP shapes: MCP present but without
+	// its own risk block (A), and MCP with no usable price at all (B).
+	const withMergePath = ({ gemini, mcp }) => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		groundAlert.mockResolvedValue({ insights: [], sources: [], ...gemini });
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue(mcp);
+	};
+
+	it('preserves grounded levels through the merge path when MCP supplies a price but no risk block', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		withMergePath({
+			gemini: {
+				sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100,
+				invalidation_level: 90, target_level: 120,
+				technical_levels: { supports: ['90'], resistances: ['120'] },
+			},
+			mcp: { current_price: 110, insights: [], sources: [], tradingViewEnrichmentApplied: true },
+		});
+
+		const result = await enrichAlert(
+			{ text: 'BINANCE:BTCUSDT(60) pasó una señal de COMPRA' },
+			{ useTradingViewData: true },
+		);
+
+		// Grounded 90/120 must survive, NOT the 1%-stop/2%-target heuristic off the MCP
+		// price of 110 that `calculateFallbackRiskLevels` would produce.
+		expect(result.invalidation_level).toBe(90);
+		expect(result.target_level).toBe(120);
+		expect(result.risk_reward_ratio).toBeCloseTo(2, 4);
+		// The MCP price still wins as the emitted entry price.
+		expect(result.current_price).toBe(110);
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it('preserves grounded levels and entry price through the merge path when MCP has no usable price', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		withMergePath({
+			gemini: {
+				sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100,
+				invalidation_level: 90, target_level: 120,
+				technical_levels: { supports: ['90'], resistances: ['120'] },
+			},
+			// `_toEnrichedAlert` always returns a truthy object; `current_price` is null when
+			// the MCP analysis carried no usable price — exactly this degraded case.
+			mcp: { current_price: null, price_data: {}, insights: [], sources: [], tradingViewEnrichmentApplied: false },
+		});
+
+		const result = await enrichAlert(
+			{ text: 'BINANCE:BTCUSDT(60) pasó una señal de COMPRA' },
+			{ useTradingViewData: true },
+		);
+
+		expect(result.current_price).toBe(100);
+		expect(result.invalidation_level).toBe(90);
+		expect(result.target_level).toBe(120);
+		expect(result.risk_reward_ratio).toBeCloseTo(2, 4);
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});

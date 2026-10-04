@@ -10621,11 +10621,12 @@
                   "levelsSource": {
                     "type": "string",
                     "enum": [
+                      "tradingview-mcp",
                       "gemini-grounding",
                       "fallback-trade-plan",
                       "derived-quote"
                     ],
-                    "description": "Provenance of the emitted risk levels (invalidation_level / target_level / risk_reward_ratio). Set to 'gemini-grounding' only when Gemini-parsed fallback levels are emitted because TradingView MCP data was absent or failed; omitted when MCP-derived levels win (GH-509 / CB-226). Set to 'fallback-trade-plan' when TradingView MCP supplied the price but its ATR-derived risk block was rejected (zero, non-finite, or failing the side/positivity checks) and the secondary heuristic timeframe risk plan was used instead (GH-1229). Set to 'derived-quote' when levels were derived from the MCP quote because neither provider returned a usable block."
+                    "description": "Provenance of the emitted risk levels (invalidation_level / target_level / risk_reward_ratio). 'tradingview-mcp' when the MCP ATR-derived block won, which is the default for MCP-sourced alerts. 'gemini-grounding' only when Gemini-parsed fallback levels are emitted because TradingView MCP data was absent or failed (GH-509 / CB-226). 'fallback-trade-plan' when TradingView MCP supplied the price but its ATR-derived risk block was rejected (zero, non-finite, or failing the side/positivity checks) and the secondary heuristic timeframe risk plan was used instead (GH-1229). 'derived-quote' when levels were derived from the MCP quote because neither provider returned a usable block (GH-599)."
                   },
                   "current_price": {
                     "type": [

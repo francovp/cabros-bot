@@ -66,21 +66,36 @@ function pickSetupType(...values) {
 	));
 }
 
+// GH-599: a provider block counts as complete when it carries both directional levels and
+// a usable risk/reward ratio. `risk_reward_ratio` is deliberately NOT relaxed to "any two
+// of three fields": an MCP ATR block legitimately omits `current_price` (its levels come
+// from the analysis, not from a quoted entry), and relaxing the ratio here would make such
+// a block look incomplete and replace real ATR levels with a timeframe heuristic.
+//
+// What the ratio relaxation actually fixes is handled in `completeGroundedRiskMetadata`:
+// a GROUNDED block that has an entry price plus both levels but no ratio is completed
+// arithmetically instead of being discarded. See the call sites for the ordering.
 function hasCompleteRiskMetadata(value = {}) {
-	return ['invalidation_level', 'target_level', 'risk_reward_ratio']
-		.every(field => isOptionalRiskValue(value[field]));
+return ['invalidation_level', 'target_level', 'risk_reward_ratio']
+	.every(field => isOptionalRiskValue(value[field]));
 }
 
-// GH-599: `risk_reward_ratio` is the one optional-risk field the provider is allowed
-// to omit, and it is pure arithmetic over fields we already have. Treating its absence
-// as "the whole block is unusable" made the fallback path discard real grounded entry
-// prices and levels — the precise data loss this issue exists to prevent. So compute
-// the ratio from the grounded entry/levels instead of throwing them away.
+// GH-599: complete a grounded block that has both levels and an entry price but is missing
+// the optional ratio, so real provider levels are preserved instead of being overwritten by
+// a derived-quote heuristic plan.
 //
-// A returned `side: null` means the block is NOT salvageable and the caller must fall
-// back to a derived plan: the entry price is missing/non-positive, or the levels are
-// not on the correct side of entry (a BUY whose stop sits above entry has no R:R).
+// A returned `side: null` means the block is NOT salvageable and the caller must fall back
+// to a derived plan: the entry price is missing/non-positive, or the levels sit on the wrong
+// side of entry (a BUY whose stop is above entry has no R:R to express).
 // `computeDeterministicRiskReward` already encodes exactly those rejections.
+//
+// The caller-supplied `parsedSignal` is the SAME object the handler passes to persistence and
+// outcome eligibility. Deriving the side independently here once made the adapter and
+// `applyDeterministicRiskReward` disagree, and because the adapter's ratio is trusted as
+// already-valid at persist time, a wrong-direction side here would be persisted unchallenged.
+// Accepts either a provider block (which carries `current_price`) or the internal
+	// selection record from `selectRiskMetadata()` (which carries `riskLevelsEntryPrice`,
+	// see there for why it is not named `current_price`).
 function completeGroundedRiskMetadata(value = {}, parsedSignal) {
 	const side = parsedSignal && parsedSignal.side ? parsedSignal.side : null;
 	if (!side) {
@@ -88,7 +103,7 @@ function completeGroundedRiskMetadata(value = {}, parsedSignal) {
 	}
 
 	const riskRewardRatio = computeDeterministicRiskReward({
-		entry: value.current_price,
+		entry: value.riskLevelsEntryPrice ?? value.current_price,
 		invalidation: value.invalidation_level,
 		target: value.target_level,
 		side,
@@ -121,9 +136,17 @@ function isHeuristicRiskBlock(value = {}) {
 function selectRiskMetadata(gemini, mcp) {
 	const mcpComplete = hasCompleteRiskMetadata(mcp);
 	const heuristicMcp = mcpComplete && isHeuristicRiskBlock(mcp);
+	// GH-599: a block that has both directional levels plus an entry price is a real
+	// provider block even when the optional ratio is absent — the ratio is filled in
+	// arithmetically by the caller. Excluding those here made the merge path fall straight
+	// through to no source at all, so the grounded levels never reached the repair branch.
+	const isUsableRiskBlock = (block) => hasCompleteRiskMetadata(block)
+		|| (toPositiveFiniteNumber(block.current_price) !== null
+			&& isOptionalRiskValue(block.invalidation_level)
+			&& isOptionalRiskValue(block.target_level));
 	const source = [
-		mcpComplete && !heuristicMcp ? mcp : null,
-		hasCompleteRiskMetadata(gemini) ? gemini : null,
+		!heuristicMcp && isUsableRiskBlock(mcp) ? mcp : null,
+		isUsableRiskBlock(gemini) ? gemini : null,
 		heuristicMcp ? mcp : null,
 	].find(Boolean) || null;
 	const setupType = pickSetupType(gemini.setup_type, mcp.setup_type);
@@ -139,6 +162,15 @@ function selectRiskMetadata(gemini, mcp) {
 		invalidation_level: source.invalidation_level,
 		target_level: source.target_level,
 		risk_reward_ratio: source.risk_reward_ratio,
+		// `riskLevelsEntryPrice` is an INTERNAL key, deliberately not named
+		// `current_price`: `optionalRiskMetadata` is spread into the emitted payload after
+		// `current_price` has been resolved (MCP price wins over Gemini), so emitting it here
+		// would silently overwrite the winning entry price with the losing block's. It exists
+		// only so the caller can complete a missing ratio from the same levels it selected
+		// (GH-599).
+		...(toPositiveFiniteNumber(source.current_price) !== null
+			? { riskLevelsEntryPrice: toPositiveFiniteNumber(source.current_price) }
+			: {}),
 		// Reports WHICH block actually supplied the risk levels, so a caller cannot
 		// describe a rejected heuristic block as the origin of the emitted levels.
 		riskLevelsSource: source === mcp ? (mcp.levelsSource || 'tradingview-mcp') : 'gemini-grounding',
@@ -307,7 +339,7 @@ function isMessageFooterMetadataEnabled() {
 	return getRuntimeConfig().ENABLE_MESSAGE_FOOTER_METADATA;
 }
 
-function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
+function mergeEnrichmentData(text, geminiEnriched, mcpEnriched, parsedSignal = null) {
 	try {
 		const gemini = geminiEnriched || {};
 		const mcp = mcpEnriched || {};
@@ -349,9 +381,23 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 			|| mcp.levelsSource
 			|| undefined;
 
-		if (!hasCompleteRiskMetadata(optionalRiskMetadata) && mcpCurrentPrice) {
-			const parsed = parseTradingViewSignal(text);
-			if (parsed && parsed.side) {
+		// The ratio is the only optional-risk field a provider may omit, so it is the only
+		// gap worth repairing here. Gate on the ratio itself rather than on overall
+		// completeness: a block that already carries every field must not be disturbed, and
+		// a block missing the ratio should first be *completed*, not replaced.
+		if (!isOptionalRiskValue(optionalRiskMetadata.risk_reward_ratio)) {
+			const parsed = parsedSignal || parseTradingViewSignal(text);
+			// GH-599: when the selected block already carries both directional levels and an
+			// entry price, its only gap is the optional ratio. Complete it arithmetically so
+			// the provider's real levels survive. Substituting the heuristic plan here is what
+			// silently discarded grounded levels on this merge path.
+			const grounded = completeGroundedRiskMetadata(optionalRiskMetadata, parsed);
+			if (grounded.side) {
+				optionalRiskMetadata = {
+					...optionalRiskMetadata,
+					risk_reward_ratio: grounded.risk_reward_ratio,
+				};
+			} else if (!hasCompleteRiskMetadata(optionalRiskMetadata) && mcpCurrentPrice && parsed && parsed.side) {
 				const fallback = calculateFallbackRiskLevels(mcpCurrentPrice, parsed.timeframe, parsed.side);
 				if (fallback) {
 					optionalRiskMetadata = {
@@ -393,7 +439,12 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 			...(gemini.promptProvenance ? { promptProvenance: gemini.promptProvenance } : {}),
 			...Object.fromEntries(
 				Object.entries(optionalRiskMetadata)
-					.filter(([key, value]) => key !== 'riskLevelsSource' && value !== undefined),
+					// Both keys are internal bookkeeping for the ratio-repair branch and must
+					// never reach the emitted payload: `current_price` is resolved separately
+					// above and must stay MCP-preferred.
+					.filter(([key, value]) => key !== 'riskLevelsSource'
+						&& key !== 'riskLevelsEntryPrice'
+						&& value !== undefined),
 			),
 		};
 	} catch (error) {
@@ -519,6 +570,11 @@ async function enrichAlert(alert, options = {}) {
 	const inputText = (typeof alert === 'string') ? alert : (alert && typeof alert.text === 'string' ? alert.text : alert);
 	const metadata = (alert && alert.metadata) ? alert.metadata : null;
 	const tokenUsage = options.tokenUsage;
+	// GH-599: the caller already parsed this exact text for persistence and outcome
+	// eligibility. Accepting its parse keeps the side used for deterministic risk/reward
+	// identical in the adapter and at persist time, instead of each re-deriving it and
+	// risking a disagreement that persists an unchallenged wrong-direction ratio.
+	const sharedParsedSignal = options.parsedSignal || null;
 
 	const validated = validateAlert(inputText, metadata);
 	// validateAlert may return either a string (when mocked in tests) or an object { text, metadata }
@@ -587,7 +643,7 @@ async function enrichAlert(alert, options = {}) {
 		const geminiEnrichedAlert = await enrichWithGemini(text, tokenUsage);
 
 		if (mcpEnrichedAlert) {
-			return mergeEnrichmentData(text, geminiEnrichedAlert, mcpEnrichedAlert);
+			return mergeEnrichmentData(text, geminiEnrichedAlert, mcpEnrichedAlert, sharedParsedSignal);
 		}
 
 		if (geminiEnrichedAlert) {
@@ -601,12 +657,15 @@ async function enrichAlert(alert, options = {}) {
 				...(geminiEnrichedAlert.technical_levels ? { levelsSource: 'gemini-grounding' } : {}),
 			};
 
-			if (!hasCompleteRiskMetadata(geminiEnrichedAlert)) {
+			// Only the missing ratio is worth repairing, so gate on that. A block that already
+			// carries the ratio must not be disturbed, and a block missing it should first be
+			// *completed* from its own levels rather than replaced.
+			if (!isOptionalRiskValue(geminiEnrichedAlert.risk_reward_ratio)) {
 				// A grounded block missing ONLY the optional ratio is completed arithmetically
 				// so the grounded entry price and levels survive (GH-599). Only a block that
 				// is genuinely unusable (no usable entry, or levels on the wrong side of it)
 				// falls through to the derived-quote heuristic plan below.
-				const grounded = completeGroundedRiskMetadata(geminiEnrichedAlert, parseTradingViewSignal(text));
+				const grounded = completeGroundedRiskMetadata(geminiEnrichedAlert, sharedParsedSignal || parseTradingViewSignal(text));
 				if (grounded.side) {
 					// Only the ratio is new here: the levels came from the same object
 					// `result` was spread from, so they are already in place.
