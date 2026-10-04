@@ -181,10 +181,11 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 	const elementsById = {};
 	[
 		'legacy-connection', 'firebase-auth', 'auth-form', 'auth-email', 'auth-password', 'sign-in', 'sign-out',
-		'auth-state', 'api-key', 'key-state', 'save-key', 'clear-key', 'connection-form', 'view', 'sse-status', 'sse-label',
+		'auth-state', 'api-key', 'key-state', 'save-key', 'clear-key', 'connection-form', 'view', 'view-status',
+		'sse-status', 'sse-label',
 	].forEach((id) => {
 		const tag = id === 'api-key' ? 'input' : id === 'connection-form' ? 'form'
-			: id === 'view' ? 'section' : id === 'auth-form' ? 'div' : id.endsWith('key') ? 'button' : 'p';
+			: id === 'view' ? 'section' : id === 'view-status' ? 'p' : id === 'auth-form' ? 'div' : id.endsWith('key') ? 'button' : 'p';
 		const node = new FakeElement(tag);
 		node.id = id;
 		node.hidden = false;
@@ -230,6 +231,27 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 			return requestHelper.createRequest(input);
 		},
 	};
+	const windowLocation = { hostname: '', pathname: '/admin', search: '', ...location };
+	const historyCalls = [];
+	const windowListeners = {};
+	const applyHistoryUrl = (url) => {
+		const raw = String(url ?? '');
+		const [pathAndQuery, hash = ''] = raw.split('#');
+		const queryAt = pathAndQuery.indexOf('?');
+		windowLocation.pathname = queryAt === -1 ? pathAndQuery : pathAndQuery.slice(0, queryAt);
+		windowLocation.search = queryAt === -1 ? '' : pathAndQuery.slice(queryAt);
+		if (hash) windowLocation.hash = `#${hash}`;
+	};
+	const historyStub = {
+		pushState: (_state, _title, url) => {
+			historyCalls.push({ mode: 'push', url: String(url ?? '') });
+			applyHistoryUrl(url);
+		},
+		replaceState: (_state, _title, url) => {
+			historyCalls.push({ mode: 'replace', url: String(url ?? '') });
+			applyHistoryUrl(url);
+		},
+	};
 	const context = {
 		document,
 		URL,
@@ -258,7 +280,9 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 			CabrosAdminComponents: require('../../src/admin/admin-components'),
 			confirm,
 			firebase,
-			location,
+			history: historyStub,
+			location: windowLocation,
+			addEventListener: (type, listener) => { (windowListeners[type] ||= []).push(listener); },
 			URL: {
 				createObjectURL: jest.fn((blob) => `blob:${blob.type}`),
 				revokeObjectURL: jest.fn(),
@@ -272,7 +296,25 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 	);
 	documentListeners.DOMContentLoaded();
 
-	return { body, context, elementsById, helperCalls, storage, downloads, timers, timerDelays, titleHistory };
+	const dispatchPopState = async () => {
+		for (const listener of windowListeners.popstate || []) await listener({ type: 'popstate' });
+		await flush();
+	};
+
+	return {
+		body,
+		context,
+		elementsById,
+		helperCalls,
+		storage,
+		downloads,
+		timers,
+		timerDelays,
+		titleHistory,
+		historyCalls,
+		location: windowLocation,
+		dispatchPopState,
+	};
 }
 
 async function selectView(browser, name) {
@@ -5725,6 +5767,276 @@ describe('structured analysis forms', () => {
 	it('keeps the view region focusable for screen readers', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell).toMatch(/<section id="view"[^>]*tabindex="-1"/);
+	});
+
+	it('does not announce the whole workspace as a live region', () => {
+		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
+		const viewTag = shell.match(/<section id="view"[^>]*>/)[0];
+		expect(viewTag).not.toMatch(/aria-live/);
+		expect(shell).toMatch(/id="view-status"[^>]*role="status"[^>]*aria-live="polite"/);
+	});
+
+	describe('deep-linkable views and filter state', () => {
+		const editField = async (input, value) => {
+			input.value = value;
+			await input.dispatch('input');
+			await flush();
+		};
+
+		const alertSummaryQuery = (browser, route = '/api/alerts/summary') => {
+			const call = [...browser.helperCalls].reverse().find((input) => input.path === route);
+			return call && call.query;
+		};
+
+		const alertFilterFields = (browser, route) => {
+			const form = findForm(browser.elementsById.view, route);
+			const field = (name) => find(form, (node) => node.name === name
+				&& ['INPUT', 'SELECT', 'TEXTAREA'].includes(node.tagName));
+			return {
+				form,
+				from: field('from'),
+				to: field('to'),
+				limit: field('limit'),
+				source: field('source'),
+				enriched: field('enriched'),
+			};
+		};
+
+		const openApi = async (url) => {
+			if (url.endsWith('/openapi.json')) return response(contract);
+			if (url.startsWith('/api/alerts/summary')) return response({ success: true, summary: { totalAlerts: 1, window: {} } });
+			return response({ enabled: false, configured: false });
+		};
+
+		it('writes the active view into the URL on navigation', async () => {
+			const browser = createBrowser({ fetchImpl: openApi });
+			await flush();
+
+			await selectView(browser, 'alerts');
+
+			const lastCall = browser.historyCalls.at(-1);
+			expect(lastCall.mode).toBe('push');
+			expect(lastCall.url).toContain('view=alerts');
+			expect(browser.location.search).toContain('view=alerts');
+			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+		});
+
+		it('round-trips alert filters through the query string', async () => {
+			const browser = createBrowser({ fetchImpl: openApi });
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const fields = alertFilterFields(browser, '/api/alerts/summary');
+			await editField(fields.from, '2026-08-01T00:00');
+			await editField(fields.to, '2026-08-02T00:00');
+			await editField(fields.limit, '42');
+			await editField(fields.source, 'webhook');
+			await editField(fields.enriched, 'true');
+			await fields.form.dispatch('submit');
+			await flush();
+
+			const serialised = browser.location.search;
+			expect(serialised).toContain('view=alerts');
+			expect(serialised).toContain('alerts.summary.from=2026-08-01T00%3A00');
+			expect(serialised).toContain('alerts.summary.limit=42');
+			expect(serialised).toContain('alerts.summary.source=webhook');
+			expect(serialised).toContain('alerts.summary.enriched=true');
+			const originalQuery = alertSummaryQuery(browser);
+
+			const restored = createBrowser({ fetchImpl: openApi, location: { search: serialised } });
+			await flush();
+
+			expect(find(browser.body, (node) => node.dataset.view === 'alerts').attributes['aria-current']).toBe('page');
+			expect(browser.elementsById.view.textContent).toContain('Load alert analytics');
+
+			const restoredFields = alertFilterFields(restored, '/api/alerts/summary');
+			expect(restoredFields.from.value).toBe('2026-08-01T00:00');
+			expect(restoredFields.to.value).toBe('2026-08-02T00:00');
+			expect(restoredFields.limit.value).toBe('42');
+			expect(restoredFields.source.value).toBe('webhook');
+			expect(restoredFields.enriched.value).toBe('true');
+
+			await restoredFields.form.dispatch('submit');
+			await flush();
+			expect(alertSummaryQuery(restored)).toEqual(originalQuery);
+		});
+
+		it('keeps the summary and export filter sets independent', async () => {
+			const browser = createBrowser({ fetchImpl: openApi });
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const summary = alertFilterFields(browser, '/api/alerts/summary');
+			await editField(summary.limit, '11');
+			await summary.form.dispatch('submit');
+			await flush();
+
+			const exportFields = alertFilterFields(browser, '/api/alerts/export');
+			expect(exportFields.limit.value).not.toBe('11');
+			expect(browser.location.search).toContain('alerts.summary.limit=11');
+			expect(browser.location.search).not.toContain('alerts.export.limit=11');
+		});
+
+		it('round-trips outcomes symbol and status filters', async () => {
+			const browser = createBrowser({ fetchImpl: openApi });
+			await flush();
+			await selectView(browser, 'outcomes');
+
+			const form = findForm(browser.elementsById.view, '/api/outcomes');
+			const symbol = find(form, (node) => node.name === 'symbol');
+			const status = find(form, (node) => node.name === 'status');
+			await editField(symbol, 'BTCUSDT');
+			await editField(status, 'evaluated');
+			await form.dispatch('submit');
+			await flush();
+
+			const serialised = browser.location.search;
+			expect(serialised).toContain('outcomes.list.symbol=BTCUSDT');
+			expect(serialised).toContain('outcomes.list.status=evaluated');
+
+			const restored = createBrowser({ fetchImpl: openApi, location: { search: serialised } });
+			await flush();
+			const restoredForm = findForm(restored.elementsById.view, '/api/outcomes');
+			expect(find(restoredForm, (node) => node.name === 'symbol').value).toBe('BTCUSDT');
+			expect(find(restoredForm, (node) => node.name === 'status').value).toBe('evaluated');
+		});
+
+		it('falls back to the overview view and rewrites an unknown view value', async () => {
+			const browser = createBrowser({ fetchImpl: openApi, location: { search: '?view=does-not-exist' } });
+			await flush();
+
+			expect(browser.location.search).toBe('?view=overview');
+			expect(browser.historyCalls.some((call) => call.mode === 'replace' && call.url.includes('view=overview'))).toBe(true);
+			expect(browser.elementsById.view.textContent.length).toBeGreaterThan(0);
+			expect(find(browser.body, (node) => node.dataset.view === 'overview').attributes['aria-current']).toBe('page');
+			expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
+		});
+
+		it('moves between views on Back and Forward without reloading', async () => {
+			const browser = createBrowser({ fetchImpl: openApi });
+			await flush();
+			expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
+
+			await selectView(browser, 'alerts');
+			const alertsUrl = browser.location.search;
+			await selectView(browser, 'outcomes');
+			expect(browser.titleHistory.at(-1)).toMatch(/Outcomes/);
+
+			browser.location.search = alertsUrl;
+			await browser.dispatchPopState();
+
+			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+			expect(browser.elementsById.view.textContent).toContain('Load alert analytics');
+			expect(find(browser.body, (node) => node.dataset.view === 'alerts').attributes['aria-current']).toBe('page');
+			expect(find(browser.body, (node) => node.dataset.view === 'outcomes').attributes['aria-current']).toBeUndefined();
+			expect(browser.elementsById.view._focused).toBe(true);
+
+			browser.location.search = '?view=outcomes';
+			await browser.dispatchPopState();
+			expect(browser.titleHistory.at(-1)).toMatch(/Outcomes/);
+			expect(browser.elementsById.view.textContent).toContain('Load outcomes');
+		});
+
+		it('does not fire an API request before sign-in on a deep link', async () => {
+			const requests = [];
+			let authStateChanged;
+			const user = {
+				email: 'ops@example.com',
+				getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+				getIdTokenResult: jest.fn().mockResolvedValue({ claims: { 'admin.operator': true } }),
+			};
+			const auth = {
+				setPersistence: jest.fn().mockResolvedValue(undefined),
+				onAuthStateChanged: jest.fn((listener) => {
+					authStateChanged = listener;
+					listener(null);
+					return jest.fn();
+				}),
+				signInWithEmailAndPassword: jest.fn(async () => {
+					await authStateChanged(user);
+					return { user };
+				}),
+				signOut: jest.fn().mockResolvedValue(undefined),
+			};
+			const firebase = { initializeApp: jest.fn(), auth: jest.fn(() => auth) };
+			const browser = createBrowser({
+				firebase,
+				location: { search: '?view=alerts&alerts.summary.limit=7' },
+				fetchImpl: async (url) => {
+					requests.push(url);
+					if (url === '/admin/auth-config') {
+						return response({
+							enabled: true,
+							configured: true,
+							config: { apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros' },
+						});
+					}
+					if (url === '/openapi.json') return response(contract);
+					return response({});
+				},
+			});
+			await flush();
+
+			expect(requests.filter((url) => url !== '/admin/auth-config')).toEqual([]);
+			expect(browser.elementsById.view.textContent).toContain('Sign in required.');
+			expect(browser.elementsById['auth-form'].hidden).toBe(false);
+			expect(browser.titleHistory).not.toContain('Alerts · Cabros Bot Console');
+
+			browser.elementsById['auth-email'].value = 'ops@example.com';
+			browser.elementsById['auth-password'].value = 'password';
+			await browser.elementsById['sign-in'].dispatch('click');
+			await flush();
+
+			expect(requests).toContain('/openapi.json');
+			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+			expect(browser.elementsById.view.textContent).toContain('Load alert analytics');
+			expect(alertFilterFields(browser, '/api/alerts/summary').limit.value).toBe('7');
+		});
+
+		it('keeps the backend origin allowlist intact alongside deep-link state', async () => {
+			const requests = [];
+			const browser = createBrowser({
+				location: {
+					hostname: 'cabros-bot.web.app',
+					search: '?backend=https%3A%2F%2Fattacker.example&view=alerts',
+				},
+				fetchImpl: async (url) => {
+					requests.push(url);
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+
+			expect(requests.some((url) => url.includes('attacker.example'))).toBe(false);
+			expect(requests[0]).toBe('https://openclaw.tail5e4271.ts.net/admin/auth-config');
+			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+			expect(browser.location.search).toContain('view=alerts');
+
+			await selectView(browser, 'outcomes');
+			expect(browser.location.search).toContain('backend=https%3A%2F%2Fattacker.example');
+		});
+
+		it('keeps an allowlisted backend origin while navigating views', async () => {
+			const requests = [];
+			const browser = createBrowser({
+				location: {
+					hostname: 'cabros-bot.web.app',
+					search: '?backend=https%3A%2F%2Fcabros-bot-production.up.railway.app&view=alerts',
+				},
+				fetchImpl: async (url) => {
+					requests.push(url);
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			await selectView(browser, 'outcomes');
+
+			expect(requests.some((url) => url.startsWith('https://cabros-bot-production.up.railway.app/'))).toBe(true);
+			expect(browser.location.search).toContain('backend=https%3A%2F%2Fcabros-bot-production.up.railway.app');
+			expect(browser.location.search).toContain('view=outcomes');
+		});
 	});
 
 });
