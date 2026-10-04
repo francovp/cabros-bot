@@ -31,4 +31,21 @@ describe('Render signal outcome worker blueprint', () => {
 		expect(workerBlueprint).toContain('- key: SENTRY_DSN\n    sync: false');
 		expect(workerBlueprint).not.toContain('- key: ENABLE_SENTRY\n    value: true');
 	});
+
+	// Issue #1111 enables durable webhook idempotency in production. Previews share the
+	// production Firestore project, so a preview that reserved keys would make a
+	// throwaway deployment suppress real production replays.
+	it('enables durable idempotency on the web service with previews off', () => {
+		const blueprint = fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');
+		const webBlueprint = blueprint.slice(0, blueprint.indexOf('- type: worker'));
+		const workerBlueprint = blueprint.slice(blueprint.indexOf('- type: worker'));
+
+		expect(webBlueprint).toContain(
+			'- key: ENABLE_FIRESTORE_IDEMPOTENCY\n    value: true\n    previewValue: false',
+		);
+		// `IdempotencyStorageService` is reached only through the HTTP route layer in
+		// `src/routes/index.js`; `worker.js` never mounts routes, so the worker keeps
+		// the ephemeral default instead of opening a second writer on the collection.
+		expect(workerBlueprint).not.toContain('ENABLE_FIRESTORE_IDEMPOTENCY');
+	});
 });
