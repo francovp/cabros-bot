@@ -157,6 +157,41 @@ When `ENABLE_ALERT_CROSS_TF_SUPPRESSION=true`, `/api/webhook/alert` additionally
 
 `dependencies.firestoreWriteMetrics` exposes in-memory per-domain Firestore write counters for `AlertStorageService.saveAlert`/`saveReplayAttempt` and `JobRepository.save`. The section is omitted entirely until at least one write has been recorded and resets on process restart, mirroring the existing `deliveryMetrics` pattern. Counters report `writesAttempted`, `writesSucceeded`, `writesFailed`, overall `successRate`, and a per-domain `byDomain` breakdown with sanitized counts so silent persistence failures can be detected without exposing provider responses or credentials.
 
+### Firestore read health (issue #1285)
+
+Write counters alone could not detect a total read-path outage: every alert write could succeed while every ordered stored-alert read was rejected, and `dependencies.firestore.ready` still returned `true` because `configured` only validates credential *shape*.
+
+`dependencies.firestoreReadMetrics` is the independent read-side counter set, omitted until at least one read has been recorded and reset on process restart. It reports `readsAttempted`, `readsSucceeded`, `readsFailed`, overall `successRate`, a per-domain `byDomain` breakdown, `consecutiveReadFailures`, `lastReadAt`, `lastReadFailureAt`, and a sanitized `lastErrorCategory`.
+
+`readHealth` is the field that drives readiness:
+
+| Value | Meaning | `dependencies.firestore.ready` |
+| :--- | :--- | :--- |
+| `unknown` | No read observed yet — no evidence, not a failure | unchanged (`enabled && configured`) |
+| `healthy` | Last read succeeded | unchanged |
+| `degraded` | Consecutive-failure streak is non-empty | **`false`**, `status: "degraded"` |
+
+While degraded, `dependencies.firestore` additionally carries `readsFailed`, `consecutiveReadFailures`, `lastReadErrorCategory`, and `lastReadFailureAt`. Read health recovers on the first successful read without a process restart.
+
+`lastErrorCategory` is drawn from a closed, sanitized enum — `uninitialized`, `failed_precondition`, `permission_denied`, `unauthenticated`, `unavailable`, `deadline_exceeded`, `not_found`, `resource_exhausted`, `invalid_argument`, `aborted`, `internal`, `unknown_error`. The provider message is **never** returned: Firestore embeds the fully-qualified project/database path and the index definition in it, so both go to the log only.
+
+### Stored-alert `503 STORAGE_UNAVAILABLE`
+
+Stored-alert read endpoints answer `503` with a machine-readable `category` so a rejected query is distinguishable from a credential failure without a Cloud Logging session:
+
+| `category` | Meaning | Fix |
+| :--- | :--- | :--- |
+| `uninitialized` | The Firestore client never built | Check `FIREBASE_SERVICE_ACCOUNT_JSON` / `GOOGLE_APPLICATION_CREDENTIALS` and the project id |
+| `failed_precondition` + `missingIndex: true` | Client was fine; the **query** was rejected for a missing composite index | Deploy the indexes declared in `firestore.indexes.json` |
+| `failed_precondition` | Query rejected for another precondition | Inspect the logged provider message |
+| `permission_denied` | IAM or Firestore security rules rejected the call | Check service-account roles and `firestore.rules` |
+| `unavailable` / `deadline_exceeded` | Backend unreachable or over deadline | Usually transient; retry |
+| `resource_exhausted` | Quota or rate limit | Back off and check quotas |
+
+`category` and `missingIndex` are omitted when the failure could not be classified, so consumers must treat them as optional.
+
+`GET /ready?depth=dependencies` runs the same indexed `alerts` read (bounded to one document) in its Firestore probe, so a missing index fails the gate closed instead of only surfacing on the admin console. The probe replaced `listCollections()`, which is a metadata call that never executes a collection query and therefore could not observe this class of fault. See [Observability & Monitoring](monitoring.md) and [Troubleshooting](troubleshooting.md).
+
 `featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
 
 `notificationChannelIntent` reports the operator-intent view of notification channel configuration (`telegram`, `whatsapp`, `discord`). It mirrors `NotificationChannel.isConfigured()`: a channel counts as `configured` when its enable flag is set **and** its required credentials/chat id/webhook are present — the same `ready` semantics `dependencyStatus` already uses. A channel with a webhook URL present but its enable flag off therefore reports as **not** configured, which is the same verdict the zero-channel admin page reaches because both call that one method. The view answers the question the zero-channel page exists to raise — a channel the operator never set up (`unconfigured`) versus one that is set up but currently failing. The page reports the same two sets, so an operator can reconcile an alert from the page and `/api/status` without inspecting credentials. Only channel names are exposed; never tokens, webhook URLs, or chat IDs.
@@ -201,7 +236,7 @@ The snapshot is cached for 30 seconds per process. The endpoint returns HTTP `50
 
 The server verifies Firebase ID tokens with revoked-token checks enabled. Custom claims may use `roles: ["admin.viewer"]`, `roles: ["admin.operator"]`, `adminRole`, `role`, or the equivalent `admin.viewer`/`admin.operator` boolean claims. Viewers can read status, alerts, analytics, exports, scanner presets, and job metadata; operators can perform the existing preset, replay, and job actions. The legacy API-key path remains available for machine clients. Protected webhook and news-monitor routes remain API-key-only.
 
-When Firebase auth is enabled, configure `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS` for server-side Admin SDK token verification, plus the public browser settings listed above. Do not put service-account JSON or ID tokens in browser config, Postman variables, logs, or client error messages.
+When Firebase auth is enabled, configure `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS` for server-side Admin SDK token verification, plus the public browser settings listed above. `GOOGLE_APPLICATION_CREDENTIALS` accepts either a service-account key or an Application Default Credentials document (`authorized_user` from `gcloud application-default login`, or `external_account` workload identity); the latter types carry no project id, so `FIREBASE_PROJECT_ID` is required on that path. `FIREBASE_SERVICE_ACCOUNT_JSON` accepts service accounts only. Do not put service-account JSON or ID tokens in browser config, Postman variables, logs, or client error messages.
 
 The public browser configuration may also include `FIREBASE_STORAGE_BUCKET`, `FIREBASE_MESSAGING_SENDER_ID`, and `FIREBASE_MEASUREMENT_ID`; these values are not service-account credentials.
 
@@ -214,7 +249,8 @@ The console uses self-hosted Vue 3 components for contract-driven forms and read
 The `/admin` console is deployed as a static site on Firebase Hosting for the `cabros-bot` project (`https://cabros-bot.web.app/admin`):
 
 - **Build & Artifacts**: `pnpm run build:hosting` synchronizes static console assets from `src/admin/` to `public/admin/` and generates the root redirect `public/index.html`. `firebase.json` defines the hosting root (`public`), ignore patterns, rewrite rules (`/admin/**` -> `/admin/index.html`), and `no-cache` cache-control headers.
-- **Backend API Connectivity**: When hosted on Firebase Hosting (`*.web.app` / `*.firebaseapp.com`), the admin console resolves `https://openclaw.tail5e4271.ts.net` by default. The `cabros_backend_origin` localStorage override takes precedence over `?backend=`; both accept only the exact HTTPS origins `https://openclaw.tail5e4271.ts.net` and `https://cabros-bot-production.up.railway.app`; arbitrary origins, wildcards, HTTP URLs, and malformed values are ignored before any credential-bearing request.
+- **Backend API Connectivity**: When hosted on Firebase Hosting (`*.web.app` / `*.firebaseapp.com`), the admin console resolves `https://openclaw.tail5e4271.ts.net` by default. The `cabros_backend_origin` localStorage override takes precedence over `?backend=`; both accept only the exact HTTPS origins `https://openclaw.tail5e4271.ts.net` and `https://cabros-bot-production.up.railway.app`; arbitrary origins, wildcards, HTTP URLs, and malformed values are ignored before any credential-bearing request. `?backend=` is preserved across view navigation and filter state.
+- **Shareable URLs**: the active view and report filters live in the query string. `?view=<name>` selects one of `overview`, `status`, `alerts`, `outcomes`, `presets`, `jobs`, `orders`, `analysis`, or `playground`; filter fields are namespaced per form as `<scope>.<field>` (for example `?view=alerts&alerts.summary.from=2026-08-01T00:00&alerts.summary.limit=500`). Scope prefixes keep the Alerts summary and export filter sets independent because they are separate forms with separate defaults. Browser Back/Forward move between views without a page reload, a refresh preserves the view and its filters, and an unrecognized `view` value falls back to `overview` and rewrites the URL rather than rendering a blank workspace. A shared link still respects authentication: an unauthenticated deep link shows the sign-in card and issues no API request until sign-in.
 - **CORS & CSP Policy**: Backend CORS permits requests from the explicit allowlist (`https://cabros-bot.web.app`, `https://cabros-bot.firebaseapp.com`, `https://cabros-bot-production.up.railway.app`, `http://localhost:*`, and optional `CORS_ALLOWED_ORIGINS`), and Helmet CSP allows `connect-src` to Google Auth, Firebase Hosting origins, and the backend origin.
 - **CI/CD Deployment**: `.github/workflows/firebase-hosting.yml` automatically deploys pull requests to ephemeral Firebase preview channels and deploys the `live` channel on releases merged to `master`.
 - **Browser verification**: With the local console open in Playwright CLI, run `playwright-cli run-code --filename=scripts/check-admin-browser.js`. The check visits contract operations, edits and restores fields, submits to intercepted API responses, and checks mobile overflow. Screenshots are saved under `output/playwright/`.

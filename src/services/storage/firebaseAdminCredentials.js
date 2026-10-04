@@ -12,9 +12,22 @@
  * Credential resolution order (matches firebase-admin defaults):
  *   1. FIREBASE_SERVICE_ACCOUNT_JSON env var (inline JSON string, preferred
  *      for Render/Railway secret env vars)
- *   2. GOOGLE_APPLICATION_CREDENTIALS env var (path to a service-account
- *      JSON file)
+ *   2. GOOGLE_APPLICATION_CREDENTIALS env var (path to a credential JSON file)
  *   3. Application Default Credentials (GCP / Cloud Run managed identity)
+ *
+ * Not every credential file is a service-account certificate. `gcloud
+ * application-default login` writes an `authorized_user` document (and
+ * workload identity federation writes `external_account`), and both are
+ * bearer-token credentials that only the SDK's Application Default
+ * Credentials resolution understands — `admin.credential.cert()` rejects
+ * them. `firestoreConfig.js` already reports those types as configured, so
+ * this loader routes every non-service-account document to
+ * `admin.credential.applicationDefault()` instead of handing it to
+ * `cert()`. Service-account documents keep the existing `cert()` path.
+ *
+ * `authorized_user` and `external_account` documents carry no project id, so
+ * `FIREBASE_PROJECT_ID` is the only project override available on that path
+ * and is always forwarded to `initializeApp()`.
  *
  * Returns `null` (fail-open) when no credentials are configured so callers
  * keep their existing "skip Firebase, run in-memory" behavior. Throws a
@@ -29,6 +42,10 @@ const { createPrivateKey } = require('crypto');
 const { accessSync, constants, readFileSync, statSync } = require('fs');
 
 const REQUIRED_FIELDS = ['project_id', 'private_key', 'client_email'];
+
+const SERVICE_ACCOUNT_TYPE = 'service_account';
+const CREDENTIAL_TYPE_CERT = 'cert';
+const CREDENTIAL_TYPE_APPLICATION_DEFAULT = 'application_default';
 
 class FirebaseAdminCredentialsError extends Error {
 	constructor(message, options = {}) {
@@ -86,6 +103,97 @@ function readAndValidateFile(filePath) {
 	const parsed = JSON.parse(contents);
 	const { projectId } = softValidateServiceAccount(parsed);
 	return { parsed, projectId };
+}
+
+/**
+ * Classify a parsed credential document as a service-account certificate or
+ * as something only Application Default Credentials can resolve.
+ *
+ * `admin.credential.cert()` accepts a service account and nothing else. A
+ * `gcloud application-default login` session (`authorized_user`) and workload
+ * identity federation (`external_account`) both fail that call, which is why
+ * they are routed to `admin.credential.applicationDefault()` instead.
+ *
+ * An explicit `type` wins. A document with no `type` is treated as a service
+ * account when it carries the service-account fields, because that is what
+ * `admin.credential.cert()` itself accepts for hand-written keys.
+ */
+function isServiceAccountDocument(record) {
+	if (!record || typeof record !== 'object') return false;
+
+	const type = readField(record, 'type');
+	if (typeof type === 'string' && type.trim()) {
+		return type.trim().toLowerCase() === SERVICE_ACCOUNT_TYPE;
+	}
+
+	return hasStringValue(readField(record, 'private_key'))
+		&& hasStringValue(readField(record, 'client_email'));
+}
+
+function resolveProjectId(env, embeddedProjectId) {
+	return hasStringValue(env.FIREBASE_PROJECT_ID)
+		? env.FIREBASE_PROJECT_ID.trim()
+		: embeddedProjectId;
+}
+
+function getApplicationDefaultCredential(admin) {
+	if (!admin.credential || typeof admin.credential.applicationDefault !== 'function') {
+		throw new FirebaseAdminCredentialsError(
+			'firebase-admin does not expose credential.applicationDefault(); '
+			+ 'cannot resolve Application Default Credentials',
+			{ code: 'FIREBASE_CREDENTIALS_ADC_UNSUPPORTED' }
+		);
+	}
+	return admin.credential.applicationDefault();
+}
+
+/**
+ * Turn a parsed credential document into the `{ credential, projectId, source }`
+ * shape every caller expects.
+ *
+ * `inlineVariable` is set only for FIREBASE_SERVICE_ACCOUNT_JSON: Application
+ * Default Credentials can never read an inline value (it resolves a file, the
+ * well-known gcloud path, or the managed-runtime metadata server), so handing
+ * one back would silently use a *different* credential than the operator
+ * configured. That case fails closed with an actionable error instead — and
+ * still fails open to `null` through loadFirebaseAdminCredentialsOrNull().
+ */
+function buildCredentialResult(admin, parsed, {
+	source,
+	env,
+	embeddedProjectId,
+	inlineVariable,
+}) {
+	if (isServiceAccountDocument(parsed)) {
+		return {
+			credential: admin.credential.cert(parsed),
+			projectId: resolveProjectId(env, embeddedProjectId),
+			source,
+			credentialType: CREDENTIAL_TYPE_CERT,
+		};
+	}
+
+	const documentType = readField(parsed, 'type');
+	if (inlineVariable) {
+		throw new FirebaseAdminCredentialsError(
+			`${inlineVariable} holds a "${typeof documentType === 'string' && documentType.trim()
+				? documentType.trim()
+				: 'untyped'}" credential document, which Application Default Credentials cannot resolve. `
+			+ 'Application Default Credentials reads GOOGLE_APPLICATION_CREDENTIALS, the well-known gcloud '
+			+ 'ADC file, or the managed-runtime metadata server — never an inline value. Store the credentials '
+			+ 'in a file and point GOOGLE_APPLICATION_CREDENTIALS at it, or provide a service-account JSON inline.',
+			{ code: 'FIREBASE_CREDENTIALS_UNSUPPORTED_TYPE' }
+		);
+	}
+
+	return {
+		credential: getApplicationDefaultCredential(admin),
+		// These document types carry no project id, so `undefined` is a real
+		// answer here and not a lost value.
+		projectId: resolveProjectId(env, undefined),
+		source,
+		credentialType: CREDENTIAL_TYPE_APPLICATION_DEFAULT,
+	};
 }
 
 /**
@@ -159,11 +267,16 @@ function getWellKnownCredentialsPath() {
 
 /**
  * Parse FIREBASE_SERVICE_ACCOUNT_JSON / GOOGLE_APPLICATION_CREDENTIALS and
- * return `{ credential, projectId, source }` ready for admin.initializeApp().
+ * return `{ credential, projectId, source, credentialType }` ready for
+ * admin.initializeApp().
+ *
+ * `credentialType` is `'cert'` for a service-account certificate and
+ * `'application_default'` for any other credential document, which the SDK
+ * resolves through Application Default Credentials.
  *
  * @param {Object} [options]
  * @param {NodeJS.ProcessEnv} [options.env] - Override env (defaults to process.env)
- * @returns {{ credential: *, projectId: string, source: ('inline_json'|'gac_path'|'adc') }}
+ * @returns {{ credential: *, projectId: string, source: ('inline_json'|'gac_path'|'adc'), credentialType: ('cert'|'application_default') }|null}
  * @throws {FirebaseAdminCredentialsError} when credentials are configured but malformed
  */
 function loadFirebaseAdminCredentials(options = {}) {
@@ -181,14 +294,12 @@ function loadFirebaseAdminCredentials(options = {}) {
 			);
 		}
 		const { projectId } = softValidateServiceAccount(parsed);
-		const credential = admin.credential.cert(parsed);
-		return {
-			credential,
-			projectId: hasStringValue(env.FIREBASE_PROJECT_ID)
-				? env.FIREBASE_PROJECT_ID.trim()
-				: projectId,
+		return buildCredentialResult(admin, parsed, {
 			source: 'inline_json',
-		};
+			env,
+			embeddedProjectId: projectId,
+			inlineVariable: 'FIREBASE_SERVICE_ACCOUNT_JSON',
+		});
 	}
 
 	if (hasStringValue(env.GOOGLE_APPLICATION_CREDENTIALS)) {
@@ -205,14 +316,11 @@ function loadFirebaseAdminCredentials(options = {}) {
 			);
 		}
 		const { parsed, projectId } = readAndValidateFile(filePath);
-		const credential = admin.credential.cert(parsed);
-		return {
-			credential,
-			projectId: hasStringValue(env.FIREBASE_PROJECT_ID)
-				? env.FIREBASE_PROJECT_ID.trim()
-				: projectId,
+		return buildCredentialResult(admin, parsed, {
 			source: 'gac_path',
-		};
+			env,
+			embeddedProjectId: projectId,
+		});
 	}
 
 	const wellKnown = getWellKnownCredentialsPath();
@@ -221,14 +329,11 @@ function loadFirebaseAdminCredentials(options = {}) {
 			accessSync(wellKnown, constants.R_OK);
 			if (statSync(wellKnown).isFile()) {
 				const { parsed, projectId } = readAndValidateFile(wellKnown);
-				const credential = admin.credential.cert(parsed);
-				return {
-					credential,
-					projectId: hasStringValue(env.FIREBASE_PROJECT_ID)
-						? env.FIREBASE_PROJECT_ID.trim()
-						: projectId,
+				return buildCredentialResult(admin, parsed, {
 					source: 'adc',
-				};
+					env,
+					embeddedProjectId: projectId,
+				});
 			}
 		} catch (error) {
 			// fall through to the "no credentials configured" warning
