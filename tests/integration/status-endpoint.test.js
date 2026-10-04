@@ -16,6 +16,7 @@ const { deliveryMetricsService } = require('../../src/services/notification/Deli
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
 const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+const promptReadiness = require('../../src/services/prompts/promptReadiness');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -865,6 +866,169 @@ describe('Status endpoints', () => {
 			});
 		} finally {
 			idempotencyStorageService._resetForTesting();
+		}
+	});
+
+	// Issue #1178 enables Langfuse dynamic prompts in production. Before the
+	// proven-readiness change `dependencies.langfuse` was
+	// `dependencyStatus({ enabled, configured })`, so flipping the gate made a
+	// deployment report `ready: true` while every alert silently resolved to the
+	// local fallback file. `configured` validates credential shape only, which a
+	// typo'd, revoked or wrong-project key satisfies.
+	it('reports Langfuse prompts as unverified while credentials only look valid', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+		process.env.LANGFUSE_PROMPT_LABEL = 'production';
+		process.env.LANGFUSE_PROMPT_CACHE_TTL_SECONDS = '300';
+		promptReadiness.resetPromptReadinessForTesting();
+
+		try {
+			const response = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.langfusePrompts).toBe(true);
+			expect(response.body.dependencies.langfuse).toEqual({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'unverified',
+				readiness: 'unverified',
+				failOpen: true,
+				baseUrlHost: 'cloud.langfuse.com',
+				label: 'production',
+				cacheTtlSeconds: 300,
+				promptsAttempted: 0,
+				promptsSucceeded: 0,
+				promptsFailed: 0,
+				localFallbackCount: 0,
+				consecutiveFailures: 0,
+				lastSuccessAt: null,
+				lastFailureAt: null,
+				lastErrorReason: null,
+				byPrompt: {},
+				localFallbackByPrompt: {},
+			});
+			expect(JSON.stringify(response.body)).not.toContain('sk-lf-status-secret');
+			expect(JSON.stringify(response.body)).not.toContain('pk-lf-status-public');
+		} finally {
+			promptReadiness.resetPromptReadinessForTesting();
+		}
+	});
+
+	it('surfaces an observed Langfuse prompt failure through /api/status as degraded', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+		promptReadiness.resetPromptReadinessForTesting();
+
+		try {
+			promptReadiness.getPromptReadiness().recordAttempt();
+			promptReadiness.getPromptReadiness().recordFailure('langfuse_prompt_not_found');
+			promptReadiness.getPromptReadiness().recordLocalFallback({ promptName: 'alert-enrichment' });
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.langfuse).toMatchObject({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'degraded',
+				readiness: 'degraded',
+				failOpen: true,
+				promptsAttempted: 1,
+				promptsFailed: 1,
+				localFallbackCount: 1,
+				lastErrorReason: 'langfuse_prompt_not_found',
+				localFallbackByPrompt: { 'alert-enrichment': 1 },
+			});
+		} finally {
+			promptReadiness.resetPromptReadinessForTesting();
+		}
+	});
+
+	it('reports Langfuse prompts ready only after an observed successful resolution', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+		promptReadiness.resetPromptReadinessForTesting();
+
+		try {
+			promptReadiness.getPromptReadiness().recordAttempt();
+			promptReadiness.getPromptReadiness().recordSuccess({
+				promptName: 'alert-enrichment',
+				label: 'production',
+				version: 12,
+			});
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.langfuse).toMatchObject({
+				ready: true,
+				status: 'ready',
+				readiness: 'verified',
+				promptsSucceeded: 1,
+				byPrompt: {
+					'alert-enrichment': { langfuse: 1, local: 0, lastVersion: 12, lastLabel: 'production' },
+				},
+			});
+		} finally {
+			promptReadiness.resetPromptReadinessForTesting();
+		}
+	});
+
+	it('reports a disabled Langfuse gate even after successes were recorded', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'false';
+		promptReadiness.resetPromptReadinessForTesting();
+
+		try {
+			promptReadiness.getPromptReadiness().recordAttempt();
+			promptReadiness.getPromptReadiness().recordSuccess({ promptName: 'alert-enrichment', label: 'latest' });
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.langfusePrompts).toBe(false);
+			expect(response.body.dependencies.langfuse).toMatchObject({
+				enabled: false,
+				ready: false,
+				status: 'disabled',
+			});
+		} finally {
+			promptReadiness.resetPromptReadinessForTesting();
+		}
+	});
+
+	it('reports a Langfuse gate with a missing credential as misconfigured, not ready', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = '';
+		promptReadiness.resetPromptReadinessForTesting();
+
+		try {
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.langfuse).toMatchObject({
+				enabled: true,
+				configured: false,
+				ready: false,
+				status: 'misconfigured',
+			});
+		} finally {
+			promptReadiness.resetPromptReadinessForTesting();
 		}
 	});
 

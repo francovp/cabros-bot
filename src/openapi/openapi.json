@@ -6147,7 +6147,7 @@
         }
       },
       "StatusResult": {
-        "description": "Non-sensitive runtime readiness. featureFlags.newsMonitorClassifier reports whether optional classifier.dev rechecks are enabled. When Firebase Remote Config is enabled, dependencies.firebaseRemoteConfig reports loader metadata only; it never exposes remote parameter values or credentials.",
+        "description": "Non-sensitive runtime readiness. featureFlags.newsMonitorClassifier reports whether optional classifier.dev rechecks are enabled. When Firebase Remote Config is enabled, dependencies.firebaseRemoteConfig reports loader metadata only; it never exposes remote parameter values or credentials. dependencies.langfuse reports proven Langfuse prompt readiness: `ready` becomes true only after an observed successful prompt resolution, `status` distinguishes disabled, misconfigured, unverified, ready and degraded, and `lastErrorReason` is a closed enum. Credentials are never returned; only the LANGFUSE_BASE_URL host is.",
         "content": {
           "application/json": {
             "schema": {
@@ -6161,7 +6161,8 @@
                 "maintenanceMode": false,
                 "notificationRedrive": false,
                 "tokenCostBudget": false,
-                "newsMonitorClassifier": false
+                "newsMonitorClassifier": false,
+                "langfusePrompts": true
               },
               "dependencies": {
                 "alertScheduler": {
@@ -6270,7 +6271,37 @@
                   ],
                   "timeoutMs": 5000
                 },
-                "idempotencyStorage": {
+ 
+                "langfuse": {
+                  "enabled": true,
+                  "configured": true,
+                  "ready": true,
+                  "status": "ready",
+                  "readiness": "verified",
+                  "failOpen": true,
+                  "baseUrlHost": "cloud.langfuse.com",
+                  "label": "production",
+                  "cacheTtlSeconds": 300,
+                  "promptsAttempted": 128,
+                  "promptsSucceeded": 128,
+                  "promptsFailed": 0,
+                  "localFallbackCount": 0,
+                  "consecutiveFailures": 0,
+                  "lastSuccessAt": "2026-10-04T12:00:05.000Z",
+                  "lastFailureAt": null,
+                  "lastErrorReason": null,
+                  "byPrompt": {
+                    "alert-enrichment": {
+                      "langfuse": 64,
+                      "local": 0,
+                      "failures": 0,
+                      "lastLabel": "production",
+                      "lastVersion": 12,
+                      "lastErrorReason": null
+                    }
+                  },
+                  "localFallbackByPrompt": {}
+                },               "idempotencyStorage": {
                   "enabled": true,
                   "configured": true,
                   "ready": false,
@@ -10271,6 +10302,208 @@
           }
         }
       },
+      "LangfusePromptDependency": {
+        "type": "object",
+        "description": "Langfuse dynamic prompt management. `configured` is credential shape only: a typo'd, revoked or wrong-project key satisfies it and can still resolve zero prompts. `PromptService` fails open to the local file on any remote failure, so before this contract a deployment that fell back on every alert reported the same `ready` verdict as a working one and the enablement was unverifiable. `ready` is therefore proven from observed resolutions. This is the fifth instance of the repository's 'shape is not readiness' rule, after `firebaseRemoteConfig.ready` (#598), Firestore `readHealth` (#1285), `equityMarketData.ready` (#1116) and `idempotencyStorage.ready` (#1111).",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "readiness",
+          "failOpen"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "ENABLE_LANGFUSE_PROMPTS is true."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Both LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are non-empty. Credential shape only; never implies a prompt can be fetched."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True only after an observed successful prompt resolution, and false again from the first failure until the next success. Never implies `configured`."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "unverified",
+              "ready",
+              "degraded"
+            ],
+            "description": "`unverified` is no evidence, not health. Gate state wins over observed provider health."
+          },
+          "readiness": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "verified",
+              "degraded"
+            ]
+          },
+          "failOpen": {
+            "type": "boolean",
+            "description": "Always true. A remote failure falls back to the local prompt file, so a `degraded` verdict still enriches and delivers alerts; it just means the managed prompt version was not the one used."
+          },
+          "baseUrlHost": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Host of LANGFUSE_BASE_URL. Only the host is reported, because a base URL can carry an embedded credential or path token."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Configured LANGFUSE_PROMPT_LABEL, or null when the code default applies (`production` in production-like environments, `latest` elsewhere)."
+          },
+          "cacheTtlSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Effective LANGFUSE_PROMPT_CACHE_TTL_SECONDS passed to the Langfuse SDK prompt cache, or null when unparseable."
+          },
+          "promptsAttempted": {
+            "type": "integer",
+            "description": "Remote prompt resolutions attempted, including attempts whose client initialization was refused. Never incremented by a status read."
+          },
+          "promptsSucceeded": {
+            "type": "integer"
+          },
+          "promptsFailed": {
+            "type": "integer"
+          },
+          "localFallbackCount": {
+            "type": "integer",
+            "description": "Resolutions that fell back to the local prompt file while the gate was on. Always 0 while the gate is off, where local use is the configured intent rather than a fallback."
+          },
+          "consecutiveFailures": {
+            "type": "integer",
+            "description": "Cleared by the next success, so a transient outage self-heals without a restart and the verdict never latches degraded."
+          },
+          "lastSuccessAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastFailureAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastErrorReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "langfuse_not_configured",
+              "langfuse_client_unavailable",
+              "langfuse_auth_failed",
+              "langfuse_prompt_not_found",
+              "langfuse_timeout",
+              "langfuse_invalid_response",
+              "langfuse_unavailable",
+              null
+            ],
+            "description": "Closed enum. A Langfuse error body can embed the project id, base URL and API key, so an unrecognized failure collapses to `langfuse_unavailable` and raw provider text never reaches this response. `langfuse_prompt_not_found` is the signature of a label that was never published."
+          },
+          "byPrompt": {
+            "type": "object",
+            "description": "Per-prompt resolution provenance, so a partial rollout is visible: how many resolved from Langfuse, how many fell back locally, how many failed, and the last label/version seen. Process-local and bounded.",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "langfuse": {
+                  "type": "integer"
+                },
+                "local": {
+                  "type": "integer"
+                },
+                "failures": {
+                  "type": "integer"
+                },
+                "lastLabel": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "lastVersion": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "lastErrorReason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "localFallbackByPrompt": {
+            "type": "object",
+            "description": "Prompts currently falling back to the local file, with counts. Empty when every registered prompt resolved from Langfuse.",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "schemaDrift": {
+            "type": "array",
+            "description": "Present only when the gate is on and at least one managed prompt has been observed. A Langfuse prompt that has not been republished after a local-fallback contract change (for example #1031) is reported here rather than as a failure: it means the managed prompt is behind the code, and the missing markers are listed.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "promptName": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "label": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "missingRiskFields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "missingCalibrationGuidance": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "detectedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          }
+        }
+      },
       "SignalOutcomeWorker": {
         "type": "object",
         "description": "Signal outcome evaluation worker state. The evaluation sweep is claimed with a Firestore lease in `signalOutcomeLocks` so exactly one process prices a pending signal when more than one has tracking enabled, which is the production topology (`render.yaml` declares a web-role process and the dedicated `cabros-crypto-bot-signal-outcome-worker`). The lease observability fields identify the winning evaluator from status alone instead of inferring it from the Render dashboard. Lease failures are fail-open: a lease write that cannot be attempted does not stop evaluation.",
@@ -12133,6 +12366,9 @@
               },
               "idempotencyStorage": {
                 "$ref": "#/components/schemas/IdempotencyStorage"
+              },
+              "langfuse": {
+                "$ref": "#/components/schemas/LangfusePromptDependency"
               },
               "signalOutcomeWorker": {
                 "$ref": "#/components/schemas/SignalOutcomeWorker"
