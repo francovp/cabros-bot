@@ -865,6 +865,26 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 | `dedupStatus` | string \| undefined | News-monitor records only: `fresh` for new analyses, `cached` for successful redeliveries |
 | `expiresAt` | timestamp | `receivedAt` plus `ALERT_STORAGE_RETENTION_DAYS`; configured as a Firestore TTL field |
 
+## Firebase Credential Fail-Fast at Startup (Issue #1128)
+
+`src/services/storage/firebaseAdminCredentials.js` separates **unconfigured** from **invalid** so storage callers can reject a misconfiguration at startup instead of discovering it inside the SDK.
+
+- `resolveFirebaseAdminCredentials()` returns `status: 'configured' | 'unconfigured' | 'invalid'` plus `appOptions`, which is **`null` only for `invalid`**. A single `null` for both cases is what previously let callers call `admin.initializeApp({})` after a failed credential check.
+- `initializeFirebaseAdminApp()` is the shared storage bootstrap. It returns `ok: false` **without touching the SDK** when credentials are configured but invalid, and the caller falls back to memory immediately. Initializing with `{}` would enter the SDK default-auth path, where the first read or write pays for authentication and network round-trips and then fails.
+- `loadFirebaseAdminCredentialsOrNull()` keeps its ambiguous `null` and its warn-once behavior for existing callers. `buildFirebaseAppOptions()` is deprecated for the same reason — it still returns `{}` for both cases and is unused in `src/`.
+
+Callers routed through it: `IdempotencyStorageService`, `NewsDedupStorageService`, `AlertStorageService`, and `ChatPreferenceService`. Each logs a service-tagged warning carrying the error `code`. `adminAuth.js` is deliberately unchanged — its throwing loader already fails closed without reaching `initializeApp`.
+
+Preserved behavior:
+
+- **No credential source configured** still calls `initializeApp({})`, so Application Default Credentials (managed runtimes, `FIREBASE_PROJECT_ID`-only) keep working.
+- The well-known `gcloud` ADC file remains an **optional probe**: a malformed one still falls through to `unconfigured` rather than failing the process.
+- `isFirestoreConfigured()` (`firestoreConfig.js`) remains the independent credential-*shape* check behind `dependencies.firestore.configured`, so a deployment can still report `configured: true` and fail here — shape validation does not prove the SDK can use the document.
+
+Coverage: `tests/unit/firebase-admin-credentials.test.js` (three statuses, `initializeApp` never called for `invalid`, ADC path retained) and `tests/unit/firebase-credential-failure-init.test.js` (each storage service returns `null`/memory for malformed inline JSON, a missing credential path, and a malformed credential document). Operator runbook: `docs/troubleshooting.md`.
+
+No environment variable, Remote Config key, endpoint, or OpenAPI contract changed.
+
 **Credential Configuration** (choose one):
 - **Option A** — `GOOGLE_APPLICATION_CREDENTIALS=/path/to/serviceAccountKey.json` (file path, good for local dev)
 - **Option B** — `FIREBASE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}` (inline JSON string, preferred for Render.com secrets)
