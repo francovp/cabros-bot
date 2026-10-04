@@ -1533,6 +1533,14 @@ Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` g
 - `tests/unit/scanner-preset-service.test.js`, `tests/integration/scanner-presets-endpoint.test.js`, and `tests/integration/status-endpoint.test.js` — Cover independent persistence, restart simulation, disabled fallback, and Firestore write failure.
 - `README.md`, `.env.example`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` — Document configuration and response contracts.
 
+**Production enablement (Issue #1114).** `render.yaml` now declares `ENABLE_FIRESTORE_SCANNER_PRESETS: true` on the **web service only**, so configured scan schedules survive a redeploy instead of resetting to ephemeral. Three deliberate boundaries:
+
+- **Web service only.** `scannerPresets` is imported solely by `src/controllers/status.js`, `src/controllers/webhooks/handlers/scannerPresets/scannerPresets.js`, and the scheduler bootstrap in `index.js`. `worker.js` never touches it, so the worker keeps the ephemeral default rather than opening a second writer against the same collection.
+- **Previews stay off** (`previewValue: false`), matching `ENABLE_FIRESTORE_JOB_STORAGE`. A PR preview sharing the production preset collection would let a throwaway environment mutate real schedules.
+- **No composite index is required, and none is declared.** Every durable query is a point read (`.doc(id)`), a single-field equality (`.where('nameKey','==',key)`, `.where('schedule.enabled','==',true)`), or a single-field sort (`.orderBy('createdAt','desc')`) — all served by Firestore's automatic single-field indexes. Firestore does **not** merge single-field indexes, so this property is one query edit away from the #1285 outage class, and neither the unit double nor `pnpm test:firebase` can observe it because the double makes `orderBy` a no-op. `tests/unit/scanner-preset-service.test.js` therefore asserts the durable query shape at the source level: no chain may combine a filter with a sort, none may sort `__name__` descending, and `firestore.indexes.json` must declare no `scannerPresets` composite until a query actually needs one.
+
+The flag is environment-only for Remote Config parity: it is a process-startup gate that changes where a collection lives, not a runtime tuning knob.
+
 ## Firebase Remote Config Safe Runtime Tuning (CB-116 / Issue #303)
 
 `ENABLE_FIREBASE_REMOTE_CONFIG=true` enables the Firebase Admin server-side Remote Config Preview loader. The repository template is published by `scripts/deploy-server-remote-config.js` to the `firebase-server` namespace and loaded by `admin.remoteConfig().initServerTemplate()`; it is not a Firebase Web/Client SDK configuration. `RemoteConfigService` reuses the existing lazy Firebase Admin/Firestore initialization, loads once after startup, and refreshes on a bounded interval; alert paths only read the in-process cache and never fetch per alert.
