@@ -122,6 +122,24 @@ Maintain these patterns and rules in all contributions:
 
 ---
 
+## Authorized-User ADC Credentials (Issue #1127)
+
+`src/services/storage/firebaseAdminCredentials.js` classifies every parsed credential document before building a Firebase Admin app. A document that `admin.credential.cert()` can accept (explicit `type: "service_account"`, or the service-account fields with no `type`) keeps the existing `cert()` path. **Every other document type is routed to `admin.credential.applicationDefault()`** and never handed to `cert()`.
+
+Why this is not optional: `gcloud application-default login` writes an `authorized_user` document (client id / client secret / refresh token) and workload identity federation writes `external_account`. Neither has a `private_key` or `client_email`, so `cert()` rejects them. `firestoreConfig.js` already reported both types as "configured", so before this fix a deployment could be *declared* configured, pass `isFirestoreConfigured()`, then throw inside the loader — which surfaced as `503 ADMIN_AUTH_UNAVAILABLE` for Firebase bearer-token requests, because `getFirebaseAuth()` swallows loader throws and returns `null`.
+
+Three invariants to preserve:
+
+- **`FIREBASE_PROJECT_ID` must always be forwarded on the ADC path.** `authorized_user` and `external_account` documents carry no project id, so the env override is the *only* one available. Callers copy `projectId` from a non-null loader result and from nothing else, so an ADC result that drops it initializes Firestore without a discoverable project and every durable operation fails.
+- **Inline JSON must NOT fall back to ADC.** Application Default Credentials resolves a file, the well-known gcloud path, or the managed-runtime metadata server — never an inline value. Handing back an ADC credential for an inline `authorized_user` document would authenticate with a *different* credential than the operator configured, so that case raises `FIREBASE_CREDENTIALS_UNSUPPORTED_TYPE` and still fails open to `null` through `loadFirebaseAdminCredentialsOrNull()`.
+- **Both ADC shapes must be covered.** The explicit `GOOGLE_APPLICATION_CREDENTIALS` file and the well-known `~/.config/gcloud/application_default_credentials.json` path need separate handling — the well-known branch is wrapped in a swallow-and-fall-through `try/catch`, so a regression there is silent rather than loud.
+
+`__mocks__/firebase-admin.js` exposes both `credential.cert` and `credential.applicationDefault`. Removing the latter breaks every suite that `jest.mock('firebase-admin')` with a `TypeError`, not just this one.
+
+**Coverage**: `tests/unit/firebase-admin-credentials.test.js` (both ADC paths, `external_account`, service-account regressions, inline rejection, ADC-unavailable fail-open), `tests/security/admin-auth.test.js` (bearer token verifies instead of `ADMIN_AUTH_UNAVAILABLE`), and `tests/unit/alert-storage-service.test.js` (`initializeApp` receives both the ADC credential and `FIREBASE_PROJECT_ID`).
+
+No environment variable, Remote Config key, endpoint, response schema, OpenAPI, or Postman variant was added — the loader's return value gained an internal `credentialType` field (`cert` | `application_default`) that no HTTP response exposes.
+
 ## API Key Timing-Safe Comparison (Issue #667)
 
 `src/lib/auth.js` now copies supplied and configured webhook API keys into fixed-size zero-padded buffers before `crypto.timingSafeEqual`, ensuring mismatched-length keys take the fixed-length comparison path without triggering weak-password-hash analysis. Values above the 4 KiB comparison ceiling are rejected after comparison. The middleware's redundant key extraction was removed. `tests/security/auth_check.test.js` covers the short-key regression; no environment, endpoint, OpenAPI, Postman, or Remote Config contract changed.

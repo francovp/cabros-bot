@@ -150,9 +150,9 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 - `TWELVE_DATA_BASE_URL` - Optional Twelve Data base URL override (default: `https://api.twelvedata.com`)
 - `EQUITY_MARKET_DATA_TIMEOUT_MS` - Per-request equity market-data timeout, capped at 30 seconds (default: `5000`)
 - `SIGNAL_OUTCOME_WORKER_ROLE` - Scheduler role: `web` preserves the local/web timer, `worker` enables only the dedicated worker entrypoint, and `disabled` prevents scheduler startup (default: `web`)
-- `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access
-- `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization
-- `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a service account JSON file for local development
+- `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access. Service accounts only; an ADC document supplied inline is rejected with an actionable error because ADC is resolved from a file or the managed runtime, never from an inline value.
+- `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization. Required when credentials resolve through Application Default Credentials, since `authorized_user` and `external_account` documents carry no project id of their own.
+- `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a credential JSON file for local development. Accepts a service account key (used directly) or an Application Default Credentials document such as the `authorized_user` file written by `gcloud application-default login` or an `external_account` workload-identity config (resolved by the Firebase Admin SDK).
 
 #### Per-Chat User Preferences
 
