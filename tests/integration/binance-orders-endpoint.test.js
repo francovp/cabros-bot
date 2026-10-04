@@ -1347,12 +1347,13 @@ describe('Binance orders API', () => {
 			});
 
 			const response = await request(app)
-				.get('/api/trading/binance/account/balances?asset=BTC')
+				.get('/api/trading/binance/account/balances?asset=BTC&refresh=true')
 				.set('x-api-key', 'test-key')
 				.expect(200);
 
 			expect(response.body.balances).toHaveLength(1);
 			expect(response.body.balances[0].asset).toBe('BTC');
+			expect(client.getAccountInformation).toHaveBeenCalledTimes(1);
 		});
 
 		it('supports symbol filter query parameter', async () => {
@@ -1364,12 +1365,13 @@ describe('Binance orders API', () => {
 			});
 
 			const response = await request(app)
-				.get('/api/trading/binance/account/balances?symbol=BTCUSDT')
+				.get('/api/trading/binance/account/balances?symbol=BTCUSDT&refresh=true')
 				.set('x-api-key', 'test-key')
 				.expect(200);
 
 			expect(response.body.balances).toHaveLength(2);
 			expect(response.body.balances.map((b) => b.asset)).toEqual(['BTC', 'USDT']);
+			expect(client.getAccountInformation).toHaveBeenCalledTimes(1);
 		});
 
 		it('rejects disallowed asset with 400', async () => {
@@ -1392,6 +1394,20 @@ describe('Binance orders API', () => {
 
 		it('returns 502 when Binance returns an error or times out without leaking secrets', async () => {
 			client.getAccountInformation = jest.fn().mockRejectedValue(new Error('Network timeout'));
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?refresh=true')
+				.set('x-api-key', 'test-key')
+				.expect(502);
+
+			expect(response.body.code).toBe('BINANCE_BALANCE_QUERY_FAILED');
+			expect(JSON.stringify(response.body)).not.toContain('fake-key');
+			expect(JSON.stringify(response.body)).not.toContain('fake-secret');
+		});
+
+		it('returns 502 when the Binance account call exceeds the configured request timeout', async () => {
+			process.env.BINANCE_TRADING_TIMEOUT_MS = '1';
+			client.getAccountInformation = jest.fn().mockReturnValue(new Promise(() => {}));
 
 			const response = await request(app)
 				.get('/api/trading/binance/account/balances?refresh=true')

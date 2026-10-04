@@ -11,6 +11,7 @@ const {
 	deriveAllowedAssets,
 	deriveSymbolAssets,
 } = require('../../src/services/trading/BinanceOrderService');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 const { MainClient } = require('binance');
 
 function exchangeInfo(overrides = {}) {
@@ -2141,7 +2142,9 @@ describe('BinanceOrderService', () => {
 			});
 
 			expect(res.quantity).toBe('0');
-			expect(res.belowMinQty).toBe(true);
+			expect(res.reason).toBe('ZERO_BALANCE');
+			expect(res.belowMinQty).toBe(false);
+			expect(res.belowMinNotional).toBe(false);
 		});
 
 		it('flags belowMinQty when quantity is below minQty', () => {
@@ -2353,6 +2356,53 @@ describe('BinanceOrderService', () => {
 				code: 'BINANCE_BALANCE_QUERY_FAILED',
 				statusCode: 502,
 			});
+		});
+
+		it('honours the Remote Config BINANCE_BALANCE_CACHE_MS override for the cache TTL', async () => {
+			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'BTCUSDT';
+			delete process.env.BINANCE_BALANCE_CACHE_MS;
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+
+			const client = {
+				getAccountInformation: jest.fn().mockResolvedValue({
+					balances: [
+						{ asset: 'BTC', free: '2.0', locked: '0.1' },
+						{ asset: 'USDT', free: '1000.0', locked: '50.0' },
+					],
+				}),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			const base = 1_800_000_000_000;
+			const envDefaultTtlMs = 3000;
+			const remoteOverrideTtlMs = 45000;
+			const pastDefaultTtl = envDefaultTtlMs + 100;
+			const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(base);
+			try {
+				await service.getBalances();
+				expect(client.getAccountInformation).toHaveBeenCalledTimes(1);
+
+				nowSpy.mockReturnValue(base + pastDefaultTtl);
+				expect((await service.getBalances()).cached).toBe(false);
+				expect(client.getAccountInformation).toHaveBeenCalledTimes(2);
+
+				const overrideLoadedAt = base + pastDefaultTtl;
+				remoteConfigService._setRemoteOverridesForTesting(
+					{ BINANCE_BALANCE_CACHE_MS: remoteOverrideTtlMs },
+					overrideLoadedAt,
+				);
+
+				nowSpy.mockReturnValue(overrideLoadedAt + pastDefaultTtl);
+				expect((await service.getBalances()).cached).toBe(true);
+				expect(client.getAccountInformation).toHaveBeenCalledTimes(2);
+
+				nowSpy.mockReturnValue(overrideLoadedAt + remoteOverrideTtlMs + 1);
+				expect((await service.getBalances()).cached).toBe(false);
+				expect(client.getAccountInformation).toHaveBeenCalledTimes(3);
+			} finally {
+				remoteConfigService._resetForTesting();
+				nowSpy.mockRestore();
+			}
 		});
 	});
 
