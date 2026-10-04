@@ -5732,14 +5732,14 @@
                   "alertId": "dryrun-test-alert-12345",
                   "persisted": false,
                   "results": [],
-                  "dryRun": true,
-                  "enrichmentApplied": false,
                   "tokenUsage": null,
+                  "enrichmentApplied": false,
+                  "dryRun": true,
                   "formatted": {
                     "telegram": {
-                      "length": 45,
-                      "preview": "[TEST-ALERT] cabros-bot smoke probe...",
-                      "text": "[TEST-ALERT] cabros-bot smoke probe 2026-09-12T12:00:00.000Z"
+                      "length": 67,
+                      "preview": "\\[TEST\\-ALERT\\] cabros\\-bot smoke probe 2026\\-09\\-12T12:00:00\\.000Z",
+                      "text": "\\[TEST\\-ALERT\\] cabros\\-bot smoke probe 2026\\-09\\-12T12:00:00\\.000Z"
                     }
                   }
                 }
@@ -7089,7 +7089,7 @@
           "text": {
             "type": "string",
             "minLength": 1,
-            "description": "Optional custom alert probe text. Must be non-empty when provided; an empty string returns 400 INVALID_REQUEST. Defaults to formatted smoke alert with timestamp."
+            "description": "Optional custom alert probe text. Must be non-empty when provided; an empty string returns 400 INVALID_REQUEST. Defaults to `[TEST-ALERT] cabros-bot smoke probe <ISO timestamp>` when omitted; with dryRun=true the per-channel `formatted` preview echoes that resolved text after channel formatting."
           },
           "channels": {
             "type": "array",
