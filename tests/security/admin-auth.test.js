@@ -3,6 +3,9 @@
 const request = require('supertest');
 const express = require('express');
 const httpMocks = require('node-mocks-http');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { generateKeyPairSync } = require('crypto');
 
 jest.mock('firebase-admin');
@@ -201,5 +204,72 @@ describe('Firebase admin authorization', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body).toEqual({ role: 'admin.operator' });
+	});
+
+	describe('authorized-user Application Default Credentials (issue #1127)', () => {
+		let adcFile;
+
+		beforeEach(() => {
+			adcFile = path.join(
+				os.tmpdir(),
+				`cabros-admin-auth-adc-${process.pid}-${Date.now()}.json`,
+			);
+			fs.writeFileSync(adcFile, JSON.stringify({
+				type: 'authorized_user',
+				client_id: '123.apps.googleusercontent.com',
+				client_secret: 'not-a-real-secret',
+				refresh_token: 'not-a-real-refresh-token',
+			}));
+			delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+			process.env.GOOGLE_APPLICATION_CREDENTIALS = adcFile;
+			admin.__resetApps();
+			// These mocks are shared across the whole file, so scope the
+			// "cert() was never used" assertion to this block.
+			admin.__mockCert.mockClear();
+			admin.__mockApplicationDefault.mockClear();
+			admin.__mockInitializeApp.mockClear();
+		});
+
+		afterEach(() => {
+			fs.unlinkSync(adcFile);
+			delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+			delete process.env.FIREBASE_PROJECT_ID;
+		});
+
+		it('verifies a Firebase bearer token instead of returning ADMIN_AUTH_UNAVAILABLE', async () => {
+			admin.auth = jest.fn(() => ({
+				verifyIdToken: jest.fn().mockResolvedValue({
+					uid: 'viewer-1',
+					roles: ['admin.viewer'],
+				}),
+			}));
+
+			const response = await request(createApp())
+				.get('/read')
+				.set('Authorization', 'Bearer firebase-token');
+
+			expect(response.status).toBe(200);
+			expect(response.body).toEqual({ role: 'admin.viewer' });
+			expect(admin.__mockCert).not.toHaveBeenCalled();
+		});
+
+		it('initializes the admin app with FIREBASE_PROJECT_ID on the ADC path', async () => {
+			admin.auth = jest.fn(() => ({
+				verifyIdToken: jest.fn().mockResolvedValue({
+					uid: 'viewer-1',
+					roles: ['admin.viewer'],
+				}),
+			}));
+
+			await request(createApp())
+				.get('/read')
+				.set('Authorization', 'Bearer firebase-token');
+
+			expect(admin.__mockInitializeApp).toHaveBeenCalledWith(expect.objectContaining({
+				credential: expect.anything(),
+				projectId: 'test-project',
+			}));
+			expect(admin.__mockApplicationDefault).toHaveBeenCalled();
+		});
 	});
 });

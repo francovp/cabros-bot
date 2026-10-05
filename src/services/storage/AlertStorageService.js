@@ -29,11 +29,25 @@
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
-const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentials');
+const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
+const {
+	classifyFirestoreError,
+	describeFirestoreErrorCategory,
+	isConfigurationErrorCategory,
+	isFirestoreErrorCategory,
+	isMissingIndexError,
+	FIRESTORE_ERROR_CATEGORIES,
+} = require('./firestoreErrorCategories');
 const { adminSseService } = require('../sse/AdminSseService');
 const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
+const {
+	toPositiveFiniteNumber,
+	computeDeterministicRiskReward,
+} = require('../tradingview/riskRewardMath');
+const { deriveAssetContext } = require('../tradingview/parseTradingViewSignal');
+const { analyzeSentimentScoreDistribution } = require('../grounding/sentimentDistribution');
 
 function createEmptySignalClassCounts() {
 	return {
@@ -50,6 +64,8 @@ function createEmptySignalClassCounts() {
 
 const WRITE_METRICS_DOMAIN_ALERTS = 'alerts';
 const WRITE_METRICS_DOMAIN_REPLAYS = 'alertReplays';
+const READ_METRICS_DOMAIN_ALERTS = 'alerts';
+const READ_METRICS_DOMAIN_REPLAYS = 'alertReplays';
 
 const COLLECTION_NAME = 'alerts';
 const REPLAY_COLLECTION_NAME = 'alertReplays';
@@ -71,6 +87,13 @@ const MAX_ALERT_TEXT_LENGTH = 20000;
 const DEFAULT_ALERT_STORAGE_RETENTION_DAYS = 90;
 const MAX_ALERT_STORAGE_RETENTION_DAYS = 3650;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+// The epoch divides evenly by both HOUR_MS and DAY_MS, so flooring a
+// millisecond timestamp by either width aligns to a UTC hour or UTC midnight.
+const SUMMARY_INTERVALS = Object.freeze({
+	hour: Object.freeze({ ms: HOUR_MS, maxDays: 31 }),
+	day: Object.freeze({ ms: DAY_MS, maxDays: 366 }),
+});
 // ponytail: 24h ceiling rejects stuck-request outliers; raise only with observed legitimate longer handlers.
 const MAX_PROCESSING_TIME_MS = 24 * 60 * 60 * 1000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
@@ -90,6 +113,40 @@ const VALID_SETUP_TYPES = new Set([
 	'reversal',
 ]);
 const VALID_TRADINGVIEW_ENRICHMENT_STATUSES = new Set(['full', 'partial', 'failed', 'not_applicable']);
+const FEATURE_TAGS = ['grounding', 'news-analysis', 'expanded-analysis', 'scanner', 'enrichment'];
+const MAX_PERSISTED_SYMBOLS_PER_BATCH = 200;
+
+/**
+ * Normalize a request-level symbol list into a bounded, de-duplicated array of
+ * upper-case symbols safe to persist on the alert document.
+ */
+function sanitizePersistedSymbols(symbols) {
+	if (!Array.isArray(symbols)) return [];
+	const seen = new Set();
+	for (const raw of symbols) {
+		if (typeof raw !== 'string') continue;
+		const trimmed = raw.trim().toUpperCase();
+		if (!trimmed || trimmed.length > 64) continue;
+		seen.add(trimmed);
+		if (seen.size >= MAX_PERSISTED_SYMBOLS_PER_BATCH) break;
+	}
+	return Array.from(seen);
+}
+
+/**
+ * True only when the record reflects real billable LLM work.
+ * A webhook alert persists `tokenUsage.toJSON()` even when every enrichment
+ * feature is disabled, producing a truthy all-zero object. Treating that as
+ * grounding usage would invent a feature spend that never happened.
+ */
+function hasRealTokenUsage(tokenUsage) {
+	if (!tokenUsage || typeof tokenUsage !== 'object') return false;
+	return FEATURE_TAGS.some((feature) => {
+		const usage = tokenUsage.byFeature && tokenUsage.byFeature[feature];
+		return Boolean(usage) && getNumericValue(usage.calls) > 0;
+	}) || getNumericValue(tokenUsage.totalTokens) > 0
+		|| getNumericValue(tokenUsage.totalCost) > 0;
+}
 
 // Lazy Firestore singleton
 let db = null;
@@ -117,12 +174,14 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
 		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true'
 		|| process.env.ENABLE_NOTIFICATION_REDRIVE === 'true'
+		|| process.env.ENABLE_USER_PRICE_ALERTS === 'true'
 		|| process.env.ENABLE_NEWS_MONITOR_SCHEDULER === 'true'
 		|| process.env.ENABLE_BINANCE_ORDER_AUDIT === 'true'
 		|| process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS === 'true'
 		|| process.env.ENABLE_TOKEN_COST_BUDGET === 'true'
 		|| rcBudgetEnabled
-		|| process.env.ENABLE_FIRESTORE_ALERT_FEEDBACK === 'true';
+		|| process.env.ENABLE_FIRESTORE_ALERT_FEEDBACK === 'true'
+		|| process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE === 'true';
 }
 
 function getAlertStorageRetentionDays() {
@@ -250,6 +309,16 @@ function formatAlertDocument(doc, options = {}) {
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
 	}
+	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
+		const currentPrice = toPositiveFiniteNumber(data.enrichmentData.current_price);
+		if (currentPrice !== null) {
+			docObj.currentPrice = currentPrice;
+		}
+		const priceCurrency = data.enrichmentData.price_currency;
+		if (typeof priceCurrency === 'string' && /^[A-Z]{2,5}$/.test(priceCurrency.trim().toUpperCase())) {
+			docObj.priceCurrency = priceCurrency.trim().toUpperCase();
+		}
+	}
 	if (typeof data.eventCategory === 'string' && data.eventCategory.trim()) {
 		docObj.eventCategory = data.eventCategory.trim();
 	} else if (data.enrichmentData && typeof (data.enrichmentData.eventCategory || data.enrichmentData.event_category) === 'string' && (data.enrichmentData.eventCategory || data.enrichmentData.event_category).trim()) {
@@ -332,7 +401,88 @@ function sanitizeEnrichmentData(enrichmentData) {
 		}
 	}
 
+	if (Object.prototype.hasOwnProperty.call(sanitized, 'current_price')) {
+		const price = toPositiveFiniteNumber(sanitized.current_price);
+		if (price !== null) {
+			sanitized.current_price = price;
+		} else {
+			delete sanitized.current_price;
+			delete sanitized.price_currency;
+		}
+	}
+	if (Object.prototype.hasOwnProperty.call(sanitized, 'price_currency')) {
+		if (typeof sanitized.price_currency === 'string') {
+			const trimmed = sanitized.price_currency.trim().toUpperCase();
+			if (/^[A-Z]{2,5}$/.test(trimmed)) {
+				sanitized.price_currency = trimmed;
+			} else {
+				delete sanitized.price_currency;
+			}
+		} else {
+			delete sanitized.price_currency;
+		}
+	}
+	if (!Object.prototype.hasOwnProperty.call(sanitized, 'current_price')) {
+		delete sanitized.price_currency;
+	}
+
 	return sanitized;
+}
+
+function applyDeterministicRiskReward(enrichmentData, side) {
+	if (!enrichmentData || typeof enrichmentData !== 'object' || Array.isArray(enrichmentData)) {
+		return enrichmentData;
+	}
+
+	const entry = toPositiveFiniteNumber(enrichmentData.current_price);
+	if (entry === null) {
+		return enrichmentData;
+	}
+
+	const invalidation = toPositiveFiniteNumber(
+		enrichmentData.invalidation_level,
+	);
+	const target = toPositiveFiniteNumber(
+		enrichmentData.target_level,
+	);
+
+	if (invalidation === null || target === null) {
+		return enrichmentData;
+	}
+
+	const existing = enrichmentData.risk_reward_ratio;
+	const existingIsValid = (typeof existing === 'number' && Number.isFinite(existing) && existing > 0)
+		|| (typeof existing === 'string' && existing.trim().length > 0);
+	if (existingIsValid) {
+		return enrichmentData;
+	}
+
+	const deterministic = computeDeterministicRiskReward({
+		entry,
+		invalidation,
+		target,
+		side,
+	});
+
+	if (deterministic === null) {
+		return enrichmentData;
+	}
+
+	// Round for readability, but never round a real ratio away. A ratio below 5e-5 (a
+	// near-flat stop against a target just above entry) rounds to 0 at 4 decimals, and 0
+	// fails the `existingIsValid` test above — so it would be re-derived on every read and
+	// counted as populated coverage while being indistinguishable from a genuine zero grade.
+	// A sub-5e-5 R:R is not actionable either, so drop it rather than persist a bad value.
+	const rounded = Number(deterministic.toFixed(4));
+	if (!(rounded > 0)) {
+		return enrichmentData;
+	}
+
+	return {
+		...enrichmentData,
+		risk_reward_ratio: rounded,
+		risk_reward_ratio_source: 'computed',
+	};
 }
 
 // Firestore Admin SDK rejects `undefined` field values anywhere in a write.
@@ -527,6 +677,66 @@ function createEvidenceCoverageBucket() {
 		totalSourceCount: 0,
 		averageSourceCount: 0,
 	};
+}
+
+// ---------------------------------------------------------------------------
+// Sentiment calibration — is the emitted sentiment_score still able to rank
+// alerts? (issue #1031). Production saw 87.6% of enriched scores at or above
+// 0.75, which makes the field useless for threshold tuning and outcome-gated
+// ranking. The durable view lives here rather than only in the process-local
+// gemini.js window so it survives a restart.
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the stored `sentiment_score` magnitude, tolerating the camelCase alias
+ * and a legacy string value. Returns null when nothing usable is stored, so a
+ * malformed legacy record is excluded from the sample instead of widening the
+ * distribution or throwing mid-summary.
+ */
+function readStoredSentimentScore(enrichmentData) {
+	if (!enrichmentData || typeof enrichmentData !== 'object' || Array.isArray(enrichmentData)) {
+		return null;
+	}
+	const raw = Number.isFinite(enrichmentData.sentiment_score)
+		? enrichmentData.sentiment_score
+		: enrichmentData.sentimentScore;
+	const numeric = typeof raw === 'string' && raw.trim() ? Number(raw) : raw;
+	if (typeof numeric !== 'number' || !Number.isFinite(numeric)) {
+		return null;
+	}
+	return Math.min(1, Math.abs(numeric));
+}
+
+function createEmptySentimentCalibration() {
+	return {
+		sampleCount: 0,
+		evaluated: false,
+		saturated: false,
+		reason: 'no_samples',
+		min: null,
+		max: null,
+		p10: null,
+		p50: null,
+		p90: null,
+		spread: null,
+		distinctValueCount: 0,
+		bucketCount: 0,
+		buckets: [],
+		topBandCount: 0,
+		topBandShare: null,
+		rawScoreCapCount: 0,
+	};
+}
+
+function buildSentimentCalibration(sentimentScores, rawScoreCapCount) {
+	let report;
+	try {
+		report = analyzeSentimentScoreDistribution(sentimentScores);
+	} catch (error) {
+		console.warn('[AlertStorageService] Sentiment calibration analysis failed:', error.message);
+		report = analyzeSentimentScoreDistribution([]);
+	}
+	return { ...report, rawScoreCapCount };
 }
 
 function getSourceCount(enrichmentData) {
@@ -730,6 +940,142 @@ function incrementCounter(target, key) {
 	target[normalizedKey] = (target[normalizedKey] || 0) + 1;
 }
 
+const UNKNOWN_SYMBOL = 'unknown';
+const MAX_EXTRACTED_SYMBOL_LENGTH = 32;
+// A normalized crypto pair ("BTC/USDT") keeps a single internal slash; every
+// other separator usage is rejected. Each side must itself be a real ticker.
+const SLASH_PAIR_PATTERN = /^[A-Z0-9][A-Z0-9._-]+\/[A-Z0-9][A-Z0-9._-]+$/;
+
+/**
+ * A candidate value is only usable as an indexable symbol when it is a non-empty
+ * string that is not the `unknown` sentinel, contains no whitespace, carries at
+ * most one well-formed slash pair, and is at least two characters long and not
+ * numeric-only.
+ *
+ * Issue #222: production `bySymbol` analytics contained a bare integer (`"53"`)
+ * and a single-character value, so a permissive extractor silently polluted the
+ * very surface this guard exists to keep honest. `unknown` must stay the honest
+ * fallback rather than a fabricated ticker.
+ */
+function isValidExtractedSymbol(value) {
+	if (typeof value !== 'string') {
+		return false;
+	}
+
+	const candidate = value.trim();
+	if (candidate.length < 2 || candidate.length > MAX_EXTRACTED_SYMBOL_LENGTH) {
+		return false;
+	}
+	if (candidate.toLowerCase() === UNKNOWN_SYMBOL) {
+		return false;
+	}
+	if (/\s/.test(candidate) || candidate.includes('\\')) {
+		return false;
+	}
+	if (candidate.includes('/') && !SLASH_PAIR_PATTERN.test(candidate)) {
+		return false;
+	}
+	// Numeric-only values are never tickers. `\p{Nd}` is used rather than `\d` so
+	// non-ASCII digits (Arabic-Indic ٥٣, fullwidth ５３) cannot slip through as a
+	// symbol, which is the exact bug class this guard exists to prevent.
+	if (/^\p{Nd}+$/u.test(candidate)) {
+		return false;
+	}
+
+	// Astral characters (emoji, some scripts) count as 2 UTF-16 units, so a
+	// length-based check alone can admit a single "character" symbol.
+	if (/[\u{10000}-\u{10FFFF}]/u.test(candidate)) {
+		return false;
+	}
+
+	return true;
+}
+
+/**
+ * Normalizes an `EXCHANGE:SYMBOL` (or bare `SYMBOL`) candidate and returns
+ * `{ symbol, exchange }`, or null when the symbol is not indexable.
+ */
+function normalizeSymbolCandidate(candidate, exchangeFallback) {
+	if (typeof candidate !== 'string' || !candidate.trim()) {
+		return null;
+	}
+
+	const normalized = candidate.trim().toUpperCase();
+	const fallbackExchange = typeof exchangeFallback === 'string' && exchangeFallback.trim()
+		? exchangeFallback.trim().toUpperCase()
+		: null;
+
+	if (normalized.includes(':')) {
+		const separatorIndex = normalized.indexOf(':');
+		const exchange = normalized.slice(0, separatorIndex).trim();
+		const symbol = normalized.slice(separatorIndex + 1).trim();
+		if (!isValidExtractedSymbol(symbol)) {
+			return null;
+		}
+		return { symbol, exchange: exchange || fallbackExchange };
+	}
+
+	if (!isValidExtractedSymbol(normalized)) {
+		return null;
+	}
+
+	return { symbol: normalized, exchange: fallbackExchange };
+}
+
+/**
+ * Deterministic symbol extraction from raw alert text.
+ *
+ * Prefers the hardened `deriveAssetContext()` normalizer (the same one used by
+ * the grounding / search-query path) so the `aerosol` / `teeth` lowercase-prose
+ * guards and the `BTC/USDT` slash-pair preservation stay in a single place
+ * instead of being re-implemented as a parallel regex. Because
+ * `deriveAssetContext()` intentionally returns null for non-crypto shapes it
+ * does not own (a bare `EXCHANGE:SYMBOL`, a 2-character ticker), the pre-existing
+ * TradingView alert patterns are retained as a second, now-validated pass so
+ * coverage is not reduced. Every returned symbol is validated, so bare integers
+ * and single characters can never be extracted.
+ */
+/**
+ * True when `text` contains an `EXCHANGE:` prefix, using a linear scan.
+ *
+ * `/[A-Z_]+:/i` is quadratic: `_` is inside the case-insensitive character class,
+ * so a long run of underscores forces backtracking (CodeQL js/polynomial-redos).
+ * Alert text is caller-supplied and unbounded, so this walks the string instead.
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasExplicitExchangePrefix(text) {
+	if (typeof text !== 'string' || text.length < 2) {
+		return false;
+	}
+	for (let i = 0; i < text.length; i += 1) {
+		if (text[i] !== ':') {
+			continue;
+		}
+		// Walk backwards over the exchange token and require >=1 leading letter/underscore.
+		let j = i - 1;
+		let hasToken = false;
+		while (j >= 0) {
+			const code = text.charCodeAt(j);
+			const isUpper = code >= 65 && code <= 90;
+			const isLower = code >= 97 && code <= 122;
+			const isDigit = code >= 48 && code <= 57;
+			if (!isUpper && !isLower && !isDigit && text[j] !== '_') {
+				break;
+			}
+			if (!isDigit) {
+				hasToken = true;
+			}
+			j -= 1;
+		}
+		if (hasToken && j < i - 1) {
+			return true;
+		}
+	}
+	return false;
+}
+
 function parseSymbolFromText(text) {
 	if (!text || typeof text !== 'string') {
 		return null;
@@ -740,17 +1086,48 @@ function parseSymbolFromText(text) {
 		return null;
 	}
 
+	try {
+		const context = deriveAssetContext(cleaned);
+		// Only trust the context when the text actually carries an exchange or a
+		// slash pair. `deriveAssetContext` matches on crypto SUFFIXES, so an
+		// uppercase prose word like AEROSOL/PARASOL/BTC otherwise reads as a ticker —
+		// and a plausible-looking fake is worse than `unknown`, because it silently
+		// corrupts bySymbol analytics. A real alert names its venue or quotes a pair.
+		const hasExplicitVenue = typeof context?.exchange === 'string' && context.exchange.trim()
+			|| cleaned.includes('/');
+		if (context && context.symbol && hasExplicitVenue && isValidExtractedSymbol(context.symbol)) {
+			return {
+				symbol: context.symbol.trim().toUpperCase(),
+				// Use only an exchange that was actually present in the text.
+				// `deriveAssetContext` synthesises "BINANCE" for any USDT pair, which
+				// would fabricate venue attribution on alerts that named none.
+				// A plain scan is used instead of /[A-Z_]+:/i: `_` overlaps the
+				// case-insensitive class, making that pattern quadratic on long
+				// underscore runs (CodeQL js/polynomial-redos).
+				exchange: typeof context.exchange === 'string' && context.exchange.trim()
+					&& hasExplicitExchangePrefix(cleaned)
+					? context.exchange.trim().toUpperCase()
+					: null,
+			};
+		}
+	} catch {
+		// Extraction must never throw: fall through to the next strategy.
+	}
+
 	const exchangeMatch = cleaned.match(/(?:^|\b)(?<exchange>[A-Z0-9_]{2,10}):(?<symbol>[A-Z0-9._-]{2,20})(?:\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\))?/i);
-	if (exchangeMatch && exchangeMatch.groups && exchangeMatch.groups.symbol) {
-		const symbol = exchangeMatch.groups.symbol.toUpperCase();
-		const exchange = exchangeMatch.groups.exchange ? exchangeMatch.groups.exchange.toUpperCase() : null;
-		return { symbol, exchange };
+	if (exchangeMatch && exchangeMatch.groups && isValidExtractedSymbol(exchangeMatch.groups.symbol)) {
+		return {
+			symbol: exchangeMatch.groups.symbol.trim().toUpperCase(),
+			exchange: exchangeMatch.groups.exchange ? exchangeMatch.groups.exchange.toUpperCase() : null,
+		};
 	}
 
 	const timeframeMatch = cleaned.match(/(?:^|\s)(?<symbol>[A-Z0-9._-]{2,20})\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\)/i);
-	if (timeframeMatch && timeframeMatch.groups && timeframeMatch.groups.symbol) {
-		const symbol = timeframeMatch.groups.symbol.toUpperCase();
-		return { symbol, exchange: null };
+	if (timeframeMatch && timeframeMatch.groups && isValidExtractedSymbol(timeframeMatch.groups.symbol)) {
+		return {
+			symbol: timeframeMatch.groups.symbol.trim().toUpperCase(),
+			exchange: null,
+		};
 	}
 
 	return null;
@@ -758,31 +1135,25 @@ function parseSymbolFromText(text) {
 
 function extractSymbolAndExchange(data) {
 	if (!data || typeof data !== 'object') {
-		return { symbol: 'unknown', exchange: null };
+		return { symbol: UNKNOWN_SYMBOL, exchange: null };
 	}
 
+	const topLevelExchange = typeof data.exchange === 'string' && data.exchange.trim()
+		? data.exchange.trim().toUpperCase()
+		: null;
+
 	if (typeof data.symbol === 'string' && data.symbol.trim()) {
-		const sym = data.symbol.trim().toUpperCase();
-		if (sym.includes(':')) {
-			const parts = sym.split(':');
-			return { symbol: parts[1], exchange: parts[0] };
+		const normalized = normalizeSymbolCandidate(data.symbol, topLevelExchange);
+		if (normalized) {
+			return normalized;
 		}
-		return {
-			symbol: sym,
-			exchange: typeof data.exchange === 'string' && data.exchange.trim() ? data.exchange.trim().toUpperCase() : null,
-		};
 	}
 
 	if (typeof data.ticker === 'string' && data.ticker.trim()) {
-		const ticker = data.ticker.trim().toUpperCase();
-		if (ticker.includes(':')) {
-			const parts = ticker.split(':');
-			return { symbol: parts[1], exchange: parts[0] };
+		const normalized = normalizeSymbolCandidate(data.ticker, topLevelExchange);
+		if (normalized) {
+			return normalized;
 		}
-		return {
-			symbol: ticker,
-			exchange: typeof data.exchange === 'string' && data.exchange.trim() ? data.exchange.trim().toUpperCase() : null,
-		};
 	}
 
 	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
@@ -792,17 +1163,17 @@ function extractSymbolAndExchange(data) {
 			data.enrichmentData.asset,
 			data.enrichmentData.original_symbol,
 		];
-		const found = candidates.find((c) => typeof c === 'string' && c.trim());
-		if (found) {
-			const sym = found.trim().toUpperCase();
-			if (sym.includes(':')) {
-				const parts = sym.split(':');
-				return { symbol: parts[1], exchange: parts[0] };
+		const enrichmentExchange = typeof data.enrichmentData.exchange === 'string' && data.enrichmentData.exchange.trim()
+			? data.enrichmentData.exchange.trim().toUpperCase()
+			: null;
+		for (const candidate of candidates) {
+			const normalized = normalizeSymbolCandidate(
+				candidate,
+				enrichmentExchange || topLevelExchange,
+			);
+			if (normalized) {
+				return normalized;
 			}
-			const exchange = typeof data.enrichmentData.exchange === 'string' && data.enrichmentData.exchange.trim()
-				? data.enrichmentData.exchange.trim().toUpperCase()
-				: (typeof data.exchange === 'string' && data.exchange.trim() ? data.exchange.trim().toUpperCase() : null);
-			return { symbol: sym, exchange };
 		}
 	}
 
@@ -813,7 +1184,7 @@ function extractSymbolAndExchange(data) {
 		}
 	}
 
-	return { symbol: 'unknown', exchange: null };
+	return { symbol: UNKNOWN_SYMBOL, exchange: null };
 }
 
 function extractAlertSymbol(data) {
@@ -830,6 +1201,134 @@ function addTokenUsage(totals, tokenUsage) {
 	totals.outputTokens += getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens);
 	totals.totalTokens += getNumericValue(tokenUsage.totalTokens || tokenUsage.total);
 	totals.totalCost += getNumericValue(tokenUsage.totalCost);
+}
+
+function createFeatureCostSummary() {
+	return Object.fromEntries(FEATURE_TAGS.map(feature => [feature, {
+		alerts: 0,
+		batches: 0,
+		symbols: 0,
+		inputTokens: 0,
+		outputTokens: 0,
+		totalTokens: 0,
+		totalCost: 0,
+	}]));
+}
+
+function getLegacyFeature(source, tokenUsage) {
+	if (!tokenUsage && !['expanded-analysis', 'market-scanner', 'scanner-preset', 'news-monitor'].includes(source)) {
+		return null;
+	}
+	if (source === 'news-monitor') return 'news-analysis';
+	if (source === 'expanded-analysis') return 'expanded-analysis';
+	if (source === 'market-scanner' || source === 'scanner-preset') return 'scanner';
+	// A plain webhook alert persists a truthy all-zero tokenUsage object even when
+	// no enrichment ran. Only attribute grounding when tokens were really used.
+	return hasRealTokenUsage(tokenUsage) ? 'grounding' : null;
+}
+
+function addFeatureCostSummary(summary, data, batchState) {
+	const tokenUsage = data && data.tokenUsage;
+	const byFeature = tokenUsage && typeof tokenUsage.byFeature === 'object'
+		? tokenUsage.byFeature
+		: null;
+	const entries = byFeature && Object.keys(byFeature).length > 0
+		? Object.entries(byFeature)
+		: [[getLegacyFeature(data && data.source, tokenUsage), tokenUsage]];
+	const symbols = extractPersistedSymbols(data);
+
+	for (const [feature, usage] of entries) {
+		if (!FEATURE_TAGS.includes(feature)) continue;
+		const bucket = summary[feature];
+		bucket.inputTokens += getNumericValue(usage && (usage.inputTokens || usage.promptTokens));
+		bucket.outputTokens += getNumericValue(usage && (usage.outputTokens || usage.completionTokens));
+		bucket.totalTokens += getNumericValue(usage && (usage.totalTokens || usage.total));
+		bucket.totalCost += getNumericValue(usage && usage.totalCost);
+
+		// A news-monitor request fans out to one stored document per symbol, so
+		// counting each document would report N batches for a single request.
+		// Count each persisted batch grouping key exactly once instead.
+		if (data.source === 'news-monitor') {
+			const batchKey = resolveBatchKey(data);
+			if (batchKey) {
+				if (batchState.seenBatches.has(batchKey)) continue;
+				batchState.seenBatches.add(batchKey);
+				bucket.batches += 1;
+			}
+		} else {
+			bucket.alerts += 1;
+		}
+
+		// `symbols` counts distinct symbols, not documents: expanded-analysis and
+		// scanner store one report covering many symbols but persist only the first,
+		// while news-monitor persists one document per symbol.
+		bucket.symbols += countNewSymbols(batchState, data, symbols, feature);
+	}
+}
+
+/**
+ * Resolve a stable grouping key identifying the request that produced a document.
+ * Falls back to the document id when no request-scoped key was persisted.
+ */
+function resolveBatchKey(data) {
+	if (data && typeof data.requestId === 'string' && data.requestId.trim()) {
+		return data.requestId.trim();
+	}
+	if (data && typeof data.batchId === 'string' && data.batchId.trim()) {
+		return data.batchId.trim();
+	}
+	return null;
+}
+
+/**
+ * Symbols represented by a stored document: the explicit `symbols` list when the
+ * handler persisted the full request-level set, otherwise the single parsed symbol.
+ */
+function extractPersistedSymbols(data) {
+	if (data && Array.isArray(data.symbols)) {
+		const seen = new Set();
+		for (const raw of data.symbols) {
+			if (typeof raw === 'string' && raw.trim()) {
+				seen.add(raw.trim().toUpperCase());
+			}
+		}
+		if (seen.size > 0) return seen;
+	}
+	const single = extractAlertSymbol(data);
+	return single && single !== 'unknown' ? new Set([single]) : new Set();
+}
+
+/**
+ * Count how many of this document's symbols have not yet been attributed for the
+ * given feature bucket, so multi-symbol reports are credited once per distinct
+ * symbol. Dedup is scoped per feature: a document carrying both `grounding` and
+ * `enrichment` usage must report the symbol in both buckets.
+ */
+function countNewSymbols(batchState, data, symbols, feature) {
+	if (symbols.size === 0) return 0;
+	const bucketKey = `${resolveBatchKey(data) || (data && data.id) || 'anonymous'}::${feature}`;
+	if (!batchState.seenSymbols.has(bucketKey)) {
+		batchState.seenSymbols.set(bucketKey, new Set());
+	}
+	const seen = batchState.seenSymbols.get(bucketKey);
+	let added = 0;
+	for (const symbol of symbols) {
+		if (!seen.has(symbol)) {
+			seen.add(symbol);
+			added += 1;
+		}
+	}
+	return added;
+}
+
+function getFeatureNames(data) {
+	const byFeature = data && data.tokenUsage && data.tokenUsage.byFeature;
+	const taggedFeatures = byFeature && typeof byFeature === 'object'
+		? Object.keys(byFeature).filter(feature => FEATURE_TAGS.includes(feature))
+		: [];
+	return taggedFeatures.length > 0
+		? taggedFeatures
+		: [getLegacyFeature(data && data.source, data && data.tokenUsage)].filter(Boolean);
 }
 
 function addDeliverySummary(summary, deliveryResults) {
@@ -860,6 +1359,34 @@ function addDeliverySummary(summary, deliveryResults) {
 	}
 }
 
+function addBucketDeliverySummary(bucket, deliveryResults) {
+	if (!Array.isArray(deliveryResults)) {
+		return;
+	}
+
+	for (const result of deliveryResults) {
+		if (!result || typeof result !== 'object') {
+			continue;
+		}
+
+		const channel = typeof result.channel === 'string' && result.channel.trim()
+			? result.channel.trim()
+			: 'unknown';
+		if (!bucket.byChannel[channel]) {
+			bucket.byChannel[channel] = { total: 0, success: 0, failure: 0 };
+		}
+
+		bucket.byChannel[channel].total += 1;
+		if (result.success) {
+			bucket.byChannel[channel].success += 1;
+			bucket.success += 1;
+		} else {
+			bucket.byChannel[channel].failure += 1;
+			bucket.failure += 1;
+		}
+	}
+}
+
 function summarizeDeliveryResults(deliveryResults) {
 	if (!Array.isArray(deliveryResults)) {
 		return [];
@@ -879,12 +1406,27 @@ function summarizeTokenUsage(tokenUsage) {
 		return null;
 	}
 
-	return {
+	const result = {
 		inputTokens: getNumericValue(tokenUsage.inputTokens || tokenUsage.promptTokens),
 		outputTokens: getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens),
 		totalTokens: getNumericValue(tokenUsage.totalTokens || tokenUsage.total),
 		totalCost: getNumericValue(tokenUsage.totalCost),
 	};
+	if (tokenUsage.byFeature && typeof tokenUsage.byFeature === 'object') {
+		result.byFeature = Object.fromEntries(Object.entries(tokenUsage.byFeature)
+			.filter(([feature]) => FEATURE_TAGS.includes(feature))
+			.map(([feature, usage]) => [feature, {
+				calls: getNumericValue(usage.calls),
+				inputTokens: getNumericValue(usage.inputTokens),
+				outputTokens: getNumericValue(usage.outputTokens),
+				totalTokens: getNumericValue(usage.totalTokens),
+				inputCost: getNumericValue(usage.inputCost),
+				outputCost: getNumericValue(usage.outputCost),
+				totalCost: getNumericValue(usage.totalCost),
+			}]));
+		if (Object.keys(result.byFeature).length === 0) delete result.byFeature;
+	}
+	return result;
 }
 
 function truncateAlertText(text) {
@@ -914,6 +1456,10 @@ function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
 		deliveryResults: summarizeDeliveryResults(data.deliveryResults),
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 	};
+	const featureNames = getFeatureNames(data);
+	if (featureNames.length > 0) {
+		record.feature = featureNames.join(',');
+	}
 	if (typeof data.requestId === 'string' && data.requestId.trim()) {
 		record.requestId = data.requestId.trim();
 	}
@@ -931,6 +1477,20 @@ function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
 	}
 	if (typeof data.dedupStatus === 'string') {
 		record.dedupStatus = data.dedupStatus;
+	}
+
+	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
+		const exportCurrentPrice = toPositiveFiniteNumber(data.enrichmentData.current_price);
+		if (exportCurrentPrice !== null) {
+			record.currentPrice = exportCurrentPrice;
+		}
+		const exportPriceCurrency = data.enrichmentData.price_currency;
+		if (typeof exportPriceCurrency === 'string') {
+			const trimmed = exportPriceCurrency.trim().toUpperCase();
+			if (/^[A-Z]{2,5}$/.test(trimmed)) {
+				record.priceCurrency = trimmed;
+			}
+		}
 	}
 
 	if (includeEnrichment) {
@@ -983,11 +1543,31 @@ function calculatePercentileLatency(samples, percentile = 95) {
 	return Math.round(sorted[index]);
 }
 
-function buildSummaryWindow({ from, to, limit }) {
-	const now = new Date();
-	const parsedTo = to ? new Date(to) : now;
-	const maxWindowMs = MAX_SUMMARY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-	let parsedFrom = from ? new Date(from) : new Date(parsedTo.getTime() - (24 * 60 * 60 * 1000));
+function getSummaryIntervalMaxWindowDays(interval) {
+	const config = SUMMARY_INTERVALS[interval];
+	return config ? config.maxDays : null;
+}
+
+function resolveSummaryWindowBounds({ from, to }) {
+	const parsedTo = to ? new Date(to) : new Date();
+	return {
+		from: from ? new Date(from) : new Date(parsedTo.getTime() - DAY_MS),
+		to: parsedTo,
+	};
+}
+
+function buildSummaryWindow({ from, to, limit, interval }) {
+	const { from: requestedFrom, to: parsedTo } = resolveSummaryWindowBounds({ from, to });
+	const intervalConfig = SUMMARY_INTERVALS[interval];
+	const maxDays = intervalConfig ? intervalConfig.maxDays : MAX_SUMMARY_WINDOW_DAYS;
+	const maxWindowMs = maxDays * DAY_MS;
+	let parsedFrom = requestedFrom;
+
+	if (intervalConfig && parsedTo.getTime() - parsedFrom.getTime() > maxWindowMs) {
+		const error = new Error(`Invalid summary window for interval "${interval}". Maximum window is ${maxDays} days.`);
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
 
 	if (parsedTo.getTime() - parsedFrom.getTime() > maxWindowMs) {
 		parsedFrom = new Date(parsedTo.getTime() - maxWindowMs);
@@ -999,12 +1579,60 @@ function buildSummaryWindow({ from, to, limit }) {
 		throw error;
 	}
 
-	return {
+	const window = {
 		from: parsedFrom.toISOString(),
 		to: parsedTo.toISOString(),
 		limit: clampSummaryLimit(limit),
-		maxDays: MAX_SUMMARY_WINDOW_DAYS,
+		maxDays,
 	};
+	if (intervalConfig) {
+		window.interval = interval;
+	}
+
+	return window;
+}
+
+function buildSummaryBuckets(interval, window, docs) {
+	const { ms: stepMs } = SUMMARY_INTERVALS[interval];
+	const windowFromMs = Date.parse(window.from);
+	const windowToMs = Date.parse(window.to);
+	const firstBucketMs = Math.floor(windowFromMs / stepMs) * stepMs;
+
+	const buckets = [];
+	const indexByStartMs = new Map();
+	for (let startMs = firstBucketMs; startMs <= windowToMs; startMs += stepMs) {
+		const bucket = {
+			bucketStart: new Date(startMs).toISOString(),
+			total: 0,
+			success: 0,
+			failure: 0,
+			byChannel: {},
+		};
+		indexByStartMs.set(startMs, bucket);
+		buckets.push(bucket);
+	}
+
+	for (const doc of docs) {
+		const data = doc.data() || {};
+		const receivedAtMs = getTimestampMillis(data.receivedAt);
+		// The scan range-filters on receivedAt, so every returned document carries
+		// a readable one. An unreadable timestamp is excluded from the series
+		// rather than fabricated into a bucket at a time it did not occur.
+		if (receivedAtMs === null) {
+			continue;
+		}
+
+		const bucketStartMs = Math.floor(receivedAtMs / stepMs) * stepMs;
+		const bucket = indexByStartMs.get(bucketStartMs);
+		if (!bucket) {
+			continue;
+		}
+
+		bucket.total += 1;
+		addBucketDeliverySummary(bucket, data.deliveryResults);
+	}
+
+	return buckets;
 }
 
 function buildExportWindow({ from, to, limit }) {
@@ -1119,13 +1747,115 @@ function matchesFilters(alert, filters) {
 	return true;
 }
 
-function createStorageUnavailableError(cause) {
-	const error = new Error('Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.');
+/**
+ * Build the `STORAGE_UNAVAILABLE` error, with a message that names the actual
+ * failing subsystem.
+ *
+ * Issue #1285: this used to emit one fixed message asserting "Check Firestore
+ * credentials and project configuration" for *every* failure. When the client
+ * had already initialized and only the query was rejected, that hint pointed
+ * operators at credentials that were demonstrably working (writes were
+ * succeeding), which is worse than no hint at all. The credential/project hint is
+ * now reserved for categories where it can actually be the cause; a rejected
+ * query reports its own sanitized category instead.
+ */
+function createStorageUnavailableError(cause, options = {}) {
+	const category = isFirestoreErrorCategory(options.category)
+		? options.category
+		: classifyFirestoreError(cause, options);
+	const missingIndex = isMissingIndexError(cause);
+	const reason = isConfigurationErrorCategory(category)
+		? 'Check Firestore credentials and project configuration.'
+		: `Firestore ${category.replace(/_/g, ' ')}: ${describeFirestoreErrorCategory(category)}`;
+	const error = new Error(`Alert storage is enabled but Firestore is unavailable. ${reason}`);
 	error.code = STORAGE_UNAVAILABLE_CODE;
+	error.category = category;
+	error.missingIndex = missingIndex;
+	if (missingIndex) {
+		error.message += ' Deploy the composite indexes declared in firestore.indexes.json (firebase deploy --only firestore:indexes).';
+	}
 	if (cause) {
 		error.cause = cause;
 	}
 	return error;
+}
+
+/**
+ * Record a read outcome and return the storage error to throw, so every read
+ * catch block stays a single expression and no read failure can escape the
+ * counters. Fail-open: metric recording never throws.
+ */
+function recordReadFailure(domain, cause, logPrefix) {
+	const category = classifyFirestoreError(cause);
+	const error = createStorageUnavailableError(cause, { category });
+	console.warn(`${logPrefix} ${error.category}:`, extractProviderErrorMessage(cause));
+	firestoreWriteMetricsService.recordReadFailure(domain, category);
+	return error;
+}
+
+function recordReadSuccess(domain) {
+	firestoreWriteMetricsService.recordReadSuccess(domain);
+}
+
+/**
+ * Null-client guard for read paths. Pinned to the `uninitialized` category
+ * because there is no provider error to classify here, and counted as a read
+ * failure so a broken read path cannot leave `dependencies.firestore.ready`
+ * green while every read endpoint answers 503.
+ */
+function storageUnavailableUninitializedRead(domain) {
+	const error = createStorageUnavailableError(null, {
+		category: FIRESTORE_ERROR_CATEGORIES.UNINITIALIZED,
+	});
+	firestoreWriteMetricsService.recordReadFailure(domain, error.category);
+	return error;
+}
+
+/**
+ * Execute the exact ordered `alerts` query used by `listAlerts`, bounded to a
+ * single document, as a read-path liveness probe for `/ready`.
+ *
+ * `listCollections()` — the probe used before #1285 — is a metadata call that
+ * never executes a collection query, so it reported a healthy Firestore while
+ * every ordered read was being rejected for a missing composite index. This
+ * probe runs the failing shape itself and is read-only, so it costs one cheap
+ * indexed document read per probe window.
+ */
+async function probeOrderedAlertRead() {
+	if (!isEnabled()) {
+		return null;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
+	}
+	try {
+		await firestore
+			.collection(COLLECTION_NAME)
+			.orderBy('receivedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+			.limit(1)
+			.get();
+	} catch (error) {
+		// Routed through the same helper as user reads so a probe-detected fault
+		// also feeds `dependencies.firestore.readHealth` and carries its
+		// category into the `/ready` payload.
+		throw recordReadFailure(READ_METRICS_DOMAIN_ALERTS, error, 'Firestore alerts read probe failed');
+	}
+	recordReadSuccess(READ_METRICS_DOMAIN_ALERTS);
+	return true;
+}
+
+/**
+ * The provider message is logged but never propagated into a response body or a
+ * status payload: Firestore embeds the fully-qualified project/database path and
+ * the index definition in it.
+ */
+function extractProviderErrorMessage(error) {
+	if (!error) {
+		return 'unknown error';
+	}
+	return typeof error.message === 'string' ? error.message : String(error);
 }
 
 function createInvalidCursorError() {
@@ -1181,7 +1911,8 @@ function getRawDocCursorValues(doc) {
 
 /**
  * Initialize Firebase Admin (idempotent) and return Firestore client.
- * Returns null when the feature is disabled or initialization fails.
+ * Returns null when the feature is disabled, when initialization fails, or when
+ * configured Firebase credentials are invalid (in-memory fallback).
  *
  * Credential resolution is delegated to the shared helper at
  * src/services/storage/firebaseAdminCredentials.js, which consolidates
@@ -1200,17 +1931,13 @@ function getFirestore() {
 	}
 
 	try {
-		const loaded = loadFirebaseAdminCredentialsOrNull();
-		const appOptions = {};
-		if (loaded && loaded.credential) {
-			appOptions.credential = loaded.credential;
-		}
-		if (loaded && loaded.projectId) {
-			appOptions.projectId = loaded.projectId;
-		}
-
-		if (!admin.apps.length) {
-			admin.initializeApp(appOptions);
+		const initialization = initializeFirebaseAdminApp({ admin });
+		if (!initialization.ok) {
+			console.warn(
+				`[AlertStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`,
+			);
+			db = null;
+			return null;
 		}
 
 		db = admin.firestore();
@@ -1272,6 +1999,8 @@ function emitAlertDeliveryEvents(params, alertId = null) {
  * @param {Array}   params.deliveryResults   - Array of SendResult from notificationManager.sendToAll()
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
  * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
+ * @param {string[]} params.symbols - Complete request-level symbol set for multi-symbol reports
+ * @param {string}  params.batchId - Stable request-scoped grouping key for batch counting
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
 async function saveAlertInternal(params = {}) {
@@ -1297,11 +2026,14 @@ async function saveAlertInternal(params = {}) {
 		dedupStatus,
 		requestId,
 		scannerErrorCategories,
+		symbols,
+		batchId,
 		telegramChatId,
 		telegramThreadId,
 		whatsappChatId,
 		discordWebhookUrl,
 		routing,
+		side,
 		alertId: providedAlertId,
 	} = params;
 	if (!isEnabled()) {
@@ -1386,6 +2118,8 @@ async function saveAlertInternal(params = {}) {
 		if (extracted.exchange) {
 			document.exchange = extracted.exchange;
 		}
+
+		document.enrichmentData = applyDeterministicRiskReward(document.enrichmentData, side);
 		if (typeof eventCategory === 'string' && eventCategory.trim()) {
 			document.eventCategory = eventCategory.trim();
 		}
@@ -1401,6 +2135,16 @@ async function saveAlertInternal(params = {}) {
 		const sanitizedScannerErrorCategories = sanitizeScannerErrorCategories(scannerErrorCategories);
 		if (sanitizedScannerErrorCategories.length > 0) {
 			document.scannerErrorCategories = sanitizedScannerErrorCategories;
+		}
+		// Request-level grouping: multi-symbol handlers persist the complete symbol
+		// set so summary aggregation can count symbols and batches accurately
+		// instead of once per stored document.
+		const sanitizedSymbols = sanitizePersistedSymbols(symbols);
+		if (sanitizedSymbols.length > 0) {
+			document.symbols = sanitizedSymbols;
+		}
+		if (typeof batchId === 'string' && batchId.trim()) {
+			document.batchId = batchId.trim();
 		}
 		if (typeof effectiveTelegramChatId === 'string' && effectiveTelegramChatId.trim()) {
 			document.telegramChatId = effectiveTelegramChatId.trim();
@@ -1474,7 +2218,7 @@ async function listAlerts({
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 
 	const pageSize = clampLimit(limit);
@@ -1514,9 +2258,9 @@ async function listAlerts({
 		try {
 			snapshot = await query.get();
 		} catch (error) {
-			console.warn('[AlertStorageService] Failed to read alerts from Firestore:', error.message);
-			throw createStorageUnavailableError(error);
+			throw recordReadFailure(READ_METRICS_DOMAIN_ALERTS, error, 'Failed to read alerts from Firestore');
 		}
+		recordReadSuccess(READ_METRICS_DOMAIN_ALERTS);
 
 		if (!snapshot || snapshot.empty || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			break;
@@ -1570,16 +2314,16 @@ async function getAlertById(alertId) {
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 
 	let snapshot;
 	try {
 		snapshot = await firestore.collection(COLLECTION_NAME).doc(alertId).get();
 	} catch (error) {
-		console.warn('[AlertStorageService] Failed to read alert from Firestore:', error.message);
-		throw createStorageUnavailableError(error);
+		throw recordReadFailure(READ_METRICS_DOMAIN_ALERTS, error, 'Failed to read alert from Firestore');
 	}
+	recordReadSuccess(READ_METRICS_DOMAIN_ALERTS);
 	if (!snapshot || !snapshot.exists) {
 		return null;
 	}
@@ -1723,7 +2467,7 @@ async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId, before }
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_REPLAYS);
 	}
 
 	const pageSize = clampLimit(limit);
@@ -1773,9 +2517,9 @@ async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId, before }
 		try {
 			snapshot = await query.get();
 		} catch (error) {
-			console.warn('[AlertStorageService] Failed to list replay attempts:', error.message);
-			throw createStorageUnavailableError(error);
+			throw recordReadFailure(READ_METRICS_DOMAIN_REPLAYS, error, 'Failed to list replays from Firestore');
 		}
+		recordReadSuccess(READ_METRICS_DOMAIN_REPLAYS);
 
 		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			break;
@@ -1835,7 +2579,7 @@ async function getLatestReplayForAlert(alertId) {
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_REPLAYS);
 	}
 
 	let pageCursor = null;
@@ -1854,9 +2598,9 @@ async function getLatestReplayForAlert(alertId) {
 		try {
 			snapshot = await query.get();
 		} catch (error) {
-			console.warn('[AlertStorageService] Failed to read latest replay for alert:', error.message);
-			throw createStorageUnavailableError(error);
+			throw recordReadFailure(READ_METRICS_DOMAIN_REPLAYS, error, 'Failed to read latest replay for alert');
 		}
+		recordReadSuccess(READ_METRICS_DOMAIN_REPLAYS);
 
 		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			return null;
@@ -1890,7 +2634,7 @@ async function getReplayAttemptByIdempotencyKey(alertId, idempotencyKey) {
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_REPLAYS);
 	}
 
 	const idempotencyKeyHash = crypto.createHash('sha256').update(idempotencyKey.trim()).digest('hex');
@@ -1902,6 +2646,7 @@ async function getReplayAttemptByIdempotencyKey(alertId, idempotencyKey) {
 			.where('idempotencyKeyHash', '==', idempotencyKeyHash)
 			.limit(1)
 			.get();
+		recordReadSuccess(READ_METRICS_DOMAIN_REPLAYS);
 
 		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			return null;
@@ -1917,8 +2662,7 @@ async function getReplayAttemptByIdempotencyKey(alertId, idempotencyKey) {
 			...doc.data(),
 		};
 	} catch (error) {
-		console.warn('[AlertStorageService] Failed to query replay by idempotency key:', error.message);
-		throw createStorageUnavailableError(error);
+		throw recordReadFailure(READ_METRICS_DOMAIN_REPLAYS, error, 'Failed to read replay attempt by idempotency key');
 	}
 }
 
@@ -1942,7 +2686,7 @@ async function exportAlerts({ from, to, limit, source, enriched, signalClass, in
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 
 	const window = buildExportWindow({ from, to, limit });
@@ -1966,9 +2710,9 @@ async function exportAlerts({ from, to, limit, source, enriched, signalClass, in
 		try {
 			snapshot = await query.get();
 		} catch (error) {
-			console.warn('[AlertStorageService] Failed to export alerts from Firestore:', error.message);
-			throw createStorageUnavailableError(error);
+			throw recordReadFailure(READ_METRICS_DOMAIN_ALERTS, error, 'Failed to read alerts for export from Firestore');
 		}
+		recordReadSuccess(READ_METRICS_DOMAIN_ALERTS);
 
 		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			break;
@@ -2019,7 +2763,7 @@ async function getAlertsByIds(alertIds) {
 	}
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 	if (!Array.isArray(alertIds) || alertIds.length === 0) {
 		return [];
@@ -2032,12 +2776,12 @@ async function getAlertsByIds(alertIds) {
 	let snapshots;
 	try {
 		snapshots = await Promise.all(
-			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get())
+			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get()),
 		);
 	} catch (error) {
-		console.warn('[AlertStorageService] Failed to read alert batch from Firestore:', error.message);
-		throw createStorageUnavailableError(error);
+		throw recordReadFailure(READ_METRICS_DOMAIN_ALERTS, error, 'Failed to read alert batch from Firestore');
 	}
+	recordReadSuccess(READ_METRICS_DOMAIN_ALERTS);
 
 	const validDocs = [];
 	for (const snap of snapshots) {
@@ -2063,7 +2807,7 @@ async function exportAlertsByIds({ alertIds, includeText = false, includeEnrichm
 	}
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 	const docs = await getAlertsByIds(alertIds);
 	const alerts = (docs || []).map(doc => formatExportRecord(doc, { includeText, includeEnrichment }));
@@ -2084,7 +2828,7 @@ async function deleteAlerts(alertIds) {
 	}
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 	if (!Array.isArray(alertIds) || alertIds.length === 0) {
 		return { deleted: 0 };
@@ -2097,12 +2841,12 @@ async function deleteAlerts(alertIds) {
 	let snapshots;
 	try {
 		snapshots = await Promise.all(
-			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get())
+			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get()),
 		);
 	} catch (error) {
-		console.warn('[AlertStorageService] Failed to read alert batch before delete from Firestore:', error.message);
-		throw createStorageUnavailableError(error);
+		throw recordReadFailure(READ_METRICS_DOMAIN_ALERTS, error, 'Failed to read alert batch before delete from Firestore');
 	}
+	recordReadSuccess(READ_METRICS_DOMAIN_ALERTS);
 
 	const existingIds = [];
 	for (const snap of snapshots) {
@@ -2204,19 +2948,22 @@ async function batchReplayAlerts(attempts) {
  * @param {string|undefined} params.symbol Optional symbol filter
  * @param {string|undefined} params.eventCategory Optional event category filter
  * @param {string|undefined} params.exchange Optional exchange filter
+ * @param {string|undefined} params.interval Optional `hour`/`day` bucket width. When
+ *        set, adds `summary.buckets` and reports `window.interval`; when omitted the
+ *        response is unchanged. Raises INVALID_REQUEST on a window over the cap.
  * @returns {Promise<Object|null>}
  */
-async function summarizeAlerts({ from, to, limit, source, enriched, symbol, eventCategory, exchange, signalClass } = {}) {
+async function summarizeAlerts({ from, to, limit, source, enriched, symbol, eventCategory, exchange, signalClass, interval } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 
-	const window = buildSummaryWindow({ from, to, limit });
+	const window = buildSummaryWindow({ from, to, limit, interval });
 	const hasFilters = typeof source === 'string'
 		|| typeof enriched === 'boolean'
 		|| typeof symbol === 'string'
@@ -2242,9 +2989,9 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		try {
 			snapshot = await query.get();
 		} catch (error) {
-			console.warn('[AlertStorageService] Failed to summarize alerts from Firestore:', error.message);
-			throw createStorageUnavailableError(error);
+			throw recordReadFailure(READ_METRICS_DOMAIN_ALERTS, error, 'Failed to summarize alerts from Firestore');
 		}
+		recordReadSuccess(READ_METRICS_DOMAIN_ALERTS);
 
 		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			break;
@@ -2309,6 +3056,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 				...createEvidenceCoverageBucket(),
 				byPromptProvenance: [],
 			},
+			sentimentCalibration: createEmptySentimentCalibration(),
 			tokenUsage: {
 				inputTokens: 0,
 				outputTokens: 0,
@@ -2330,10 +3078,16 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 			averageDeliveryMs: null,
 			byChannel: {},
 		},
+		costByFeature: createFeatureCostSummary(),
 	};
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
 	const channelLatencySamples = {};
+	const sentimentScores = [];
+	let rawScoreCapCount = 0;
+	// Cross-document state so multi-symbol / multi-document requests are not
+	// counted once per stored document.
+	const batchState = { seenBatches: new Set(), seenSymbols: new Map() };
 
 	for (const doc of docs) {
 		const data = doc.data() || {};
@@ -2356,6 +3110,17 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 			summary.enrichment.enrichedAlerts += 1;
 			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData);
 			recordEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage, data.enrichmentData);
+
+			const storedScore = readStoredSentimentScore(data.enrichmentData);
+			if (storedScore !== null) {
+				sentimentScores.push(storedScore);
+				// `sentiment_score_raw` only exists when CB-238 rewrote the score, so
+				// counting it reports how much of the window is capped rather than
+				// model-emitted.
+				if (Number.isFinite(data.enrichmentData.sentiment_score_raw)) {
+					rawScoreCapCount += 1;
+				}
+			}
 		} else {
 			summary.byFeatureFlag.plain += 1;
 			summary.enrichment.plainAlerts += 1;
@@ -2379,6 +3144,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		}
 
 		addTokenUsage(summary.enrichment.tokenUsage, data.tokenUsage);
+		addFeatureCostSummary(summary.costByFeature, data, batchState);
 		addDeliverySummary(summary.delivery, data.deliveryResults);
 		collectLatency(processingLatencySamples, data.processingTimeMs ?? data.processing_time_ms);
 
@@ -2414,7 +3180,11 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 
 	finalizeRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage);
 	finalizeEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage);
+	summary.enrichment.sentimentCalibration = buildSentimentCalibration(sentimentScores, rawScoreCapCount);
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
+	for (const feature of FEATURE_TAGS) {
+		summary.costByFeature[feature].totalCost = Number(summary.costByFeature[feature].totalCost.toFixed(6));
+	}
 	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
 	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);
 	summary.latency.byChannel = {};
@@ -2428,6 +3198,10 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		}
 	}
 
+	if (SUMMARY_INTERVALS[interval]) {
+		summary.buckets = buildSummaryBuckets(interval, window, docs);
+	}
+
 	return summary;
 }
 
@@ -2438,6 +3212,9 @@ module.exports = {
 	getAlertById,
 	summarizeAlerts,
 	calculatePercentileLatency,
+	resolveSummaryWindowBounds,
+	getSummaryIntervalMaxWindowDays,
+	SUMMARY_INTERVALS,
 	exportAlerts,
 	exportAlertsByIds,
 	getAlertsByIds,
@@ -2448,12 +3225,15 @@ module.exports = {
 	getLatestReplayForAlert,
 	getReplayAttemptByIdempotencyKey,
 	parseSymbolFromText,
+	isValidExtractedSymbol,
 	extractSymbolAndExchange,
 	extractAlertSymbol,
 	formatEnrichmentSummary,
 	extractSourceDomains,
 	formatAlertDocument,
 	STORAGE_UNAVAILABLE_CODE,
+	probeOrderedAlertRead,
+	FIRESTORE_ERROR_CATEGORIES,
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,
 	MAX_ALERT_TEXT_LENGTH,

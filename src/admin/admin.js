@@ -94,22 +94,44 @@ const DISPLAY_LABELS = {
 	signalOutcomeWorker: 'Signal outcome worker',
 	idempotencyStorage: 'Idempotency storage',
 	scannerPresetStorage: 'Scanner preset storage',
+	symbolAnalysisStorage: 'Symbol analysis storage',
 	cloudflareAig: 'Cloudflare AI Gateway',
 };
 
 const VIEW_TITLES = {
 	overview: 'Overview',
 	status: 'Status',
+	trading: 'Trading',
 	alerts: 'Alerts',
 	outcomes: 'Outcomes',
 	presets: 'Presets',
 	jobs: 'Jobs',
+	orders: 'Orders',
 	analysis: 'Analysis',
 	playground: 'Playground',
 };
 const CONSOLE_TITLE_BASE = 'Cabros Bot Console';
 
+// Closed set: a `view` value outside it must fall back, never render a blank workspace.
+const DEFAULT_CONSOLE_VIEW = 'overview';
+const FIREBASE_SIGN_IN_LANDING_VIEW = 'status';
+const CONSOLE_VIEW_NAMES = Object.freeze(Object.keys(VIEW_TITLES));
+
+// Scope prefixes keep the alerts summary and export filter sets independent, because
+// they are two separate forms with separate defaults.
+const FILTER_SCOPE_VIEWS = Object.freeze({
+	trading: 'trading',
+	'alerts.list': 'alerts',
+	'alerts.summary': 'alerts',
+	'alerts.export': 'alerts',
+	'outcomes.list': 'outcomes',
+	'outcomes.summary': 'outcomes',
+	'outcomes.calibration': 'outcomes',
+});
+
+const DEFAULT_BACKEND_ORIGIN = 'https://openclaw.tail5e4271.ts.net';
 const ALLOWED_BACKEND_ORIGINS = new Set([
+	DEFAULT_BACKEND_ORIGIN,
 	'https://cabros-bot-production.up.railway.app',
 ]);
 
@@ -132,7 +154,7 @@ const getApiBaseUrl = () => {
 		const paramOrigin = getAllowedBackendOrigin(param);
 		if (paramOrigin) return paramOrigin;
 		if (typeof window !== 'undefined' && window.location && (window.location.hostname.endsWith('web.app') || window.location.hostname.endsWith('firebaseapp.com'))) {
-			return 'https://cabros-bot-production.up.railway.app';
+			return DEFAULT_BACKEND_ORIGIN;
 		}
 	} catch (_) {
 		// Fallback safely
@@ -140,10 +162,94 @@ const getApiBaseUrl = () => {
 	return '';
 };
 
+const getWindowLocation = () => (typeof window !== 'undefined' && window.location ? window.location : null);
+
+const readConsoleSearch = () => {
+	try {
+		const location = getWindowLocation();
+		return location && typeof location.search === 'string' ? location.search : '';
+	} catch (_) {
+		return '';
+	}
+};
+
+const readConsoleParams = () => {
+	try {
+		return new URLSearchParams(readConsoleSearch());
+	} catch (_) {
+		return new URLSearchParams();
+	}
+};
+
+const resolveConsoleView = (value) => {
+	const name = typeof value === 'string' ? value.trim() : '';
+	return CONSOLE_VIEW_NAMES.includes(name) ? name : DEFAULT_CONSOLE_VIEW;
+};
+
+const readConsoleUrlState = () => {
+	const params = readConsoleParams();
+	const requested = params.get('view');
+	const view = resolveConsoleView(requested);
+	return {
+		view,
+		viewRequested: requested !== null,
+		viewRecognised: view === requested,
+		params,
+	};
+};
+
+const filterParamsForView = (view, params) => {
+	const source = params || readConsoleParams();
+	const carried = {};
+	Object.keys(FILTER_SCOPE_VIEWS).forEach((scope) => {
+		if (FILTER_SCOPE_VIEWS[scope] !== view) return;
+		const prefix = `${scope}.`;
+		source.forEach((value, key) => {
+			if (key.startsWith(prefix)) carried[key] = value;
+		});
+	});
+	return carried;
+};
+
+const buildConsoleUrl = (view, filterParams = {}) => {
+	const location = getWindowLocation();
+	let pathname = '';
+	try {
+		pathname = (location && location.pathname) || '';
+	} catch (_) {
+		pathname = '';
+	}
+	const params = new URLSearchParams();
+	readConsoleParams().forEach((value, key) => {
+		const ownsFilterScope = Object.keys(FILTER_SCOPE_VIEWS).some((scope) => key.startsWith(`${scope}.`));
+		if (key !== 'view' && !ownsFilterScope) params.set(key, value);
+	});
+	params.set('view', view);
+	Object.entries(filterParams).forEach(([key, value]) => {
+		if (value !== undefined && value !== null && value !== '') params.set(key, value);
+	});
+	const search = params.toString();
+	return `${pathname}${search ? `?${search}` : ''}`;
+};
+
+const writeConsoleUrl = (url, { replace = false } = {}) => {
+	const history = typeof window !== 'undefined' ? window.history : null;
+	if (!history) return false;
+	try {
+		if (replace && typeof history.replaceState === 'function') history.replaceState({}, '', url);
+		else if (!replace && typeof history.pushState === 'function') history.pushState({}, '', url);
+		else return false;
+		return true;
+	} catch (_) {
+		return false;
+	}
+};
+
 let contractPromise;
 let authConfigPromise;
 let firebaseSdkPromise;
 let detachActiveViewPoll = null;
+let currentConsoleView = DEFAULT_CONSOLE_VIEW;
 let authState = { enabled: false, auth: null, user: null, role: null };
 
 const CONTRACT_TIMEOUT_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.CONTRACT_TIMEOUT_MS
@@ -164,6 +270,19 @@ const VOLUME_CONFIRMATION_OVERHEAD_MS = typeof window !== 'undefined' && window.
 const VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS
 	? window.CabrosAdminRequest.VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS
 	: (VOLUME_CONFIRMATION_MCP_CALLS * TRADINGVIEW_MCP_MAX_TIMEOUT_MS) + VOLUME_CONFIRMATION_OVERHEAD_MS; // 390000 ms
+
+// Symbol analysis budget breakdown:
+// - ONE createDeadline() signal spans the base analyzeSymbolIdentifier call and the optional
+//   multi_timeframe_analysis / multi_agent_debate calls, so this budget is never multiplied per
+//   MCP call the way volume confirmation is. Worst case is a single min(EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS, 120,000 ms).
+// - Ingress, route handling, symbol validation, and network transport overhead: 30,000 ms
+const SYMBOL_ANALYSIS_BACKEND_BUDGET_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.SYMBOL_ANALYSIS_BACKEND_BUDGET_MS
+	? window.CabrosAdminRequest.SYMBOL_ANALYSIS_BACKEND_BUDGET_MS : 120000;
+const SYMBOL_ANALYSIS_OVERHEAD_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.SYMBOL_ANALYSIS_OVERHEAD_MS
+	? window.CabrosAdminRequest.SYMBOL_ANALYSIS_OVERHEAD_MS : 30000;
+const SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS
+	? window.CabrosAdminRequest.SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS
+	: SYMBOL_ANALYSIS_BACKEND_BUDGET_MS + SYMBOL_ANALYSIS_OVERHEAD_MS; // 150000 ms
 
 // Long-running alert and analysis pipeline budget breakdown:
 // - TradingView MCP enrichment maximum budget: 120,000 ms (TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS max)
@@ -220,9 +339,11 @@ const getApiRequestTimeout = (definition, options) => {
 		return window.CabrosAdminRequest.getApiRequestTimeout(definition, options);
 	}
 	if (!definition || !definition.path) return API_REQUEST_TIMEOUT_MS;
-	if (definition.path === '/api/webhook/volume-confirmation'
-		|| definition.path === '/api/webhook/symbol-analysis') {
+	if (definition.path === '/api/webhook/volume-confirmation') {
 		return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+	}
+	if (definition.path === '/api/webhook/symbol-analysis') {
+		return SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS;
 	}
 	if (definition.path === '/api/alerts/batch/replay') {
 		let count = 1;
@@ -235,7 +356,7 @@ const getApiRequestTimeout = (definition, options) => {
 					if (Array.isArray(parsed && parsed.alertIds) && parsed.alertIds.length > 0) {
 						count = Math.min(parsed.alertIds.length, 50);
 					}
-				} catch (_) {}
+				} catch (_) { /* Fall back to the bounded default budget. */ }
 			}
 		}
 		return count > 1 ? count * LONG_RUNNING_API_REQUEST_TIMEOUT_MS : LONG_RUNNING_API_REQUEST_TIMEOUT_MS;
@@ -359,7 +480,9 @@ const createCopyButton = (getText, label = 'Copy') => {
 	button.type = 'button';
 	button.className = 'copy-button';
 	button.addEventListener('click', () => copyToClipboard(
-		typeof getText === 'function' ? String(getText() ?? '') : String(getText ?? ''),
+		label === 'Copy details'
+			? window.CabrosAdminComponents.plainText(window.CabrosAdminComponents.present(JSON.parse((typeof getText === 'function' ? getText() : getText) || 'null'), false, getElement('api-key')?.value || ''))
+			: typeof getText === 'function' ? String(getText() ?? '') : String(getText ?? ''),
 		button,
 	));
 	return button;
@@ -476,7 +599,11 @@ const setupFirebaseAuth = async (config) => {
 				}
 				showSignedInState();
 				setupSseStream();
-				navigateToView('status');
+				const requested = readConsoleUrlState();
+				navigateToView(
+					requested.viewRequested ? requested.view : FIREBASE_SIGN_IN_LANDING_VIEW,
+					{ history: 'replace' },
+				);
 			} catch (error) {
 				disconnectSse();
 				showAuthState('Unable to verify the signed-in account.', true);
@@ -492,6 +619,9 @@ let sseReconnectTimer = null;
 let sseReconnectAttempts = 0;
 const sseListeners = new Set();
 const MAX_SSE_RECONNECT_DELAY_MS = 30000;
+// Bounds the SSE handshake only, not the stream body. An event stream is
+// legitimately idle between events, so this must not become a read deadline.
+const SSE_HANDSHAKE_TIMEOUT_MS = 15000;
 
 const getRetryAfterMs = (response) => {
 	const rawValue = response?.headers?.get?.('retry-after');
@@ -627,12 +757,20 @@ const setupSseStream = async () => {
 	const controller = new AbortController();
 	sseAbortController = controller;
 
+	let handshakeTimer = setTimeout(() => controller.abort(), SSE_HANDSHAKE_TIMEOUT_MS);
+	const clearHandshakeTimer = () => {
+		if (handshakeTimer === null) return;
+		clearTimeout(handshakeTimer);
+		handshakeTimer = null;
+	};
+
 	try {
 		const response = await fetch(streamUrl, {
 			method: 'GET',
 			headers,
 			signal: controller.signal,
 		});
+		clearHandshakeTimer();
 
 		if (!response.ok) {
 			const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
@@ -706,7 +844,14 @@ const setupSseStream = async () => {
 			}
 		}
 	} catch (error) {
-		if (controller.signal.aborted) {
+		clearHandshakeTimer();
+		// `aborted` alone cannot separate an intentional teardown from our own
+		// handshake deadline. disconnectSse() and a newer setupSseStream() both
+		// clear sseAbortController, so ownership is the discriminator: while we
+		// still own it, our own abort is a stall that must reconnect. Collapsing
+		// this to `if (aborted) return` turns the handshake deadline above into a
+		// permanently dead stream.
+		if (controller.signal.aborted && sseAbortController !== controller) {
 			return;
 		}
 		console.error('SSE stream error:', error);
@@ -771,14 +916,46 @@ const getRequestBody = (definition, form) => {
 	return requestBody;
 };
 
-const addJsonField = (form, labelText, name, value) => {
-	const label = element('label', { text: labelText });
-	const textarea = element('textarea');
-	textarea.name = name;
-	textarea.rows = 8;
-	textarea.value = JSON.stringify(value, null, 2);
-	label.append(textarea);
-	form.append(label);
+// The hidden transport value preserves existing request/idempotency builders;
+// operators edit typed Vue controls, never serialized payloads.
+const addObjectField = (form, labelText, name, value, contract, schema = {}) => {
+	const input = element('input');
+	input.name = name;
+	input.type = 'hidden';
+	const editor = element('cabros-fields');
+	editor.heading = labelText;
+	editor.schema = window.CabrosAdminComponents.schemaFor(contract, schema);
+	let serialized = '';
+	Object.defineProperty(input, 'value', {
+		get: () => serialized,
+		set: (next) => {
+			serialized = String(next);
+			try { editor.value = JSON.parse(serialized); } catch (_) { /* Request validation reports invalid restored data. */ }
+		},
+	});
+	input.value = JSON.stringify(value || {}, null, 2);
+	editor.addEventListener('update', (event) => {
+		input.value = JSON.stringify(event.detail[0]);
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+	});
+	form.append(input, editor);
+};
+
+const getQuerySchema = (contract, operation) => ({
+	type: 'object', additionalProperties: false,
+	properties: Object.fromEntries(getParameters(contract, operation).filter((p) => p.in === 'query').map((p) => [p.name, { ...resolveRef(contract, p.schema), description: p.description }])),
+	required: getParameters(contract, operation).filter((p) => p.in === 'query' && p.required).map((p) => p.name),
+});
+
+const createResult = (data) => {
+	const value = window.CabrosAdminComponents.present(data, false, getElement('api-key')?.value || '');
+	const result = element('cabros-result');
+	result.value = value;
+	return result;
+};
+
+const showResult = (output, serialized) => {
+	output.replaceChildren(...(serialized ? [createResult(JSON.parse(serialized))] : []));
 };
 
 const addField = (form, labelText, name, options = {}) => {
@@ -883,9 +1060,24 @@ const statusDetailFields = [
 	['completed', 'Completed'],
 	['failed', 'Failed'],
 	['lastErrorCode', 'Last error code'],
+	['brokerReachable', 'Broker reachable'],
+	['lastBrokerProbeAt', 'Last broker probe', true],
+	['lastBrokerProbeErrorCode', 'Last broker probe error'],
 	['lastEnqueuedAt', 'Last enqueued', true],
 	['mode', 'Mode'],
 	['backend', 'Backend'],
+	['collection', 'Collection'],
+	['retentionDays', 'Retention (days)'],
+	['readiness', 'Readiness'],
+	['failOpen', 'Fail open'],
+	['writesAttempted', 'Writes attempted'],
+	['writesSucceeded', 'Writes succeeded'],
+	['writesFailed', 'Writes failed'],
+	['lastWriteAt', 'Last write', true],
+	['readsAttempted', 'Reads attempted'],
+	['readsSucceeded', 'Reads succeeded'],
+	['readsFailed', 'Reads failed'],
+	['lastErrorReason', 'Last error reason'],
 	['role', 'Worker role'],
 	['running', 'Running'],
 	['shutdownRequested', 'Shutdown requested'],
@@ -923,6 +1115,9 @@ const statusDetailFields = [
 	['enrichment.alertPath.failedCount', 'Alert path failed'],
 	['enrichment.alertPath.appliedRate24h', 'Alert path applied rate (%)'],
 	['enrichment.alertPath.failureRate24h', 'Alert path failure rate (%)'],
+	['leaseMs', 'Lease (ms)'],
+	['lastRunLeaseHeld', 'Last run lease held'],
+	['leaseHeldSkipCount', 'Lease-held skips'],
 ];
 
 const statusFieldValue = (detail, key) => key.split('.').reduce((value, part) => asObject(value)[part], detail);
@@ -940,6 +1135,15 @@ const DECISION_ACTION_TONES = {
 	hold: 'status-disabled',
 	neutral: 'status-disabled',
 };
+
+const CONFIDENCE_TONES = {
+	high: 'status-ready',
+	medium: 'status-active',
+	moderate: 'status-active',
+	low: 'status-danger',
+};
+
+const MTF_ENVELOPE_KEYS = ['timeframes', 'alignment', 'recommendation'];
 
 const JOB_ACTIVE_STATUSES = ['pending', 'processing'];
 const JOB_STATUS_TONES = {
@@ -1136,12 +1340,23 @@ const symbolAnalysisResult = (data) => {
 			text: `Status: ${displayLabel(data.analysisStatus)}`,
 		}));
 	}
+
+	// The endpoint returns categorical confidence labels, so the numeric-only
+	// meter path must not be the only consumer or confidence disappears entirely.
+	const confidence = asFiniteNumber(decision.confidence);
+	const confidenceLabel = confidence === null ? asLabelValue(decision.confidence) : '';
+	if (confidenceLabel) {
+		const tone = CONFIDENCE_TONES[confidenceLabel.toLowerCase()] || 'status-unknown';
+		badges.append(element('span', {
+			className: `status-badge ${tone}`,
+			text: `Confidence: ${displayLabel(confidenceLabel)}`,
+		}));
+	}
 	if (badges.children.length) panel.append(badges);
 
 	const identity = [data.symbol || analysis.symbol, data.timeframe || analysis.timeframe].filter(Boolean).join(' · ');
 	if (identity) panel.append(element('p', { className: 'request-state', text: identity }));
 
-	const confidence = asFiniteNumber(decision.confidence);
 	if (confidence !== null) {
 		const normConfidence = confidence > 1 ? confidence / 100 : confidence;
 		panel.append(createMeter(normConfidence, `${Math.round(normConfidence * 100)}% confidence`));
@@ -1232,13 +1447,36 @@ const symbolAnalysisResult = (data) => {
 		const mtfBlock = element('div', { className: 'detail-block' });
 		mtfBlock.append(element('h4', { text: 'Multi-timeframe Analysis' }));
 		const mtfChips = element('div', { className: 'chip-grid' });
-		Object.entries(mtf).forEach(([tf, tfData]) => {
+		const alignment = asObject(mtf.alignment);
+		const recommendation = asObject(mtf.recommendation);
+		const timeframes = asObject(mtf.timeframes);
+		// The endpoint nests the breakdown under `timeframes` beside sibling
+		// `alignment` and `recommendation` keys. Reading those siblings as
+		// timeframes renders the envelope and hides every real trend.
+		const timeframeEntries = Object.entries(Object.keys(timeframes).length ? timeframes : mtf)
+			.filter(([key]) => !MTF_ENVELOPE_KEYS.includes(key));
+		timeframeEntries.forEach(([tf, tfData]) => {
 			const tfObj = asObject(tfData);
-			const tfTrend = tfObj.trend || tfObj.direction || tfObj.status || (typeof tfData === 'string' ? tfData : null);
+			const tfTrend = tfObj.bias || tfObj.trend || tfObj.direction || tfObj.status || asLabelValue(tfData);
 			if (tfTrend) {
 				mtfChips.append(element('span', { className: 'capability-chip', text: `${tf}: ${displayLabel(tfTrend)}` }));
 			}
 		});
+
+		const alignmentStatus = asLabelValue(alignment.status);
+		if (alignmentStatus) {
+			mtfChips.append(element('span', { className: 'capability-chip', text: `Alignment: ${displayLabel(alignmentStatus)}` }));
+		}
+		const alignmentConfidence = asLabelValue(alignment.confidence);
+		if (alignmentConfidence) {
+			mtfChips.append(element('span', { className: 'capability-chip', text: `Alignment confidence: ${displayLabel(alignmentConfidence)}` }));
+		}
+		const recommendedAction = asLabelValue(recommendation.action) || asLabelValue(mtf.recommendation);
+		if (recommendedAction) {
+			const tone = DECISION_ACTION_TONES[recommendedAction.toLowerCase()] || 'status-unknown';
+			mtfChips.append(element('span', { className: `status-badge ${tone}`, text: `Recommendation: ${displayLabel(recommendedAction)}` }));
+		}
+
 		if (mtfChips.children.length) {
 			mtfBlock.append(mtfChips);
 			panel.append(mtfBlock);
@@ -1257,14 +1495,14 @@ const symbolAnalysisResult = (data) => {
 };
 
 const volumeConfirmationResult = (data) => {
-		const panel = element('article', { className: 'operation-card verdict-panel' });
-		panel.append(element('p', { className: 'eyebrow', text: 'Volume confirmation' }));
-		const badges = element('div', { className: 'badge-row' });
-		badges.append(data.confirmed === true
-			? element('span', { className: 'status-badge status-ready', text: 'Confirmed' })
-			: data.confirmed === false
-				? element('span', { className: 'status-badge status-danger', text: 'Not confirmed' })
-				: element('span', { className: 'status-badge status-active', text: 'Unknown' }));
+	const panel = element('article', { className: 'operation-card verdict-panel' });
+	panel.append(element('p', { className: 'eyebrow', text: 'Volume confirmation' }));
+	const badges = element('div', { className: 'badge-row' });
+	badges.append(data.confirmed === true
+		? element('span', { className: 'status-badge status-ready', text: 'Confirmed' })
+		: data.confirmed === false
+			? element('span', { className: 'status-badge status-danger', text: 'Not confirmed' })
+			: element('span', { className: 'status-badge status-active', text: 'Unknown' }));
 	if (data.decision) badges.append(element('span', { className: 'capability-chip', text: displayLabel(data.decision) }));
 	panel.append(badges);
 
@@ -1353,6 +1591,13 @@ const analysisReportResult = (data) => {
 };
 
 const asFiniteNumber = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+
+const LABEL_VALUE_MAX_LENGTH = 40;
+
+const asLabelValue = (value) => {
+	if (typeof value !== 'string') return '';
+	return value.trim().slice(0, LABEL_VALUE_MAX_LENGTH);
+};
 
 const sentimentBadge = (enrichment) => {
 	const sentiment = enrichment && typeof enrichment === 'object' ? String(enrichment.sentiment || '') : '';
@@ -1606,11 +1851,11 @@ const renderStatusCards = (container, entries, emptyText, { detailed = false } =
 				value.append(timestamp ? createTimestamp(fieldValue) : element('span', { text: Array.isArray(fieldValue) ? fieldValue.join(', ') : String(fieldValue) }));
 				list.append(element('dt', { text: label }), value);
 			});
-			nestedStatusEntries(detail).forEach(([name, nested]) => {
+			nestedStatusEntries(detail).forEach(([nestedName, nested]) => {
 				const value = element('dd');
 				value.append(createStatusBadge(nested.status));
 				list.append(
-					element('dt', { text: displayLabel(name) }),
+					element('dt', { text: displayLabel(nestedName) }),
 					value,
 				);
 			});
@@ -1738,13 +1983,13 @@ const createStatusExplorer = () => {
 	const filters = element('div', { className: 'status-filter-bar' });
 	filters.append(searchLabel, toneLabel);
 
-	const statusOutput = element('pre', { className: 'response-block', text: 'No status response yet.' });
+	const statusOutput = element('div', { className: 'response-block', text: 'No status response yet.' });
 	let lastRawStatus = '';
-	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy JSON');
+	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawStatus = element('details', { className: 'raw-status' });
 	rawStatus.append(
-		element('summary', { text: 'Show raw status response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		statusOutput,
 	);
@@ -1778,10 +2023,7 @@ const createStatusExplorer = () => {
 			output: statusOutput,
 		});
 		if (status && typeof status === 'object') {
-			lastRawStatus = window.CabrosAdminRequest.redactSecret(
-				JSON.stringify(status, null, 2),
-				getElement('api-key')?.value || '',
-			);
+			lastRawStatus = JSON.stringify(status);
 			rawCopyButton.hidden = false;
 			dependencies = statusEntries(status.dependencies);
 			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status, { renderDependencies });
@@ -1805,6 +2047,10 @@ const createOverviewDashboard = () => {
 		element('p', { className: 'eyebrow', text: 'Live control plane' }),
 		element('h2', { text: 'Operational overview' }),
 		element('p', { text: 'A quick read on service readiness, enabled capabilities and delivery health.' }),
+		element('p', {
+			className: 'dashboard-subtitle',
+			text: 'New here? See docs/PRODUCT.md for the human-readable capability map and first-24-hours operator journey.',
+		}),
 		lastChecked,
 	);
 	const refreshButton = element('button', { className: 'button-primary', text: 'Refresh dashboard' });
@@ -1816,13 +2062,13 @@ const createOverviewDashboard = () => {
 	const channelGrid = element('div', { className: 'status-grid' });
 	const dependencyGrid = element('div', { className: 'status-grid' });
 	const featureGrid = element('div', { className: 'chip-grid' });
-	const statusOutput = element('pre', { className: 'response-block', text: 'No status response yet.' });
+	const statusOutput = element('div', { className: 'response-block', text: 'No status response yet.' });
 	let lastRawStatus = '';
-	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy JSON');
+	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawStatus = element('details', { className: 'raw-status' });
 	rawStatus.append(
-		element('summary', { text: 'Show raw status response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		statusOutput,
 	);
@@ -1851,10 +2097,7 @@ const createOverviewDashboard = () => {
 			output: statusOutput,
 		});
 		if (status && typeof status === 'object') {
-			lastRawStatus = window.CabrosAdminRequest.redactSecret(
-				JSON.stringify(status, null, 2),
-				getElement('api-key')?.value || '',
-			);
+			lastRawStatus = JSON.stringify(status);
 			rawCopyButton.hidden = false;
 			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status);
 		} else {
@@ -1870,13 +2113,50 @@ const createOverviewDashboard = () => {
 	return dashboard;
 };
 
+// A request can end without an HTTP response at all. Each such end is a distinct
+// operator-facing result, so it is labelled explicitly; an HTTP status is only ever
+// assigned after captureResponseStatus receives a real response.
+const REQUEST_OUTCOMES = {
+	AUTHORIZATION_DENIED: 'authorization_denied',
+	SIGN_IN_EXPIRED: 'sign_in_expired',
+	INVALID_REQUEST: 'invalid_request',
+	CANCELLED: 'cancelled',
+	SUPERSEDED: 'superseded',
+	TIMED_OUT: 'timed_out',
+	NETWORK_ERROR: 'network_error',
+};
+
+const REQUEST_OUTCOME_LABELS = {
+	[REQUEST_OUTCOMES.AUTHORIZATION_DENIED]: 'Not authorized',
+	[REQUEST_OUTCOMES.SIGN_IN_EXPIRED]: 'Sign-in expired',
+	[REQUEST_OUTCOMES.INVALID_REQUEST]: 'Invalid request',
+	[REQUEST_OUTCOMES.CANCELLED]: 'Cancelled',
+	[REQUEST_OUTCOMES.SUPERSEDED]: 'Superseded',
+	[REQUEST_OUTCOMES.TIMED_OUT]: 'Timed out',
+	[REQUEST_OUTCOMES.NETWORK_ERROR]: 'Network error',
+};
+
+const DEFAULT_NO_RESPONSE_LABEL = 'No response';
+
+const describeRequestOutcome = (outcome) => REQUEST_OUTCOME_LABELS[outcome] || DEFAULT_NO_RESPONSE_LABEL;
+
+// fetchWithTimeout aborts via AbortController, so an exceeded client budget rejects with
+// an AbortError — the request may or may not have reached the server, unlike a transport failure.
+const classifyRequestFailure = (error) => (error && error.name === 'AbortError'
+	? REQUEST_OUTCOMES.TIMED_OUT
+	: REQUEST_OUTCOMES.NETWORK_ERROR);
+
 const sendRequest = async ({
-	definition, path, query, body, headers, button, output, formatResponse, parseSuccessResponse, isCurrent, captureResponseStatus, captureResponseData,
+	definition, path, query, body, headers, button, output, formatResponse, parseSuccessResponse, isCurrent, captureResponseStatus, captureResponseData, captureOutcome,
 }) => {
 	const requestIsCurrent = typeof isCurrent === 'function' ? isCurrent : () => true;
+	const recordOutcome = (outcome) => {
+		if (typeof captureOutcome === 'function') captureOutcome(outcome);
+	};
 	const apiKey = getElement('api-key')?.value || '';
 	const requiredRole = definition.requiredRole || (definition.method === 'GET' ? 'admin.viewer' : 'admin.operator');
 	if (authState.enabled && (!authState.user || !window.CabrosAdminRequest.canAccess({ requiredRole }, authState.role))) {
+		recordOutcome(REQUEST_OUTCOMES.AUTHORIZATION_DENIED);
 		showError(output, authState.user ? 'Your admin role cannot perform this operation.' : 'Sign in is required.');
 		return;
 	}
@@ -1885,6 +2165,7 @@ const sendRequest = async ({
 		try {
 			authToken = await authState.user.getIdToken();
 		} catch (error) {
+			recordOutcome(REQUEST_OUTCOMES.SIGN_IN_EXPIRED);
 			showError(output, 'Unable to refresh the admin sign-in. Please sign in again.');
 			return;
 		}
@@ -1905,13 +2186,20 @@ const sendRequest = async ({
 			baseUrl: getApiBaseUrl(),
 		});
 	} catch (error) {
+		recordOutcome(REQUEST_OUTCOMES.INVALID_REQUEST);
 		showError(output, error.message);
 		return;
 	}
 
-	if (!window.CabrosAdminRequest.confirmRequest(definition, (message) => window.confirm(message))) return;
+	if (!window.CabrosAdminRequest.confirmRequest(definition, (message) => window.confirm(message))) {
+		recordOutcome(REQUEST_OUTCOMES.CANCELLED);
+		return;
+	}
 
-	if (!requestIsCurrent()) return;
+	if (!requestIsCurrent()) {
+		recordOutcome(REQUEST_OUTCOMES.SUPERSEDED);
+		return;
+	}
 	button.disabled = true;
 	output.className = 'response-block';
 	output.replaceChildren(
@@ -1945,11 +2233,16 @@ const sendRequest = async ({
 		output.className = `response-block${response.ok ? '' : ' response-error'}`;
 		const responseText = response.ok && formatResponse
 			? formatResponse({ summary, status: response.status, elapsed, data })
-			: `${summary}\nHTTP ${response.status} · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(formatted, apiKey)}`;
+			: `${summary}\nHTTP ${response.status} · ${elapsed} ms`;
 		output.textContent = window.CabrosAdminRequest.redactSecret(responseText, apiKey);
+		if (!(response.ok && formatResponse)) {
+			if (data !== undefined) output.append(createResult(data));
+			else output.append(element('p', { text: window.CabrosAdminRequest.redactSecret(formatted, apiKey) }));
+		}
 		return response.ok ? data : undefined;
 	} catch (error) {
 		const elapsed = Math.round(performance.now() - started);
+		recordOutcome(classifyRequestFailure(error));
 		if (!requestIsCurrent()) return;
 		showError(output, `${summary}\nNetwork error · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(error.message, apiKey)}`);
 	} finally {
@@ -1968,6 +2261,7 @@ const createAlertListForm = () => {
 	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
 	const source = addField(form, 'Source', 'source', { placeholder: 'webhook' });
 	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
+	registerFilterScope('alerts.list', { limit, before, source, enriched });
 	[
 		['', 'All alerts'],
 		['true', 'Enriched only'],
@@ -1985,15 +2279,15 @@ const createAlertListForm = () => {
 	const next = element('button', { text: 'Next page' });
 	next.type = 'button';
 	next.disabled = true;
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const alertList = element('div', { className: 'form-fields alert-list' });
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -2020,7 +2314,7 @@ const createAlertListForm = () => {
 	batchDeleteButton.type = 'button';
 	batchDeleteButton.disabled = true;
 
-	const batchOutput = element('pre', { className: 'response-block batch-output' });
+	const batchOutput = element('div', { className: 'response-block batch-output' });
 	batchOutput.hidden = true;
 
 	batchToolbar.append(selectAllLabel, selectionCount, batchReplayButton, batchExportButton, batchDeleteButton, batchOutput);
@@ -2201,7 +2495,7 @@ const createAlertListForm = () => {
 			selectAllCheckbox.checked = false;
 			updateBatchToolbar();
 			lastRawJson = JSON.stringify(data, null, 2);
-			rawOutput.textContent = lastRawJson;
+			showResult(rawOutput, lastRawJson);
 			rawCopyButton.hidden = false;
 			alertList.replaceChildren();
 			if (!data.alerts.length) {
@@ -2220,7 +2514,7 @@ const createAlertListForm = () => {
 			selectAllCheckbox.checked = false;
 			updateBatchToolbar();
 			lastRawJson = '';
-			rawOutput.textContent = '';
+			showResult(rawOutput, '');
 			rawCopyButton.hidden = true;
 			alertList.replaceChildren();
 		}
@@ -2250,7 +2544,7 @@ const createAlertListForm = () => {
 		button.disabled = false;
 		alertList.replaceChildren();
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load alerts to refresh.';
 		if (clearCursor) before.value = '';
@@ -2300,7 +2594,66 @@ const reportWindowDefaults = () => {
 	};
 };
 
-const addAlertReportFilters = (form, { requiredWindow = false } = {}) => {
+let activeFilterScopes = [];
+
+const resetFilterScopes = () => {
+	activeFilterScopes = [];
+};
+
+const registerFilterScope = (scope, fields) => {
+	if (FILTER_SCOPE_VIEWS[scope]) {
+		activeFilterScopes.push({ scope, fields: { ...fields } });
+	}
+	return fields;
+};
+
+const readFilterValue = (input) => {
+	if (!input) return '';
+	if (input.type === 'checkbox') return input.checked ? 'true' : '';
+	return typeof input.value === 'string' ? input.value : '';
+};
+
+const collectFilterParams = (view) => {
+	const collected = {};
+	activeFilterScopes.forEach(({ scope, fields }) => {
+		if (view && FILTER_SCOPE_VIEWS[scope] !== view) return;
+		Object.entries(fields).forEach(([name, input]) => {
+			const value = readFilterValue(input);
+			if (value !== '') collected[`${scope}.${name}`] = value;
+		});
+	});
+	return collected;
+};
+
+const applyFilterParams = (params) => {
+	if (!params) return;
+	activeFilterScopes.forEach(({ scope, fields }) => {
+		Object.entries(fields).forEach(([name, input]) => {
+			const key = `${scope}.${name}`;
+			if (!input || !params.has(key)) return;
+			const value = params.get(key);
+			if (input.type === 'checkbox') input.checked = value === 'true';
+			else input.value = value;
+		});
+	});
+};
+
+const syncConsoleUrlFromFilters = () => {
+	writeConsoleUrl(buildConsoleUrl(currentConsoleView, collectFilterParams(currentConsoleView)), { replace: true });
+};
+
+const bindFilterScopeListeners = () => {
+	activeFilterScopes.forEach(({ fields }) => {
+		Object.values(fields).forEach((input) => {
+			if (!input || typeof input.addEventListener !== 'function' || input.consoleFilterBound) return;
+			input.consoleFilterBound = true;
+			input.addEventListener('input', syncConsoleUrlFromFilters);
+			input.addEventListener('change', syncConsoleUrlFromFilters);
+		});
+	});
+};
+
+const addAlertReportFilters = (form, { requiredWindow = false, scope } = {}) => {
 	const defaults = reportWindowDefaults();
 	const from = addField(form, 'From', 'from', {
 		type: 'datetime-local', value: defaults.from, required: requiredWindow,
@@ -2320,7 +2673,7 @@ const addAlertReportFilters = (form, { requiredWindow = false } = {}) => {
 		option.value = value;
 		enriched.append(option);
 	});
-	return { from, to, limit, source, enriched };
+	return registerFilterScope(scope, { from, to, limit, source, enriched });
 };
 
 const toIsoTimestamp = (value, label) => {
@@ -2341,6 +2694,107 @@ const getAlertReportQuery = (fields, { format, includeText } = {}) => Object.fro
 		includeText,
 	}).filter(([, value]) => value !== undefined && value !== ''),
 );
+
+// Verdict tones for the sentiment calibration panel. A window too small to
+// judge is deliberately NOT green: `insufficient_sample` is the absence of
+// evidence, and rendering it as a pass would read as reassurance.
+const SENTIMENT_CALIBRATION_TONES = {
+	spread_collapse: 'status-danger',
+	top_band_concentration: 'status-danger',
+	insufficient_sample: 'status-disabled',
+	no_samples: 'status-disabled',
+};
+
+const SENTIMENT_CALIBRATION_LABELS = {
+	spread_collapse: 'Spread collapsed',
+	top_band_concentration: 'Top-band concentration',
+	insufficient_sample: 'Not enough samples',
+	no_samples: 'No samples',
+};
+
+const formatScore = (value) => {
+	const numeric = asFiniteNumber(value);
+	return numeric === null ? '—' : numeric.toFixed(2);
+};
+
+const renderSentimentCalibration = (enrichment) => {
+	const calibration = asObject(enrichment && enrichment.sentimentCalibration);
+	if (!calibration || !('sampleCount' in calibration)) return null;
+
+	const reason = typeof calibration.reason === 'string' && calibration.reason ? calibration.reason : null;
+	const saturated = calibration.saturated === true;
+	const evaluated = calibration.evaluated === true;
+	const verdict = saturated ? 'Saturated' : (evaluated ? 'Healthy' : 'Not evaluated');
+	const tone = saturated
+		? 'status-danger'
+		: (reason ? (SENTIMENT_CALIBRATION_TONES[reason] || 'status-disabled') : 'status-ready');
+
+	const spread = asFiniteNumber(calibration.spread);
+	const topBandShare = asFiniteNumber(calibration.topBandShare);
+	const section = element('section', { className: 'dashboard-section sentiment-calibration' });
+
+	const header = element('div', { className: 'section-header' });
+	header.append(
+		element('h3', { text: 'Sentiment calibration' }),
+		element('span', {
+			className: `status-badge ${tone}`,
+			text: verdict,
+			attributes: { role: 'status' },
+		}),
+	);
+	section.append(header);
+
+	const grid = element('div', { className: 'metric-grid' });
+	const topBandPct = topBandShare === null ? '—' : `${Math.round(topBandShare * 100)}%`;
+	grid.append(
+		createMetricCard(
+			'Scores in window',
+			formatJobValue(calibration.sampleCount),
+			`${formatJobValue(calibration.distinctValueCount)} distinct · ${formatJobValue(calibration.bucketCount)} buckets`,
+		),
+		createMetricCard(
+			'Spread (p90 − p10)',
+			spread === null ? '—' : spread.toFixed(2),
+			`p10 ${formatScore(calibration.p10)} · p90 ${formatScore(calibration.p90)}`,
+		),
+		createMetricCard('Range', `${formatScore(calibration.min)} → ${formatScore(calibration.max)}`, `p50 ${formatScore(calibration.p50)}`),
+		createMetricCard('At or above 0.75', topBandPct, `${formatJobValue(calibration.topBandCount)} of ${formatJobValue(calibration.sampleCount)} scores`),
+		createMetricCard(
+			'Zero-source capped',
+			formatJobValue(calibration.rawScoreCapCount),
+			calibration.rawScoreCapCount
+				? 'Cap is live in this deployment'
+				: 'No capped alerts in this window',
+		),
+	);
+	section.append(grid);
+
+	const details = element('p', { className: 'metric-meta' });
+	details.append(element('span', { text: reason ? `Rule: ${reason}` : 'Rule: none (healthy)' }));
+	section.append(details);
+
+	const buckets = Array.isArray(calibration.buckets) ? calibration.buckets : [];
+	if (buckets.length) {
+		const table = element('table', { className: 'data-table' });
+		const head = element('tr');
+		['Band', 'Count'].forEach((label) => head.append(element('th', { text: label })));
+		table.append(head);
+		buckets.forEach((bucket) => {
+			const row = element('tr');
+			const detail = asObject(bucket);
+			const lower = asFiniteNumber(detail.lowerBound);
+			const upper = asFiniteNumber(detail.upperBound);
+			row.append(
+				element('td', { text: lower === null || upper === null ? '—' : `${lower.toFixed(1)} – ${upper.toFixed(1)}` }),
+				element('td', { text: formatJobValue(detail.count) }),
+			);
+			table.append(row);
+		});
+		section.append(table);
+	}
+
+	return section;
+};
 
 const renderAlertSummaryBlocks = (data) => {
 	const wrap = element('div', { className: 'dashboard summary-blocks' });
@@ -2374,6 +2828,13 @@ const renderAlertSummaryBlocks = (data) => {
 			`${formatJobValue(enrichment.plainAlerts)} plain · denominator ${formatJobValue(coverage.denominator)}`,
 		),
 	);
+
+	// Appended before the coverage sections so a saturated score is the first
+	// thing an operator reads: it invalidates every per-alert score above it.
+	const calibrationPanel = renderSentimentCalibration(enrichment);
+	if (calibrationPanel) {
+		wrap.append(calibrationPanel);
+	}
 
 	const channels = Object.entries(asObject(delivery.byChannel));
 	if (channels.length) {
@@ -2447,18 +2908,18 @@ const createAlertSummaryForm = () => {
 		element('h3', { text: definition.label }),
 		element('code', { text: `${definition.method} ${definition.path}` }),
 	);
-	const fields = addAlertReportFilters(form);
+	const fields = addAlertReportFilters(form, { scope: 'alerts.summary' });
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const blocks = element('div', { className: 'summary-host' });
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw analytics response' }),
+		element('summary', { text: 'Analytics details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -2469,7 +2930,7 @@ const createAlertSummaryForm = () => {
 		button.disabled = false;
 		blocks.replaceChildren();
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load alert analytics to refresh.';
 	};
@@ -2499,12 +2960,12 @@ const createAlertSummaryForm = () => {
 				if (!data || !data.summary) {
 					blocks.replaceChildren();
 					lastRawJson = '';
-					rawOutput.textContent = '';
+					showResult(rawOutput, '');
 					rawCopyButton.hidden = true;
 					return;
 				}
 				blocks.replaceChildren(renderAlertSummaryBlocks(data));
-				rawOutput.textContent = lastRawJson;
+				showResult(rawOutput, lastRawJson);
 				rawCopyButton.hidden = false;
 			});
 		} catch (error) {
@@ -2521,7 +2982,7 @@ const createAlertExportForm = () => {
 		element('h3', { text: definition.label }),
 		element('code', { text: `${definition.method} ${definition.path}` }),
 	);
-	const fields = addAlertReportFilters(form, { requiredWindow: true });
+	const fields = addAlertReportFilters(form, { requiredWindow: true, scope: 'alerts.export' });
 	const format = addField(form, 'Format', 'format', { tag: 'select' });
 	[['jsonl', 'JSONL'], ['csv', 'CSV']].forEach(([value, text]) => {
 		const option = element('option', { text });
@@ -2533,7 +2994,7 @@ const createAlertExportForm = () => {
 	});
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	form.append(button, output);
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
@@ -2822,6 +3283,7 @@ const createOutcomesListForm = () => {
 	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
 	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
+	registerFilterScope('outcomes.list', { symbol, exchange, status, window: windowField, from, to, limit, before });
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
@@ -2831,15 +3293,15 @@ const createOutcomesListForm = () => {
 	const next = element('button', { text: 'Next page' });
 	next.type = 'button';
 	next.disabled = true;
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const outcomeList = element('div', { className: 'form-fields outcome-list' });
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -2876,7 +3338,7 @@ const createOutcomesListForm = () => {
 		if (generation !== pageGeneration) return false;
 		if (data && Array.isArray(data.outcomes)) {
 			lastRawJson = JSON.stringify(data, null, 2);
-			rawOutput.textContent = lastRawJson;
+			showResult(rawOutput, lastRawJson);
 			rawCopyButton.hidden = false;
 			outcomeList.replaceChildren();
 			if (!data.outcomes.length) {
@@ -2886,7 +3348,7 @@ const createOutcomesListForm = () => {
 			}
 		} else {
 			lastRawJson = '';
-			rawOutput.textContent = '';
+			showResult(rawOutput, '');
 			rawCopyButton.hidden = true;
 			outcomeList.replaceChildren();
 		}
@@ -2911,7 +3373,7 @@ const createOutcomesListForm = () => {
 		button.disabled = false;
 		outcomeList.replaceChildren();
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load outcomes to refresh.';
 		if (clearCursor) before.value = '';
@@ -3052,18 +3514,19 @@ const createOutcomesSummaryForm = () => {
 	const from = addField(form, 'From', 'from', { placeholder: 'ISO-8601 timestamp' });
 	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
+	registerFilterScope('outcomes.summary', { symbol, exchange, status, window: windowField, from, to, limit });
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const blocks = element('div', { className: 'summary-host' });
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw summary response' }),
+		element('summary', { text: 'Summary details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -3075,7 +3538,7 @@ const createOutcomesSummaryForm = () => {
 		button.disabled = false;
 		blocks.replaceChildren();
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load outcomes summary to refresh.';
 	};
@@ -3112,12 +3575,12 @@ const createOutcomesSummaryForm = () => {
 			if (!data || !data.summary) {
 				blocks.replaceChildren();
 				lastRawJson = '';
-				rawOutput.textContent = '';
+				showResult(rawOutput, '');
 				rawCopyButton.hidden = true;
 				return;
 			}
 			blocks.replaceChildren(renderOutcomesSummaryBlocks(data));
-			rawOutput.textContent = lastRawJson;
+			showResult(rawOutput, lastRawJson);
 			rawCopyButton.hidden = false;
 		});
 	});
@@ -3207,6 +3670,7 @@ const createOutcomesCalibrationForm = () => {
 	const from = addField(form, 'From', 'from', { placeholder: 'ISO-8601 timestamp' });
 	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 1000, value: 1000 });
+	registerFilterScope('outcomes.calibration', { symbol, exchange, window: windowField, from, to, limit });
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
@@ -3287,14 +3751,18 @@ const getQueryEnum = (contract, definition, name) => {
 const formatOrderValue = (value) => value === undefined || value === null || value === '' ? '—' : String(value);
 
 const formatOrderEnvironment = (environment) => {
-	if (environment === 'live') return element('span', {
-		className: 'status-badge status-danger',
-		text: 'Environment: live',
-	});
-	if (environment === 'testnet') return element('span', {
-		className: 'status-badge status-ready',
-		text: 'Environment: testnet',
-	});
+	if (environment === 'live') {
+		return element('span', {
+			className: 'status-badge status-danger',
+			text: 'Environment: live',
+		});
+	}
+	if (environment === 'testnet') {
+		return element('span', {
+			className: 'status-badge status-ready',
+			text: 'Environment: testnet',
+		});
+	}
 	return element('span', {
 		className: 'status-badge status-disabled',
 		text: `Environment: ${formatOrderValue(environment)}`,
@@ -3414,7 +3882,7 @@ const createOrderListForm = () => {
 	button.type = 'submit';
 	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: —' });
 	const list = element('div', { className: 'form-fields' });
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	form.append(button, environmentBadge, list, output);
 
 	let listRequestVersion = 0;
@@ -3490,7 +3958,7 @@ const createOrderLookupForm = () => {
 	button.type = 'submit';
 	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: —' });
 	const result = element('div');
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const hint = element('p', { className: 'hint', text: 'Provide either orderId or origClientOrderId to query a single order.' });
 	form.append(button, environmentBadge, hint, result, output);
 
@@ -3637,7 +4105,7 @@ const createJobListForm = (contract, onSelect) => {
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	const list = element('div', { className: 'form-fields' });
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	form.append(button, list, output);
 	let listRequestVersion = 0;
 	const invalidateListRequest = () => {
@@ -3699,15 +4167,15 @@ const createJobStatusForm = () => {
 	const pollButton = element('button', { className: 'button-ghost', text: 'Pause auto-refresh' });
 	pollButton.type = 'button';
 	pollButton.hidden = true;
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const statusPanel = element('div');
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw job payload' }),
+		element('summary', { text: 'Job details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -3744,7 +4212,7 @@ const createJobStatusForm = () => {
 	const clearStructuredState = () => {
 		statusPanel.replaceChildren();
 		actions.replaceChildren();
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		lastFetchedActive = false;
 		stopPollTimer();
@@ -3754,7 +4222,7 @@ const createJobStatusForm = () => {
 	const applyStatus = (data, jobId) => {
 		statusPanel.replaceChildren(createJobPanel(data));
 		lastRawJson = JSON.stringify(data, null, 2);
-		rawOutput.textContent = lastRawJson;
+		showResult(rawOutput, lastRawJson);
 		rawCopyButton.hidden = false;
 		renderActions(data, jobId);
 		lastFetchedActive = JOB_ACTIVE_STATUSES.includes(data.status);
@@ -3781,15 +4249,16 @@ const createJobStatusForm = () => {
 			captureResponseStatus: (responseStatus) => { pollFailureStatus = responseStatus; },
 		});
 		if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value.trim() !== jobId) return data;
-		if (data && data.status) applyStatus(data, jobId);
-		else if (!isAutoRefresh) clearStructuredState();
-		else {
+		if (data && data.status) {
+			applyStatus(data, jobId);
+		} else if (!isAutoRefresh) {
+			clearStructuredState();
+		} else {
 			statusRequestVersion += 1;
 			stopPollTimer();
 			const recoverable = typeof pollFailureStatus !== 'number'
 				|| pollFailureStatus >= 500 || pollFailureStatus === 429;
-			if (recoverable && lastFetchedActive && !pollPaused) schedulePoll();
-			else {
+			if (recoverable && lastFetchedActive && !pollPaused) {schedulePoll();} else {
 				lastFetchedActive = false;
 				updatePollButton();
 			}
@@ -3906,6 +4375,7 @@ const PRESET_SCAN_TYPES = [
 const PRESET_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1D', '1W', '1M'];
 
 const createJobCreateForm = (contract, definition, onJobCreated) => {
+	const operation = getOperation(contract, definition);
 	const form = element('form', { className: 'operation-card structured-form' });
 	form.append(
 		element('h3', { text: definition.label || 'Create job' }),
@@ -4039,7 +4509,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 
 	// --- Advanced Section ---
 	const advancedDetails = element('details', { className: 'raw-status' });
-	advancedDetails.append(element('summary', { text: 'Advanced options & raw JSON' }));
+	advancedDetails.append(element('summary', { text: 'Advanced options' }));
 
 	const channelsFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
 	channelsFieldset.append(element('legend', { text: 'Notification channels (optional)' }));
@@ -4092,7 +4562,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 		placeholder: '300000',
 	});
 
-	addJsonField(advancedDetails, 'Request body JSON (raw override)', 'body', {});
+	addObjectField(advancedDetails, 'Request options', 'body', {}, contract, getBodySchema(contract, operation));
 	form.append(advancedDetails);
 
 	// Actions, output, and raw response
@@ -4104,14 +4574,14 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 	const formActions = element('div', { className: 'form-actions' });
 	formActions.append(button, retryButton);
 
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -4279,7 +4749,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 		lastIdempotencyKey = idempotencyKey;
 		retryButton.hidden = true;
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		submitInProgress = true;
 
@@ -4304,7 +4774,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 			const effectiveData = data || responseData;
 			if (effectiveData) {
 				lastRawJson = JSON.stringify(effectiveData, null, 2);
-				rawOutput.textContent = lastRawJson;
+				showResult(rawOutput, lastRawJson);
 				rawCopyButton.hidden = false;
 			}
 
@@ -4426,18 +4896,20 @@ const createPresetSummary = (preset, { onEdit, onRun, onDelete }) => {
 	}
 
 	const resultHost = element('div');
-	const output = element('pre', { className: 'response-block', text: '' });
+	const output = element('div', { className: 'response-block', text: '' });
 	output.hidden = true;
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.hidden = true;
-	rawToggle.append(element('summary', { text: 'Show raw run response' }), rawCopyButton, rawOutput);
+	rawToggle.append(element('summary', { text: 'Run details' }), rawCopyButton, rawOutput);
 
 	runBtn.addEventListener('click', () => {
-		onRun(preset, runBtn, card, output, resultHost, rawToggle, rawOutput, rawCopyButton);
+		onRun(preset, runBtn, card, output, resultHost, rawToggle, rawOutput, rawCopyButton, (rawJson) => {
+			lastRawJson = rawJson;
+		});
 	});
 	editBtn.addEventListener('click', () => {
 		onEdit(preset);
@@ -4476,19 +4948,19 @@ const createPresetListForm = (contract, { onEdit, onStorageUpdate }) => {
 	button.type = 'submit';
 
 	const listContainer = element('div', { className: 'form-fields preset-list' });
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 
 	let lastListRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastListRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastListRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.hidden = true;
-	rawToggle.append(element('summary', { text: 'Show raw presets response' }), rawCopyButton, rawOutput);
+	rawToggle.append(element('summary', { text: 'Presets details' }), rawCopyButton, rawOutput);
 
 	form.append(button, listContainer, output, rawToggle);
 
-	const onRunPreset = async (preset, runBtn, card, cardOutput, cardResultHost, cardRawToggle, cardRawOutput, cardRawCopy) => {
+	const onRunPreset = async (preset, runBtn, card, cardOutput, cardResultHost, cardRawToggle, cardRawOutput, cardRawCopy, setRawJson) => {
 		const runDef = {
 			method: 'POST',
 			path: '/api/scanner-presets/{id}/run',
@@ -4497,6 +4969,7 @@ const createPresetListForm = (contract, { onEdit, onStorageUpdate }) => {
 			requiredRole: 'admin.operator',
 		};
 		cardResultHost.replaceChildren();
+		setRawJson('');
 		cardRawToggle.hidden = true;
 		cardOutput.hidden = false;
 		cardOutput.className = 'response-block request-state';
@@ -4519,7 +4992,8 @@ const createPresetListForm = (contract, { onEdit, onStorageUpdate }) => {
 				if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
 			}
 			const rawJson = JSON.stringify(data, null, 2);
-			cardRawOutput.textContent = rawJson;
+			setRawJson(rawJson);
+			showResult(cardRawOutput, rawJson);
 			cardRawCopy.hidden = false;
 			cardRawToggle.hidden = false;
 			const rendered = analysisReportResult(data);
@@ -4577,7 +5051,7 @@ const createPresetListForm = (contract, { onEdit, onStorageUpdate }) => {
 				if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
 			}
 			lastListRawJson = JSON.stringify(data, null, 2);
-			rawOutput.textContent = lastListRawJson;
+			showResult(rawOutput, lastListRawJson);
 			rawCopyButton.hidden = false;
 			rawToggle.hidden = false;
 
@@ -4696,8 +5170,8 @@ const addPresetStructuredFields = (form, contract, operation) => {
 	});
 
 	const advancedDetails = element('details', { className: 'raw-status' });
-	advancedDetails.append(element('summary', { text: 'Advanced request body' }));
-	addJsonField(advancedDetails, 'Request body JSON', 'body', bodyExample);
+	advancedDetails.append(element('summary', { text: 'All request options' }));
+	addObjectField(advancedDetails, 'Request options', 'body', bodyExample, contract, getBodySchema(contract, operation));
 	form.append(advancedDetails);
 
 	const syncBody = () => {
@@ -4785,30 +5259,30 @@ const createOperationForm = (contract, definition, options = {}) => {
 		(definition.path === '/api/scanner-presets/{id}' && definition.method === 'PUT');
 
 	if (definition.method === 'GET' || getParameters(contract, operation).some((parameter) => parameter.in === 'query')) {
-		addJsonField(form, 'Query JSON', 'query', getQueryExample(contract, operation));
+		addObjectField(form, 'Filters', 'query', getQueryExample(contract, operation), contract, getQuerySchema(contract, operation));
 	}
 	if (isPresetUpsert) {
 		addPresetStructuredFields(form, contract, operation);
 	} else if (definition.method !== 'GET' && operation && operation.requestBody) {
-		addJsonField(form, 'Request body JSON', 'body', getBodyExample(contract, operation));
+		addObjectField(form, 'Request options', 'body', getBodyExample(contract, operation), contract, getBodySchema(contract, operation));
 	}
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	if (definition.confirm) button.className = 'destructive-action';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const hasStructuredResult = typeof definition.renderSuccess === 'function';
 	const resultHost = hasStructuredResult ? element('div') : null;
 	let lastRawJson = '';
 	let rawOutputEl = null;
 	let rawCopyButton = null;
 	if (hasStructuredResult) {
-		rawOutputEl = element('pre', { className: 'response-block' });
-		rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+		rawOutputEl = element('div', { className: 'response-block' });
+		rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 		rawCopyButton.hidden = true;
 		const rawToggle = element('details', { className: 'raw-status' });
 		rawToggle.append(
-			element('summary', { text: 'Show raw response' }),
+			element('summary', { text: 'Response details' }),
 			rawCopyButton,
 			rawOutputEl,
 		);
@@ -4821,7 +5295,7 @@ const createOperationForm = (contract, definition, options = {}) => {
 		if (resultHost) resultHost.replaceChildren();
 		if (rawCopyButton) {
 			lastRawJson = '';
-			rawOutputEl.textContent = '';
+			showResult(rawOutputEl, '');
 			rawCopyButton.hidden = true;
 		}
 		try {
@@ -4849,12 +5323,12 @@ const createOperationForm = (contract, definition, options = {}) => {
 				if (!resultHost) return;
 				if (!data) {
 					resultHost.replaceChildren();
-					rawOutputEl.textContent = '';
+					showResult(rawOutputEl, '');
 					rawCopyButton.hidden = true;
 					return;
 				}
 				lastRawJson = JSON.stringify(data, null, 2);
-				rawOutputEl.textContent = lastRawJson;
+				showResult(rawOutputEl, lastRawJson);
 				rawCopyButton.hidden = false;
 				const rendered = definition.renderSuccess(data);
 				resultHost.replaceChildren(...(rendered ? [rendered] : []));
@@ -4933,7 +5407,7 @@ const sanitizeForHistory = (text) => {
 
 const renderPlayground = (contract, view) => {
 	const form = element('form', { className: 'operation-card playground' });
-	form.append(element('h2', { text: 'Playground' }));
+	form.append(element('h2', { text: 'Operations' }));
 
 	const filterLabel = element('label', { text: 'Filter operations' });
 	const filterInput = element('input', { type: 'search', placeholder: 'Filter by method, path, or label...' });
@@ -4947,6 +5421,17 @@ const renderPlayground = (contract, view) => {
 
 	const definitions = window.CabrosAdminRequest.operationDefinitions(contract);
 
+	// `Number('') === 0`, so a direct `definitions[Number(select.value)]` lookup resolves a
+	// blank selection to the FIRST definition instead of to nothing. Every lookup goes through
+	// this resolver so "no operation matches" is a real no-selection state. Do not inline it.
+	const selectedDefinition = () => {
+		const raw = select.value;
+		if (raw === undefined || raw === null || String(raw).trim() === '') return undefined;
+		const index = Number(raw);
+		if (!Number.isInteger(index) || index < 0) return undefined;
+		return definitions[index];
+	};
+
 	const fields = element('div', { className: 'form-fields' });
 
 	const buttonRow = element('div', { className: 'badge-row playground-actions' });
@@ -4954,7 +5439,7 @@ const renderPlayground = (contract, view) => {
 	button.type = 'submit';
 
 	const buildCurlCommand = () => {
-		const definition = definitions[Number(select.value)];
+		const definition = selectedDefinition();
 		if (!definition) return '';
 		const pathNames = [...definition.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
 		const resolvedPath = pathNames.reduce((acc, name) => {
@@ -4989,7 +5474,7 @@ const renderPlayground = (contract, view) => {
 			const bodyVal = form.elements.body.value.trim();
 			if (bodyVal) {
 				lines.push('  -H "Content-Type: application/json"');
-				lines.push(`  -d '${bodyVal.replace(/'/g, "'\\''")}'`);
+				lines.push(`  -d '${bodyVal.replace(/'/g, '\'\\\'\'')}'`);
 			}
 		}
 		return lines.join(' \\\n');
@@ -4999,15 +5484,15 @@ const renderPlayground = (contract, view) => {
 	buttonRow.append(button, curlButton);
 
 	const resultHost = element('div', { className: 'playground-structured-result' });
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -5021,6 +5506,12 @@ const renderPlayground = (contract, view) => {
 
 	form.append(filterLabel, selectLabel, fields, buttonRow, resultHost, output, rawToggle, historySection);
 	view.append(form);
+
+	let pendingRequestCount = 0;
+	const isSubmitLocked = () => pendingRequestCount > 0;
+	const syncSubmitLockedState = () => {
+		button.disabled = isSubmitLocked() || !selectedDefinition();
+	};
 
 	const saveCurrentInputs = (def) => {
 		if (!def) return;
@@ -5040,13 +5531,18 @@ const renderPlayground = (contract, view) => {
 
 	const renderFields = () => {
 		fields.replaceChildren();
-		const definition = definitions[Number(select.value)];
+		const definition = selectedDefinition();
 		if (!definition) {
 			button.disabled = true;
 			curlButton.disabled = true;
 			return;
 		}
-		button.disabled = false;
+		// Every re-render path (operation switch, filter auto-select, history restore)
+		// lands here, so this is the single place that decides whether a dispatch is
+		// allowed. `pendingRequestCount` is the source of truth: a request that outlives
+		// this re-render must keep the shared submit button locked so a second alert,
+		// replay, or order mutation cannot be dispatched behind it.
+		button.disabled = isSubmitLocked();
 		curlButton.disabled = false;
 		button.className = definition.confirm ? 'destructive-action' : '';
 
@@ -5055,13 +5551,13 @@ const renderPlayground = (contract, view) => {
 		const queryParameters = getParameters(contract, operation).filter((p) => p && p.in === 'query');
 		const hasQueryParams = queryParameters.length > 0;
 		if (hasQueryParams) {
-			addJsonField(fields, 'Query JSON', 'query', getQueryExample(contract, operation));
+			addObjectField(fields, 'Filters', 'query', getQueryExample(contract, operation), contract, getQuerySchema(contract, operation));
 		}
 
 		const requestBody = resolveRef(contract, operation && operation.requestBody);
 		const hasRequestBody = Boolean(requestBody && requestBody.content && requestBody.content['application/json']);
 		if (hasRequestBody && definition.method !== 'GET') {
-			addJsonField(fields, 'Request body JSON', 'body', getBodyExample(contract, operation));
+			addObjectField(fields, 'Request options', 'body', getBodyExample(contract, operation), contract, getBodySchema(contract, operation));
 		}
 
 		const key = `${definition.method} ${definition.path}`;
@@ -5123,12 +5619,20 @@ const renderPlayground = (contract, view) => {
 		} else if (firstAvailableValue !== null) {
 			// Filter-driven selection: save current inputs under the old definition
 			// and update previousDefinition to the newly selected one so subsequent
-			// explicit changes save under the correct operation.
+			// explicit changes save under the correct operation. `previousDefinition`
+			// is null when this filter followed an empty result, which makes this save a
+			// no-op instead of writing the empty form over the last active operation.
 			saveCurrentInputs(previousDefinition);
 			previousDefinition = definitions[Number(firstAvailableValue)];
 			select.value = firstAvailableValue;
 			renderFields();
 		} else {
+			// Nothing matches. Persist the in-flight draft before the fields are torn
+			// down, then clear previousDefinition: leaving it pointing at the operation
+			// that is no longer rendered is what let the next auto-select save the blank
+			// form into that operation's cache.
+			saveCurrentInputs(previousDefinition);
+			previousDefinition = null;
 			select.value = '';
 			renderFields();
 		}
@@ -5177,7 +5681,7 @@ const renderPlayground = (contract, view) => {
 	const restoreHistoryEntry = (entry) => {
 		const targetIndex = definitions.findIndex((d) => d.method === entry.method && d.path === entry.path);
 		if (targetIndex === -1) return;
-		saveCurrentInputs(definitions[Number(select.value)]);
+		saveCurrentInputs(selectedDefinition());
 		if (filterInput.value) {
 			filterInput.value = '';
 			populateOptions('');
@@ -5203,12 +5707,12 @@ const renderPlayground = (contract, view) => {
 	let previousDefinition = definitions[0];
 	select.addEventListener('change', () => {
 		saveCurrentInputs(previousDefinition);
-		previousDefinition = definitions[Number(select.value)];
+		previousDefinition = selectedDefinition();
 		renderFields();
 	});
 
 	fields.addEventListener('input', () => {
-		saveCurrentInputs(definitions[Number(select.value)]);
+		saveCurrentInputs(selectedDefinition());
 	});
 
 	filterInput.addEventListener('input', () => {
@@ -5217,13 +5721,16 @@ const renderPlayground = (contract, view) => {
 
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
+		// A disabled submit button does not stop implicit submission (Enter in a text
+		// input) or a programmatic submit, so the lock is also enforced here.
+		if (isSubmitLocked()) return;
 		resultHost.replaceChildren();
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		rawToggle.hidden = true;
 
-		const definition = definitions[Number(select.value)];
+		const definition = selectedDefinition();
 		if (!definition) return;
 
 		const pathNames = [...definition.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
@@ -5234,14 +5741,18 @@ const renderPlayground = (contract, view) => {
 			if (el) pathValues[name] = el.value;
 		});
 
+		let submittedBody = form.elements.body ? form.elements.body.value : undefined;
+		const submittedQuery = form.elements.query ? form.elements.query.value : undefined;
+
 		let query;
 		let body;
 		try {
 			if (form.elements.query) {
-				query = window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query'));
+				query = window.CabrosAdminRequest.validateQuery(parseJson(submittedQuery, 'Query'));
 			}
 			if (form.elements.body) {
 				body = getRequestBody(definition, form);
+				submittedBody = form.elements.body.value;
 			}
 		} catch (error) {
 			showError(output, error.message);
@@ -5250,8 +5761,8 @@ const renderPlayground = (contract, view) => {
 				path: definition.path,
 				resolvedPath,
 				pathValues,
-				query: form.elements.query ? form.elements.query.value : undefined,
-				body: form.elements.body ? form.elements.body.value : undefined,
+				query: submittedQuery,
+				body: submittedBody,
 				status: 'Validation error',
 				ok: false,
 			});
@@ -5265,7 +5776,10 @@ const renderPlayground = (contract, view) => {
 		let responseStatus = null;
 		let responseOk = false;
 		let responseData = null;
+		let requestOutcome = null;
 
+		pendingRequestCount += 1;
+		syncSubmitLockedState();
 		sendRequest({
 			definition,
 			path: resolvedPath,
@@ -5284,6 +5798,7 @@ const renderPlayground = (contract, view) => {
 					responseOk = response.ok;
 				}
 			},
+			captureOutcome: (outcome) => { requestOutcome = outcome; },
 			formatResponse: hasStructured
 				? ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`
 				: undefined,
@@ -5293,10 +5808,10 @@ const renderPlayground = (contract, view) => {
 				path: definition.path,
 				resolvedPath,
 				pathValues,
-				query: form.elements.query ? form.elements.query.value : undefined,
-				body: form.elements.body ? form.elements.body.value : undefined,
-				status: responseStatus ? `HTTP ${responseStatus}` : '200 OK',
-				ok: responseOk !== false,
+				query: submittedQuery,
+				body: submittedBody,
+				status: responseStatus ? `HTTP ${responseStatus}` : describeRequestOutcome(requestOutcome),
+				ok: responseOk,
 			});
 
 			const payloadToRender = data || responseData;
@@ -5311,11 +5826,11 @@ const renderPlayground = (contract, view) => {
 			if (rendered) {
 				resultHost.replaceChildren(rendered);
 				lastRawJson = JSON.stringify(payloadToRender, null, 2);
-				rawOutput.textContent = lastRawJson;
+				showResult(rawOutput, lastRawJson);
 				rawCopyButton.hidden = false;
 				rawToggle.hidden = false;
 			} else if (payloadToRender && hasStructured) {
-				output.textContent = `${output.textContent}\n\n${JSON.stringify(payloadToRender, null, 2)}`;
+				output.append(createResult(payloadToRender));
 			}
 		}).catch(() => {
 			addHistoryEntry({
@@ -5323,11 +5838,15 @@ const renderPlayground = (contract, view) => {
 				path: definition.path,
 				resolvedPath,
 				pathValues,
-				query: form.elements.query ? form.elements.query.value : undefined,
-				body: form.elements.body ? form.elements.body.value : undefined,
-				status: responseStatus ? `HTTP ${responseStatus}` : 'Network error',
-				ok: false,
+				query: submittedQuery,
+				body: submittedBody,
+				status: responseStatus ? `HTTP ${responseStatus}` : describeRequestOutcome(requestOutcome),
+				ok: responseOk,
 			});
+		}).finally(() => {
+			// Runs after sendRequest's own finally, so this is the authoritative write.
+			pendingRequestCount = Math.max(0, pendingRequestCount - 1);
+			syncSubmitLockedState();
 		});
 	});
 
@@ -5384,8 +5903,8 @@ const createStructuredAnalysisForm = (contract, definition, builder) => {
 
 	if (!isGet) {
 		const advancedDetails = element('details', { className: 'raw-status' });
-		advancedDetails.append(element('summary', { text: 'Advanced request body' }));
-		addJsonField(advancedDetails, 'Request body JSON', 'body', bodyExample);
+		advancedDetails.append(element('summary', { text: 'All request options' }));
+		addObjectField(advancedDetails, 'Request options', 'body', bodyExample, contract, getBodySchema(contract, operation));
 		form.append(fields, advancedDetails);
 	} else {
 		form.append(fields);
@@ -5440,7 +5959,7 @@ const createStructuredAnalysisForm = (contract, definition, builder) => {
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	if (definition.confirm) button.className = 'destructive-action';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const hasStructuredResult = typeof definition.renderSuccess === 'function';
 	const resultHost = hasStructuredResult ? element('div') : null;
 	let lastRawJson = '';
@@ -5448,12 +5967,12 @@ const createStructuredAnalysisForm = (contract, definition, builder) => {
 	let rawCopyButton = null;
 
 	if (hasStructuredResult) {
-		rawOutputEl = element('pre', { className: 'response-block' });
-		rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+		rawOutputEl = element('div', { className: 'response-block' });
+		rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 		rawCopyButton.hidden = true;
 		const rawToggle = element('details', { className: 'raw-status' });
 		rawToggle.append(
-			element('summary', { text: 'Show raw response' }),
+			element('summary', { text: 'Response details' }),
 			rawCopyButton,
 			rawOutputEl,
 		);
@@ -5467,7 +5986,7 @@ const createStructuredAnalysisForm = (contract, definition, builder) => {
 		if (resultHost) resultHost.replaceChildren();
 		if (rawCopyButton) {
 			lastRawJson = '';
-			rawOutputEl.textContent = '';
+			showResult(rawOutputEl, '');
 			rawCopyButton.hidden = true;
 		}
 
@@ -5511,12 +6030,12 @@ const createStructuredAnalysisForm = (contract, definition, builder) => {
 				if (!resultHost) return;
 				if (!data) {
 					resultHost.replaceChildren();
-					rawOutputEl.textContent = '';
+					showResult(rawOutputEl, '');
 					rawCopyButton.hidden = true;
 					return;
 				}
 				lastRawJson = JSON.stringify(data, null, 2);
-				rawOutputEl.textContent = lastRawJson;
+				showResult(rawOutputEl, lastRawJson);
 				rawCopyButton.hidden = false;
 				const rendered = definition.renderSuccess(data);
 				resultHost.replaceChildren(...(rendered ? [rendered] : []));
@@ -6063,10 +6582,756 @@ const buildNewsMonitorForm = (contract, operation, fields, definition) => {
 	};
 };
 
+// Realized P&L, ROI, fees and open exposure need a durable trade ledger that is not
+// deployed yet. Each real-money panel looks its path up in the loaded contract and
+// renders a named pending state when it is absent, so this path pointing at an
+// operation the contract does not yet carry is intentional, not a typo.
+const TRADING_LEDGER_PATH = '/api/trading/ledger/summary';
+
+const TRADING_REAL_METRICS = [
+	['Realized P&L', 'realizedPnl'],
+	['Unrealized P&L', 'unrealizedPnl'],
+	['ROI', 'roiPercent'],
+	['Profit factor', 'profitFactor'],
+	['Fees', 'feesPaid'],
+	['Avg hold', 'averageHoldMinutes'],
+	['Open exposure', 'openExposure'],
+];
+
+const TRADING_REAL_METRIC_HINTS = {
+	realizedPnl: 'Closed trades only',
+	unrealizedPnl: 'Mark to last evaluated price',
+	roiPercent: 'On deployed capital',
+	profitFactor: 'Gross win over gross loss',
+	feesPaid: 'Exchange commission',
+	averageHoldMinutes: 'Per closed trade',
+	openExposure: 'Against BINANCE_TRADING_MAX_NOTIONAL',
+};
+
+const TRADING_WINDOWS = ['1h', '4h', '1D', '1W'];
+
+const formatTradingPercent = (value, digits = 2) => {
+	const numeric = asFiniteNumber(value);
+	if (numeric === null) return '—';
+	return `${numeric > 0 ? '+' : ''}${numeric.toFixed(digits)}%`;
+};
+
+const formatTradingR = (value) => {
+	const numeric = asFiniteNumber(value);
+	if (numeric === null) return '—';
+	return `${numeric > 0 ? '+' : ''}${numeric.toFixed(2)}R`;
+};
+
+// The service reports every percentage at two decimals (parseFloat(toFixed(2))), so
+// a bare interpolation would print "59%" for a pooled average and "59.00%" for a
+// per-window one purely because the pooled value happened to be whole.
+const formatTradingHitRate = (value) => {
+	const numeric = asFiniteNumber(value);
+	return numeric === null ? '—' : `${numeric.toFixed(2)}%`;
+};
+
+const tradingUtcDay = (value) => {
+	if (typeof value !== 'string' || value.trim() === '') return null;
+	const parsed = Date.parse(value);
+	if (!Number.isFinite(parsed)) return null;
+	return new Date(parsed).toISOString().slice(0, 10);
+};
+
+const collectEvaluatedSignals = (records, windowKey) => {
+	const list = Array.isArray(records) ? records : [];
+	return list.reduce((acc, record) => {
+		const window = asObject(asObject(record && record.outcomes)[windowKey]);
+		const value = asFiniteNumber(window.return);
+		if (window.status !== 'evaluated' || value === null) return acc;
+		const day = tradingUtcDay(record && record.receivedAt);
+		acc.push({
+			day,
+			symbol: record && record.symbol ? String(record.symbol) : 'unknown',
+			setupType: record && record.setupType ? String(record.setupType) : 'unlabelled',
+			side: record && record.side ? String(record.side) : 'unknown',
+			value,
+		});
+		return acc;
+	}, []);
+};
+
+const summariseSignalsBy = (signals, key) => {
+	const buckets = new Map();
+	signals.forEach((signal) => {
+		const name = signal[key];
+		const bucket = buckets.get(name) || { name, count: 0, wins: 0, sum: 0 };
+		bucket.count += 1;
+		bucket.sum += signal.value;
+		if (signal.value > 0) bucket.wins += 1;
+		buckets.set(name, bucket);
+	});
+	return [...buckets.values()]
+		.map((bucket) => ({
+			...bucket,
+			meanReturn: bucket.sum / bucket.count,
+			hitRate: bucket.count ? (bucket.wins / bucket.count) * 100 : null,
+		}))
+		.sort((a, b) => a.meanReturn - b.meanReturn);
+};
+
+const buildDailyBuckets = (signals) => {
+	const byDay = new Map();
+	signals.forEach((signal) => {
+		const day = signal.day || 'undated';
+		const bucket = byDay.get(day) || { day, count: 0, sum: 0 };
+		bucket.count += 1;
+		bucket.sum += signal.value;
+		byDay.set(day, bucket);
+	});
+	return [...byDay.values()]
+		.map((bucket) => ({
+			day: bucket.day,
+			count: bucket.count,
+			sum: bucket.sum,
+			meanReturn: bucket.sum / bucket.count,
+		}))
+		.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+};
+
+const firstEvaluatedWindowKey = (records) => {
+	const list = Array.isArray(records) ? records : [];
+	for (const key of TRADING_WINDOWS) {
+		if (list.some((record) => asObject(asObject(record && record.outcomes)[key]).status === 'evaluated')) return key;
+	}
+	return TRADING_WINDOWS[0];
+};
+
+// SignalOutcomeService.summarizeOutcomes() has no top-level winRatePercent,
+// averageReturnPercent, averageMfePercent or averageMaePercent. Those four live one
+// level down at summary.windows[<window>] (schema WindowStats), alongside
+// totalSignals. Reading the top-level names renders a permanent em dash even when
+// the backend computed the value, so the window block is always resolved first.
+const WINDOW_POOLED_METRICS = ['hitRatePercent', 'averageReturnPercent', 'averageMfePercent', 'averageMaePercent'];
+
+// Each WindowStats percentage is a mean over that window's evaluated
+// (signal, window) observations, and `totalSignals` is exactly that denominator.
+// Weighting by it therefore reproduces the pooled mean across windows rather than
+// an unweighted average of per-window percentages, which would let a window with
+// two observations count as much as one with two hundred.
+const poolWindowStats = (blocks) => {
+	const pooled = { totalSignals: 0 };
+	const sums = {};
+	WINDOW_POOLED_METRICS.forEach((metric) => { sums[metric] = 0; });
+	blocks.forEach((block) => {
+		const total = asFiniteNumber(block.totalSignals);
+		if (total === null || total <= 0) return;
+		pooled.totalSignals += total;
+		WINDOW_POOLED_METRICS.forEach((metric) => {
+			const value = asFiniteNumber(block[metric]);
+			if (value === null) return;
+			sums[metric] += value * total;
+		});
+	});
+	WINDOW_POOLED_METRICS.forEach((metric) => {
+		pooled[metric] = pooled.totalSignals > 0 ? sums[metric] / pooled.totalSignals : null;
+	});
+	return pooled;
+};
+
+// `windowKey` is the raw select value, so '' means "All windows" — and there is no
+// single window block to read then. Pooling keeps the strip informative instead of
+// blank, and `pooled` lets the copy say so rather than implying a one-window number.
+const resolveTradingWindowStats = (summary, windowKey) => {
+	const windows = asObject(summary && summary.windows);
+	const requested = typeof windowKey === 'string' ? windowKey.trim() : '';
+	if (requested) {
+		const stats = asObject(windows[requested]);
+		return { stats, scope: requested, pooled: false, available: Object.keys(stats).length > 0 };
+	}
+	const blocks = TRADING_WINDOWS
+		.map((key) => asObject(windows[key]))
+		.filter((block) => Object.keys(block).length > 0);
+	if (!blocks.length) return { stats: {}, scope: '', pooled: false, available: false };
+	return { stats: poolWindowStats(blocks), scope: 'all windows', pooled: true, available: true };
+};
+
+const describeTradingWindowScope = (resolved) => {
+	if (!resolved || !resolved.available) return '';
+	return resolved.pooled ? 'pooled across all windows' : `${resolved.scope} window`;
+};
+
+const createTradingKpiCard = (label, value, meta, badgeText, tone) => {
+	const card = createMetricCard(label, value, meta);
+	card.className = `${card.className} trading-kpi`;
+	card.append(element('span', {
+		className: `trading-kpi-badge status-badge ${tone || 'status-disabled'}`,
+		text: badgeText,
+	}));
+	return card;
+};
+
+const renderPaperKpiStrip = (summary, badgeText, resolved) => {
+	const grid = element('div', { className: 'metric-grid kpi-strip' });
+	const received = asFiniteNumber(summary.totalSignalsReceived);
+	const evaluated = asFiniteNumber(summary.totalSignalsEvaluated);
+	const coverage = received && received > 0 && evaluated !== null
+		? Math.round((evaluated / received) * 100)
+		: null;
+	const stats = asObject(resolved && resolved.stats);
+	const scope = describeTradingWindowScope(resolved);
+	const hitRate = asFiniteNumber(stats.hitRatePercent);
+	const mfe = asFiniteNumber(stats.averageMfePercent);
+	const mae = asFiniteNumber(stats.averageMaePercent);
+
+	grid.append(
+		createTradingKpiCard('Signals recorded', formatOrderValue(summary.totalSignalsReceived),
+			`${formatOrderValue(summary.totalSignalsEligible)} eligible · ${formatOrderValue(summary.totalSignalsPending)} pending`,
+			badgeText, 'status-disabled'),
+		createTradingKpiCard('Coverage', coverage === null ? '—' : `${coverage}%`,
+			`${formatOrderValue(summary.totalSignalsEvaluated)} evaluated of ${formatOrderValue(summary.totalSignalsReceived)}`,
+			badgeText, 'status-disabled'),
+		createTradingKpiCard('Hit rate', formatTradingHitRate(hitRate),
+			`Evaluated signals closing above entry${scope ? ` · ${scope}` : ''}`,
+			badgeText, 'status-disabled'),
+		createTradingKpiCard('Expectancy', formatTradingR(summary.expectancyR),
+			'Average R-multiple per evaluated window',
+			badgeText, 'status-disabled'),
+		createTradingKpiCard('Average return', formatTradingPercent(stats.averageReturnPercent),
+			`Paper, per evaluated window${scope ? ` · ${scope}` : ''}`,
+			badgeText, 'status-disabled'),
+		createTradingKpiCard('MFE / MAE',
+			mfe === null && mae === null ? '—' : `${mfe === null ? '—' : `${mfe.toFixed(2)}%`} / ${mae === null ? '—' : `${mae.toFixed(2)}%`}`,
+			`Excursion reached vs tolerated${scope ? ` · ${scope}` : ''}`,
+			badgeText, 'status-disabled'),
+	);
+	return grid;
+};
+
+// A disabled feature and an unavailable dependency get different copy: telling an
+// operator to go enable a feature that is already deployed sends them the wrong way.
+const classifyTradingFailure = (status, data) => {
+	if (status === 403 || (data && data.code === 'FEATURE_DISABLED')) {
+		return { tone: 'status-misconfigured', heading: 'Not available — trade ledger API not deployed', body: 'Realized P&L, ROI, fees and open exposure need the durable trade ledger. Set the trading feature flags and redeploy once that API ships; this panel fills in automatically.' };
+	}
+	if (status === 503) {
+		return { tone: 'status-unknown', heading: 'Trade ledger temporarily unavailable', body: 'The backend answered but could not produce ledger data right now. This is a transient dependency state, not a disabled feature — retry from the refresh button.' };
+	}
+	return { tone: 'status-danger', heading: 'Trade ledger request failed', body: '' };
+};
+
+// Same reasoning as classifyTradingFailure, applied to the paper summary. A 400 is
+// this console's own malformed request, so telling the operator to enable a flag
+// that is already correct sends them the wrong way; only FEATURE_DISABLED earns
+// that advice.
+const classifyPaperFailure = (status, data) => {
+	if (status === 403 || (data && data.code === 'FEATURE_DISABLED')) {
+		return { tone: 'status-misconfigured', heading: 'Signal outcome tracking is disabled', body: 'Set ENABLE_SIGNAL_OUTCOME_TRACKING=true and redeploy to record paper outcomes.' };
+	}
+	if (status === 503) {
+		return { tone: 'status-unknown', heading: 'Outcome storage temporarily unavailable', body: 'Signal outcome tracking is enabled but its storage could not be read. This is a dependency state, not a disabled feature — retry from the refresh button.' };
+	}
+	if (status === 400) {
+		return { tone: 'status-danger', heading: 'Console sent an invalid filter', body: 'The backend rejected the window filter this console sent. No environment change is needed — the request itself was malformed.' };
+	}
+	return { tone: 'status-danger', heading: 'Outcome summary request failed', body: '' };
+};
+
+const createTradingPanelShell = (className, title, note) => {
+	const panel = element('section', { className: `dashboard-section ${className}` });
+	panel.append(element('h3', { text: title }));
+	if (note) panel.append(element('p', { className: 'trading-panel-note', text: note }));
+	return panel;
+};
+
+const renderRealPnlPanel = (contract, definition, query, button) => {
+	const panel = createTradingPanelShell('real-pnl-panel', 'Real trading P&L');
+	const host = element('div', { className: 'trading-metric-list' });
+	const pendingNotice = element('div', { className: 'trading-pending-notice' });
+	const pending = element('div', { className: 'trading-metric-list' });
+	const localOutput = element('div', { className: 'response-block', text: '' });
+	panel.append(host, pendingNotice, pending, localOutput);
+
+	const showPending = (classification) => {
+		host.replaceChildren();
+		const notice = element('p', { className: 'empty-state' });
+		notice.append(
+			element('span', { className: `status-badge ${classification.tone}`, text: classification.heading }),
+			element('span', { text: ` ${classification.body}` }),
+		);
+		pendingNotice.replaceChildren(
+			notice,
+			element('p', { className: 'trading-panel-note', text: 'Metrics that will appear here once a ledger exists:' }),
+		);
+		pending.replaceChildren(...TRADING_REAL_METRICS.map(([label, key]) => {
+			const box = element('div', { className: 'trading-metric-pending' });
+			box.append(
+				element('p', { className: 'metric-label', text: label }),
+				element('strong', { className: 'metric-value', text: '—' }),
+				element('p', { className: 'metric-meta', text: TRADING_REAL_METRIC_HINTS[key] }),
+			);
+			return box;
+		}));
+		localOutput.textContent = '';
+	};
+
+	if (!contract || !contract.paths || !contract.paths[TRADING_LEDGER_PATH]) {
+		showPending({
+			tone: 'status-disabled',
+			heading: 'Not available — trade ledger API not deployed',
+			body: `The API contract has no ${TRADING_LEDGER_PATH} operation, so there is no measured P&L to show. Nothing is fabricated here: these metrics appear automatically once the ledger ships.`,
+		});
+		return Promise.resolve(panel);
+	}
+
+	let capturedStatus = 0;
+	return sendRequest({
+		definition,
+		path: TRADING_LEDGER_PATH,
+		query,
+		button,
+		output: localOutput,
+		isCurrent: () => true,
+		captureResponseStatus: (status) => { capturedStatus = status; },
+		formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+	}).then((data) => {
+		const payload = data && typeof data === 'object' && !Array.isArray(data) ? data : null;
+		if (payload && capturedStatus < 400) {
+			host.replaceChildren(...TRADING_REAL_METRICS.map(([label, key]) => createTradingKpiCard(
+				label,
+				formatOrderValue(payload[key]),
+				TRADING_REAL_METRIC_HINTS[key],
+				'Measured',
+				'status-ready',
+			)));
+			pendingNotice.replaceChildren();
+			pending.replaceChildren();
+			return panel;
+		}
+		showPending(classifyTradingFailure(capturedStatus, payload));
+		return panel;
+	});
+};
+
+const renderChartPanel = (className, title, note, chartNode, emptyText) => {
+	const panel = createTradingPanelShell(className, title, note);
+	if (chartNode) panel.append(chartNode);
+	else panel.append(createEmptyState(emptyText));
+	return panel;
+};
+
+const renderAttributionPanel = (className, title, note, rows, dimensionLabel) => {
+	const panel = createTradingPanelShell(className, title, note);
+	if (!rows.length) {
+		panel.append(createEmptyState('No evaluated signals to attribute yet.'));
+		return panel;
+	}
+	const wrap = element('div', { className: 'table-wrap' });
+	const table = element('table', { className: 'data-table' });
+	const head = element('tr');
+	[dimensionLabel, 'Signals', 'Wins', 'Hit rate', 'Avg return', 'Total return'].forEach((label) => head.append(element('th', { text: label })));
+	table.append(head);
+	rows.forEach((row) => {
+		const tr = element('tr');
+		tr.append(
+			element('td', { text: row.name }),
+			element('td', { text: String(row.count) }),
+			element('td', { text: String(row.wins) }),
+			element('td', { text: row.hitRate === null ? '—' : `${row.hitRate.toFixed(1)}%` }),
+			element('td', { text: formatTradingPercent(row.meanReturn) }),
+			element('td', { text: formatTradingPercent(row.sum) }),
+		);
+		table.append(tr);
+	});
+	wrap.append(table);
+	panel.append(wrap);
+	return panel;
+};
+
+const describeSignalShape = (signals) => {
+	if (!signals.length) return 'No evaluated signals in the selected window.';
+	const wins = signals.filter((signal) => signal.value > 0).length;
+	const sum = signals.reduce((total, signal) => total + signal.value, 0);
+	return `${signals.length} evaluated signals, ${wins} closed above entry, total return ${formatTradingPercent(sum)}.`;
+};
+
+const createLiveFeed = () => {
+	const panel = createTradingPanelShell('live-feed-panel', 'Live event feed');
+	const feed = element('div', { className: 'live-feed' });
+	feed.append(createEmptyState('No events yet — connect a key or sign in to stream.'));
+	panel.append(feed);
+	const MAX_ROWS = 40;
+	const unsubscribe = onSseEvent((type, data) => {
+		if (type === 'connected') return;
+		if (feed.firstChild && feed.firstChild.className === 'empty-state') feed.replaceChildren();
+		const row = element('div', { className: 'live-feed-row' });
+		row.append(
+			element('span', { className: 'live-feed-type', text: type }),
+			element('span', { text: data && data.symbol ? String(data.symbol) : '—' }),
+		);
+		['status', 'channel', 'name', 'error'].forEach((key) => {
+			if (!data || data[key] === undefined || data[key] === null || data[key] === '') return;
+			row.append(element('span', { className: 'status-badge status-disabled', text: `${key}: ${String(data[key])}` }));
+		});
+		row.append(createTimestamp(Date.now()));
+		feed.prepend(row);
+		while (feed.children.length > MAX_ROWS && feed.lastElementChild) feed.lastElementChild.remove();
+	});
+	return { panel, unsubscribe };
+};
+
+const createOrderAuditPanel = (button) => {
+	const panel = createTradingPanelShell('order-audit-panel', 'Recent order audit');
+	const list = element('div', { className: 'table-wrap' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
+	panel.append(button, list, output);
+	return { panel, list, output };
+};
+
+const renderOrderAudit = (list, data) => {
+	const records = Array.isArray(data && data.records) && data.records.length
+		? data.records
+		: (Array.isArray(data && data.audit) ? data.audit : []);
+	list.replaceChildren();
+	if (!records.length) {
+		list.append(createEmptyState('No order mutations recorded yet.'));
+		return;
+	}
+	// The rail column is narrow, so the table keeps a floor width and the wrapper scrolls
+	// instead of `width: 100%` wrapping headers into unreadable fragments.
+	const table = element('table', { className: 'data-table data-table-scroll' });
+	const head = element('tr');
+	['When', 'Symbol', 'Action', 'Status', 'Env'].forEach((label) => head.append(element('th', { text: label })));
+	table.append(head);
+	records.slice(0, 20).forEach((record) => {
+		const tr = element('tr');
+		const when = element('td');
+		when.append(record && record.timestamp ? createTimestamp(record.timestamp) : element('span', { text: '—' }));
+		tr.append(
+			when,
+			element('td', { text: formatOrderValue(record && record.symbol) }),
+			element('td', { text: formatOrderValue(record && record.action) }),
+			element('td', { text: formatOrderValue(record && record.status) }),
+			element('td', { text: formatOrderValue(record && record.environment) }),
+		);
+		table.append(tr);
+	});
+	list.append(table);
+};
+
+const createQuickControl = (label, definition, body) => {
+	const button = element('button', { className: 'quick-control', text: label });
+	button.type = 'button';
+	const output = element('p', { className: 'quick-control-output request-state' });
+	button.addEventListener('click', () => {
+		sendRequest({
+			definition,
+			path: definition.path,
+			body,
+			button,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+	});
+	return { button, output };
+};
+
+const createTradingView = (contract) => {
+	const summaryDefinition = { method: 'GET', path: '/api/outcomes/summary', label: 'Load signal performance' };
+	const outcomesDefinition = { method: 'GET', path: '/api/outcomes', label: 'Load signal records' };
+	const auditDefinition = { method: 'GET', path: '/api/trading/binance/orders/audit', label: 'Load order audit' };
+	const ledgerDefinition = { method: 'GET', path: TRADING_LEDGER_PATH, label: 'Load trade ledger' };
+	const statusDefinition = { method: 'GET', path: '/api/status', label: 'Load trading environment' };
+
+	const wrap = element('section', { className: 'dashboard trading-view' });
+	const hero = element('div', { className: 'dashboard-hero' });
+	const heroCopy = element('div');
+	heroCopy.append(
+		element('p', { className: 'eyebrow', text: 'Trading' }),
+		element('h2', { text: 'Are the alerts making money?' }),
+		element('p', { text: 'Paper signal performance from recorded outcomes, beside the real order audit. The curve plots cumulative signal return, which is not account equity.' }),
+	);
+	const heroActions = element('div', { className: 'quick-controls' });
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: —' });
+	heroActions.append(environmentBadge);
+	hero.append(heroCopy, heroActions);
+	const environmentOutput = element('div', { className: 'response-block', text: '' });
+	wrap.append(hero, environmentOutput);
+
+	const filters = element('form', { className: 'operation-card' });
+	filters.append(element('h3', { text: 'Filters' }));
+	const windowField = addField(filters, 'Evaluation window', 'window', { tag: 'select' });
+	[['', 'All windows'], ...TRADING_WINDOWS.map((key) => [key, key])].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		windowField.append(option);
+	});
+	const limit = addField(filters, 'Record limit', 'limit', { type: 'number', min: 1, max: 100, value: 100 });
+	registerFilterScope('trading', { window: windowField, limit });
+	const refresh = element('button', { text: 'Refresh trading data' });
+	refresh.type = 'submit';
+	const filterNote = element('p', { className: 'trading-panel-note', text: '' });
+	filters.append(refresh, filterNote);
+
+	const layout = element('div', { className: 'trading-layout' });
+	const main = element('div', { className: 'trading-main' });
+	const rail = element('aside', {
+		className: 'ops-rail',
+		attributes: { 'aria-label': 'Operations rail' },
+	});
+	layout.append(main, rail);
+	wrap.append(filters, layout);
+
+	const paperPanel = createTradingPanelShell('paper-panel', 'Paper signal performance',
+		'Server-computed aggregates from recorded outcomes. These are paper results on evaluated signals, not realised account profit.');
+	const paperHost = element('div');
+	const paperOutput = element('div', { className: 'response-block', text: '' });
+	paperPanel.append(paperHost, paperOutput);
+
+	const realPanelHost = element('div');
+	const realOutput = element('div', { className: 'response-block', text: '' });
+	const analyticsOutput = element('div', { className: 'response-block', text: '' });
+	main.append(paperPanel, realPanelHost, realOutput);
+
+	const curveHost = element('div');
+	const barsHost = element('div');
+	const symbolHost = element('div');
+	const setupHost = element('div');
+	const compareHost = element('div');
+	main.append(curveHost, barsHost, symbolHost, setupHost, compareHost, analyticsOutput);
+
+	const { panel: feedPanel, unsubscribe: unsubscribeFeed } = createLiveFeed();
+	const auditButton = element('button', { className: 'quick-control', text: auditDefinition.label });
+	auditButton.type = 'submit';
+	const audit = createOrderAuditPanel(auditButton);
+	const quickPanel = createTradingPanelShell('quick-controls-panel', 'Quick controls');
+	const quickControls = element('div', { className: 'quick-controls' });
+	const quickOutput = element('p', { className: 'quick-control-output request-state' });
+	quickPanel.append(quickControls, quickOutput);
+	rail.append(feedPanel, audit.panel, quickPanel);
+
+	const mutationControls = [
+		createQuickControl('Pause news monitor', { method: 'POST', path: '/api/news-monitor/pause', label: 'Pause news monitor', confirm: 'Pause the news monitor? Scheduled sweeps stop until you resume them.' }, {}),
+		createQuickControl('Resume news monitor', { method: 'POST', path: '/api/news-monitor/resume', label: 'Resume news monitor', confirm: 'Resume the news monitor?' }, {}),
+		createQuickControl('Run self-test', { method: 'POST', path: '/api/selftest/run', label: 'Run self-test' }, {}),
+		createQuickControl('Send test alert', { method: 'POST', path: '/api/admin/test-alert', label: 'Send test alert', confirm: 'Send a test alert to every enabled channel?' }, {}),
+	];
+	if (canPerformMutation()) {
+		mutationControls.forEach((control) => quickControls.append(control.button));
+		mutationControls.forEach((control) => quickPanel.append(control.output));
+	} else {
+		quickPanel.append(createEmptyState('Mutation controls are hidden for the admin.viewer role.'));
+	}
+
+	let generation = 0;
+
+	const applyEnvironment = (status) => {
+		const binance = asObject(asObject(asObject(status && status.dependencies).binanceTrading));
+		const environment = binance.environment ? String(binance.environment) : '';
+		environmentBadge.replaceChildren(environment
+			? formatOrderEnvironment(environment)
+			: element('span', { className: 'status-badge status-disabled', text: 'Environment: unknown' }));
+		if (!binance.maxNotionalConfigured) {
+			filterNote.textContent = 'BINANCE_TRADING_MAX_NOTIONAL is not configured; the console never receives its numeric value.';
+		}
+	};
+
+	const loadEnvironment = (current) => sendRequest({
+		definition: statusDefinition,
+		path: statusDefinition.path,
+		button: refresh,
+		output: environmentOutput,
+		isCurrent: () => current === generation,
+		formatResponse: () => '',
+	}).then((status) => applyEnvironment(status));
+
+	const loadPaper = (current) => sendRequest({
+		definition: summaryDefinition,
+		path: summaryDefinition.path,
+		query: Object.fromEntries(Object.entries({ window: windowField.value }).filter(([, value]) => value !== '')),
+		button: refresh,
+		output: paperOutput,
+		isCurrent: () => current === generation,
+		captureResponseData: (data, response) => renderPaper(data, response),
+		formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+	});
+
+	const renderPaper = (data, response) => {
+		if (response && response.ok === false) {
+			const classification = classifyPaperFailure(response.status, data);
+			const notice = element('p', { className: 'empty-state' });
+			notice.append(
+				element('span', { className: `status-badge ${classification.tone}`, text: classification.heading }),
+				element('span', { text: ` ${classification.body}` }),
+			);
+			paperHost.replaceChildren(notice);
+			renderCompare(null, null, classification);
+			return;
+		}
+		const summary = asObject(data && data.summary);
+		if (!data || !data.summary) {
+			paperHost.replaceChildren(createEmptyState('No outcome summary block in the response.'));
+			renderCompare(null, null, null);
+			return;
+		}
+		const resolved = resolveTradingWindowStats(summary, windowField.value);
+		paperHost.replaceChildren(renderPaperKpiStrip(summary, 'Paper · signals', resolved));
+		renderCompare(summary, null, null, resolved);
+	};
+
+	const renderCompare = (summary, ledger, failure, resolved) => {
+		compareHost.replaceChildren();
+		const panel = createTradingPanelShell('paper-vs-real-panel', 'Paper vs real win rate',
+			'Paper results come from evaluated signals; real results require a measured ledger. They are not interchangeable.');
+		const grid = element('div', { className: 'paper-vs-real' });
+
+		const paperColumn = element('div', { className: 'paper-vs-real-column' });
+		paperColumn.append(element('h4', { text: 'Paper (evaluated signals)' }));
+		const paperStats = asObject(resolved && resolved.stats);
+		const paperHitRate = summary ? asFiniteNumber(paperStats.hitRatePercent) : null;
+		const paperScope = describeTradingWindowScope(resolved);
+		paperColumn.append(
+			createTradingKpiCard('Hit rate', formatTradingHitRate(paperHitRate),
+				summary
+					? `From GET /api/outcomes/summary${paperScope ? ` · ${paperScope}` : ''}`
+					: (failure ? failure.heading : 'No paper summary available'),
+				'Paper · signals', 'status-disabled'),
+		);
+
+		const realColumn = element('div', { className: 'paper-vs-real-column' });
+		realColumn.append(element('h4', { text: 'Real (trade ledger)' }));
+		if (ledger) {
+			realColumn.append(createTradingKpiCard('Hit rate', formatOrderValue(ledger.winRatePercent), 'From the trade ledger', 'Measured', 'status-ready'));
+		} else {
+			realColumn.append(createTradingKpiCard('Hit rate', '—',
+				failure ? failure.heading : 'No trade ledger measurement available', 'Not measured', 'status-disabled'));
+		}
+
+		grid.append(paperColumn, realColumn);
+		panel.append(grid);
+		compareHost.append(panel);
+	};
+
+	const renderSignalAnalytics = (records, windowKey) => {
+		const signals = collectEvaluatedSignals(records, windowKey);
+		const emptyText = 'No evaluated signals for this window yet, so the curve and breakdown are empty.';
+		const scope = windowKey ? `${windowKey} window` : 'first available window per signal';
+
+		if (!signals.length) {
+			curveHost.replaceChildren(renderChartPanel('equity-panel', 'Cumulative signal return', 'Not account equity.', null, emptyText));
+			barsHost.replaceChildren(renderChartPanel('daily-panel', 'Average daily signal return', 'Mean return per signal day.', null, emptyText));
+			symbolHost.replaceChildren(renderAttributionPanel('attribution-symbols', 'P&L by symbol', 'Ranked worst to best.', [], 'Symbol'));
+			setupHost.replaceChildren(renderAttributionPanel('attribution-setups', 'P&L by setup type', 'Ranked worst to best.', [], 'Setup type'));
+			return;
+		}
+
+		const daily = buildDailyBuckets(signals);
+		let running = 0;
+		let runningCount = 0;
+		const cumulative = daily.map((bucket) => {
+			runningCount += bucket.count;
+			running += bucket.sum;
+			return { label: bucket.day, value: running / runningCount };
+		});
+
+		curveHost.replaceChildren(renderChartPanel(
+			'equity-panel',
+			'Cumulative signal return',
+			`Cumulative average return per signal across ${scope}. This is paper signal return, not account equity. ${describeSignalShape(signals)}`,
+			window.CabrosAdminCharts.lineChart(
+				[{ label: 'Cumulative average signal return (%)', points: cumulative }],
+				{ label: 'Cumulative average signal return', xKey: 'label', yKey: 'value', formatY: (value) => `${Number(value).toFixed(2)}%` },
+			),
+		));
+
+		barsHost.replaceChildren(renderChartPanel(
+			'daily-panel',
+			'Average daily signal return',
+			`Mean return per signal day across ${scope}. ${describeSignalShape(signals)}`,
+			window.CabrosAdminCharts.barChart(
+				daily.map((bucket) => ({ label: bucket.day, value: bucket.meanReturn })),
+				{ label: 'Average daily signal return', valueKey: 'value', formatValue: (value) => `${Number(value).toFixed(2)}%` },
+			),
+		));
+
+		symbolHost.replaceChildren(renderAttributionPanel(
+			'attribution-symbols', 'P&L by symbol',
+			`Derived from ${signals.length} evaluated signals in the ${scope}.`, summariseSignalsBy(signals, 'symbol'), 'Symbol',
+		));
+		setupHost.replaceChildren(renderAttributionPanel(
+			'attribution-setups', 'P&L by setup type',
+			`Derived from ${signals.length} evaluated signals in the ${scope}.`, summariseSignalsBy(signals, 'setupType'), 'Setup type',
+		));
+	};
+
+	const loadSignals = (current) => sendRequest({
+		definition: outcomesDefinition,
+		path: outcomesDefinition.path,
+		query: { limit: String(Number(trimFormValue(limit.value)) || 100) },
+		button: refresh,
+		output: analyticsOutput,
+		isCurrent: () => current === generation,
+		captureResponseData: (data) => {
+			const records = Array.isArray(data && data.outcomes) ? data.outcomes : [];
+			const windowKey = windowField.value || firstEvaluatedWindowKey(records);
+			renderSignalAnalytics(records, windowKey);
+		},
+		formatResponse: ({ summary, status, elapsed, data }) => `${summary}\nHTTP ${status} · ${elapsed} ms · `
+			+ `${data && Array.isArray(data.outcomes) ? `${data.outcomes.length} signal records` : 'no records returned'}`,
+	});
+
+	const loadAudit = (current) => sendRequest({
+		definition: auditDefinition,
+		path: auditDefinition.path,
+		query: { limit: '20' },
+		button: auditButton,
+		output: audit.output,
+		isCurrent: () => current === generation,
+		captureResponseData: (data) => {
+			audit.list.replaceChildren();
+			renderOrderAudit(audit.list, data);
+		},
+		formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+	});
+
+	const loadAll = () => {
+		const current = ++generation;
+		refresh.disabled = true;
+		return Promise.all([
+			loadEnvironment(current),
+			loadPaper(current),
+			loadSignals(current),
+			loadAudit(current),
+			renderRealPnlPanel(contract, ledgerDefinition, {}, refresh)
+				.then((panel) => realPanelHost.replaceChildren(panel)),
+		]).then(() => {
+			if (current === generation) refresh.disabled = false;
+		}).catch((error) => {
+			if (current === generation) {
+				refresh.disabled = false;
+				showError(environmentOutput, `Trading dashboard could not refresh: ${error.message}`);
+			}
+		});
+	};
+
+	filters.addEventListener('submit', (event) => {
+		event.preventDefault();
+		loadAll();
+	});
+	[windowField, limit].forEach((field) => {
+		field.addEventListener('input', () => { filterNote.textContent = 'Filters changed — refresh trading data to apply.'; });
+	});
+
+	auditButton.addEventListener('click', () => loadAudit(generation));
+
+	detachActiveViewPoll = () => {
+		generation += 1;
+		unsubscribeFeed();
+	};
+
+	loadAll();
+	return wrap;
+};
+
 const renderView = async (name) => {
 	const view = document.getElementById('view');
 	if (typeof detachActiveViewPoll === 'function') detachActiveViewPoll();
 	detachActiveViewPoll = null;
+	resetFilterScopes();
 	view.replaceChildren(createLoadingState('Loading API contract…'));
 	try {
 		const contract = await loadContract();
@@ -6084,6 +7349,10 @@ const renderView = async (name) => {
 			return;
 		}
 		view.append(element('h2', { text: name[0].toUpperCase() + name.slice(1) }));
+		if (name === 'trading') {
+			view.append(createTradingView(contract));
+			return;
+		}
 		if (name === 'alerts') {
 			view.append(createAlertListForm());
 			view.append(createAlertSummaryForm(), createAlertExportForm());
@@ -6190,19 +7459,46 @@ const renderView = async (name) => {
 	}
 };
 
-const navigateToView = (name) => {
+const navigateToView = (name, { history: historyMode = 'push' } = {}) => {
 	if (authState.enabled && !authState.user) return showSignedOutState();
+	const target = resolveConsoleView(name);
+	currentConsoleView = target;
+	markActiveView(target);
+	setViewTitle(target);
+	if (historyMode !== 'none') {
+		const carried = historyMode === 'push' ? {} : filterParamsForView(target, readConsoleParams());
+		writeConsoleUrl(buildConsoleUrl(target, carried), { replace: historyMode === 'replace' });
+	}
+	return renderView(target).then(() => {
+		applyFilterParams(readConsoleParams());
+		bindFilterScopeListeners();
+		moveFocusToView(target);
+	});
+};
+
+const handleConsolePopState = () => {
+	navigateToView(readConsoleUrlState().view, { history: 'none' });
+};
+
+const canonicaliseConsoleUrl = () => {
+	const state = readConsoleUrlState();
+	if (!state.viewRequested || state.viewRecognised) return;
+	writeConsoleUrl(buildConsoleUrl(state.view, filterParamsForView(state.view, state.params)), { replace: true });
+};
+
+const markActiveView = (name) => {
+	if (typeof document === 'undefined' || !document) return;
 	const buttons = document.querySelectorAll('[data-view]');
 	buttons.forEach((button) => button.removeAttribute('aria-current'));
 	[...buttons].find((button) => button.dataset.view === name)?.setAttribute('aria-current', 'page');
-	setViewTitle(name);
-	return renderView(name).then(() => moveFocusToView(name));
 };
 
 const setViewTitle = (name) => {
 	if (typeof document === 'undefined' || !document) return;
 	const label = VIEW_TITLES[name] || (name ? name[0].toUpperCase() + name.slice(1) : '');
 	document.title = label ? `${label} · ${CONSOLE_TITLE_BASE}` : CONSOLE_TITLE_BASE;
+	const status = getElement('view-status');
+	if (status) status.textContent = label ? `${label} view` : '';
 };
 
 const moveFocusToView = (name) => {
@@ -6259,10 +7555,44 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 	});
 };
 
+const setupSidebarToggle = () => {
+	const toggle = getElement('toggle-sidebar');
+	const shell = getElement('console-shell');
+	if (!toggle || !shell) return;
+	const LABELS = { expanded: 'Collapse sidebar', collapsed: 'Expand sidebar' };
+	const apply = (collapsed) => {
+		if (collapsed) shell.setAttribute('data-sidebar', 'collapsed');
+		else shell.removeAttribute('data-sidebar');
+		toggle.textContent = collapsed ? LABELS.collapsed : LABELS.expanded;
+		toggle.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
+	};
+	let initialCollapsed = false;
+	try {
+		initialCollapsed = sessionStorage.getItem('cabros-admin-sidebar-collapsed') === 'true';
+	} catch (_) {
+		initialCollapsed = false;
+	}
+	apply(initialCollapsed);
+	toggle.addEventListener('click', () => {
+		const collapsed = shell.getAttribute('data-sidebar') === 'collapsed';
+		apply(!collapsed);
+		try {
+			sessionStorage.setItem('cabros-admin-sidebar-collapsed', String(!collapsed));
+		} catch (_) {
+			// A collapsed sidebar is cosmetic, so a storage failure must not block the toggle.
+		}
+	});
+};
+
 document.addEventListener('DOMContentLoaded', async () => {
 	const view = getElement('view');
 	if (view) view.replaceChildren(createLoadingState('Checking authentication…'));
 	document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigateToView(button.dataset.view)));
+	setupSidebarToggle();
+	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+		window.addEventListener('popstate', handleConsolePopState);
+	}
+	canonicaliseConsoleUrl();
 
 	getElement('connection-form')?.addEventListener('submit', (event) => {
 		event.preventDefault();
@@ -6288,7 +7618,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 	setHidden('legacy-connection', false);
 	setupLegacyConsole();
 	if (getElement('api-key')?.value) setupSseStream();
-	setViewTitle('overview');
-	renderView('overview').then(() => moveFocusToView('overview'));
+	navigateToView(readConsoleUrlState().view, { history: 'none' });
 
 });

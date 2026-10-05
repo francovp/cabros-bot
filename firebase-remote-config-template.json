@@ -441,12 +441,33 @@
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
     },
-    "ENABLE_FIRESTORE_NEWS_ANALYSIS": {
+    "ENABLE_USER_PRICE_ALERTS": {
       "defaultValue": {
         "value": "false"
       },
-      "description": "Enable Firestore persistence for news-monitor analysis records",
+      "description": "Enable Telegram custom user price alerts and background evaluation worker",
       "valueType": "BOOLEAN"
+    },
+    "USER_PRICE_ALERT_EVALUATION_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Cadence between background user price alert evaluation sweeps in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT": {
+      "defaultValue": {
+        "value": "50"
+      },
+      "description": "Maximum number of armed user price alerts evaluated per sweep",
+      "valueType": "NUMBER"
+    },
+    "USER_PRICE_ALERT_MAX_PER_CHAT": {
+      "defaultValue": {
+        "value": "20"
+      },
+      "description": "Maximum active price alerts allowed per Telegram chat",
+      "valueType": "NUMBER"
     },
     "NEWS_ANALYSIS_RETENTION_DAYS": {
       "defaultValue": {
@@ -474,20 +495,6 @@
         "value": "30"
       },
       "description": "Audit log retention in days before Firestore TTL expiry",
-      "valueType": "NUMBER"
-    },
-    "ENABLE_SYMBOL_ANALYSIS_STORAGE": {
-      "defaultValue": {
-        "value": "false"
-      },
-      "description": "Enable Firestore persistence of symbol-analysis results for decision history and accuracy trending",
-      "valueType": "BOOLEAN"
-    },
-    "SYMBOL_ANALYSIS_RETENTION_DAYS": {
-      "defaultValue": {
-        "value": "7"
-      },
-      "description": "Retention window in days for persisted symbol-analysis records before Firestore TTL expiry",
       "valueType": "NUMBER"
     },
     "ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT": {
@@ -573,10 +580,31 @@
       },
       "description": "Maintenance mode toggle to pause webhooks and commands during incidents",
       "valueType": "BOOLEAN"
+    },
+    "JOB_BACKLOG_ALERT_THRESHOLD_MS": {
+      "defaultValue": {
+        "value": "900000"
+      },
+      "description": "Threshold in milliseconds before the oldest queued job triggers operator alert paging (default: 15m)",
+      "valueType": "NUMBER"
+    },
+    "JOB_BACKLOG_PAGE_COOLDOWN_MS": {
+      "defaultValue": {
+        "value": "900000"
+      },
+      "description": "Cooldown in milliseconds between repeated backlog operator alert pages to avoid paging storms (default: 15m)",
+      "valueType": "NUMBER"
+    },
+    "JOB_BACKLOG_PROBE_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Interval in milliseconds between periodic async job backlog depth probes (default: 1m)",
+      "valueType": "NUMBER"
     }
   },
   "version": {
-    "versionNumber": "22",
+    "versionNumber": "24",
     "isLegacy": true
   }
 }

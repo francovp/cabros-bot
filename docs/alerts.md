@@ -9,7 +9,9 @@ When `ENABLE_FIRESTORE_ALERT_STORAGE=true`, successful `POST /api/webhook/alert`
 Stored `alerts` and `alertReplays` records default to 90 days of retention. The service filters expired records before list, detail, export, and summary responses while Firestore's native TTL deletion is eventual. New records carry an `expiresAt` timestamp; `bash ops/configure-firestore-alert-retention.sh` backfills legacy records from `receivedAt`/`replayedAt` before enabling both TTL policies, shortens existing expiries when the configured deadline is earlier, removes legacy raw replay idempotency keys after hashing them, reports scanned/updated/skipped counts, and fails if a record has no usable timestamp. Replay audit documents retain only a SHA-256 `idempotencyKeyHash`, never the raw key. Inspect the TTL policies with `gcloud firestore fields ttls list`.
 
 All endpoints below require the same `x-api-key` header used by the webhook routes.
-If alert storage is enabled but Firestore credentials/project access are unavailable, they return `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
+If alert storage is enabled but Firestore cannot serve the request, they return `503 STORAGE_UNAVAILABLE` instead of a generic `500`. The body carries a sanitized `category` (and `missingIndex: true` for a missing composite index) so a rejected query is distinguishable from a credential/init failure — see the [runbook](troubleshooting.md#stored-alerts-return-503-storage_unavailable). Both fields are optional.
+
+List, summary, and export order by `receivedAt` **and** `FieldPath.documentId()` for deterministic pagination. Firestore sorts `__name__` ascending for free but requires a composite index for the descending direction, so `alerts { receivedAt DESC, __name__ DESC }` must be declared in `firestore.indexes.json` **and** deployed (`firebase deploy --only firestore:indexes`) or those three endpoints answer `503`. Detail reads (`GET /api/alerts/:alertId`) use a document get and need no index.
 
 #### GET /api/alerts
 
@@ -62,7 +64,7 @@ List stored alerts ordered by `receivedAt` descending.
 
 #### GET /api/alerts/export
 
-Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string fields whose leading control characters (`tab`/`LF`/`CR`) are followed by `=`, `+`, `-`, or `@`—or that begin directly with those markers—with an apostrophe so spreadsheet clients treat them as inert text; finite numeric strings such as `-42` remain unchanged. JSONL output is unchanged.
+Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string fields whose leading control characters (`tab`/`LF`/`CR`) are followed by `=`, `+`, `-`, or `@`—or that begin directly with those markers—with an apostrophe so spreadsheet clients treat them as inert text; finite numeric strings such as `-42` remain unchanged. Feature-attributed records include a `feature` column containing comma-separated tags. JSONL output is unchanged.
 
 **Query Parameters:**
 - `format` - `jsonl` or `csv` (default: `jsonl`)
@@ -80,6 +82,8 @@ Each enriched alert records only safe prompt provenance (`name`, `source`, `labe
 
 Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited grounding sources, reporting `zeroSources`, `oneToTwoSources`, and `threePlusSources` distribution along with `averageSourceCount`, overall and grouped `byPromptProvenance`.
 
+`enrichment.sentimentCalibration` reports whether the stored `sentiment_score` distribution can still rank alerts. A near-constant score is worse than no score: it cannot separate a strong setup from a weak one, so it cannot be used to tune thresholds or compare signal quality over time. See [Sentiment score calibration](#sentiment-score-calibration) below.
+
 **Query Parameters:**
 - `from` - Optional ISO-8601 lower bound; defaults to 24 hours before `to`
 - `to` - Optional ISO-8601 upper bound; defaults to request time
@@ -89,8 +93,16 @@ Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited gr
 - `symbol` - Optional symbol filter (e.g. `BTCUSDT`, `BINANCE:BTCUSDT`, `AAPL`). Case-insensitive and matched against extracted symbol and exchange fields. Up to 64 characters.
 - `exchange` - Optional exchange filter (e.g. `BINANCE`, `COINBASE`). Case-insensitive and matched against the extracted exchange field. Up to 64 characters.
 - `eventCategory` - Optional event category filter (e.g. `price_surge`, `price_decline`, `regulatory`). Case-insensitive and matched against `eventCategory`. Up to 64 characters.
+- `signalClass` - Optional signal class filter; repeatable and comma-separated (e.g. `signalClass=breakout&signalClass=reversal` or `signalClass=breakout,reversal`)
+- `interval` - Optional bucket width for the time series: `hour` or `day`. Omit it for the aggregate-only response. See [Time-bucketed series](#time-bucketed-series-interval) below.
 
 The service caps the queried window at 31 days to keep routine operator usage cheap.
+
+The summary also returns `costByFeature` for `grounding`, `news-analysis`, `expanded-analysis`, `scanner`, and `enrichment`. Each bucket includes `alerts`, `batches`, `symbols`, `inputTokens`, `outputTokens`, `totalTokens`, and `totalCost`; the feature costs sum to `enrichment.tokenUsage.totalCost` without double-counting. Older records without feature tags are attributed conservatively from their stored source.
+
+`totalCost` values are **estimates** derived from published list prices in `src/lib/tokenUsage.js` (`PRICING_PER_1M`), not provider invoices. Model names are normalized before lookup (provider prefixes such as `openai/` or `azure/` and revision suffixes are stripped, family heuristics fill gaps, and models marked `:free` or `/free` cost 0). A model that matches no known entry is priced at the documented default rate rather than 0, so an unpriced model is never reported as free. `alerts` counts stored documents, `batches` counts distinct news-monitor requests (grouped by `requestId`/`batchId`, not per document), and `symbols` counts distinct symbols across a batch — a multi-symbol expanded-analysis or scanner report contributes all of its symbols even though it is stored as one document.
+
+An alert that persisted no real token usage is not attributed to any feature. Plain webhook alerts always store a `tokenUsage` object, but when grounding and TradingView enrichment are both disabled it is all-zero, so it contributes nothing to any bucket and carries no `feature` tag in CSV exports.
 
 **Response (200 OK):**
 ```json
@@ -168,6 +180,26 @@ The service caps the queried window at 31 days to keep routine operator usage ch
           }
         ]
       },
+      "sentimentCalibration": {
+        "sampleCount": 1,
+        "evaluated": false,
+        "saturated": false,
+        "reason": "insufficient_sample",
+        "min": 0.55,
+        "max": 0.55,
+        "p10": 0.55,
+        "p50": 0.55,
+        "p90": 0.55,
+        "spread": 0,
+        "distinctValueCount": 1,
+        "bucketCount": 1,
+        "buckets": [
+          { "lowerBound": 0.5, "upperBound": 0.6, "count": 1 }
+        ],
+        "topBandCount": 0,
+        "topBandShare": 0,
+        "rawScoreCapCount": 1
+      },
       "tokenUsage": {
         "inputTokens": 10,
         "outputTokens": 20,
@@ -229,6 +261,107 @@ The service caps the queried window at 31 days to keep routine operator usage ch
 For rollout validation, first verify the active prompt provenance and coverage in preview, then observe a bounded production/shadow window after aligning the remote `alert-enrichment` prompt with the local optional-risk schema. Treat missing fields as unavailable data; do not use zero coverage as a trading outcome or fabricate stops, targets, setup types, or R:R values.
 
 The `feedback` block is always included regardless of the report filters so traders can correlate prompt calibration with raw trader outcomes. Counts are sourced from the `alertFeedback` collection (when `ENABLE_FIRESTORE_ALERT_FEEDBACK=true`) or the in-process memory surface; only SHA-256 chat hashes are persisted and raw chat ids are never returned.
+
+#### Time-bucketed series (interval)
+
+The aggregate response has no time axis, so a console cannot chart alert volume or delivery success over time. Client-side bucketing is not a workaround: `limit` bounds the sample, so a page of alerts is not the population.
+
+Supply the optional `interval` parameter to add `summary.buckets`, a time-bucketed series over the requested window. **Omitting `interval` leaves the response byte-for-byte unchanged** — same keys, same order, same values — so existing consumers are unaffected.
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
+  "$BASE_URL/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-06T03:00:00.000Z&interval=hour"
+```
+
+| Behaviour | Detail |
+| :--- | :--- |
+| `interval` values | `hour` or `day`. Case-insensitive. |
+| Window cap | `hour` → 31 days, `day` → 366 days. A wider window returns `400`. |
+| Bucket alignment | UTC hours (`hour`) or UTC midnights (`day`). |
+| Ordering | Ascending by `bucketStart`, starting at the aligned start of the window and running through `to`. |
+| Empty buckets | Present with zero counts, never omitted, so a chart has no gaps and the array length is predictable for a given window and interval. |
+| Filters | Every existing filter (`source`, `enriched`, `symbol`, `eventCategory`, `exchange`, `signalClass`, `from`/`to`/`limit`) narrows the buckets exactly as it narrows the totals. |
+| Reads | The series is derived from the same bounded Firestore cursor scan as the aggregates. No unbounded collection read was introduced. |
+
+Each bucket is `{ bucketStart, total, success, failure, byChannel }`:
+
+```json
+{
+  "success": true,
+  "summary": {
+    "window": {
+      "from": "2026-06-06T00:00:00.000Z",
+      "to": "2026-06-06T03:00:00.000Z",
+      "limit": 500,
+      "maxDays": 31,
+      "interval": "hour"
+    },
+    "buckets": [
+      {
+        "bucketStart": "2026-06-06T00:00:00.000Z",
+        "total": 1,
+        "success": 1,
+        "failure": 0,
+        "byChannel": { "telegram": { "total": 1, "success": 1, "failure": 0 } }
+      },
+      {
+        "bucketStart": "2026-06-06T01:00:00.000Z",
+        "total": 0,
+        "success": 0,
+        "failure": 0,
+        "byChannel": {}
+      }
+    ],
+    "totalAlerts": 1
+  }
+}
+```
+
+Two invariants a consumer can rely on:
+
+- **`sum(bucket.total) === totalAlerts`.** The series and the aggregates are computed from the same bounded sample, so they cannot disagree. `bucket.total` counts *alerts*, not deliveries, so an alert with no recorded `deliveryResults` still increments it.
+- **`bucket.success` / `bucket.failure` equal the sums of that bucket's `byChannel[*]` counts.** A delivery result with no usable channel name is counted under `unknown`.
+
+`window.interval` and the interval-specific `window.maxDays` are reported only when `interval` is supplied.
+
+**Validation failures are never silent.** An empty, unrecognised, or over-cap `interval` returns `400` rather than falling back to the aggregate-only response — a silent fallback is how a flag ends up reporting itself enabled while resolving to something else. Interval failures use the shared error envelope from `src/lib/errorEnvelope.js` (`success`, `error`, `code`, `requestId`, `retryable`); the endpoint's pre-existing timestamp and filter failures keep their original `{ error, code }` body.
+
+Note the difference in window handling: with `interval` set, an over-cap window is **rejected**; with `interval` omitted, a window wider than 31 days is still **silently narrowed** to 31 days, as it always has been.
+
+The `adminRead` guard and rate limiting are unchanged; this is an operator read surface and neither was weakened to make the aggregation cheaper.
+
+`GET /api/outcomes/summary` has the same gap (aggregates with no time axis) and is tracked separately; this change is limited to the alerts summary.
+
+#### Sentiment score calibration
+
+The `alert-enrichment` prompt scores `sentiment_score` against five fixed reference anchors and must justify its choice in `sentiment_score_evidence`:
+
+| abs score | anchor | means |
+| --- | --- | --- |
+| 0.90 | multi-source major catalyst | Two or more independent reputable outlets plus a regulatory/filing/earnings catalyst, with aligned technicals |
+| 0.75 | corroborated | One reputable primary report plus confirming technical structure |
+| 0.60 | partial | Mixed evidence, or a single low-relevance source |
+| 0.45 | routine | A routine, largely anticipated event |
+| 0.30 | negligible | Evidence absent, stale, or contradictory |
+
+Without a reference point the model emitted whatever magnitude "felt" right, and production ended up with 87.6% of enriched scores at or above 0.75 — a channel that cannot tell a high-conviction breakout from a routine entry. `sentiment_score_evidence` records which anchor was chosen and the observation behind it, so an individual score can be audited.
+
+`enrichment.sentimentCalibration` measures whether the window is saturated again. Scores are read as **absolute magnitudes** (a BEARISH `-0.9` contributes `0.9`), and only enriched alerts that stored a usable score count toward `sampleCount`.
+
+Two independent rules are applied, because the reported production failure is not caught by a spread rule alone:
+
+- `spread_collapse` — `p90 - p10` fell below the spread floor. This is the "everything reads 0.8" signature.
+- `top_band_concentration` — at least 75% of samples sit at or above `0.75`. For the reported distribution `p90 - p10` was `0.15`, comfortably **above** a `0.1` floor, so a spread-only guard would have stayed silent on the exact incident this was written for.
+
+`insufficient_sample` and `no_samples` mean no verdict was declared. That is deliberate: a cold window, or one that has just been widened by a long query, is never reported as saturated.
+
+`distinctValueCount` and `bucketCount` are diagnostics, **not** triggers. Anchoring the prompt to score bands intentionally concentrates output onto band centres, so a low distinct-value count measures anchor adherence rather than calibration failure.
+
+`rawScoreCapCount` counts alerts in the window that also stored `sentiment_score_raw`, meaning the zero-source cap rewrote their score (see [AI Grounding & Prompts](ai-grounding.md#zero-source-sentiment-cap)). A non-zero value proves the cap is live in the deployment you are querying; zero means either no capped alerts in the window or a build that predates the cap.
+
+**Rollout validation.** Align the remote Langfuse `alert-enrichment` prompt with the local anchors first. Until it is republished, `promptProvenance.schemaDriftDetected` is `true` and `missingCalibrationGuidance` names the missing markers — that flag is the intended signal, not a failure. After cutover, sample two weeks and confirm `saturated` is `false` and `bucketCount` is at least 4. Do not gate any trading decision on `sentiment_score` until that observation window closes: `NEWS_ALERT_THRESHOLD` (`0.7`) consumes news confidence, not this field, but a prompt change still shifts the score population that any future threshold would be tuned against.
+
+A process-local rolling window in `src/services/grounding/gemini.js` emits one structured `console.warn` per hour when it saturates, plus a recovery line on the state change. It is a fast early warning only: state is lost on restart, so it stays silent until it holds enough fresh observations. `enrichment.sentimentCalibration` is the durable view.
 
 #### POST /api/alerts/feedback
 

@@ -56,7 +56,7 @@ class NewsMonitorHandler {
 	async handleRequest(req, res) {
 		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
-		const tokenUsage = new TokenUsageTracker();
+		const tokenUsage = new TokenUsageTracker('news-analysis');
 
 		try {
 			const requestSpan = sentryService.getActiveSpan();
@@ -230,6 +230,11 @@ class NewsMonitorHandler {
 					alertStorageService.saveAlert({
 						text: result.alert.text || '',
 						symbol: result.alert.symbol || result.symbol,
+						// All documents from one request share requestId, so the summary
+						// counts this request as a single batch with its full symbol set.
+						symbols: symbolsToAnalyze,
+						batchId: requestId,
+						requestId,
 						exchange: result.alert.marketContext && result.alert.marketContext.source === 'binance' ? 'BINANCE' : undefined,
 						enriched: Boolean(result.alert.enriched),
 						enrichmentData: result.alert.enriched || null,

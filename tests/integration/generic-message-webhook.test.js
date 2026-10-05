@@ -293,7 +293,18 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.expect(200);
 
 		expect(first.body.success).toBe(true);
-		expect(second.body).toEqual({ ...first.body, idempotencyReplayed: true });
+		// Everything except the correlation id is replayed verbatim. The requestId
+		// is deliberately NOT: the replay is a distinct HTTP request, so the
+		// deadline, the X-Request-Id header, and the structured access log all carry
+		// the replaying request's id. Replaying the original id would advertise a
+		// correlation id that appears nowhere in the logs for this request.
+		expect(second.body).toEqual({
+			...first.body,
+			idempotencyReplayed: true,
+			requestId: second.body.requestId,
+		});
+		expect(second.body.requestId).not.toBe(first.body.requestId);
+		expect(second.body.requestId).toBe(second.headers['x-request-id']);
 		expect(second.headers['idempotency-replay']).toBe('true');
 		expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
 		expect(global.fetch).toHaveBeenCalledTimes(2);
@@ -795,6 +806,34 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(replay.body.idempotencyReplayed).toBe(true);
 	});
 
+	it('re-correlates an idempotent replay that arrives with a different x-request-id', async () => {
+		// Request headers are not part of the idempotency fingerprint, so a retry
+		// carrying a new x-request-id is a valid replay. The response must then
+		// advertise the replaying request's id so the body's correlation id, the
+		// X-Request-Id header, and the structured access log all agree.
+		const payload = { message: 'Divergent replay id', channels: ['telegram'] };
+		const first = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('x-request-id', 'msg-original-001')
+			.set('idempotency-key', 'generic-message-divergent-1')
+			.send(payload)
+			.expect(200);
+
+		const replay = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('x-request-id', 'msg-retry-002')
+			.set('idempotency-key', 'generic-message-divergent-1')
+			.send(payload)
+			.expect(200);
+
+		expect(first.body.requestId).toBe('msg-original-001');
+		expect(replay.body.requestId).toBe('msg-retry-002');
+		expect(replay.headers['x-request-id']).toBe('msg-retry-002');
+		expect(replay.body.idempotencyReplayed).toBe(true);
+	});
+
 	// ---------------------------------------------------------------------------
 	// API key protection
 	// ---------------------------------------------------------------------------
@@ -815,5 +854,183 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.expect(403);
 
 		expect(res.body.error).toContain('Forbidden');
+	});
+
+	// ---------------------------------------------------------------------------
+	// Truncation metadata (GH-602)
+	// ---------------------------------------------------------------------------
+	it('omits truncation metadata when message fits within MAX_MESSAGE_LENGTH', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'short message', channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body).not.toHaveProperty('truncated');
+		expect(res.body).not.toHaveProperty('originalLength');
+		expect(res.body).not.toHaveProperty('deliveredLength');
+	});
+
+	it('exposes truncated flag, originalLength and deliveredLength when message exceeds MAX_MESSAGE_LENGTH', async () => {
+		const longMessage = 'A'.repeat(6000);
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: longMessage, channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.truncated).toBe(true);
+		expect(res.body.originalLength).toBe(6000);
+		expect(res.body.deliveredLength).toBe(4003); // 4000 chars + '...'
+		// The truncated text was delivered to the requested chat; the trailing
+		// ellipsis may be stripped by MarkdownV2 escaping so we only assert the
+		// response metadata.
+		const userCall = mockBot.telegram.sendMessage.mock.calls.find(
+			(call) => call[0] === '123456789',
+		);
+		expect(userCall).toBeDefined();
+		expect(userCall[1].length).toBeGreaterThan(0);
+	});
+
+	it('warns via console.warn when truncation occurs', async () => {
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+		const longMessage = 'B'.repeat(5000);
+		await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: longMessage, channels: ['telegram'] })
+			.expect(200);
+
+		const truncationWarnings = warnSpy.mock.calls.filter((call) =>
+			typeof call[0] === 'string' && call[0].includes('[MessageWebhook] Message truncated'),
+		);
+		expect(truncationWarnings.length).toBeGreaterThan(0);
+		warnSpy.mockRestore();
+	});
+
+	it('does not warn when message fits within MAX_MESSAGE_LENGTH', async () => {
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+		await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'short', channels: ['telegram'] })
+			.expect(200);
+
+		const truncationWarnings = warnSpy.mock.calls.filter((call) =>
+			typeof call[0] === 'string' && call[0].includes('[MessageWebhook] Message truncated'),
+		);
+		expect(truncationWarnings.length).toBe(0);
+		warnSpy.mockRestore();
+		});
+
+	// Chunk estimation & dryValidate mode (GH-614)
+	// ---------------------------------------------------------------------------
+	describe('chunk estimation and dryValidate mode', () => {
+		it('returns estimatedChunks without sending when dryValidate: true is provided', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({
+					message: 'Short dry validation message',
+					dryValidate: true,
+				})
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.dryValidate).toBe(true);
+			expect(res.body.estimatedChunks).toEqual({
+				telegram: 1,
+				whatsapp: 1,
+				discord: 1,
+			});
+			expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+			expect(global.fetch).not.toHaveBeenCalled();
+		});
+
+		it('returns per-channel chunk estimates for long message with dryValidate: true', async () => {
+			const longMessage = 'x'.repeat(50000);
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({
+					message: longMessage,
+					dryValidate: true,
+				})
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.dryValidate).toBe(true);
+			expect(res.body.estimatedChunks).toEqual({
+				telegram: 1,
+				whatsapp: 3,
+				discord: 25,
+			});
+			expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+			expect(global.fetch).not.toHaveBeenCalled();
+		});
+
+		it('returns 400 when dryValidate is not a boolean', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({
+					message: 'Validation test',
+					dryValidate: 'invalid-boolean',
+				})
+				.expect(400);
+
+			expect(res.body.success).toBe(false);
+			expect(res.body.error).toContain('must be a boolean');
+			expect(res.body.details).toEqual({ field: 'dryValidate' });
+		});
+
+		it('omits estimatedChunks for messages under channel limits on normal send', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({
+					message: 'Short message under all limits',
+					channels: ['telegram'],
+				})
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results).toBeDefined();
+			expect(res.body.estimatedChunks).toBeUndefined();
+			expect(res.body.channelDetails).toBeUndefined();
+			expect(res.body.delivered).toBeUndefined();
+		});
+
+		it('includes estimatedChunks, delivered, and channelDetails when message exceeds single-chunk size', async () => {
+			const text3k = 'y'.repeat(3000);
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({
+					message: text3k,
+					channels: ['telegram', 'whatsapp'],
+				})
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.results).toHaveLength(2);
+			expect(res.body.delivered).toEqual(['telegram', 'whatsapp']);
+			expect(res.body.channelDetails).toBeDefined();
+			expect(res.body.channelDetails.telegram).toMatchObject({
+				success: true,
+				messageId: 'tg-msg-123',
+			});
+			expect(res.body.channelDetails.whatsapp).toMatchObject({
+				success: true,
+				messageId: 'wa-msg-456',
+			});
+			expect(res.body.estimatedChunks).toEqual({
+				telegram: 1,
+				whatsapp: 1,
+				discord: 2,
+			});
+		});
 	});
 });
