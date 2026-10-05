@@ -20,6 +20,7 @@ const equityMarketDataService = require('../../src/services/storage/EquityMarket
 const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
 const newsAnalysisStorageService = require('../../src/services/storage/NewsAnalysisStorageService');
 const promptReadiness = require('../../src/services/prompts/promptReadiness');
+const symbolAnalysisStorageService = require('../../src/services/storage/SymbolAnalysisStorageService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -1424,6 +1425,71 @@ describe('Status endpoints', () => {
 			});
 		} finally {
 			promptReadiness.resetPromptReadinessForTesting();
+		}
+	});
+
+	// Issue #1179 enables symbol-analysis persistence in production. Every Firestore
+	// error in `SymbolAnalysisStorageService` drops the record and still answers the
+	// analysis, so before the proven-readiness change a deployment that had never
+	// persisted an analysis reported the same `ready` verdict as a working one.
+	it('reports symbol analysis storage as unverified while credentials only look valid', async () => {
+		process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
+		symbolAnalysisStorageService.__resetForTesting();
+
+		try {
+			const response = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.symbolAnalysisStorage).toBe(true);
+			expect(response.body.dependencies.symbolAnalysisStorage).toEqual({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'unverified',
+				readiness: 'unverified',
+				failOpen: true,
+				collection: 'symbolAnalyses',
+				retentionDays: 7,
+				writesAttempted: 0,
+				writesSucceeded: 0,
+				writesFailed: 0,
+				readsAttempted: 0,
+				readsSucceeded: 0,
+				readsFailed: 0,
+				consecutiveFailures: 0,
+				lastWriteAt: null,
+				lastFailureAt: null,
+				lastErrorReason: null,
+			});
+		} finally {
+			symbolAnalysisStorageService.__resetForTesting();
+		}
+	});
+
+	it('reports symbol analysis storage as ephemeral when the gate is off', async () => {
+		delete process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE;
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		symbolAnalysisStorageService.__resetForTesting();
+
+		try {
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.symbolAnalysisStorage).toBe(false);
+			expect(response.body.dependencies.symbolAnalysisStorage).toMatchObject({
+				enabled: false,
+				ready: false,
+				status: 'disabled',
+				writesAttempted: 0,
+				writesSucceeded: 0,
+			});
+		} finally {
+			symbolAnalysisStorageService.__resetForTesting();
 		}
 	});
 

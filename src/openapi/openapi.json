@@ -11235,6 +11235,116 @@
           }
         }
       },
+      "SymbolAnalysisStorage": {
+        "type": "object",
+        "description": "Durable symbol-analysis history behind `/api/symbol-analyses`. Every Firestore error in this layer is swallowed into a dropped record so a symbol analysis never fails, which is why `ready` is proven from an observed successful **write** rather than inferred from credential shape: a deployment whose credentials look valid but cannot reach Firestore reports `degraded`. A successful read only proves Firestore reachability, never that analyses are being stored, so read counters are reported separately and do not flip the verdict.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "readiness",
+          "failOpen",
+          "collection",
+          "retentionDays",
+          "writesAttempted",
+          "writesSucceeded",
+          "writesFailed",
+          "readsAttempted",
+          "readsSucceeded",
+          "readsFailed",
+          "consecutiveFailures"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "ENABLE_SYMBOL_ANALYSIS_STORAGE is true. Environment-only: excluded from Remote Config so a published server template cannot override render.yaml. This is configured intent, not evidence that persistence works."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Firestore credential shape only. True does not mean the collection is reachable or writable."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True only after an observed successful durable write, and false again from the first failure until the next success. It never implies `configured`, and reading the collection does not set it."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "unverified",
+              "ready",
+              "degraded"
+            ],
+            "description": "`unverified` is no evidence, not health: it is the normal state right after a redeploy until the first analysis is persisted. Gate state wins over observed provider health."
+          },
+          "readiness": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "verified",
+              "degraded"
+            ]
+          },
+          "failOpen": {
+            "type": "boolean",
+            "description": "Always true. A Firestore failure drops the record and still answers the symbol analysis, so a `degraded` verdict means decision history silently stops accumulating rather than that analysis is unavailable."
+          },
+          "collection": {
+            "type": "string",
+            "description": "Firestore collection group backing the history."
+          },
+          "retentionDays": {
+            "type": "integer",
+            "description": "Days before a document expires. `expiresAt` is only honoured once the Firestore TTL policy exists (`bash ops/configure-operational-collection-retention.sh`); until then the collection grows without bound."
+          },
+          "writesAttempted": {
+            "type": "integer",
+            "description": "Durable write attempts, including those where Firebase initialization was rejected — asking for durable storage and not getting it is the event an operator needs to see. A rejected initialization is charged to the operation that triggered it, so browsing the collection never increments this counter."
+          },
+          "writesSucceeded": {
+            "type": "integer"
+          },
+          "writesFailed": {
+            "type": "integer"
+          },
+          "readsAttempted": {
+            "type": "integer",
+            "description": "Durable read attempts, including those where Firebase initialization was rejected. Attribution follows the triggering operation, so a read that fails to initialize is counted here and never as a write."
+          },
+          "readsSucceeded": {
+            "type": "integer",
+            "description": "Proves Firestore reachability only. A non-zero value does not mean analyses are being persisted."
+          },
+          "readsFailed": {
+            "type": "integer"
+          },
+          "consecutiveFailures": {
+            "type": "integer",
+            "description": "Clears on the next successful Firestore operation, so a transient outage self-heals without a restart and never latches degraded."
+          },
+          "lastWriteAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastFailureAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastErrorReason": {
+            "type": "string",
+            "enum": [
+              "firestore_not_initialized",
+              "firestore_unavailable"
+            ],
+            "nullable": true,
+            "description": "Closed enum so a Firestore error message — which embeds the fully-qualified project and database path — can never leak into a status response."
+          }
+        }
+      },
       "ScannerPreset": {
         "type": "object",
         "properties": {
@@ -12993,6 +13103,9 @@
               },
               "idempotencyStorage": {
                 "$ref": "#/components/schemas/IdempotencyStorage"
+              },
+              "symbolAnalysisStorage": {
+                "$ref": "#/components/schemas/SymbolAnalysisStorage"
               },
               "newsAnalysisStorage": {
                 "$ref": "#/components/schemas/NewsAnalysisStorage"

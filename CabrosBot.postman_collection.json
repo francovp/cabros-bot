@@ -13829,6 +13829,212 @@
           "body": "{\n  \"error\": \"Unauthorized\"\n}"
         }
       ]
+    },
+    {
+      "name": "Get Status - symbol analysis storage readiness (issue #1179)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Issue #1179 enables symbol-analysis persistence in production (web service only, previews off). Every Firestore failure in `SymbolAnalysisStorageService` is swallowed so the symbol analysis still returns, which means before this change a deployment that had never persisted a single analysis reported the same `ready` verdict as a working one. `configured` is credential shape only; `ready` is true only after an observed successful WRITE and `status` is `unverified` until one is observed. Read counters are reported separately: a successful read proves Firestore reachability, never that analyses are being stored."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('symbol analysis storage is not ready on the strength of credential shape', function () {",
+              "  const store = pm.response.json().dependencies.symbolAnalysisStorage;",
+              "  pm.expect(pm.response.code).to.eql(200);",
+              "  pm.expect(store).to.be.an('object');",
+              "  pm.expect(store.enabled).to.eql(true);",
+              "  pm.expect(store.configured).to.eql(true);",
+              "  pm.expect(store.ready).to.eql(false);",
+              "  pm.expect(store.status).to.eql('unverified');",
+              "  pm.expect(store.readiness).to.eql('unverified');",
+              "});",
+              "pm.test('only a write proves persistence, and reads are counted separately', function () {",
+              "  const store = pm.response.json().dependencies.symbolAnalysisStorage;",
+              "  pm.expect(store.failOpen).to.eql(true);",
+              "  pm.expect(store.collection).to.eql('symbolAnalyses');",
+              "  pm.expect(store.writesAttempted).to.be.a('number');",
+              "  pm.expect(store.writesSucceeded).to.be.a('number');",
+              "  pm.expect(store.readsAttempted).to.be.a('number');",
+              "  pm.expect(store.readsSucceeded).to.be.a('number');",
+              "  pm.expect(store.consecutiveFailures).to.eql(0);",
+              "  pm.expect(store.retentionDays).to.be.a('number');",
+              "});",
+              "pm.test('a degraded verdict never leaks the Firestore project path', function () {",
+              "  const raw = pm.response.text();",
+              "  pm.expect(raw).to.not.include('projects/');",
+              "  pm.expect(raw).to.not.include('console.firebase.google.com');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 unverified - enabled and configured, nothing persisted yet",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"symbolAnalysisStorage\": true\n  },\n  \"dependencies\": {\n    \"symbolAnalysisStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"unverified\",\n      \"readiness\": \"unverified\",\n      \"failOpen\": true,\n      \"collection\": \"symbolAnalyses\",\n      \"retentionDays\": 7,\n      \"writesAttempted\": 0,\n      \"writesSucceeded\": 0,\n      \"writesFailed\": 0,\n      \"readsAttempted\": 0,\n      \"readsSucceeded\": 0,\n      \"readsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastWriteAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 ready - a symbol analysis was persisted",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"symbolAnalysisStorage\": true\n  },\n  \"dependencies\": {\n    \"symbolAnalysisStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"readiness\": \"verified\",\n      \"failOpen\": true,\n      \"collection\": \"symbolAnalyses\",\n      \"retentionDays\": 7,\n      \"writesAttempted\": 31,\n      \"writesSucceeded\": 31,\n      \"writesFailed\": 0,\n      \"readsAttempted\": 4,\n      \"readsSucceeded\": 4,\n      \"readsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastWriteAt\": \"2026-10-04T15:42:18.221Z\",\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 degraded - a durable write failed while the analysis still returned",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"symbolAnalysisStorage\": true\n  },\n  \"dependencies\": {\n    \"symbolAnalysisStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"degraded\",\n      \"readiness\": \"degraded\",\n      \"failOpen\": true,\n      \"collection\": \"symbolAnalyses\",\n      \"retentionDays\": 7,\n      \"writesAttempted\": 36,\n      \"writesSucceeded\": 29,\n      \"writesFailed\": 7,\n      \"readsAttempted\": 6,\n      \"readsSucceeded\": 2,\n      \"readsFailed\": 4,\n      \"consecutiveFailures\": 4,\n      \"lastWriteAt\": \"2026-10-04T15:38:02.774Z\",\n      \"lastFailureAt\": \"2026-10-04T15:41:55.908Z\",\n      \"lastErrorReason\": \"firestore_unavailable\"\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 disabled - flag off, no counters touched",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"symbolAnalysisStorage\": false\n  },\n  \"dependencies\": {\n    \"symbolAnalysisStorage\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"readiness\": \"unverified\",\n      \"failOpen\": true,\n      \"collection\": \"symbolAnalyses\",\n      \"retentionDays\": 7,\n      \"writesAttempted\": 0,\n      \"writesSucceeded\": 0,\n      \"writesFailed\": 0,\n      \"readsAttempted\": 0,\n      \"readsSucceeded\": 0,\n      \"readsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastWriteAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
+          "response": []
+        }
+      ]
     }
   ]
 }
