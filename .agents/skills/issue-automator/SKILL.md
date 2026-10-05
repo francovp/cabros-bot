@@ -134,9 +134,16 @@ A claimed issue is a **zero-work skip**: outcome `CLAIMED`, the issue number is 
 Railway is the primary deployment platform; PRs may also be deployed to other platforms (self-hosted, Tailscale, Fly.io, etc.).
 
 - **Production**: `https://cabros-bot-production.up.railway.app` (master)
-- **PR previews**: The live URL is resolved dynamically from the GitHub Deployments API via `scripts/get-pr-deployment-url.sh <PR_NUMBER>`, which returns the `environment_url` of the latest `success`/`active` deployment for the PR. If no GitHub deployment is found, it falls back to the Railway pattern `https://cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app` with a warning.
-- Verify health with `scripts/verify-preview.sh <PR_NUMBER>` (or `scripts/verify-preview.sh production` for master). The script resolves the live URL via `get-pr-deployment-url.sh`, checks `/healthcheck` and `/openapi.json`, plus any extra endpoints passed as a second argument: `scripts/verify-preview.sh 359 "/healthcheck,/openapi.json,/api/alerts"`.
-- Pass an optional `EXPECTED_SHA` as a third argument to detect stale deployments (exit 2 = SHA mismatch → triggers Step 6.5): `scripts/verify-preview.sh 359 "/healthcheck" "$(gh pr view 359 --json headRefOid --jq .headRefOid)"`.
+- **PR previews**: The live URL is resolved dynamically from the GitHub Deployments API via `scripts/get-pr-deployment-url.sh <PR_NUMBER>`, which returns the `environment_url` of the latest `success`/`active` deployment for the PR. Deployments are walked newest-first, so a still-`pending` newest deployment is skipped in favour of the previous successful one. If no GitHub deployment is found, it falls back to the Railway pattern `https://cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app` with a warning.
+- Pass `--details` to `get-pr-deployment-url.sh` when you need the identity of the selected deployment, not just its URL. It emits one line of JSON — `{"url":…,"sha":…,"state":…,"deployment_id":…,"source":…}` — where `sha` is the commit of the **same** deployment whose status supplied `url`, and `source` is `production`, `github-deployment`, or `railway-fallback`. Because the newest deployment may be skipped, never pair a resolved URL with a separately-fetched "latest" deployment SHA; use `--details` or let `verify-preview.sh` do it. Without the flag the output is still the bare URL.
+- Verify health with `scripts/verify-preview.sh <PR_NUMBER>` (or `scripts/verify-preview.sh production` for master). The script resolves the live URL via `get-pr-deployment-url.sh --details`, checks `/healthcheck` and `/openapi.json`, plus any extra endpoints passed as a second argument: `scripts/verify-preview.sh 359 "/healthcheck,/openapi.json,/api/alerts"`.
+- Pass an optional `EXPECTED_SHA` as a third argument to detect stale deployments (exit 2 = SHA mismatch → triggers Step 6.5): `scripts/verify-preview.sh 359 "/healthcheck" "$(gh pr view 359 --json headRefOid --jq .headRefOid)"`. Full and short SHAs are both accepted.
+- When `EXPECTED_SHA` is given, the script runs **two** independent checks, and either mismatch exits `2`:
+  1. **Bound-record check** — `EXPECTED_SHA` against the `sha` of the deployment that actually supplied the probed URL.
+  2. **Served-build check** — `EXPECTED_SHA` against `service.commit` from `${PREVIEW_URL}/api/status`, i.e. the commit the running service reports for itself.
+  The second check needs `WEBHOOK_API_KEY` exported in the environment (sent as the `x-api-key` header; never in a URL or log line). It is skipped with a warning — not a failure — when the key is absent, `/api/status` is auth-gated or unreachable, or the payload omits `service.commit`, because missing evidence is not evidence of a stale deploy.
+  **`WEBHOOK_API_KEY` is an `ADMIN_OPERATOR` credential** — it authorizes `POST`/`DELETE /trading/binance/orders` and alert replay (`src/lib/adminAuth.js`) — and a deployment's `environment_url` is attacker-influenceable input, so the key is only ever sent to an **HTTPS URL on an allowlisted host**: `openclaw.tail5e4271.ts.net`, `*.onrender.com`, `*.up.railway.app`. Any other scheme or host skips the served-build check with a warning; extend or replace the list with `VERIFY_PREVIEW_ALLOWED_HOSTS` (comma-separated; exact hostname or `*.suffix`, matched on a label boundary) rather than editing the script. The check must not use a broader credential or a key-only-for-`/api/status` scope unless the credential itself is re-scoped.
+- Retry pacing is tunable via `VERIFY_PREVIEW_MAX_ATTEMPTS` (default `3`) and `VERIFY_PREVIEW_RETRY_DELAY_SECONDS` (default `5`); leave both unset in the normal workflow.
 - If the PR introduces new endpoints, pass them explicitly and verify each returns `200` (or `401/403` for auth-gated endpoints, which proves the service is live).
 - For `GLOBAL_BLOCKED` caused by Railway bounded retry or stale deployment, see Step 6.5 recovery before labeling `need manual PR deploy`.
 - For Firebase Hosting preview `RESOURCE_EXHAUSTED` / channel quota, see Error Handling — it is not a `GLOBAL_BLOCKED` and is fixed locally via `scripts/cleanup-preview-channels.js`.
@@ -218,14 +225,14 @@ Follow these steps in strict chronological order to automate issue resolution:
 
 ### Step 5: Verification & Deploy Check
 1. Ensure the PR meets all applicable criteria in `references/readiness-and-verification.md`. For documentation-only PRs, code checks and preview gates are not applicable; do not trigger or wait for them.
-2. For changes that are not documentation-only, retrieve the PR number and run `scripts/verify-preview.sh <PR_NUMBER>` to verify the preview deployment is live and healthy. The script resolves the live URL via `scripts/get-pr-deployment-url.sh` (GitHub Deployments API, Railway fallback). Capture the expected SHA for staleness detection and pass it as a third argument. For PRs that add new endpoints, verify them explicitly:
+2. For changes that are not documentation-only, retrieve the PR number and run `scripts/verify-preview.sh <PR_NUMBER>` to verify the preview deployment is live and healthy. The script resolves the live URL via `scripts/get-pr-deployment-url.sh --details` (GitHub Deployments API, Railway fallback), so the URL and the commit it is checked against always come from the same deployment record. Capture the expected SHA for staleness detection and pass it as a third argument. For PRs that add new endpoints, verify them explicitly:
    ```bash
    EXPECTED_SHA="$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)"
    scripts/verify-preview.sh "$PR_NUMBER" "/healthcheck,/openapi.json,/api/your-new-endpoint" "$EXPECTED_SHA"
    # production:
    scripts/verify-preview.sh production "/healthcheck,/openapi.json"
    ```
-   A `401/403` on auth-gated endpoints counts as live (service is up, auth is required). Exit code `2` from `verify-preview.sh` signals a stale deploy (SHA mismatch) — route to Step 6.5 recovery.
+   A `401/403` on auth-gated endpoints counts as live (service is up, auth is required). Exit code `2` from `verify-preview.sh` signals a stale deploy — either the selected deployment record is not the PR head, or the probed URL reports a different `service.commit` — and routes to Step 6.5 recovery.
 3. **Publish UI evidence before requesting review**: For user-visible UI changes, use the `playwright` skill to capture the relevant states and attach the screenshots to the PR description or a single PR comment using `gh pr edit <N> --attach <file>#<alt-text>` or `gh pr comment <N> --attach <file>#<alt-text>`. If UI code changes again, capture a fresh set for the latest head SHA and update the description or add a comment identifying the new evidence. Skip screenshots when the change has no user-visible UI.
 4. **Run the Codex review loop after PR creation and each code/head update**, with at most three Codex review requests per PR, including the first; failed requests count toward the cap. Metadata-only edits, labels, screenshot attachments, and comment replies do not consume a review session:
    - Request/re-trigger the repository's Codex review, then wait for its result and inspect all Codex and Copilot feedback against the recorded head SHA.
@@ -252,7 +259,7 @@ Follow these steps in strict chronological order to automate issue resolution:
 7. Verify the PR title describes the change and the PR body references the source GitHub issue; use `create-pr` to correct either if needed.
 8. If Codex approved (or the full quiet window ended without new actionable feedback), all merge-gate criteria pass, and the agent is confident the PR is mergeable:
    - Merge the PR.
-   - After merge, verify production Railway deployment if needed: `scripts/verify-preview.sh production`.
+   - After merge, verify the production deployment if needed: `scripts/verify-preview.sh production`.
    - **Remove `agent-working` from the issue and the PR**:
     ```bash
     gh issue edit <ISSUE_NUMBER> --remove-label "agent-working"
@@ -286,15 +293,15 @@ Never remove the label when this session does not own the claim for this run. Th
 
 #### Step 6.5: Stale-deploy / bounded-retry recovery (GLOBAL_BLOCKED with deployment cause)
 
-This recovery applies only to code-changing PRs. For a documentation-only PR, follow Hard Rule 23 and do not trigger, wait for, or verify a deployment.
+This recovery applies only to code-changing PRs. For a documentation-only PR, Hard Rule 23 makes preview and code-check gates inapplicable; do not trigger, wait for, or verify a preview deployment for those causes.
 
-This recovery applies to code-changing PRs only. For a documentation-only PR, Hard Rule 23 makes preview and code-check gates inapplicable; do not enter this recovery for those causes.
+Resolve the host before using any provider-specific step: run `scripts/get-pr-deployment-url.sh <PR_NUMBER>` (the resolver behind `verify-preview.sh`). The `railway up` / `railway redeploy` steps below apply only when the resolved host is Railway, or when the resolver fell back to the Railway pattern after warning. When the resolved host belongs to another provider, do not invoke Railway commands — they deploy a host the PR is not served from. Instead wait for that provider's deployment to settle, re-resolve, and re-run `scripts/verify-preview.sh`; escalate to `need manual PR deploy` only if the resolved host still does not serve the PR head after the bounded wait.
 
 If the issue/PR carries `GLOBAL_BLOCKED` **caused by a bounded retry (`429`/`rate-limit`) or an outdated deployment where the preview commit is not the PR head** (detected via `verify-preview.sh` exit code `2` or manual SHA comparison), do NOT immediately treat it as a permanent skip:
 
 1. **Attempt recovery** (bounded, one try):
    - Check if the PR branch is behind `master`: `gh pr view <N> --json baseRefName,headRefOid` and `git fetch origin master && git merge-base --is-ancestor HEAD origin/master`. If behind, update the branch: `git fetch origin master && git merge origin/master` (or `gh pr update-branch` / `gh api repos/francovp/cabros-bot/pulls/<N>/update-branch -X PUT`), push, then wait for the CD platform to start a new deployment.
-   - Otherwise, trigger a Railway deploy from the branch: `railway up --detach` (if `railway` CLI is authenticated via `RAILWAY_TOKEN`) or `railway redeploy` / Railway API `POST https://backboard.railway.app/graphql/v2` with the service. Poll deployment status with `railway status` or via `scripts/verify-preview.sh <PR_NUMBER>` until healthy (max 5 minutes, 30s interval).
+   - Otherwise, when the resolved host is Railway, trigger a Railway deploy from the branch: `railway up --detach` (if `railway` CLI is authenticated via `RAILWAY_TOKEN`) or `railway redeploy` / Railway API `POST https://backboard.railway.app/graphql/v2` with the service. Poll deployment status with `railway status` or via `scripts/verify-preview.sh <PR_NUMBER>` until healthy (max 5 minutes, 30s interval).
 2. **Re-verify**: Run `scripts/verify-preview.sh <PR_NUMBER>` (and any new endpoints). If it now succeeds (HTTP 200 on `/healthcheck`), the blocker is resolved: remove `GLOBAL_BLOCKED` and `need manual PR deploy` labels from the issue and PR:
    ```bash
    gh issue edit <ISSUE_NUMBER> --remove-label "GLOBAL_BLOCKED" --remove-label "need manual PR deploy" 2>/dev/null || true
@@ -384,8 +391,8 @@ Always include a final summary of execution containing:
 1. Primary issue processed and its outcome.
 2. Outcome of the first non-skip issue, if any (issues with skip outcomes `CLAIMED`, `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` with no agent writes, or `IN_REVIEW` no-writes are counted as skipped and listed). Write-producing `GLOBAL_BLOCKED` issues are non-skip outcomes and are listed as such. A `NEEDS_USER` outcome is a terminal handoff, not a skip.
 3. Tools utilized (`gh`, GitHub MCP, or scripts).
-4. Details of any global blockers, including each `GLOBAL_BLOCKED` issue skipped, the unblock attempt made, and the next issue advanced to. Include Railway stale-deploy recovery attempts and `need manual PR deploy` label actions.
-5. Performed verification steps (CI, reviews, Railway preview ping, and E2E). Note the Railway URLs verified (`https://cabros-bot-cabros-bot-pr-<PR>.up.railway.app` and `https://cabros-bot-production.up.railway.app`).
+4. Details of any global blockers, including each `GLOBAL_BLOCKED` issue skipped, the unblock attempt made, and the next issue advanced to. Include stale-deploy recovery attempts (with the resolved preview host and whether it was Railway) and `need manual PR deploy` label actions.
+5. Performed verification steps (CI, reviews, preview ping, and E2E). Note the URLs verified as resolved by `scripts/get-pr-deployment-url.sh` — the PR preview URL and, when applicable, the production URL (`https://cabros-bot-production.up.railway.app`). Never report a host you did not resolve; if the resolver warned that it fell back to the Railway pattern, say so.
    - Record both nested pre-PR reviews, the Codex review-request count/result, and screenshot evidence for UI changes.
 6. GitHub issue and PR status after processing, including whether the issue was closed or handed off for review.
 7. **`agent-working` lifecycle confirmation**: For each issue confirm: the claim was acquired at start via `scripts/claim-issue.sh` (label + claim comment with agent/session/timestamp), and released at end (merged or `In review`).
@@ -414,9 +421,10 @@ Refer to this section when encountering execution issues:
     ```
   - Then end the run with outcome `GLOBAL_BLOCKED`. Do not attempt to advance: without authenticated `gh` or an available GitHub MCP path, there is no GitHub access to fetch the next issue — `get-oldest-issue.sh` fails its auth check. The Step 6 skip loop applies only to issue-specific `GLOBAL_BLOCKED` PRs where tooling remains functional.
 - **Merge Conflicts**: If branch checkout or pushes fail due to conflicts, pull from `master` and resolve conflicts locally. Re-run tests for code changes; docs-only changes keep the Hard Rule 23 exemption. If resolving conflicts introduces ambiguity, end with `AMBIGUOUS`.
-- **Railway Preview deployment timeout / bounded retry**: If `scripts/verify-preview.sh` fails after 3 attempts on Railway:
-  - Check if the PR preview commit matches the head: `gh pr view <N> --json headRefOid` vs. the deployed commit visible via `curl https://cabros-bot-cabros-bot-pr-<N>.up.railway.app/healthcheck` or Railway dashboard.
-  - If it is a Railway `429` bounded retry or stale deployment (previous commit, not the HEAD), follow Step 6.5: update branch with `master` or trigger `railway up`/`railway redeploy` (requires `RAILWAY_TOKEN`), wait up to 5 minutes, re-run `scripts/verify-preview.sh`. On success, remove `GLOBAL_BLOCKED` / `need manual PR deploy` labels. On failure, add `need manual PR deploy`, notify WhatsApp `120363422033474991@g.us` with PR link, and skip to next issue.
+- **Preview deployment timeout / bounded retry**: If `scripts/verify-preview.sh` fails after 3 attempts, first re-resolve the host with `scripts/get-pr-deployment-url.sh <N>` — the failure may belong to a provider other than Railway.
+  - Check if the PR preview commit matches the head: `gh pr view <N> --json headRefOid` vs. the SHA reported by `verify-preview.sh`'s `EXPECTED_SHA` comparison, or the deployed commit visible via `curl "$(scripts/get-pr-deployment-url.sh <N>)/healthcheck"`.
+  - If the resolved host is Railway and the failure is a Railway `429` bounded retry or stale deployment (previous commit, not the HEAD), follow Step 6.5: update branch with `master` or trigger `railway up`/`railway redeploy` (requires `RAILWAY_TOKEN`), wait up to 5 minutes, re-run `scripts/verify-preview.sh`. On success, remove `GLOBAL_BLOCKED` / `need manual PR deploy` labels. On failure, add `need manual PR deploy`, notify WhatsApp `120363422033474991@g.us` with PR link, and skip to next issue.
+  - If the resolved host is not Railway, do not run `railway up`/`railway redeploy` — that deploys a host the PR is not served from. Wait for the provider's deployment to settle, re-resolve, and re-run `scripts/verify-preview.sh`; escalate to `need manual PR deploy` only if the resolved host still does not serve the PR head.
   - If it is an application error/crash (5xx with current commit), treat it as a `LOCAL_DEADLOCK`.
 - **Firebase Hosting preview `RESOURCE_EXHAUSTED`**: This is NOT a blocker. When `firebase hosting:channel:deploy` or PR checks report `RESOURCE_EXHAUSTED` / `channel quota reached`:
   ```bash

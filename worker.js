@@ -15,6 +15,7 @@ const { alertSchedulerService } = require('./src/services/scheduler');
 const { userPriceAlertService } = require('./src/services/alerts/UserPriceAlertService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
+const { probeManagedPromptReadiness } = require('./src/services/prompts');
 
 function buildNotificationBot() {
 	if (process.env.ENABLE_TELEGRAM_BOT !== 'true' || !process.env.BOT_TOKEN) {
@@ -39,6 +40,10 @@ async function main() {
 	}
 
 	void remoteConfigService.start();
+	// `newsMonitorSchedulerService` and `alertSchedulerService` below resolve prompts
+	// through the same PromptService, so this process needs the same probe as the
+	// web service or its /api/status verdict would stay `unverified` by design (#1178).
+	void probeManagedPromptReadiness();
 	const bot = buildNotificationBot();
 	await initializeNotificationServices(bot);
 	const runtime = await startJobWorker({ botOrGetter: bot });

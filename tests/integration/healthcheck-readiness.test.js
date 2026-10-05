@@ -216,6 +216,59 @@ describe('healthcheck + dependency readiness', () => {
 			expect(response.body.status).toBe('ready');
 		});
 
+		// ── Issue #1285 ──────────────────────────────────────────────────────
+		// The Firestore probe only called `listCollections()`, a metadata call that
+		// never executes a collection query, so it reported a healthy dependency
+		// while every ordered `alerts` read was rejected.
+		it('GET /ready?depth=dependencies fails closed when the indexed alerts read is rejected', async () => {
+			bootstrapReadiness.begin({ telegramRequired: false, newsMonitorRequired: false });
+			bootstrapReadiness.markReady('notificationServices');
+			applyOverrides(app, {
+				isFirestoreConfigured: () => true,
+				getFirestoreClient: () => ({ listCollections: async () => [] }),
+				probeAlertReads: async () => {
+					const error = new Error('9 FAILED_PRECONDITION: The query requires an index.');
+					error.code = 'STORAGE_UNAVAILABLE';
+					error.category = 'failed_precondition';
+					throw error;
+				},
+			});
+			const restoreFlags = setEnv({ ENABLE_FIRESTORE_ALERT_STORAGE: 'true' });
+			try {
+				const response = await request(app).get('/ready?depth=dependencies');
+
+				expect(response.status).toBe(503);
+				expect(response.body.ready).toBe(false);
+				expect(response.body.dependencies.firestore.ready).toBe(false);
+				expect(response.body.dependencies.firestore.error).toMatch(/requires an index/i);
+			} finally {
+				restoreFlags();
+				applyOverrides(app);
+			}
+		});
+
+		it('GET /ready?depth=dependencies stays ready when the indexed alerts read succeeds', async () => {
+			bootstrapReadiness.begin({ telegramRequired: false, newsMonitorRequired: false });
+			bootstrapReadiness.markReady('notificationServices');
+			const probeAlertReads = jest.fn(async () => true);
+			applyOverrides(app, {
+				isFirestoreConfigured: () => true,
+				getFirestoreClient: () => ({ listCollections: async () => [] }),
+				probeAlertReads,
+			});
+			const restoreFlags = setEnv({ ENABLE_FIRESTORE_ALERT_STORAGE: 'true' });
+			try {
+				const response = await request(app).get('/ready?depth=dependencies');
+
+				expect(response.status).toBe(200);
+				expect(response.body.dependencies.firestore.ready).toBe(true);
+				expect(probeAlertReads).toHaveBeenCalled();
+			} finally {
+				restoreFlags();
+				applyOverrides(app);
+			}
+		});
+
 		it('GET /ready?depth=report is not a recognized depth and keeps the bootstrap contract', async () => {
 			bootstrapReadiness.begin({ telegramRequired: false, newsMonitorRequired: false });
 			bootstrapReadiness.markReady('notificationServices');

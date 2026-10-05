@@ -141,6 +141,92 @@ PRODUCTION_EXPECTED_COMMIT=$(git rev-parse origin/master) \
 ops/production-smoke-probe.sh
 ```
 
+### External Uptime Monitoring
+
+Every check described above lives *inside* the deployment, which is exactly the blind spot that cost six days of alert flow: on 2026-08-31 the hosting platform removed the production deployment platform-side (trial expiry) and `https://cabros-bot-production.up.railway.app` started answering `404 {"status":"error","code":404,"message":"Application not found"}`. Nothing outside the platform noticed, because there was no longer anything running to notice — including the in-repo smoke probe, which had been failing for an unrelated reason (issue #971) and whose failure looked identical to a routine misconfiguration.
+
+The external monitor closes that gap. It runs from GitHub Actions, so it survives the deployment being removed, and it is **secretless**: `/healthcheck` is mounted in `app.js` before `validateApiKey` and before the rate limiter, so no API key is needed and the monitor cannot degrade into a silent no-op when a secret was never provisioned.
+
+| Layer | Where it runs | Credentials | Detects |
+| --- | --- | --- | --- |
+| External uptime monitor (`external-uptime-monitor.yml`) | GitHub Actions, every 5 min | none | Platform-side removal, DNS/TLS failure, process death, ingress that answers 200 without the app |
+| Uptime watchdog (`external-uptime-watchdog.yml`) | GitHub Actions, every 15 min offset | `GITHUB_TOKEN` | The monitor itself stopped running (no failed run ⇒ no GitHub notification) |
+| Production smoke probe (`production-smoke-probe.yml`) | GitHub Actions, every 15 min | `WEBHOOK_API_KEY` | Stale deploy, authenticated routes, dependency readiness |
+| Optional third-party SaaS monitor | Provider's own infrastructure | provider account | Hosting provider *and* GitHub Actions both unavailable |
+
+The probe script is `ops/external-uptime-monitor.js`. Run it locally with `pnpm run uptime:monitor` or `node ops/external-uptime-monitor.js --no-page`; it prints one line of JSON and exits non-zero when the target is down.
+
+Repository variables (all optional — each has a working default, so an unset variable degrades to the default rather than to a broken monitor):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `UPTIME_MONITOR_BASE_URL` | `https://cabros-bot-production.up.railway.app` | Production origin to probe. Update this on any platform or host change. |
+| `UPTIME_MONITOR_CHECK_DOCS` | `true` | Also probe the public `/docs` contract. |
+| `UPTIME_MONITOR_TIMEOUT_MS` | `10000` | Per-request deadline in milliseconds. |
+| `UPTIME_WATCHDOG_MAX_AGE_MINUTES` | `30` | How stale the last monitor run may be before the watchdog fails. |
+
+Repository secrets (both optional; paging is disabled until both are set):
+
+| Secret | Purpose |
+| --- | --- |
+| `TELEGRAM_BOT_TOKEN` | Admin-notifications bot token used for the transition page. |
+| `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` | Admin chat that receives the page. |
+
+Exit codes:
+
+| Code | Reason | Meaning |
+| --- | --- | --- |
+| `0` | `UP` | Healthcheck answered 200 with the application payload. |
+| `3` | `HEALTHCHECK_UNREACHABLE` | DNS/connection failure, timeout, or non-200. This is the platform-removal case. |
+| `4` | `HEALTHCHECK_BODY_UNEXPECTED` | HTTP 200 that is not this application — a proxy placeholder or CDN interstitial never reads as up. |
+| `5` | `DOCS_UNREACHABLE` | `/healthcheck` is fine but the public `/docs` contract is not, which catches a half-migrated ingress. |
+| `6` | `BASE_URL_INVALID` | Missing, non-HTTP(S), or credential-bearing target. |
+| `7` | `MONITOR_INTERNAL_ERROR` | The monitor itself broke. Reported as DOWN — a broken monitor must never report UP. |
+
+Alert routing:
+
+1. **Primary, zero configuration.** A non-zero exit fails the scheduled job, and GitHub notifies repository admins of failed workflows. This works with no secrets at all.
+2. **Optional Telegram page.** The script pages the admin chat once when the verdict transitions into DOWN, and once when it recovers. It deliberately does *not* re-page on every interval of a continuing outage — GitHub already reports each failing run, and a page every five minutes for six days is how an alert channel gets ignored. The previous run's conclusion is read from the Actions API and passed as `--previous-conclusion`; a manual `workflow_dispatch` run does not page unless `force_page` is set, so an operator test run cannot page the real chat.
+3. Paging is fail-open: a Telegram failure is recorded as `paging_failed` and never changes the probe verdict or exit code.
+
+**Verifying detection.** With the monitor merged, a failing probe is observable immediately:
+
+```bash
+node ops/external-uptime-monitor.js --base-url=https://<deliberately-wrong-host> --no-page; echo "exit=$?"
+# {"status":"down","reason":"HEALTHCHECK_UNREACHABLE","exitCode":3,...}
+# exit=3
+```
+
+To confirm the paging path end to end, run the workflow manually against a known-bad host with `force_page: true`, then confirm the page arrived and that the next scheduled run (previous conclusion now `failure`) does **not** page again.
+
+#### Registering a third-party uptime service
+
+The in-repo monitor covers a GitHub Actions outage; a hosted uptime service additionally covers a GitHub outage, and is the only layer that does not depend on this repository. Register the following with any provider that offers an HTTP uptime check (Better Stack, UptimeRobot, StatusCake, or equivalent — check the provider's current interval and quota before choosing):
+
+| Field | Value |
+| --- | --- |
+| Monitor URL | `https://<production-host>/healthcheck` |
+| Method | `GET` |
+| Interval | 5 minutes (or the shortest the plan allows) |
+| Expect | status `200` |
+| Optional second monitor | `https://<production-host>/docs`, expect `200` |
+| Alert contacts | Operator email, plus a Telegram alert via the provider's Telegram integration or an outbound webhook to a private relay |
+| Paused on deploy? | **No.** A deploy pause must not silence the check; confirm the new deployment on the in-repo monitor instead. |
+
+Never give a third-party monitor the production `WEBHOOK_API_KEY`. The liveness probe needs no credential, and a provider holding that key would turn a monitoring account compromise into full alert-injection capability.
+
+#### Platform migration re-activation checklist
+
+A migration is exactly how the last monitor was lost: the new host was never registered, and the old monitor's target was deleted with the old deployment. Run this list every time the hosting platform, the production host, or the plan changes:
+
+- [ ] Set `UPTIME_MONITOR_BASE_URL` to the new production origin (repository variable).
+- [ ] Confirm `node ops/external-uptime-monitor.js --base-url=<new origin> --no-page` exits `0`.
+- [ ] Update the third-party provider's monitor URL (if one is registered), and re-confirm it reports UP.
+- [ ] Update `PRODUCTION_BASE_URL`, the smoke probe's dependency list, `docs/environment-configuration.md`, `README.md`, and `AGENTS.md` to the new origin.
+- [ ] Trigger `workflow_dispatch` on `external-uptime-monitor.yml` and confirm the run is green.
+- [ ] Watch one `external-uptime-watchdog.yml` run pass, so the monitor is known to be scheduled.
+- [ ] Confirm the previous platform's domain is intentionally released, not merely abandoned.
+
 ### Logs
 
 The application logs to stdout:
@@ -149,3 +235,61 @@ The application logs to stdout:
 - `DEBUG`: Detailed processing steps
 - `WARN`: Configuration warnings, retry attempts
 - `ERROR`: Delivery failures, API errors
+
+## Structured Request Logging (GH-665)
+
+Every completed HTTP request emits exactly one structured JSON line, in addition
+to the free-form application logs above. Each line records:
+
+| Field | Meaning |
+|---|---|
+| `method` | HTTP method |
+| `path` | Request path with the query string and trailing slash stripped (case preserved; `chatId` redacted) |
+| `statusCode` | Final response status (`0` when the response never started) |
+| `durationMs` | Time from middleware entry to response end (excludes connection setup and TLS) |
+| `requestId` | Correlation id, shared with the `X-Request-Id` response header. Some handlers also echo it as `requestId` in the response body |
+| `clientIp` | Client address, truncated (`203.0.113.x`) or redacted for IPv6 |
+| `aborted` | `true` when the client disconnected before the response was fully flushed |
+| `outcome` | `completed` or `aborted` |
+
+Example line:
+
+```json
+{"timestamp":"2026-10-02T08:12:44.913Z","level":"warn","message":"Request completed","service":"cabros-bot","attributes":{"method":"POST","path":"/api/webhook/alert","statusCode":408,"durationMs":30012,"requestId":"3f1c...","clientIp":"203.0.113.x","aborted":false,"outcome":"completed"}}
+```
+
+**Log level** follows the status code: `info` for 2xx/3xx, `warn` for 4xx and
+client aborts, `error` for 5xx.
+
+**Correlating a request.** Use `requestId` to follow one request end to end. It
+is the same value the request-deadline middleware puts in its `408` payload and
+in the `X-Request-Id` response header, so a timeout in the logs lines up with the
+client's error body:
+
+```bash
+grep '"requestId":"3f1c' logs.json | jq -c '{path:.attributes.path,status:.attributes.statusCode}'
+```
+
+The `X-Request-Id` **response header** is the reliable surface, and it is set on
+every non-exempt route. Body echo is handler-dependent: many handlers include
+`requestId`, but middleware-generated failures do not — a `401` from
+`validateApiKey` carries only `{"error":"Unauthorized: Missing API key"}`. Search
+logs by the header value rather than assuming a body field exists.
+
+**What is not logged.** Probe paths (`/healthcheck`, `/ready`, `/openapi.json`,
+`/docs` and its static asset subtree — the same list the request deadline
+exempts) are silent, and query strings are stripped so request parameters never
+reach the log. Request and response bodies are never logged.
+
+Path **case is preserved** in `path`, so an id can be searched exactly as it
+appeared in the request — Firestore document ids are mixed case. Probe-path
+exemption is matched case-insensitively, so `/HEALTHCHECK` is silent too.
+
+Chat identifiers are redacted: `/api/preferences/telegram/123456789` is logged as
+`/api/preferences/telegram/:redacted`, because a chat id is a personal
+destination. Other path parameters (`alertId`, `jobId`, scanner preset ids) are
+kept so those paths stay searchable during triage.
+
+**Tuning.** The middleware has no configuration of its own. Raise or lower
+verbosity with `LOG_LEVEL`, and exempt additional probe paths with
+`REQUEST_DEADLINE_EXEMPT_PATHS` — the logging skip list follows it.
