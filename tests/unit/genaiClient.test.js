@@ -47,6 +47,7 @@ describe('GenaiClient robustness', () => {
 			expect(res.results).toHaveLength(1);
 			expect(res.results[0].title).toBe('G1');
 			expect(res.searchResultText).toBe('Google Answer');
+			expect(geminiQuotaManager.getSnapshot().requestsInWindow).toBe(1);
 
 			// Should not call Brave (fetch)
 			expect(global.fetch).not.toHaveBeenCalled();
@@ -93,6 +94,11 @@ describe('GenaiClient robustness', () => {
 			expect(res.results).toHaveLength(1);
 			expect(res.results[0].title).toBe('BraveQuotaFallback');
 			expect(global.fetch).toHaveBeenCalledTimes(1);
+			expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+				requestsInWindow: 1,
+				exhaustedEventsInWindow: 1,
+				quotaStatus: 'exhausted',
+			}));
 		});
 
 		it('rethrows Gemini quota exhaustion when requested by caller', async () => {

@@ -268,7 +268,8 @@
                     {
                       "$ref": "#/components/schemas/ReadinessReport"
                     }
-                  ]
+                  ],
+                  "$ref": "#/components/schemas/BootstrapReadiness"
                 },
                 "examples": {
                   "dependenciesHealthy": {
@@ -358,7 +359,8 @@
                     {
                       "$ref": "#/components/schemas/ReadinessReport"
                     }
-                  ]
+                  ],
+                  "$ref": "#/components/schemas/BootstrapReadiness"
                 },
                 "examples": {
                   "bootstrapPending": {
@@ -4401,6 +4403,17 @@
           ]
         },
         "description": "Filter by analysis decision action (BUY, SELL, or NO_TRADE)."
+      },
+      "AlertListInclude": {
+        "name": "include",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "enrichment_summary"
+          ]
+        },
+        "description": "Optional projections to include in list records. Allowed values: enrichment_summary."
       }
     },
     "requestBodies": {
@@ -4585,6 +4598,15 @@
                   "dryValidate": true
                 }
               }
+            },
+            "example": {
+              "message": "Deployment completed",
+              "channels": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ],
+              "idempotencyKey": "generic-message-demo-1"
             }
           }
         }
@@ -6228,7 +6250,13 @@
                     "successRequests": 0,
                     "failureRequests": 0,
                     "timeoutRequests": 0
-                  }
+                  },
+                  "windowStartedAt": null,
+                  "windowDurationMs": 60000,
+                  "requestsInWindow": 0,
+                  "exhaustedEventsInWindow": 0,
+                  "lastExhaustedAt": null,
+                  "quotaStatus": "healthy"
                 },
                 "grounding": {
                   "enabled": true,
@@ -6286,7 +6314,15 @@
                     "failureThreshold": 5,
                     "cooldownMs": 600000
                   },
-                  "toolMetrics": {}
+                  "toolMetrics": {},
+                  "errorCategoryCounts": {
+                    "circuit_breaker_open": 0,
+                    "http_5xx": 0,
+                    "http_4xx": 0,
+                    "timeout": 0,
+                    "invalid_response": 0,
+                    "request_failed": 0
+                  }
                 },
                 "equityMarketData": {
                   "provider": null,
@@ -6313,7 +6349,6 @@
                   ],
                   "timeoutMs": 5000
                 },
- 
                 "langfuse": {
                   "enabled": true,
                   "configured": true,
@@ -6343,7 +6378,8 @@
                     }
                   },
                   "localFallbackByPrompt": {}
-                },               "idempotencyStorage": {
+                },
+                "idempotencyStorage": {
                   "enabled": true,
                   "configured": true,
                   "ready": false,
@@ -6359,7 +6395,7 @@
                   "consecutiveFailures": 0,
                   "lastSuccessAt": null,
                   "lastFailureAt": null,
-"lastErrorReason": null
+                  "lastErrorReason": null
                 },
                 "signalOutcomeWorker": {
                   "enabled": true,
@@ -6403,7 +6439,8 @@
                   "lastErrorCategory": null,
                   "consecutiveFailures": 0,
                   "refreshIntervalMs": 900000,
-                  "maxAgeMs": 3600000
+                  "maxAgeMs": 3600000,
+                  "ready": false
                 },
                 "notificationRedrive": {
                   "enabled": false,
@@ -8000,6 +8037,24 @@
           "missingIndex": {
             "type": "boolean",
             "description": "Present and true when the failure was a Firestore missing-composite-index rejection. Resolved by deploying the composite indexes declared in firestore.indexes.json."
+          },
+          "success": {
+            "type": "boolean",
+            "const": false,
+            "description": "Always false on error responses."
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Request correlation UUID; echoes the X-Request-Id header when available."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "True when the client should retry the request (5xx or 429)."
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Optional extra context for the failure; caller is responsible for sanitizing secrets."
           }
         }
       },
@@ -8891,6 +8946,9 @@
               "null"
             ],
             "description": "Top-level mirror of enrichmentData.price_currency when currentPrice is present (GH-599 / CB-XXX)."
+          },
+          "enrichmentSummary": {
+            "$ref": "#/components/schemas/EnrichmentSummary"
           }
         }
       },
@@ -9259,6 +9317,44 @@
           },
           "feedback": {
             "$ref": "#/components/schemas/AlertFeedbackBlock"
+          },
+          "scanner": {
+            "description": "Market scanner run aggregates. totalRuns counts delivered market-scanner reports; errorCategoryCounts tallies per-symbol TradingView MCP failures by closed-enum category (mcp_unreachable, mcp_timeout, mcp_rate_limited, mcp_tool_error, mcp_suspended, symbol_invalid, symbol_unsupported, unknown).",
+            "type": "object",
+            "properties": {
+              "totalRuns": {
+                "type": "integer"
+              },
+              "errorCategoryCounts": {
+                "type": "object",
+                "properties": {
+                  "mcp_unreachable": {
+                    "type": "integer"
+                  },
+                  "mcp_timeout": {
+                    "type": "integer"
+                  },
+                  "mcp_rate_limited": {
+                    "type": "integer"
+                  },
+                  "mcp_tool_error": {
+                    "type": "integer"
+                  },
+                  "mcp_suspended": {
+                    "type": "integer"
+                  },
+                  "symbol_invalid": {
+                    "type": "integer"
+                  },
+                  "symbol_unsupported": {
+                    "type": "integer"
+                  },
+                  "unknown": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -9280,7 +9376,10 @@
             "description": "True when the distribution is judged unusable for ranking."
           },
           "reason": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "enum": [
               "spread_collapse",
               "top_band_concentration",
@@ -9291,37 +9390,55 @@
             "description": "Which rule produced the verdict. null means healthy. spread_collapse is p90 - p10 below the spread floor; top_band_concentration is at least 75% of samples at or above 0.75; insufficient_sample and no_samples mean no verdict was reached."
           },
           "min": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Lowest magnitude in the window, or null when there are no samples."
           },
           "max": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Highest magnitude in the window, or null when there are no samples."
           },
           "p10": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Nearest-rank 10th percentile magnitude."
           },
           "p50": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Nearest-rank median magnitude."
           },
           "p90": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Nearest-rank 90th percentile magnitude."
           },
           "spread": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "p90 - p10. Compared against the spread floor to detect a collapsed distribution."
@@ -9341,7 +9458,11 @@
             "description": "Histogram of magnitudes in 0.1-wide bands, ascending. Only non-empty bands are listed.",
             "items": {
               "type": "object",
-              "required": ["lowerBound", "upperBound", "count"],
+              "required": [
+                "lowerBound",
+                "upperBound",
+                "count"
+              ],
               "properties": {
                 "lowerBound": {
                   "type": "number",
@@ -9366,7 +9487,10 @@
             "description": "Samples at or above the top-band floor (0.75)."
           },
           "topBandShare": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "topBandCount divided by sampleCount, or null when there are no samples."
@@ -11721,7 +11845,8 @@
             "description": "Persisted replay attempt ID returned only on live replay; absent when dryRun=true."
           }
         }
-      },      "WebhookAlertDeliveryResult": {
+      },
+      "WebhookAlertDeliveryResult": {
         "description": "Response for POST /api/webhook/alert. Mirrors the shared DeliveryResult schema and adds endpoint-specific truncation metadata: when the shared alert validator clips submitted text above 4,000 characters the response carries truncated: true, originalLength, and deliveredLength. All three are absent when the text fits, and they never appear on alert replay responses.",
         "allOf": [
           {
@@ -11748,7 +11873,6 @@
           }
         ]
       },
-
       "Job": {
         "type": "object",
         "properties": {
@@ -12524,7 +12648,7 @@
               "selfTest": {
                 "$ref": "#/components/schemas/SelfTestStatus"
               },
-"firestoreReadMetrics": {
+              "firestoreReadMetrics": {
                 "$ref": "#/components/schemas/FirestoreReadMetrics"
               },
               "idempotencyStorage": {
@@ -12538,6 +12662,9 @@
               },
               "firestore": {
                 "$ref": "#/components/schemas/FirestoreDependency"
+              },
+              "geminiQuota": {
+                "$ref": "#/components/schemas/GeminiQuotaDependency"
               }
             }
           }
@@ -13760,16 +13887,25 @@
             "description": "BullMQ queue name. Never contains credentials."
           },
           "brokerReachable": {
-            "type": ["boolean", "null"],
+            "type": [
+              "boolean",
+              "null"
+            ],
             "description": "Result of the bounded broker readiness probe: true once a probe has proven connectivity, false when the last probe ran and the broker did not answer, and null when no probe has produced a verdict — which includes queue mode being disabled, a missing broker URL (misconfigured), and an enabled+configured queue whose probe has not settled yet. Unlike `configured`, this is evidence rather than configuration shape."
           },
           "lastBrokerProbeAt": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time",
             "description": "ISO-8601 timestamp of the most recent broker readiness probe, or null when no probe has run."
           },
           "lastBrokerProbeErrorCode": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Sanitized error code from the most recent failed broker readiness probe, or null after a successful probe. Never contains the broker URL."
           },
           "enqueued": {
@@ -13993,6 +14129,206 @@
           "bootstrapReady": {
             "type": "boolean",
             "description": "Bootstrap gate verdict, ANDed with the dependency verdict. Only present on the `/ready?depth=dependencies` variant."
+          }
+        }
+      },
+      "EnrichmentSummary": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "description": "Sanitized, bounded summary projection of alert enrichment metadata requested via include=enrichment_summary.",
+        "properties": {
+          "sentiment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Trading sentiment signal (e.g. BULLISH, BEARISH, NEUTRAL)."
+          },
+          "sentiment_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Normalized sentiment score."
+          },
+          "setup_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Technical setup type (e.g. breakout, continuation)."
+          },
+          "invalidation_level": {
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Price level where setup is invalidated."
+          },
+          "target_level": {
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Target take-profit price level."
+          },
+          "risk_reward_ratio": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Calculated risk-reward ratio."
+          },
+          "sourceCount": {
+            "type": "integer",
+            "description": "Number of reference sources attached to the enrichment."
+          },
+          "sourceDomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Up to 10 unique lowercase hostnames extracted from source URLs."
+          },
+          "tradingViewEnrichmentApplied": {
+            "type": "boolean",
+            "description": "Whether TradingView MCP technical data was incorporated."
+          },
+          "tradingViewEnrichmentStatus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Status of TradingView enrichment (e.g. full, partial, none)."
+          },
+          "promptProvenance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PromptProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "GeminiQuotaDependency": {
+        "type": "object",
+        "description": "Non-sensitive Gemini quota and request-window telemetry. The window is process-local and counters reset at the declared 60-second window boundary.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "windowStartedAt",
+          "windowDurationMs",
+          "requestsInWindow",
+          "exhaustedEventsInWindow",
+          "lastExhaustedAt",
+          "quotaStatus"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "degraded",
+              "ready"
+            ]
+          },
+          "windowStartedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "windowDurationMs": {
+            "type": "integer",
+            "minimum": 1,
+            "example": 60000
+          },
+          "requestsInWindow": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "exhaustedEventsInWindow": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastExhaustedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "quotaStatus": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "approaching_limit",
+              "exhausted"
+            ]
+          },
+          "cooldownActive": {
+            "type": "boolean"
+          },
+          "remainingCooldownMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastTriggeredAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "triggersTotal": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "braveFallbacksDuringCooldown": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastBraveFallbackAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/JsonObject"
           }
         }
       }
