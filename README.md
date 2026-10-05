@@ -150,7 +150,7 @@ All webhook and mutation endpoints require the `x-api-key` header (configured vi
 | `GET` | `/api/outcomes` | Query signal outcomes with multi-window returns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomes) |
 | `GET` | `/api/outcomes/summary` | Expectancy, win rate, and performance summary | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |
 
-Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`.
+Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`. CI coverage guards (`tests/unit/postman-collection.test.js` and `tests/unit/openapi-contract.test.js`) enforce that every mounted `/api` route appears in both OpenAPI and `CabrosBot.postman_collection.json`, and that every unique endpoint path referenced in README API documentation exists in `src/openapi/openapi.json`.
 
 ---
 
