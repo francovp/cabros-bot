@@ -2301,6 +2301,44 @@ No environment variable, Remote Config key, endpoint, OpenAPI, or Postman contra
 - `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document the conditional fields and both response shapes.
 
 
+## Same-Direction Alert Burst Aggregation (Issue #1104)
+
+`ENABLE_ALERT_SYNTH_BURST_AGGREGATION=true` (default `false`) buffers a parsed TradingView signal for `ALERT_BURST_WINDOW_MS` and collapses alerts sharing a direction **and** identical notification routing into one "regime" message per channel. Production evidence: 4 SELLs in 2.3s on 2026-08-31 became 12 channel messages for one macro risk-off moment.
+
+`src/services/alerts/burstAggregator.js` owns the window; `alert.js` only supplies `parsedSignal`, the effective routing, and a `deliver` closure.
+
+**Five invariants to preserve:**
+
+- **Grouping is by direction, not by exchange.** A regime event spans asset classes at the same instant (the 2026-08-27 burst was 6 BATS equities + 1 BINANCE crypto, all BUY). Exchange and timeframe are *displayed* per symbol; using venue as a grouping dimension would leave one message per asset class. Grouping by `(side, routingIdentity)` is deliberate.
+- **Routing identity is part of the bucket key**, and `symbolRoutes` bypasses the buffer entirely. One synthetic message can only have one destination, so merging alerts with different `channels`/`telegramChatId`/`telegramThreadId`/`whatsappChatId`/`discordWebhookUrl` would misdeliver, and per-symbol channel routing cannot be expressed by one message at all.
+- **The window is leading-edge, not debounced.** `openedAt` is fixed by the first signal and later joiners do not extend it, so the added latency is *exactly* `ALERT_BURST_WINDOW_MS` and can never grow under an alert storm. A trailing-edge window would let a sustained firehose hold alerts indefinitely. The cost is that a burst wider than the window splits — measured in `Historical replay` below.
+- **Nothing may leave a held request unresolved.** `dispatch()` returns a promise that keeps the HTTP response open until the window closes, so any path that drops a member hangs that request until `REQUEST_TIMEOUT_MS` fires a 408. Window eviction therefore *closes* the oldest window rather than deleting it, `closeWindow` has a last-resort release net, and every member is settled exactly once via `settle()`/`settleWithError()`.
+- **Fail-open everywhere.** A store error, an aggregate dispatch that throws, a malformed parse, and shutdown mid-window all release the held alert to its own delivery. Per-channel delivery failures come back as `{ success: false }` results rather than throws, so the aggregate-failover path is reached only for validation or programming errors. The only thing this feature can lose is noise reduction, never an alert.
+
+Two smaller consequences of holding the alert: a deferred dispatch **drops its Sentry `parentSpan`** (the request span has already ended, so claiming it would report a duration longer than its own span), and inline keyboards are **skipped for aggregated bursts** because N constituents would race on one shared Telegram message id.
+
+`featureFlags`/`dependencies` report `featureFlags.alertBurstAggregation` plus `dependencies.alertBurstAggregation` (`openWindows`, `windowMs`, `minSignals`, `aggregatedBurstCount`, `aggregatedSignalCount`, `aggregatedFailoverCount`, `releasedSignalCount`, `lastAggregatedAt`, `lastWindowClosedAt`). Counters are process-local, so `enabled: true` with every counter at `0` is the normal state right after a deploy. `aggregatedFailoverCount` climbing means aggregation is not reducing noise. `burstAggregator.flushAll('shutdown')` is wired into `processLifecycle` **before** the bot is torn down.
+
+**MarkdownV2 safety is inherited, not re-implemented.** `smartEscapeMarkdownV2` deliberately leaves `_` and `*` unescaped, so the aggregate's safety rests on `parseTradingViewSignal`'s symbol charset `[A-Z0-9._-]{3,20}`, which cannot contain either. `tests/unit/burst-aggregator.test.js` pins that charset against the real parser; if the regex widens, the aggregate can start producing a Telegram parse failure raw alerts never had.
+
+### Historical replay (issue validation)
+
+The production export could not be re-fetched (`GET /api/alerts/export` returned `503 STORAGE_UNAVAILABLE` — Firestore reads are down, see #1285), so this replays the two bursts transcribed from the issue's Problem section with the 7-signal spread assumed evenly across the documented ~10s. `ALERT_BURST_MIN_SIGNALS=3`, three channels:
+
+| `ALERT_BURST_WINDOW_MS` | 2.3s risk-off burst | 10s risk-on burst | burst traffic | 36-alert window |
+| :--- | :--- | :--- | :--- | :--- |
+| `3000` (default) | 4 → 1 msg/channel | 7 → **2 aggregates + 1 individual** | **33 → 12** | 108 → 87 |
+| `5000` | 4 → 1 | 7 → 2 aggregates | 33 → 9 | 108 → 84 |
+| `15000` (max) | 4 → 1 | 7 → 1 | 33 → **6** | 108 → 81 |
+
+The issue's expected `33 → 6` is **only reachable at the top of the range**, because the 10s burst does not fit a 3s leading-edge window. The default is deliberately left at 3000 — 15s of added latency on every parsed alert is a worse trade than splitting one wide burst — and `ALERT_BURST_WINDOW_MS` exists so an operator who measures wider bursts can raise it. A future extension window (grow while signals keep arriving, capped by a second maximum-hold deadline) would reach 33 → 6 at a 3s window without unbounded latency; that is deliberately not in this change.
+
+Residual risks, as documented in the issue: up to `ALERT_BURST_WINDOW_MS` added latency for parsed alerts (unparsed text is never buffered), a held alert is lost only on a hard process kill mid-window, and the buffer is in-process so multi-replica deployments aggregate partially.
+
+**Coverage**: `tests/unit/burst-aggregator.test.js` (window machine, direction grouping, routing-equality, minimum count, member and window caps, MarkdownV2 charset, fail-open store and dispatch failures, shutdown flush, defence-in-depth bounds when runtime config is unbounded or throws), `tests/integration/alert-burst-aggregation.test.js` (endpoint-level burst collapse, cross-asset burst, mixed direction, routing mismatch, `symbolRoutes`, unparsed text, dry-run, flag off, aggregate failover, per-channel failure, status counters, shutdown flush), `tests/unit/postman-collection.test.js` and `src/openapi/openapi.json` (`AlertBurstAggregationDependency` schema plus the aggregated response fields and two documented variants).
+
+No secret, destination or startup-only gate was added: the flag and both tuning values follow the `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` precedent and are Remote Config eligible.
+
 ## Telegram Command Rate Limiting (Issue #658)
 
 `index.js` installs `telegramCommandRateLimiter` before Telegraf command handlers. It applies process-local per-chat fixed-window limits to the expensive `/precio`, `/analisis`/`/analysis`, `/scanner`, and `/noticias`/`/news` commands, with bounded storage for 10,000 chat-command buckets. It defaults to 10 `/precio` calls per minute and 3 calls per hour for the other commands; `ENABLE_TELEGRAM_COMMAND_RATE_LIMITING=false` disables it, and `TELEGRAM_COMMAND_RATE_LIMITS_JSON` provides optional per-command `{max,windowMs}` overrides bounded to `max` 1-1000 and `windowMs` 1-86400000, with invalid values falling back to defaults. These are environment-only security controls and are intentionally excluded from Firebase Remote Config.

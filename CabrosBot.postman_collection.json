@@ -343,7 +343,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"telegramCommandAuth\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false,\"alertScheduler\":false,\"notificationRedrive\":false,\"firestoreChatPreferences\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true,\"newsMonitorClassifier\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"jobExecutionQueue\":{\"mode\":\"local\",\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"queueName\":\"tradingview-jobs\",\"brokerReachable\":null,\"lastBrokerProbeAt\":null,\"lastBrokerProbeErrorCode\":null,\"enqueued\":0,\"claimed\":0,\"completed\":0,\"failed\":0,\"lastErrorCode\":null,\"lastEnqueuedAt\":null,\"waitingCount\":0,\"delayedCount\":0,\"failedCount\":0,\"activeCount\":0,\"durableQueuedCount\":0,\"durableQueuedTruncated\":false,\"durableScanRotated\":false,\"durableProbeSucceeded\":null,\"durableCycleComplete\":false,\"oldestQueuedAgeMs\":null,\"backlogAlert\":{\"active\":false,\"thresholdMs\":900000,\"pagedAt\":null,\"lastRecoveryAt\":null},\"backlogMonitorEnabled\":true,\"backlogMonitorRunning\":false},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0,\"entryPriceSources\":{\"configured\":false,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"twelve-data\"]}},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"alertScheduler\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":10,\"scheduleCount\":0,\"activeCount\":0,\"lastRunAt\":null,\"lastRunDurationMs\":null,\"lastRunExecutedCount\":0,\"lastRunErrorCount\":0,\"lastError\":null,\"schedules\":[]},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"telegramCommandAuth\":{\"enabled\":true,\"allowlistSource\":\"TELEGRAM_ALLOWED_CHAT_IDS\",\"allowlistSize\":1,\"deniedSinceStart\":0,\"trackedDeniedSenders\":0,\"deniedSenderCacheLimit\":1000},\"selfTest\":{\"lastRunAt\":null,\"lastStatus\":\"unknown\",\"ttlSec\":3600,\"ageMs\":null},\"newsMonitorDedup\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"mode\":\"in-memory\",\"backend\":null,\"cacheSize\":{\"entries\":0,\"maxEntries\":5000,\"evictionCount\":0,\"deliveryLocks\":0,\"deliveryLockMaxEntries\":1000,\"deliveryLockEvictionCount\":0,\"urlShortenerCache\":{\"size\":0,\"maxEntries\":1000,\"evictionCount\":0},\"urlShortenerServiceFailures\":{\"size\":0,\"maxEntries\":32,\"evictionCount\":0}}},\"chatPreferences\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cachedCount\":0,\"cacheTtlMs\":60000,\"retentionDays\":90},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"}}}"
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"telegramCommandAuth\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false,\"alertScheduler\":false,\"notificationRedrive\":false,\"firestoreChatPreferences\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true,\"newsMonitorClassifier\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"jobExecutionQueue\":{\"mode\":\"local\",\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"queueName\":\"tradingview-jobs\",\"brokerReachable\":null,\"lastBrokerProbeAt\":null,\"lastBrokerProbeErrorCode\":null,\"enqueued\":0,\"claimed\":0,\"completed\":0,\"failed\":0,\"lastErrorCode\":null,\"lastEnqueuedAt\":null,\"waitingCount\":0,\"delayedCount\":0,\"failedCount\":0,\"activeCount\":0,\"durableQueuedCount\":0,\"durableQueuedTruncated\":false,\"durableScanRotated\":false,\"durableProbeSucceeded\":null,\"durableCycleComplete\":false,\"oldestQueuedAgeMs\":null,\"backlogAlert\":{\"active\":false,\"thresholdMs\":900000,\"pagedAt\":null,\"lastRecoveryAt\":null},\"backlogMonitorEnabled\":true,\"backlogMonitorRunning\":false},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0,\"entryPriceSources\":{\"configured\":false,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"twelve-data\"]}},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"alertScheduler\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":10,\"scheduleCount\":0,\"activeCount\":0,\"lastRunAt\":null,\"lastRunDurationMs\":null,\"lastRunExecutedCount\":0,\"lastRunErrorCount\":0,\"lastError\":null,\"schedules\":[]},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"telegramCommandAuth\":{\"enabled\":true,\"allowlistSource\":\"TELEGRAM_ALLOWED_CHAT_IDS\",\"allowlistSize\":1,\"deniedSinceStart\":0,\"trackedDeniedSenders\":0,\"deniedSenderCacheLimit\":1000},\"selfTest\":{\"lastRunAt\":null,\"lastStatus\":\"unknown\",\"ttlSec\":3600,\"ageMs\":null},\"newsMonitorDedup\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"mode\":\"in-memory\",\"backend\":null,\"cacheSize\":{\"entries\":0,\"maxEntries\":5000,\"evictionCount\":0,\"deliveryLocks\":0,\"deliveryLockMaxEntries\":1000,\"deliveryLockEvictionCount\":0,\"urlShortenerCache\":{\"size\":0,\"maxEntries\":1000,\"evictionCount\":0},\"urlShortenerServiceFailures\":{\"size\":0,\"maxEntries\":32,\"evictionCount\":0}}},\"chatPreferences\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cachedCount\":0,\"cacheTtlMs\":60000,\"retentionDays\":90},\"alertBurstAggregation\":{\"enabled\":false,\"windowMs\":3000,\"minSignals\":3,\"openWindows\":0,\"aggregatedBurstCount\":0,\"aggregatedSignalCount\":0,\"aggregatedFailoverCount\":0,\"releasedSignalCount\":0,\"lastAggregatedAt\":null,\"lastWindowClosedAt\":null},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"}}}"
         },
         {
           "name": "200 degraded provider unavailable telemetry",
@@ -1626,7 +1626,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true,\"notificationRedrive\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true,\"newsMonitorClassifier\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000},\"toolMetrics\":{}},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"signalOutcomeWorker\":{\"entryPriceSources\":{\"configured\":true,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"mcp\",\"binance\",\"gemini\"]}},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"},\"jobExecutionQueue\":{\"mode\":\"local\",\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"queueName\":\"tradingview-jobs\",\"brokerReachable\":null,\"lastBrokerProbeAt\":null,\"lastBrokerProbeErrorCode\":null,\"enqueued\":0,\"claimed\":0,\"completed\":0,\"failed\":0,\"lastErrorCode\":null,\"lastEnqueuedAt\":null,\"waitingCount\":0,\"delayedCount\":0,\"failedCount\":0,\"activeCount\":0,\"durableQueuedCount\":0,\"durableQueuedTruncated\":false,\"durableScanRotated\":false,\"durableProbeSucceeded\":null,\"durableCycleComplete\":false,\"oldestQueuedAgeMs\":null,\"backlogAlert\":{\"active\":false,\"thresholdMs\":900000,\"pagedAt\":null,\"lastRecoveryAt\":null},\"backlogMonitorEnabled\":true,\"backlogMonitorRunning\":false}}}"
+          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true,\"notificationRedrive\":false,\"tokenCostBudget\":false,\"signalClassMarker\":true,\"newsMonitorClassifier\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000},\"toolMetrics\":{}},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000},\"signalOutcomeWorker\":{\"entryPriceSources\":{\"configured\":true,\"crypto\":[\"mcp\",\"binance\",\"gemini\"],\"equity\":[\"mcp\",\"binance\",\"gemini\"]}},\"notificationRedrive\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"workerRole\":\"web\",\"running\":false,\"intervalMs\":60000,\"batchLimit\":50,\"maxAttempts\":5,\"maxAgeMs\":3600000,\"pendingCount\":0,\"deliveredCount\":0,\"exhaustedCount\":0,\"zeroChannelBroadcasts\":0,\"lastRunAt\":null,\"lastSweepAt\":null,\"lastRunDurationMs\":null,\"lastRunScannedCount\":0,\"lastRunRedrivenCount\":0,\"lastRunErrorCount\":0,\"lastRunExhaustedCount\":0,\"lastSweepResult\":null},\"alertBurstAggregation\":{\"enabled\":false,\"windowMs\":3000,\"minSignals\":3,\"openWindows\":0,\"aggregatedBurstCount\":0,\"aggregatedSignalCount\":0,\"aggregatedFailoverCount\":0,\"releasedSignalCount\":0,\"lastAggregatedAt\":null,\"lastWindowClosedAt\":null},\"tokenCostBudget\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"dailySpendUsd\":0,\"budgetUsd\":5,\"utilizationPct\":0,\"alertsSent\":0,\"lastResetAt\":\"2026-03-29T00:00:00.000Z\"},\"jobExecutionQueue\":{\"mode\":\"local\",\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"queueName\":\"tradingview-jobs\",\"brokerReachable\":null,\"lastBrokerProbeAt\":null,\"lastBrokerProbeErrorCode\":null,\"enqueued\":0,\"claimed\":0,\"completed\":0,\"failed\":0,\"lastErrorCode\":null,\"lastEnqueuedAt\":null,\"waitingCount\":0,\"delayedCount\":0,\"failedCount\":0,\"activeCount\":0,\"durableQueuedCount\":0,\"durableQueuedTruncated\":false,\"durableScanRotated\":false,\"durableProbeSucceeded\":null,\"durableCycleComplete\":false,\"oldestQueuedAgeMs\":null,\"backlogAlert\":{\"active\":false,\"thresholdMs\":900000,\"pagedAt\":null,\"lastRecoveryAt\":null},\"backlogMonitorEnabled\":true,\"backlogMonitorRunning\":false}}}"
         }
       ]
     },
@@ -3837,6 +3837,114 @@
               "status": "Payload Too Large",
               "code": 413,
               "body": "{\n  \"success\": false,\n  \"error\": \"PAYLOAD_TOO_LARGE\",\n  \"message\": \"Request body exceeds maximum size of 256kb\",\n  \"limit\": \"256kb\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Send Alert (burst aggregated)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BINANCE:BTCUSDT (1D) VENTA \u2014 send three same-direction alerts within ALERT_BURST_WINDOW_MS to see one regime message\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            },
+            "description": "Send three same-direction alerts (same side, identical notification routing) within ALERT_BURST_WINDOW_MS while ENABLE_ALERT_SYNTH_BURST_AGGREGATION=true. Every constituent response returns 200 with aggregated: true, the shared burstAggregateId, burstSignalCount, and the single aggregate set of results/deliveredChannels, while only one message per channel is delivered and each alert is still persisted individually with the shared marker. Send fewer than ALERT_BURST_MIN_SIGNALS alerts, mix directions, or vary channels/chat overrides to get the normal individual response with no aggregated field. symbolRoutes requests and unparsed text are never buffered."
+          },
+          "response": [
+            {
+              "name": "Aggregated burst",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true},{\"channel\":\"whatsapp\",\"success\":true}],\"enriched\":false,\"aggregated\":true,\"burstAggregateId\":\"3f6b2a1e-0c1d-4a77-9c3e-6f0a1b2c3d4e\",\"burstSignalCount\":3,\"requestedChannels\":[\"telegram\",\"whatsapp\"],\"deliveredChannels\":[\"telegram\",\"whatsapp\"],\"requestId\":\"req-123\"}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) VENTA \u2014 burst constituent\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Below minimum (individual delivery)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true}],\"enriched\":false,\"requestedChannels\":[\"telegram\"],\"deliveredChannels\":[\"telegram\"],\"requestId\":\"req-123\"}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) VENTA \u2014 below ALERT_BURST_MIN_SIGNALS\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ]
+                }
+              }
             }
           ]
         },
