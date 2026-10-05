@@ -125,7 +125,7 @@ class EnrichmentService {
 					const activeSignal = retrySignal || combinedSignal;
 					const result = await this.azureClient.chatCompletion(systemPrompt, userPrompt, { signal: activeSignal });
 					const durationMs = Date.now() - startTime;
-const usage = (typeof normalizeUsage === 'function' ? normalizeUsage(result?.usage) : normalizeUsageMetadata(result?.usage)) || { inputTokens: 0, outputTokens: 0 };
+					const usage = (typeof normalizeUsage === 'function' ? normalizeUsage(result?.usage) : normalizeUsageMetadata(result?.usage)) || { inputTokens: 0, outputTokens: 0 };
 					const modelName = process.env.AZURE_LLM_MODEL || 'gpt-4o-mini';
 					// Attribute this call to the `enrichment` feature so paid secondary-model
 					// spend is separated from grounding spend in persisted token usage.

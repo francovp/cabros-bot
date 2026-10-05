@@ -314,7 +314,7 @@ function postAlert(botOrGetter) {
 				assertChannelsAvailable(notificationManager, routing);
 			}
 
-const tokenUsage = new TokenUsageTracker('grounding');
+			const tokenUsage = new TokenUsageTracker('grounding');
 			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan, parsedSignal });
 
 			const tokenUsageJSON = tokenUsage.toJSON();

@@ -166,7 +166,7 @@ class TokenUsageTracker {
 	 * @param {Object|null|undefined} usage
 	 * @param {string} [model] - Model name for pricing calculation
 	 */
-addUsage(usage, model, featureOrOptions = this.defaultFeature) {
+	addUsage(usage, model, featureOrOptions = this.defaultFeature) {
 		// Accept either a feature name (per-call attribution) or an options object
 		// ({ recordGlobal }) for backward compatibility with existing call sites.
 		const options = (featureOrOptions && typeof featureOrOptions === 'object')
@@ -190,7 +190,7 @@ addUsage(usage, model, featureOrOptions = this.defaultFeature) {
 		this.inputTokens += currentInput;
 		this.outputTokens += currentOutput;
 
-let iCost = 0;
+		let iCost = 0;
 		let oCost = 0;
 		if (model) {
 			const cost = this.calculateCost(currentInput, currentOutput, model);

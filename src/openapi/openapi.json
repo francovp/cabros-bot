@@ -9121,7 +9121,7 @@
           },
 "costByFeature": {
             "type": "object",
-            "description": "Token usage and cost attribution by feature. Legacy records are conservatively attributed from their alert source; totals sum to enrichment.tokenUsage without double-counting.",
+            "description": "Token usage and cost attribution by feature. Records are attributed from their persisted tokenUsage.byFeature tags; legacy records without tags fall back to their alert source, and records with no real token usage are not attributed at all. totalCost is an estimate from published list pricing (unrecognized models use the default rate, never 0); alerts counts stored documents, batches counts distinct news-monitor requests grouped by requestId/batchId, and symbols counts distinct symbols across a batch including multi-symbol reports stored as a single document.",
             "properties": {
               "grounding": { "$ref": "#/components/schemas/FeatureCostSummary" },
               "news-analysis": { "$ref": "#/components/schemas/FeatureCostSummary" },

@@ -98,6 +98,10 @@ The service caps the queried window at 31 days to keep routine operator usage ch
 
 The summary also returns `costByFeature` for `grounding`, `news-analysis`, `expanded-analysis`, `scanner`, and `enrichment`. Each bucket includes `alerts`, `batches`, `symbols`, `inputTokens`, `outputTokens`, `totalTokens`, and `totalCost`; the feature costs sum to `enrichment.tokenUsage.totalCost` without double-counting. Older records without feature tags are attributed conservatively from their stored source.
 
+`totalCost` values are **estimates** derived from published list prices in `src/lib/tokenUsage.js` (`PRICING_PER_1M`), not provider invoices. Model names are normalized before lookup (provider prefixes such as `openai/` or `azure/` and revision suffixes are stripped, family heuristics fill gaps, and models marked `:free` or `/free` cost 0). A model that matches no known entry is priced at the documented default rate rather than 0, so an unpriced model is never reported as free. `alerts` counts stored documents, `batches` counts distinct news-monitor requests (grouped by `requestId`/`batchId`, not per document), and `symbols` counts distinct symbols across a batch — a multi-symbol expanded-analysis or scanner report contributes all of its symbols even though it is stored as one document.
+
+An alert that persisted no real token usage is not attributed to any feature. Plain webhook alerts always store a `tokenUsage` object, but when grounding and TradingView enrichment are both disabled it is all-zero, so it contributes nothing to any bucket and carries no `feature` tag in CSV exports.
+
 **Response (200 OK):**
 ```json
 {

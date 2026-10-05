@@ -252,7 +252,7 @@ describe('Alerts API Integration Tests', () => {
 			.expect(400);
 
 		expect(res.body).toEqual({
-			error: "Invalid include parameter 'unknown_field'. Allowed values: enrichment_summary.",
+			error: 'Invalid include parameter \'unknown_field\'. Allowed values: enrichment_summary.',
 			code: 'INVALID_REQUEST',
 		});
 	});
@@ -877,8 +877,8 @@ describe('Alerts API Integration Tests', () => {
 					useTradingViewData: true,
 					tradingViewEnrichmentStatus: 'partial',
 					deliveryResults: [{ channel: 'whatsapp', success: false, messageId: null, errorCode: 'PROVIDER_LIMIT', statusCode: 429 }],
-				suppressedRepeat: true,
-				tokenUsage: null,
+					suppressedRepeat: true,
+					tokenUsage: null,
 					text: '=@SUM(1,1), "quoted"\r\n+next',
 				},
 			],
@@ -900,8 +900,8 @@ describe('Alerts API Integration Tests', () => {
 			includeEnrichment: false,
 		});
 		expect(res.headers['content-type']).toContain('text/csv');
-expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
-		expect(res.text).toContain("'=alert-1,,-42,'@webhook");
+		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
+		expect(res.text).toContain('\'=alert-1,,-42,\'@webhook');
 		expect(res.text).toContain('"\'=@SUM(1,1), ""quoted""\r\n+next"');
 		expect(res.text).not.toContain('=alert-1,-42,@webhook');
 		expect(res.text).toContain('PROVIDER_LIMIT');
@@ -950,7 +950,7 @@ expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,
 			.expect(200);
 
 		expect(res.headers['content-type']).toContain('text/csv');
-expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
+		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
 		expect(res.text).toContain('news-123,req-news-456,2026-06-06T12:00:00.000Z,news-monitor,news_event,true,false,false,not_applicable,price_surge,0.85,0.75,fresh');
 		expect(res.text).toContain('BTCUSDT: Bitcoin surges past 100k');
 		expect(res.text).toContain(',news-analysis,');
@@ -971,7 +971,7 @@ expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,
 			.set('x-api-key', 'test-key')
 			.expect(200);
 
-		expect(res.text).toContain("'\t=alert-1");
+		expect(res.text).toContain('\'\t=alert-1');
 		expect(res.text).toContain('"\'\r@received-at"');
 		expect(res.text).toContain('"\'\n=alert-text"');
 	});
