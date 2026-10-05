@@ -536,7 +536,7 @@ class NewsMonitorHandler {
 				threshold: parsedThreshold,
 			});
 
-			return res.status(200).json(summary);
+			return res.status(200).json({ success: true, ...summary });
 		} catch (error) {
 			if (error && error.code === 'FEATURE_DISABLED') {
 				return res.status(403).json({
@@ -570,7 +570,11 @@ class NewsMonitorHandler {
 				});
 			}
 
-			const { from, to, limit, symbol, eventCategory, beforeCursor } = req.query || {};
+			// `before` is the published cursor parameter (the shared `BeforeCursor` openapi
+			// component, also used by /api/outcomes and /api/symbol-analyses); `beforeCursor`
+			// stays accepted as a deprecated alias. Reading only `beforeCursor` made a
+			// documented `before` request return page one forever.
+			const { from, to, limit, symbol, eventCategory, before: beforeParam, beforeCursor: beforeCursorAlias } = req.query || {};
 
 			let parsedFrom;
 			if (from !== undefined) {
@@ -608,7 +612,8 @@ class NewsMonitorHandler {
 
 			const parsedSymbol = typeof symbol === 'string' && symbol.trim() ? symbol.trim().toUpperCase() : undefined;
 			const parsedCategory = typeof eventCategory === 'string' && eventCategory.trim() ? eventCategory.trim().toLowerCase() : undefined;
-			const parsedCursor = typeof beforeCursor === 'string' && beforeCursor.trim() ? beforeCursor.trim() : undefined;
+			const rawCursor = typeof beforeParam === 'string' && beforeParam.trim() ? beforeParam : beforeCursorAlias;
+			const parsedCursor = typeof rawCursor === 'string' && rawCursor.trim() ? rawCursor.trim() : undefined;
 
 			const result = await newsAnalysisStorageService.listAnalyses({
 				from: parsedFrom,
@@ -619,7 +624,7 @@ class NewsMonitorHandler {
 				beforeCursor: parsedCursor,
 			});
 
-			return res.status(200).json(result);
+			return res.status(200).json({ success: true, ...result });
 		} catch (error) {
 			if (error && error.code === 'FEATURE_DISABLED') {
 				return res.status(403).json({

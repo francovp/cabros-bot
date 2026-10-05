@@ -24,9 +24,10 @@
 
 	root.CabrosAdminNewsMonitor = api;
 }(typeof window === 'undefined' ? globalThis : window, () => {
-	// The one closed code this view special-cases. `POST /api/news-monitor` answers 503
-	// with this shape while the kill switch is engaged, and it is a *state*, not a fault:
-	// the operator needs to be told which action unblocks it.
+	// The one closed code this view special-cases. Defensive rather than reachable from these
+	// five endpoints today: `POST /api/news-monitor` answers 503 with this shape while the
+	// kill switch is engaged, and it is a *state*, not a fault, so the operator needs to be
+	// told which action unblocks it if a read ever returns it.
 	const NEWS_MONITOR_PAUSED_CODE = 'NEWS_MONITOR_PAUSED';
 	const PAUSED_HEADLINE = 'The news monitor is paused — resume to continue.';
 	const PAUSED_EXPLANATION = 'While it stays paused, analysis requests are rejected and background sweeps skip execution, so the news monitor produces no alerts at all.';
@@ -61,7 +62,11 @@
 		return Number.isFinite(numeric) && numeric >= 0 ? numeric : 0;
 	};
 
-	const asPercent = (value) => {
+	// `Number(null)` and `Number('')` are both 0, so a missing measurement would format as
+	// a real 0% — the failure mode where an absent value reads as a reported zero. An absent
+	// value stays absent.
+	const asFiniteNumber = (value) => {
+		if (value === null || value === undefined || value === '') return null;
 		const numeric = Number(value);
 		return Number.isFinite(numeric) ? numeric : null;
 	};
@@ -69,12 +74,25 @@
 	// A bare 0 is a real, reportable answer ("nothing cleared the threshold"), so it must
 	// never collapse into an em dash the way an absent value does.
 	const formatPercent = (value) => {
-		const numeric = asPercent(value);
+		const numeric = asFiniteNumber(value);
 		if (numeric === null) return '—';
 		return `${Number.isInteger(numeric) ? numeric : Number(numeric.toFixed(2))}%`;
 	};
 
+	// For 0-1 fractions (confidence, thresholds), where a percent sign would misread 0.7 as
+	// 0.007.
+	const formatFraction = (value) => {
+		const numeric = asFiniteNumber(value);
+		return numeric === null ? '—' : numeric.toFixed(2);
+	};
+
 	const formatCount = (value) => asCount(value).toLocaleString();
+
+	// Rounded the same way the service rounds its own percentages, so a client-derived rate
+	// and a server-derived one are formatted identically.
+	const ratioPercent = (numerator, denominator) => (denominator > 0
+		? Math.round((asCount(numerator) / asCount(denominator)) * 10000) / 100
+		: null);
 
 	const isPausedPayload = (payload) => asObject(payload).paused === true;
 
@@ -232,22 +250,31 @@
 		const proxySection = element('section', { className: 'dashboard-section' });
 		view.append(summarySection, symbolSection, categorySection, proxySection);
 
-		const breakdownRows = (value) => Object.entries(asObject(value))
-			.map(([key, detail]) => ({
-				name: key,
-				count: asCount(asObject(detail).count),
-				alertsSent: asCount(asObject(detail).alertsSent),
-				alertRatePercent: asPercent(asObject(detail).alertRatePercent),
-				avgConfidence: asPercent(asObject(detail).avgConfidence),
-			}))
+		// The two breakdowns genuinely disagree on the count key: `bySymbol` counts with
+		// `totalAnalyses` and `byEventCategory` with `total`. Neither supplies a per-row
+		// alert rate, so it is derived from the two fields both do supply.
+		const breakdownRows = (value, countKey) => Object.entries(asObject(value))
+			.map(([key, detail]) => {
+				const row = asObject(detail);
+				const count = asCount(row[countKey]);
+				return {
+					name: key,
+					count,
+					alertsSent: asCount(row.alertsSent),
+					alertRatePercent: ratioPercent(asCount(row.alertsSent), count),
+					averageConfidence: asFiniteNumber(row.averageConfidence),
+				};
+			})
 			.sort((left, right) => right.count - left.count || left.name.localeCompare(right.name));
 
 		const renderKpis = (summary) => {
 			const totalAnalyses = asCount(summary.totalAnalyses);
 			const totalAlertsSent = asCount(summary.totalAlertsSent);
-			const alertRate = asPercent(summary.alertRatePercent);
+			// The summary payload carries no top-level alert rate, so it is derived from the
+			// two counts it does carry rather than read from a field that never arrives.
+			const alertRate = ratioPercent(totalAlertsSent, totalAnalyses);
 			const proxy = asObject(summary.falsePositiveProxy);
-			const proxyRate = asPercent(proxy.ratePercent);
+			const proxyRate = asFiniteNumber(proxy.ratePercent);
 
 			const alertRateMeta = totalAnalyses > 0
 				// Zero alerts over a populated window is the #1177 shape, so it is spelled out
@@ -272,13 +299,14 @@
 				if (values.length < 2) return;
 				card.append(charts.sparkline(values, { label, formatValue: (value) => String(value) }));
 			};
-			const symbolCounts = breakdownRows(summary.bySymbol).map((row) => row.count);
-			const categoryCounts = breakdownRows(summary.byEventCategory).map((row) => row.count);
+			const symbolCounts = breakdownRows(summary.bySymbol, 'totalAnalyses').map((row) => row.count);
+			const categoryCounts = breakdownRows(summary.byEventCategory, 'total').map((row) => row.count);
 			attachSparkline(kpiGrid.children[0], symbolCounts, 'Analyses by symbol');
-			attachSparkline(kpiGrid.children[1], categoryCounts, 'Alerts by event category');
+			attachSparkline(kpiGrid.children[1], categoryCounts, 'Analyses by event category');
 		};
 
 		// Each header is [label, read], so callers pass records rather than projecting cells.
+		// `read` may return a node (an absolute+relative timestamp) instead of a string.
 		const breakdownTable = (caption, headers, records) => {
 			const scroll = element('div', { className: 'table-scroll', attributes: { tabindex: '0', role: 'region', 'aria-label': caption } });
 			const table = element('table', { className: 'data-table' });
@@ -287,7 +315,13 @@
 			table.append(head);
 			records.forEach((record) => {
 				const row = element('tr');
-				headers.forEach(([, read]) => row.append(element('td', { text: read(record) })));
+				headers.forEach(([, read]) => {
+					const cell = element('td');
+					const value = read(record);
+					if (value !== null && typeof value === 'object') cell.append(value);
+					else cell.textContent = value === undefined || value === null ? '—' : String(value);
+					row.append(cell);
+				});
 				table.append(row);
 			});
 			scroll.append(table);
@@ -321,7 +355,7 @@
 			proxySection.replaceChildren(element('h3', { text: 'False-positive proxy' }));
 			const list = element('dl', { className: 'status-detail-list' });
 			const rows = [
-				['Threshold', formatPercent(detail.threshold)],
+				['Threshold', formatFraction(detail.threshold)],
 				['Delivered alerts evaluated', formatCount(detail.totalEvaluated)],
 				['With no follow-up', formatCount(detail.noFollowupCount)],
 				['Rate', formatPercent(detail.ratePercent)],
@@ -361,15 +395,16 @@
 				return undefined;
 			}
 			renderKpis(data);
+			const confidenceHeader = ['Avg confidence', (row) => formatFraction(row.averageConfidence)];
 			renderBreakdown(symbolSection, {
 				title: 'Analyses by symbol',
-				rows: breakdownRows(data.bySymbol),
+				rows: breakdownRows(data.bySymbol, 'totalAnalyses'),
 				headers: [
 					['Symbol', (row) => row.name],
 					['Analyses', (row) => formatCount(row.count)],
 					['Alerts sent', (row) => formatCount(row.alertsSent)],
 					['Alert rate', (row) => formatPercent(row.alertRatePercent)],
-					['Avg confidence', (row) => (row.avgConfidence === null ? '—' : row.avgConfidence.toFixed(2))],
+					confidenceHeader,
 				],
 				valueKey: 'count',
 				chartLabel: 'Analyses by symbol',
@@ -377,11 +412,13 @@
 			});
 			renderBreakdown(categorySection, {
 				title: 'Analyses by event category',
-				rows: breakdownRows(data.byEventCategory),
+				rows: breakdownRows(data.byEventCategory, 'total'),
 				headers: [
 					['Event category', (row) => row.name],
 					['Analyses', (row) => formatCount(row.count)],
 					['Alerts sent', (row) => formatCount(row.alertsSent)],
+					['Alert rate', (row) => formatPercent(row.alertRatePercent)],
+					confidenceHeader,
 				],
 				valueKey: 'count',
 				chartLabel: 'Analyses by event category',
@@ -430,11 +467,13 @@
 			}
 			const headers = [
 				['Symbol', (row) => String(row.symbol)],
-				['Event category', (row) => (row.eventCategory ? String(row.eventCategory) : '—')],
+				['Event category', (row) => formatFraction(row.eventCategory)],
 				['Alert sent', (row) => (row.alertSent === true ? 'yes' : 'no')],
-				['Confidence', (row) => (row.confidence === null ? '—' : row.confidence.toFixed(2))],
-				['Sentiment', (row) => (row.sentiment === null ? '—' : row.sentiment.toFixed(2))],
-				['Analyzed', (row) => String(row.analyzedAt)],
+				['Confidence', (row) => formatFraction(row.confidence)],
+				['Sentiment', (row) => formatFraction(row.sentiment)],
+				// createdAt, not an "analyzedAt" the payload never carries, and rendered as an
+				// absolute time plus the relative one instead of a raw string.
+				['Analyzed', (row) => createTimestamp(row.createdAt)],
 			];
 			analysesResults.append(breakdownTable(`Recorded news analyses (${count ?? rows.length})`, headers, rows));
 		};
@@ -443,11 +482,11 @@
 			const detail = asObject(record);
 			return {
 				symbol: detail.symbol === undefined || detail.symbol === null ? '—' : detail.symbol,
-				eventCategory: detail.eventCategory ?? null,
+				eventCategory: detail.eventCategory === undefined || detail.eventCategory === null ? null : String(detail.eventCategory),
 				alertSent: detail.alertSent === true,
-				confidence: asPercent(detail.confidence),
-				sentiment: asPercent(detail.sentiment),
-				analyzedAt: typeof detail.analyzedAt === 'string' ? detail.analyzedAt : '—',
+				confidence: asFiniteNumber(detail.confidence),
+				sentiment: asFiniteNumber(detail.sentiment),
+				createdAt: detail.createdAt === undefined || detail.createdAt === null ? '' : String(detail.createdAt),
 			};
 		};
 
@@ -490,7 +529,7 @@
 				renderAnalyses([], 0);
 				return false;
 			}
-			renderAnalyses(data.analyses.map(normaliseRecord), data.count);
+			renderAnalyses(data.analyses.map(normaliseRecord), data.analyses.length);
 			nextCursor = typeof data.nextCursor === 'string' && data.nextCursor ? data.nextCursor : undefined;
 			analysesNext.disabled = !nextCursor;
 			analysesPrev.disabled = !backCursors.length;
@@ -599,7 +638,8 @@
 			loadStatus();
 			loadSummary();
 		} else {
-			renderPausedState({});
+			// Nothing has been read yet, so the card must not claim the monitor is running.
+			renderUnavailableState();
 			lastChecked.textContent = 'Enter an API key or sign in to load the news monitor state.';
 		}
 		return view;

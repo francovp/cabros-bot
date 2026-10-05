@@ -5351,31 +5351,34 @@ describe('news monitor operations view', () => {
 		pausedAt: '2026-09-04T06:00:00.000Z',
 		reason: 'Gemini quota exhausted',
 	};
+	// Shaped exactly like NewsAnalysisStorageService.summarizeAnalyses(): the bySymbol count
+	// key is `totalAnalyses`, the byEventCategory one is `total`, confidence arrives as
+	// `averageConfidence`, and there is no top-level alertRatePercent at all. A fixture
+	// invented from the old OpenAPI schema is what let this view ship rendering zeros.
 	const SUMMARY = {
 		success: true,
-		totalAnalyses: 120,
-		totalAlertsSent: 0,
-		alertRatePercent: 0,
+		totalAnalyses: 4,
+		totalAlertsSent: 2,
 		bySymbol: {
-			BTCUSDT: { count: 90, alertsSent: 0, alertRatePercent: 0, avgConfidence: 0.41 },
-			ETHUSDT: { count: 30, alertsSent: 0, alertRatePercent: 0, avgConfidence: 0.38 },
+			BTCUSDT: { totalAnalyses: 2, alertsSent: 2, averageConfidence: 0.84 },
+			ETHUSDT: { totalAnalyses: 2, alertsSent: 0, averageConfidence: 0.52 },
 		},
 		byEventCategory: {
-			none: { count: 120, alertsSent: 0 },
+			price_surge: { total: 3, alertsSent: 2, averageConfidence: 0.73 },
+			none: { total: 1, alertsSent: 0, averageConfidence: 0.41 },
 		},
-		falsePositiveProxy: { threshold: 0.7, totalEvaluated: 0, noFollowupCount: 0, ratePercent: 0 },
-		window: {},
+		falsePositiveProxy: { threshold: 0.7, totalEvaluated: 2, noFollowupCount: 1, ratePercent: 50 },
+		window: { from: '2026-09-03T00:00:00.000Z', to: '2026-09-05T00:00:00.000Z', limit: 500 },
 	};
 	const ANALYSES = {
 		success: true,
 		analyses: [
 			{
-				id: 'a1', symbol: 'BTCUSDT', eventCategory: 'none', sentiment: 0.12, confidence: 0.41,
-				headline: 'Nothing moved', alertSent: false, analyzedAt: '2026-09-04T05:00:00.000Z',
+				id: 'a1', createdAt: '2026-09-04T05:00:00.000Z', symbol: 'BTCUSDT', eventCategory: 'none',
+				sentiment: 0.12, confidence: 0.41, headline: 'Nothing moved', alertSent: false,
+				promptVersion: null, tokens: 120, expiresAt: '2026-10-04T05:00:00.000Z',
 			},
 		],
-		count: 1,
-		limit: 50,
 		nextCursor: null,
 	};
 
@@ -5563,28 +5566,71 @@ describe('news monitor operations view', () => {
 		expect(stateBadge(browser).textContent).toBe('Running');
 	});
 
-	it('maps the summary onto KPI cards and reads a zero alert rate over a populated window', async () => {
+	it('maps the summary onto KPI cards and derives the alert rate from the counts it does carry', async () => {
 		const { browser } = await openNewsMonitor();
 		const view = browser.elementsById.view;
 		const cards = () => findAll(view, (node) => node.className.includes('metric-card'));
 
 		expect(cards()).toHaveLength(4);
-		expect(cards()[0].textContent).toContain('Analyses120');
-		expect(cards()[1].textContent).toContain('Alerts sent0');
-		expect(cards()[2].textContent).toContain('Alert rate0%');
-		expect(cards()[2].textContent).toContain('0% of analyses became alerts');
-		expect(cards()[2].textContent).toContain('(0 of 120)');
-		expect(cards()[3].textContent).toContain('No delivered alerts at or above the threshold were evaluated');
+		expect(cards()[0].textContent).toContain('Analyses4');
+		expect(cards()[1].textContent).toContain('Alerts sent2');
+		// The payload has no alertRatePercent, so the KPI must be computed from the counts:
+		// 2 of 4 is 50%, not the fabricated 0% a missing field used to render.
+		expect(cards()[2].textContent).toContain('Alert rate50%');
+		expect(cards()[2].textContent).toContain('50% of analyses became alerts');
+		expect(cards()[2].textContent).toContain('(2 of 4)');
+		expect(cards()[3].textContent).toContain('False-positive proxy50%');
+		expect(cards()[3].textContent).toContain('1 of 2 delivered alerts had no follow-up within 24h');
 
 		expect(view.textContent).toContain('Analyses by symbol');
 		expect(view.textContent).toContain('BTCUSDT');
 		expect(view.textContent).toContain('ETHUSDT');
 		expect(view.textContent).toContain('Analyses by event category');
-		expect(view.textContent).toContain('False-positive proxy');
+		expect(view.textContent).toContain('price_surge');
 		// barChart from #1288 renders an accessible <svg>, not a bare table.
 		expect(findAll(view, (node) => node.tagName === 'SVG' && hasClass(node, 'chart-bar-svg')).length).toBeGreaterThan(0);
 		// Two symbols is enough for a sparkline on the KPI card.
 		expect(findAll(view, (node) => node.tagName === 'SVG' && hasClass(node, 'chart-sparkline-svg')).length).toBeGreaterThan(0);
+	});
+
+	it('reads the breakdown volumes the service actually returns, sorted by volume', async () => {
+		const { browser } = await openNewsMonitor();
+		const view = browser.elementsById.view;
+		const symbolRows = () => findAll(view, (node) => node.className.includes('table-scroll')
+			&& node.attributes['aria-label'] === 'Analyses by symbol');
+		const categoryRows = () => findAll(view, (node) => node.className.includes('table-scroll')
+			&& node.attributes['aria-label'] === 'Analyses by event category');
+
+		// `totalAnalyses` / `total` are the real count keys; reading a nonexistent `count`
+		// rendered every volume as 0 and made every bar width zero.
+		expect(symbolRows()[0].textContent).toContain('BTCUSDT');
+		expect(symbolRows()[0].textContent).toContain('2');
+		expect(symbolRows()[0].textContent).toContain('100%');
+		expect(symbolRows()[0].textContent).toContain('0.84');
+		expect(symbolRows()[0].textContent).not.toContain('0.00');
+		// price_surge has 3 analyses against none's 1, so it must lead despite sorting
+		// alphabetically later.
+		const categoryCells = findAll(categoryRows()[0], (node) => node.tagName === 'TD').map((node) => node.textContent);
+		expect(categoryCells.slice(0, 4)).toEqual(['price_surge', '3', '2', '66.67%']);
+
+		// A zero-width bar is what a 0 volume produced; the chart must now carry real values.
+		const barWidths = findAll(view, (node) => node.tagName === 'RECT').map((node) => node.attributes.width);
+		expect(barWidths.some((width) => Number(width) > 0)).toBe(true);
+		expect(find(view, (node) => node.tagName === 'SVG' && hasClass(node, 'chart-bar-svg')).attributes['aria-label'])
+			.toMatch(/Analyses by symbol.*high 2 at BTCUSDT/);
+	});
+
+	it('renders the false-positive threshold as a 0-1 confidence fraction, not a percentage', async () => {
+		const { browser } = await openNewsMonitor();
+		const view = browser.elementsById.view;
+		const proxy = find(view, (node) => node.textContent.startsWith('False-positive proxy') && node.className.includes('dashboard-section'));
+		const terms = findAll(proxy, (node) => node.tagName === 'DT').map((node) => node.textContent);
+		const values = findAll(proxy, (node) => node.tagName === 'DD').map((node) => node.textContent);
+
+		expect(values[terms.indexOf('Threshold')]).toBe('0.70');
+		expect(proxy.textContent).not.toContain('0.7%');
+		// ratePercent is genuinely a percentage and must keep its sign.
+		expect(values[terms.indexOf('Rate')]).toBe('50%');
 	});
 
 	it('names the window as empty rather than implying a zero alert rate', async () => {
@@ -5597,7 +5643,6 @@ describe('news monitor operations view', () => {
 						success: true,
 						totalAnalyses: 0,
 						totalAlertsSent: 0,
-						alertRatePercent: 0,
 						bySymbol: {},
 						byEventCategory: {},
 						falsePositiveProxy: { threshold: 0.7, totalEvaluated: 0, noFollowupCount: 0, ratePercent: 0 },
@@ -5615,6 +5660,18 @@ describe('news monitor operations view', () => {
 		expect(view.textContent).toContain('No analyses recorded in this window.');
 	});
 
+	it('formats an absent percentage as an em dash rather than as 0%', () => {
+		const { formatPercent } = require('../../src/admin/admin-newsmonitor');
+		// Number(null), Number(undefined) and Number('') are all 0, so an unguarded coercion
+		// printed a real-looking 0% for a measurement that was never taken.
+		expect(formatPercent(null)).toBe('—');
+		expect(formatPercent(undefined)).toBe('—');
+		expect(formatPercent('')).toBe('—');
+		// A reported zero is still a zero and must keep reading as one.
+		expect(formatPercent(0)).toBe('0%');
+		expect(formatPercent(50)).toBe('50%');
+	});
+
 	it('renders an explicit empty state when no analyses match the filters', async () => {
 		const { browser } = await openNewsMonitor({
 			handler: async (url) => {
@@ -5622,7 +5679,7 @@ describe('news monitor operations view', () => {
 				if (String(url).startsWith('/api/news-monitor/status')) return response(RUNNING);
 				if (String(url).startsWith('/api/news-monitor/summary')) return response(SUMMARY);
 				if (String(url).startsWith('/api/news-monitor/analyses')) {
-					return response({ success: true, analyses: [], count: 0, limit: 50, nextCursor: null });
+					return response({ success: true, analyses: [], nextCursor: null });
 				}
 				return response({});
 			},
@@ -5646,7 +5703,7 @@ describe('news monitor operations view', () => {
 				if (path === '/api/news-monitor/analyses') {
 					requested.push(search);
 					return search.includes('before=c2')
-						? response({ success: true, analyses: [{ ...ANALYSES.analyses[0], id: 'a2', symbol: 'ETHUSDT' }], count: 1, limit: 50, nextCursor: null })
+						? response({ success: true, analyses: [{ ...ANALYSES.analyses[0], id: 'a2', symbol: 'ETHUSDT' }], nextCursor: null })
 						: response({ ...ANALYSES, nextCursor: 'c2' });
 				}
 				return response({});
@@ -5671,6 +5728,28 @@ describe('news monitor operations view', () => {
 		expect(view.textContent).toContain('ETHUSDT');
 		expect(findButton(view, 'Next page').disabled).toBe(true);
 		expect(findButton(view, 'Previous page').disabled).toBe(false);
+
+		await findButton(view, 'Previous page').dispatch('click');
+		await flush();
+		expect(view.textContent).toContain('BTCUSDT');
+		expect(findButton(view, 'Previous page').disabled).toBe(true);
+	});
+
+	it('renders the Analyzed column from createdAt as a timestamp, never as an em dash', async () => {
+		const { browser } = await openNewsMonitor();
+		const view = browser.elementsById.view;
+		const form = findForm(view, '/api/news-monitor/analyses');
+		await form.dispatch('submit');
+		await flush();
+
+		const table = find(view, (node) => node.tagName === 'DIV' && node.attributes['aria-label'] === 'Recorded news analyses (1)');
+		const headers = findAll(table, (node) => node.tagName === 'TH').map((node) => node.textContent);
+		expect(headers).toContain('Analyzed');
+		const analyzedCell = findAll(findAll(table, (node) => node.tagName === 'TR')[1], (node) => node.tagName === 'TD')[5];
+		// The record carries createdAt; reading analyzedAt rendered a permanent em dash.
+		expect(analyzedCell.textContent).toContain('ago');
+		expect(findAll(analyzedCell, (node) => node.className.includes('timestamp'))[0].attributes.title)
+			.toContain('2026');
 	});
 
 	it('clears the cursor chain when a filter changes so paging cannot skip rows', async () => {
@@ -5747,6 +5826,31 @@ describe('news monitor operations view', () => {
 		expect(view.textContent).toContain('Delivery analytics unavailable.');
 		expect(view.textContent).not.toContain('Running normally');
 		expect(view.textContent).not.toContain('Loading delivery analytics…');
+	});
+
+	it('claims nothing about the monitor before any status read has happened', async () => {
+		// No API key and no Firebase session: the pause state was never read, so the card
+		// used to render the healthy branch — a green RUNNING badge on a monitor that might
+		// have been paused for months.
+		const dispatched = [];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				dispatched.push(String(url).split('?')[0]);
+				return url === '/openapi.json' ? response(contract) : response({});
+			},
+		});
+		await flush();
+		await browser.dispatchPopState();
+		browser.location.search = '?view=newsMonitor';
+		await browser.dispatchPopState();
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(dispatched).not.toContain('/api/news-monitor/status');
+		expect(stateBadge(browser).textContent).toBe('Unavailable');
+		expect(view.textContent).not.toContain('Running normally');
+		expect(view.textContent).not.toContain('Background sweeps and manual analysis requests are accepted');
+		expect(view.textContent).toContain('Enter an API key or sign in to load the news monitor state.');
 	});
 
 	it('deep-links the news monitor view and its filter scopes', async () => {
