@@ -2011,6 +2011,212 @@
           ]
         },
         {
+          "name": "GET Alert Analytics Summary (interval=hour)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-06T03:00:00.000Z&limit=500&interval=hour",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-06T03:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "interval",
+                  "value": "hour"
+                }
+              ]
+            },
+            "description": "Optional time-bucketed series (issue #1287). With interval set, summary.window also reports interval and maxDays=31, and summary.buckets carries one entry per UTC hour from the aligned start of the window through `to`, ascending by bucketStart.\n\n- Buckets are derived from the same limit-bounded sample as the aggregates, so sum(bucket.total) === totalAlerts.\n- Empty buckets are present with zero counts instead of omitted, so a chart has no gaps and the array length is predictable for a given window and interval. The 01:00 bucket below has no alerts and is still returned.\n- bucket.success / bucket.failure are the per-bucket delivery totals; each equals the sum of that bucket's byChannel[*] counts. A delivery result with no usable channel name is counted under \"unknown\".\n- bucket.total counts alerts, not deliveries, so an alert with no recorded deliveryResults still increments it.\n- interval=hour is capped at a 31-day window; a wider window is rejected with 400 instead of being silently narrowed."
+          },
+          "response": [
+            {
+              "name": "200 OK - Hourly bucket series",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-06T03:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31,\n      \"interval\": \"hour\"\n    },\n    \"buckets\": [\n      {\n        \"bucketStart\": \"2026-06-06T00:00:00.000Z\",\n        \"total\": 1,\n        \"success\": 1,\n        \"failure\": 0,\n        \"byChannel\": {\n          \"telegram\": { \"total\": 1, \"success\": 1, \"failure\": 0 }\n        }\n      },\n      {\n        \"bucketStart\": \"2026-06-06T01:00:00.000Z\",\n        \"total\": 0,\n        \"success\": 0,\n        \"failure\": 0,\n        \"byChannel\": {}\n      },\n      {\n        \"bucketStart\": \"2026-06-06T02:00:00.000Z\",\n        \"total\": 1,\n        \"success\": 1,\n        \"failure\": 1,\n        \"byChannel\": {\n          \"telegram\": { \"total\": 1, \"success\": 1, \"failure\": 0 },\n          \"whatsapp\": { \"total\": 1, \"success\": 0, \"failure\": 1 }\n        }\n      },\n      {\n        \"bucketStart\": \"2026-06-06T03:00:00.000Z\",\n        \"total\": 0,\n        \"success\": 0,\n        \"failure\": 0,\n        \"byChannel\": {}\n      }\n    ],\n    \"totalAlerts\": 2,\n    \"delivery\": {\n      \"totalSuccess\": 2,\n      \"totalFailure\": 1,\n      \"byChannel\": {\n        \"telegram\": { \"total\": 2, \"success\": 2, \"failure\": 0 },\n        \"whatsapp\": { \"total\": 1, \"success\": 0, \"failure\": 1 }\n      }\n    }\n  }\n}"
+            },
+            {
+              "name": "200 OK - Empty window still returns all-zero buckets",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-06T02:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31,\n      \"interval\": \"hour\"\n    },\n    \"buckets\": [\n      { \"bucketStart\": \"2026-06-06T00:00:00.000Z\", \"total\": 0, \"success\": 0, \"failure\": 0, \"byChannel\": {} },\n      { \"bucketStart\": \"2026-06-06T01:00:00.000Z\", \"total\": 0, \"success\": 0, \"failure\": 0, \"byChannel\": {} },\n      { \"bucketStart\": \"2026-06-06T02:00:00.000Z\", \"total\": 0, \"success\": 0, \"failure\": 0, \"byChannel\": {} }\n    ],\n    \"totalAlerts\": 0\n  }\n}"
+            },
+            {
+              "name": "200 OK - Filters narrow the buckets, not only the totals",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-06T01:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31,\n      \"interval\": \"hour\"\n    },\n    \"buckets\": [\n      {\n        \"bucketStart\": \"2026-06-06T00:00:00.000Z\",\n        \"total\": 1,\n        \"success\": 1,\n        \"failure\": 0,\n        \"byChannel\": { \"telegram\": { \"total\": 1, \"success\": 1, \"failure\": 0 } }\n      },\n      {\n        \"bucketStart\": \"2026-06-06T01:00:00.000Z\",\n        \"total\": 0,\n        \"success\": 0,\n        \"failure\": 0,\n        \"byChannel\": {}\n      }\n    ],\n    \"totalAlerts\": 1\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (interval=day)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-01-15T00:00:00.000Z&to=2026-01-18T00:00:00.000Z&limit=500&interval=day",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-01-15T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-01-18T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "interval",
+                  "value": "day"
+                }
+              ]
+            },
+            "description": "Daily buckets, aligned to UTC midnight, for a window that is wider than the aggregate-only 31-day cap. interval=day is capped at 366 days, so a daily series can cover up to a year; window.maxDays reports 366 and window.interval reports \"day\". Every other filter (source, enriched, symbol, eventCategory, exchange, signalClass, from/to/limit) narrows the buckets exactly as it narrows the totals."
+          },
+          "response": [
+            {
+              "name": "200 OK - Daily bucket series",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-01-15T00:00:00.000Z\",\n      \"to\": \"2026-01-18T00:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 366,\n      \"interval\": \"day\"\n    },\n    \"buckets\": [\n      {\n        \"bucketStart\": \"2026-01-15T00:00:00.000Z\",\n        \"total\": 1,\n        \"success\": 1,\n        \"failure\": 0,\n        \"byChannel\": { \"discord\": { \"total\": 1, \"success\": 1, \"failure\": 0 } }\n      },\n      {\n        \"bucketStart\": \"2026-01-16T00:00:00.000Z\",\n        \"total\": 0,\n        \"success\": 0,\n        \"failure\": 0,\n        \"byChannel\": {}\n      },\n      {\n        \"bucketStart\": \"2026-01-17T00:00:00.000Z\",\n        \"total\": 1,\n        \"success\": 0,\n        \"failure\": 1,\n        \"byChannel\": { \"discord\": { \"total\": 1, \"success\": 0, \"failure\": 1 } }\n      },\n      {\n        \"bucketStart\": \"2026-01-18T00:00:00.000Z\",\n        \"total\": 0,\n        \"success\": 0,\n        \"failure\": 0,\n        \"byChannel\": {}\n      }\n    ],\n    \"totalAlerts\": 2\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (invalid interval - 400 Bad Request)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?interval=week",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "interval",
+                  "value": "week"
+                }
+              ]
+            },
+            "description": "An unrecognised interval is rejected rather than silently falling back to the aggregate-only response. A silent fallback is how this repo's feature flags end up reporting themselves enabled while resolving to something else, so the caller has to be told. The response uses the shared structured error envelope from src/lib/errorEnvelope.js, unlike this endpoint's older plain `{ error, code }` validation failures."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Unrecognised interval",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid interval parameter. Allowed values: hour, day.\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"0f8fad5b-d9cb-469f-a165-70867728950e\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "400 Bad Request - Empty interval value",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid interval parameter. Allowed values: hour, day.\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"0f8fad5b-d9cb-469f-a165-70867728950e\",\n  \"retryable\": false\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (interval window over cap - 400 Bad Request)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-01-01T00:00:00.000Z&to=2026-03-01T00:00:00.000Z&interval=hour",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-01-01T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-03-01T00:00:00.000Z"
+                },
+                {
+                  "key": "interval",
+                  "value": "hour"
+                }
+              ]
+            },
+            "description": "A 59-day window with interval=hour exceeds the 31-day hourly cap, so the request is rejected and the message names both the cap and the interval that set it. The same window is accepted with interval=day (cap 366 days). Note that omitting interval entirely keeps the pre-existing aggregate-only behaviour, which narrows such a window silently to 31 days instead of rejecting it."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Hourly window exceeds the 31-day cap",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid summary window for interval \\\"hour\\\". Maximum window is 31 days.\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"0f8fad5b-d9cb-469f-a165-70867728950e\",\n  \"retryable\": false\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Send Alert Dry Run (risk metadata)",
           "request": {
             "method": "POST",

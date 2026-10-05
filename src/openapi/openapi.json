@@ -1151,6 +1151,9 @@
           },
           {
             "$ref": "#/components/parameters/AlertSignalClass"
+          },
+          {
+            "$ref": "#/components/parameters/SummaryInterval"
           }
         ],
         "responses": {
@@ -1158,7 +1161,7 @@
             "$ref": "#/components/responses/AlertSummaryResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/AlertSummaryBadRequest"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -4136,6 +4139,19 @@
           "default": 500
         }
       },
+      "SummaryInterval": {
+        "name": "interval",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "hour",
+            "day"
+          ]
+        },
+        "example": "hour",
+        "description": "Optional bucket width for the summary.buckets time series (issue #1287). Omit it for the aggregate-only response, which is byte-for-byte unchanged. `hour` is capped at a 31-day window and `day` at 366 days; a wider window is rejected with 400 rather than silently narrowed. An empty or unrecognised value is rejected with 400 and never falls back to the aggregate-only response. Buckets are aligned to UTC hours or UTC midnights, are returned ascending by bucketStart with empty buckets zero-filled so a chart has no gaps, and are derived from the same limit-bounded sample as the aggregates (so sum(bucket.total) === totalAlerts)."
+      },
       "ExportLimit": {
         "name": "limit",
         "in": "query",
@@ -5404,6 +5420,50 @@
             "schema": {
               "$ref": "#/components/schemas/AlertSummaryResult"
             }
+          }
+        }
+      },
+      "AlertSummaryBadRequest": {
+        "description": "Summary request validation failure. Interval failures (`interval` empty, unrecognised, or a window wider than the interval cap) use the shared structured error envelope so they carry `success`, `code`, `requestId` and `retryable`. The pre-existing timestamp and filter failures on this operation keep the original `{ error, code }` body.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InvalidRequestEnvelope"
+            },
+            "examples": {
+              "invalidInterval": {
+                "summary": "Unrecognised interval value",
+                "value": {
+                  "success": false,
+                  "error": "Invalid interval parameter. Allowed values: hour, day.",
+                  "code": "INVALID_REQUEST",
+                  "requestId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                  "retryable": false
+                }
+              },
+              "windowExceedsIntervalCap": {
+                "summary": "Hourly window wider than the 31-day cap",
+                "value": {
+                  "success": false,
+                  "error": "Invalid summary window for interval \"hour\". Maximum window is 31 days.",
+                  "code": "INVALID_REQUEST",
+                  "requestId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                  "retryable": false
+                }
+              },
+              "invalidTimestamp": {
+                "summary": "Pre-existing plain-shape timestamp validation failure",
+                "value": {
+                  "error": "Invalid from timestamp. Use an ISO-8601 timestamp.",
+                  "code": "INVALID_REQUEST"
+                }
+              }
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -8052,6 +8112,39 @@
           }
         }
       },
+      "InvalidRequestEnvelope": {
+        "type": "object",
+        "description": "Structured error envelope built by src/lib/errorEnvelope.js. Used by the GET /api/alerts/summary interval failures; the endpoint's older timestamp/filter failures still return the plain `{ error, code }` body.",
+        "required": [
+          "success",
+          "error",
+          "code",
+          "requestId",
+          "retryable"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Always false on an error path."
+          },
+          "error": {
+            "type": "string",
+            "description": "Human-readable failure message."
+          },
+          "code": {
+            "type": "string",
+            "description": "Machine-readable code, INVALID_REQUEST for a request validation failure."
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Request correlation id, echoing the X-Request-Id response header."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "False for 400 responses; a validation failure is permanent until the request changes."
+          }
+        }
+      },
       "PayloadTooLarge": {
         "type": "object",
         "description": "Structured 413 response returned when a webhook or news-monitor request body (JSON, text/plain, or application/x-www-form-urlencoded) exceeds the WEBHOOK_MAX_BODY_SIZE limit (default 256kb).",
@@ -9182,7 +9275,15 @@
         "type": "object",
         "properties": {
           "window": {
-            "$ref": "#/components/schemas/JsonObject"
+            "$ref": "#/components/schemas/JsonObject",
+            "description": "The effective window the aggregates were computed over. Contains from, to, limit and maxDays. When the interval parameter is supplied it also contains interval, and maxDays reports that interval's cap (31 for hour, 366 for day) instead of the aggregate-only 31."
+          },
+          "buckets": {
+            "type": "array",
+            "description": "Present only when the interval parameter is supplied (issue #1287). Time-bucketed alert volume and delivery outcomes, ascending by bucketStart, with empty buckets zero-filled so a chart has no gaps and the array length is predictable for a given window and interval. Derived from the same limit-bounded sample as the aggregates, so sum(bucket.total) equals totalAlerts.",
+            "items": {
+              "$ref": "#/components/schemas/AlertSummaryBucket"
+            }
           },
           "totalAlerts": {
             "type": "integer"
@@ -9505,6 +9606,72 @@
             "description": "Per-channel delivery latency breakdown. Only channels with recorded delivery samples in the window are included.",
             "additionalProperties": {
               "$ref": "#/components/schemas/ChannelLatencyStats"
+            }
+          }
+        }
+      },
+      "AlertSummaryBucketChannel": {
+        "type": "object",
+        "description": "Delivery outcome counts for one notification channel inside one time bucket.",
+        "required": [
+          "total",
+          "success",
+          "failure"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Delivery attempts recorded for this channel in this bucket."
+          },
+          "success": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Successful deliveries for this channel in this bucket."
+          },
+          "failure": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Failed deliveries for this channel in this bucket."
+          }
+        }
+      },
+      "AlertSummaryBucket": {
+        "type": "object",
+        "description": "One point of the optional time-bucketed series (issue #1287), aligned to a UTC hour or UTC midnight.",
+        "required": [
+          "bucketStart",
+          "total",
+          "success",
+          "failure",
+          "byChannel"
+        ],
+        "properties": {
+          "bucketStart": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Inclusive ISO-8601 start of this bucket. Buckets are returned ascending by this value."
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Stored alerts whose receivedAt falls in this bucket. An empty bucket is reported as 0 rather than omitted."
+          },
+          "success": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Successful deliveries in this bucket across all channels. Equal to the sum of byChannel[*].success."
+          },
+          "failure": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Failed deliveries in this bucket across all channels. Equal to the sum of byChannel[*].failure."
+          },
+          "byChannel": {
+            "type": "object",
+            "description": "Per-channel delivery counts for this bucket. Only channels with a recorded attempt in this bucket are present; a delivery result without a usable channel name is counted under \"unknown\".",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AlertSummaryBucketChannel"
             }
           }
         }
