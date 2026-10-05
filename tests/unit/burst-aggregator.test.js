@@ -1,4 +1,5 @@
 /* global jest, describe, it, expect, beforeEach, afterEach */
+/* global saveEnv, restoreEnv */
 
 const {
 	createBurstAggregator,
@@ -89,7 +90,13 @@ function createHarness({ windowMs = 3000, minSignals = 3, store } = {}) {
 }
 
 describe('burstAggregator', () => {
+	let savedEnv;
+
 	beforeEach(() => {
+		// Restore the whole environment after each test: the gate and window keys
+		// are process-global, and the suite runs with maxWorkers 1, so a value left
+		// behind here would be observed by whichever suite loads next.
+		savedEnv = saveEnv();
 		delete process.env.ENABLE_ALERT_SYNTH_BURST_AGGREGATION;
 		delete process.env.ALERT_BURST_WINDOW_MS;
 		delete process.env.ALERT_BURST_MIN_SIGNALS;
@@ -98,6 +105,7 @@ describe('burstAggregator', () => {
 
 	afterEach(() => {
 		burstAggregator.reset();
+		restoreEnv(savedEnv);
 	});
 
 	describe('feature gate', () => {

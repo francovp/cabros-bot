@@ -496,6 +496,78 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
 	});
 
+	it('documents the optional summary interval series with self-consistent examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const hourly = findItem(collection.item, 'GET Alert Analytics Summary (interval=hour)');
+		const daily = findItem(collection.item, 'GET Alert Analytics Summary (interval=day)');
+		const invalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid interval - 400 Bad Request)');
+		const overCap = findItem(collection.item, 'GET Alert Analytics Summary (interval window over cap - 400 Bad Request)');
+
+		expect(hourly).toBeDefined();
+		expect(hourly.request.url.raw).toContain('interval=hour');
+		expect(daily).toBeDefined();
+		expect(daily.request.url.raw).toContain('interval=day');
+
+		expect(invalid).toBeDefined();
+		expect(invalid.response[0].code).toBe(400);
+		const invalidBody = JSON.parse(invalid.response[0].body);
+		expect(invalidBody).toEqual({
+			success: false,
+			error: 'Invalid interval parameter. Allowed values: hour, day.',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+
+		expect(overCap).toBeDefined();
+		expect(overCap.response[0].code).toBe(400);
+		const overCapBody = JSON.parse(overCap.response[0].body);
+		expect(overCapBody.error).toContain('interval "hour"');
+		expect(overCapBody.error).toContain('31 days');
+		expect(overCapBody.code).toBe('INVALID_REQUEST');
+
+		// The examples must be internally consistent with the runtime contract,
+		// otherwise they document a shape the server never produces.
+		const hourlyBody = JSON.parse(hourly.response[0].body).summary;
+		expect(hourlyBody.window.interval).toBe('hour');
+		expect(hourlyBody.window.maxDays).toBe(31);
+		expect(hourlyBody.buckets.map(b => b.bucketStart)).toEqual([
+			'2026-06-06T00:00:00.000Z',
+			'2026-06-06T01:00:00.000Z',
+			'2026-06-06T02:00:00.000Z',
+			'2026-06-06T03:00:00.000Z',
+		]);
+
+		const dailyBody = JSON.parse(daily.response[0].body).summary;
+		expect(dailyBody.window.interval).toBe('day');
+		expect(dailyBody.window.maxDays).toBe(366);
+
+		for (const body of [hourlyBody, dailyBody]) {
+			expect(body.buckets.reduce((sum, b) => sum + b.total, 0)).toBe(body.totalAlerts);
+			for (const bucket of body.buckets) {
+				expect(Object.keys(bucket)).toEqual(['bucketStart', 'total', 'success', 'failure', 'byChannel']);
+				const channels = Object.values(bucket.byChannel);
+				expect(bucket.success).toBe(channels.reduce((sum, c) => sum + c.success, 0));
+				expect(bucket.failure).toBe(channels.reduce((sum, c) => sum + c.failure, 0));
+			}
+			const starts = body.buckets.map(b => Date.parse(b.bucketStart));
+			expect(starts).toEqual([...starts].sort((a, b) => a - b));
+		}
+
+		// Gapless series: the empty-window example must still be zero-filled.
+		const emptyBody = JSON.parse(hourly.response[1].body).summary;
+		expect(emptyBody.buckets).toHaveLength(3);
+		for (const bucket of emptyBody.buckets) {
+			expect(bucket).toEqual({
+				bucketStart: expect.any(String),
+				total: 0,
+				success: 0,
+				failure: 0,
+				byChannel: {},
+			});
+		}
+	});
+
 	it('documents signalClass in alert webhook and alert query/summary examples', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const postAlert = findItem(collection.item, 'POST Send Alert');
@@ -747,6 +819,80 @@ describe('Postman collection contract', () => {
 			status: 'disabled',
 			mode: 'ephemeral',
 			backend: 'memory',
+		});
+
+		// Every documented variant must be free of the provider text that Firestore
+		// embeds in its error messages.
+		for (const response of item.response) {
+			expect(response.body).not.toContain('projects/');
+			expect(response.body).not.toContain('console.firebase.google.com');
+		}
+	});
+
+	it('documents unverified, ready, degraded and disabled symbol analysis storage variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - symbol analysis storage readiness (issue #1179)');
+
+		expect(item).toBeDefined();
+
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const ready = item.response.find((res) => res.name.includes('was persisted'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const disabled = item.response.find((res) => res.name.includes('flag off'));
+
+		// Issue #1179 acceptance: enabling the flag must not immediately report `ready`,
+		// because every Firestore failure here drops the record and still answers the
+		// analysis, so credential shape alone proves nothing about persistence.
+		expect(unverified.code).toBe(200);
+		expect(JSON.parse(unverified.body).dependencies.symbolAnalysisStorage).toEqual({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'unverified',
+			readiness: 'unverified',
+			failOpen: true,
+			collection: 'symbolAnalyses',
+			retentionDays: 7,
+			writesAttempted: 0,
+			writesSucceeded: 0,
+			writesFailed: 0,
+			readsAttempted: 0,
+			readsSucceeded: 0,
+			readsFailed: 0,
+			consecutiveFailures: 0,
+			lastWriteAt: null,
+			lastFailureAt: null,
+			lastErrorReason: null,
+		});
+
+		expect(ready.code).toBe(200);
+		expect(JSON.parse(ready.body).dependencies.symbolAnalysisStorage).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			// Only a write proves persistence; the reads alongside it do not.
+			writesSucceeded: 31,
+			consecutiveFailures: 0,
+		});
+
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.symbolAnalysisStorage).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			// Intent is unchanged while storage is broken, and the fallback is stated.
+			enabled: true,
+			configured: true,
+			failOpen: true,
+			lastErrorReason: 'firestore_unavailable',
+		});
+
+		expect(disabled.code).toBe(200);
+		expect(JSON.parse(disabled.body).dependencies.symbolAnalysisStorage).toMatchObject({
+			enabled: false,
+			ready: false,
+			status: 'disabled',
+			writesAttempted: 0,
 		});
 
 		// Every documented variant must be free of the provider text that Firestore
@@ -1114,6 +1260,38 @@ describe('news-monitor stop/target example (GH-712)', () => {
 		expect(script).toContain('enrichment.confluence');
 		expect(script).toContain('enrichment.alertPath');
 		expect(script).toContain('appliedCount + c.failedCount');
+	});
+
+	// GH-637: a saved response alone cannot demonstrate the 4,000-character clip, because
+	// the request that produced it must actually send an oversized body. The example is
+	// only runnable if it generates that body itself.
+	it('provides a runnable oversized-alert example that reproduces the truncation response', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Send Alert (truncation metadata)');
+		expect(item).toBeDefined();
+
+		// The body must be larger than the 4,000-character cap, built at runtime.
+		const prerequest = item.event.find((entry) => entry.listen === 'prerequest');
+		expect(prerequest).toBeDefined();
+		const prerequestScript = prerequest.script.exec.join('\n');
+		expect(prerequestScript).toContain('truncationPadding');
+		expect(prerequestScript).toMatch(/repeat\(\s*\d{4,}\s*\)/);
+		expect(item.request.body.raw).toContain('{{truncationPadding}}');
+
+		// And it must assert the documented response rather than only display it.
+		const test = item.event.find((entry) => entry.listen === 'test');
+		expect(test).toBeDefined();
+		const testScript = test.script.exec.join('\n');
+		for (const field of ['truncated', 'originalLength', 'deliveredLength']) {
+			expect(testScript).toContain(field);
+		}
+
+		const example = item.response.find((response) => /truncated/.test(response.name));
+		expect(example.code).toBe(200);
+		const body = JSON.parse(example.body);
+		expect(body.truncated).toBe(true);
+		expect(body.originalLength).toBeGreaterThan(4000);
+		expect(body.deliveredLength).toBe(4003);
 	});
 
 	// The first version of this example was named for a budget-starved multi-timeframe

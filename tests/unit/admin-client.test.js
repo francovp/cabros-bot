@@ -36,6 +36,17 @@ class FakeElement {
 		});
 	}
 
+	// `children` is a plain array here but a live HTMLCollection in the browser, so
+	// anything array-only (Array#pop) type-checks in tests and throws in Chrome.
+	// This getter is what keeps the live feed's trim honest.
+	get lastElementChild() {
+		return this.children[this.children.length - 1] || null;
+	}
+
+	get firstChild() {
+		return this.children[0] || null;
+	}
+
 	append(...nodes) {
 		nodes.forEach((node) => {
 			const selectFirstOption = this.tagName === 'SELECT' && this.children.length === 0;
@@ -52,6 +63,17 @@ class FakeElement {
 		this.children = [];
 		this._text = '';
 		this.append(...nodes);
+	}
+
+	// Present because the console calls prepend() and falls back to an array
+	// unshift() without it. That fallback leaves parentNode unset, which makes a
+	// later lastElementChild.remove() a silent no-op and hangs the live feed's
+	// trim loop. Modelling prepend keeps the fake on the browser's code path.
+	prepend(...nodes) {
+		nodes.reverse().forEach((node) => {
+			node.parentNode = this;
+			this.children.unshift(node);
+		});
 	}
 
 	addEventListener(type, listener) {
@@ -188,13 +210,49 @@ const idleStreamResponse = () => ({
 	},
 });
 
+// A stream whose chunks are pushed by the test, so an SSE subscriber can be fed
+// real `event:`/`data:` frames and then observed to stop receiving them.
+const createControllableStream = () => {
+	const encoder = new TextEncoder();
+	const pending = [];
+	let notify = null;
+	return {
+		response: () => ({
+			ok: true,
+			status: 200,
+			headers: { get: () => null },
+			body: {
+				getReader: () => ({
+					read: () => new Promise((resolve) => {
+						if (pending.length) {
+							const chunk = pending.shift();
+							resolve({ done: false, value: chunk });
+							return;
+						}
+						notify = () => {
+							notify = null;
+							if (pending.length) resolve({ done: false, value: pending.shift() });
+						};
+					}),
+				}),
+			},
+		}),
+		emit: (eventType, data) => {
+			pending.push(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`));
+			const wake = notify;
+			notify = null;
+			if (wake) wake();
+		},
+	};
+};
+
 function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase, location = {} }) {
 	const body = new FakeElement('body');
 	const elementsById = {};
 	[
 		'legacy-connection', 'firebase-auth', 'auth-form', 'auth-email', 'auth-password', 'sign-in', 'sign-out',
 		'auth-state', 'api-key', 'key-state', 'save-key', 'clear-key', 'connection-form', 'view', 'view-status',
-		'sse-status', 'sse-label',
+		'sse-status', 'sse-label', 'console-shell', 'toggle-sidebar',
 	].forEach((id) => {
 		const tag = id === 'api-key' ? 'input' : id === 'connection-form' ? 'form'
 			: id === 'view' ? 'section' : id === 'view-status' ? 'p' : id === 'auth-form' ? 'div' : id.endsWith('key') ? 'button' : 'p';
@@ -204,7 +262,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['overview', 'status', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'playground'].forEach((view) => {
+	['overview', 'status', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'playground', 'trading'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -224,6 +282,9 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 			if (tag === 'a') node.click = () => downloads.push({ href: node.href, download: node.download });
 			return node;
 		},
+		// Deliberately does not assert the SVG namespace, unlike admin-charts.test.js: this fake only
+		// needs the nodes to be walkable by the same findAll the other DOM assertions use.
+		createElementNS: (_namespaceURI, tag) => new FakeElement(tag),
 		getElementById: (id) => elementsById[id],
 		querySelectorAll: (selector) => body.querySelectorAll(selector),
 		addEventListener: (type, listener) => { documentListeners[type] = listener; },
@@ -304,10 +365,14 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		},
 	};
 	context.window.fetch = context.fetch;
-	vm.runInNewContext(
-		fs.readFileSync(path.join(__dirname, '../../src/admin/admin.js'), 'utf8'),
-		context,
-	);
+	// admin-charts.js is evaluated in the browser context, not require()d into Node: it builds
+	// nodes through the ambient `document`, which only exists inside this vm.
+	[
+		'../../src/admin/admin-charts.js',
+		'../../src/admin/admin.js',
+	].forEach((relative) => {
+		vm.runInNewContext(fs.readFileSync(path.join(__dirname, relative), 'utf8'), context);
+	});
 	documentListeners.DOMContentLoaded();
 
 	const dispatchPopState = async () => {
@@ -750,6 +815,57 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('Last poll');
 		expect(view.textContent).toContain('Last error detailpoll failed');
 		expect(view.textContent).toContain('Last error at');
+	});
+
+	it('renders durable storage readiness counters so an operator can tell unverified from misconfigured', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: { symbolAnalysisStorage: true },
+			dependencies: {
+				symbolAnalysisStorage: {
+					enabled: true,
+					configured: true,
+					ready: false,
+					status: 'unverified',
+					readiness: 'unverified',
+					failOpen: true,
+					collection: 'symbolAnalyses',
+					retentionDays: 7,
+					writesAttempted: 0,
+					writesSucceeded: 0,
+					writesFailed: 0,
+					readsAttempted: 2,
+					readsSucceeded: 2,
+					readsFailed: 0,
+					consecutiveFailures: 0,
+					lastWriteAt: null,
+					lastFailureAt: null,
+					lastErrorReason: null,
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Symbol analysis storage');
+		expect(view.textContent).toContain('Readinessunverified');
+		expect(view.textContent).toContain('Fail opentrue');
+		expect(view.textContent).toContain('CollectionsymbolAnalyses');
+		expect(view.textContent).toContain('Retention (days)7');
+		expect(view.textContent).toContain('Writes attempted0');
+		expect(view.textContent).toContain('Writes succeeded0');
+		expect(view.textContent).toContain('Reads attempted2');
+		expect(view.textContent).toContain('Reads succeeded2');
 	});
 
 	it('includes nested profiling health in dependency attention', async () => {
@@ -4860,7 +4976,9 @@ describe('admin browser client', () => {
 
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
-		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(9);
+		const navItems = shell.match(/<button data-view="/g) || [];
+		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(navItems.length);
+		expect(navItems.length).toBeGreaterThan(0);
 		expect(shell).not.toMatch(/[⌂◈◉◇◌✦▷]/);
 	});
 
@@ -6828,6 +6946,545 @@ describe('structured analysis forms', () => {
 			expect(requests.some((url) => url.startsWith('https://cabros-bot-production.up.railway.app/'))).toBe(true);
 			expect(browser.location.search).toContain('backend=https%3A%2F%2Fcabros-bot-production.up.railway.app');
 			expect(browser.location.search).toContain('view=outcomes');
+		});
+	});
+
+	describe('trading dashboard', () => {
+		const TRADING_WINDOWS_FOR_TEST = ['1h', '4h', '1D', '1W'];
+		// Faithful to SignalOutcomeService.summarizeOutcomes(): the four per-window
+		// averages live under windows[<window>], never at the top level. The
+		// per-window values are deliberately distinct so the pooled "All windows"
+		// figures (hit rate 59.00, return +1.30) differ both from any single window
+		// (1D is 65.00 / +1.25) and from an unweighted mean of the four
+		// percentages (63.75 / +1.44), so a wrong pooling weight cannot pass.
+		const outcomeSummary = (overrides = {}) => ({
+			success: true,
+			summary: {
+				available: true,
+				totalSignalsReceived: 40,
+				totalSignalsEligible: 36,
+				totalSignalsEvaluated: 30,
+				totalSignalsPending: 4,
+				totalSignalsUnavailable: 2,
+				coveragePercent: 75,
+				isCoverageComplete: false,
+				expectancyR: 0.42,
+				targetHitRatePercent: 55,
+				stopHitRatePercent: 21,
+				populationNote: 'Metrics represent 30 evaluated signals out of 40 total received signals (75% coverage).',
+				exchangeBreakdown: {},
+				providerBreakdown: {},
+				entryPriceSourceBreakdown: {},
+				eligibilityBreakdown: {},
+				windows: {
+					'1h': { totalSignals: 40, hitRatePercent: 50, averageReturnPercent: 1.0, averageMfePercent: 2.0, averageMaePercent: -0.4 },
+					'4h': { totalSignals: 30, hitRatePercent: 60, averageReturnPercent: 1.5, averageMfePercent: 2.4, averageMaePercent: -0.6 },
+					'1D': { totalSignals: 20, hitRatePercent: 65, averageReturnPercent: 1.25, averageMfePercent: 2.6, averageMaePercent: -0.9 },
+					'1W': { totalSignals: 10, hitRatePercent: 80, averageReturnPercent: 2.0, averageMfePercent: 3.0, averageMaePercent: -1.1 },
+				},
+				drawdownProxy: { averageMaxAdverseExcursionPercent: -0.63, absoluteMaxAdverseExcursionPercent: -1.1 },
+				falsePositiveCandidatesCount: 0,
+				falsePositiveCandidates: [],
+				latencyCostMetadata: { averageProcessingTimeMs: 120, tokenUsage: { inputTokens: 0, outputTokens: 0, totalCost: 0 } },
+				...overrides,
+			},
+		});
+
+		const statusPayload = (binance = {}) => ({
+			success: true,
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: { binanceTrading: true, signalOutcomeTracking: true },
+			dependencies: {
+				binanceTrading: {
+					enabled: true,
+					configured: true,
+					ready: true,
+					status: 'ready',
+					environment: 'testnet',
+					allowedSymbols: ['BTCUSDT'],
+					maxNotionalConfigured: true,
+					...binance,
+				},
+			},
+		});
+
+		const outcomeRecord = ({ id, symbol, setupType, receivedAt, win, source = 'webhook' }) => ({
+			id,
+			receivedAt,
+			source,
+			symbol,
+			exchange: 'BINANCE',
+			setupType,
+			side: 'BUY',
+			outcomeEvaluated: true,
+			outcomes: { '1D': { status: 'evaluated', return: win, rMultiple: win / 2 } },
+		});
+
+		const outcomeList = (records) => ({
+			success: true,
+			outcomes: records,
+			pagination: { hasMore: false, limit: 100, nextBefore: null },
+		});
+
+		const defaultOutcomes = [
+			outcomeRecord({ id: 'o1', symbol: 'BTCUSDT', setupType: 'breakout', receivedAt: '2026-10-01T10:00:00.000Z', win: 3 }),
+			outcomeRecord({ id: 'o2', symbol: 'BTCUSDT', setupType: 'breakout', receivedAt: '2026-10-01T18:00:00.000Z', win: -1 }),
+			outcomeRecord({ id: 'o3', symbol: 'ETHUSDT', setupType: 'trend_continuation', receivedAt: '2026-10-02T09:00:00.000Z', win: 2 }),
+		];
+
+		// Stands in for the trade-ledger contract (#1275) so the panel's pending and populated
+		// states can both be exercised without that API shipping first.
+		const contractWithLedger = {
+			...contract,
+			paths: { ...contract.paths, '/api/trading/ledger/summary': { get: { operationId: 'getTradeLedger', responses: {} } } },
+		};
+
+		const createTradingBrowser = ({
+			outcomes = defaultOutcomes,
+			summary = outcomeSummary(),
+			summaryStatus = 200,
+			audit = { success: true, records: [], audit: [], pagination: { hasMore: false, limit: 20, nextBefore: null } },
+			status = statusPayload(),
+			ledger,
+			firebase,
+			authEnabled = false,
+			contract: apiContract = contract,
+		} = {}) => createBrowser({
+			firebase,
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({
+						enabled: authEnabled,
+						configured: authEnabled,
+						config: { apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros' },
+					});
+				}
+				if (url === '/openapi.json') return response(apiContract);
+				if (url.startsWith('/api/outcomes/summary')) {
+					// Mirror the server instead of matching on startsWith: an empty
+					// `?window=` is a 400 there (parseWindow('') is null), so a console
+					// that forgets to filter the empty select option fails here.
+					const sent = new URL(url, 'https://console.test').searchParams;
+					if (sent.has('window') && sent.get('window') === '') {
+						return response({ error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.', code: 'INVALID_REQUEST' }, 400);
+					}
+					return response(typeof summary === 'function' ? summary(url) : summary, summaryStatus);
+				}
+				if (url.startsWith('/api/outcomes')) return response(outcomeList(outcomes));
+				if (url.startsWith('/api/trading/binance/orders/audit')) return response(audit);
+				if (url.startsWith('/api/status')) return response(status);
+				if (ledger) return ledger(url);
+				return response({});
+			},
+		});
+
+		const tradingView = (browser) => browser.elementsById.view;
+		const kpiCards = (root) => findAll(root, (node) => node.className.includes('trading-kpi'));
+		const hasClass = (node, name) => String(node.className || '').split(/\s+/).includes(name);
+		const quickControlButtons = (root) => findAll(root, (node) => node.tagName === 'BUTTON' && hasClass(node, 'quick-control'));
+		const kpiText = (root, label) => {
+			const card = kpiCards(root).find((node) => node.textContent.includes(label));
+			return card ? card.textContent : null;
+		};
+
+		it('keeps the summary fixture aligned with the published OutcomesSummary schema', () => {
+			const declared = new Set(Object.keys(contract.components.schemas.OutcomesSummary.properties));
+			const declaredWindow = new Set(Object.keys(contract.components.schemas.WindowStats.properties));
+			const summary = outcomeSummary().summary;
+
+			Object.keys(summary).forEach((key) => {
+				expect(declared.has(key)).toBe(true);
+			});
+			Object.entries(summary.windows).forEach(([windowKey, block]) => {
+				expect(TRADING_WINDOWS_FOR_TEST).toContain(windowKey);
+				Object.keys(block).forEach((key) => {
+					expect(declaredWindow.has(key)).toBe(true);
+				});
+			});
+			// The regression this guards: the console read four names the service
+			// never returns, and only a fixture that invented them kept it green.
+			expect(declared.has('winRatePercent')).toBe(false);
+			expect(declared.has('averageReturnPercent')).toBe(false);
+		});
+
+		it('renders paper P&L KPIs from the window block, not names the API never returns', async () => {
+			const browser = createTradingBrowser();
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			expect(kpiText(view, 'Signals recorded')).toContain('40');
+			// Pooled across all four windows, weighted by each window's own
+			// denominator. 63.75 is the unweighted mean of the same percentages.
+			expect(kpiText(view, 'Hit rate')).toContain('59.00%');
+			expect(kpiText(view, 'Average return')).toContain('+1.30%');
+			expect(kpiText(view, 'Expectancy')).toContain('+0.42R');
+			expect(kpiText(view, 'Coverage')).toContain('75%');
+			expect(kpiText(view, 'Hit rate')).not.toContain('63.75');
+			expect(kpiText(view, 'MFE / MAE')).toContain('2.34% / -0.63%');
+			expect(kpiCards(view).length).toBeGreaterThanOrEqual(6);
+		});
+
+		it('does not 400 its own request when the default All windows filter is selected', async () => {
+			const requests = [];
+			const browser = createTradingBrowser({
+				summary: (url) => {
+					requests.push(url);
+					return outcomeSummary();
+				},
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			const summaryRequest = requests.find((url) => url.startsWith('/api/outcomes/summary'));
+			expect(summaryRequest).toBeTruthy();
+			expect(new URL(summaryRequest, 'https://console.test').searchParams.has('window')).toBe(false);
+			expect(view.textContent).not.toMatch(/HTTP 400/);
+			expect(view.textContent).not.toMatch(/invalid filter/i);
+			expect(kpiText(view, 'Hit rate')).toContain('59.00%');
+		});
+
+		it('reads the selected window block when a window is chosen', async () => {
+			const requests = [];
+			const browser = createTradingBrowser({
+				summary: (url) => {
+					requests.push(url);
+					return outcomeSummary();
+				},
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const windowSelect = findAll(tradingView(browser), (node) => node.name === 'window')[0];
+			windowSelect.value = '1D';
+			await findAll(tradingView(browser), (node) => node.tagName === 'FORM')[0].dispatch('submit');
+			await flush();
+
+			const summaryRequest = requests.filter((url) => url.startsWith('/api/outcomes/summary')).pop();
+			expect(new URL(summaryRequest, 'https://console.test').searchParams.get('window')).toBe('1D');
+			const view = tradingView(browser);
+			// 1D's own figures, not the pooled ones.
+			expect(kpiText(view, 'Hit rate')).toContain('65.00%');
+			expect(kpiText(view, 'Average return')).toContain('+1.25%');
+			expect(kpiText(view, 'Hit rate')).not.toContain('59.00');
+			expect(kpiText(view, 'MFE / MAE')).toContain('2.60% / -0.90%');
+			expect(view.textContent).toContain('1D window');
+		});
+
+		it('blames the console request, not a feature flag, when the summary filter is rejected', async () => {
+			const browser = createTradingBrowser({
+				summary: { error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.', code: 'INVALID_REQUEST' },
+				summaryStatus: 400,
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			expect(view.textContent).toMatch(/invalid filter/i);
+			expect(view.textContent).not.toMatch(/may be disabled/i);
+			expect(view.textContent).not.toMatch(/ENABLE_SIGNAL_OUTCOME_TRACKING/);
+		});
+
+		it('treats a 503 summary as a dependency state rather than a disabled feature', async () => {
+			const browser = createTradingBrowser({
+				summary: { error: 'Storage unavailable', code: 'STORAGE_UNAVAILABLE' },
+				summaryStatus: 503,
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			expect(view.textContent).toMatch(/temporarily unavailable/i);
+			expect(view.textContent).not.toMatch(/ENABLE_SIGNAL_OUTCOME_TRACKING/);
+		});
+
+		it('keeps the paper vs real panel with a named state when the summary fails', async () => {
+			const browser = createTradingBrowser({
+				summary: { error: 'Storage unavailable', code: 'STORAGE_UNAVAILABLE' },
+				summaryStatus: 503,
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const compare = findAll(tradingView(browser), (node) => node.className.includes('paper-vs-real-panel'))[0];
+
+			expect(compare).toBeTruthy();
+			expect(compare.textContent).toMatch(/temporarily unavailable/i);
+		});
+
+		it('labels every KPI card with its environment provenance', async () => {
+			const browser = createTradingBrowser();
+			await flush();
+			await selectView(browser, 'trading');
+			const cards = kpiCards(tradingView(browser));
+
+			expect(cards.length).toBeGreaterThan(0);
+			const allowedProvenance = ['Paper · signals', 'Measured', 'Not measured', 'Environment: testnet'];
+			cards.forEach((card) => {
+				const badges = findAll(card, (node) => hasClass(node, 'trading-kpi-badge'));
+				expect(badges).toHaveLength(1);
+				expect(allowedProvenance).toContain(badges[0].textContent);
+			});
+			expect(tradingView(browser).textContent).toContain('Environment: testnet');
+		});
+
+		it('renders an empty state instead of an error when the trade ledger API is not available yet', async () => {
+			const browser = createTradingBrowser({
+				ledger: async () => response({ success: false, error: 'Trading ledger is disabled', code: 'FEATURE_DISABLED' }, 403),
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			const panel = findAll(view, (node) => node.className.includes('real-pnl-panel'))[0];
+			expect(panel).toBeTruthy();
+			expect(panel.textContent).toMatch(/not available/i);
+			expect(panel.textContent).toMatch(/trade ledger/i);
+			expect(view.textContent).not.toContain('undefined');
+			expect(view.textContent).not.toMatch(/NaN/);
+		});
+
+		it('never renders a fabricated zero for metrics the ledger does not provide yet', async () => {
+			const browser = createTradingBrowser({
+				ledger: async () => response({ success: false, error: 'Trading ledger is disabled', code: 'FEATURE_DISABLED' }, 403),
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const panel = findAll(tradingView(browser), (node) => node.className.includes('real-pnl-panel'))[0];
+
+			['Realized P&L', 'Unrealized P&L', 'ROI', 'Profit factor', 'Fees', 'Avg hold'].forEach((label) => {
+				expect(panel.textContent).toContain(label);
+				expect(panel.textContent).not.toMatch(new RegExp(`${label}[^—]*\\$?0(\\.0+)?\\b`));
+			});
+		});
+
+		it('renders the unavailable state for a 503 without raising an error', async () => {
+			const browser = createTradingBrowser({
+				contract: contractWithLedger,
+				ledger: async () => response({ success: false, error: 'Storage unavailable', code: 'STORAGE_UNAVAILABLE' }, 503),
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const panel = findAll(tradingView(browser), (node) => node.className.includes('real-pnl-panel'))[0];
+
+			expect(panel.textContent).toMatch(/unavailable/i);
+			expect(panel.className).not.toContain('response-error');
+		});
+
+		it('fills the real-money panel from a ledger response once the contract ships it', async () => {
+			const browser = createTradingBrowser({
+				contract: contractWithLedger,
+				ledger: async () => response({
+					success: true,
+					realizedPnl: 412.55,
+					unrealizedPnl: -18.2,
+					roiPercent: 7.4,
+					profitFactor: 1.92,
+					feesPaid: 9.81,
+					averageHoldMinutes: 96,
+					openExposure: 250,
+				}),
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const panel = findAll(tradingView(browser), (node) => hasClass(node, 'real-pnl-panel'))[0];
+
+			expect(panel.textContent).toContain('412.55');
+			expect(panel.textContent).toContain('7.4');
+			expect(panel.textContent).not.toMatch(/not deployed/);
+		});
+
+		it('gives every chart an accessible text alternative and a data table', async () => {
+			const browser = createTradingBrowser();
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+			const charts = findAll(view, (node) => node.tagName === 'SVG' && node.attributes.role === 'img');
+
+			expect(charts.length).toBeGreaterThanOrEqual(2);
+			charts.forEach((chart) => expect(chart.attributes['aria-label']).toBeTruthy());
+			expect(findAll(view, (node) => node.tagName === 'TABLE').length).toBeGreaterThanOrEqual(2);
+		});
+
+		it('plots real values on the curve instead of an empty axis', async () => {
+			const browser = createTradingBrowser();
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			// A non-finite accumulator reaches the chart kit as null and renders an empty
+			// plot, which still satisfies an aria-label assertion. The painted polyline is
+			// the only proof the cumulative series actually carries values.
+			const labels = findAll(view, (node) => node.tagName === 'SVG' && node.attributes.role === 'img')
+				.map((chart) => chart.attributes['aria-label']);
+			expect(labels.some((label) => label.includes('no plottable values'))).toBe(false);
+			expect(labels.some((label) => /high [+-]?\d/.test(label))).toBe(true);
+			expect(findAll(view, (node) => node.tagName === 'POLYLINE').length).toBeGreaterThan(0);
+			expect(view.textContent).not.toMatch(/NaN|Infinity/);
+		});
+
+		it('states plainly that the curve is signal returns rather than account equity', async () => {
+			const browser = createTradingBrowser();
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			expect(view.textContent).toMatch(/not account equity/i);
+			expect(view.textContent).toMatch(/paper/i);
+		});
+
+		it('groups attribution by symbol and by setup type', async () => {
+			const browser = createTradingBrowser();
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+			const bySymbol = findAll(view, (node) => node.className.includes('attribution-symbols'))[0];
+			const bySetup = findAll(view, (node) => node.className.includes('attribution-setups'))[0];
+
+			expect(bySymbol.textContent).toContain('BTCUSDT');
+			expect(bySymbol.textContent).toContain('ETHUSDT');
+			expect(bySetup.textContent).toContain('breakout');
+			expect(bySetup.textContent).toContain('trend_continuation');
+		});
+
+		it('shows an empty state when no outcomes have been evaluated', async () => {
+			const browser = createTradingBrowser({ outcomes: [] });
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			expect(view.textContent).toMatch(/no evaluated signals/i);
+			expect(findAll(view, (node) => node.className === 'svg' && node.attributes.role === 'img').length).toBe(0);
+		});
+
+		it('hides every mutation control from an admin.viewer role', async () => {
+			let authStateChanged;
+			const user = {
+				getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+				getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.viewer'] } }),
+			};
+			const auth = {
+				setPersistence: jest.fn().mockResolvedValue(undefined),
+				onAuthStateChanged: jest.fn((listener) => {
+					authStateChanged = listener;
+					listener(null);
+					return jest.fn();
+				}),
+				signInWithEmailAndPassword: jest.fn(async () => {
+					await authStateChanged(user);
+					return { user };
+				}),
+				signOut: jest.fn().mockResolvedValue(undefined),
+			};
+			const browser = createTradingBrowser({
+				firebase: { initializeApp: jest.fn(), auth: jest.fn(() => auth) },
+				authEnabled: true,
+			});
+			await flush();
+			browser.elementsById['auth-email'].value = 'viewer@example.com';
+			browser.elementsById['auth-password'].value = 'secret';
+			await browser.elementsById['sign-in'].dispatch('click');
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			const controls = quickControlButtons(view);
+			expect(controls.map((control) => control.textContent)).toEqual(['Load order audit']);
+			expect(view.textContent).not.toMatch(/Pause news monitor|Resume news monitor|Run self-test|Send test alert|Retry job/);
+		});
+
+		it('exposes quick controls to an operator and keeps destructive confirmations', async () => {
+			const browser = createTradingBrowser();
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			const controls = quickControlButtons(view);
+			expect(controls.length).toBe(5);
+			const pause = findButton(view, 'Pause news monitor');
+			const confirmations = [];
+			browser.context.window.confirm = (message) => {
+				confirmations.push(message);
+				return false;
+			};
+			await pause.dispatch('click');
+			await flush();
+			expect(confirmations.some((message) => /pause/i.test(message))).toBe(true);
+		});
+
+		it('renders the recent order audit in the operations rail', async () => {
+			const browser = createTradingBrowser({
+				audit: {
+					success: true,
+					records: [{
+						id: 'audit-1',
+						orderId: 'local-1',
+						action: 'submit',
+						status: 'FILLED',
+						symbol: 'BTCUSDT',
+						side: 'BUY',
+						environment: 'testnet',
+						timestamp: '2026-10-01T10:00:00.000Z',
+						operator: 'operator@example.com',
+					}],
+					audit: [],
+					pagination: { hasMore: false, limit: 20, nextBefore: null },
+				},
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const rail = findAll(tradingView(browser), (node) => node.className.includes('ops-rail'))[0];
+
+			expect(rail.textContent).toContain('BTCUSDT');
+			expect(rail.textContent).toContain('FILLED');
+			expect(rail.textContent).toContain('testnet');
+		});
+
+		it('streams SSE events into the live feed and unsubscribes when the view is left', async () => {
+			const stream = createControllableStream();
+			const browser = createBrowser({
+				storedKey: 'test-key',
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/admin/events') return stream.response();
+					if (url.startsWith('/api/outcomes/summary')) return response(outcomeSummary());
+					if (url.startsWith('/api/outcomes')) return response(outcomeList(defaultOutcomes));
+					if (url.startsWith('/api/status')) return response(statusPayload());
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await browser.elementsById['save-key'].dispatch('click');
+			await flush();
+			await selectView(browser, 'trading');
+			// Exact match: an `includes('live-feed')` probe also matches the wrapping
+			// `live-feed-panel` section, whose children are a heading plus the feed.
+			const feed = findAll(tradingView(browser), (node) => node.className === 'live-feed')[0];
+
+			expect(feed).toBeTruthy();
+			expect(feed.textContent).toMatch(/no events yet/i);
+
+			await stream.emit('alert-delivered', { symbol: 'BTCUSDT', channels: ['telegram'] });
+			await flush();
+			expect(feed.textContent).toContain('BTCUSDT');
+			expect(feed.children.length).toBe(1);
+
+			// MAX_ROWS is 40, so the trim is only reachable past that. The old
+			// `feed.children.pop()` threw a TypeError in Chrome because an
+			// HTMLCollection has no pop(); the array-backed fake DOM accepted it,
+			// which is why this needed a real-browser check to find.
+			for (let index = 0; index < 55; index += 1) {
+				await stream.emit('alert-delivered', { symbol: `SYM${index}` });
+			}
+			await flush();
+			expect(feed.children.length).toBe(40);
+			expect(feed.textContent).toContain('SYM54');
+			expect(feed.textContent).not.toContain('BTCUSDT');
+
+			await selectView(browser, 'overview');
+			await stream.emit('delivery-failure', { symbol: 'ETHUSDT', channel: 'whatsapp', error: 'boom' });
+			await flush();
+			expect(feed.children.length).toBe(40);
 		});
 	});
 

@@ -259,6 +259,26 @@ BTC price is at $45,000 - breakout detected!
 }
 ```
 
+**Truncation metadata (GH-637).** `validateAlert()` clips alert text to 4,000 characters
+(plus an ellipsis). When the submitted text exceeds that cap, the 200 response — and the
+`dryRun=true` response — also carries `truncated: true`, `originalLength`, and
+`deliveredLength` so the caller can detect the loss:
+
+```json
+{
+  "success": true,
+  "requestId": "0d63f03b-d5a2-4a0b-928d-1959b8eb6a95",
+  "truncated": true,
+  "originalLength": 4001,
+  "deliveredLength": 4003,
+  "results": [],
+  "enriched": false
+}
+```
+
+The fields are absent when the text fits. The service logs a structured warning and keeps
+processing the validated text — truncation never blocks delivery or enrichment.
+
 #### Per-symbol channel routing (`symbolRoutes`)
 
 `POST /api/webhook/alert` accepts an optional `symbolRoutes` object to send different

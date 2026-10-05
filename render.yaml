@@ -97,6 +97,30 @@ services:
   - key: ENABLE_FIRESTORE_SCANNER_PRESETS
     value: true
     previewValue: false
+# Durable news-monitor analysis records (#1180): web service only, previews off.
+  # Only the web service mounts /api/news-monitor, so a worker declaration would be
+  # a mirror of a value the web service never set. Previews stay off so a throwaway
+  # PR deploy cannot write into the production news_analysis collection.
+  # Environment-only: this gate decides where a collection lives, so it is
+  # deliberately absent from firebase-remote-config-template.json. A template
+  # parameter's defaultValue is reported with source `remote` and would otherwise
+  # override this env var and silently disable persistence.
+  - key: ENABLE_FIRESTORE_NEWS_ANALYSIS
+    value: true
+    previewValue: false
+  - key: NEWS_ANALYSIS_RETENTION_DAYS
+    value: 30
+  # Durable symbol-analysis history for /api/symbol-analyses: web service only,
+  # previews off. The writer is the HTTP route layer in
+  # src/controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis.js, and
+  # worker.js never mounts routes, so the worker stays off rather than becoming a
+  # second writer. Declared at the code default so an operator can see and change
+  # the TTL horizon without leaving the blueprint.
+  - key: ENABLE_SYMBOL_ANALYSIS_STORAGE
+    value: true
+    previewValue: false
+  - key: SYMBOL_ANALYSIS_RETENTION_DAYS
+    value: 7
   # Server-side Remote Config. Enabled on every compute service that starts the
   # loader so they cannot evaluate different effective configs. Previews stay off.
   - key: ENABLE_FIREBASE_REMOTE_CONFIG

@@ -3,19 +3,187 @@
 const crypto = require('crypto');
 const admin = require('firebase-admin');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { isFirestoreConfigured } = require('./firestoreConfig');
+const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
+const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
+const {
+	FIRESTORE_ERROR_CATEGORIES,
+	classifyFirestoreError,
+	isMissingIndexError,
+} = require('./firestoreErrorCategories');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_DAYS = 30;
 const COLLECTION_NAME = 'news_analysis';
+const WRITE_METRICS_DOMAIN = 'newsAnalysis';
+
+/**
+ * Environment-only, deliberately absent from the Remote Config allow-list exactly
+ * like `ENABLE_FIRESTORE_ALERT_STORAGE` / `_JOB_STORAGE` / `_SCANNER_PRESETS` /
+ * `_IDEMPOTENCY`: it decides where a collection lives, it is not a tuning knob.
+ *
+ * Issue #1180 is why this is load-bearing rather than stylistic. The key *was* in
+ * the published server template as `"false"`, and a template parameter's
+ * `defaultValue` is reported by the Admin SDK with source `remote`, so
+ * `getRemoteValue()` accepts it as an override that beats `process.env` — enabling
+ * the variable in `render.yaml` alone would have been silently reverted to `false`
+ * the moment Remote Config loads recovered. `NEWS_ANALYSIS_RETENTION_DAYS` is the
+ * genuine tuning knob and stays remote-config eligible.
+ */
+function isEnabled() {
+	return process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS === 'true';
+}
+
+/**
+ * `lastErrorReason` reuses the repository-wide closed Firestore error category
+ * enum. Every Firestore failure in this service is swallowed, so this is the only
+ * evidence an operator gets that persistence silently stopped working, and a raw
+ * provider message must never reach a status payload: Firestore embeds the
+ * fully-qualified project/database path and the missing index definition in it.
+ * `missingIndex` is reported separately as a boolean for the same reason.
+ */
+const KNOWN_REASONS = new Set(Object.values(FIRESTORE_ERROR_CATEGORIES));
+
+/**
+ * `unverified` is deliberately distinct from `ready` (and from `degraded`):
+ * before the first observed durable operation there is no evidence that analysis
+ * records actually persist, and reporting that as `ready` is what would make the
+ * production enablement unverifiable.
+ */
+const READINESS = Object.freeze({
+	UNVERIFIED: 'unverified',
+	VERIFIED: 'verified',
+	DEGRADED: 'degraded',
+});
 
 let db = null;
 
-function isEnabled() {
-	try {
-		return getRuntimeConfig().ENABLE_FIRESTORE_NEWS_ANALYSIS === true;
-	} catch {
-		return process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS === 'true';
+/**
+ * Process-local window of observed durable outcomes. Readiness is derived from
+ * real Firestore work rather than credential shape, so a deployment whose
+ * credentials look valid but cannot reach Firestore reports `degraded` instead of
+ * `ready`. Counters reset on restart and every recorder is fail-open: telemetry
+ * must never block alert delivery or reject an admin read.
+ */
+const durableReadiness = {
+	operationsAttempted: 0,
+	operationsSucceeded: 0,
+	operationsFailed: 0,
+	consecutiveFailures: 0,
+	lastSuccessAt: null,
+	lastFailureAt: null,
+	lastErrorReason: null,
+	lastMissingIndex: false,
+};
+
+function _resetReadinessForTesting() {
+	durableReadiness.operationsAttempted = 0;
+	durableReadiness.operationsSucceeded = 0;
+	durableReadiness.operationsFailed = 0;
+	durableReadiness.consecutiveFailures = 0;
+	durableReadiness.lastSuccessAt = null;
+	durableReadiness.lastFailureAt = null;
+	durableReadiness.lastErrorReason = null;
+	durableReadiness.lastMissingIndex = false;
+}
+
+// A durable use attempt is counted even when Firebase initialization fails, because
+// asking for durable storage and not getting it is exactly the event an operator
+// needs to see. `operationsFailed` therefore never exceeds `operationsAttempted`.
+function _recordDurableAttempt() {
+	durableReadiness.operationsAttempted += 1;
+}
+
+function _recordDurableSuccess() {
+	durableReadiness.operationsSucceeded += 1;
+	durableReadiness.consecutiveFailures = 0;
+	durableReadiness.lastSuccessAt = new Date().toISOString();
+}
+
+function _recordDurableFailure(reason, missingIndex = false) {
+	durableReadiness.operationsFailed += 1;
+	durableReadiness.consecutiveFailures += 1;
+	durableReadiness.lastFailureAt = new Date().toISOString();
+	durableReadiness.lastErrorReason = typeof reason === 'string' && KNOWN_REASONS.has(reason)
+		? reason
+		: FIRESTORE_ERROR_CATEGORIES.UNAVAILABLE;
+	durableReadiness.lastMissingIndex = missingIndex === true;
+}
+
+function _resolveDurableReadiness() {
+	if (durableReadiness.consecutiveFailures > 0) {
+		return READINESS.DEGRADED;
 	}
+	if (durableReadiness.operationsSucceeded > 0) {
+		return READINESS.VERIFIED;
+	}
+	return READINESS.UNVERIFIED;
+}
+
+// Telemetry must never be able to reject a write or an admin read: every readiness
+// mutation runs through this guard so a counter error cannot fail the caller.
+function recordReadinessSafely(record) {
+	try {
+		record();
+	} catch (error) {
+		console.warn('[NewsAnalysisStorageService] readiness recording failed:', error && error.message);
+	}
+}
+
+function _classifyAndRecordFailure(error) {
+	recordReadinessSafely(() => {
+		_recordDurableFailure(classifyFirestoreError(error), isMissingIndexError(error));
+	});
+}
+
+/**
+ * `mode` and `backend` report configured **intent** and must not flip to `memory`
+ * while the gate is on, or an operator reading `memory` concludes the flag is off.
+ * `ready` is the proof question: true only after an observed successful durable
+ * operation, cleared by the first failure so a transient error self-heals without
+ * a restart. This function performs no I/O, so a status read cannot register a
+ * durable attempt. `failOpen` is always `true` and is stated rather than implied:
+ * a `degraded` verdict still delivers news alerts, it just stops recording them.
+ */
+function getStorageStatus() {
+	const enabled = isEnabled();
+	const configured = isFirestoreConfigured();
+	const durableIntent = enabled && configured;
+	const readiness = _resolveDurableReadiness();
+
+	let status;
+	if (!enabled) {
+		status = 'disabled';
+	} else if (!configured) {
+		status = 'misconfigured';
+	} else if (readiness === READINESS.DEGRADED) {
+		status = 'degraded';
+	} else if (readiness === READINESS.VERIFIED) {
+		status = 'ready';
+	} else {
+		status = READINESS.UNVERIFIED;
+	}
+
+	return {
+		enabled,
+		configured,
+		ready: status === 'ready',
+		status,
+		mode: durableIntent ? 'durable' : 'ephemeral',
+		backend: durableIntent ? 'firestore' : 'memory',
+		failOpen: true,
+		readiness,
+		collection: COLLECTION_NAME,
+		retentionDays: getRetentionDays(),
+		operationsAttempted: durableReadiness.operationsAttempted,
+		operationsSucceeded: durableReadiness.operationsSucceeded,
+		operationsFailed: durableReadiness.operationsFailed,
+		consecutiveFailures: durableReadiness.consecutiveFailures,
+		lastSuccessAt: durableReadiness.lastSuccessAt,
+		lastFailureAt: durableReadiness.lastFailureAt,
+		lastErrorReason: durableReadiness.lastErrorReason,
+		lastMissingIndex: durableReadiness.lastMissingIndex,
+	};
 }
 
 function getRetentionDays() {
@@ -92,22 +260,24 @@ function getFirestore() {
 	}
 
 	try {
-		let credential;
-		if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-			const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-			credential = admin.credential.cert(serviceAccount);
-		}
-
-		const appOptions = {};
-		if (credential) {
-			appOptions.credential = credential;
-		}
-		if (process.env.FIREBASE_PROJECT_ID) {
-			appOptions.projectId = process.env.FIREBASE_PROJECT_ID;
-		}
-
-		if (!admin.apps.length) {
-			admin.initializeApp(appOptions);
+		// Issue #1128: never call `initializeApp({})` for credentials that are
+		// configured but invalid. The shared bootstrap classifies the credential
+		// document first, so an inline `authorized_user` / `external_account`
+		// document is refused instead of authenticating with a *different*
+		// credential than the operator configured, and an ADC-only deployment
+		// (GOOGLE_APPLICATION_CREDENTIALS file or well-known gcloud path) works
+		// instead of paying for default-auth discovery on the first read.
+		const initialization = initializeFirebaseAdminApp({ admin });
+		if (!initialization.ok) {
+			console.warn(
+				`[NewsAnalysisStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and keeping analysis ephemeral.`,
+			);
+			db = null;
+			recordReadinessSafely(() => {
+				_recordDurableAttempt();
+				_recordDurableFailure(FIRESTORE_ERROR_CATEGORIES.UNINITIALIZED);
+			});
+			return null;
 		}
 
 		db = admin.firestore();
@@ -115,6 +285,10 @@ function getFirestore() {
 	} catch (error) {
 		console.warn('[NewsAnalysisStorageService] Failed to initialize Firestore client:', error.message);
 		db = null;
+		recordReadinessSafely(() => {
+			_recordDurableAttempt();
+			_recordDurableFailure(classifyFirestoreError(error));
+		});
 	}
 
 	return db;
@@ -152,6 +326,8 @@ async function recordAnalysis(record = {}) {
 		return null;
 	}
 
+	recordReadinessSafely(_recordDurableAttempt);
+
 	try {
 		const id = (record.id && String(record.id).trim()) || crypto.randomUUID();
 		const symbol = String(record.symbol || '').trim().toUpperCase();
@@ -186,8 +362,12 @@ async function recordAnalysis(record = {}) {
 		});
 
 		await firestore.collection(COLLECTION_NAME).doc(id).set(dataToSave);
+		firestoreWriteMetricsService.recordWriteSuccess(WRITE_METRICS_DOMAIN);
+		recordReadinessSafely(_recordDurableSuccess);
 		return id;
 	} catch (error) {
+		firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN);
+		_classifyAndRecordFailure(error);
 		console.warn('[NewsAnalysisStorageService] Failed to record news analysis:', error.message);
 		return null;
 	}
@@ -244,7 +424,26 @@ async function summarizeAnalyses({ from, to, limit = 500, symbol, threshold = 0.
 	const boundedLimit = Math.min(Math.max(1, limit || 500), 1000);
 	query = query.orderBy('createdAt', 'desc').limit(boundedLimit);
 
-	const snapshot = await query.get();
+	recordReadinessSafely(_recordDurableAttempt);
+	let snapshot;
+	try {
+		snapshot = await query.get();
+	} catch (error) {
+		// Issue #1285: a rejected *query* is a storage-availability failure, not an
+		// internal bug. A missing composite index is the common cause here, because
+		// Firestore does not merge single-field indexes for an equality filter plus a
+		// sort on another field, and neither the unit double (orderBy is a no-op) nor
+		// the emulator (which auto-creates indexes) can observe a missing declaration.
+		firestoreWriteMetricsService.recordReadFailure(WRITE_METRICS_DOMAIN, classifyFirestoreError(error));
+		_classifyAndRecordFailure(error);
+		console.warn('[NewsAnalysisStorageService] Failed to read news analyses for summary:', error.message);
+		const storageError = new Error('News analysis storage read failed. See dependencies.newsAnalysisStorage for the classified reason.');
+		storageError.code = 'STORAGE_UNAVAILABLE';
+		throw storageError;
+	}
+	firestoreWriteMetricsService.recordReadSuccess(WRITE_METRICS_DOMAIN);
+	recordReadinessSafely(_recordDurableSuccess);
+
 	const rawDocs = snapshot && snapshot.docs ? snapshot.docs : [];
 	const items = rawDocs.map(formatAnalysisDoc);
 
@@ -405,7 +604,21 @@ async function listAnalyses({ from, to, limit = 50, symbol, eventCategory, befor
 	}
 
 	query = query.limit(boundedLimit);
-	const snapshot = await query.get();
+	recordReadinessSafely(_recordDurableAttempt);
+	let snapshot;
+	try {
+		snapshot = await query.get();
+	} catch (error) {
+		firestoreWriteMetricsService.recordReadFailure(WRITE_METRICS_DOMAIN, classifyFirestoreError(error));
+		_classifyAndRecordFailure(error);
+		console.warn('[NewsAnalysisStorageService] Failed to list news analyses:', error.message);
+		const storageError = new Error('News analysis storage read failed. See dependencies.newsAnalysisStorage for the classified reason.');
+		storageError.code = 'STORAGE_UNAVAILABLE';
+		throw storageError;
+	}
+	firestoreWriteMetricsService.recordReadSuccess(WRITE_METRICS_DOMAIN);
+	recordReadinessSafely(_recordDurableSuccess);
+
 	const docs = snapshot && snapshot.docs ? snapshot.docs : [];
 
 	const analyses = docs.map(formatAnalysisDoc);
@@ -432,5 +645,9 @@ module.exports = {
 	listAnalyses,
 	formatAnalysisDoc,
 	getFirestore,
+	getStorageStatus,
+	COLLECTION_NAME,
+	READINESS,
 	__resetFirestoreClient,
+	__resetReadinessForTesting: _resetReadinessForTesting,
 };

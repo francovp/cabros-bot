@@ -245,6 +245,57 @@ bash ops/configure-operational-collection-retention.sh   # covers idempotency_ke
 Until that runs, the collection grows without bound. This is the same eventual deletion the other operational collections depend on, and it is a deployment step — it is not something this repository can apply for you.
 
 **Rollback.** Set the variable back to `false` and redeploy; the service falls back to in-memory idempotency on the next request and no code change is needed. Nothing is lost that matters — unexpired reservations simply stop being shared, so a duplicate is possible again, which is the pre-#1111 behaviour.
+
+#### Symbol Analysis Persistence
+
+- `ENABLE_SYMBOL_ANALYSIS_STORAGE` - Store `/api/webhook/symbol-analysis` results in the Firestore `symbolAnalyses` collection so they are readable from `/api/symbol-analyses` (`true` or `false`, default: `false`). **Enabled in production** via `render.yaml` on the web service only, with previews off (issue #1179). Read [`dependencies.symbolAnalysisStorage`](#verifying-symbol-analysis-persistence-is-actually-working) before treating it as working. **Environment-only** — excluded from Remote Config (see the note below).
+- `SYMBOL_ANALYSIS_RETENTION_DAYS` - Retention for stored symbol analyses in days (`1`-`365`, default: `7`). New records write `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` once per Firebase project to enable native Firestore TTL deletion on `expiresAt`. **Environment-only** — excluded from Remote Config.
+
+The flag is declared on the **web service only**. The single writer is the HTTP route layer in `src/controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis.js`, and `worker.js` never mounts routes, so the worker stays off rather than becoming a second writer on the collection. Previews stay off because previews share the production Firestore project: a preview would write throwaway rows into the collection operators read.
+
+**Both keys are excluded from Remote Config on purpose.** A gate that decides where a collection lives is a process-startup decision, not a runtime tuning knob, so neither key is in `RemoteConfigService.js` `PARAMETER_SCHEMA` nor in `firebase-remote-config-template.json`. This is not cosmetic: `getRemoteValue()` accepts a published template parameter with a plain `defaultValue`, and a published template outranks `render.yaml` for every allow-listed key. An allow-listed gate whose template value disagrees with the blueprint therefore reports the blueprint's value in `/api/capabilities` while the template keeps the feature silently off. `tests/unit/remote-config-service.test.js` fails if the blueprint and the template ever disagree for a shared key.
+
+#### Verifying symbol analysis persistence is actually working
+
+`ENABLE_SYMBOL_ANALYSIS_STORAGE=true` is **enabled in production** (issue #1179, declared on the web service in `render.yaml`), but the gate alone is not proof that analyses are being stored. `SymbolAnalysisStorageService` is fail-open by design: every Firestore error is logged and swallowed, the record is dropped, and the symbol analysis still returns `200`. A deployment whose credentials look valid but cannot reach Firestore behaves exactly as it did before the flag existed, so the reported state is derived from an observed **write** instead:
+
+| Field | Meaning |
+| :--- | :--- |
+| `featureFlags.symbolAnalysisStorage` | The `ENABLE_SYMBOL_ANALYSIS_STORAGE` gate only. |
+| `dependencies.symbolAnalysisStorage.configured` | Credential **shape** only. Not proof that writes land. |
+| `dependencies.symbolAnalysisStorage.status` | `disabled`, `misconfigured`, `unverified`, `ready`, or `degraded`. |
+| `dependencies.symbolAnalysisStorage.ready` | `true` only after an observed **successful write**. |
+| `dependencies.symbolAnalysisStorage.readiness` | `unverified` / `verified` / `degraded` from the observed-write window. |
+| `dependencies.symbolAnalysisStorage.failOpen` | Always `true`: a degraded verdict still answers symbol analysis, it just silently stops building decision history. |
+| `dependencies.symbolAnalysisStorage.lastErrorReason` | Closed enum: `firestore_not_initialized` or `firestore_unavailable`. Never provider text. |
+
+Read and write counters are reported separately (`writesAttempted`, `writesSucceeded`, `writesFailed`, `readsAttempted`, `readsSucceeded`, `readsFailed`). **A successful read is not evidence of persistence** — it proves Firestore reachability only, and never sets `ready`. Persistence is the feature, so only a write proves the enablement took effect.
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
+  | jq '{flag: .featureFlags.symbolAnalysisStorage, dep: .dependencies.symbolAnalysisStorage,
+         templatePublished: .dependencies.firebaseRemoteConfig.templatePublished,
+         configSource: .dependencies.firebaseRemoteConfig.source}'
+```
+
+- `flag: false` in production although `render.yaml` says `true` — check `templatePublished` and `configSource` first. Because both keys are excluded from Remote Config, a `true` template here can no longer be the cause; a published template that disagrees with `render.yaml` on *any* allow-listed key means `render.yaml` itself has not been applied to the running deployment, so redeploy from the blueprint.
+
+- `status: "unverified"` — the normal state right after a deploy. `configured` is already `true` here; nothing has been proven yet. Persist one analysis and re-check.
+- `status: "ready"` — proven: `writesSucceeded` is at least `1`.
+- `status: "degraded"` — a durable write failed while the analysis still returned. `firestore_unavailable` points at the Firestore SDK or network path; `firestore_not_initialized` points at the credential loader, and is the signal to check `FIREBASE_SERVICE_ACCOUNT_JSON` / `GOOGLE_APPLICATION_CREDENTIALS`. `consecutiveFailures` clears on the next successful Firestore operation, so a transient outage self-heals without a restart.
+- `status: "misconfigured"` — enabled without usable Firestore credentials.
+
+Counters and timestamps are process-local and reset on restart. A status read never counts as a durable attempt, so polling `/api/status` cannot manufacture a `ready` verdict.
+
+**Prerequisite — TTL on `symbolAnalyses`.** Every document carries `expiresAt`, but Firestore only deletes on it once the TTL policy exists, and Firestore TTL deletion is eventually consistent (up to ~24 h) and only removes documents that are *already* expired. Run once per Firebase project:
+
+```bash
+bash ops/configure-operational-collection-retention.sh   # covers symbolAnalyses
+```
+
+Until that runs, the collection grows without bound. This is a deployment step — it is not something this repository can apply for you.
+
+**Rollback.** Set the variable back to `false` and redeploy; symbol analysis keeps working and simply stops persisting, which is the pre-#1179 behaviour. Already-stored documents are left in place for TTL deletion.
 - `SIGNAL_OUTCOME_WORKER_ROLE` - Scheduler role: `web` preserves the local/web timer, `worker` enables only the dedicated worker entrypoint, and `disabled` prevents scheduler startup (default: `web`)
 - `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` - Distributed sweep lease duration in milliseconds (`10000`-`600000`, integer, default: `120000`). The sweep is claimed in the Firestore `signalOutcomeLocks` collection so exactly one process evaluates a pending signal when more than one has tracking enabled; a replica that loses the claim skips with `reason: "lease-held"` and makes no market-data calls. Fails open to single-process behaviour when Firestore or the lease write is unavailable, so it can never disable evaluation. Reported as `dependencies.signalOutcomeWorker.leaseMs`.
 - `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access. Service accounts only; an ADC document supplied inline is rejected with an actionable error because ADC is resolved from a file or the managed runtime, never from an inline value.

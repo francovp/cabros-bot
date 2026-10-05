@@ -768,6 +768,31 @@ describe('status dependency contract drift', () => {
 		const missing = documentedDependencyKeys().filter((key) => !seen.has(key));
 		expect(missing).toEqual([]);
 	});
+	// GH-637: the alert truncation fields are endpoint-specific. `DeliveryResult` is
+	// shared with POST /api/alerts/{alertId}/replay, whose runtime response
+	// (src/controllers/alerts/alerts.js) returns only success/alertId/replayId/results.
+	// Documenting truncation there would promise replay callers fields that never appear.
+	it('documents alert truncation metadata on /api/webhook/alert only', () => {
+		const spec = require('../../src/openapi/openapi.json');
+
+		const alert200 = spec.paths['/api/webhook/alert'].post.responses['200'];
+		expect(alert200.$ref).toBe('#/components/responses/WebhookAlertDeliveryResult');
+
+		const alertResponse = spec.components.responses.WebhookAlertDeliveryResult;
+		expect(alertResponse.content['application/json'].schema.$ref)
+			.toBe('#/components/schemas/WebhookAlertDeliveryResult');
+		expect(alertResponse.content['application/json'].example.truncated).toBe(true);
+
+		// The replay contract must stay free of the endpoint-specific fields.
+		const shared = spec.components.schemas.DeliveryResult.properties;
+		for (const field of ['truncated', 'originalLength', 'deliveredLength']) {
+			expect(shared[field]).toBeUndefined();
+		}
+		expect(
+			spec.paths['/api/alerts/{alertId}/replay'].post.responses['200'].$ref,
+		).toBe('#/components/responses/DeliveryResult');
+	});
+
 	it('documents every lastErrorCategory the remote-config service can emit', () => {
 		// The service emits `invalid_value` on a SUCCESSFUL load whose values failed
 		// schema validation. A client validating responses against the published spec

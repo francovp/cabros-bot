@@ -354,6 +354,106 @@
       ]
     },
     {
+      "name": "Get Status - langfuse prompt resolution",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request separating Langfuse CONFIGURATION readiness (dependencies.langfuse) from actual PROMPT SERVING (dependencies.langfusePrompts). dependencies.langfusePrompts.servingStatus is one of disabled, unconfigured, no_traffic, serving, degraded, local_fallback, or unknown. A 100% local-fallback regression is reported as servingStatus=local_fallback with localResolutionRatePercent=100 and remoteFetchSuccessRatePercent=0. Counters reset on process restart. Only counts, tiers, timestamps, per-prompt resolved source, and a closed error-category enum are returned; remote prompt content and credentials are never included."
+      },
+      "response": [
+        {
+          "name": "200 OK - local_fallback (100% local fallback regression)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"langfusePrompts\":true},\"dependencies\":{\"langfuse\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"langfusePrompts\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"servingStatus\":\"local_fallback\",\"servingPrompts\":false,\"label\":\"production\",\"cacheTtlSeconds\":60,\"totalResolutions\":412,\"langfuseResolutions\":0,\"localResolutions\":412,\"localResolutionRatePercent\":100,\"remoteFetchAttempts\":412,\"remoteFetchSuccesses\":0,\"remoteFetchFailures\":412,\"remoteFetchSuccessRatePercent\":0,\"lastSuccessfulFetchAt\":null,\"lastFailedFetchAt\":\"2026-09-28T08:40:45.319Z\",\"lastErrorCategory\":\"prompt_not_found\",\"consecutiveFailures\":412,\"prompts\":[{\"name\":\"alert-enrichment\",\"type\":\"chat\",\"langfuseResolutions\":0,\"localResolutions\":412,\"lastSource\":\"local\",\"lastLangfuseVersion\":null,\"lastResolvedAt\":\"2026-09-28T08:40:45.319Z\"}]}}}"
+        },
+        {
+          "name": "200 OK - serving (prompts resolved from Langfuse)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"langfusePrompts\":true},\"dependencies\":{\"langfuse\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"langfusePrompts\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"servingStatus\":\"serving\",\"servingPrompts\":true,\"label\":\"production\",\"cacheTtlSeconds\":60,\"totalResolutions\":412,\"langfuseResolutions\":410,\"localResolutions\":2,\"localResolutionRatePercent\":0.5,\"remoteFetchAttempts\":412,\"remoteFetchSuccesses\":410,\"remoteFetchFailures\":2,\"remoteFetchSuccessRatePercent\":99.5,\"lastSuccessfulFetchAt\":\"2026-09-28T08:40:44.902Z\",\"lastFailedFetchAt\":\"2026-09-28T08:12:07.114Z\",\"lastErrorCategory\":\"timeout\",\"consecutiveFailures\":0,\"prompts\":[{\"name\":\"alert-enrichment\",\"type\":\"chat\",\"langfuseResolutions\":410,\"localResolutions\":2,\"lastSource\":\"langfuse\",\"lastLangfuseVersion\":12,\"lastResolvedAt\":\"2026-09-28T08:40:44.902Z\"}]}}}"
+        },
+        {
+          "name": "200 OK - no_traffic (configured but nothing resolved yet)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"langfusePrompts\":true},\"dependencies\":{\"langfuse\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"langfusePrompts\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"servingStatus\":\"no_traffic\",\"servingPrompts\":false,\"label\":\"production\",\"cacheTtlSeconds\":60,\"totalResolutions\":0,\"langfuseResolutions\":0,\"localResolutions\":0,\"localResolutionRatePercent\":null,\"remoteFetchAttempts\":0,\"remoteFetchSuccesses\":0,\"remoteFetchFailures\":0,\"remoteFetchSuccessRatePercent\":null,\"lastSuccessfulFetchAt\":null,\"lastFailedFetchAt\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"prompts\":[]}}}"
+        },
+        {
+          "name": "401 Unauthorized (missing API key)",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\"error\":\"Unauthorized: Missing API key\"}"
+        }
+      ]
+    },
+    {
+      "name": "Get Status - signal classification population",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing the in-memory signal classification population rate for the webhook ingest path. `featureFlags.signalClassMarker: true` only states that the badge marker is allowed to render; this block states whether alerts are actually being classified, so a silent regression back to 100% `unknown` is detectable instead of looking healthy. Counters reset on process restart and the dependencies.signalClassClassification key is omitted entirely until at least one alert has been classified. Contains only enum class names and counts, never alert text, symbols, or chat ids. No backfill of historical records is performed."
+      },
+      "response": [
+        {
+          "name": "200 OK - signalClassClassification populated",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"signalClassClassification\":{\"window\":{\"startedAt\":\"2026-09-28T04:00:00.000Z\",\"durationMs\":3600000},\"totalAlerts\":148,\"classifiedAlerts\":137,\"unknownAlerts\":11,\"populationRate\":0.9257,\"byClass\":{\"breakout\":61,\"mean_reversion\":24,\"trend_continuation\":19,\"reversal\":12,\"volume_spike\":9,\"news_event\":7,\"manual\":5,\"unknown\":11}}}}"
+        },
+        {
+          "name": "200 OK - populationRate 0 (every alert unknown)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"signalClassMarker\":true},\"dependencies\":{\"signalClassClassification\":{\"window\":{\"startedAt\":\"2026-09-28T04:00:00.000Z\",\"durationMs\":3600000},\"totalAlerts\":10,\"classifiedAlerts\":0,\"unknownAlerts\":10,\"populationRate\":0,\"byClass\":{\"unknown\":10}}}}"
+        },
+        {
+          "name": "200 OK - signalClassClassification omitted (before first classified alert)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"signalClassMarker\":true},\"dependencies\":{}}"
+        },
+        {
+          "name": "401 Unauthorized (missing API key)",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\"error\":\"Unauthorized: Missing API key\"}"
+        }
+      ]
+    },
+    {
       "name": "Get Status - remote config unready (issue #598)",
       "request": {
         "method": "GET",
@@ -615,6 +715,56 @@
           "status": "OK",
           "code": 200,
           "body": "{\"deliveryChannels\":{\"telegram\":{\"enabled\":true,\"status\":\"ready\"},\"whatsapp\":{\"enabled\":true,\"status\":\"ready\"},\"discord\":{\"enabled\":false,\"status\":\"disabled\"}},\"deliveryMetrics\":{\"window\":{\"startedAt\":\"2026-08-31T22:30:00.000Z\",\"durationMs\":60000},\"success\":3,\"failure\":1,\"total\":4,\"successRate\":0.75,\"averageDeliveryMs\":217.5,\"byChannel\":{\"telegram\":{\"success\":2,\"failure\":1,\"total\":3,\"successRate\":0.6667,\"averageDeliveryMs\":190},\"whatsapp\":{\"success\":1,\"failure\":0,\"total\":1,\"successRate\":1,\"averageDeliveryMs\":300}}}}"
+        }
+      ]
+    },
+    {
+      "name": "Get Status - admin paging health",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing adminPaging, the non-secret health of the operator paging path (GH-1168). Channel readiness blocks report 'ready' from configuration alone, so they say 'ready' for a channel that is failing 100% of live sends. This block reports whether operator pages are actually landing, and which channels can carry a page when the primary Telegram admin destination cannot. status is 'unknown' before the first page attempt, 'ready' once at least one page landed, and 'degraded' when every attempted page failed on every operator channel. consecutiveFailures is the signal external uptime monitoring can page on. Channel names, counters, and a truncated error string only; never tokens, webhook URLs, or chat ids. Omitted entirely when no NotificationManager has been constructed."
+      },
+      "response": [
+        {
+          "name": "200 OK - admin path degraded, healthy fallback available",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"deliveryChannels\":{\"telegram\":{\"enabled\":true,\"status\":\"ready\"},\"whatsapp\":{\"enabled\":true,\"status\":\"ready\"},\"discord\":{\"enabled\":false,\"status\":\"disabled\"}},\"adminPaging\":{\"enabled\":true,\"status\":\"degraded\",\"telegramAdminChatConfigured\":true,\"fallbackEnabled\":true,\"fallbackChannels\":[\"whatsapp\"],\"attempts\":3,\"successes\":0,\"failures\":3,\"consecutiveFailures\":3,\"lastSuccessAt\":null,\"lastFailureAt\":\"2026-09-28T04:00:00.000Z\",\"lastSuccessChannel\":null,\"lastAttemptChannel\":\"telegram\",\"lastErrorCategory\":\"PROVIDER_ERROR\",\"lastError\":\"Bad Request: chat not found\",\"byChannel\":[{\"pageType\":\"delivery-failure\",\"channel\":\"telegram\",\"success\":0,\"failure\":3}]}}"
+        },
+        {
+          "name": "200 OK - admin path ready via fallback channel",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"deliveryChannels\":{\"telegram\":{\"enabled\":true,\"status\":\"ready\"},\"whatsapp\":{\"enabled\":true,\"status\":\"ready\"},\"discord\":{\"enabled\":true,\"status\":\"ready\"}},\"adminPaging\":{\"enabled\":true,\"status\":\"ready\",\"telegramAdminChatConfigured\":true,\"fallbackEnabled\":true,\"fallbackChannels\":[\"discord\",\"whatsapp\"],\"attempts\":6,\"successes\":3,\"failures\":3,\"consecutiveFailures\":0,\"lastSuccessAt\":\"2026-09-28T04:12:31.000Z\",\"lastFailureAt\":\"2026-09-28T04:11:02.000Z\",\"lastSuccessChannel\":\"whatsapp\",\"lastAttemptChannel\":\"whatsapp\",\"lastErrorCategory\":null,\"lastError\":null,\"byChannel\":[{\"pageType\":\"delivery-failure\",\"channel\":\"telegram\",\"success\":0,\"failure\":3},{\"pageType\":\"delivery-failure\",\"channel\":\"whatsapp\",\"success\":3,\"failure\":0}]}}"
+        },
+        {
+          "name": "200 OK - no operator channel configured, adminPaging reports unknown",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"deliveryChannels\":{\"telegram\":{\"enabled\":false,\"status\":\"disabled\"},\"whatsapp\":{\"enabled\":false,\"status\":\"disabled\"},\"discord\":{\"enabled\":false,\"status\":\"disabled\"}},\"adminPaging\":{\"enabled\":false,\"status\":\"unknown\",\"telegramAdminChatConfigured\":false,\"fallbackEnabled\":false,\"fallbackChannels\":[],\"attempts\":0,\"successes\":0,\"failures\":0,\"consecutiveFailures\":0,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastSuccessChannel\":null,\"lastAttemptChannel\":null,\"lastErrorCategory\":null,\"lastError\":null,\"byChannel\":[]}}"
+        },
+        {
+          "name": "401 Unauthorized - missing or invalid API key",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\"error\":\"Invalid or missing API key\",\"code\":\"UNAUTHORIZED\"}"
         }
       ]
     },
@@ -1735,6 +1885,108 @@
           ]
         },
         {
+          "name": "POST Send Alert (truncation metadata)",
+          "request": {
+            "method": "POST",
+            "description": "The shared alert validator (src/lib/validation.js validateAlert) clips alert text to 4,000 characters plus an ellipsis. This request deliberately sends more than 4,000 characters so the clipping path actually runs, and the 200 response returns truncated: true with originalLength and deliveredLength. The prerequest script builds the padding, so running this request reproduces the documented response instead of only reading a saved example.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "x-request-id",
+                "value": "gh637-truncation-001",
+                "type": "text",
+                "description": "Optional request correlation ID"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BINANCE:BTCUSDT truncation probe {{truncationPadding}}\",\n  \"signalClass\": \"breakout\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// 4,000-character cap: build a payload comfortably above it.",
+                  "const filler = 'X'.repeat(4500);",
+                  "pm.variables.set('truncationPadding', filler);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The body sent above exceeds 4,000 characters, so truncation must be reported.",
+                  "pm.test(\"status is 200\", function () {",
+                  "  pm.expect(pm.response.code).to.eql(200);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"truncated is true\", function () {",
+                  "  pm.expect(json.truncated).to.eql(true);",
+                  "});",
+                  "",
+                  "pm.test(\"originalLength reports the submitted length\", function () {",
+                  "  pm.expect(json.originalLength).to.be.above(4000);",
+                  "});",
+                  "",
+                  "pm.test(\"deliveredLength is the clipped length plus the ellipsis\", function () {",
+                  "  pm.expect(json.deliveredLength).to.eql(4003);",
+                  "});",
+                  "",
+                  "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
+                  "  pm.expect(json.requestId).to.eql(\"gh637-truncation-001\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Success - truncated",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "gh637-truncation-001"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"requestId\": \"gh637-truncation-001\",\n  \"truncated\": true,\n  \"originalLength\": 4529,\n  \"deliveredLength\": 4003,\n  \"results\": [],\n  \"enriched\": false\n}"
+            },
+            {
+              "name": "Success - not truncated (under the cap)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"requestId\": \"gh637-truncation-002\",\n  \"results\": [],\n  \"enriched\": false\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Send Alert (invalid signalClass - 400 Bad Request)",
           "request": {
             "method": "POST",
@@ -1855,6 +2107,212 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\"success\":false,\"error\":\"Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord\",\"details\":{\"field\":\"channels\",\"unknownChannels\":[\"slack\"]}}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (interval=hour)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-06T03:00:00.000Z&limit=500&interval=hour",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-06T03:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "interval",
+                  "value": "hour"
+                }
+              ]
+            },
+            "description": "Optional time-bucketed series (issue #1287). With interval set, summary.window also reports interval and maxDays=31, and summary.buckets carries one entry per UTC hour from the aligned start of the window through `to`, ascending by bucketStart.\n\n- Buckets are derived from the same limit-bounded sample as the aggregates, so sum(bucket.total) === totalAlerts.\n- Empty buckets are present with zero counts instead of omitted, so a chart has no gaps and the array length is predictable for a given window and interval. The 01:00 bucket below has no alerts and is still returned.\n- bucket.success / bucket.failure are the per-bucket delivery totals; each equals the sum of that bucket's byChannel[*] counts. A delivery result with no usable channel name is counted under \"unknown\".\n- bucket.total counts alerts, not deliveries, so an alert with no recorded deliveryResults still increments it.\n- interval=hour is capped at a 31-day window; a wider window is rejected with 400 instead of being silently narrowed."
+          },
+          "response": [
+            {
+              "name": "200 OK - Hourly bucket series",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-06T03:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31,\n      \"interval\": \"hour\"\n    },\n    \"buckets\": [\n      {\n        \"bucketStart\": \"2026-06-06T00:00:00.000Z\",\n        \"total\": 1,\n        \"success\": 1,\n        \"failure\": 0,\n        \"byChannel\": {\n          \"telegram\": { \"total\": 1, \"success\": 1, \"failure\": 0 }\n        }\n      },\n      {\n        \"bucketStart\": \"2026-06-06T01:00:00.000Z\",\n        \"total\": 0,\n        \"success\": 0,\n        \"failure\": 0,\n        \"byChannel\": {}\n      },\n      {\n        \"bucketStart\": \"2026-06-06T02:00:00.000Z\",\n        \"total\": 1,\n        \"success\": 1,\n        \"failure\": 1,\n        \"byChannel\": {\n          \"telegram\": { \"total\": 1, \"success\": 1, \"failure\": 0 },\n          \"whatsapp\": { \"total\": 1, \"success\": 0, \"failure\": 1 }\n        }\n      },\n      {\n        \"bucketStart\": \"2026-06-06T03:00:00.000Z\",\n        \"total\": 0,\n        \"success\": 0,\n        \"failure\": 0,\n        \"byChannel\": {}\n      }\n    ],\n    \"totalAlerts\": 2,\n    \"delivery\": {\n      \"totalSuccess\": 2,\n      \"totalFailure\": 1,\n      \"byChannel\": {\n        \"telegram\": { \"total\": 2, \"success\": 2, \"failure\": 0 },\n        \"whatsapp\": { \"total\": 1, \"success\": 0, \"failure\": 1 }\n      }\n    }\n  }\n}"
+            },
+            {
+              "name": "200 OK - Empty window still returns all-zero buckets",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-06T02:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31,\n      \"interval\": \"hour\"\n    },\n    \"buckets\": [\n      { \"bucketStart\": \"2026-06-06T00:00:00.000Z\", \"total\": 0, \"success\": 0, \"failure\": 0, \"byChannel\": {} },\n      { \"bucketStart\": \"2026-06-06T01:00:00.000Z\", \"total\": 0, \"success\": 0, \"failure\": 0, \"byChannel\": {} },\n      { \"bucketStart\": \"2026-06-06T02:00:00.000Z\", \"total\": 0, \"success\": 0, \"failure\": 0, \"byChannel\": {} }\n    ],\n    \"totalAlerts\": 0\n  }\n}"
+            },
+            {
+              "name": "200 OK - Filters narrow the buckets, not only the totals",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-06T01:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31,\n      \"interval\": \"hour\"\n    },\n    \"buckets\": [\n      {\n        \"bucketStart\": \"2026-06-06T00:00:00.000Z\",\n        \"total\": 1,\n        \"success\": 1,\n        \"failure\": 0,\n        \"byChannel\": { \"telegram\": { \"total\": 1, \"success\": 1, \"failure\": 0 } }\n      },\n      {\n        \"bucketStart\": \"2026-06-06T01:00:00.000Z\",\n        \"total\": 0,\n        \"success\": 0,\n        \"failure\": 0,\n        \"byChannel\": {}\n      }\n    ],\n    \"totalAlerts\": 1\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (interval=day)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-01-15T00:00:00.000Z&to=2026-01-18T00:00:00.000Z&limit=500&interval=day",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-01-15T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-01-18T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "interval",
+                  "value": "day"
+                }
+              ]
+            },
+            "description": "Daily buckets, aligned to UTC midnight, for a window that is wider than the aggregate-only 31-day cap. interval=day is capped at 366 days, so a daily series can cover up to a year; window.maxDays reports 366 and window.interval reports \"day\". Every other filter (source, enriched, symbol, eventCategory, exchange, signalClass, from/to/limit) narrows the buckets exactly as it narrows the totals."
+          },
+          "response": [
+            {
+              "name": "200 OK - Daily bucket series",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-01-15T00:00:00.000Z\",\n      \"to\": \"2026-01-18T00:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 366,\n      \"interval\": \"day\"\n    },\n    \"buckets\": [\n      {\n        \"bucketStart\": \"2026-01-15T00:00:00.000Z\",\n        \"total\": 1,\n        \"success\": 1,\n        \"failure\": 0,\n        \"byChannel\": { \"discord\": { \"total\": 1, \"success\": 1, \"failure\": 0 } }\n      },\n      {\n        \"bucketStart\": \"2026-01-16T00:00:00.000Z\",\n        \"total\": 0,\n        \"success\": 0,\n        \"failure\": 0,\n        \"byChannel\": {}\n      },\n      {\n        \"bucketStart\": \"2026-01-17T00:00:00.000Z\",\n        \"total\": 1,\n        \"success\": 0,\n        \"failure\": 1,\n        \"byChannel\": { \"discord\": { \"total\": 1, \"success\": 0, \"failure\": 1 } }\n      },\n      {\n        \"bucketStart\": \"2026-01-18T00:00:00.000Z\",\n        \"total\": 0,\n        \"success\": 0,\n        \"failure\": 0,\n        \"byChannel\": {}\n      }\n    ],\n    \"totalAlerts\": 2\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (invalid interval - 400 Bad Request)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?interval=week",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "interval",
+                  "value": "week"
+                }
+              ]
+            },
+            "description": "An unrecognised interval is rejected rather than silently falling back to the aggregate-only response. A silent fallback is how this repo's feature flags end up reporting themselves enabled while resolving to something else, so the caller has to be told. The response uses the shared structured error envelope from src/lib/errorEnvelope.js, unlike this endpoint's older plain `{ error, code }` validation failures."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Unrecognised interval",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid interval parameter. Allowed values: hour, day.\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"0f8fad5b-d9cb-469f-a165-70867728950e\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "400 Bad Request - Empty interval value",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid interval parameter. Allowed values: hour, day.\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"0f8fad5b-d9cb-469f-a165-70867728950e\",\n  \"retryable\": false\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (interval window over cap - 400 Bad Request)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-01-01T00:00:00.000Z&to=2026-03-01T00:00:00.000Z&interval=hour",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-01-01T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-03-01T00:00:00.000Z"
+                },
+                {
+                  "key": "interval",
+                  "value": "hour"
+                }
+              ]
+            },
+            "description": "A 59-day window with interval=hour exceeds the 31-day hourly cap, so the request is rejected and the message names both the cap and the interval that set it. The same window is accepted with interval=day (cap 366 days). Note that omitting interval entirely keeps the pre-existing aggregate-only behaviour, which narrows such a window silently to 31 days instead of rejecting it."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Hourly window exceeds the 31-day cap",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid summary window for interval \\\"hour\\\". Maximum window is 31 days.\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"0f8fad5b-d9cb-469f-a165-70867728950e\",\n  \"retryable\": false\n}"
             }
           ]
         },
@@ -5633,6 +6091,330 @@
               }
             }
           ]
+        },
+        {
+          "name": "GET News Monitor Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/summary?limit=500&threshold=0.7",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-09-18T00:00:00.000Z",
+                  "disabled": true,
+                  "description": "ISO-8601 inclusive lower bound on createdAt"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-09-19T00:00:00.000Z",
+                  "disabled": true,
+                  "description": "ISO-8601 inclusive upper bound on createdAt"
+                },
+                {
+                  "key": "limit",
+                  "value": "500",
+                  "description": "Integer 1-1000 (default 500)"
+                },
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT",
+                  "disabled": true,
+                  "description": "Uppercased exact symbol filter. Requires the {symbol, createdAt} composite index."
+                },
+                {
+                  "key": "threshold",
+                  "value": "0.7",
+                  "description": "Number 0-1 used by the false-positive proxy (default 0.7)"
+                }
+              ]
+            },
+            "description": "Aggregates persisted news analyses. Firestore rejects a filter-plus-sort query without the matching composite index, and that surfaces as 503 STORAGE_UNAVAILABLE with `dependencies.newsAnalysisStorage.lastMissingIndex` true — deploy firestore.indexes.json rather than treating it as an outage."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('returns 200 with the documented aggregate shape', function () {",
+                  "  pm.expect(pm.response.code).to.eql(200);",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.totalAnalyses).to.be.a('number');",
+                  "  pm.expect(b.totalAlertsSent).to.be.a('number');",
+                  "  pm.expect(b.bySymbol).to.be.an('object');",
+                  "  pm.expect(b.byEventCategory).to.be.an('object');",
+                  "  pm.expect(b.window.limit).to.be.a('number');",
+                  "});",
+                  "pm.test('a false-positive rate is never emitted outside 0-100', function () {",
+                  "  const r = pm.response.json().falsePositiveProxy.ratePercent;",
+                  "  pm.expect(r).to.be.within(0, 100);",
+                  "});",
+                  "pm.test('per-symbol averages are reported without leaking raw sums', function () {",
+                  "  const bySymbol = pm.response.json().bySymbol;",
+                  "  Object.keys(bySymbol).forEach(function (k) {",
+                  "    pm.expect(bySymbol[k].averageConfidence).to.be.a('number');",
+                  "    pm.expect(bySymbol[k]).to.not.have.property('confidenceSum');",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 OK - window aggregate",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"window\": {\n    \"from\": \"2026-09-18T00:00:00.000Z\",\n    \"to\": \"2026-09-19T00:00:00.000Z\",\n    \"limit\": 500\n  },\n  \"totalAnalyses\": 128,\n  \"totalAlertsSent\": 17,\n  \"bySymbol\": {\n    \"BTCUSDT\": {\n      \"totalAnalyses\": 64,\n      \"alertsSent\": 9,\n      \"averageConfidence\": 0.61\n    },\n    \"ETHUSDT\": {\n      \"totalAnalyses\": 64,\n      \"alertsSent\": 8,\n      \"averageConfidence\": 0.58\n    }\n  },\n  \"byEventCategory\": {\n    \"none\": {\n      \"total\": 96,\n      \"alertsSent\": 0,\n      \"averageConfidence\": 0.42\n    },\n    \"price_surge\": {\n      \"total\": 21,\n      \"alertsSent\": 12,\n      \"averageConfidence\": 0.79\n    },\n    \"price_decline\": {\n      \"total\": 11,\n      \"alertsSent\": 5,\n      \"averageConfidence\": 0.74\n    }\n  },\n  \"falsePositiveProxy\": {\n    \"threshold\": 0.7,\n    \"totalEvaluated\": 17,\n    \"noFollowupCount\": 6,\n    \"ratePercent\": 35.29\n  }\n}"
+            },
+            {
+              "name": "400 Bad Request - limit out of range",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 1000.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "400 Bad Request - malformed from timestamp",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Invalid from timestamp. Use an ISO-8601 timestamp.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "403 Forbidden - ENABLE_FIRESTORE_NEWS_ANALYSIS is off",
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"News analysis storage feature is disabled. Set ENABLE_FIRESTORE_NEWS_ANALYSIS=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 Service Unavailable - Firestore unavailable or query rejected",
+              "status": "Service Unavailable",
+              "code": 503,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"News analysis storage read failed. See dependencies.newsAnalysisStorage for the classified reason.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            },
+            {
+              "name": "401 Unauthorized - missing API key",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Unauthorized\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET News Monitor Analyses",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/analyses?limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "analyses"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-09-18T00:00:00.000Z",
+                  "disabled": true,
+                  "description": "ISO-8601 inclusive lower bound on createdAt"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-09-19T00:00:00.000Z",
+                  "disabled": true,
+                  "description": "ISO-8601 inclusive upper bound on createdAt"
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Integer 1-100 (default 50)"
+                },
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT",
+                  "disabled": true,
+                  "description": "Uppercased exact symbol filter"
+                },
+                {
+                  "key": "eventCategory",
+                  "value": "price_surge",
+                  "disabled": true,
+                  "description": "Lowercased exact category filter"
+                },
+                {
+                  "key": "beforeCursor",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Document id cursor for the next page"
+                }
+              ]
+            },
+            "description": "Lists persisted news analyses newest-first. Combining `symbol` and `eventCategory` with the createdAt sort requires the three-field composite index declared in firestore.indexes.json."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('returns 200 with analyses and a cursor', function () {",
+                  "  pm.expect(pm.response.code).to.eql(200);",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.analyses).to.be.an('array');",
+                  "  if (b.analyses.length > 0) {",
+                  "    pm.expect(b.analyses[0]).to.include.keys('id','symbol','eventCategory','confidence','alertSent');",
+                  "    pm.expect(b.analyses[0].eventCategory).to.be.a('string');",
+                  "    pm.expect(b.analyses[0].confidence).to.be.a('number');",
+                  "  }",
+                  "});",
+                  "pm.test('a cursor is only present when the page is full', function () {",
+                  "  const b = pm.response.json();",
+                  "  if (b.analyses.length < 50) {",
+                  "    pm.expect(b.nextCursor).to.eql(null);",
+                  "  }",
+                  "});",
+                  "pm.test('never returns raw alert text or provider payloads', function () {",
+                  "  pm.expect(pm.response.text()).to.not.include('private_key');",
+                  "  pm.expect(pm.response.text()).to.not.include('projects/');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 OK - paginated analyses",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"analyses\": [\n    {\n      \"id\": \"5f1c2b7e-6d4a-4a0f-9b6e-2c1d9f8a7b34\",\n      \"createdAt\": \"2026-09-19T17:42:03.118Z\",\n      \"symbol\": \"BTCUSDT\",\n      \"eventCategory\": \"price_surge\",\n      \"sentiment\": 0.82,\n      \"confidence\": 0.88,\n      \"headline\": \"Bitcoin climbs above key resistance as inflows accelerate\",\n      \"alertSent\": true,\n      \"promptVersion\": \"12\",\n      \"tokens\": 1840,\n      \"expiresAt\": \"2026-10-19T17:42:03.118Z\"\n    },\n    {\n      \"id\": \"8a2d5c1f-0b3e-4d7a-8c5b-9e4f6d2a1b07\",\n      \"createdAt\": \"2026-09-19T17:42:01.902Z\",\n      \"symbol\": \"BTCUSDT\",\n      \"eventCategory\": \"none\",\n      \"sentiment\": 0.12,\n      \"confidence\": 0.31,\n      \"headline\": \"Routine market update with no material catalyst\",\n      \"alertSent\": false,\n      \"promptVersion\": \"12\",\n      \"tokens\": 1610,\n      \"expiresAt\": \"2026-10-19T17:42:01.902Z\"\n    }\n  ],\n  \"nextCursor\": \"8a2d5c1f-0b3e-4d7a-8c5b-9e4f6d2a1b07\"\n}"
+            },
+            {
+              "name": "400 Bad Request - limit out of range",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "403 Forbidden - ENABLE_FIRESTORE_NEWS_ANALYSIS is off",
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"News analysis storage feature is disabled. Set ENABLE_FIRESTORE_NEWS_ANALYSIS=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 Service Unavailable - Firestore unavailable or query rejected",
+              "status": "Service Unavailable",
+              "code": 503,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"News analysis storage read failed. See dependencies.newsAnalysisStorage for the classified reason.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            },
+            {
+              "name": "401 Unauthorized - missing API key",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Unauthorized\"\n}"
+            }
+          ]
         }
       ]
     },
@@ -6503,7 +7285,7 @@
                 }
               ]
             },
-            "description": "Protected summary request. Unfiltered responses include the full shadow-mode outcome metrics payload (coverage buckets, per-window WindowStats with hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR, drawdown proxy, and latency/cost metadata). The shadow-mode metrics field is the string sentinel \"No measurements found\" when signal-outcome tracking is disabled or has no data. Requires ENABLE_FIRESTORE_ALERT_STORAGE=true and a valid x-api-key."
+            "description": "Protected summary request. Unfiltered responses include the full shadow-mode outcome metrics payload (coverage buckets, per-window WindowStats with hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR, drawdown proxy, and latency/cost metadata) plus costByFeature attribution. The shadow-mode metrics field is the string sentinel \"No measurements found\" when signal-outcome tracking is disabled or has no data. Requires ENABLE_FIRESTORE_ALERT_STORAGE=true and a valid x-api-key."
           },
           "response": [
             {
@@ -6529,6 +7311,53 @@
               "status": "OK",
               "code": 200,
               "body": "{\"success\":true,\"summary\":{\"shadowModeMetrics\":{\"exchangeBreakdown\":{\"BATS\":{\"received\":1,\"eligible\":1,\"evaluated\":1,\"pending\":0,\"unavailable\":0}},\"providerBreakdown\":{\"twelve-data\":{\"received\":1,\"eligible\":1,\"evaluated\":1,\"pending\":0,\"unavailable\":0}}}}}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary - feature cost attribution",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                }
+              ]
+            },
+            "description": "Valid protected summary variant showing per-feature token counts/costs. The five feature keys are always present and legacy records are attributed from source."
+          },
+          "response": [
+            {
+              "name": "200 OK - costByFeature",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"costByFeature\": {\n      \"grounding\": {\"alerts\": 1, \"batches\": 0, \"symbols\": 1, \"inputTokens\": 120, \"outputTokens\": 40, \"totalTokens\": 160, \"totalCost\": 0.0002},\n      \"news-analysis\": {\"alerts\": 0, \"batches\": 2, \"symbols\": 2, \"inputTokens\": 300, \"outputTokens\": 120, \"totalTokens\": 420, \"totalCost\": 0.0005},\n      \"expanded-analysis\": {\"alerts\": 0, \"batches\": 0, \"symbols\": 0, \"inputTokens\": 0, \"outputTokens\": 0, \"totalTokens\": 0, \"totalCost\": 0},\n      \"scanner\": {\"alerts\": 0, \"batches\": 0, \"symbols\": 0, \"inputTokens\": 0, \"outputTokens\": 0, \"totalTokens\": 0, \"totalCost\": 0},\n      \"enrichment\": {\"alerts\": 1, \"batches\": 0, \"symbols\": 1, \"inputTokens\": 50, \"outputTokens\": 20, \"totalTokens\": 70, \"totalCost\": 0.0001}\n    }\n  }\n}"
             }
           ]
         },
@@ -7361,7 +8190,7 @@
               "name": "200 OK - CSV export",
               "status": "OK",
               "code": 200,
-              "body": "id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,tokenUsage,text\nalert-123,2026-06-06T12:00:00.000Z,webhook,true,false,false,not_applicable,,,,,\"[\"\"telegram\"\"]\",\"[{\"\"channel\"\": \"\"telegram\"\", \"\"success\"\": true, \"\"messageId\"\": \"\"123\"\", \"\"errorCode\"\": null, \"\"statusCode\"\": null}]\",\"{\"\"inputTokens\"\":10,\"\"outputTokens\"\":20,\"\"totalTokens\"\":30,\"\"totalCost\"\":0.001}\",BTC breakout\n"
+              "body": "id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,tokenUsage,text\nalert-123,2026-06-06T12:00:00.000Z,webhook,true,false,false,not_applicable,,,,,grounding,\"[\"\"telegram\"\"]\",\"[{\"\"channel\"\": \"\"telegram\"\", \"\"success\"\": true, \"\"messageId\"\": \"\"123\"\", \"\"errorCode\"\": null, \"\"statusCode\"\": null}]\",\"{\"\"inputTokens\"\":10,\"\"outputTokens\"\":20,\"\"totalTokens\"\":30,\"\"totalCost\"\":0.001}\",BTC breakout\n"
             }
           ]
         },
@@ -12974,6 +13803,343 @@
             }
           ],
           "body": "{\n  \"featureFlags\": {\n    \"langfusePrompts\": false\n  },\n  \"dependencies\": {\n    \"langfuse\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"readiness\": \"unverified\",\n      \"failOpen\": true,\n      \"baseUrlHost\": \"cloud.langfuse.com\",\n      \"label\": \"production\",\n      \"cacheTtlSeconds\": 300,\n      \"promptsAttempted\": 0,\n      \"promptsSucceeded\": 0,\n      \"promptsFailed\": 0,\n      \"localFallbackCount\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null,\n      \"byPrompt\": {},\n      \"localFallbackByPrompt\": {}\n    }\n  }\n}",
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Get Status - news analysis storage readiness (issue #1180)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/capabilities",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "capabilities"
+          ]
+        },
+        "description": "Issue #1180. Every Firestore error in NewsAnalysisStorageService is swallowed so news alert delivery is never blocked, so `featureFlags.firestoreNewsAnalysis` alone reports configured intent and not whether persistence works. `ready` is proven from an observed durable write or read; counters are process-local and reset on restart, so `unverified` is the normal state right after a deploy."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('news analysis status is always a known value', function () {",
+              "  const n = pm.response.json().dependencies.newsAnalysisStorage;",
+              "  pm.expect(pm.response.code).to.eql(200);",
+              "  pm.expect(n).to.be.an('object');",
+              "  pm.expect(['disabled','misconfigured','unverified','ready','degraded']).to.include(n.status);",
+              "});",
+              "pm.test('an unproven or degraded verdict is never reported as ready', function () {",
+              "  const n = pm.response.json().dependencies.newsAnalysisStorage;",
+              "  if (n.status !== 'ready') {",
+              "    pm.expect(n.ready).to.eql(false);",
+              "  }",
+              "});",
+              "pm.test('mode and backend stay intent-derived while the gate is on', function () {",
+              "  const n = pm.response.json().dependencies.newsAnalysisStorage;",
+              "  if (n.enabled && n.configured) {",
+              "    pm.expect(n.mode).to.eql('durable');",
+              "    pm.expect(n.backend).to.eql('firestore');",
+              "  }",
+              "});",
+              "pm.test('a rejected query is classified, never a raw provider message', function () {",
+              "  const n = pm.response.json().dependencies.newsAnalysisStorage;",
+              "  if (n.lastErrorReason !== null) {",
+              "    pm.expect(n.lastErrorReason).to.be.a('string');",
+              "    pm.expect(n.lastErrorReason).to.not.include('projects/');",
+              "  }",
+              "});",
+              "pm.test('news analysis storage never leaks the project path', function () {",
+              "  pm.expect(pm.response.text()).to.not.include('(default)');",
+              "  pm.expect(pm.response.text()).to.not.include('private_key');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 unverified - gate on, no durable operation observed yet",
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firestoreNewsAnalysis\": true\n  },\n  \"dependencies\": {\n    \"newsAnalysisStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"unverified\",\n      \"mode\": \"durable\",\n      \"backend\": \"firestore\",\n      \"failOpen\": true,\n      \"readiness\": \"unverified\",\n      \"collection\": \"news_analysis\",\n      \"retentionDays\": 30,\n      \"operationsAttempted\": 0,\n      \"operationsSucceeded\": 0,\n      \"operationsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null,\n      \"lastMissingIndex\": false\n    }\n  }\n}"
+        },
+        {
+          "name": "200 ready - a durable write succeeded",
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firestoreNewsAnalysis\": true\n  },\n  \"dependencies\": {\n    \"newsAnalysisStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"mode\": \"durable\",\n      \"backend\": \"firestore\",\n      \"failOpen\": true,\n      \"readiness\": \"verified\",\n      \"collection\": \"news_analysis\",\n      \"retentionDays\": 30,\n      \"operationsAttempted\": 412,\n      \"operationsSucceeded\": 411,\n      \"operationsFailed\": 1,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": \"2026-09-19T18:12:31.028Z\",\n      \"lastFailureAt\": \"2026-09-19T17:02:10.451Z\",\n      \"lastErrorReason\": \"unavailable\",\n      \"lastMissingIndex\": false\n    }\n  }\n}"
+        },
+        {
+          "name": "200 degraded - a durable read was rejected for a missing composite index",
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firestoreNewsAnalysis\": true\n  },\n  \"dependencies\": {\n    \"newsAnalysisStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"degraded\",\n      \"mode\": \"durable\",\n      \"backend\": \"firestore\",\n      \"failOpen\": true,\n      \"readiness\": \"degraded\",\n      \"collection\": \"news_analysis\",\n      \"retentionDays\": 30,\n      \"operationsAttempted\": 413,\n      \"operationsSucceeded\": 411,\n      \"operationsFailed\": 2,\n      \"consecutiveFailures\": 1,\n      \"lastSuccessAt\": \"2026-09-19T18:12:31.028Z\",\n      \"lastFailureAt\": \"2026-09-19T18:31:02.774Z\",\n      \"lastErrorReason\": \"failed_precondition\",\n      \"lastMissingIndex\": true\n    }\n  }\n}"
+        },
+        {
+          "name": "200 disabled - gate off",
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"firestoreNewsAnalysis\": false\n  },\n  \"dependencies\": {\n    \"newsAnalysisStorage\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"mode\": \"ephemeral\",\n      \"backend\": \"memory\",\n      \"failOpen\": true,\n      \"readiness\": \"unverified\",\n      \"collection\": \"news_analysis\",\n      \"retentionDays\": 30,\n      \"operationsAttempted\": 0,\n      \"operationsSucceeded\": 0,\n      \"operationsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null,\n      \"lastMissingIndex\": false\n    }\n  }\n}"
+        },
+        {
+          "name": "401 Unauthorized - missing API key",
+          "status": "Unauthorized",
+          "code": 401,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"error\": \"Unauthorized\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Get Status - symbol analysis storage readiness (issue #1179)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Issue #1179 enables symbol-analysis persistence in production (web service only, previews off). Every Firestore failure in `SymbolAnalysisStorageService` is swallowed so the symbol analysis still returns, which means before this change a deployment that had never persisted a single analysis reported the same `ready` verdict as a working one. `configured` is credential shape only; `ready` is true only after an observed successful WRITE and `status` is `unverified` until one is observed. Read counters are reported separately: a successful read proves Firestore reachability, never that analyses are being stored."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('symbol analysis storage is not ready on the strength of credential shape', function () {",
+              "  const store = pm.response.json().dependencies.symbolAnalysisStorage;",
+              "  pm.expect(pm.response.code).to.eql(200);",
+              "  pm.expect(store).to.be.an('object');",
+              "  pm.expect(store.enabled).to.eql(true);",
+              "  pm.expect(store.configured).to.eql(true);",
+              "  pm.expect(store.ready).to.eql(false);",
+              "  pm.expect(store.status).to.eql('unverified');",
+              "  pm.expect(store.readiness).to.eql('unverified');",
+              "});",
+              "pm.test('only a write proves persistence, and reads are counted separately', function () {",
+              "  const store = pm.response.json().dependencies.symbolAnalysisStorage;",
+              "  pm.expect(store.failOpen).to.eql(true);",
+              "  pm.expect(store.collection).to.eql('symbolAnalyses');",
+              "  pm.expect(store.writesAttempted).to.be.a('number');",
+              "  pm.expect(store.writesSucceeded).to.be.a('number');",
+              "  pm.expect(store.readsAttempted).to.be.a('number');",
+              "  pm.expect(store.readsSucceeded).to.be.a('number');",
+              "  pm.expect(store.consecutiveFailures).to.eql(0);",
+              "  pm.expect(store.retentionDays).to.be.a('number');",
+              "});",
+              "pm.test('a degraded verdict never leaks the Firestore project path', function () {",
+              "  const raw = pm.response.text();",
+              "  pm.expect(raw).to.not.include('projects/');",
+              "  pm.expect(raw).to.not.include('console.firebase.google.com');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 unverified - enabled and configured, nothing persisted yet",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"symbolAnalysisStorage\": true\n  },\n  \"dependencies\": {\n    \"symbolAnalysisStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"unverified\",\n      \"readiness\": \"unverified\",\n      \"failOpen\": true,\n      \"collection\": \"symbolAnalyses\",\n      \"retentionDays\": 7,\n      \"writesAttempted\": 0,\n      \"writesSucceeded\": 0,\n      \"writesFailed\": 0,\n      \"readsAttempted\": 0,\n      \"readsSucceeded\": 0,\n      \"readsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastWriteAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 ready - a symbol analysis was persisted",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"symbolAnalysisStorage\": true\n  },\n  \"dependencies\": {\n    \"symbolAnalysisStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"readiness\": \"verified\",\n      \"failOpen\": true,\n      \"collection\": \"symbolAnalyses\",\n      \"retentionDays\": 7,\n      \"writesAttempted\": 31,\n      \"writesSucceeded\": 31,\n      \"writesFailed\": 0,\n      \"readsAttempted\": 4,\n      \"readsSucceeded\": 4,\n      \"readsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastWriteAt\": \"2026-10-04T15:42:18.221Z\",\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 degraded - a durable write failed while the analysis still returned",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"symbolAnalysisStorage\": true\n  },\n  \"dependencies\": {\n    \"symbolAnalysisStorage\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"degraded\",\n      \"readiness\": \"degraded\",\n      \"failOpen\": true,\n      \"collection\": \"symbolAnalyses\",\n      \"retentionDays\": 7,\n      \"writesAttempted\": 36,\n      \"writesSucceeded\": 29,\n      \"writesFailed\": 7,\n      \"readsAttempted\": 6,\n      \"readsSucceeded\": 2,\n      \"readsFailed\": 4,\n      \"consecutiveFailures\": 4,\n      \"lastWriteAt\": \"2026-10-04T15:38:02.774Z\",\n      \"lastFailureAt\": \"2026-10-04T15:41:55.908Z\",\n      \"lastErrorReason\": \"firestore_unavailable\"\n    }\n  }\n}",
+          "response": []
+        },
+        {
+          "name": "200 disabled - flag off, no counters touched",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"featureFlags\": {\n    \"symbolAnalysisStorage\": false\n  },\n  \"dependencies\": {\n    \"symbolAnalysisStorage\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"readiness\": \"unverified\",\n      \"failOpen\": true,\n      \"collection\": \"symbolAnalyses\",\n      \"retentionDays\": 7,\n      \"writesAttempted\": 0,\n      \"writesSucceeded\": 0,\n      \"writesFailed\": 0,\n      \"readsAttempted\": 0,\n      \"readsSucceeded\": 0,\n      \"readsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastWriteAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
           "response": []
         }
       ]

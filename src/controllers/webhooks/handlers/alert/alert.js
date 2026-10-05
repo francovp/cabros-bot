@@ -29,6 +29,7 @@ const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
 const { burstAggregator, buildBurstGroupKey } = require('../../../../services/alerts/burstAggregator');
 const { alertModeration } = require('../../../../services/alerts/alertModeration');
+const { classifySignal } = require('../../../../services/alerts/signalClassifier');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
 const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
@@ -275,16 +276,45 @@ function postAlert(botOrGetter) {
 			const rawSignalClass = (typeof body === 'object' && body && 'signalClass' in body)
 				? body.signalClass
 				: req.query?.signalClass;
+			// `validateAlert` falls back to `metadata.signalClass` when neither the body
+			// nor the query carried one. The classifier must see the same precedence, or
+			// a caller using the documented metadata form is silently misclassified -
+			// and replay, which preserves metadata, would not round-trip (AGENTS.md
+			// "Replay Payload Preservation"). Mirrors validation's `!== undefined` test
+			// exactly, including the `'signalClass' in body` short-circuit above.
+			const metadataSignalClass = (rawSignalClass === undefined
+				&& typeof body === 'object' && body && body.metadata && typeof body.metadata === 'object')
+				? body.metadata.signalClass
+				: undefined;
+			const effectiveSignalClass = rawSignalClass === undefined ? metadataSignalClass : rawSignalClass;
 
-			const { text, signalClass } = validateAlert(
+			const validatedAlert = validateAlert(
 				alertText,
 				typeof body === 'object' ? body.metadata : undefined,
 				rawSignalClass,
 			);
+			const { text } = validatedAlert;
+			// `validateAlert` collapses "no explicit class" into the string
+			// 'unknown', which would always beat derivation and leave the badge
+			// markers rendering for a class nothing populated (issue #858). So we
+			// classify here from the RAW explicit value instead - honouring an
+			// explicit 'unknown' - and fall back to deriving from the text.
+			// Deterministic, channel neutral, fail-open to 'unknown'.
+			const signalClass = classifySignal(text, { explicit: effectiveSignalClass });
+			const truncation = validatedAlert.truncated === true
+				? {
+					truncated: true,
+					originalLength: validatedAlert.originalLength,
+					deliveredLength: validatedAlert.deliveredLength,
+				}
+				: {};
+			if (truncation.truncated) {
+				console.warn('[Alert] Alert text truncated before processing', truncation);
+			}
 			const source = (typeof body === 'object' && body && typeof body.source === 'string' && body.source.trim())
 				? body.source.trim()
 				: 'webhook-alert';
-			alert = { text, source, signalClass };
+			alert = { text, source, signalClass, ...truncation };
 			// `alert.text` is immutable from here on, so the TradingView signal is parsed
 			// once and shared by the repeat-suppression, persistence, and outcome-eligibility
 			// paths below.
@@ -319,7 +349,7 @@ function postAlert(botOrGetter) {
 				assertChannelsAvailable(notificationManager, routing);
 			}
 
-			const tokenUsage = new TokenUsageTracker();
+			const tokenUsage = new TokenUsageTracker('grounding');
 			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan, parsedSignal });
 
 			const tokenUsageJSON = tokenUsage.toJSON();
@@ -330,6 +360,7 @@ function postAlert(botOrGetter) {
 				return res.json({
 					success: true,
 					dryRun: true,
+					...truncation,
 					enriched,
 					payload: {
 						text: alert.text,
@@ -580,6 +611,7 @@ function postAlert(botOrGetter) {
 			res.json({
 				success: true,
 				results,
+				...truncation,
 				enriched,
 				suppressedRepeat: suppressedRepeat || undefined,
 				aggregated: aggregated || undefined,
@@ -724,7 +756,7 @@ function postAlert(botOrGetter) {
 						textLength: alertText ? alertText.length : 0,
 						hasEnrichment: !!(alert && alert.enriched),
 						enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
-						truncated: false,
+						truncated: Boolean(alert && alert.truncated),
 					},
 				});
 			}
