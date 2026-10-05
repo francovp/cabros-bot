@@ -141,6 +141,10 @@ class NotificationManager {
 	 */
 	getAdminPagingStatus() {
 		const state = this.adminPagingState;
+		// Resolve the candidates ONCE. Previously evaluated twice here and twice more by
+		// the caller, so a single /api/status read emitted four console.warn lines for one
+		// failing channel - sustained log noise for any status poller.
+		const fallbackChannels = this.getAdminPagingFallbackChannels();
 		// Derived from CONSECUTIVE failures, not from "has ever succeeded". Keying on
 		// lifetime successes pinned a block to 'ready' through any number of subsequent
 		// total failures, which is the exact state an operator needs to see.
@@ -151,11 +155,14 @@ class NotificationManager {
 			status = 'ready';
 		}
 		return {
-			enabled: Boolean(process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID),
+			// True when ANY admin destination is usable. Keying this on the Telegram chat
+			// alone reported `enabled: false` while a page was actually delivered over
+			// WhatsApp, which is what OpenAPI documents it as.
+			enabled: Boolean(process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID) || fallbackChannels.length > 0,
 			status,
 			telegramAdminChatConfigured: Boolean(process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID),
-			fallbackEnabled: this.getAdminPagingFallbackChannels().length > 0,
-			fallbackChannels: this.getAdminPagingFallbackChannels().map((channel) => channel.name),
+			fallbackEnabled: fallbackChannels.length > 0,
+			fallbackChannels: fallbackChannels.map((channel) => channel.name),
 			attempts: state.attempts,
 			successes: state.successes,
 			failures: state.failures,
@@ -180,6 +187,18 @@ class NotificationManager {
 	 * @returns {Array<Object>} channel instances
 	 */
 	getAdminPagingFallbackChannels() {
+		// Wrapped because this runs from /api/status as well as the dispatch path, and a
+		// channel whose configuration probe throws would otherwise escape
+		// _dispatchAdminPage, breaking its documented "never throws" contract.
+		try {
+			return this._collectAdminPagingFallbackChannels();
+		} catch (error) {
+			console.warn(`[NotificationManager] Failed to resolve admin paging fallbacks: ${error.message}`);
+			return [];
+		}
+	}
+
+	_collectAdminPagingFallbackChannels() {
 		const candidates = [];
 		for (const name of ADMIN_PAGING_FALLBACK_ORDER) {
 			const channel = this.channels.get(name);
@@ -351,11 +370,12 @@ class NotificationManager {
 		} else {
 			const reason = !adminChatId ? 'admin chat is not configured' : 'telegram is not eligible for admin delivery';
 			console.warn(`[NotificationManager] ${reason}; admin ${pageType} notification falling back to alternate channels`);
-			this._recordAdminPagingAttempt(pageType, 'telegram', {
-				success: false,
-				category: 'ADMIN_DESTINATION_UNAVAILABLE',
-				error: reason,
-			});
+			// Deliberately NOT recorded as a channel attempt. Nothing was sent to
+			// telegram, so counting it as a failure made consecutiveFailures - the
+			// documented signal for uptime monitoring to page on - climb without bound
+			// for an operator who never configured admin paging, and asserted in
+			// byChannel that telegram was tried N times when it was tried zero times.
+			// That is the phantom-alarm failure this work set out to prevent.
 		}
 
 		for (const channel of this.getAdminPagingFallbackChannels()) {
