@@ -1,3 +1,61 @@
+## [LRN-20261005-001] correction
+
+**Logged**: 2026-10-05T04:49:00Z
+**Priority**: high
+**Status**: pending
+**Area**: api
+
+### Summary
+PR #1356 (admin news-monitor console): QA failed round 1 with 5 blockers and 2 bugs — runtime payload disagrees with OpenAPI/admin code; volumes render 0, alert-rate KPI fabricates 0%, cursor paging inert, Analyzed column shows em dash, proxy threshold misrendered as 0.7%, no-credentials state claims 'Running normally'.
+
+### Details
+@francovp QA'd PR #1356 (Sherlock, Round 1): The console scaffolding is solid (byte-identical public/admin parity, zero new lint, green full suite, zero horizontal overflow), but the delivery-analytics panel was built to OpenAPI and OpenAPI disagrees with the controller. The service returns `bySymbol.totalAnalyses`/`averageConfidence`, no top-level `alertRatePercent`, `createdAt` instead of `analyzedAt`, and reads `beforeCursor` rather than `before`. In the real browser this makes every volume render 0, the alert-rate KPI render a fabricated 0% for a window whose true rate is 50%, the bar charts empty, the Analyzed column permanently an em dash, and Next page re-fetch page 1 forever. Five precise fixes needed in `src/admin/admin-newsmonitor.js`, none requiring new endpoints or schema changes if mapping to the runtime payload. Two additional bugs: false-positive proxy threshold rendered as 0.7% (should be 0–1 number), and no-credentials state claims 'Running normally' instead of unavailable. Also a dead code path for NEWS_MONITOR_PAUSED that production cannot produce.
+
+### Suggested Action
+1. Map admin code to actual runtime payload: read `totalAnalyses`/`averageConfidence` instead of `count`/`avgConfidence`; guard `formatPercent` against null/undefined to avoid fabricating 0%; align cursor param between view (`before`) and controller (`beforeCursor`) and add regression test; read `createdAt` not `analyzedAt`; render proxy threshold as plain number not percent; call `renderUnavailableState()` for no-credentials instead of `renderPausedState({})`.
+2. Always validate admin console panels against the *actual* API response, not the OpenAPI spec — the spec can be wrong or outdated.
+3. When a field the service never sends reaches `formatPercent`, it formats as 0% instead of an em dash — guard explicitly for null/undefined/empty string.
+
+### Metadata
+- Source: user_feedback
+- Related Files: PR #1356, src/admin/admin-newsmonitor.js, src/controllers/webhooks/handlers/newsMonitor/newsMonitor.js, src/openapi/openapi.json
+- Tags: admin-console, news-monitor, payload-mapping, contract-vs-runtime, qa-failure
+- Pattern-Key: harden.validate_console_against_runtime_payload
+- Recurrence-Count: 1
+- First-Seen: 2026-10-05
+- Last-Seen: 2026-10-05
+
+---
+
+## [LRN-20261005-002] correction
+
+**Logged**: 2026-10-05T04:49:00Z
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+PR #1352 (symbol-analysis storage readiness): QA passed all implementation blockers on round 2, but PR contains 3 merge commits that violate master's required_linear_history ruleset — merge cannot complete until branch is rebased.
+
+### Details
+@francovp QA'd PR #1352 (Margaret, Round 2): Every substantive finding from round 1 is fixed — conflict with master resolved (pure additions, zero deletions), Remote Config override risk eliminated in code, symbol-analysis read failures now return contractual 503 STORAGE_UNAVAILABLE with no provider text, console exposes all 14 new readiness fields with src/public parity exact, full suite green at 244/5319 with clean worktree, readiness genuinely write-proven. However, the conflict resolution used three merges of master, producing merge commits 8182335d, 27998c19, 39e988e7. Master's active ruleset enforces `required_linear_history`, so the PR cannot merge regardless of check status. Requires `git rebase origin/master` followed by force-with-lease push.
+
+### Suggested Action
+1. Never resolve conflicts by merging master into a feature branch when the target repo enforces `required_linear_history` — use `git rebase origin/master` instead.
+2. Before pushing, check the target branch's ruleset: `gh api repos/{owner}/{repo}/rulesets` to see if `required_linear_history` is active.
+3. Close issue #1179 noting the deliberate divergence: the PR intentionally reports `unverified` until a write actually lands (correct, a boot-time ready would be a lying flag), which is documented in PR assumptions, AGENTS.md and README.
+
+### Metadata
+- Source: user_feedback
+- Related Files: PR #1352, Issue #1179, src/services/storage/SymbolAnalysisStorageService.js, src/admin/admin.js, .github/rulesets
+- Tags: git-workflow, required-linear-history, rebase-vs-merge, readiness-verification
+- Pattern-Key: harden.rebase_for_linear_history
+- Recurrence-Count: 1
+- First-Seen: 2026-10-05
+- Last-Seen: 2026-10-05
+
+---
+
 ## [LRN-20261004-011] correction
 
 **Logged**: 2026-10-04T08:27:00Z
