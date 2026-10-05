@@ -104,7 +104,12 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_SYMBOL_ANALYSIS_STORAGE: { type: 'boolean', defaultValue: false },
 	SYMBOL_ANALYSIS_RETENTION_DAYS: { type: 'number', defaultValue: 7, integer: true, min: 1, max: 365 },
 	ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT: { type: 'boolean', defaultValue: false },
-	ENABLE_FIRESTORE_NEWS_ANALYSIS: { type: 'boolean', defaultValue: false },
+	// ENABLE_FIRESTORE_NEWS_ANALYSIS excluded (issue #1180): it is a process-startup
+	// gate that decides where the news_analysis collection lives, like every other
+	// ENABLE_FIRESTORE_* storage gate. A published template parameter reports its
+	// defaultValue with source `remote`, so leaving the gate here would let the
+	// template silently override render.yaml and re-disable persistence the moment
+	// a template load recovered. NEWS_ANALYSIS_RETENTION_DAYS stays eligible.
 	NEWS_ANALYSIS_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
 	ENABLE_FIRESTORE_CHAT_PREFERENCES: { type: 'boolean', defaultValue: false },
 	CHAT_PREFERENCES_RETENTION_DAYS: { type: 'number', defaultValue: 90, integer: true, min: 1, max: 365 },

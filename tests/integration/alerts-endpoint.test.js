@@ -1,23 +1,30 @@
 'use strict';
 
-jest.mock('../../src/services/storage/AlertStorageService', () => ({
-	isEnabled: jest.fn(),
-	listAlerts: jest.fn(),
-	getAlertById: jest.fn(),
-	getAlertsByIds: jest.fn(),
-	exportAlertsByIds: jest.fn(),
-	deleteAlerts: jest.fn(),
-	batchReplayAlerts: jest.fn(),
-	saveReplayAttempt: jest.fn(),
-	getReplayAttemptByIdempotencyKey: jest.fn(),
-	listReplayAttempts: jest.fn(),
-	getLatestReplayForAlert: jest.fn(),
-	summarizeAlerts: jest.fn(),
-	exportAlerts: jest.fn(),
-	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
-	INVALID_CURSOR_MESSAGE: 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.',
-	parseAlertPaginationCursor: jest.fn(),
-}));
+jest.mock('../../src/services/storage/AlertStorageService', () => {
+	const actual = jest.requireActual('../../src/services/storage/AlertStorageService');
+	return {
+		isEnabled: jest.fn(),
+		listAlerts: jest.fn(),
+		getAlertById: jest.fn(),
+		getAlertsByIds: jest.fn(),
+		exportAlertsByIds: jest.fn(),
+		deleteAlerts: jest.fn(),
+		batchReplayAlerts: jest.fn(),
+		saveReplayAttempt: jest.fn(),
+		getReplayAttemptByIdempotencyKey: jest.fn(),
+		listReplayAttempts: jest.fn(),
+		getLatestReplayForAlert: jest.fn(),
+		summarizeAlerts: jest.fn(),
+		exportAlerts: jest.fn(),
+		STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
+		INVALID_CURSOR_MESSAGE: 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.',
+		parseAlertPaginationCursor: jest.fn(),
+		// Pure window/interval helpers stay real so the cap the controller enforces
+		// is the cap the service implements, not a copy that can drift.
+		resolveSummaryWindowBounds: actual.resolveSummaryWindowBounds,
+		getSummaryIntervalMaxWindowDays: actual.getSummaryIntervalMaxWindowDays,
+	};
+});
 
 jest.mock('../../src/controllers/webhooks/handlers/alert/alert', () => ({
 	postAlert: jest.fn(() => (_req, res) => res.status(501).json({ error: 'not mocked' })),
@@ -784,6 +791,127 @@ describe('Alerts API Integration Tests', () => {
 
 		expect(res.body.code).toBe('INVALID_REQUEST');
 		expect(res.body.error).toContain('Invalid signalClass filter');
+	});
+
+	// ── Optional time-bucketed series (issue #1287) ────────────────────────
+
+	it('returns the aggregate-only summary unchanged when interval is omitted', async () => {
+		alertStorageService.summarizeAlerts.mockResolvedValue({ totalAlerts: 3, bySource: {} });
+
+		const res = await request(app)
+			.get('/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		// `interval` must not even reach the service as an undefined key: an
+		// explicit `interval: undefined` would change the params object a
+		// strict toHaveBeenCalledWith assertion sees.
+		expect(alertStorageService.summarizeAlerts).toHaveBeenCalledWith({
+			from: '2026-06-06T00:00:00.000Z',
+			limit: 500,
+			to: '2026-06-07T00:00:00.000Z',
+			source: undefined,
+			enriched: undefined,
+		});
+		expect(res.body.summary).not.toHaveProperty('buckets');
+	});
+
+	it.each([
+		['hour', '2026-06-06T00:00:00.000Z', '2026-06-06T05:00:00.000Z'],
+		['day', '2026-06-01T00:00:00.000Z', '2026-06-05T00:00:00.000Z'],
+	])('passes interval=%s through to the storage service and returns its buckets', async (interval, from, to) => {
+		alertStorageService.summarizeAlerts.mockResolvedValue({
+			totalAlerts: 1,
+			buckets: [{
+				bucketStart: from,
+				total: 1,
+				success: 1,
+				failure: 0,
+				byChannel: { telegram: { total: 1, success: 1, failure: 0 } },
+			}],
+		});
+
+		const res = await request(app)
+			.get(`/api/alerts/summary?from=${from}&to=${to}&interval=${interval}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.summarizeAlerts).toHaveBeenCalledWith(
+			expect.objectContaining({ interval }),
+		);
+		expect(res.body.summary.buckets).toHaveLength(1);
+		expect(res.body.summary.buckets[0]).toEqual({
+			bucketStart: from,
+			total: 1,
+			success: 1,
+			failure: 0,
+			byChannel: { telegram: { total: 1, success: 1, failure: 0 } },
+		});
+	});
+
+	it('returns 400 through the shared error envelope for an unrecognised interval', async () => {
+		const res = await request(app)
+			.get('/api/alerts/summary?interval=week')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			success: false,
+			error: 'Invalid interval parameter. Allowed values: hour, day.',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+		// A silent aggregate-only fallback is how this repo's flags end up
+		// reporting themselves enabled while resolving to something else.
+		expect(alertStorageService.summarizeAlerts).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 for an empty interval rather than treating it as omitted', async () => {
+		const res = await request(app)
+			.get('/api/alerts/summary?interval=')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body.code).toBe('INVALID_REQUEST');
+		expect(alertStorageService.summarizeAlerts).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 through the shared error envelope when the window exceeds the interval cap', async () => {
+		const res = await request(app)
+			.get('/api/alerts/summary?from=2026-01-01T00:00:00.000Z&to=2026-03-01T00:00:00.000Z&interval=hour')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			success: false,
+			error: 'Invalid summary window for interval "hour". Maximum window is 31 days.',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+		expect(alertStorageService.summarizeAlerts).not.toHaveBeenCalled();
+	});
+
+	it('allows a day interval window that an hour interval would reject', async () => {
+		alertStorageService.summarizeAlerts.mockResolvedValue({ totalAlerts: 0, buckets: [] });
+
+		await request(app)
+			.get('/api/alerts/summary?from=2026-01-01T00:00:00.000Z&to=2026-03-01T00:00:00.000Z&interval=day')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.summarizeAlerts).toHaveBeenCalledWith(
+			expect.objectContaining({ interval: 'day' }),
+		);
+	});
+
+	it('keeps the adminRead guard and rate limiting in force for interval requests', async () => {
+		await request(app)
+			.get('/api/alerts/summary?interval=hour')
+			.expect(401);
+
+		expect(alertStorageService.summarizeAlerts).not.toHaveBeenCalled();
 	});
 
 	it('passes signalClass filter to alertStorageService.exportAlerts', async () => {

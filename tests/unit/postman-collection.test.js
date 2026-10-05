@@ -496,6 +496,78 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
 	});
 
+	it('documents the optional summary interval series with self-consistent examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const hourly = findItem(collection.item, 'GET Alert Analytics Summary (interval=hour)');
+		const daily = findItem(collection.item, 'GET Alert Analytics Summary (interval=day)');
+		const invalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid interval - 400 Bad Request)');
+		const overCap = findItem(collection.item, 'GET Alert Analytics Summary (interval window over cap - 400 Bad Request)');
+
+		expect(hourly).toBeDefined();
+		expect(hourly.request.url.raw).toContain('interval=hour');
+		expect(daily).toBeDefined();
+		expect(daily.request.url.raw).toContain('interval=day');
+
+		expect(invalid).toBeDefined();
+		expect(invalid.response[0].code).toBe(400);
+		const invalidBody = JSON.parse(invalid.response[0].body);
+		expect(invalidBody).toEqual({
+			success: false,
+			error: 'Invalid interval parameter. Allowed values: hour, day.',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+
+		expect(overCap).toBeDefined();
+		expect(overCap.response[0].code).toBe(400);
+		const overCapBody = JSON.parse(overCap.response[0].body);
+		expect(overCapBody.error).toContain('interval "hour"');
+		expect(overCapBody.error).toContain('31 days');
+		expect(overCapBody.code).toBe('INVALID_REQUEST');
+
+		// The examples must be internally consistent with the runtime contract,
+		// otherwise they document a shape the server never produces.
+		const hourlyBody = JSON.parse(hourly.response[0].body).summary;
+		expect(hourlyBody.window.interval).toBe('hour');
+		expect(hourlyBody.window.maxDays).toBe(31);
+		expect(hourlyBody.buckets.map(b => b.bucketStart)).toEqual([
+			'2026-06-06T00:00:00.000Z',
+			'2026-06-06T01:00:00.000Z',
+			'2026-06-06T02:00:00.000Z',
+			'2026-06-06T03:00:00.000Z',
+		]);
+
+		const dailyBody = JSON.parse(daily.response[0].body).summary;
+		expect(dailyBody.window.interval).toBe('day');
+		expect(dailyBody.window.maxDays).toBe(366);
+
+		for (const body of [hourlyBody, dailyBody]) {
+			expect(body.buckets.reduce((sum, b) => sum + b.total, 0)).toBe(body.totalAlerts);
+			for (const bucket of body.buckets) {
+				expect(Object.keys(bucket)).toEqual(['bucketStart', 'total', 'success', 'failure', 'byChannel']);
+				const channels = Object.values(bucket.byChannel);
+				expect(bucket.success).toBe(channels.reduce((sum, c) => sum + c.success, 0));
+				expect(bucket.failure).toBe(channels.reduce((sum, c) => sum + c.failure, 0));
+			}
+			const starts = body.buckets.map(b => Date.parse(b.bucketStart));
+			expect(starts).toEqual([...starts].sort((a, b) => a - b));
+		}
+
+		// Gapless series: the empty-window example must still be zero-filled.
+		const emptyBody = JSON.parse(hourly.response[1].body).summary;
+		expect(emptyBody.buckets).toHaveLength(3);
+		for (const bucket of emptyBody.buckets) {
+			expect(bucket).toEqual({
+				bucketStart: expect.any(String),
+				total: 0,
+				success: 0,
+				failure: 0,
+				byChannel: {},
+			});
+		}
+	});
+
 	it('documents signalClass in alert webhook and alert query/summary examples', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const postAlert = findItem(collection.item, 'POST Send Alert');

@@ -1153,6 +1153,9 @@
           },
           {
             "$ref": "#/components/parameters/AlertSignalClass"
+          },
+          {
+            "$ref": "#/components/parameters/SummaryInterval"
           }
         ],
         "responses": {
@@ -1160,7 +1163,7 @@
             "$ref": "#/components/responses/AlertSummaryResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/AlertSummaryBadRequest"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -4138,6 +4141,19 @@
           "default": 500
         }
       },
+      "SummaryInterval": {
+        "name": "interval",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "hour",
+            "day"
+          ]
+        },
+        "example": "hour",
+        "description": "Optional bucket width for the summary.buckets time series (issue #1287). Omit it for the aggregate-only response, which is byte-for-byte unchanged. `hour` is capped at a 31-day window and `day` at 366 days; a wider window is rejected with 400 rather than silently narrowed. An empty or unrecognised value is rejected with 400 and never falls back to the aggregate-only response. Buckets are aligned to UTC hours or UTC midnights, are returned ascending by bucketStart with empty buckets zero-filled so a chart has no gaps, and are derived from the same limit-bounded sample as the aggregates (so sum(bucket.total) === totalAlerts)."
+      },
       "ExportLimit": {
         "name": "limit",
         "in": "query",
@@ -5415,6 +5431,50 @@
             "schema": {
               "$ref": "#/components/schemas/AlertSummaryResult"
             }
+          }
+        }
+      },
+      "AlertSummaryBadRequest": {
+        "description": "Summary request validation failure. Interval failures (`interval` empty, unrecognised, or a window wider than the interval cap) use the shared structured error envelope so they carry `success`, `code`, `requestId` and `retryable`. The pre-existing timestamp and filter failures on this operation keep the original `{ error, code }` body.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InvalidRequestEnvelope"
+            },
+            "examples": {
+              "invalidInterval": {
+                "summary": "Unrecognised interval value",
+                "value": {
+                  "success": false,
+                  "error": "Invalid interval parameter. Allowed values: hour, day.",
+                  "code": "INVALID_REQUEST",
+                  "requestId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                  "retryable": false
+                }
+              },
+              "windowExceedsIntervalCap": {
+                "summary": "Hourly window wider than the 31-day cap",
+                "value": {
+                  "success": false,
+                  "error": "Invalid summary window for interval \"hour\". Maximum window is 31 days.",
+                  "code": "INVALID_REQUEST",
+                  "requestId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                  "retryable": false
+                }
+              },
+              "invalidTimestamp": {
+                "summary": "Pre-existing plain-shape timestamp validation failure",
+                "value": {
+                  "error": "Invalid from timestamp. Use an ISO-8601 timestamp.",
+                  "code": "INVALID_REQUEST"
+                }
+              }
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -8078,6 +8138,39 @@
           }
         }
       },
+      "InvalidRequestEnvelope": {
+        "type": "object",
+        "description": "Structured error envelope built by src/lib/errorEnvelope.js. Used by the GET /api/alerts/summary interval failures; the endpoint's older timestamp/filter failures still return the plain `{ error, code }` body.",
+        "required": [
+          "success",
+          "error",
+          "code",
+          "requestId",
+          "retryable"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Always false on an error path."
+          },
+          "error": {
+            "type": "string",
+            "description": "Human-readable failure message."
+          },
+          "code": {
+            "type": "string",
+            "description": "Machine-readable code, INVALID_REQUEST for a request validation failure."
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Request correlation id, echoing the X-Request-Id response header."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "False for 400 responses; a validation failure is permanent until the request changes."
+          }
+        }
+      },
       "PayloadTooLarge": {
         "type": "object",
         "description": "Structured 413 response returned when a webhook or news-monitor request body (JSON, text/plain, or application/x-www-form-urlencoded) exceeds the WEBHOOK_MAX_BODY_SIZE limit (default 256kb).",
@@ -9229,7 +9322,15 @@
         "type": "object",
         "properties": {
           "window": {
-            "$ref": "#/components/schemas/JsonObject"
+            "$ref": "#/components/schemas/JsonObject",
+            "description": "The effective window the aggregates were computed over. Contains from, to, limit and maxDays. When the interval parameter is supplied it also contains interval, and maxDays reports that interval's cap (31 for hour, 366 for day) instead of the aggregate-only 31."
+          },
+          "buckets": {
+            "type": "array",
+            "description": "Present only when the interval parameter is supplied (issue #1287). Time-bucketed alert volume and delivery outcomes, ascending by bucketStart, with empty buckets zero-filled so a chart has no gaps and the array length is predictable for a given window and interval. Derived from the same limit-bounded sample as the aggregates, so sum(bucket.total) equals totalAlerts.",
+            "items": {
+              "$ref": "#/components/schemas/AlertSummaryBucket"
+            }
           },
           "totalAlerts": {
             "type": "integer"
@@ -9590,6 +9691,72 @@
             "description": "Per-channel delivery latency breakdown. Only channels with recorded delivery samples in the window are included.",
             "additionalProperties": {
               "$ref": "#/components/schemas/ChannelLatencyStats"
+            }
+          }
+        }
+      },
+      "AlertSummaryBucketChannel": {
+        "type": "object",
+        "description": "Delivery outcome counts for one notification channel inside one time bucket.",
+        "required": [
+          "total",
+          "success",
+          "failure"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Delivery attempts recorded for this channel in this bucket."
+          },
+          "success": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Successful deliveries for this channel in this bucket."
+          },
+          "failure": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Failed deliveries for this channel in this bucket."
+          }
+        }
+      },
+      "AlertSummaryBucket": {
+        "type": "object",
+        "description": "One point of the optional time-bucketed series (issue #1287), aligned to a UTC hour or UTC midnight.",
+        "required": [
+          "bucketStart",
+          "total",
+          "success",
+          "failure",
+          "byChannel"
+        ],
+        "properties": {
+          "bucketStart": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Inclusive ISO-8601 start of this bucket. Buckets are returned ascending by this value."
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Stored alerts whose receivedAt falls in this bucket. An empty bucket is reported as 0 rather than omitted."
+          },
+          "success": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Successful deliveries in this bucket across all channels. Equal to the sum of byChannel[*].success."
+          },
+          "failure": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Failed deliveries in this bucket across all channels. Equal to the sum of byChannel[*].failure."
+          },
+          "byChannel": {
+            "type": "object",
+            "description": "Per-channel delivery counts for this bucket. Only channels with a recorded attempt in this bucket are present; a delivery result without a usable channel name is counted under \"unknown\".",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AlertSummaryBucketChannel"
             }
           }
         }
@@ -10508,6 +10675,130 @@
               null
             ],
             "description": "Closed enum so a Firestore error message — which embeds the project and database path — can never reach a status response."
+          }
+        }
+      },
+      "NewsAnalysisStorage": {
+        "type": "object",
+        "description": "Durable news-monitor analysis records (issue #1180). Every Firestore error in this service is swallowed so news alert delivery is never blocked, which is why `ready` is proven from observed durable work rather than inferred from credential shape: a deployment whose credentials look valid but cannot reach Firestore reports `degraded`, and a process that has not yet recorded or read an analysis reports `unverified`. Counters are process-local and reset on restart, so `unverified` is the normal state right after every deploy.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "mode",
+          "backend",
+          "failOpen",
+          "readiness",
+          "collection",
+          "retentionDays"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "ENABLE_FIRESTORE_NEWS_ANALYSIS is true. Environment-only: it is deliberately absent from the Remote Config allow-list because a published template parameter's defaultValue is reported with source `remote` and would override this env var."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Firestore credential shape only. True does not mean persistence works."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True only after an observed successful durable write or read, and false again from the first failure until the next success."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "unverified",
+              "ready",
+              "degraded"
+            ],
+            "description": "`unverified` is no evidence, not health. Gate state wins over observed provider health."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "durable",
+              "ephemeral"
+            ],
+            "description": "Configured intent. It stays `durable` while the gate is on even after a failure, because `memory` would read as the flag being off."
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          },
+          "failOpen": {
+            "type": "boolean",
+            "description": "Always true. Firestore failures degrade to unrecorded analysis rather than failing the news monitor, so a `degraded` verdict still delivers alerts; it just stops recording an audit trail."
+          },
+          "readiness": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "verified",
+              "degraded"
+            ]
+          },
+          "collection": {
+            "type": "string",
+            "description": "Firestore collection holding persisted news analysis records."
+          },
+          "retentionDays": {
+            "type": "integer",
+            "description": "Effective NEWS_ANALYSIS_RETENTION_DAYS (1-365, default 30), applied as the document `expiresAt` field. Honoured only once the project's Firestore TTL policy exists."
+          },
+          "operationsAttempted": {
+            "type": "integer",
+            "description": "Durable use attempts, including attempts whose Firebase initialization was rejected. Never incremented by a status read."
+          },
+          "operationsSucceeded": {
+            "type": "integer"
+          },
+          "operationsFailed": {
+            "type": "integer"
+          },
+          "consecutiveFailures": {
+            "type": "integer",
+            "description": "Cleared by the next success, so a transient outage self-heals without a restart."
+          },
+          "lastSuccessAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastFailureAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastErrorReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "uninitialized",
+              "failed_precondition",
+              "permission_denied",
+              "unauthenticated",
+              "unavailable",
+              "deadline_exceeded",
+              "not_found",
+              "resource_exhausted",
+              "invalid_argument",
+              "aborted",
+              "internal",
+              "unknown_error",
+              null
+            ],
+            "description": "Closed enum so a Firestore error message — which embeds the fully-qualified project/database path — can never reach a status response."
+          },
+          "lastMissingIndex": {
+            "type": "boolean",
+            "description": "True when the most recent failure was a rejected query caused by an undeployed composite index. `news_analysis` reads filter on symbol/eventCategory and sort on createdAt, and Firestore does not merge single-field indexes, so the composites declared in firestore.indexes.json must be deployed with `firebase deploy --only firestore:indexes`."
           }
         }
       },
@@ -12699,6 +12990,9 @@
               },
               "idempotencyStorage": {
                 "$ref": "#/components/schemas/IdempotencyStorage"
+              },
+              "newsAnalysisStorage": {
+                "$ref": "#/components/schemas/NewsAnalysisStorage"
               },
               "langfuse": {
                 "$ref": "#/components/schemas/LangfusePromptDependency"
