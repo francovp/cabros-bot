@@ -719,6 +719,56 @@
       ]
     },
     {
+      "name": "Get Status - admin paging health",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing adminPaging, the non-secret health of the operator paging path (GH-1168). Channel readiness blocks report 'ready' from configuration alone, so they say 'ready' for a channel that is failing 100% of live sends. This block reports whether operator pages are actually landing, and which channels can carry a page when the primary Telegram admin destination cannot. status is 'unknown' before the first page attempt, 'ready' once at least one page landed, and 'degraded' when every attempted page failed on every operator channel. consecutiveFailures is the signal external uptime monitoring can page on. Channel names, counters, and a truncated error string only; never tokens, webhook URLs, or chat ids. Omitted entirely when no NotificationManager has been constructed."
+      },
+      "response": [
+        {
+          "name": "200 OK - admin path degraded, healthy fallback available",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"deliveryChannels\":{\"telegram\":{\"enabled\":true,\"status\":\"ready\"},\"whatsapp\":{\"enabled\":true,\"status\":\"ready\"},\"discord\":{\"enabled\":false,\"status\":\"disabled\"}},\"adminPaging\":{\"enabled\":true,\"status\":\"degraded\",\"telegramAdminChatConfigured\":true,\"fallbackEnabled\":true,\"fallbackChannels\":[\"whatsapp\"],\"attempts\":3,\"successes\":0,\"failures\":3,\"consecutiveFailures\":3,\"lastSuccessAt\":null,\"lastFailureAt\":\"2026-09-28T04:00:00.000Z\",\"lastSuccessChannel\":null,\"lastAttemptChannel\":\"telegram\",\"lastErrorCategory\":\"PROVIDER_ERROR\",\"lastError\":\"Bad Request: chat not found\",\"byChannel\":[{\"pageType\":\"delivery-failure\",\"channel\":\"telegram\",\"success\":0,\"failure\":3}]}}"
+        },
+        {
+          "name": "200 OK - admin path ready via fallback channel",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"deliveryChannels\":{\"telegram\":{\"enabled\":true,\"status\":\"ready\"},\"whatsapp\":{\"enabled\":true,\"status\":\"ready\"},\"discord\":{\"enabled\":true,\"status\":\"ready\"}},\"adminPaging\":{\"enabled\":true,\"status\":\"ready\",\"telegramAdminChatConfigured\":true,\"fallbackEnabled\":true,\"fallbackChannels\":[\"discord\",\"whatsapp\"],\"attempts\":6,\"successes\":3,\"failures\":3,\"consecutiveFailures\":0,\"lastSuccessAt\":\"2026-09-28T04:12:31.000Z\",\"lastFailureAt\":\"2026-09-28T04:11:02.000Z\",\"lastSuccessChannel\":\"whatsapp\",\"lastAttemptChannel\":\"whatsapp\",\"lastErrorCategory\":null,\"lastError\":null,\"byChannel\":[{\"pageType\":\"delivery-failure\",\"channel\":\"telegram\",\"success\":0,\"failure\":3},{\"pageType\":\"delivery-failure\",\"channel\":\"whatsapp\",\"success\":3,\"failure\":0}]}}"
+        },
+        {
+          "name": "200 OK - no operator channel configured, adminPaging reports unknown",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"deliveryChannels\":{\"telegram\":{\"enabled\":false,\"status\":\"disabled\"},\"whatsapp\":{\"enabled\":false,\"status\":\"disabled\"},\"discord\":{\"enabled\":false,\"status\":\"disabled\"}},\"adminPaging\":{\"enabled\":false,\"status\":\"unknown\",\"telegramAdminChatConfigured\":false,\"fallbackEnabled\":false,\"fallbackChannels\":[],\"attempts\":0,\"successes\":0,\"failures\":0,\"consecutiveFailures\":0,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastSuccessChannel\":null,\"lastAttemptChannel\":null,\"lastErrorCategory\":null,\"lastError\":null,\"byChannel\":[]}}"
+        },
+        {
+          "name": "401 Unauthorized - missing or invalid API key",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\"error\":\"Invalid or missing API key\",\"code\":\"UNAUTHORIZED\"}"
+        }
+      ]
+    },
+    {
       "name": "Get Status - notification channel intent",
       "request": {
         "method": "GET",

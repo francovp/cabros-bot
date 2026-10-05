@@ -20,6 +20,7 @@ const symbolAnalysisStorageService = require('../services/storage/SymbolAnalysis
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
+const { getAdminPagingStatus } = require('../services/notification/adminPagingStatus');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService, READ_HEALTH } = require('../services/storage/FirestoreWriteMetricsService');
 const { getPromptService } = require('../services/prompts');
@@ -552,6 +553,12 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		},
 		...(deliveryMetricsService.getSnapshot()
 			? { deliveryMetrics: deliveryMetricsService.getSnapshot() }
+			: {}),
+		// Non-secret operator-paging health. Lets an operator tell a working admin path from
+		// a silent one: readiness alone reports "ready" for a channel that is 0/N at runtime.
+		// Channel names and counters only — never tokens, webhook URLs, or chat IDs.
+		...(getAdminPagingStatus()
+			? { adminPaging: getAdminPagingStatus() }
 			: {}),
 		dependencies: {
 			telegram,

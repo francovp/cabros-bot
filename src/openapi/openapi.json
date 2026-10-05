@@ -13058,6 +13058,9 @@
           "notificationChannelIntent": {
             "$ref": "#/components/schemas/NotificationChannelIntent"
           },
+          "adminPaging": {
+            "$ref": "#/components/schemas/AdminPagingStatus"
+          },
           "deliveryMetrics": {
             "$ref": "#/components/schemas/DeliveryMetrics"
           },
@@ -13401,6 +13404,75 @@
                 "whatsapp",
                 "discord"
               ]
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdminPagingStatus": {
+        "type": "object",
+        "description": "Non-secret health of the operator paging path. Channel readiness blocks report 'ready' from configuration alone, so they report ready for a channel that is failing 100% of live sends. This block reports whether operator pages are actually landing, and which channels can carry a page when the primary Telegram admin destination cannot. Channel names, counters, and a truncated error string only; never tokens, webhook URLs, or chat ids. Omitted entirely when no NotificationManager has been constructed.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether an admin destination is configured at all (TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID, or a usable fallback channel)."
+          },
+          "status": {
+            "type": "string",
+            "enum": ["unknown", "ready", "degraded"],
+            "description": "unknown before the first page attempt, ready once at least one page landed, degraded when every attempted page failed on every operator channel."
+          },
+          "telegramAdminChatConfigured": {
+            "type": "boolean",
+            "description": "Whether the primary Telegram admin chat id is configured."
+          },
+          "fallbackEnabled": {
+            "type": "boolean",
+            "description": "Whether at least one alternate operator channel is configured and eligible to carry a page."
+          },
+          "fallbackChannels": {
+            "type": "array",
+            "description": "Alternate channel names eligible to carry a page, ordered by observed delivery health. Only channels the operator configured are listed, so a never-configured channel never produces a phantom page.",
+            "items": { "type": "string", "enum": ["whatsapp", "discord"] }
+          },
+          "attempts": {
+            "type": "integer",
+            "description": "Total per-channel admin page attempts in this process."
+          },
+          "successes": {
+            "type": "integer",
+            "description": "Admin page attempts that were delivered."
+          },
+          "failures": {
+            "type": "integer",
+            "description": "Admin page attempts that failed."
+          },
+          "consecutiveFailures": {
+            "type": "integer",
+            "description": "Admin page attempts failed since the last successful page. This is the signal external uptime monitoring can page on."
+          },
+          "lastSuccessAt": { "type": "string", "format": "date-time", "nullable": true },
+          "lastFailureAt": { "type": "string", "format": "date-time", "nullable": true },
+          "lastSuccessChannel": { "type": "string", "nullable": true },
+          "lastAttemptChannel": { "type": "string", "nullable": true },
+          "lastErrorCategory": { "type": "string", "nullable": true },
+          "lastError": {
+            "type": "string",
+            "nullable": true,
+            "description": "Truncated last admin page error, sanitized. Never contains a token, webhook URL, or chat id."
+          },
+          "byChannel": {
+            "type": "array",
+            "description": "Per-page-type, per-channel admin delivery counters.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "pageType": { "type": "string", "enum": ["delivery-failure", "zero-channel"] },
+                "channel": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] },
+                "success": { "type": "integer" },
+                "failure": { "type": "integer" }
+              },
+              "additionalProperties": false
             }
           }
         },

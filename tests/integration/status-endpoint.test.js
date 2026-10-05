@@ -2958,6 +2958,74 @@ describe('Status endpoints', () => {
 			.toEqual(expect.arrayContaining(['telegram', 'whatsapp', 'discord']));
 	});
 
+	it('exposes non-secret admin-paging health so a silent operator path is visible (#1168)', async () => {
+		const { registerAdminPagingManager, resetAdminPagingManagerForTesting } =
+			require('../../src/services/notification/adminPagingStatus');
+
+		try {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+			process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+			process.env.WHATSAPP_API_URL = 'https://greenapi.example';
+			process.env.WHATSAPP_API_KEY = 'green-key';
+			process.env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
+
+			const manager = {
+				getAdminPagingStatus: () => ({
+					enabled: true,
+					status: 'degraded',
+					telegramAdminChatConfigured: true,
+					fallbackEnabled: true,
+					fallbackChannels: ['whatsapp'],
+					attempts: 3,
+					successes: 0,
+					failures: 3,
+					consecutiveFailures: 3,
+					lastSuccessAt: null,
+					lastFailureAt: '2026-09-28T04:00:00.000Z',
+					lastSuccessChannel: null,
+					lastAttemptChannel: 'telegram',
+					lastErrorCategory: 'PROVIDER_ERROR',
+					lastError: 'Bad Request: chat not found',
+					byChannel: [{ pageType: 'delivery-failure', channel: 'telegram', success: 0, failure: 3 }],
+				}),
+			};
+			registerAdminPagingManager(manager);
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			// A channel readiness block says "ready"; adminPaging says whether the operator
+			// path is actually landing. Both are needed to see a 0/3 blackout.
+			expect(response.body.adminPaging).toEqual(expect.objectContaining({
+				status: 'degraded',
+				consecutiveFailures: 3,
+				fallbackChannels: ['whatsapp'],
+			}));
+			// Never leak destinations.
+			const serialized = JSON.stringify(response.body.adminPaging);
+			expect(serialized).not.toContain('-100-admin');
+			expect(serialized).not.toContain('120363000000000000@g.us');
+			expect(serialized).not.toContain('green-key');
+		} finally {
+			resetAdminPagingManagerForTesting();
+		}
+	});
+
+	it('omits adminPaging when no NotificationManager has been constructed', async () => {
+		const { resetAdminPagingManagerForTesting } =
+			require('../../src/services/notification/adminPagingStatus');
+		resetAdminPagingManagerForTesting();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body).not.toHaveProperty('adminPaging');
+	});
+
 	it('waits for the initial notification redrive heartbeat before serializing status', async () => {
 		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
 		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
