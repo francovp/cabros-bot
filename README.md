@@ -418,6 +418,46 @@ Setting the variable is **necessary but not sufficient**, because this layer is 
 
 `expiresAt` on each document is only honoured once Firestore's TTL policy exists, so run `bash ops/configure-operational-collection-retention.sh` once per Firebase project; until then the collection grows without bound. Rollback is `false` plus a redeploy — no code change. See [Environment Configuration](docs/environment-configuration.md#verifying-idempotency-storage-is-actually-durable).
 
+### Durable News-Monitor Analysis Records
+
+`ENABLE_FIRESTORE_NEWS_ANALYSIS=true` is enabled in production by `render.yaml` on the **web service only** (previews off), so every analyzed symbol is recorded in the `news_analysis` collection and `GET /api/news-monitor/analyses` and `GET /api/news-monitor/summary` have an audit trail to read. Previews stay off because a PR preview shares the production Firestore project.
+
+Setting the flag is **necessary but not sufficient**. Every Firestore error in this service is swallowed so news alert delivery is never blocked, which means a deployment that cannot reach Firestore behaves exactly as it did before the flag existed. `dependencies.newsAnalysisStorage` therefore reports observed work rather than credential shape:
+
+| `status` | Meaning |
+| :--- | :--- |
+| `disabled` | `ENABLE_FIRESTORE_NEWS_ANALYSIS` is not `true`. |
+| `misconfigured` | Enabled, but Firestore credentials are absent or refused (for example an inline `authorized_user` document, which #1128 refuses rather than silently authenticating as something else). |
+| `unverified` | Configured, but no analysis has been recorded or read yet. Not a failure — and not health. It is the normal state right after every deploy. |
+| `ready` | A durable write or read has actually succeeded. |
+| `degraded` | A durable operation failed and nothing has answered since. `lastErrorReason` names the class and `lastMissingIndex` flags a rejected query. |
+
+`mode`/`backend` keep reporting configured **intent** (`durable`/`firestore`) even after a failure, because `memory` would read as the flag being off. `failOpen` is always `true`: a `degraded` verdict still delivers news alerts, it just stops recording them. Counters are process-local and reset on restart.
+
+Verify the rollout on the deployed service rather than trusting the flag:
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
+  | jq '{flag: .featureFlags.firestoreNewsAnalysis,
+         dep: .dependencies.newsAnalysisStorage | {status, ready, mode, backend,
+                                                  operationsSucceeded, lastErrorReason,
+                                                  lastMissingIndex}}'
+```
+
+`operationsSucceeded` climbing with a non-zero count is the evidence that analysis records are actually landing. The flag alone proves nothing: it reports what was configured.
+
+**Two deployment prerequisites are not code steps.** A merged change is not a working feature until both are done:
+
+1. **Deploy the composite indexes.** `firestore.indexes.json` declares three `news_analysis` composites (`{symbol, createdAt}`, `{eventCategory, createdAt}`, `{symbol, eventCategory, createdAt}`) because Firestore never merges single-field indexes, so an equality filter plus a sort on `createdAt` needs an explicit composite. Run `firebase deploy --only firestore:indexes`; indexes build asynchronously and the query is rejected until the build reaches `READY`. A rejection surfaces as `503 STORAGE_UNAVAILABLE` with `lastMissingIndex: true` — **neither the unit suite (the Firestore double makes `orderBy` a no-op) nor the emulator (which auto-creates indexes) can catch a missing declaration**, so it is asserted at the source level in `tests/unit/news-analysis-storage.test.js`.
+2. **Enable TTL deletion.** `expiresAt` is only honoured once the policy exists, and TTL deletion is eventually consistent and only removes already-expired documents. Run `bash ops/configure-operational-collection-retention.sh` once per project, otherwise the collection grows without bound.
+
+**The gate is environment-only, and that is deliberate.** It is deliberately absent from `firebase-remote-config-template.json`. A template parameter's `defaultValue` is reported by the Admin SDK with source `remote`, so a published `"false"` entry would override `render.yaml` and silently re-disable persistence the first time a Remote Config load succeeded — a fix that reads as applied and does nothing. `NEWS_ANALYSIS_RETENTION_DAYS` is the genuine runtime knob and stays remote-config eligible.
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `ENABLE_FIRESTORE_NEWS_ANALYSIS` | `false` (`render.yaml`: `true` on web, previews off) | Master gate for recording and for the two read endpoints. Environment-only. |
+| `NEWS_ANALYSIS_RETENTION_DAYS` | `30` | Days before a record expires (`1`–`365`). Remote Config eligible. |
+
 ### External Uptime Monitoring
 
 Production liveness is checked from **outside** the deployment. `.github/workflows/external-uptime-monitor.yml` probes the public `GET /healthcheck` every 5 minutes from GitHub Actions using `ops/external-uptime-monitor.js`; `.github/workflows/external-uptime-watchdog.yml` asserts the monitor itself is still being scheduled. `/healthcheck` is mounted before `validateApiKey`, so the monitor needs **no API key** — which is deliberate, since a monitor that silently no-ops because a secret was never provisioned is what hid the six-day platform-side outage in issue #1107.

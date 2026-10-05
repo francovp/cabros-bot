@@ -1532,6 +1532,31 @@ describe('news-monitor', () => {
 - Add timeout handling
 - Example: `src/services/inference/azureAiClient.js`
 
+## Durable News-Monitor Analysis Storage (Issue #1180)
+
+`ENABLE_FIRESTORE_NEWS_ANALYSIS=true` is pinned in `render.yaml` on the **web service only**, `previewValue: false`, so `NewsAnalysisStorageService` records each analyzed symbol into the `news_analysis` collection and `GET /api/news-monitor/analyses` / `GET /api/news-monitor/summary` have an audit trail. Previews stay off because a PR preview shares the production Firestore project, matching `ENABLE_FIRESTORE_JOB_STORAGE` and `ENABLE_FIRESTORE_SCANNER_PRESETS`. The worker never mounts routes, so a worker declaration would be a `fromService` mirror of a value the web service never set.
+
+**The gate was environment-only but published in the Remote Config template — the trap that made this issue non-trivial.** It was listed in `PARAMETER_SCHEMA` and shipped in `firebase-remote-config-template.json` as `"false"`. A template parameter's `defaultValue` is reported by the Admin SDK with **source `remote`**, so `getRemoteValue()` accepts it as an override that beats `process.env`: setting the variable in `render.yaml` alone would have been **silently reverted to `false` the first time a Remote Config load succeeded**. The key is now removed from both `PARAMETER_SCHEMA` and the template, and `isEnabled()` reads `process.env` directly. `NEWS_ANALYSIS_RETENTION_DAYS` is the genuine runtime knob and stays remote-config eligible. Do not "restore" the gate to the allow-list.
+
+The service also had its own inline credential bootstrap (`JSON.parse(FIREBASE_SERVICE_ACCOUNT_JSON)` + `admin.credential.cert` + `initializeApp`), which is exactly what issue #1128 removed from every other storage service. It is now routed through `initializeFirebaseAdminApp({ admin })`, so an inline `authorized_user` / `external_account` document is refused instead of authenticating with a *different* credential than the operator configured, and an ADC-only deployment works instead of paying default-auth discovery on the first read.
+
+**Three composite indexes are required, and nothing in the test suite can catch a missing one.** Both reads filter on `symbol` / `eventCategory` and sort on `createdAt`, and Firestore never merges single-field indexes, so `firestore.indexes.json` must declare `{symbol, createdAt}`, `{eventCategory, createdAt}` and `{symbol, eventCategory, createdAt}`. The unit Firestore double makes `orderBy` a no-op and the emulator auto-creates indexes, so the only guard is the source-level declaration assertion in `tests/unit/news-analysis-storage.test.js`. **A declaration is not a deployment:** `firebase deploy --only firestore:indexes` must be run, and the query is rejected until the build reaches `READY`. A rejected read maps to `503 STORAGE_UNAVAILABLE`, not `500`, and `lastMissingIndex: true` names the cause.
+
+Six invariants to preserve:
+
+- **`mode` and `backend` are intent-derived** (`enabled && credentials present`) and must not flip to `memory` while the gate is on. An operator reading `memory` concludes the flag is off, which is the opposite of the truth.
+- **`ready` is proven, not inferred.** It is true only after an observed successful durable write or read, and `unverified` means *no evidence yet*. This is the seventh instance of the repo's "shape is not readiness" rule, after `firebaseRemoteConfig.ready` (#598), Firestore `readHealth` (#1285), `equityMarketData.ready` (#1116), `idempotencyStorage.ready` (#1111), `scannerPresetStorage` (#1342), `promptReadiness` (#1178) and `jobExecutionQueue.brokerReachable` (#1117).
+- **Gate state wins over observed health.** Credentials absent or refused report `misconfigured`, which is the only verdict that means "fix the credentials".
+- **`lastErrorReason` is the repository-wide closed `FIRESTORE_ERROR_CATEGORIES` enum**, because every Firestore error here is swallowed and this is the operator's only evidence — and a provider message embeds the fully-qualified project/database path. `missingIndex` is reported separately as a boolean for the same reason.
+- **`operationsAttempted` counts an attempt even when Firebase initialization was rejected**, so `operationsFailed <= operationsAttempted`. `getStorageStatus()` performs no I/O, so reading status never registers an attempt.
+- **Telemetry can never reject a write or an admin read.** Every readiness mutation runs through `recordReadinessSafely()`; reads and writes also record through `FirestoreWriteMetricsService` under the `newsAnalysis` domain, so the shared `firestoreReadMetrics` / `readHealth` surfaces see this path too.
+
+**TTL is a deployment prerequisite, not a code step.** `expiresAt` is only honoured once `news_analysis` is in the TTL list of `ops/configure-operational-collection-retention.sh`, and TTL deletion is eventually consistent and only removes already-expired documents. The legacy backfill was deliberately *not* extended to this collection: `news_analysis` has always written `expiresAt`, so there is no pre-TTL document to repair.
+
+**Coverage**: `tests/unit/news-analysis-storage.test.js` (readiness lifecycle `unverified → ready → degraded`, self-heal without restart, cold start, invalid-credential skip with `initializeApp` never called, `operationsFailed <= operationsAttempted`, read-failure classification with `lastMissingIndex`, provider-message non-leakage, intent preservation after failure, source-level index + render.yaml + Remote Config assertions), `tests/integration/status-endpoint.test.js` (status projection in disabled / unverified / degraded states), `tests/unit/render-blueprint.test.js` (web declares the gate with previews off, worker does not), `tests/unit/postman-collection.test.js` and `src/openapi/openapi.json` (`NewsAnalysisStorage` schema plus the two read endpoints' success and failure variants).
+
+No new environment variable, endpoint, or feature gate was added; `GET /api/news-monitor/analyses` and `GET /api/news-monitor/summary` already existed and now return data.
+
 ## Persistent News Monitor Deduplication (CB-38 / Issue #120)
 
 This feature introduces an optional persistent/shared backend (Firestore) for the news monitor cache (`NewsCache`) to ensure duplicate suppression survives restarts and scales across replicas.
