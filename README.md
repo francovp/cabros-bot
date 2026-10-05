@@ -448,6 +448,24 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
          confluence: .dependencies.tradingViewMcp.enrichment.confluence}'
 ```
 
+### Same-Direction Alert Burst Aggregation
+
+`ENABLE_ALERT_SYNTH_BURST_AGGREGATION=true` buffers a parsed TradingView signal for `ALERT_BURST_WINDOW_MS` and collapses alerts sharing a direction **and** identical routing into one "⚡ Regime shift" message per channel, so a market-wide move reads as one event instead of N×channels messages. Grouping is by direction, not by exchange, because a risk-on or risk-off shift spans asset classes at the same instant; each symbol's exchange and timeframe are listed in the message.
+
+Every constituent alert is still persisted with the shared `burstAggregateId`, so `/api/alerts` analytics and signal outcomes stay per-symbol, and each response reports `aggregated: true`, the shared `burstAggregateId`, `burstSignalCount`, and the aggregate `results`/`deliveredChannels`.
+
+Aggregation is fail-open by design: a window that closes below `ALERT_BURST_MIN_SIGNALS`, a store error, a failed aggregate dispatch, and shutdown mid-window all deliver the held alerts individually, and a `symbolRoutes` request or unparsed text is never buffered at all. It can cost noise reduction, never an alert.
+
+`dependencies.alertBurstAggregation` reports `windowMs`, `minSignals`, `openWindows`, `aggregatedBurstCount`, `aggregatedSignalCount`, `aggregatedFailoverCount`, `releasedSignalCount`, `lastAggregatedAt` and `lastWindowClosedAt`. Counters are process-local, so all zeros with `enabled: true` is expected right after a deploy.
+
+| Variable | Default | Bounds | Purpose |
+| :--- | :--- | :--- | :--- |
+| `ENABLE_ALERT_SYNTH_BURST_AGGREGATION` | `false` | — | Master gate. Remote Config eligible. |
+| `ALERT_BURST_WINDOW_MS` | `3000` | `1000`–`15000` | Buffered window; also the maximum latency added to a parsed alert. Remote Config eligible. |
+| `ALERT_BURST_MIN_SIGNALS` | `3` | `2`–`20` | Minimum same-direction signals required to send one aggregate message. Remote Config eligible. |
+
+The window is **leading-edge**, so the added latency is exactly `ALERT_BURST_WINDOW_MS` and can never grow under an alert storm. The trade-off is that a burst wider than the window splits: on the two production bursts behind this feature the 2.3s burst collapses at the default while the ~10s burst needs `ALERT_BURST_WINDOW_MS` raised toward its maximum to collapse as a single message. See [Webhook Alerts](docs/webhooks.md#same-direction-burst-aggregation).
+
 ### Market Scanner MCP Fast-Fail Gate
 `POST /api/webhook/market-scanner-alert` checks the process-local TradingView MCP status before running its sequential scans. If the status is `degraded` with `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, it skips every scan and returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with each scan as `status: "skipped"`. The endpoint returns `502` in two shapes: `TRADINGVIEW_MCP_UNAVAILABLE` (skipped, nothing attempted) and `ALL_SCANS_FAILED` (attempted, all failed). The gate keys on the breaker's time-based state so that after `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses the next request is allowed through as a recovery probe — a transient outage self-heals without a restart. See [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert).
 
