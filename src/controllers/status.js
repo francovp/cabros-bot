@@ -376,6 +376,16 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		}),
 	};
 	const langfuse = getLangfusePromptDependencyStatus(langfusePromptsEnabled);
+	// Configuration/reachability (dependencies.langfuse) says nothing about whether
+	// prompts are actually served remotely. Keep the two facts apart so a 100%
+	// local-fallback regression is visible instead of silent.
+	let langfusePrompts;
+	try {
+		langfusePrompts = getPromptService().getPromptResolutionStatus();
+	} catch (error) {
+		console.warn(`[status] Failed to read prompt-resolution telemetry: ${error.message}`);
+		langfusePrompts = undefined;
+	}
 	const braveSearch = dependencyStatus({
 		enabled: newsMonitorEnabled && forceBraveSearch,
 		configured: hasValue(process.env.BRAVE_SEARCH_API_KEY),
@@ -562,7 +572,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				: {}),
 			sentry,
 			langfuse,
-			langfusePrompts,
+			...(langfusePrompts ? { langfusePrompts } : {}),
 			braveSearch,
 			newsMonitor: {
 				enabled: newsMonitorEnabled,

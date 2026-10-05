@@ -113,7 +113,7 @@
           "Operations"
         ],
         "summary": "Service healthcheck",
-        "description": "Default behavior returns 200 with `uptime` JSON only. With `?deep=true`, the endpoint reuses the existing channel readiness logic from `/api/status` dependencies and returns 200 when every enabled channel is ready, 503 when any enabled channel is degraded (with `degradedChannels` and per-channel readiness). The endpoint is never API-key protected.",
+        "description": "Default behavior returns 200 with `uptime` JSON only. With `?deep=true`, the endpoint reuses the existing channel readiness logic from `/api/status` dependencies and returns 200 when every enabled channel is ready, 503 when any enabled channel is degraded. With `?depth=readiness`, it runs bounded external dependency probes (Firestore, Gemini, TradingView MCP, Binance, Telegram) and always returns 200 with the dependency report. The endpoint is never API-key protected.",
         "operationId": "getHealthcheck",
         "parameters": [
           {
@@ -124,6 +124,18 @@
               "type": "boolean"
             },
             "description": "When `true`, include channel readiness and return 503 if any enabled channel is degraded."
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "readiness"
+              ]
+            },
+            "description": "Set to `readiness` to receive the external dependency validation report. This surface is advisory: it always returns HTTP 200 and reports degradation in the body's `ready` field, so a flaky third-party provider can never pull a healthy replica out of load-balancer rotation. Use `/ready?depth=dependencies` when you need a traffic-gating 503."
           }
         ],
         "responses": {
@@ -138,6 +150,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/DeepHealthcheck"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReadinessReport"
                     }
                   ]
                 },
@@ -220,7 +235,7 @@
             }
           },
           "503": {
-            "description": "One or more enabled channels are degraded, or readiness evaluation failed.",
+            "description": "Only `?deep=true` returns 503: one or more enabled notification channels are degraded, or readiness evaluation failed. The `?depth=readiness` variant never returns 503.",
             "content": {
               "application/json": {
                 "schema": {
@@ -238,11 +253,11 @@
           "Operations"
         ],
         "summary": "Get bootstrap readiness",
-        "description": "Returns 200 only after required startup components have completed bootstrap. Returns 503 while pending or after a bootstrap failure. This endpoint checks bootstrap completion, not continuous external provider health.",
+        "description": "Two shapes, selected by `depth`. Without it, the bootstrap gate: 200 only after required startup components have completed bootstrap, 503 while pending or failed (`BootstrapReadiness`). With `?depth=dependencies`, the bootstrap verdict is ANDed with bounded external dependency probes for Firestore, Gemini, TradingView MCP, Binance, and Telegram, returning 503 when either the bootstrap is not ready or a considered dependency is unhealthy (`ReadinessReport`, which also echoes `status`, `components` and `bootstrapReady`). This endpoint checks neither continuous external provider health by default nor anything else implicitly. For an advisory, always-200 dependency report use `/healthcheck?depth=readiness`.",
         "operationId": "getReadiness",
         "responses": {
           "200": {
-            "description": "Bootstrap completed successfully.",
+            "description": "Dependency report produced.",
             "content": {
               "application/json": {
                 "schema": {
@@ -333,7 +348,7 @@
             }
           },
           "503": {
-            "description": "Bootstrap is pending or failed.",
+            "description": "At least one considered dependency is unhealthy (fail-closed variant only).",
             "content": {
               "application/json": {
                 "schema": {
@@ -522,7 +537,7 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/DeliveryResult"
+            "$ref": "#/components/responses/WebhookAlertDeliveryResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -629,6 +644,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -689,6 +707,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -714,7 +735,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "502": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/MarketScannerBadGateway"
           },
           "503": {
             "$ref": "#/components/responses/MaintenanceMode"
@@ -1326,7 +1347,7 @@
         ],
         "responses": {
           "200": {
-            "description": "JSON Lines or CSV export",
+            "description": "JSON Lines or CSV export. Export records include a comma-separated `feature` tag column when feature-attributed token usage is available.",
             "headers": {
               "X-Shadow-Mode-Metrics": {
                 "description": "JSON-encoded shadow-mode outcome metrics payload emitted by SignalOutcomeService.getMetricsSummary(). Returns the string \"No measurements found\" when signal-outcome tracking is disabled or no measurements exist. Object form (when tracking is enabled with data) follows the ShadowModeMetrics schema: coverage buckets, per-window hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR plus drawdown proxy and latency/cost metadata. Omitted when source, enriched, or signalClass filters are supplied because the shadow-mode metrics service has no matching filters.",
@@ -2408,6 +2429,9 @@
           },
           {
             "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -2448,6 +2472,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -3783,6 +3810,9 @@
         "operationId": "postSelfTestRun",
         "parameters": [
           {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          },
+          {
             "name": "only",
             "in": "query",
             "required": false,
@@ -4301,7 +4331,7 @@
           "minLength": 1,
           "maxLength": 128
         },
-        "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Echoed in the response and persisted on stored alerts."
+        "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Returned as the X-Request-Id response header on every non-exempt route, included in structured request logs, and persisted on stored alerts. Handlers that build their own response body may also echo it as `requestId`; middleware-generated errors such as an authentication failure do not include it in the body."
       },
       "NewsAnalysisSymbol": {
         "name": "symbol",
@@ -5482,6 +5512,55 @@
                   "properties": {
                     "idempotencyReplayed": {
                       "type": "boolean"
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "description": "True when the inbound message exceeded MAX_MESSAGE_LENGTH (4000) and was clipped before delivery. Caller can detect silent content loss; downstream delivery proceeds with the truncated text."
+                    },
+                    "originalLength": {
+                      "type": "integer",
+                      "description": "Inbound message character count before truncation. Only present when truncated=true.",
+                      "minimum": 4001
+                    },
+                    "deliveredLength": {
+                      "type": "integer",
+                      "description": "Character count of the text actually passed to the notification channels. Only present when truncated=true.",
+                      "minimum": 1
+                    },
+                    "dryValidate": {
+                      "type": "boolean",
+                      "description": "True when the request was executed in dry-run validation mode without sending notifications."
+                    },
+                    "delivered": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "List of channels that successfully delivered the message."
+                    },
+                    "channelDetails": {
+                      "type": "object",
+                      "description": "Detailed per-channel delivery results including chunk counts when messages are split.",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "success": {
+                            "type": "boolean"
+                          },
+                          "messageId": {
+                            "type": "string"
+                          },
+                          "chunks": {
+                            "type": "integer"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "estimatedChunks": {
+                      "$ref": "#/components/schemas/EstimatedChunks"
                     }
                   }
                 }
@@ -5698,9 +5777,9 @@
                   "dryRun": true,
                   "formatted": {
                     "telegram": {
-                      "length": 45,
-                      "preview": "[TEST-ALERT] cabros-bot smoke probe...",
-                      "text": "[TEST-ALERT] cabros-bot smoke probe 2026-09-12T12:00:00.000Z"
+                      "length": 67,
+                      "preview": "\\[TEST\\-ALERT\\] cabros\\-bot smoke probe 2026\\-09\\-12T12:00:00\\.000Z",
+                      "text": "\\[TEST\\-ALERT\\] cabros\\-bot smoke probe 2026\\-09\\-12T12:00:00\\.000Z"
                     }
                   }
                 }
@@ -5931,14 +6010,14 @@
                         "formattedMessage": "BTCUSDT breakout above resistance (confidence 0.85).",
                         "timestamp": 1724745600000,
                         "marketContext": {
-                          "price": 68500.0,
+                          "price": 68500,
                           "change24h": 2.4,
                           "volume24h": 18500000000,
                           "source": "binance",
                           "timestamp": 1724745599000
                         },
-                        "stop": 67130.0,
-                        "target": 71925.0
+                        "stop": 67130,
+                        "target": 71925
                       },
                       "deliveryResults": [],
                       "cached": false,
@@ -6108,7 +6187,7 @@
         }
       },
       "StatusResult": {
-        "description": "Non-sensitive runtime readiness. featureFlags.newsMonitorClassifier reports whether optional classifier.dev rechecks are enabled. When Firebase Remote Config is enabled, dependencies.firebaseRemoteConfig reports loader metadata only; it never exposes remote parameter values or credentials.",
+        "description": "Non-sensitive runtime readiness. featureFlags.newsMonitorClassifier reports whether optional classifier.dev rechecks are enabled. When Firebase Remote Config is enabled, dependencies.firebaseRemoteConfig reports loader metadata only; it never exposes remote parameter values or credentials. dependencies.langfuse reports proven Langfuse prompt readiness: `ready` becomes true only after an observed successful prompt resolution, `status` distinguishes disabled, misconfigured, unverified, ready and degraded, and `lastErrorReason` is a closed enum. Credentials are never returned; only the LANGFUSE_BASE_URL host is.",
         "content": {
           "application/json": {
             "schema": {
@@ -7099,7 +7178,7 @@
           "text": {
             "type": "string",
             "minLength": 1,
-            "description": "Optional custom alert probe text. Defaults to formatted smoke alert with timestamp."
+            "description": "Optional custom alert probe text. Must be non-empty when provided; an empty string returns 400 INVALID_REQUEST. Defaults to `[TEST-ALERT] cabros-bot smoke probe <ISO timestamp>` when omitted; with dryRun=true the per-channel `formatted` preview echoes that resolved text after channel formatting."
           },
           "channels": {
             "type": "array",
@@ -10733,16 +10812,31 @@
           "ready",
           "status",
           "mode",
-          "backend"
+          "backend",
+          "failOpen",
+          "readiness",
+          "collection",
+          "operationsAttempted",
+          "operationsSucceeded",
+          "operationsFailed",
+          "consecutiveFailures",
+          "lastSuccessAt",
+          "lastFailureAt",
+          "lastErrorReason",
+          "pendingWrites",
+          "inFlightWrites",
+          "pendingDeletes",
+          "oldestPendingWriteAt",
+          "lastReadFellBack"
         ],
         "properties": {
           "enabled": {
             "type": "boolean",
-            "description": "Whether any configured Firestore persistence gate is active."
+            "description": "Whether ENABLE_FIRESTORE_SCANNER_PRESETS=true."
           },
           "configured": {
             "type": "boolean",
-            "description": "Whether the Firestore client is available for scanner presets."
+            "description": "Whether Firestore credentials are present and a client can be constructed. This is credential shape only and must not be read as proof that presets persist; read `ready`/`status` instead."
           },
           "ready": {
             "type": "boolean",
@@ -10753,7 +10847,9 @@
             "enum": [
               "ready",
               "disabled",
-              "misconfigured"
+              "misconfigured",
+              "degraded",
+              "unverified"
             ]
           },
           "mode": {
@@ -10762,7 +10858,7 @@
               "durable",
               "ephemeral"
             ],
-            "description": "durable means Firestore-backed; ephemeral means in-memory fallback and may be lost on restart."
+            "description": "Intent-derived: `durable` means the service is configured to use Firestore and will keep doing so across a restart. `ephemeral` is reported only when the gate is off or credentials are unusable, in which case presets may be lost on restart."
           },
           "backend": {
             "type": "string",
@@ -11610,16 +11706,19 @@
                   "levelsSource": {
                     "type": "string",
                     "enum": [
-                      "gemini-grounding"
+                      "tradingview-mcp",
+                      "gemini-grounding",
+                      "fallback-trade-plan",
+                      "derived-quote"
                     ],
-                    "description": "Provenance of technical_levels. Set to 'gemini-grounding' only when Gemini-parsed fallback levels are emitted because TradingView MCP data was absent or failed; omitted when MCP-derived levels win (GH-509 / CB-226)."
+                    "description": "Provenance of the emitted risk levels (invalidation_level / target_level / risk_reward_ratio). 'tradingview-mcp' when the MCP ATR-derived block won, which is the default for MCP-sourced alerts. 'gemini-grounding' only when Gemini-parsed fallback levels are emitted because TradingView MCP data was absent or failed (GH-509 / CB-226). 'fallback-trade-plan' when TradingView MCP supplied the price but its ATR-derived risk block was rejected (zero, non-finite, or failing the side/positivity checks) and the secondary heuristic timeframe risk plan was used instead (GH-1229). 'derived-quote' when levels were derived from the MCP quote because neither provider returned a usable block (GH-599)."
                   },
                   "current_price": {
                     "type": [
                       "number",
                       "null"
                     ],
-                    "description": "Current price supplied by TradingView MCP enrichment; null when unavailable."
+                    "description": "Current entry-price context. Sourced from TradingView MCP when tradingViewEnrichmentApplied is true; sourced from Gemini grounding snippets (alert-enrichment prompt response) when only Gemini enrichment ran (GH-599 / CB-XXX). Null when neither provider supplies a finite positive price."
                   },
                   "price_currency": {
                     "type": [
@@ -12541,7 +12640,7 @@
       },
       "Status": {
         "type": "object",
-        "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.newsMonitorClassifier reports ENABLE_NEWS_MONITOR_CLASSIFIER and defaults to false; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations. dependencies.langfusePrompts reports non-secret prompt-resolution telemetry that separates Langfuse configuration readiness from actual prompt serving, so a 100% local-fallback regression is detectable rather than silent; it exposes resolution counters, remote fetch success rate, the last successful fetch timestamp, per-prompt resolved source, and a closed error-category enum without returning remote prompt content, prompt variables, or credentials.",
+        "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports scanner-preset persistence, where mode/backend are intent-derived and must not flip to memory while the gate and credentials are present (#1342): scannerPresetStorage.configured is credential shape only, scannerPresetStorage.ready is true only after an observed durable read or write and is proven on this endpoint by a bounded durable read, and scannerPresetStorage.status is disabled, misconfigured when credentials are genuinely absent, unverified before any durable attempt, ready, or degraded after a failure that nothing has answered since, with readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps, closed-enum lastErrorReason, and the pendingWrites/inFlightWrites/pendingDeletes/oldestPendingWriteAt unsynced-workload fields exposing the process-local observed window, which resets on process restart; a transient failure downgrades the verdict only until the next success; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters, plus the distributed sweep lease observability that identifies the winning evaluator: leaseMs (SIGNAL_OUTCOME_EVALUATION_LEASE_MS, default 120000, valid range 10000-600000, environment-only), lastRunLeaseHeld and leaseHeldSkipCount, where lastRunLeaseHeld is true whenever the most recent sweep did not run to completion as the lease holder and leaseHeldSkipCount counts those sweeps cumulatively since process start; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.newsMonitorClassifier reports ENABLE_NEWS_MONITOR_CLASSIFIER and defaults to false; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation. equityMarketData.configured reports credential shape only (gate on, provider selected, key present) and must not be read as proof the feature works: equityMarketData.ready is true only after an observed successful provider call, and equityMarketData.status is disabled, misconfigured, unverified before any call is observed, ready, or degraded after a failed call. equityMarketData.readiness plus the requestsAttempted/requestsSucceeded/requestsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and sanitized lastErrorReason expose the observed provider outcome window, which resets on process restart. featureFlags.firestoreIdempotency reports ENABLE_FIRESTORE_IDEMPOTENCY and dependencies.idempotencyStorage reports durable webhook idempotency state; idempotencyStorage.configured is credential shape only and must not be read as proof that duplicates are suppressed, because every Firestore failure in this layer falls open to in-memory idempotency: idempotencyStorage.ready is true only after an observed successful durable operation and idempotencyStorage.status is disabled, misconfigured, unverified before any durable attempt, ready, or degraded after a failure, with mode/backend reporting configured intent and failOpen always true. idempotencyStorage.readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and closed-enum lastErrorReason expose the observed durable outcome window, which resets on process restart. featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports scanner-preset persistence, where mode/backend are intent-derived and must not flip to memory while the gate and credentials are present (#1342): scannerPresetStorage.configured is credential shape only, scannerPresetStorage.ready is true only after an observed durable read or write and is proven on this endpoint by a bounded durable read, and scannerPresetStorage.status is disabled, misconfigured when credentials are genuinely absent, unverified before any durable attempt, ready, or degraded after a failure that nothing has answered since, with readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps, closed-enum lastErrorReason, and the pendingWrites/inFlightWrites/pendingDeletes/oldestPendingWriteAt unsynced-workload fields exposing the process-local observed window, which resets on process restart; a transient failure downgrades the verdict only until the next success; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters, plus the distributed sweep lease observability that identifies the winning evaluator: leaseMs (SIGNAL_OUTCOME_EVALUATION_LEASE_MS, default 120000, valid range 10000-600000, environment-only), lastRunLeaseHeld and leaseHeldSkipCount, where lastRunLeaseHeld is true whenever the most recent sweep did not run to completion as the lease holder and leaseHeldSkipCount counts those sweeps cumulatively since process start; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation. equityMarketData.configured reports credential shape only (gate on, provider selected, key present) and must not be read as proof the feature works: equityMarketData.ready is true only after an observed successful provider call, and equityMarketData.status is disabled, misconfigured, unverified before any call is observed, ready, or degraded after a failed call. equityMarketData.readiness plus the requestsAttempted/requestsSucceeded/requestsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and sanitized lastErrorReason expose the observed provider outcome window, which resets on process restart. featureFlags.firestoreIdempotency reports ENABLE_FIRESTORE_IDEMPOTENCY and dependencies.idempotencyStorage reports durable webhook idempotency state; idempotencyStorage.configured is credential shape only and must not be read as proof that duplicates are suppressed, because every Firestore failure in this layer falls open to in-memory idempotency: idempotencyStorage.ready is true only after an observed successful durable operation and idempotencyStorage.status is disabled, misconfigured, unverified before any durable attempt, ready, or degraded after a failure, with mode/backend reporting configured intent and failOpen always true. idempotencyStorage.readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and closed-enum lastErrorReason expose the observed durable outcome window, which resets on process restart. featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations.",
         "properties": {
           "readiness": {
             "$ref": "#/components/schemas/BootstrapReadiness"
@@ -12764,6 +12863,7 @@
           "enabled",
           "configured",
           "ready",
+          "templatePublished",
           "status",
           "source",
           "templateVersion",
@@ -12784,7 +12884,7 @@
           },
           "ready": {
             "type": "boolean",
-            "description": "True only after a successful, fresh server template load; false if uninitialized, disabled, misconfigured, failed, or stale."
+            "description": "True only after a successful, fresh server template load; false if uninitialized, disabled, misconfigured, failed, or stale. `enabled` and `configured` being true does NOT imply readiness."
           },
           "templatePublished": {
             "type": "boolean",
@@ -12837,9 +12937,19 @@
               "unsupported_sdk",
               "load_failed",
               "stale",
+              "template_not_published",
+              "permission_denied",
+              "unauthenticated",
+              "failed_precondition",
+              "internal_error",
+              "aborted",
+              "resource_exhausted",
+              "invalid_argument",
+              "invalid_value",
+              "unknown_error",
               null
             ],
-            "description": "Sanitized error category if the last load failed or values are stale (timeout, credentials, unsupported_sdk, load_failed, stale), or null."
+            "description": "Sanitized error category if the last load failed, returned values are stale, or a successful load produced values that failed schema validation (`invalid_value`), or null. `template_not_published` means the `firebase-server` namespace has no template yet and must be published (see the deploy:firebase-remote-config:server workflow); it is distinct from a transient `load_failed`."
           },
           "consecutiveFailures": {
             "type": "integer",
@@ -13530,9 +13640,10 @@
             "type": "object",
             "description": "False-positive proxy measured over DELIVERED alerts only. Analyses that never sent an alert are excluded, because the proxy tracks delivered-alert outcomes rather than raw analysis scores. A delivered alert is counted as a false positive when no subsequent delivered alert for the same symbol arrived within 24h.",
             "required": [
-              "totalHighConfidenceAlerts",
-              "falsePositiveAlerts",
-              "falsePositiveRatePercent"
+              "threshold",
+              "totalEvaluated",
+              "noFollowupCount",
+              "ratePercent"
             ],
             "properties": {
               "threshold": {

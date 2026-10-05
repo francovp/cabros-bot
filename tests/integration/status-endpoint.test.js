@@ -777,14 +777,16 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		// Configuration and reachability are still reported exactly as before.
+		// Configuration/reachability keeps master's prompt-readiness shape (it answers
+		// "is the probe verified", not "were prompts served"). The serving facts live in
+		// dependencies.langfusePrompts below.
 		expect(response.body.featureFlags.langfusePrompts).toBe(true);
-		expect(response.body.dependencies.langfuse).toEqual({
+		expect(response.body.dependencies.langfuse).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
-			ready: true,
-			status: 'ready',
-		});
+			readiness: 'unverified',
+			failOpen: true,
+		}));
 		// Prompt serving is a separate, honest fact.
 		expect(response.body.dependencies.langfusePrompts).toEqual(expect.objectContaining({
 			enabled: true,
@@ -900,8 +902,12 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		// Langfuse still reports configured/ready — but the serving fact is now honest.
-		expect(response.body.dependencies.langfuse.ready).toBe(true);
+		// Langfuse still reports itself configured/enabled — but the serving fact is
+		// now honest and lives in dependencies.langfusePrompts.
+		expect(response.body.dependencies.langfuse).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+		}));
 		expect(response.body.dependencies.langfusePrompts).toEqual(expect.objectContaining({
 			ready: true,
 			servingStatus: 'local_fallback',
