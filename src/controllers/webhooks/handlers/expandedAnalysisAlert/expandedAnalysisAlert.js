@@ -1,7 +1,7 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	ExpandedAnalysisAlertRequestError,
 	parseExpandedAnalysisAlertRequest,
@@ -52,7 +52,7 @@ function deriveItemSide(analysis = {}) {
 
 function postExpandedAnalysisAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 
 		try {
@@ -60,7 +60,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseExpandedAnalysisAlertRequest(req);
 			const timeoutMs = getAlertTimeoutMs();
-			const deadline = createAlertDeadline(timeoutMs);
+			const deadline = createAlertDeadline(timeoutMs, req.requestDeadlineSignal);
 			let results;
 
 			try {
@@ -165,6 +165,9 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
 					const score = item.analysis.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
 
+					const rawConfidence = item.analysis?.confidence ?? item.confidence ?? (typeof score === 'number' && score >= 0 && score <= 1 ? score : null);
+					const validConfidence = typeof rawConfidence === 'number' && Number.isFinite(rawConfidence) && rawConfidence >= 0 && rawConfidence <= 1 ? rawConfidence : null;
+
 					signalOutcomeService.recordSignal({
 						requestId,
 						source: 'expanded-analysis',
@@ -173,6 +176,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 						timeframe: parsed.timeframe,
 						setupType: 'expanded-analysis',
 						score,
+						confidenceScore: validConfidence,
 						side: itemSide,
 						price: typeof closePrice === 'number' ? closePrice : null,
 						priceSource: typeof closePrice === 'number' ? 'tradingview-mcp' : null,
@@ -332,14 +336,14 @@ function getAlertTimeoutMs() {
 	return Math.min(parsedTimeout, MAX_ALERT_TIMEOUT_MS);
 }
 
-function createAlertDeadline(timeoutMs) {
+function createAlertDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => {
 		controller.abort(new Error(`Expanded analysis alert timeout after ${timeoutMs}ms`));
 	}, timeoutMs);
 
 	return {
-		signal: controller.signal,
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
 		clear: () => clearTimeout(timeoutId),
 	};
 }

@@ -1,6 +1,7 @@
 const { NotificationRedriveService, notificationRedriveService, calculateBackoffMs, stripUndefinedFieldsDeep } = require('../../src/services/notification/NotificationRedriveService');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const { signalRepeatCooldown } = require('../../src/services/alerts/signalRepeatCooldown');
+const admin = require('firebase-admin');
 
 describe('NotificationRedriveService', () => {
 	let savedEnv;
@@ -19,8 +20,8 @@ describe('NotificationRedriveService', () => {
 		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = 'admin-chat-123';
 
 		mockDocs = new Map();
-		mockFirestore = {
-			collection: jest.fn(() => ({
+		const buildChain = (filters = [], limitVal = null) => {
+			const chain = {
 				doc: jest.fn((id) => ({
 					id,
 					set: jest.fn(async (data, options) => {
@@ -36,19 +37,72 @@ describe('NotificationRedriveService', () => {
 						};
 					}),
 				})),
-				where: jest.fn().mockReturnThis(),
-				limit: jest.fn().mockReturnThis(),
+				where: jest.fn((field, op, value) => {
+					const nextFilters = [...filters, { field, op, value }];
+					return buildChain(nextFilters, limitVal);
+				}),
+				limit: jest.fn((n) => {
+					return buildChain(filters, n);
+				}),
 				get: jest.fn(async () => {
-					const docs = Array.from(mockDocs.entries()).map(([id, data]) => ({
+					const all = Array.from(mockDocs.entries()).map(([id, data]) => ({
 						id,
 						data: () => data,
 					}));
+					const nowMs = Date.now();
+					const toMs = (val) => {
+						if (val === null || val === undefined) return NaN;
+						if (typeof val === 'number') return val;
+						if (typeof val === 'string') return new Date(val).getTime() || NaN;
+						if (val instanceof Date) return val.getTime();
+						if (typeof val.toMillis === 'function') return val.toMillis();
+						if (typeof val.toDate === 'function') return val.toDate().getTime();
+						return NaN;
+					};
+					const resolvePath = (obj, path) => {
+						if (obj == null) return undefined;
+						return path.split('.').reduce((acc, k) => (acc == null ? acc : acc[k]), obj);
+					};
+					const filtered = all.filter((doc) => {
+						const d = doc.data() || {};
+						for (const f of filters) {
+							const val = resolvePath(d, f.field);
+							if (f.op === '==') {
+								if (val !== f.value) return false;
+							} else if (f.op === '<=') {
+								const a = toMs(val);
+								const b = toMs(f.value);
+								if (!Number.isFinite(a) || !Number.isFinite(b) || a > b) return false;
+							} else if (f.op === '>') {
+								const a = toMs(val);
+								const b = toMs(f.value);
+								if (!Number.isFinite(a) || !Number.isFinite(b) || a <= b) return false;
+							} else if (f.op === '>=') {
+								const a = toMs(val);
+								const b = toMs(f.value);
+								if (!Number.isFinite(a) || !Number.isFinite(b) || a < b) return false;
+							} else if (f.op === '<') {
+								const a = toMs(val);
+								const b = toMs(f.value);
+								if (!Number.isFinite(a) || !Number.isFinite(b) || a >= b) return false;
+							} else if (f.op === 'in') {
+								if (!Array.isArray(f.value) || !f.value.includes(val)) return false;
+							}
+						}
+						return true;
+					});
+					const limited = typeof limitVal === 'number' ? filtered.slice(0, limitVal) : filtered;
 					return {
-						empty: docs.length === 0,
-						docs,
+						empty: limited.length === 0,
+						docs: limited,
 					};
 				}),
-			})),
+			};
+			return chain;
+		};
+
+		mockFirestore = {
+			collection: jest.fn(() => buildChain()),
 			runTransaction: jest.fn(async (callback) => {
 				const transaction = {
 					get: jest.fn(async (docRef) => {
@@ -1299,6 +1353,34 @@ describe('NotificationRedriveService', () => {
 			expect(adminMsg).toContain('Fatal error');
 			expect(releaseSpy).toHaveBeenCalledWith('BINANCE|ETHUSDT|4h|BUY', ['telegram:destination-a']);
 			releaseSpy.mockRestore();
+		});
+
+		it('sends permanent failure alert when telegram broadcast is disabled but admin delivery is eligible', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = 'admin-chat-id';
+			const mockAdminSend = jest.fn().mockResolvedValue({ success: true });
+			const mockTelegramService = {
+				name: 'telegram',
+				send: mockAdminSend,
+				isEnabled: () => false,
+				isAdminDeliveryEligible: () => true,
+			};
+			const mockNotificationManager = {
+				channels: new Map([['telegram', mockTelegramService]]),
+				isTelegramAdminDeliveryEligible: jest.fn(() => true),
+			};
+			service.setNotificationManagerGetter(() => mockNotificationManager);
+
+			const record = {
+				alertId: 'alert-admin-eligible',
+				channel: 'telegram',
+				payload: { text: 'Failed alert' },
+				lastError: 'Exhausted retries',
+			};
+
+			await service.notifyAdminPermanentFailure(record, 'Exhausted max attempts');
+			expect(mockAdminSend).toHaveBeenCalledTimes(1);
+			expect(mockAdminSend.mock.calls[0][0].telegramChatId).toBe('admin-chat-id');
+			expect(mockAdminSend.mock.calls[0][0].text).toContain('Notification Redrive Exhausted');
 		});
 
 		it('expires dead-letter records older than maxAgeMs', async () => {
@@ -2878,4 +2960,488 @@ describe('NotificationRedriveService', () => {
 			});
 		});
 	});
+
+	describe('chunk resume', () => {
+		it('persists chunk metadata on the dead-letter record when the failed delivery is chunked', async () => {
+			const alert = { text: 'Chunked alert', correlationId: 'corr-chunk-1' };
+			const results = [
+				{
+					channel: 'whatsapp',
+					success: false,
+					error: 'Mid-sequence chunk failed',
+					statusCode: 502,
+					messageIds: ['msg-a', 'msg-b'],
+					messageCount: 2,
+					splitMessageCount: 5,
+					failedPart: 3,
+				},
+			];
+
+			await service.recordDeliveryResults(alert, results);
+
+			const stored = service.inMemoryStore.get('corr-chunk-1_whatsapp');
+			expect(stored.chunkResume).toEqual({
+				splitMessageCount: 5,
+				failedPart: 3,
+				messageCount: 2,
+				resumeFromChunk: 2,
+				deliveredMessageIds: ['msg-a', 'msg-b'],
+			});
+		});
+
+		it('omits chunk metadata when the failed delivery is not chunked', async () => {
+			const alert = { text: 'Single alert', correlationId: 'corr-single' };
+			const results = [
+				{ channel: 'whatsapp', success: false, error: 'Single chunk failed', statusCode: 500 },
+			];
+
+			await service.recordDeliveryResults(alert, results);
+
+			const stored = service.inMemoryStore.get('corr-single_whatsapp');
+			expect(stored.chunkResume).toBeNull();
+		});
+
+		it('passes startChunk = failedPart - 1 to the channel service on redrive', async () => {
+			const whatsappSend = jest.fn().mockResolvedValue({
+				success: true,
+				channel: 'whatsapp',
+				messageIds: ['msg-c', 'msg-d', 'msg-e'],
+				messageCount: 3,
+				splitMessageCount: 5,
+			});
+			const notificationManager = {
+				channels: new Map([['whatsapp', { name: 'whatsapp', send: whatsappSend, isEnabled: () => true }]]),
+				sendToChannels: jest.fn(async (payload, channels, opts) => [{
+					channel: channels[0],
+					...(await whatsappSend(payload, opts)),
+				}]),
+			};
+			service.setNotificationManagerGetter(() => notificationManager);
+
+			await service.recordDeliveryResults(
+				{ text: 'Chunked', correlationId: 'corr-resume' },
+				[{
+					channel: 'whatsapp',
+					success: false,
+					error: 'Part 3 failed',
+					statusCode: 502,
+					messageIds: ['msg-a', 'msg-b'],
+					messageCount: 2,
+					splitMessageCount: 5,
+					failedPart: 3,
+				}],
+			);
+
+			const item = service.inMemoryStore.get('corr-resume_whatsapp');
+			item.nextAttemptAt = Date.now() - 1000;
+			await service.sweep();
+
+			expect(whatsappSend).toHaveBeenCalledTimes(1);
+			expect(whatsappSend.mock.calls[0][1]).toMatchObject({ startChunk: 2, isRedrive: true });
+		});
+
+		it('advances the resume point after a later redrive chunk fails', async () => {
+			const whatsappSend = jest.fn()
+				.mockResolvedValueOnce({
+					success: false,
+					channel: 'whatsapp',
+					error: 'Part 4 failed',
+					statusCode: 502,
+					messageIds: ['msg-c'],
+					messageCount: 1,
+					splitMessageCount: 5,
+					failedPart: 4,
+				})
+				.mockResolvedValueOnce({
+					success: true,
+					channel: 'whatsapp',
+					messageIds: ['msg-d', 'msg-e'],
+					messageCount: 2,
+					splitMessageCount: 5,
+				});
+			const notificationManager = {
+				channels: new Map([['whatsapp', { name: 'whatsapp', send: whatsappSend, isEnabled: () => true }]]),
+				sendToChannels: jest.fn(async (payload, channels, opts) => [{
+					channel: channels[0],
+					...(await whatsappSend(payload, opts)),
+				}]),
+			};
+			service.setNotificationManagerGetter(() => notificationManager);
+
+			await service.recordDeliveryResults(
+				{ text: 'Chunked', correlationId: 'corr-resume-progress' },
+				[{
+					channel: 'whatsapp',
+					success: false,
+					error: 'Part 3 failed',
+					statusCode: 502,
+					messageIds: ['msg-a', 'msg-b'],
+					messageCount: 2,
+					splitMessageCount: 5,
+					failedPart: 3,
+				}],
+			);
+
+			service.inMemoryStore.get('corr-resume-progress_whatsapp').nextAttemptAt = Date.now() - 1000;
+			await service.sweep();
+			service.inMemoryStore.get('corr-resume-progress_whatsapp').nextAttemptAt = Date.now() - 1000;
+			await service.sweep();
+
+			expect(whatsappSend.mock.calls).toHaveLength(2);
+			expect(whatsappSend.mock.calls[0][1]).toMatchObject({ startChunk: 2, isRedrive: true });
+			expect(whatsappSend.mock.calls[1][1]).toMatchObject({ startChunk: 3, isRedrive: true });
+		});
+
+		it('does not pass startChunk on legacy dead-letter records without chunk metadata', async () => {
+			const whatsappSend = jest.fn().mockResolvedValue({
+				success: true,
+				channel: 'whatsapp',
+				messageIds: ['msg-z'],
+				messageCount: 1,
+			});
+			const notificationManager = {
+				channels: new Map([['whatsapp', { name: 'whatsapp', send: whatsappSend, isEnabled: () => true }]]),
+				sendToChannels: jest.fn(async (payload, channels, opts) => [{
+					channel: channels[0],
+					...(await whatsappSend(payload, opts)),
+				}]),
+			};
+			service.setNotificationManagerGetter(() => notificationManager);
+
+			// Inject a legacy record directly (no chunkResume)
+			const nowMs = Date.now();
+			mockDocs.set('legacy_whatsapp', {
+				id: 'legacy_whatsapp',
+				alertId: 'legacy',
+				channel: 'whatsapp',
+				status: 'pending',
+				alert: { text: 'Legacy alert' },
+				attemptCount: 0,
+				lastError: 'Legacy failure',
+				createdAt: { toDate: () => new Date(nowMs - 60000) },
+				updatedAt: { toDate: () => new Date(nowMs - 60000) },
+				nextAttemptAt: { toDate: () => new Date(nowMs - 1000) },
+				expiresAt: { toDate: () => new Date(nowMs + 600000) },
+				claimedAt: null,
+				leaseUntil: null,
+				workerId: null,
+				terminalAt: null,
+				deliveredAt: null,
+			});
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				await service.sweep();
+				expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Legacy dead-letter legacy_whatsapp'));
+			} finally {
+				warnSpy.mockRestore();
+			}
+
+			expect(whatsappSend).toHaveBeenCalledTimes(1);
+			expect(whatsappSend.mock.calls[0][1]).not.toHaveProperty('startChunk');
+			expect(whatsappSend.mock.calls[0][1].isRedrive).toBe(true);
+		});
+
+		it('skips startChunk for non-chunkable channels like telegram', async () => {
+			const telegramSend = jest.fn().mockResolvedValue({
+				success: true,
+				channel: 'telegram',
+				messageId: 'msg-x',
+			});
+			const notificationManager = {
+				channels: new Map([['telegram', { name: 'telegram', send: telegramSend, isEnabled: () => true }]]),
+				sendToChannels: jest.fn(async (payload, channels, opts) => [{
+					channel: channels[0],
+					...(await telegramSend(payload, opts)),
+				}]),
+			};
+			service.setNotificationManagerGetter(() => notificationManager);
+
+			await service.recordDeliveryResults(
+				{ text: 'Telegram', correlationId: 'corr-tg' },
+				[{
+					channel: 'telegram',
+					success: false,
+					error: 'Network',
+					// Even if a chunk-like payload is supplied, telegram is single-shot
+					splitMessageCount: 1,
+					failedPart: 1,
+				}],
+			);
+
+			const item = service.inMemoryStore.get('corr-tg_telegram');
+			item.nextAttemptAt = Date.now() - 1000;
+			await service.sweep();
+
+			expect(telegramSend).toHaveBeenCalledTimes(1);
+			expect(telegramSend.mock.calls[0][1]).not.toHaveProperty('startChunk');
+		});
+
+		it('records a delivered dead-letter after a chunk-resume redrive succeeds', async () => {
+			const whatsappSend = jest.fn().mockResolvedValue({
+				success: true,
+				channel: 'whatsapp',
+				messageIds: ['msg-c', 'msg-d', 'msg-e'],
+				messageCount: 3,
+				splitMessageCount: 5,
+			});
+			const notificationManager = {
+				channels: new Map([['whatsapp', { name: 'whatsapp', send: whatsappSend, isEnabled: () => true }]]),
+				sendToChannels: jest.fn(async (payload, channels, opts) => [{
+					channel: channels[0],
+					...(await whatsappSend(payload, opts)),
+				}]),
+			};
+			service.setNotificationManagerGetter(() => notificationManager);
+
+			await service.recordDeliveryResults(
+				{ text: 'Chunked', correlationId: 'corr-resume-ok' },
+				[{
+					channel: 'whatsapp',
+					success: false,
+					error: 'Part 3 failed',
+					statusCode: 502,
+					messageIds: ['msg-a', 'msg-b'],
+					messageCount: 2,
+					splitMessageCount: 5,
+					failedPart: 3,
+				}],
+			);
+
+			const item = service.inMemoryStore.get('corr-resume-ok_whatsapp');
+			item.nextAttemptAt = Date.now() - 1000;
+			await service.sweep();
+
+			const finalState = service.inMemoryStore.get('corr-resume-ok_whatsapp');
+			expect(finalState.status).toBe('delivered');
+			expect(whatsappSend.mock.calls[0][1].startChunk).toBe(2);
+		});
+	});
+	describe('getEligibleRecords query-side filtering', () => {
+		function buildTimestamp(date) {
+			return admin.firestore.Timestamp.fromDate(date);
+		}
+
+		function seedPending(docId, nextAttemptDate, expiresAtDate) {
+			mockDocs.set(docId, {
+				id: docId,
+				channel: 'telegram',
+				status: 'pending',
+				attemptCount: 1,
+				alert: { text: `pending ${docId}`, requestId: docId },
+				destinationOverride: {},
+				createdAt: buildTimestamp(new Date(Date.now() - 60000)),
+				updatedAt: buildTimestamp(new Date(Date.now() - 30000)),
+				nextAttemptAt: buildTimestamp(nextAttemptDate),
+				expiresAt: buildTimestamp(expiresAtDate),
+				claimedAt: null,
+				leaseUntil: null,
+				workerId: null,
+				terminalAt: null,
+				deliveredAt: null,
+			});
+		}
+
+		function seedInFlight(docId, leaseUntilDate) {
+			mockDocs.set(docId, {
+				id: docId,
+				channel: 'whatsapp',
+				status: 'in_flight',
+				attemptCount: 1,
+				alert: { text: `inflight ${docId}`, requestId: docId },
+				destinationOverride: {},
+				createdAt: buildTimestamp(new Date(Date.now() - 60000)),
+				updatedAt: buildTimestamp(new Date(Date.now() - 30000)),
+				nextAttemptAt: buildTimestamp(new Date(Date.now() - 10000)),
+				expiresAt: buildTimestamp(new Date(Date.now() + 60000)),
+				claimedAt: buildTimestamp(new Date(Date.now() - 30000)),
+				leaseUntil: buildTimestamp(leaseUntilDate),
+				workerId: 'pid-1',
+				terminalAt: null,
+				deliveredAt: null,
+			});
+		}
+
+		it('issues two indexed queries (no `in` operator) bounded by batchLimit', async () => {
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+			// With no docs the pending query returns 0 records and the service
+			// then issues the in_flight query to verify no other work is due.
+			await service.getEligibleRecords(10, 3600000);
+
+			const collectionMock = mockFirestore.collection;
+			expect(collectionMock).toHaveBeenCalledWith('notificationDeadLetters');
+			// The mock creates a new chain per `.where()` call, so we assert that
+			// the call sequence uses indexed equality filters rather than the `in` operator.
+			const allWhereCalls = collectionMock.mock.results.flatMap((r) => {
+				const chain = r.value;
+				return chain && chain.where ? chain.where.mock.calls : [];
+			});
+			expect(allWhereCalls).toEqual(expect.arrayContaining([
+				['status', '==', 'pending'],
+			]));
+			// `where('status', 'in', ...)` must never be used.
+			expect(allWhereCalls).not.toContainEqual(['status', 'in', expect.anything()]);
+		});
+
+		it('issues both pending and in_flight queries when pending has no matches', async () => {
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+			const past = new Date(Date.now() - 10000);
+			seedInFlight('expired-lease', new Date(Date.now() - 10000));
+			await service.getEligibleRecords(10, 3600000);
+
+			const collectionMock = mockFirestore.collection;
+			const allWhereCalls = collectionMock.mock.results.flatMap((r) => {
+				const chain = r.value;
+				return chain && chain.where ? chain.where.mock.calls : [];
+			});
+			expect(allWhereCalls).toEqual(expect.arrayContaining([
+				['status', '==', 'pending'],
+				['status', '==', 'in_flight'],
+			]));
+		});
+
+		it('skips pending rows whose nextAttemptAt is in the future (query-side filter)', async () => {
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+			const future = new Date(Date.now() + 120000);
+			const past = new Date(Date.now() - 10000);
+			seedPending('future-pending', future, new Date(Date.now() + 3600000));
+			seedPending('due-pending', past, new Date(Date.now() + 3600000));
+
+			const records = await service.getEligibleRecords(10, 3600000);
+			const ids = records.map((r) => r.id);
+			expect(ids).toContain('due-pending');
+			expect(ids).not.toContain('future-pending');
+		});
+
+		it('keeps pending rows past their expiry window so the sweep can mark them terminal', async () => {
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+			const past = new Date(Date.now() - 10000);
+			seedPending('expired-pending', past, new Date(Date.now() - 2000));
+
+			const records = await service.getEligibleRecords(10, 3600000);
+			const expired = records.find((r) => r.id === 'expired-pending');
+			expect(expired).toBeDefined();
+			expect(expired.expired).toBe(true);
+		});
+
+		it('skips in_flight rows whose lease is still active (query-side filter)', async () => {
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+			const expired = new Date(Date.now() - 10000);
+			const active = new Date(Date.now() + 120000);
+			seedInFlight('expired-lease', expired);
+			seedInFlight('active-lease', active);
+
+			const records = await service.getEligibleRecords(10, 3600000);
+			const ids = records.map((r) => r.id);
+			expect(ids).toContain('expired-lease');
+			expect(ids).not.toContain('active-lease');
+		});
+
+		it('deduplicates Firestore and in-memory candidates by id', async () => {
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+			const past = new Date(Date.now() - 10000);
+			seedPending('shared-id', past, new Date(Date.now() + 3600000));
+
+			// Insert the same id into inMemoryStore
+			service.inMemoryStore.set('shared-id', {
+				id: 'shared-id',
+				channel: 'telegram',
+				status: 'pending',
+				attemptCount: 1,
+				alert: { text: 'shared', requestId: 'shared-id' },
+				destinationOverride: {},
+				createdAt: new Date(Date.now() - 60000),
+				updatedAt: new Date(Date.now() - 30000),
+				nextAttemptAt: new Date(Date.now() - 10000),
+				expiresAt: new Date(Date.now() + 3600000),
+				claimedAt: null,
+				leaseUntil: null,
+				workerId: null,
+				terminalAt: null,
+				deliveredAt: null,
+			});
+
+			const records = await service.getEligibleRecords(10, 3600000);
+			const shared = records.filter((r) => r.id === 'shared-id');
+			expect(shared).toHaveLength(1);
+		});
+
+		it('applies the same eligibility split on the in-memory fallback (Firestore unavailable)', async () => {
+			alertStorageService.getFirestore.mockReturnValue(null);
+			const future = new Date(Date.now() + 120000);
+			const past = new Date(Date.now() - 10000);
+			service.inMemoryStore.set('mem-future', {
+				id: 'mem-future',
+				channel: 'telegram',
+				status: 'pending',
+				alert: { text: 'mem-future', requestId: 'mem-future' },
+				nextAttemptAt: future,
+				expiresAt: new Date(Date.now() + 3600000),
+				leaseUntil: null,
+			});
+			service.inMemoryStore.set('mem-due', {
+				id: 'mem-due',
+				channel: 'telegram',
+				status: 'pending',
+				alert: { text: 'mem-due', requestId: 'mem-due' },
+				nextAttemptAt: past,
+				expiresAt: new Date(Date.now() + 3600000),
+				leaseUntil: null,
+			});
+			service.inMemoryStore.set('mem-active-lease', {
+				id: 'mem-active-lease',
+				channel: 'whatsapp',
+				status: 'in_flight',
+				alert: { text: 'mem-active-lease', requestId: 'mem-active-lease' },
+				nextAttemptAt: past,
+				expiresAt: new Date(Date.now() + 3600000),
+				leaseUntil: new Date(Date.now() + 120000),
+			});
+			service.inMemoryStore.set('mem-expired-lease', {
+				id: 'mem-expired-lease',
+				channel: 'whatsapp',
+				status: 'in_flight',
+				alert: { text: 'mem-expired-lease', requestId: 'mem-expired-lease' },
+				nextAttemptAt: past,
+				expiresAt: new Date(Date.now() + 3600000),
+				leaseUntil: new Date(Date.now() - 10000),
+			});
+
+			const records = await service.getEligibleRecords(10, 3600000);
+			const ids = records.map((r) => r.id);
+			expect(ids).toContain('mem-due');
+			expect(ids).toContain('mem-expired-lease');
+			expect(ids).not.toContain('mem-future');
+			expect(ids).not.toContain('mem-active-lease');
+		});
+
+		it('falls back to in-memory store when the Firestore query throws', async () => {
+			const failingFirestore = {
+				collection: jest.fn(() => ({
+					where: jest.fn().mockReturnThis(),
+					where: jest.fn().mockReturnThis(),
+					limit: jest.fn().mockReturnThis(),
+					get: jest.fn(async () => {
+						throw new Error('simulated Firestore outage');
+					}),
+				})),
+			};
+			alertStorageService.getFirestore.mockReturnValue(failingFirestore);
+			const past = new Date(Date.now() - 10000);
+			service.inMemoryStore.set('mem-only', {
+				id: 'mem-only',
+				channel: 'telegram',
+				status: 'pending',
+				alert: { text: 'mem-only', requestId: 'mem-only' },
+				nextAttemptAt: past,
+				expiresAt: new Date(Date.now() + 3600000),
+				leaseUntil: null,
+			});
+
+			const records = await service.getEligibleRecords(10, 3600000);
+			expect(records.map((r) => r.id)).toContain('mem-only');
+		});
+	});
+
 });

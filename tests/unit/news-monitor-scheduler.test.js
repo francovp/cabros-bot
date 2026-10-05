@@ -411,6 +411,100 @@ describe('NewsMonitorSchedulerService', () => {
 		});
 	});
 
+	// #1135: the renewal tick used to pass `Date.now() + leaseMs` into a
+	// `_renewLease(nowMs, leaseMs)` that adds `leaseMs` again, so the lock covered
+	// 2x the intended lease (20 minutes at MAX_LEASE_MS) and `updatedAt` was
+	// written into the future.
+	describe('lease renewal (#1135)', () => {
+		it('computes lockedUntil as now + leaseMs and updatedAt as now', async () => {
+			const nowMs = 1700000000000;
+			mockDocs.set('singleton', {
+				lockedUntil: new Date(nowMs - 1000).toISOString(),
+				lockedBy: 'test-worker-1',
+				updatedAt: new Date(nowMs - 60000).toISOString(),
+			});
+
+			const renewed = await scheduler._renewLease(nowMs, 120000);
+			expect(renewed).toBe(true);
+
+			const doc = mockDocs.get('singleton');
+			expect(doc.lockedUntil).toBe(new Date(nowMs + 120000).toISOString());
+			expect(doc.updatedAt).toBe(new Date(nowMs).toISOString());
+		});
+
+		it('renews with the current time so lockedUntil never exceeds now + leaseMs', async () => {
+			jest.useFakeTimers();
+			try {
+				// MIN_LEASE_MS keeps the renewal interval at a cheap 5s tick.
+				const leaseMs = 10000;
+				const renewIntervalMs = Math.max(1000, Math.floor(leaseMs / 2));
+				jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+
+				let resolveAnalysis;
+				const analyzeSymbols = jest.fn(() => new Promise((resolve) => {
+					resolveAnalysis = resolve;
+				}));
+				scheduler.getAnalyzerFn = () => ({ analyzeSymbols });
+
+				const sweepPromise = scheduler.sweep({ force: true, leaseMs });
+
+				await jest.advanceTimersByTimeAsync(0);
+				expect(analyzeSymbols).toHaveBeenCalledTimes(1);
+
+				const acquired = mockDocs.get('singleton');
+				expect(new Date(acquired.lockedUntil).getTime()).toBe(Date.now() + leaseMs);
+
+				await jest.advanceTimersByTimeAsync(renewIntervalMs);
+
+				const renewalNow = Date.now();
+				const doc = mockDocs.get('singleton');
+				const lockedUntilMs = new Date(doc.lockedUntil).getTime();
+				const updatedAtMs = new Date(doc.updatedAt).getTime();
+
+				expect(lockedUntilMs).toBeGreaterThan(new Date(acquired.lockedUntil).getTime());
+				expect(lockedUntilMs).toBe(renewalNow + leaseMs);
+				expect(updatedAtMs).toBe(renewalNow);
+				expect(updatedAtMs).toBeLessThanOrEqual(Date.now());
+
+				resolveAnalysis([]);
+				await jest.advanceTimersByTimeAsync(0);
+				await sweepPromise;
+			} finally {
+				jest.useRealTimers();
+			}
+		});
+
+		it('leaves the lease no longer than leaseMs after a renewal tick', async () => {
+			jest.useFakeTimers();
+			try {
+				// MAX_LEASE_MS: the crash-after-renewal case that blocked takeover for 20 minutes.
+				const leaseMs = 600000;
+				const renewIntervalMs = Math.max(1000, Math.floor(leaseMs / 2));
+				jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+
+				let resolveAnalysis;
+				const analyzeSymbols = jest.fn(() => new Promise((resolve) => {
+					resolveAnalysis = resolve;
+				}));
+				scheduler.getAnalyzerFn = () => ({ analyzeSymbols });
+
+				const sweepPromise = scheduler.sweep({ force: true, leaseMs });
+				await jest.advanceTimersByTimeAsync(0);
+
+				await jest.advanceTimersByTimeAsync(renewIntervalMs);
+
+				const heldMs = new Date(mockDocs.get('singleton').lockedUntil).getTime() - Date.now();
+				expect(heldMs).toBeLessThanOrEqual(leaseMs);
+
+				resolveAnalysis([]);
+				await jest.advanceTimersByTimeAsync(0);
+				await sweepPromise;
+			} finally {
+				jest.useRealTimers();
+			}
+		});
+	});
+
 	describe('lifecycle', () => {
 		it('startWorker no-op when disabled', () => {
 			process.env.ENABLE_NEWS_MONITOR_SCHEDULER = 'false';

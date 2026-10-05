@@ -2,9 +2,12 @@
 
 const crypto = require('crypto');
 const alertStorageService = require('../../services/storage/AlertStorageService');
+const alertFeedbackStorageService = require('../../services/storage/AlertFeedbackStorageService');
 const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
 const { parseTelegramTopicRoutes, resolveTelegramThreadId } = require('../../services/notification/telegramTopicRouting');
+const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
+const { isFirestoreErrorCategory } = require('../../services/storage/firestoreErrorCategories');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -20,6 +23,7 @@ const EXPORT_FIELDS = [
 	'requestId',
 	'receivedAt',
 	'source',
+	'signalClass',
 	'enriched',
 	'useTradingViewData',
 	'tradingViewEnrichmentApplied',
@@ -34,6 +38,8 @@ const EXPORT_FIELDS = [
 	'tokenUsage',
 	'enrichmentData',
 	'text',
+	'currentPrice',
+	'priceCurrency',
 ];
 
 function parseLimit(rawLimit) {
@@ -183,6 +189,61 @@ function parseStringFilter(rawValue, filterName, maxLength = 64) {
 	return { value: rawValue.trim() };
 }
 
+function parseSignalClassFilter(rawValue) {
+	if (rawValue === undefined) {
+		return { value: undefined };
+	}
+
+	const tokens = Array.isArray(rawValue)
+		? rawValue
+		: typeof rawValue === 'string'
+			? rawValue.split(',')
+			: null;
+
+	if (!tokens || tokens.length === 0) {
+		return {
+			error: {
+				error: 'Invalid signalClass filter. Use a non-empty string.',
+				code: 'INVALID_REQUEST',
+			},
+		};
+	}
+
+	const parts = [];
+	for (const token of tokens) {
+		if (typeof token !== 'string') {
+			return {
+				error: {
+					error: 'Invalid signalClass filter. Must be a string.',
+					code: 'INVALID_REQUEST',
+				},
+			};
+		}
+		const subParts = token.split(',').map((p) => p.trim().toLowerCase());
+		for (const subPart of subParts) {
+			if (!subPart) {
+				return {
+					error: {
+						error: 'Invalid signalClass filter. Contains empty value.',
+						code: 'INVALID_REQUEST',
+					},
+				};
+			}
+			if (!VALID_SIGNAL_CLASSES.has(subPart)) {
+				return {
+					error: {
+						error: `Invalid signalClass filter: "${subPart}". Allowed values: ${Array.from(VALID_SIGNAL_CLASSES).join(', ')}.`,
+						code: 'INVALID_REQUEST',
+					},
+				};
+			}
+			parts.push(subPart);
+		}
+	}
+
+	return { value: parts.join(',') };
+}
+
 function listAlerts(req, res) {
 	return handleAsync(req, res, '/api/alerts', async () => {
 		if (!alertStorageService.isEnabled()) {
@@ -237,6 +298,11 @@ function listAlerts(req, res) {
 			return res.status(400).json(exchange.error);
 		}
 
+		const signalClass = parseSignalClassFilter(req.query.signalClass);
+		if (signalClass.error) {
+			return res.status(400).json(signalClass.error);
+		}
+
 		const parsedInclude = parseInclude(req.query.include);
 		if (!parsedInclude.success) {
 			return res.status(400).json({
@@ -259,6 +325,9 @@ function listAlerts(req, res) {
 		}
 		if (exchange.value !== undefined) {
 			listParams.exchange = exchange.value;
+		}
+		if (signalClass.value !== undefined) {
+			listParams.signalClass = signalClass.value;
 		}
 		if (parsedInclude.values.length > 0) {
 			listParams.include = parsedInclude.values;
@@ -333,6 +402,11 @@ function summarizeAlerts(req, res) {
 			return res.status(400).json(exchange.error);
 		}
 
+		const signalClass = parseSignalClassFilter(req.query.signalClass);
+		if (signalClass.error) {
+			return res.status(400).json(signalClass.error);
+		}
+
 		const summaryParams = {
 			from: from.value,
 			limit,
@@ -349,6 +423,9 @@ function summarizeAlerts(req, res) {
 		if (exchange.value !== undefined) {
 			summaryParams.exchange = exchange.value;
 		}
+		if (signalClass.value !== undefined) {
+			summaryParams.signalClass = signalClass.value;
+		}
 
 		const summary = await alertStorageService.summarizeAlerts(summaryParams);
 
@@ -356,7 +433,8 @@ function summarizeAlerts(req, res) {
 			|| typeof enriched === 'boolean'
 			|| symbol.value !== undefined
 			|| eventCategory.value !== undefined
-			|| exchange.value !== undefined;
+			|| exchange.value !== undefined
+			|| signalClass.value !== undefined;
 		if (!hasReportFilters) {
 			let shadowModeMetrics = 'No measurements found';
 			if (signalOutcomeService.isEnabled()) {
@@ -368,6 +446,17 @@ function summarizeAlerts(req, res) {
 			}
 			summary.shadowModeMetrics = shadowModeMetrics;
 		}
+
+		// Feedback aggregation always reflects the same window — it does not
+		// depend on alert storage and is intentionally included regardless of
+		// the report filters so traders can correlate prompt calibration with
+		// raw outcomes. Disabled feedback storage falls back to an in-memory
+		// surface that returns zeroed counts.
+		const feedbackBlock = await alertFeedbackStorageService.getSummaryBlock({
+			from: from.value,
+			to: to.value,
+		});
+		summary.feedback = feedbackBlock;
 
 		return res.status(200).json({
 			success: true,
@@ -490,17 +579,23 @@ function exportAlerts(req, res) {
 			? req.query.source.trim()
 			: undefined;
 
+		const signalClass = parseSignalClassFilter(req.query.signalClass);
+		if (signalClass.error) {
+			return res.status(400).json(signalClass.error);
+		}
+
 		const result = await alertStorageService.exportAlerts({
 			from: from.value,
 			to: to.value,
 			limit,
 			source,
 			enriched,
+			signalClass: signalClass.value,
 			includeText,
 			includeEnrichment,
 		});
 
-		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
+		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean' || signalClass.value !== undefined;
 		if (!hasReportFilters) {
 			let shadowModeMetrics = 'No measurements found';
 			if (signalOutcomeService.isEnabled()) {
@@ -678,12 +773,12 @@ function buildDryRunChannelRouting(storedAlert, storedTelegramThreadId, channels
 				const isCustomChat = Boolean(
 					routing.telegramChatId
 					&& process.env.TELEGRAM_CHAT_ID
-					&& String(routing.telegramChatId) !== String(process.env.TELEGRAM_CHAT_ID)
+					&& String(routing.telegramChatId) !== String(process.env.TELEGRAM_CHAT_ID),
 				);
 				const topicRoutes = isCustomChat ? {} : parseTelegramTopicRoutes(process.env.TELEGRAM_TOPIC_ROUTES);
 				const resolvedThread = resolveTelegramThreadId(
 					{ ...storedAlert, source: storedAlert.source || 'alert-replay' },
-					topicRoutes
+					topicRoutes,
 				);
 				if (resolvedThread !== null && resolvedThread !== undefined) {
 					routing.telegramThreadId = resolvedThread;
@@ -806,6 +901,7 @@ function replayAlert(botOrGetter) {
 				text: storedAlert.text,
 				enriched: (reEnriched ? newEnrichmentData : storedAlert.enrichmentData) || undefined,
 				source: storedAlert.source || 'alert-replay',
+				signalClass: storedAlert.signalClass || undefined,
 				replay: {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),
@@ -972,6 +1068,7 @@ function batchReplayAlerts(botOrGetter) {
 						text: storedAlert.text,
 						enriched: storedAlert.enrichmentData || undefined,
 						source: storedAlert.source || 'alert-replay',
+						signalClass: storedAlert.signalClass || undefined,
 						replay: {
 							originalAlertId: alertId,
 							idempotencyKey: alertIdempotencyKey,
@@ -1132,6 +1229,7 @@ function handleAsync(req, res, endpoint, handler) {
 	return Promise.resolve(handler()).catch((error) => {
 		console.error('[AlertsController] Request failed:', error.message);
 		const statusCode = error.code === alertStorageService.STORAGE_UNAVAILABLE_CODE
+			|| error.code === alertFeedbackStorageService.STORAGE_UNAVAILABLE_CODE
 			? 503
 			: (error.code === 'INVALID_REQUEST' ? 400 : 500);
 		sentryService.captureRuntimeError({
@@ -1142,13 +1240,30 @@ function handleAsync(req, res, endpoint, handler) {
 				method: req.method,
 				statusCode,
 			},
+			// `extra.category` is what SentryService maps onto a Sentry tag, so this
+			// is the supported way to make a read-path outage alertable by category
+			// instead of by message text (#1285).
+			...(isFirestoreErrorCategory(error.category)
+				? { extra: { category: error.category, missingIndex: error.missingIndex === true } }
+				: {}),
 		});
 
 		if (statusCode === 503) {
-			return res.status(503).json({
+			// `category` is the sanitized Firestore enum from the storage layer, so
+			// an operator can tell a rejected query from a credential/init failure
+			// without a Cloud Logging session (#1285). It is never the provider
+			// message, which embeds the project/database path and index definition.
+			const body = {
 				error: error.message,
 				code: alertStorageService.STORAGE_UNAVAILABLE_CODE,
-			});
+			};
+			if (isFirestoreErrorCategory(error.category)) {
+				body.category = error.category;
+			}
+			if (error.missingIndex === true) {
+				body.missingIndex = true;
+			}
+			return res.status(503).json(body);
 		}
 
 		if (statusCode === 400) {
@@ -1165,6 +1280,94 @@ function handleAsync(req, res, endpoint, handler) {
 	});
 }
 
+function submitFeedback(req, res) {
+	return handleAsync(req, res, '/api/alerts/feedback', async () => {
+		const body = req.body || {};
+		const alertId = typeof body.alertId === 'string' ? body.alertId.trim() : '';
+		const chatId = typeof body.chatId === 'string' ? body.chatId.trim() : '';
+		const verdictRaw = body.verdict;
+		const source = body.source;
+
+		if (!alertId) {
+			return res.status(400).json({
+				error: 'alertId is required and must be a non-empty string.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+		if (!chatId) {
+			return res.status(400).json({
+				error: 'chatId is required and must be a non-empty string.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+		if (typeof verdictRaw !== 'string'
+			|| !alertFeedbackStorageService.VALID_VERDICTS.has(verdictRaw.trim().toLowerCase())) {
+			return res.status(400).json({
+				error: 'verdict must be "up" or "down".',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const result = await alertFeedbackStorageService.saveFeedback({
+			alertId,
+			chatId,
+			verdict: verdictRaw,
+			source,
+			symbol: body.symbol,
+			exchange: body.exchange,
+		});
+
+		return res.status(200).json({
+			success: true,
+			persisted: result.persisted,
+			source: result.source,
+			alertId,
+			verdict: result.persisted ? verdictRaw.trim().toLowerCase() : null,
+		});
+	});
+}
+
+function getFeedbackSummary(req, res) {
+	return handleAsync(req, res, '/api/alerts/feedback/summary', async () => {
+		const from = parseOptionalTimestamp(req.query.from, 'from');
+		if (from.error) {
+			return res.status(400).json(from.error);
+		}
+		const to = parseOptionalTimestamp(req.query.to, 'to');
+		if (to.error) {
+			return res.status(400).json(to.error);
+		}
+		const limit = parseSummaryLimit(req.query.limit);
+		if (limit === null) {
+			return res.status(400).json({
+				error: `Invalid limit. Use an integer between 1 and ${MAX_SUMMARY_LIMIT}.`,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const result = await alertFeedbackStorageService.listFeedbackEntries({
+			from: from.value,
+			to: to.value,
+			limit,
+		});
+
+		return res.status(200).json({
+			success: true,
+			feedback: {
+				total: result.aggregate.total,
+				up: result.aggregate.up,
+				down: result.aggregate.down,
+				ratio: result.aggregate.ratio,
+				bySource: result.aggregate.bySource,
+				bySymbol: result.aggregate.bySymbol,
+				byExchange: result.aggregate.byExchange,
+				source: result.source,
+				window: result.window,
+			},
+		});
+	});
+}
+
 module.exports = {
 	listAlerts,
 	getAlertById,
@@ -1175,4 +1378,6 @@ module.exports = {
 	batchDeleteAlerts,
 	summarizeAlerts,
 	exportAlerts,
+	submitFeedback,
+	getFeedbackSummary,
 };

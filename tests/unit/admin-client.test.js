@@ -86,6 +86,17 @@ class FakeElement {
 		const results = this.querySelectorAll(selector);
 		return results[0] || null;
 	}
+	focus() {
+		this._focused = true;
+	}
+
+	get tabIndex() {
+		return this._tabIndex;
+	}
+
+	set tabIndex(value) {
+		this._tabIndex = value;
+	}
 
 	querySelectorAll(selector) {
 		if (selector === '[data-view]') return findAll(this, (node) => node.dataset.view);
@@ -152,15 +163,41 @@ const response = (body, status = 200) => ({
 	text: async () => JSON.stringify(body),
 });
 
+const streamResponse = ({ status = 200, retryAfter, done = false } = {}) => ({
+	ok: status >= 200 && status < 300,
+	status,
+	headers: {
+		get: (name) => name.toLowerCase() === 'retry-after' ? retryAfter : null,
+	},
+	body: {
+		getReader: () => ({
+			read: async () => ({ done }),
+		}),
+	},
+});
+
+// An established stream that stays open and never emits, matching a real event
+// stream between events. A reader that keeps resolving { done: false } instead
+// would spin the client's read loop without yielding and starve the event loop.
+const idleStreamResponse = () => ({
+	ok: true,
+	status: 200,
+	headers: { get: () => null },
+	body: {
+		getReader: () => ({ read: () => new Promise(() => {}) }),
+	},
+});
+
 function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase, location = {} }) {
 	const body = new FakeElement('body');
 	const elementsById = {};
 	[
 		'legacy-connection', 'firebase-auth', 'auth-form', 'auth-email', 'auth-password', 'sign-in', 'sign-out',
-		'auth-state', 'api-key', 'key-state', 'save-key', 'clear-key', 'connection-form', 'view',
+		'auth-state', 'api-key', 'key-state', 'save-key', 'clear-key', 'connection-form', 'view', 'view-status',
+		'sse-status', 'sse-label',
 	].forEach((id) => {
 		const tag = id === 'api-key' ? 'input' : id === 'connection-form' ? 'form'
-			: id === 'view' ? 'section' : id === 'auth-form' ? 'div' : id.endsWith('key') ? 'button' : 'p';
+			: id === 'view' ? 'section' : id === 'view-status' ? 'p' : id === 'auth-form' ? 'div' : id.endsWith('key') ? 'button' : 'p';
 		const node = new FakeElement(tag);
 		node.id = id;
 		node.hidden = false;
@@ -177,10 +214,13 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 	const downloads = [];
 	const timers = new Map();
 	const timerDelays = new Map();
+	const timerHistory = [];
+	const titleHistory = [''];
 	const document = {
 		body,
 		createElement: (tag) => {
 			const node = new FakeElement(tag);
+			if (tag === 'cabros-result') Object.defineProperty(node, 'value', { set(value) { this.textContent = require('../../src/admin/admin-components').plainText(value); } });
 			if (tag === 'a') node.click = () => downloads.push({ href: node.href, download: node.download });
 			return node;
 		},
@@ -188,6 +228,12 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		querySelectorAll: (selector) => body.querySelectorAll(selector),
 		addEventListener: (type, listener) => { documentListeners[type] = listener; },
 		execCommand: () => false,
+		get title() {
+			return titleHistory[titleHistory.length - 1];
+		},
+		set title(value) {
+			titleHistory.push(String(value));
+		},
 	};
 	const storage = new Map(storedKey ? [['cabros-admin-api-key', storedKey]] : []);
 	const helperCalls = [];
@@ -198,6 +244,27 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 			return requestHelper.createRequest(input);
 		},
 	};
+	const windowLocation = { hostname: '', pathname: '/admin', search: '', ...location };
+	const historyCalls = [];
+	const windowListeners = {};
+	const applyHistoryUrl = (url) => {
+		const raw = String(url ?? '');
+		const [pathAndQuery, hash = ''] = raw.split('#');
+		const queryAt = pathAndQuery.indexOf('?');
+		windowLocation.pathname = queryAt === -1 ? pathAndQuery : pathAndQuery.slice(0, queryAt);
+		windowLocation.search = queryAt === -1 ? '' : pathAndQuery.slice(queryAt);
+		if (hash) windowLocation.hash = `#${hash}`;
+	};
+	const historyStub = {
+		pushState: (_state, _title, url) => {
+			historyCalls.push({ mode: 'push', url: String(url ?? '') });
+			applyHistoryUrl(url);
+		},
+		replaceState: (_state, _title, url) => {
+			historyCalls.push({ mode: 'replace', url: String(url ?? '') });
+			applyHistoryUrl(url);
+		},
+	};
 	const context = {
 		document,
 		URL,
@@ -206,6 +273,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 			if (url === '/admin/auth-config' && !firebase) return response({ enabled: false, configured: false });
 			return fetchImpl(url, options);
 		}),
+		TextDecoder,
 		performance: { now: jest.fn().mockReturnValueOnce(10).mockReturnValue(20) },
 		sessionStorage: {
 			getItem: (key) => storage.get(key) || null,
@@ -217,27 +285,51 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 			const id = timers.size + 1;
 			timers.set(id, fn);
 			timerDelays.set(id, delay);
+			timerHistory.push(delay);
 			return id;
 		},
 		clearTimeout: (id) => { timers.delete(id); timerDelays.delete(id); },
 		window: {
 			CabrosAdminRequest: helper,
+			CabrosAdminComponents: require('../../src/admin/admin-components'),
 			confirm,
 			firebase,
-			location,
+			history: historyStub,
+			location: windowLocation,
+			addEventListener: (type, listener) => { (windowListeners[type] ||= []).push(listener); },
 			URL: {
 				createObjectURL: jest.fn((blob) => `blob:${blob.type}`),
 				revokeObjectURL: jest.fn(),
 			},
 		},
 	};
+	context.window.fetch = context.fetch;
 	vm.runInNewContext(
 		fs.readFileSync(path.join(__dirname, '../../src/admin/admin.js'), 'utf8'),
 		context,
 	);
 	documentListeners.DOMContentLoaded();
 
-	return { body, context, elementsById, helperCalls, storage, downloads, timers, timerDelays };
+	const dispatchPopState = async () => {
+		for (const listener of windowListeners.popstate || []) await listener({ type: 'popstate' });
+		await flush();
+	};
+
+	return {
+		body,
+		context,
+		elementsById,
+		helperCalls,
+		storage,
+		downloads,
+		timers,
+		timerDelays,
+		timerHistory,
+		titleHistory,
+		historyCalls,
+		location: windowLocation,
+		dispatchPopState,
+	};
 }
 
 async function selectView(browser, name) {
@@ -246,6 +338,174 @@ async function selectView(browser, name) {
 }
 
 describe('admin browser client', () => {
+	it('uses visual controls instead of editable JSON throughout the console', async () => {
+		const browser = createBrowser({ fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}) });
+		await flush();
+		for (const name of ['alerts', 'presets', 'jobs', 'analysis', 'playground']) {
+			await selectView(browser, name);
+			const view = browser.elementsById.view;
+			const payloads = findAll(view, (node) => ['body', 'query'].includes(node.name));
+			expect(payloads.length).toBeGreaterThan(0);
+			payloads.forEach((input) => expect(input.type).toBe('hidden'));
+			expect(findAll(view, (node) => node.tagName === 'CABROS-FIELDS').length).toBeGreaterThan(0);
+			expect(view.textContent).not.toMatch(/Request body JSON|Query JSON|Show raw|Copy JSON/);
+		}
+	});
+
+	it('reconnects after the SSE stream ends cleanly', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/admin/events') return streamResponse({ done: true });
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await browser.elementsById['save-key'].dispatch('click');
+		await flush();
+		expect(browser.context.fetch.mock.calls.map(([url]) => url)).toContain('/api/admin/events');
+
+		expect(browser.elementsById['sse-label'].textContent).toBe('Reconnecting…');
+		expect(browser.timers.size).toBe(1);
+	});
+
+	it('does not reconnect on permanent SSE authorization failures', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/admin/events') return streamResponse({ status: 403 });
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await browser.elementsById['save-key'].dispatch('click');
+		await flush();
+
+		expect(browser.elementsById['sse-label'].textContent).toBe('Unavailable');
+		expect(browser.timers.size).toBe(0);
+	});
+
+	it('honors fractional Retry-After delays for retryable SSE failures', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/admin/events') return streamResponse({ status: 503, retryAfter: '2.5' });
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await browser.elementsById['save-key'].dispatch('click');
+		await flush();
+
+		expect([...browser.timerDelays.values()]).toContain(2500);
+	});
+
+	// GH-1201: `fetch` on an SSE endpoint only settles once response headers
+	// arrive, so a connection that never flushes headers left the handshake
+	// pending forever and the console sat on "Connecting…" without reconnecting.
+	it('aborts and reconnects a stalled SSE handshake instead of hanging on Connecting', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/admin/events') {
+					// Resolve only when the handshake deadline aborts us.
+					return new Promise((_resolve, reject) => {
+						options.signal.addEventListener('abort', () => {
+							const error = new Error('The operation was aborted');
+							error.name = 'AbortError';
+							reject(error);
+						});
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await browser.elementsById['save-key'].dispatch('click');
+		await flush();
+
+		// The only armed timer must be the handshake deadline: the request is
+		// still pending, so no reconnect backoff exists yet.
+		expect([...browser.timerDelays.values()]).toEqual([15000]);
+		expect(browser.elementsById['sse-label'].textContent).toBe('Connecting…');
+
+		// Fire the handshake deadline.
+		const [handshakeTimer] = [...browser.timers.keys()];
+		await browser.timers.get(handshakeTimer)();
+		await flush();
+
+		expect(browser.elementsById['sse-label'].textContent).toBe('Reconnecting…');
+	});
+
+	it('clears the handshake deadline once headers arrive so an idle stream stays live', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/admin/events') return idleStreamResponse();
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await browser.elementsById['save-key'].dispatch('click');
+		await flush();
+
+		expect(browser.elementsById['sse-label'].textContent).toBe('Live');
+		// The deadline must be armed for the handshake and then disarmed: an SSE
+		// body is legitimately idle between events, so a surviving timer would
+		// tear down a healthy stream.
+		expect(browser.timerHistory).toContain(15000);
+		expect(browser.timers.size).toBe(0);
+	});
+
+	// GH-1201: `aborted` alone cannot separate an intentional teardown from our
+	// own handshake deadline. `disconnectSse()` nulls `sseAbortController`, so
+	// ownership ("am I still the current stream?") is the discriminator.
+	// Collapsing this back to `if (aborted) return` makes the handshake deadline
+	// above convert a hang into a permanently dead stream that never reconnects.
+	it('does not reconnect when an intentional disconnect aborts the handshake', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/admin/events') {
+					return new Promise((_resolve, reject) => {
+						options.signal.addEventListener('abort', () => {
+							const error = new Error('The operation was aborted');
+							error.name = 'AbortError';
+							reject(error);
+						});
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await browser.elementsById['save-key'].dispatch('click');
+		await flush();
+		expect([...browser.timerDelays.values()]).toEqual([15000]);
+
+		// clear-key is the unconditional operator teardown (sign-out routes to the
+		// same disconnectSse()): it aborts the controller and clears ownership.
+		await browser.elementsById['clear-key'].dispatch('click');
+		await flush();
+
+		expect(browser.elementsById['sse-label'].textContent).toBe('Offline');
+		// No reconnect backoff may be armed behind a deliberate disconnect, and
+		// the handshake deadline must be disarmed with the controller it guarded.
+		expect([...browser.timerDelays.values()]).toEqual([]);
+	});
+
 	it('renders an operational overview from the status response', async () => {
 		const status = {
 			service: {
@@ -716,6 +976,41 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('Alert path failure rate (%)40');
 	});
 
+	it('renders the signal outcome sweep lease counters in dependency details', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			dependencies: {
+				signalOutcomeWorker: {
+					status: 'ready',
+					role: 'web',
+					leaseMs: 120000,
+					lastRunLeaseHeld: true,
+					leaseHeldSkipCount: 138,
+					lastRunEvaluatedCount: 0,
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		// Without these the operator cannot tell which replica is evaluating, which
+		// is the whole reason the counters exist.
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Lease (ms)120000');
+		expect(view.textContent).toContain('Last run lease heldtrue');
+		expect(view.textContent).toContain('Lease-held skips138');
+	});
+
 	it('waits for an API key before loading protected overview status', async () => {
 		const requests = [];
 		const browser = createBrowser({
@@ -735,7 +1030,7 @@ describe('admin browser client', () => {
 		const requests = [];
 		const browser = createBrowser({
 			location: {
-				hostname: 'cabros-bot.web.app',
+				hostname: 'cabros-bot--pr-1211-abcdef.web.app',
 				search: '?backend=https%3A%2F%2Fattacker.example',
 			},
 			fetchImpl: async (url) => {
@@ -746,7 +1041,7 @@ describe('admin browser client', () => {
 		});
 		await flush();
 
-		expect(requests[0]).toBe('https://cabros-bot-production.up.railway.app/admin/auth-config');
+		expect(requests[0]).toBe('https://openclaw.tail5e4271.ts.net/admin/auth-config');
 		expect(requests.some((url) => url.includes('attacker.example'))).toBe(false);
 		void browser;
 	});
@@ -882,7 +1177,8 @@ describe('admin browser client', () => {
 				if (!url.includes('/api/webhook/expanded-analysis-alert')
 					&& !url.includes('/api/news-monitor')
 					&& !url.includes('/api/scanner-presets/')
-					&& !url.includes('/api/webhook/volume-confirmation')) return response({});
+					&& !url.includes('/api/webhook/volume-confirmation')
+					&& !url.includes('/api/webhook/symbol-analysis')) return response({});
 				const signal = options?.signal;
 				signals.push(signal);
 				return new Promise((resolve, reject) => {
@@ -925,6 +1221,14 @@ describe('admin browser client', () => {
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[3].aborted).toBe(true);
+
+		await selectView(browser, 'analysis');
+		await findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis').dispatch('submit');
+		await flush();
+		expect([...browser.timerDelays.values()]).toContain(150000);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+		expect(signals[4].aborted).toBe(true);
 	});
 
 	it('does not abort slow responses that resolve within the maximum budget for volume-confirmation and alerts', async () => {
@@ -963,12 +1267,12 @@ describe('admin browser client', () => {
 		await flush();
 
 		expect(browser.timers.size).toBe(0);
-		expect(volumeForm.textContent).toContain('volumeConfirmed');
+		expect(volumeForm.textContent).toContain('Volume Confirmed');
 
 		// Webhook alert slow response within budget via Playground
 		await selectView(browser, 'playground');
 		const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-			&& node.textContent.includes('Playground'));
+			&& node.textContent.includes('Operations'));
 		const select = find(playground, (node) => node.tagName === 'SELECT');
 		select.value = find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes('POST /api/webhook/alert')).value;
 		await select.dispatch('change');
@@ -1120,7 +1424,7 @@ describe('admin browser client', () => {
 		await selectView(browser, 'playground');
 
 		const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-			&& node.textContent.includes('Playground'));
+			&& node.textContent.includes('Operations'));
 		const select = find(playground, (node) => node.tagName === 'SELECT');
 		select.value = find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes('POST /api/alerts/{alertId}/replay')).value;
 		await select.dispatch('change');
@@ -1229,27 +1533,27 @@ describe('admin browser client', () => {
 			fetchImpl: async (url, options) => {
 				if (url === '/openapi.json') return response(contract);
 				requests.push([url, options]);
-			return response({
-				success: true,
-				summary: {
-					window: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-02T00:00:00.000Z' },
-					totalAlerts: 3,
-					enrichment: {
-						enrichedAlerts: 2,
-						plainAlerts: 1,
-						riskMetadataCoverage: {
-							denominator: 2,
-							fields: { invalidation_level: { populated: 1, percentage: 50 } },
+				return response({
+					success: true,
+					summary: {
+						window: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-02T00:00:00.000Z' },
+						totalAlerts: 3,
+						enrichment: {
+							enrichedAlerts: 2,
+							plainAlerts: 1,
+							riskMetadataCoverage: {
+								denominator: 2,
+								fields: { invalidation_level: { populated: 1, percentage: 50 } },
+							},
+							tokenUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.002 },
 						},
-						tokenUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.002 },
+						delivery: {
+							totalSuccess: 2,
+							totalFailure: 1,
+							byChannel: { telegram: { total: 3, success: 2, failure: 1 } },
+						},
 					},
-					delivery: {
-						totalSuccess: 2,
-						totalFailure: 1,
-						byChannel: { telegram: { total: 3, success: 2, failure: 1 } },
-					},
-				},
-			});
+				});
 			},
 		});
 		await flush();
@@ -1279,7 +1583,7 @@ describe('admin browser client', () => {
 		expect(find(blocks, (node) => node.tagName === 'TR'
 			&& node.textContent.toLowerCase().includes('invalidation'))).toBeDefined();
 		expect(blocks.textContent).toContain('50%');
-		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(false);
+		expect(findButton(summaryForm, 'Copy details').hidden).toBe(false);
 	});
 
 	it.each([
@@ -1348,7 +1652,7 @@ describe('admin browser client', () => {
 		await exportForm.dispatch('submit');
 		await flush();
 		expect(requests).toHaveLength(0);
-		const exportOutput = find(exportForm, (node) => node.tagName === 'PRE');
+		const exportOutput = find(exportForm, (node) => node.className.includes('response-block'));
 		expect(exportOutput.className).toContain('response-error');
 		expect(exportOutput.textContent).toContain('From and To are required');
 
@@ -1356,7 +1660,7 @@ describe('admin browser client', () => {
 		await summaryForm.dispatch('submit');
 		await flush();
 		expect(requests).toHaveLength(1);
-		const summaryOutput = find(summaryForm, (node) => node.tagName === 'PRE');
+		const summaryOutput = find(summaryForm, (node) => node.className.includes('response-block'));
 		expect(summaryOutput.className).toContain('response-error');
 		expect(summaryOutput.textContent).toContain('HTTP 503');
 		expect(summaryOutput.textContent).toContain('STORAGE_UNAVAILABLE');
@@ -1442,7 +1746,7 @@ describe('admin browser client', () => {
 		expect(listForm.textContent).toContain('Ranked');
 		expect(listForm.textContent).toContain('MTF');
 		expect(listForm.textContent).toContain('BBW: 0.08');
-		expect(listForm.textContent).toContain('Show raw presets response');
+		expect(listForm.textContent).toContain('Presets details');
 	});
 
 	it('supports running a scanner preset from its card with confirmation and structured analysis result', async () => {
@@ -1499,7 +1803,19 @@ describe('admin browser client', () => {
 		expect(confirmPrompts).toContain('Run this scanner preset?');
 		expect(requests.at(-1)[0]).toContain('/api/scanner-presets/crypto_breakout/run?dryRun=false');
 		expect(listForm.textContent).toContain('Technical scan report for crypto breakout');
-		expect(listForm.textContent).toContain('Show raw run response');
+		expect(listForm.textContent).toContain('Run details');
+
+		let copiedTextarea;
+		const createElement = browser.context.document.createElement;
+		browser.context.document.createElement = (tag) => {
+			const node = createElement(tag);
+			if (tag === 'textarea') copiedTextarea = node;
+			return node;
+		};
+		browser.context.document.execCommand = () => true;
+		await findButton(runBtn.parentNode.parentNode, 'Copy details').dispatch('click');
+		await flush();
+		expect(copiedTextarea.value).toContain('Technical scan report for crypto breakout');
 	});
 
 	it('supports editing a scanner preset from its card and populates update form fields', async () => {
@@ -2069,7 +2385,7 @@ describe('admin browser client', () => {
 		await selectView(browser, 'status');
 		await flush();
 
-		const output = find(browser.elementsById.view, (node) => node.tagName === 'PRE');
+		const output = find(browser.elementsById.view, (node) => node.className.includes('response-block'));
 		expect(find(output, (node) => node.className === 'spinner')).toBeDefined();
 		expect(output.textContent).toContain('Request in progress');
 
@@ -2142,14 +2458,14 @@ describe('admin browser client', () => {
 		await selectView(browser, 'overview');
 		await flush();
 
-		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		const copyButton = findButton(browser.elementsById.view, 'Copy details');
 		expect(copyButton).toBeDefined();
 		await copyButton.dispatch('click');
 		await flush();
 		expect(copyButton.textContent).toBe('Copy unavailable');
 
 		for (const fireTimer of [...browser.timers.values()]) fireTimer();
-		expect(copyButton.textContent).toBe('Copy JSON');
+		expect(copyButton.textContent).toBe('Copy details');
 	});
 
 	it('renders stored alerts as cards with sentiment, delivery chips, and lazy detail', async () => {
@@ -2238,8 +2554,8 @@ describe('admin browser client', () => {
 		const rawToggle = find(listForm, (node) => node.tagName === 'DETAILS');
 		expect(rawToggle).toBeDefined();
 		const summary = find(rawToggle, (node) => node.tagName === 'SUMMARY');
-		expect(summary.textContent).toContain('Show raw response');
-		expect(findButton(listForm, 'Copy JSON').hidden).toBe(false);
+		expect(summary.textContent).toContain('Response details');
+		expect(findButton(listForm, 'Copy details').hidden).toBe(false);
 	});
 
 	it('supports bulk alert selection, select-all toggle, and batch operations', async () => {
@@ -2572,7 +2888,7 @@ describe('admin browser client', () => {
 		expect(find(panel, (node) => node.tagName === 'TR' && node.textContent.includes('BINANCE:BTCUSDT'))).toBeDefined();
 		expect(find(panel, (node) => node.className === 'report-text').textContent).toContain('REPORT BODY');
 		expect(find(panel, (node) => node.className.includes('delivery-ok'))).toBeDefined();
-		expect(findButton(statusForm, 'Copy JSON').hidden).toBe(false);
+		expect(findButton(statusForm, 'Copy details').hidden).toBe(false);
 	});
 
 	it('auto-refreshes active jobs and stops on terminal status', async () => {
@@ -2742,7 +3058,185 @@ describe('admin browser client', () => {
 		expect(verdict.textContent).toContain('4h: BULLISH');
 		expect(verdict.textContent).toContain('Report preview');
 		expect(verdict.textContent).toContain('BTCUSDT Analysis: Bullish breakout above 65000');
-		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
+		expect(findButton(form, 'Copy details').hidden).toBe(false);
+	});
+
+	it('renders nested multi-timeframe timeframes, alignment, and recommendation from the endpoint shape', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:BTCUSDT',
+						timeframe: '1D',
+						analysisStatus: 'complete',
+						analysis: {
+							decision: {
+								action: 'SELL',
+								confidence: 'HIGH',
+								dataSufficient: true,
+								reasons: ['Confluencia: SELL'],
+								warnings: [],
+							},
+							multi_timeframe: {
+								timeframes: { '1W': { bias: 'bearish' }, '1D': { bias: 'bearish', rsi: 77.9 } },
+								alignment: { status: 'ALIGNED', confidence: 'HIGH' },
+								recommendation: { action: 'SELL' },
+							},
+						},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('symbol-analysis-result'));
+		expect(verdict).toBeDefined();
+		expect(verdict.textContent).toContain('Multi-timeframe Analysis');
+		// The endpoint populates multi_timeframe.timeframes[].bias; treating the
+		// top-level envelope keys as timeframes both drops these and mislabels
+		// `alignment` as a trading interval.
+		expect(verdict.textContent).toContain('1W: Bearish');
+		expect(verdict.textContent).toContain('1D: Bearish');
+		expect(verdict.textContent).toContain('Alignment: ALIGNED');
+		expect(verdict.textContent).toContain('Alignment confidence: HIGH');
+		expect(verdict.textContent).toContain('Recommendation: SELL');
+		expect(verdict.textContent).not.toContain('alignment: ALIGNED');
+		expect(verdict.textContent).not.toContain('Timeframes:');
+
+		const recommendationBadge = find(verdict, (node) => node.tagName === 'SPAN'
+			&& node.textContent === 'Recommendation: SELL');
+		expect(recommendationBadge.className).toContain('status-danger');
+	});
+
+	it('still renders a legacy flat multi-timeframe map without alignment or recommendation', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:ETHUSDT',
+						timeframe: '4h',
+						analysis: {
+							decision: { action: 'BUY', confidence: 0.7, dataSufficient: true, reasons: [], warnings: [] },
+							multi_timeframe: { '4h': { trend: 'BULLISH' }, '1W': { direction: 'NEUTRAL' } },
+						},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('symbol-analysis-result'));
+		expect(verdict).toBeDefined();
+		expect(verdict.textContent).toContain('4h: BULLISH');
+		expect(verdict.textContent).toContain('1W: NEUTRAL');
+		expect(verdict.textContent).not.toContain('Alignment:');
+		expect(verdict.textContent).not.toContain('Recommendation:');
+	});
+
+	it('renders categorical decision confidence labels instead of dropping them', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({
+						success: true,
+						symbol: 'NASDAQ:NVDA',
+						timeframe: '1D',
+						analysis: {
+							decision: { action: 'BUY', confidence: 'HIGH', dataSufficient: true, reasons: [], warnings: [] },
+						},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('symbol-analysis-result'));
+		expect(verdict).toBeDefined();
+		expect(verdict.textContent).toContain('Confidence: HIGH');
+		expect(verdict.textContent).not.toContain('NaN');
+		expect(find(verdict, (node) => node.tagName === 'SPAN' && node.textContent === 'Confidence: HIGH').className)
+			.toContain('status-ready');
+	});
+
+	it('renders a bounded neutral confidence label and ignores non-scalar confidence values', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:BTCUSDT',
+						timeframe: '1D',
+						analysis: {
+							decision: {
+								action: 'NO_TRADE',
+								confidence: 'medium',
+								dataSufficient: false,
+								reasons: [],
+								warnings: [],
+							},
+						},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('symbol-analysis-result'));
+		expect(verdict.textContent).toContain('Confidence: Medium');
+
+		// Arrays and objects are not labels; they must not render as "[object Object]".
+		const objectBrowser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:BTCUSDT',
+						timeframe: '1D',
+						analysis: { decision: { action: 'NO_TRADE', confidence: { score: 3 }, dataSufficient: false } },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(objectBrowser, 'analysis');
+		const objectForm = findForm(objectBrowser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		await objectForm.dispatch('submit');
+		await flush();
+		const objectVerdict = find(objectForm, (node) => node.className.includes('symbol-analysis-result'));
+		expect(objectVerdict.textContent).not.toContain('Confidence');
+		expect(objectVerdict.textContent).not.toContain('[object');
 	});
 
 	it('renders NO_TRADE decision action and warning chips when data is insufficient or neutral', async () => {
@@ -2840,7 +3334,7 @@ describe('admin browser client', () => {
 		expect(verdict.textContent).toContain('BINANCE:BTCUSDT · 4h');
 		expect(verdict.textContent).toContain('1.7x average volume');
 		expect(verdict.textContent).toContain('Strength: HIGH');
-		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
+		expect(findButton(form, 'Copy details').hidden).toBe(false);
 	});
 
 	it('renders news-monitor result cards with confidence and dry-run notice', async () => {
@@ -3125,7 +3619,7 @@ describe('admin browser client', () => {
 		await selectView(browser, 'overview');
 		await flush();
 
-		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		const copyButton = findButton(browser.elementsById.view, 'Copy details');
 		expect(copyButton).toBeDefined();
 		expect(copyButton.hidden).toBe(false);
 
@@ -3196,7 +3690,7 @@ describe('admin browser client', () => {
 		await flush();
 
 		browser.context.document.execCommand = () => { throw new Error('blocked'); };
-		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		const copyButton = findButton(browser.elementsById.view, 'Copy details');
 		await copyButton.dispatch('click');
 		await flush();
 
@@ -3220,7 +3714,7 @@ describe('admin browser client', () => {
 		await flush();
 
 		browser.context.document.execCommand = () => true;
-		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		const copyButton = findButton(browser.elementsById.view, 'Copy details');
 		await copyButton.dispatch('click');
 		await flush();
 
@@ -3286,8 +3780,8 @@ describe('admin browser client', () => {
 		expect(nextButton.disabled).toBe(true);
 		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
 		expect(listForm.textContent).not.toContain('first page alert');
-		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
-		expect(find(listForm, (node) => node.tagName === 'PRE' && node.textContent.includes('first page alert'))).toBeUndefined();
+		expect(findButton(listForm, 'Copy details').hidden).toBe(true);
+		expect(find(listForm, (node) => node.className.includes('response-block') && node.textContent.includes('first page alert'))).toBeUndefined();
 
 		await nextButton.dispatch('click');
 		await flush();
@@ -3316,13 +3810,13 @@ describe('admin browser client', () => {
 		await listForm.dispatch('submit');
 		await flush();
 		expect(listForm.textContent).toContain('first page alert');
-		expect(findButton(listForm, 'Copy JSON').hidden).toBe(false);
+		expect(findButton(listForm, 'Copy details').hidden).toBe(false);
 
 		await listForm.dispatch('submit');
 		await flush();
 
 		expect(listForm.textContent).not.toContain('first page alert');
-		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
+		expect(findButton(listForm, 'Copy details').hidden).toBe(true);
 	});
 
 	it('resets pagination when the before cursor is edited manually', async () => {
@@ -3380,13 +3874,13 @@ describe('admin browser client', () => {
 		const summaryForm = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
 		await summaryForm.dispatch('submit');
 		await flush();
-		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(false);
+		expect(findButton(summaryForm, 'Copy details').hidden).toBe(false);
 
 		await summaryForm.dispatch('submit');
 		await flush();
 
-		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(true);
-		const rawPre = find(summaryForm, (node) => node.tagName === 'PRE' && node.textContent.includes('totalAlerts'));
+		expect(findButton(summaryForm, 'Copy details').hidden).toBe(true);
+		const rawPre = find(summaryForm, (node) => node.className.includes('response-block') && node.textContent.includes('Total Alerts'));
 		expect(rawPre).toBeUndefined();
 	});
 
@@ -3466,7 +3960,7 @@ describe('admin browser client', () => {
 		const form = findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation');
 		await form.dispatch('submit');
 		await flush();
-		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
+		expect(findButton(form, 'Copy details').hidden).toBe(false);
 
 		// Use form.elements to find the raw textarea by name
 		const rawTextarea = form.elements.body;
@@ -3474,8 +3968,8 @@ describe('admin browser client', () => {
 		await form.dispatch('submit');
 		await flush();
 
-		expect(findButton(form, 'Copy JSON').hidden).toBe(true);
-		const staleRaw = find(form, (node) => node.tagName === 'PRE' && node.textContent.includes('volume_ratio'));
+		expect(findButton(form, 'Copy details').hidden).toBe(true);
+		const staleRaw = find(form, (node) => node.className.includes('response-block') && node.textContent.includes('Volume ratio'));
 		expect(staleRaw).toBeUndefined();
 	});
 
@@ -3828,12 +4322,211 @@ describe('admin browser client', () => {
 		await summaryForm.elements.source.dispatch('input');
 
 		expect(loadButton.disabled).toBe(false);
-		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(true);
+		expect(findButton(summaryForm, 'Copy details').hidden).toBe(true);
 
 		releaseSlow();
 		await flush();
-		expect(find(summaryForm, (node) => node.tagName === 'PRE' && node.textContent.includes('totalAlerts'))).toBeUndefined();
+		expect(find(summaryForm, (node) => node.className.includes('response-block') && node.textContent.includes('Total Alerts'))).toBeUndefined();
 		expect(summaryForm.textContent).toContain('Filters changed');
+	});
+
+	describe('sentiment calibration panel', () => {
+		function summaryWithCalibration(calibration) {
+			return {
+				success: true,
+				summary: {
+					totalAlerts: 97,
+					window: {},
+					enrichment: {
+						enrichedAlerts: 97,
+						plainAlerts: 0,
+						sentimentCalibration: calibration,
+						riskMetadataCoverage: { denominator: 97, fields: {} },
+					},
+				},
+			};
+		}
+
+		async function loadSummary(browser, calibration) {
+			await flush();
+			await selectView(browser, 'alerts');
+			const form = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+			await form.dispatch('submit');
+			await flush();
+			return form;
+		}
+
+		it('surfaces a saturated verdict with the rule that fired', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.startsWith('/api/alerts/summary')) {
+						return response(summaryWithCalibration({
+							sampleCount: 97,
+							evaluated: true,
+							saturated: true,
+							reason: 'top_band_concentration',
+							min: 0.55,
+							max: 0.85,
+							p10: 0.7,
+							p50: 0.8,
+							p90: 0.85,
+							spread: 0.15,
+							distinctValueCount: 7,
+							bucketCount: 4,
+							buckets: [
+								{ lowerBound: 0.5, upperBound: 0.6, count: 5 },
+								{ lowerBound: 0.8, upperBound: 0.9, count: 45 },
+							],
+							topBandCount: 85,
+							topBandShare: 0.876289,
+							rawScoreCapCount: 13,
+						}));
+					}
+					return response({});
+				},
+			});
+
+			const form = await loadSummary(browser);
+
+			const text = form.textContent;
+			expect(text).toContain('Sentiment calibration');
+			expect(text).toContain('Saturated');
+			expect(text).toContain('top_band_concentration');
+			expect(text).toContain('0.75');
+			expect(text).toContain('13');
+			const panel = find(form, (node) => node.className.includes('sentiment-calibration'));
+			expect(panel).toBeDefined();
+			expect(find(panel, (node) => node.className.includes('status-danger'))).toBeDefined();
+		});
+
+		it('surfaces a healthy verdict', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.startsWith('/api/alerts/summary')) {
+						return response(summaryWithCalibration({
+							sampleCount: 120,
+							evaluated: true,
+							saturated: false,
+							reason: null,
+							min: 0.15,
+							max: 0.9,
+							p10: 0.25,
+							p50: 0.45,
+							p90: 0.85,
+							spread: 0.6,
+							distinctValueCount: 34,
+							bucketCount: 8,
+							buckets: [],
+							topBandCount: 46,
+							topBandShare: 0.383333,
+							rawScoreCapCount: 4,
+						}));
+					}
+					return response({});
+				},
+			});
+
+			const form = await loadSummary(browser);
+
+			expect(form.textContent).toContain('Sentiment calibration');
+			expect(form.textContent).toContain('Spread');
+			const panel = find(form, (node) => node.className.includes('sentiment-calibration'));
+			expect(panel).toBeDefined();
+			expect(find(panel, (node) => node.className.includes('status-ready'))).toBeDefined();
+		});
+
+		it('distinguishes an unevaluated window from a healthy one', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.startsWith('/api/alerts/summary')) {
+						return response(summaryWithCalibration({
+							sampleCount: 3,
+							evaluated: false,
+							saturated: false,
+							reason: 'insufficient_sample',
+							min: 0.55,
+							max: 0.55,
+							p10: 0.55,
+							p50: 0.55,
+							p90: 0.55,
+							spread: 0,
+							distinctValueCount: 1,
+							bucketCount: 1,
+							buckets: [],
+							topBandCount: 0,
+							topBandShare: 0,
+							rawScoreCapCount: 0,
+						}));
+					}
+					return response({});
+				},
+			});
+
+			const form = await loadSummary(browser);
+
+			const text = form.textContent;
+			expect(text).toContain('Sentiment calibration');
+			expect(text).toContain('insufficient_sample');
+			// Must not read as healthy: a small window is a non-verdict, not a pass.
+			expect(text).not.toContain('Healthy');
+			const panel = find(form, (node) => node.className.includes('sentiment-calibration'));
+			expect(panel).toBeDefined();
+			expect(find(panel, (node) => node.className.includes('status-disabled'))).toBeDefined();
+			expect(find(panel, (node) => node.className.includes('status-ready'))).toBeUndefined();
+		});
+
+		it('omits the panel entirely when the API reports no calibration block', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.startsWith('/api/alerts/summary')) {
+						return response({ success: true, summary: { totalAlerts: 1, window: {}, enrichment: { enrichedAlerts: 1 } } });
+					}
+					return response({});
+				},
+			});
+
+			const form = await loadSummary(browser);
+
+			expect(form.textContent).not.toContain('Sentiment calibration');
+		});
+
+		it('renders untrusted reason text as text, never as markup', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.startsWith('/api/alerts/summary')) {
+						return response(summaryWithCalibration({
+							sampleCount: 30,
+							evaluated: true,
+							saturated: true,
+							reason: '<img src=x onerror=alert(1)>',
+							min: 0.8,
+							max: 0.8,
+							p10: 0.8,
+							p50: 0.8,
+							p90: 0.8,
+							spread: 0,
+							distinctValueCount: 1,
+							bucketCount: 1,
+							buckets: [],
+							topBandCount: 30,
+							topBandShare: 1,
+							rawScoreCapCount: 0,
+						}));
+					}
+					return response({});
+				},
+			});
+
+			const form = await loadSummary(browser);
+
+			expect(form.querySelectorAll('img')).toHaveLength(0);
+			expect(form.textContent).toContain('<img src=x onerror=alert(1)>');
+		});
 	});
 
 	it('renders dedicated outcomes filters and follows the returned before cursor', async () => {
@@ -3963,6 +4656,51 @@ describe('admin browser client', () => {
 		expect(summaryForm.textContent).toContain('+2.34%');
 		expect(summaryForm.textContent).toContain('Performance by window');
 		expect(summaryForm.textContent).toContain('66.67%');
+	});
+
+	it('renders dedicated outcomes calibration query and builds calibration dashboard', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				requests.push([url, options]);
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/outcomes/calibration')) {
+					return response({
+						success: true,
+						calibration: {
+							available: true,
+							totalScoredAlerts: 45,
+							suggestedThreshold: 0.78,
+							suggestedThresholdRationale: 'Alerts at 0.78+ show 55%+ target hit rate at 4h window',
+							buckets: [
+								{ range: '0.70-0.75', count: 15, avgReturn1h: 0.2, avgReturn4h: 0.5, targetHitRate: 0.4 },
+								{ range: '0.75-0.80', count: 30, avgReturn1h: 0.8, avgReturn4h: 1.5, targetHitRate: 0.6 },
+							],
+						},
+					});
+				}
+				return response({ success: true });
+			},
+		});
+
+		await flush();
+		await selectView(browser, 'outcomes');
+
+		const calibrationForm = findForm(browser.elementsById.view, 'GET /api/outcomes/calibration');
+		expect(calibrationForm).toBeDefined();
+		calibrationForm.elements.symbol.value = 'BTCUSDT';
+		calibrationForm.elements.window.value = '4h';
+		await calibrationForm.dispatch('submit');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/outcomes/calibration?limit=1000&symbol=BTCUSDT&window=4h');
+		expect(calibrationForm.textContent).toContain('Scored alerts');
+		expect(calibrationForm.textContent).toContain('45');
+		expect(calibrationForm.textContent).toContain('Suggested threshold');
+		expect(calibrationForm.textContent).toContain('0.78');
+		expect(calibrationForm.textContent).toContain('Calibration buckets');
+		expect(calibrationForm.textContent).toContain('0.70-0.75');
+		expect(calibrationForm.textContent).toContain('60%');
 	});
 
 	it('safely renders outcome cards with excursions, barriers, and expandable detail', async () => {
@@ -4096,7 +4834,7 @@ describe('admin browser client', () => {
 		await listForm.elements.symbol.dispatch('input');
 
 		expect(listButton.disabled).toBe(false);
-		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
+		expect(findButton(listForm, 'Copy details').hidden).toBe(true);
 
 		releaseList();
 		await flush();
@@ -4184,7 +4922,7 @@ describe('admin browser client', () => {
 					environment: 'testnet',
 					orders: [{
 						symbol: 'BTCUSDT',
-						orderId: 9007199254740993,
+						orderId: Number('9007199254740993'),
 						clientOrderId: 'cb-test-001',
 						price: '65000.00',
 						origQty: '0.01000000',
@@ -5065,7 +5803,7 @@ describe('structured analysis forms', () => {
 			await flush();
 
 			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Playground'));
+				&& node.textContent.includes('Operations'));
 			const select = find(playground, (node) => node.tagName === 'SELECT');
 
 			// POST /api/jobs/tradingview-analysis has body but NO query parameters
@@ -5100,7 +5838,7 @@ describe('structured analysis forms', () => {
 			await flush();
 
 			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Playground'));
+				&& node.textContent.includes('Operations'));
 			const select = find(playground, (node) => node.tagName === 'SELECT');
 			const optgroups = findAll(select, (node) => node.tagName === 'OPTGROUP');
 
@@ -5135,7 +5873,7 @@ describe('structured analysis forms', () => {
 			await flush();
 
 			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Playground'));
+				&& node.textContent.includes('Operations'));
 			const select = find(playground, (node) => node.tagName === 'SELECT');
 
 			// Select POST /api/webhook/alert and enter custom body
@@ -5153,6 +5891,210 @@ describe('structured analysis forms', () => {
 			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
 			await select.dispatch('change');
 			expect(playground.elements.body.value).toContain('Custom alert message 42');
+		});
+
+		it('preserves operation input when filtering auto-selects another operation', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+			});
+			await flush();
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
+			const alertOperation = optionValue('POST /api/webhook/alert');
+			const volumeOperation = optionValue('POST /api/webhook/volume-confirmation');
+
+			select.value = alertOperation;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ message: 'Original alert payload' });
+
+			const filter = playground.elements.filterOperations;
+			filter.value = 'volume-confirmation';
+			await filter.dispatch('input');
+			expect(select.value).toBe(volumeOperation);
+			playground.elements.body.value = JSON.stringify({ symbol: 'BINANCE:BTCUSDT', timeframe: '1h' });
+
+			filter.value = '';
+			await filter.dispatch('input');
+			select.value = alertOperation;
+			await select.dispatch('change');
+			expect(playground.elements.body.value).toContain('Original alert payload');
+
+			select.value = volumeOperation;
+			await select.dispatch('change');
+			expect(playground.elements.body.value).toContain('BINANCE:BTCUSDT');
+		});
+
+		it('does not let an empty filter result erase previously cached operation inputs', async () => {
+			const dispatched = [];
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					dispatched.push(url);
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const submitButton = find(playground, (node) => node.tagName === 'BUTTON' && node.textContent === 'Send request');
+			const curlButton = find(playground, (node) => node.tagName === 'BUTTON' && node.textContent.includes('cURL'));
+			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
+			const alertOperation = optionValue('POST /api/webhook/alert');
+			const volumeOperation = optionValue('POST /api/webhook/volume-confirmation');
+
+			select.value = alertOperation;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ message: 'Alert draft that must survive' });
+			await playground.elements.body.dispatch('input');
+
+			select.value = volumeOperation;
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ symbol: 'BINANCE:BTCUSDT', timeframe: '4h' });
+			await playground.elements.body.dispatch('input');
+
+			select.value = alertOperation;
+			await select.dispatch('change');
+
+			const filter = playground.elements.filterOperations;
+
+			// A blank `select.value` must mean "no operation selected", never index 0:
+			// `Number('') === 0`, so an unguarded lookup silently resolves to the first
+			// definition and leaves the dispatch controls armed against a route the
+			// operator never picked.
+			filter.value = 'zzz-no-operation-matches';
+			await filter.dispatch('input');
+			expect(select.value).toBe('');
+			expect(playground.elements.body).toBeUndefined();
+			expect(playground.elements.query).toBeUndefined();
+			expect(playground.elements['path-alertId']).toBeUndefined();
+			expect(submitButton.disabled).toBe(true);
+			expect(curlButton.disabled).toBe(true);
+
+			await playground.dispatch('submit');
+			await flush();
+			expect(dispatched).toEqual([]);
+
+			filter.value = 'volume-confirmation';
+			await filter.dispatch('input');
+			expect(select.value).toBe(volumeOperation);
+			expect(playground.elements.body.value).toContain('BINANCE:BTCUSDT');
+
+			select.value = alertOperation;
+			await select.dispatch('change');
+			expect(playground.elements.body.value).toContain('Alert draft that must survive');
+
+			select.value = volumeOperation;
+			await select.dispatch('change');
+			expect(playground.elements.body.value).toContain('BINANCE:BTCUSDT');
+		});
+
+		it('keeps the Playground submit locked across an operation switch while a request is pending', async () => {
+			let pendingResolver;
+			const dispatched = [];
+			const browser = createBrowser({
+				fetchImpl: (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/webhook/alert')) {
+						dispatched.push(url);
+						return new Promise((resolve) => { pendingResolver = resolve; });
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const submitButton = find(playground, (node) => node.tagName === 'BUTTON' && node.textContent === 'Send request');
+			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
+
+			select.value = optionValue('POST /api/webhook/alert');
+			await select.dispatch('change');
+			await playground.dispatch('submit');
+			await flush();
+
+			expect(dispatched.length).toBe(1);
+			expect(submitButton.disabled).toBe(true);
+
+			// Switching operations re-renders the fields while the first request is still in flight.
+			select.value = optionValue('POST /api/webhook/volume-confirmation');
+			await select.dispatch('change');
+			await flush();
+			expect(submitButton.disabled).toBe(true);
+
+			// A second dispatch attempt must not reach the network while the first is pending.
+			await playground.dispatch('submit');
+			await flush();
+			expect(dispatched.length).toBe(1);
+
+			pendingResolver(response({ success: true, messageId: '12345' }));
+			await flush();
+
+			expect(dispatched.length).toBe(1);
+			expect(submitButton.disabled).toBe(false);
+		});
+
+		it('keeps the Playground submit locked when filtering auto-selects another operation during a pending request', async () => {
+			let pendingResolver;
+			const dispatched = [];
+			const browser = createBrowser({
+				fetchImpl: (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/webhook/alert')) {
+						dispatched.push(url);
+						return new Promise((resolve) => { pendingResolver = resolve; });
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const submitButton = find(playground, (node) => node.tagName === 'BUTTON' && node.textContent === 'Send request');
+			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
+
+			select.value = optionValue('POST /api/webhook/alert');
+			await select.dispatch('change');
+			await playground.dispatch('submit');
+			await flush();
+			expect(dispatched.length).toBe(1);
+
+			// Filter-driven selection re-renders through populateOptions() rather than the select.
+			const filter = playground.elements.filterOperations;
+			filter.value = 'volume-confirmation';
+			await filter.dispatch('input');
+			await flush();
+
+			expect(select.value).toBe(optionValue('POST /api/webhook/volume-confirmation'));
+			expect(submitButton.disabled).toBe(true);
+
+			await playground.dispatch('submit');
+			await flush();
+			expect(dispatched.length).toBe(1);
+
+			pendingResolver(response({ success: true, messageId: '12345' }));
+			await flush();
+
+			expect(dispatched.length).toBe(1);
+			expect(submitButton.disabled).toBe(false);
 		});
 
 		it('renders structured results and provides collapsible raw JSON toggle', async () => {
@@ -5179,7 +6121,7 @@ describe('structured analysis forms', () => {
 			await flush();
 
 			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Playground'));
+				&& node.textContent.includes('Operations'));
 			const select = find(playground, (node) => node.tagName === 'SELECT');
 
 			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/volume-confirmation')).value;
@@ -5195,7 +6137,7 @@ describe('structured analysis forms', () => {
 			// Raw toggle should be visible with copy button and formatted JSON
 			const rawToggle = find(playground, (n) => n.tagName === 'DETAILS' && n.className === 'raw-status');
 			expect(rawToggle.hidden).toBe(false);
-			expect(rawToggle.textContent).toContain('Show raw response');
+			expect(rawToggle.textContent).toContain('Response details');
 			expect(rawToggle.textContent).toContain('2.15');
 		});
 
@@ -5215,7 +6157,7 @@ describe('structured analysis forms', () => {
 			await flush();
 
 			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Playground'));
+				&& node.textContent.includes('Operations'));
 			const select = find(playground, (node) => node.tagName === 'SELECT');
 
 			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
@@ -5251,6 +6193,114 @@ describe('structured analysis forms', () => {
 			expect(playground.elements.body.value).toContain('[REDACTED]');
 		});
 
+		it('records the submitted query payload when operations change mid-flight', async () => {
+			let releaseRequest;
+			const pendingRequest = new Promise((resolve) => { releaseRequest = resolve; });
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/selftest/run')) {
+						await pendingRequest;
+						return response({ success: true, results: [] });
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
+
+			select.value = optionValue('POST /api/selftest/run');
+			await select.dispatch('change');
+			playground.elements.query.value = JSON.stringify({ only: 'submitted-check-1162' });
+			playground.elements.body.value = JSON.stringify({ only: 'submitted-body-1162' });
+
+			await playground.dispatch('submit');
+			await flush();
+
+			// The response is still in flight: switch operation and type a different query.
+			select.value = optionValue('GET /api/alerts —');
+			await select.dispatch('change');
+			playground.elements.query.value = JSON.stringify({ limit: 5 });
+			await playground.dispatch('input');
+
+			releaseRequest();
+			await flush();
+			await flush();
+
+			const historyItems = findAll(playground, (n) => n.className === 'history-item');
+			expect(historyItems.length).toBe(1);
+
+			const restoreBtn = find(historyItems[0], (n) => n.tagName === 'BUTTON' && n.textContent === 'Restore');
+			await restoreBtn.dispatch('click');
+			await flush();
+
+			const currentSelected = find(select, (o) => o.value === select.value);
+			expect(currentSelected.textContent).toContain('POST /api/selftest/run');
+			expect(playground.elements.query.value).toContain('submitted-check-1162');
+			expect(playground.elements.query.value).not.toContain('"limit"');
+			expect(playground.elements.body.value).toContain('submitted-body-1162');
+		});
+
+		it('records the submitted body payload when operations change mid-flight', async () => {
+			let releaseRequest;
+			const pendingRequest = new Promise((resolve) => { releaseRequest = resolve; });
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/webhook/alert')) {
+						await pendingRequest;
+						return response({ success: true, messageId: 'm-1162' });
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
+
+			select.value = optionValue('POST /api/webhook/alert');
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ text: 'submitted alert 1162' });
+
+			await playground.dispatch('submit');
+			await flush();
+
+			// The response is still in flight: switch operation and type a different body.
+			select.value = optionValue('POST /api/jobs/tradingview-analysis');
+			await select.dispatch('change');
+			playground.elements.body.value = JSON.stringify({ symbols: ['BINANCE:BTCUSDT'] });
+			await playground.dispatch('input');
+
+			releaseRequest();
+			await flush();
+			await flush();
+
+			const historyItems = findAll(playground, (n) => n.className === 'history-item');
+			expect(historyItems.length).toBe(1);
+
+			const restoreBtn = find(historyItems[0], (n) => n.tagName === 'BUTTON' && n.textContent === 'Restore');
+			await restoreBtn.dispatch('click');
+			await flush();
+
+			const currentSelected = find(select, (o) => o.value === select.value);
+			expect(currentSelected.textContent).toContain('POST /api/webhook/alert');
+			expect(playground.elements.body.value).toContain('submitted alert 1162');
+			expect(playground.elements.body.value).not.toContain('BINANCE:BTCUSDT');
+		});
+
 		it('generates a curl command with literal $WEBHOOK_API_KEY placeholder and never leaks actual key', async () => {
 			let capturedTextarea = null;
 			const browser = createBrowser({
@@ -5271,7 +6321,7 @@ describe('structured analysis forms', () => {
 			browser.context.document.execCommand = () => true;
 
 			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Playground'));
+				&& node.textContent.includes('Operations'));
 			const select = find(playground, (node) => node.tagName === 'SELECT');
 
 			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
@@ -5294,6 +6344,491 @@ describe('structured analysis forms', () => {
 			// Crucial security check: the actual API key MUST NOT appear anywhere in the curl output
 			expect(curlCommand).not.toContain('actual-production-secret-key-12345');
 		});
-	});
-});
 
+		describe('request history records the actual outcome', () => {
+			const openPlayground = async (options) => {
+				const browser = createBrowser({
+					fetchImpl: async (url) => {
+						if (url === '/openapi.json') return response(contract);
+						return response({});
+					},
+					...options,
+				});
+				await flush();
+				browser.elementsById['api-key'].value = 'test-key';
+				await selectView(browser, 'playground');
+				await flush();
+				const form = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+					&& node.textContent.includes('Operations'));
+				const select = find(form, (node) => node.tagName === 'SELECT');
+				const choose = async (route) => {
+					select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes(route)).value;
+					await select.dispatch('change');
+				};
+				return { browser, form, select, choose };
+			};
+
+			const badgeOf = (historyItem) => find(historyItem, (node) => typeof node.className === 'string'
+				&& node.className.startsWith('status-badge'));
+
+			it('labels a network failure as a network error instead of 200 OK', async () => {
+				const { form, choose } = await openPlayground({
+					fetchImpl: async (url) => {
+						if (url === '/openapi.json') return response(contract);
+						throw new TypeError('Failed to fetch');
+					},
+				});
+				await choose('POST /api/webhook/alert');
+				form.elements.body.value = JSON.stringify({ text: 'network failure probe' });
+				await form.dispatch('submit');
+				await flush();
+
+				const historyItems = findAll(form, (n) => n.className === 'history-item');
+				expect(historyItems.length).toBe(1);
+				const badge = badgeOf(historyItems[0]);
+				expect(badge.textContent).toBe('Network error');
+				expect(badge.textContent).not.toContain('200');
+				expect(badge.className).toContain('status-danger');
+			});
+
+			it('distinguishes a client-side request timeout from a generic network error', async () => {
+				const abortError = new Error('The operation was aborted');
+				abortError.name = 'AbortError';
+				const { form, choose } = await openPlayground({
+					fetchImpl: async (url) => {
+						if (url === '/openapi.json') return response(contract);
+						throw abortError;
+					},
+				});
+				await choose('POST /api/webhook/alert');
+				form.elements.body.value = JSON.stringify({ text: 'timeout probe' });
+				await form.dispatch('submit');
+				await flush();
+
+				const historyItems = findAll(form, (n) => n.className === 'history-item');
+				expect(badgeOf(historyItems[0]).textContent).toBe('Timed out');
+			});
+
+			it('labels a declined confirmation as cancelled and never sends the request', async () => {
+				const sent = [];
+				const { form, choose } = await openPlayground({
+					confirm: () => false,
+					fetchImpl: async (url) => {
+						if (url === '/openapi.json') return response(contract);
+						sent.push(url);
+						return response({ success: true });
+					},
+				});
+				await choose('POST /api/alerts/{alertId}/replay');
+				form.elements['path-alertId'].value = 'alert-1163';
+				await form.dispatch('submit');
+				await flush();
+
+				expect(sent.some((url) => url.includes('/api/alerts/alert-1163/replay'))).toBe(false);
+				const historyItems = findAll(form, (n) => n.className === 'history-item');
+				expect(historyItems.length).toBe(1);
+				const badge = badgeOf(historyItems[0]);
+				expect(badge.textContent).toBe('Cancelled');
+				expect(badge.className).toContain('status-danger');
+			});
+
+			it('labels an authorization refusal as not authorized and never sends the request', async () => {
+				const sent = [];
+				const auth = {
+					onAuthStateChanged: (listener) => {
+						listener({
+							email: 'viewer@example.com',
+							getIdToken: async () => 'viewer-token',
+							getIdTokenResult: async () => ({ claims: { role: 'admin.viewer' } }),
+						});
+						return () => {};
+					},
+					setPersistence: async () => undefined,
+					signInWithEmailAndPassword: jest.fn(),
+					signOut: jest.fn(),
+				};
+				const { form, choose } = await openPlayground({
+					firebase: { initializeApp: jest.fn(), auth: jest.fn(() => auth) },
+					fetchImpl: async (url) => {
+						if (url === '/admin/auth-config') {
+							return response({
+								enabled: true,
+								configured: true,
+								config: { apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros' },
+							});
+						}
+						if (url === '/openapi.json') return response(contract);
+						sent.push(url);
+						return response({ success: true });
+					},
+				});
+				await choose('POST /api/webhook/alert');
+				form.elements.body.value = JSON.stringify({ text: 'viewer must not mutate' });
+				await form.dispatch('submit');
+				await flush();
+
+				expect(sent.some((url) => url.includes('/api/webhook/alert'))).toBe(false);
+				const historyItems = findAll(form, (n) => n.className === 'history-item');
+				expect(historyItems.length).toBe(1);
+				const badge = badgeOf(historyItems[0]);
+				expect(badge.textContent).toBe('Not authorized');
+				expect(badge.className).toContain('status-danger');
+			});
+
+			it('records a real 4xx response as its own HTTP status and a non-success tone', async () => {
+				const { form, choose } = await openPlayground({
+					fetchImpl: async (url) => {
+						if (url === '/openapi.json') return response(contract);
+						if (url.includes('/api/webhook/alert')) {
+							return response({
+								success: false,
+								error: 'text is required',
+								code: 'INVALID_REQUEST',
+								requestId: 'req-1163',
+								retryable: false,
+							}, 400);
+						}
+						return response({});
+					},
+				});
+				await choose('POST /api/webhook/alert');
+				form.elements.body.value = JSON.stringify({});
+				await form.dispatch('submit');
+				await flush();
+
+				const historyItems = findAll(form, (n) => n.className === 'history-item');
+				expect(historyItems.length).toBe(1);
+				const badge = badgeOf(historyItems[0]);
+				expect(badge.textContent).toBe('HTTP 400');
+				expect(badge.className).toContain('status-danger');
+			});
+
+			it('records a real 2xx response as an HTTP status and a success tone', async () => {
+				const { form, choose } = await openPlayground({
+					fetchImpl: async (url) => {
+						if (url === '/openapi.json') return response(contract);
+						if (url.includes('/api/webhook/alert')) return response({ success: true, messageId: 'm-1163' });
+						return response({});
+					},
+				});
+				await choose('POST /api/webhook/alert');
+				form.elements.body.value = JSON.stringify({ text: 'successful delivery probe' });
+				await form.dispatch('submit');
+				await flush();
+
+				const historyItems = findAll(form, (n) => n.className === 'history-item');
+				expect(historyItems.length).toBe(1);
+				const badge = badgeOf(historyItems[0]);
+				expect(badge.textContent).toBe('HTTP 200');
+				expect(badge.className).toContain('status-ready');
+			});
+		});
+	});
+	it('moves focus to the view region and updates the document title on every view switch', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+
+		const view = browser.elementsById.view;
+		// Initial load focuses the overview view region.
+		expect(view._focused).toBe(true);
+		expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
+
+		view._focused = false;
+		await selectView(browser, 'status');
+		expect(view._focused).toBe(true);
+		expect(view.tabIndex).toBe(-1);
+		expect(browser.titleHistory.at(-1)).toMatch(/Status/);
+
+		view._focused = false;
+		await selectView(browser, 'alerts');
+		expect(view._focused).toBe(true);
+		expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+
+		view._focused = false;
+		await selectView(browser, 'overview');
+		expect(view._focused).toBe(true);
+		expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
+	});
+
+	it('keeps the view region focusable for screen readers', () => {
+		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
+		expect(shell).toMatch(/<section id="view"[^>]*tabindex="-1"/);
+	});
+
+	it('does not announce the whole workspace as a live region', () => {
+		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
+		const viewTag = shell.match(/<section id="view"[^>]*>/)[0];
+		expect(viewTag).not.toMatch(/aria-live/);
+		expect(shell).toMatch(/id="view-status"[^>]*role="status"[^>]*aria-live="polite"/);
+	});
+
+	describe('deep-linkable views and filter state', () => {
+		const editField = async (input, value) => {
+			input.value = value;
+			await input.dispatch('input');
+			await flush();
+		};
+
+		const alertSummaryQuery = (browser, route = '/api/alerts/summary') => {
+			const call = [...browser.helperCalls].reverse().find((input) => input.path === route);
+			return call && call.query;
+		};
+
+		const alertFilterFields = (browser, route) => {
+			const form = findForm(browser.elementsById.view, route);
+			const field = (name) => find(form, (node) => node.name === name
+				&& ['INPUT', 'SELECT', 'TEXTAREA'].includes(node.tagName));
+			return {
+				form,
+				from: field('from'),
+				to: field('to'),
+				limit: field('limit'),
+				source: field('source'),
+				enriched: field('enriched'),
+			};
+		};
+
+		const openApi = async (url) => {
+			if (url.endsWith('/openapi.json')) return response(contract);
+			if (url.startsWith('/api/alerts/summary')) return response({ success: true, summary: { totalAlerts: 1, window: {} } });
+			return response({ enabled: false, configured: false });
+		};
+
+		it('writes the active view into the URL on navigation', async () => {
+			const browser = createBrowser({ fetchImpl: openApi });
+			await flush();
+
+			await selectView(browser, 'alerts');
+
+			const lastCall = browser.historyCalls.at(-1);
+			expect(lastCall.mode).toBe('push');
+			expect(lastCall.url).toContain('view=alerts');
+			expect(browser.location.search).toContain('view=alerts');
+			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+		});
+
+		it('round-trips alert filters through the query string', async () => {
+			const browser = createBrowser({ fetchImpl: openApi });
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const fields = alertFilterFields(browser, '/api/alerts/summary');
+			await editField(fields.from, '2026-08-01T00:00');
+			await editField(fields.to, '2026-08-02T00:00');
+			await editField(fields.limit, '42');
+			await editField(fields.source, 'webhook');
+			await editField(fields.enriched, 'true');
+			await fields.form.dispatch('submit');
+			await flush();
+
+			const serialised = browser.location.search;
+			expect(serialised).toContain('view=alerts');
+			expect(serialised).toContain('alerts.summary.from=2026-08-01T00%3A00');
+			expect(serialised).toContain('alerts.summary.limit=42');
+			expect(serialised).toContain('alerts.summary.source=webhook');
+			expect(serialised).toContain('alerts.summary.enriched=true');
+			const originalQuery = alertSummaryQuery(browser);
+
+			const restored = createBrowser({ fetchImpl: openApi, location: { search: serialised } });
+			await flush();
+
+			expect(find(browser.body, (node) => node.dataset.view === 'alerts').attributes['aria-current']).toBe('page');
+			expect(browser.elementsById.view.textContent).toContain('Load alert analytics');
+
+			const restoredFields = alertFilterFields(restored, '/api/alerts/summary');
+			expect(restoredFields.from.value).toBe('2026-08-01T00:00');
+			expect(restoredFields.to.value).toBe('2026-08-02T00:00');
+			expect(restoredFields.limit.value).toBe('42');
+			expect(restoredFields.source.value).toBe('webhook');
+			expect(restoredFields.enriched.value).toBe('true');
+
+			await restoredFields.form.dispatch('submit');
+			await flush();
+			expect(alertSummaryQuery(restored)).toEqual(originalQuery);
+		});
+
+		it('keeps the summary and export filter sets independent', async () => {
+			const browser = createBrowser({ fetchImpl: openApi });
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const summary = alertFilterFields(browser, '/api/alerts/summary');
+			await editField(summary.limit, '11');
+			await summary.form.dispatch('submit');
+			await flush();
+
+			const exportFields = alertFilterFields(browser, '/api/alerts/export');
+			expect(exportFields.limit.value).not.toBe('11');
+			expect(browser.location.search).toContain('alerts.summary.limit=11');
+			expect(browser.location.search).not.toContain('alerts.export.limit=11');
+		});
+
+		it('round-trips outcomes symbol and status filters', async () => {
+			const browser = createBrowser({ fetchImpl: openApi });
+			await flush();
+			await selectView(browser, 'outcomes');
+
+			const form = findForm(browser.elementsById.view, '/api/outcomes');
+			const symbol = find(form, (node) => node.name === 'symbol');
+			const status = find(form, (node) => node.name === 'status');
+			await editField(symbol, 'BTCUSDT');
+			await editField(status, 'evaluated');
+			await form.dispatch('submit');
+			await flush();
+
+			const serialised = browser.location.search;
+			expect(serialised).toContain('outcomes.list.symbol=BTCUSDT');
+			expect(serialised).toContain('outcomes.list.status=evaluated');
+
+			const restored = createBrowser({ fetchImpl: openApi, location: { search: serialised } });
+			await flush();
+			const restoredForm = findForm(restored.elementsById.view, '/api/outcomes');
+			expect(find(restoredForm, (node) => node.name === 'symbol').value).toBe('BTCUSDT');
+			expect(find(restoredForm, (node) => node.name === 'status').value).toBe('evaluated');
+		});
+
+		it('falls back to the overview view and rewrites an unknown view value', async () => {
+			const browser = createBrowser({ fetchImpl: openApi, location: { search: '?view=does-not-exist' } });
+			await flush();
+
+			expect(browser.location.search).toBe('?view=overview');
+			expect(browser.historyCalls.some((call) => call.mode === 'replace' && call.url.includes('view=overview'))).toBe(true);
+			expect(browser.elementsById.view.textContent.length).toBeGreaterThan(0);
+			expect(find(browser.body, (node) => node.dataset.view === 'overview').attributes['aria-current']).toBe('page');
+			expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
+		});
+
+		it('moves between views on Back and Forward without reloading', async () => {
+			const browser = createBrowser({ fetchImpl: openApi });
+			await flush();
+			expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
+
+			await selectView(browser, 'alerts');
+			const alertsUrl = browser.location.search;
+			await selectView(browser, 'outcomes');
+			expect(browser.titleHistory.at(-1)).toMatch(/Outcomes/);
+
+			browser.location.search = alertsUrl;
+			await browser.dispatchPopState();
+
+			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+			expect(browser.elementsById.view.textContent).toContain('Load alert analytics');
+			expect(find(browser.body, (node) => node.dataset.view === 'alerts').attributes['aria-current']).toBe('page');
+			expect(find(browser.body, (node) => node.dataset.view === 'outcomes').attributes['aria-current']).toBeUndefined();
+			expect(browser.elementsById.view._focused).toBe(true);
+
+			browser.location.search = '?view=outcomes';
+			await browser.dispatchPopState();
+			expect(browser.titleHistory.at(-1)).toMatch(/Outcomes/);
+			expect(browser.elementsById.view.textContent).toContain('Load outcomes');
+		});
+
+		it('does not fire an API request before sign-in on a deep link', async () => {
+			const requests = [];
+			let authStateChanged;
+			const user = {
+				email: 'ops@example.com',
+				getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+				getIdTokenResult: jest.fn().mockResolvedValue({ claims: { 'admin.operator': true } }),
+			};
+			const auth = {
+				setPersistence: jest.fn().mockResolvedValue(undefined),
+				onAuthStateChanged: jest.fn((listener) => {
+					authStateChanged = listener;
+					listener(null);
+					return jest.fn();
+				}),
+				signInWithEmailAndPassword: jest.fn(async () => {
+					await authStateChanged(user);
+					return { user };
+				}),
+				signOut: jest.fn().mockResolvedValue(undefined),
+			};
+			const firebase = { initializeApp: jest.fn(), auth: jest.fn(() => auth) };
+			const browser = createBrowser({
+				firebase,
+				location: { search: '?view=alerts&alerts.summary.limit=7' },
+				fetchImpl: async (url) => {
+					requests.push(url);
+					if (url === '/admin/auth-config') {
+						return response({
+							enabled: true,
+							configured: true,
+							config: { apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros' },
+						});
+					}
+					if (url === '/openapi.json') return response(contract);
+					return response({});
+				},
+			});
+			await flush();
+
+			expect(requests.filter((url) => url !== '/admin/auth-config')).toEqual([]);
+			expect(browser.elementsById.view.textContent).toContain('Sign in required.');
+			expect(browser.elementsById['auth-form'].hidden).toBe(false);
+			expect(browser.titleHistory).not.toContain('Alerts · Cabros Bot Console');
+
+			browser.elementsById['auth-email'].value = 'ops@example.com';
+			browser.elementsById['auth-password'].value = 'password';
+			await browser.elementsById['sign-in'].dispatch('click');
+			await flush();
+
+			expect(requests).toContain('/openapi.json');
+			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+			expect(browser.elementsById.view.textContent).toContain('Load alert analytics');
+			expect(alertFilterFields(browser, '/api/alerts/summary').limit.value).toBe('7');
+		});
+
+		it('keeps the backend origin allowlist intact alongside deep-link state', async () => {
+			const requests = [];
+			const browser = createBrowser({
+				location: {
+					hostname: 'cabros-bot.web.app',
+					search: '?backend=https%3A%2F%2Fattacker.example&view=alerts',
+				},
+				fetchImpl: async (url) => {
+					requests.push(url);
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+
+			expect(requests.some((url) => url.includes('attacker.example'))).toBe(false);
+			expect(requests[0]).toBe('https://openclaw.tail5e4271.ts.net/admin/auth-config');
+			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+			expect(browser.location.search).toContain('view=alerts');
+
+			await selectView(browser, 'outcomes');
+			expect(browser.location.search).toContain('backend=https%3A%2F%2Fattacker.example');
+		});
+
+		it('keeps an allowlisted backend origin while navigating views', async () => {
+			const requests = [];
+			const browser = createBrowser({
+				location: {
+					hostname: 'cabros-bot.web.app',
+					search: '?backend=https%3A%2F%2Fcabros-bot-production.up.railway.app&view=alerts',
+				},
+				fetchImpl: async (url) => {
+					requests.push(url);
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			await selectView(browser, 'outcomes');
+
+			expect(requests.some((url) => url.startsWith('https://cabros-bot-production.up.railway.app/'))).toBe(true);
+			expect(browser.location.search).toContain('backend=https%3A%2F%2Fcabros-bot-production.up.railway.app');
+			expect(browser.location.search).toContain('view=outcomes');
+		});
+	});
+
+});

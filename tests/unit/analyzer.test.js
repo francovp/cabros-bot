@@ -11,6 +11,12 @@ jest.mock('../../src/services/grounding/genaiClient', () => ({
 	}),
 	llmCall: jest.fn(),
 }));
+jest.mock('../../src/services/classifierDevClient', () => ({
+	isEnabled: jest.fn(),
+	classifyHeadline: jest.fn(),
+}));
+
+const classifierDev = require('../../src/services/classifierDevClient');
 
 function getRemoteConfigService() {
 	return require('../../src/services/remoteConfig/RemoteConfigService');
@@ -19,6 +25,8 @@ function getRemoteConfigService() {
 describe('Analyzer - Unit Tests', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		classifierDev.isEnabled.mockReturnValue(false);
+		classifierDev.classifyHeadline.mockResolvedValue(null);
 		getRemoteConfigService()._resetForTesting();
 
 		gemini.analyzeNewsForSymbol = jest.fn().mockResolvedValue({
@@ -167,6 +175,33 @@ describe('Analyzer - Unit Tests', () => {
 		expect(result.error).toBeUndefined();
 	});
 
+	it('uses the analysis deadline when bounding a Gemini quota retry', async () => {
+		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
+		geminiQuotaManager.resetForTesting();
+
+		const analyzer = new NewsAnalyzer();
+		analyzer.timeout = 1000;
+		const quotaError = new Error('429 RESOURCE_EXHAUSTED: RetryDelay: 100ms');
+		analyzer.analyzeSymbolInternal = jest.fn()
+			.mockRejectedValueOnce(quotaError)
+			.mockResolvedValueOnce({ status: 'analyzed', alert: null, cached: false });
+
+		const startedAt = Date.now();
+		await expect(analyzer.runSymbolAnalysisWithRetry(
+			'BTCUSDT',
+			'req-analysis-deadline-retry',
+			null,
+			{},
+			startedAt,
+			{ analysisDeadline: startedAt + 20 },
+		)).rejects.toThrow(quotaError.message);
+
+		expect(analyzer.analyzeSymbolInternal).toHaveBeenCalledTimes(1);
+		geminiQuotaManager.resetForTesting();
+	});
+
 	it('should honor quoted Gemini retryDelay values from RetryInfo JSON', async () => {
 		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
 		process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS = '1000';
@@ -305,6 +340,203 @@ describe('Analyzer - Unit Tests', () => {
 		const context = analyzer.getMarketContext('BTCUSDT');
 		expect(typeof context).toBe('object');
 	});
+
+	it('uses classifier.dev to promote a high-confidence Gemini no-event result', async () => {
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeClassifierDev = require('../../src/services/classifierDevClient');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		activeClassifierDev.isEnabled.mockReturnValue(true);
+		activeClassifierDev.classifyHeadline.mockResolvedValue({ label: 'price_surge', confidence: 0.93 });
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'none',
+			event_significance: 0,
+			sentiment_score: 0.7,
+			headline: 'Bitcoin surges after a major exchange approval',
+			confidence: 0.2,
+			sources: ['https://example.com/news'],
+		});
+		const analyzer = new NewsAnalyzer();
+		analyzer.getMarketContext = jest.fn().mockResolvedValue(null);
+		analyzer.enrichmentService.isEnabled = jest.fn().mockReturnValue(false);
+
+		const result = await analyzer.analyzeSymbolInternal('BTCUSDT', 'req-1', null, {}, { dryRun: true });
+
+		expect(activeClassifierDev.classifyHeadline).toHaveBeenCalledWith(
+			'BTCUSDT: Bitcoin surges after a major exchange approval',
+			expect.objectContaining({
+				labels: expect.arrayContaining(['price_surge', 'price_decline', 'none']),
+			}),
+		);
+		expect(result.alert).toBeDefined();
+		expect(result.alert.eventCategory).toBe('price_surge');
+		expect(result.alert.confidence).toBe(0.93);
+	});
+
+	it('uses classifier.dev provenance for promoted confidence', async () => {
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeClassifierDev = require('../../src/services/classifierDevClient');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		activeClassifierDev.isEnabled.mockReturnValue(true);
+		activeClassifierDev.classifyHeadline.mockResolvedValue({ label: 'price_surge', confidence: 0.93 });
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'none',
+			event_significance: 0,
+			sentiment_score: 0.7,
+			headline: 'Bitcoin surges after a major exchange approval',
+			confidence: 0.2,
+			confidence_reason: 'No market-moving catalyst detected',
+			calibration: { mode: 'gemini-grounding' },
+			sources: ['https://example.com/news'],
+		});
+		const analyzer = new NewsAnalyzer();
+		analyzer.getMarketContext = jest.fn().mockResolvedValue(null);
+		analyzer.enrichmentService.isEnabled = jest.fn().mockReturnValue(false);
+
+		const result = await analyzer.analyzeSymbolInternal('BTCUSDT', 'req-provenance', null, {}, { dryRun: true });
+
+		expect(result.alert.confidence_reason).toBe('Confidence score from classifier.dev');
+		expect(result.alert.calibration).toBeUndefined();
+		expect(result.alert.enriched.extraText).toContain('_Confidence source: classifier.dev_');
+		expect(result.alert.enriched.extraText).not.toContain('No market-moving catalyst detected');
+	});
+
+	it.each([
+		{ label: 'price_decline', sentimentScore: 0.7, expectedSentiment: -0.7 },
+		{ label: 'price_surge', sentimentScore: -0.7, expectedSentiment: 0.7 },
+	])('aligns sentiment with classifier.dev $label promotions', async ({ label, sentimentScore, expectedSentiment }) => {
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeClassifierDev = require('../../src/services/classifierDevClient');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		activeClassifierDev.isEnabled.mockReturnValue(true);
+		activeClassifierDev.classifyHeadline.mockResolvedValue({ label, confidence: 0.93 });
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'none',
+			event_significance: 0,
+			sentiment_score: sentimentScore,
+			headline: 'Market-moving headline',
+			confidence: 0.2,
+			sources: ['https://example.com/news'],
+		});
+		const analyzer = new NewsAnalyzer();
+		analyzer.getMarketContext = jest.fn().mockResolvedValue(null);
+		analyzer.enrichmentService.isEnabled = jest.fn().mockReturnValue(false);
+
+		const result = await analyzer.analyzeSymbolInternal('BTCUSDT', 'req-1', null, {}, { dryRun: true });
+
+		expect(result.alert.eventCategory).toBe(label);
+		expect(result.alert.sentimentScore).toBe(expectedSentiment);
+	});
+
+	it('rechecks cached no-event results when classifier.dev has not been evaluated', async () => {
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeClassifierDev = require('../../src/services/classifierDevClient');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		activeClassifierDev.isEnabled.mockReturnValue(true);
+		activeClassifierDev.classifyHeadline.mockResolvedValue({ label: 'price_surge', confidence: 0.93 });
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'none',
+			event_significance: 0,
+			sentiment_score: 0.7,
+			headline: 'Bitcoin surges after a major exchange approval',
+			confidence: 0.2,
+			sources: ['https://example.com/news'],
+		});
+		const analyzer = new NewsAnalyzer();
+		analyzer.cache.get = jest.fn().mockImplementation(async (_symbol, category) => (
+			category === 'none' ? { alert: null, analysisResult: { status: 'analyzed' } } : null
+		));
+		analyzer.getMarketContext = jest.fn().mockResolvedValue(null);
+		analyzer.enrichmentService.isEnabled = jest.fn().mockReturnValue(false);
+
+		const result = await analyzer.analyzeSymbolInternal('BTCUSDT', 'req-1', null, {}, { deferDelivery: true });
+
+		expect(activeGemini.analyzeNewsForSymbol).toHaveBeenCalled();
+		expect(result.alert.eventCategory).toBe('price_surge');
+	});
+
+	it('marks cached no-event results after classifier.dev is checked', async () => {
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeClassifierDev = require('../../src/services/classifierDevClient');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		activeClassifierDev.isEnabled.mockReturnValue(true);
+		activeClassifierDev.classifyHeadline.mockResolvedValue({ label: 'none', confidence: 0.6 });
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'none',
+			event_significance: 0,
+			sentiment_score: 0,
+			headline: 'No material event detected',
+			confidence: 0.2,
+			sources: ['https://example.com/news'],
+		});
+		const analyzer = new NewsAnalyzer();
+		analyzer.cache.get = jest.fn().mockResolvedValue(null);
+		analyzer.cache.set = jest.fn().mockResolvedValue(true);
+		analyzer.getMarketContext = jest.fn().mockResolvedValue(null);
+
+		await analyzer.analyzeSymbolInternal('BTCUSDT', 'req-1');
+
+		expect(analyzer.cache.set).toHaveBeenCalledWith(
+			'BTCUSDT',
+			'none',
+			expect.objectContaining({ classifierDevChecked: true }),
+		);
+	});
+
+	it('leaves cached no-event results eligible after classifier.dev fails', async () => {
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeClassifierDev = require('../../src/services/classifierDevClient');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		activeClassifierDev.isEnabled.mockReturnValue(true);
+		activeClassifierDev.classifyHeadline.mockResolvedValue(null);
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'none',
+			event_significance: 0,
+			sentiment_score: 0,
+			headline: 'Market-moving headline',
+			confidence: 0.2,
+			sources: ['https://example.com/news'],
+		});
+		const analyzer = new NewsAnalyzer();
+		analyzer.cache.get = jest.fn().mockResolvedValue(null);
+		analyzer.cache.set = jest.fn().mockResolvedValue(true);
+		analyzer.getMarketContext = jest.fn().mockResolvedValue(null);
+
+		await analyzer.analyzeSymbolInternal('BTCUSDT', 'req-1');
+
+		expect(analyzer.cache.set).toHaveBeenCalledWith(
+			'BTCUSDT',
+			'none',
+			expect.objectContaining({ classifierDevChecked: false }),
+		);
+	});
+
+	it('leaves cached no-event results eligible after classifier.dev returns an unsupported label', async () => {
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeClassifierDev = require('../../src/services/classifierDevClient');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		activeClassifierDev.isEnabled.mockReturnValue(true);
+		activeClassifierDev.classifyHeadline.mockResolvedValue({ label: 'unsupported', confidence: 0.9 });
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'none',
+			event_significance: 0,
+			sentiment_score: 0,
+			headline: 'Market-moving headline',
+			confidence: 0.2,
+			sources: ['https://example.com/news'],
+		});
+		const analyzer = new NewsAnalyzer();
+		analyzer.cache.get = jest.fn().mockResolvedValue(null);
+		analyzer.cache.set = jest.fn().mockResolvedValue(true);
+		analyzer.getMarketContext = jest.fn().mockResolvedValue(null);
+
+		await analyzer.analyzeSymbolInternal('BTCUSDT', 'req-unsupported-label');
+
+		expect(analyzer.cache.set).toHaveBeenCalledWith(
+			'BTCUSDT',
+			'none',
+			expect.objectContaining({ classifierDevChecked: false }),
+		);
+	});
 });
 
 describe('Analyzer - Grounding Calibration Surface', () => {
@@ -356,5 +588,79 @@ describe('Analyzer - Grounding Calibration Surface', () => {
 		expect(alert.symbol).toBe('BTCUSDT');
 		expect(alert.calibration).toBeUndefined();
 		expect(alert.confidence_reason).toBeDefined();
+	});
+
+	// Issue #1230: surface the source-quality tier so an operator can audit WHY
+	// an alert cleared NEWS_ALERT_THRESHOLD.
+	it('should surface the source quality tier for operator auditing', () => {
+		const analysis = baseAnalysis({
+			calibration: {
+				grounding_used: true,
+				actual_source_count: 3,
+				actual_quality_tiers: { high: 0, medium: 0, low: 3, unknown: 0 },
+				qualityTier: 'low',
+				qualityPenalty: 0.85,
+			},
+		});
+		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
+
+		expect(alert.calibration.qualityTier).toBe('low');
+		expect(alert.calibration.qualityPenalty).toBe(0.85);
+		expect(alert.sourceQualityTier).toBe('low');
+
+		const message = analyzer.formatAlertMessage('BTCUSDT', analysis, null);
+		expect(message).toMatch(/Source Quality:/);
+		expect(message).toMatch(/low/);
+	});
+
+	it('renders the source quality audit line into the DELIVERED payload (enriched.extraText)', () => {
+		// formatAlertMessage() has no production call site — production renders
+		// alert.enriched through formatEnriched(), which prints extraText. Without
+		// this the operator never sees why an alert cleared the threshold.
+		const analysis = baseAnalysis({
+			calibration: {
+				grounding_used: true,
+				actual_source_count: 3,
+				actual_quality_tiers: { high: 0, medium: 0, low: 3, unknown: 0 },
+				qualityTier: 'low',
+				qualityPenalty: 0.85,
+			},
+		});
+		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
+
+		expect(alert.enriched.extraText).toMatch(/Source Quality: low \(x0\\\.85\)/);
+	});
+
+	it('escapes the source quality audit line for MarkdownV2 delivery', () => {
+		// extraText is emitted verbatim by MarkdownV2Formatter, so `(` `)` and `.`
+		// are reserved characters — unescaped they make Telegram reject the whole
+		// message, not just the appended line.
+		const analysis = baseAnalysis({
+			calibration: {
+				grounding_used: true,
+				actual_source_count: 3,
+				actual_quality_tiers: { high: 0, medium: 0, low: 3, unknown: 0 },
+				qualityTier: 'low',
+				qualityPenalty: 0.85,
+			},
+		});
+		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
+		const line = alert.enriched.extraText.split('\n').find(l => l.includes('Source Quality'));
+
+		// The interpolated VALUE is escaped (`0.85` -> `0\.85`); the surrounding
+		// `_italic_` and `(x…)` parentheses are authored markup, not data.
+		expect(line).toBe('_Source Quality: low (x0\\.85)_');
+	});
+
+	it('should omit the quality tier line when no tier was resolved', () => {
+		const analysis = baseAnalysis({
+			calibration: { grounding_used: true, actual_source_count: 0, qualityTier: null, qualityPenalty: 1 },
+		});
+		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
+
+		expect(alert.sourceQualityTier).toBeUndefined();
+
+		const message = analyzer.formatAlertMessage('BTCUSDT', analysis, null);
+		expect(message).not.toContain('Source Quality:');
 	});
 });

@@ -9,7 +9,15 @@ const DEFAULT_MAX_REQUESTS = 100;
 // ponytail: fixed 1,000-request webhook bucket; split by API-key identity if isolation needs to scale.
 const WEBHOOK_MAX_REQUESTS = 1000;
 const DEFAULT_WINDOW_MS = 900000;
-const WEBHOOK_INGEST_PATHS = new Set(['/api/webhook/alert', '/api/webhook/message']);
+const WEBHOOK_INGEST_PATHS = new Set([
+	'/api/webhook/alert',
+	'/api/webhook/message',
+	'/api/webhook/expanded-analysis-alert',
+	'/api/webhook/market-scanner-alert',
+	'/api/webhook/volume-confirmation',
+	'/api/webhook/symbol-analysis',
+	'/api/news-monitor',
+]);
 const invalidConfigWarnings = new Set();
 
 let testModeEnabled = false;
@@ -115,6 +123,12 @@ function rateLimiter(req, res, next) {
 		data.count++;
 	}
 
+	const remaining = Math.max(0, maxRequests - data.count);
+	const resetSeconds = Math.ceil(data.resetTime / 1000);
+	res.setHeader('X-RateLimit-Limit', String(maxRequests));
+	res.setHeader('X-RateLimit-Remaining', String(remaining));
+	res.setHeader('X-RateLimit-Reset', String(resetSeconds));
+
 	if (data.count > maxRequests) {
 		const retryAfterSeconds = Math.max(1, Math.ceil((data.resetTime - now) / 1000));
 		res.setHeader('Retry-After', String(retryAfterSeconds));
@@ -139,5 +153,8 @@ rateLimiter.disableTestMode = function () {
 rateLimiter.reset = function () {
 	rateLimit.clear();
 };
+
+rateLimiter.WEBHOOK_INGEST_PATHS = WEBHOOK_INGEST_PATHS;
+rateLimiter.WEBHOOK_MAX_REQUESTS = WEBHOOK_MAX_REQUESTS;
 
 module.exports = rateLimiter;
