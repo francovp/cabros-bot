@@ -18,7 +18,7 @@ const {
 	MAX_LISTED_SYMBOLS,
 } = require('../../src/services/alerts/burstAggregator');
 
-const MarkdownV2Formatter = require('../../src/services/notification/formatters/MarkdownV2Formatter');
+const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
 const { parseTradingViewSignal } = require('../../src/services/tradingview/parseTradingViewSignal');
 
 function signal(symbol, { exchange = 'BINANCE', timeframe = '1D', side = 'SELL' } = {}) {
