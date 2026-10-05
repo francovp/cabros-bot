@@ -16,6 +16,7 @@ class FakeElement {
 		this.className = '';
 		this.value = '';
 		this.disabled = false;
+		this.required = false;
 		this.checked = false;
 		this._text = '';
 		this.name = '';
@@ -197,13 +198,16 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		'sse-status', 'sse-label',
 	].forEach((id) => {
 		const tag = id === 'api-key' ? 'input' : id === 'connection-form' ? 'form'
-			: id === 'view' ? 'section' : id === 'view-status' ? 'p' : id === 'auth-form' ? 'div' : id.endsWith('key') ? 'button' : 'p';
+			: id === 'view' ? 'section' : id === 'view-status' ? 'p' : id === 'auth-form' ? 'form' : id.endsWith('key') ? 'button' : 'p';
 		const node = new FakeElement(tag);
 		node.id = id;
 		node.hidden = false;
 		elementsById[id] = node;
 		body.append(node);
 	});
+	if (elementsById['auth-email']) elementsById['auth-email'].required = true;
+	if (elementsById['auth-password']) elementsById['auth-password'].required = true;
+	if (elementsById['api-key']) elementsById['api-key'].required = true;
 	['overview', 'status', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
@@ -4864,1971 +4868,216 @@ describe('admin browser client', () => {
 		expect(shell).not.toMatch(/[⌂◈◉◇◌✦▷]/);
 	});
 
-	it('loads recent Binance orders with symbol and limit filters', async () => {
-		const requests = [];
-		const browser = createBrowser({
-			fetchImpl: async (url, options) => {
-				if (url === '/openapi.json') return response(contract);
-				requests.push([url, options]);
-				return response({ success: true, environment: 'testnet', orders: [] });
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
-		listForm.elements.symbol.value = 'BTCUSDT';
-		listForm.elements.limit.value = '5';
-		browser.elementsById['api-key'].value = 'session-secret';
-		await listForm.dispatch('submit');
-		await flush();
-
-		const last = requests.at(-1);
-		expect(last[0]).toBe('/api/trading/binance/orders?symbol=BTCUSDT&limit=5');
-		expect(last[1].headers['x-api-key']).toBe('session-secret');
-	});
-
-	it('rejects exponent notation and canonicalizes integer order limits', async () => {
-		const requests = [];
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				requests.push(url);
-				return response({ success: true, environment: 'testnet', orders: [] });
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
-		listForm.elements.symbol.value = 'BTCUSDT';
-		listForm.elements.limit.value = '1e2';
-		await listForm.dispatch('submit');
-		await flush();
-		expect(requests.at(-1)).toBe('/api/trading/binance/orders?symbol=BTCUSDT');
-
-		listForm.elements.limit.value = '005';
-		await listForm.dispatch('submit');
-		await flush();
-		expect(requests.at(-1)).toBe('/api/trading/binance/orders?symbol=BTCUSDT&limit=5');
-	});
-
-	it('renders sanitized Binance order summary fields and hides provider noise', async () => {
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				return response({
-					success: true,
-					environment: 'testnet',
-					orders: [{
-						symbol: 'BTCUSDT',
-						orderId: Number('9007199254740993'),
-						clientOrderId: 'cb-test-001',
-						price: '65000.00',
-						origQty: '0.01000000',
-						executedQty: '0.00500000',
-						cummulativeQuoteQty: '325.00000',
-						status: 'PARTIALLY_FILLED',
-						type: 'LIMIT',
-						side: 'BUY',
-						timeInForce: 'GTC',
-						transactTime: 1717000000000,
-						updateTime: 1717000060000,
-						time: 1717000000000,
-						workingTime: 1717000000000,
-						isWorking: true,
-						stopPrice: '0.00000000',
-						icebergQty: '0.00000000',
-						origQuoteOrderQty: '0.00000000',
-						orderListId: -1,
-						selfTradePreventionMode: 'NONE',
-						fills: [{
-							price: '65000.00',
-							qty: '0.00500000',
-							commission: '0.00000500',
-							commissionAsset: 'BNB',
-							tradeId: 12345,
-							hiddenField: 'hidden-noisy-data',
-						}],
-						hiddenProviderField: 'hidden-noise',
-					}],
-				});
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
-		listForm.elements.symbol.value = 'BTCUSDT';
-		await listForm.dispatch('submit');
-		await flush();
-
-		expect(listForm.textContent).toContain('BTCUSDT');
-		expect(listForm.textContent).toContain('LIMIT');
-		expect(listForm.textContent).toContain('BUY');
-		expect(listForm.textContent).toContain('PARTIALLY_FILLED');
-		expect(listForm.textContent).toContain('cb-test-001');
-		expect(listForm.textContent).toContain('65000');
-		expect(listForm.textContent).toContain('0.00500000');
-		expect(listForm.textContent).not.toContain('hidden-noise');
-		expect(listForm.textContent).not.toContain('hidden-noisy-data');
-	});
-
-	it('looks up a single Binance order by orderId through the dedicated form', async () => {
-		const requests = [];
-		const browser = createBrowser({
-			fetchImpl: async (url, options) => {
-				if (url === '/openapi.json') return response(contract);
-				requests.push([url, options]);
-				return response({
-					success: true,
-					environment: 'testnet',
-					order: {
-						symbol: 'BTCUSDT',
-						orderId: 42,
-						clientOrderId: 'cb-order-42',
-						price: '62000.00',
-						origQty: '0.02000000',
-						executedQty: '0.02000000',
-						status: 'FILLED',
-						type: 'MARKET',
-						side: 'SELL',
-						transactTime: 1717000000000,
-						updateTime: 1717000005000,
-					},
-				});
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const detailForm = findForm(browser.elementsById.view, 'Get single order');
-		detailForm.elements.symbol.value = 'BTCUSDT';
-		detailForm.elements['path-orderId'].value = '42';
-		await detailForm.dispatch('submit');
-		await flush();
-
-		expect(requests.at(-1)[0]).toBe('/api/trading/binance/orders?symbol=BTCUSDT&orderId=42');
-		expect(detailForm.textContent).toContain('FILLED');
-		expect(detailForm.textContent).toContain('MARKET');
-		expect(detailForm.textContent).toContain('SELL');
-		expect(detailForm.textContent).toContain('cb-order-42');
-	});
-
-	it('rejects exponent notation and canonicalizes order IDs', async () => {
-		const requests = [];
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				requests.push(url);
-				return response({ success: true, environment: 'testnet', order: { status: 'FILLED' } });
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const detailForm = findForm(browser.elementsById.view, 'Get single order');
-		detailForm.elements.symbol.value = 'BTCUSDT';
-		detailForm.elements['path-orderId'].value = '1e2';
-		await detailForm.dispatch('submit');
-		await flush();
-		expect(requests).toHaveLength(0);
-		expect(detailForm.textContent).toContain('orderId must be a positive integer');
-
-		detailForm.elements['path-orderId'].value = '0042';
-		await detailForm.dispatch('submit');
-		await flush();
-		expect(requests.at(-1)).toBe('/api/trading/binance/orders?symbol=BTCUSDT&orderId=42');
-	});
-
-	it('looks up a single Binance order by origClientOrderId through the dedicated form', async () => {
-		const requests = [];
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				requests.push(url);
-				return response({
-					success: true,
-					environment: 'testnet',
-					order: {
-						symbol: 'ETHUSDT',
-						orderId: 7,
-						clientOrderId: 'cb-eth-7',
-						status: 'NEW',
-						type: 'LIMIT',
-						side: 'BUY',
-					},
-				});
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const detailForm = findForm(browser.elementsById.view, 'Get single order');
-		detailForm.elements.symbol.value = 'ETHUSDT';
-		detailForm.elements['path-origClientOrderId'].value = 'cb-eth-7';
-		await detailForm.dispatch('submit');
-		await flush();
-
-		expect(requests.at(-1)).toBe('/api/trading/binance/orders?symbol=ETHUSDT&origClientOrderId=cb-eth-7');
-	});
-
-	it('rejects invalid origClientOrderId before dispatch', async () => {
-		const requests = [];
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				requests.push(url);
-				return response({ success: true, environment: 'testnet', order: {} });
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const detailForm = findForm(browser.elementsById.view, 'Get single order');
-		detailForm.elements.symbol.value = 'ETHUSDT';
-		detailForm.elements['path-origClientOrderId'].value = 'invalid/client/id';
-		await detailForm.dispatch('submit');
-		await flush();
-
-		expect(requests).toHaveLength(0);
-		expect(detailForm.textContent).toContain('origClientOrderId must contain 1-36 safe characters');
-
-		detailForm.elements['path-origClientOrderId'].value = 'a'.repeat(37);
-		await detailForm.dispatch('submit');
-		await flush();
-
-		expect(requests).toHaveLength(0);
-		expect(detailForm.textContent).toContain('origClientOrderId must contain 1-36 safe characters');
-	});
-
-	it('rejects ambiguous single-order identifiers', async () => {
-		const requests = [];
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				requests.push(url);
-				return response({ success: true, environment: 'testnet', order: {} });
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const detailForm = findForm(browser.elementsById.view, 'Get single order');
-		detailForm.elements.symbol.value = 'BTCUSDT';
-		detailForm.elements['path-orderId'].value = '42';
-		detailForm.elements['path-origClientOrderId'].value = 'cb-42';
-		await detailForm.dispatch('submit');
-		await flush();
-
-		expect(requests).toHaveLength(0);
-		expect(detailForm.textContent).toContain('Provide exactly one order identifier');
-	});
-
-	it('renders malformed Binance order timestamps without throwing', async () => {
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				return response({
-					success: true,
-					environment: 'testnet',
-					orders: [{ symbol: 'BTCUSDT', orderId: 42, status: 'FILLED', type: 'MARKET', time: 'not-a-timestamp' }],
-				});
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
-		listForm.elements.symbol.value = 'BTCUSDT';
-		await expect(listForm.dispatch('submit')).resolves.toBeUndefined();
-		await flush();
-
-		expect(listForm.textContent).toContain('not-a-timestamp');
-	});
-
-	it('clears stale Binance orders when filters change before the response resolves', async () => {
-		let releaseList;
-		const slow = new Promise((resolve) => { releaseList = resolve; });
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				if (url.startsWith('/api/trading/binance/orders')) {
-					return slow.then(() => response({
-						success: true,
-						environment: 'testnet',
-						orders: [{ symbol: 'BTCUSDT', orderId: 1, side: 'BUY', status: 'NEW', type: 'LIMIT', executedQty: '0', origQty: '1' }],
-					}));
-				}
-				return response({});
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
-		listForm.elements.symbol.value = 'BTCUSDT';
-		const submit = listForm.dispatch('submit');
-		await flush();
-
-		listForm.elements.symbol.value = 'ETHUSDT';
-		await listForm.elements.symbol.dispatch('input');
-
-		expect(listForm.textContent).toContain('Filters changed');
-
-		releaseList();
-		await flush();
-		await submit;
-		expect(listForm.textContent).not.toContain('orderId');
-		expect(listForm.textContent).toContain('Filters changed');
-	});
-
-	it('surfaces ORDER_NOT_FOUND through the error UI on single-order lookup', async () => {
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				return response({
-					success: false,
-					error: 'Binance order not found',
-					code: 'ORDER_NOT_FOUND',
-				}, 404);
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const detailForm = findForm(browser.elementsById.view, 'Get single order');
-		detailForm.elements.symbol.value = 'BTCUSDT';
-		detailForm.elements['path-orderId'].value = '9999';
-		await detailForm.dispatch('submit');
-		await flush();
-
-		expect(detailForm.textContent).toContain('HTTP 404');
-		expect(detailForm.textContent).toContain('ORDER_NOT_FOUND');
-	});
-
-	it('renders an empty state when the recent-orders list has no rows', async () => {
-		const browser = createBrowser({
-			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : { success: true, environment: 'testnet', orders: [] }),
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
-		listForm.elements.symbol.value = 'BTCUSDT';
-		await listForm.dispatch('submit');
-		await flush();
-
-		const empty = find(listForm, (node) => node.className === 'empty-state');
-		expect(empty).toBeDefined();
-		expect(empty.textContent).toContain('No recent orders found.');
-	});
-
-	it('disables single-order lookup unless at least one identifier is set', async () => {
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				return response({ success: true, environment: 'testnet', order: {} });
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const detailForm = findForm(browser.elementsById.view, 'Get single order');
-		detailForm.elements.symbol.value = 'BTCUSDT';
-		const button = findButton(detailForm, 'Get single order');
-		const submitPromise = detailForm.dispatch('submit');
-		await flush();
-		expect(button.disabled).toBe(false);
-		expect(detailForm.textContent).toContain('orderId or origClientOrderId');
-		await submitPromise;
-	});
-
-	it('keeps the API key out of query strings for Binance order requests', async () => {
-		const requests = [];
-		const browser = createBrowser({
-			fetchImpl: async (url, options) => {
-				if (url === '/openapi.json') return response(contract);
-				requests.push([url, options]);
-				return response({ success: true, environment: 'testnet', orders: [] });
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
-		listForm.elements.symbol.value = 'BTCUSDT';
-		browser.elementsById['api-key'].value = 'should-only-be-header';
-		await listForm.dispatch('submit');
-		await flush();
-
-		const last = requests.at(-1);
-		expect(last[0]).not.toContain('should-only-be-header');
-		expect(last[0]).not.toContain('api-key');
-		expect(last[0]).not.toContain('x-api-key');
-		expect(last[1].headers['x-api-key']).toBe('should-only-be-header');
-	});
-
-	it('renders the Binance environment badge for both list and lookup results', async () => {
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				if (url.includes('orderId=42')) {
-					return response({
-						success: true,
-						environment: 'live',
-						order: { symbol: 'BTCUSDT', orderId: 42, side: 'SELL', status: 'FILLED', type: 'MARKET' },
-					});
-				}
-				return response({
-					success: true,
-					environment: 'testnet',
-					orders: [{ symbol: 'BTCUSDT', orderId: 1, side: 'BUY', status: 'NEW', type: 'LIMIT' }],
-				});
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
-		listForm.elements.symbol.value = 'BTCUSDT';
-		await listForm.dispatch('submit');
-		await flush();
-		expect(listForm.textContent).toContain('Environment: testnet');
-		const listBadge = find(listForm, (node) => node.tagName === 'SPAN' && node.className.includes('status-badge'));
-		expect(listBadge.className).toBe('status-badge status-ready');
-
-		const detailForm = findForm(browser.elementsById.view, 'Get single order');
-		detailForm.elements.symbol.value = 'BTCUSDT';
-		detailForm.elements['path-orderId'].value = '42';
-		await detailForm.dispatch('submit');
-		await flush();
-		expect(detailForm.textContent).toContain('Environment: live');
-		const detailBadge = find(detailForm, (node) => node.tagName === 'SPAN' && node.className.includes('status-badge'));
-		expect(detailBadge.className).toBe('status-badge status-danger');
-	});
-
-	it('resets the Binance environment badge when filters change', async () => {
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				return response({
-					success: true,
-					environment: 'testnet',
-					orders: [{ symbol: 'BTCUSDT', orderId: 1, side: 'BUY', status: 'NEW', type: 'LIMIT' }],
-				});
-			},
-		});
-		await flush();
-		await selectView(browser, 'orders');
-
-		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
-		listForm.elements.symbol.value = 'BTCUSDT';
-		await listForm.dispatch('submit');
-		await flush();
-		expect(listForm.textContent).toContain('Environment: testnet');
-
-		listForm.elements.symbol.value = 'ETHUSDT';
-		await listForm.elements.symbol.dispatch('input');
-		expect(listForm.textContent).toContain('Environment: —');
-	});
-});
-
-
-describe('structured analysis forms', () => {
-	it('renders structured controls for analysis operations and provides raw JSON sync', async () => {
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				return response({});
-			},
-		});
-		await flush();
-		browser.elementsById['api-key'].value = 'test-key';
-		await selectView(browser, 'analysis');
-		await flush();
-
-		const view = browser.elementsById.view;
-
-		// 1. Volume Confirmation Form
-		const vcForm = findForm(view, 'POST /api/webhook/volume-confirmation');
-		expect(vcForm).toBeDefined();
-		expect(vcForm.elements.symbol).toBeDefined();
-		expect(vcForm.elements.timeframe).toBeDefined();
-		expect(vcForm.elements.body).toBeDefined();
-
-		// Real-time synchronization
-		vcForm.elements.symbol.value = 'BINANCE:ETHUSDT';
-		await vcForm.elements.symbol.dispatch('input');
-		await flush();
-		const vcParsed = JSON.parse(vcForm.elements.body.value);
-		expect(vcParsed.symbol).toBe('BINANCE:ETHUSDT');
-
-		// 2. Expanded Analysis Form
-		const expForm = findForm(view, 'POST /api/webhook/expanded-analysis-alert');
-		expect(expForm).toBeDefined();
-		expect(expForm.elements.symbols).toBeDefined();
-		expect(expForm.elements.timeframe).toBeDefined();
-		expect(expForm.elements.analysisMode).toBeDefined();
-		expect(expForm.elements.includeMultiTimeframe).toBeDefined();
-		expect(expForm.elements.channel_telegram).toBeDefined();
-		expect(expForm.elements.channel_whatsapp).toBeDefined();
-		expect(expForm.elements.channel_discord).toBeDefined();
-		expect(expForm.elements.body).toBeDefined();
-
-		// 3. Market Scanner Form
-		const scanForm = findForm(view, 'POST /api/webhook/market-scanner-alert');
-		expect(scanForm).toBeDefined();
-		expect(scanForm.elements.exchange).toBeDefined();
-		expect(scanForm.elements.timeframe).toBeDefined();
-		expect(scanForm.elements.scan_top_gainers).toBeDefined();
-		expect(scanForm.elements.scan_top_losers).toBeDefined();
-		expect(scanForm.elements.scan_volume_breakout_scanner).toBeDefined();
-		expect(scanForm.elements.scan_smart_volume_scanner).toBeDefined();
-		expect(scanForm.elements.scan_bollinger_scan).toBeDefined();
-		expect(scanForm.elements.limit).toBeDefined();
-		expect(scanForm.elements.bbw_threshold).toBeDefined();
-		expect(scanForm.elements.body).toBeDefined();
-
-		// 4. Symbol Analysis Form
-		const symForm = findForm(view, 'POST /api/webhook/symbol-analysis');
-		expect(symForm).toBeDefined();
-		expect(symForm.elements.symbol).toBeDefined();
-		expect(symForm.elements.timeframe).toBeDefined();
-		expect(symForm.elements.analysisMode).toBeDefined();
-		expect(symForm.elements.body).toBeDefined();
-
-		// 5. News Monitor Form (POST)
-		const newsPostForm = findForm(view, 'POST /api/news-monitor');
-		expect(newsPostForm).toBeDefined();
-		expect(newsPostForm.elements.crypto).toBeDefined();
-		expect(newsPostForm.elements.stocks).toBeDefined();
-		expect(newsPostForm.elements.channel_telegram).toBeDefined();
-		expect(newsPostForm.elements.channel_whatsapp).toBeDefined();
-		expect(newsPostForm.elements.channel_discord).toBeDefined();
-		expect(newsPostForm.elements.body).toBeDefined();
-
-		// News monitor sync
-		newsPostForm.elements.crypto.value = 'SOLUSDT,ADAUSDT';
-		await newsPostForm.elements.crypto.dispatch('input');
-		await flush();
-		const newsParsed = JSON.parse(newsPostForm.elements.body.value);
-		expect(newsParsed.crypto).toEqual(['SOLUSDT', 'ADAUSDT']);
-	});
-
-	it('validates symbol format on structured analysis submit and prevents invalid requests', async () => {
-		let requestedUrl = null;
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				requestedUrl = url;
-				return response({});
-			},
-		});
-		await flush();
-		browser.elementsById['api-key'].value = 'test-key';
-		await selectView(browser, 'analysis');
-		await flush();
-
-		const vcForm = findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation');
-		vcForm.elements.symbol.value = 'MALFORMED_SYMBOL';
-		await vcForm.elements.symbol.dispatch('input');
-		await flush();
-
-		await vcForm.dispatch('submit');
-		await flush();
-
-		expect(requestedUrl).toBeNull();
-		expect(vcForm.textContent).toContain('Malformed symbol');
-	});
-
-	describe('structured job builder and auto-handoff', () => {
-		it('renders structured job builder with expanded-analysis controls and contract enums', async () => {
-			const browser = createBrowser({
-				fetchImpl: async (url) => {
-					if (url === '/openapi.json') return response(contract);
-					return response({ success: true, jobs: [] });
-				},
-			});
-			await flush();
-			await selectView(browser, 'jobs');
-			await flush();
-
-			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
-			expect(createForm).toBeDefined();
-			expect(createForm.elements.type.value).toBe('expanded-analysis');
-			expect(createForm.elements.symbols.value).toBe('BINANCE:BTCUSDT');
-			expect(createForm.elements.timeframe.value).toBe('1D');
-			expect(createForm.elements.includeMultiTimeframe.checked).toBe(false);
-			expect(createForm.elements.body).toBeDefined();
-
-			const initialPayload = JSON.parse(createForm.elements.body.value);
-			expect(initialPayload).toEqual({
-				type: 'expanded-analysis',
-				symbols: ['BINANCE:BTCUSDT'],
-				timeframe: '1D',
-			});
-		});
-
-		it('switches job builder to market-scanner, updating controls and timeframe options', async () => {
-			const browser = createBrowser({
-				fetchImpl: async (url) => {
-					if (url === '/openapi.json') return response(contract);
-					return response({ success: true, jobs: [] });
-				},
-			});
-			await flush();
-			await selectView(browser, 'jobs');
-			await flush();
-
-			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
-			createForm.elements.type.value = 'market-scanner';
-			await createForm.elements.type.dispatch('change');
-			await flush();
-
-			expect(createForm.elements.exchange.value).toBe('BINANCE');
-			expect(createForm.elements.timeframe.value).toBe('4h');
-			expect(Number(createForm.elements.limit.value)).toBe(5);
-			expect(Number(createForm.elements.bbw_threshold.value)).toBe(0.05);
-			expect(createForm.elements.ranked.checked).toBe(true);
-			expect(createForm.elements.includeMultiTimeframe.checked).toBe(true);
-			expect(createForm.elements.scan_top_gainers.checked).toBe(true);
-			expect(createForm.elements.scan_top_losers.checked).toBe(true);
-			expect(createForm.elements.scan_volume_breakout_scanner.checked).toBe(true);
-
-			// Verify limit clamping
-			createForm.elements.limit.value = '50';
-			await createForm.elements.limit.dispatch('input');
-			await flush();
-			expect(Number(createForm.elements.limit.value)).toBe(20);
-
-			const msPayload = JSON.parse(createForm.elements.body.value);
-			expect(msPayload.type).toBe('market-scanner');
-			expect(msPayload.exchange).toBe('BINANCE');
-			expect(msPayload.limit).toBe(20);
-			expect(msPayload.ranked).toBe(true);
-			expect(msPayload.includeMultiTimeframe).toBe(true);
-		});
-
-		it('validates symbol format on submit and displays inline feedback without sending request', async () => {
-			let dispatched = false;
-			const browser = createBrowser({
-				fetchImpl: async (url) => {
-					if (url === '/openapi.json') return response(contract);
-					if (url === '/api/jobs/tradingview-analysis') {
-						dispatched = true;
-						return response({ success: true, jobId: 'job-invalid' }, 201);
-					}
-					return response({ success: true, jobs: [] });
-				},
-			});
-			await flush();
-			browser.elementsById['api-key'].value = 'test-key';
-			await selectView(browser, 'jobs');
-			await flush();
-
-			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
-			createForm.elements.symbols.value = 'INVALID_SYMBOL';
-			await createForm.elements.symbols.dispatch('input');
-			await flush();
-
-			await createForm.dispatch('submit');
-			await flush();
-
-			expect(dispatched).toBe(false);
-			expect(createForm.textContent).toContain('Malformed symbol(s): INVALID_SYMBOL');
-		});
-
-		it('generates and transmits idempotency-key in headers and displays in response summary', async () => {
-			let capturedOptions = null;
-			const browser = createBrowser({
-				fetchImpl: async (url, options) => {
-					if (url === '/openapi.json') return response(contract);
-					if (url === '/api/jobs/tradingview-analysis') {
-						capturedOptions = options;
-						return response({ success: true, jobId: 'job-123-idem' }, 201);
-					}
-					if (url.startsWith('/api/jobs/job-123-idem')) {
-						return response({
-							success: true,
-							jobId: 'job-123-idem',
-							type: 'expanded-analysis',
-							status: 'pending',
-							progress: { fraction: 0.1, currentPhase: 'queued' },
-						});
-					}
-					return response({ success: true, jobs: [] });
-				},
-			});
-			await flush();
-			browser.elementsById['api-key'].value = 'test-session-key';
-			await selectView(browser, 'jobs');
-			await flush();
-
-			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
-			createForm.elements.symbols.value = 'BINANCE:BTCUSDT\nBINANCE:ETHUSDT';
-			await createForm.elements.symbols.dispatch('input');
-			await flush();
-
-			await createForm.dispatch('submit');
-			await flush();
-
-			expect(capturedOptions).toBeDefined();
-			expect(capturedOptions.method).toBe('POST');
-			expect(capturedOptions.headers['x-api-key']).toBe('test-session-key');
-			const sentKey = capturedOptions.headers['idempotency-key'];
-			expect(typeof sentKey).toBe('string');
-			expect(sentKey.length).toBeGreaterThan(5);
-
-			expect(createForm.textContent).toContain(`Idempotency: ${sentKey}`);
-		});
-
-		it('shows retry button on error that reuses the exact same idempotency key', async () => {
-			const sentKeys = [];
-			let attempt = 0;
-			const browser = createBrowser({
-				fetchImpl: async (url, options) => {
-					if (url === '/openapi.json') return response(contract);
-					if (url === '/api/jobs/tradingview-analysis') {
-						attempt += 1;
-						sentKeys.push(options.headers['idempotency-key']);
-						if (attempt === 1) {
-							return response({ success: false, error: 'Internal server error' }, 500);
-						}
-						return response({ success: true, jobId: 'job-retried' }, 201);
-					}
-					if (url.startsWith('/api/jobs/job-retried')) {
-						return response({
-							success: true,
-							jobId: 'job-retried',
-							type: 'expanded-analysis',
-							status: 'pending',
-							progress: {},
-						});
-					}
-					return response({ success: true, jobs: [] });
-				},
-			});
-			await flush();
-			browser.elementsById['api-key'].value = 'test-session-key';
-			await selectView(browser, 'jobs');
-			await flush();
-
-			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
-			await createForm.dispatch('submit');
-			await flush();
-
-			expect(attempt).toBe(1);
-			expect(sentKeys.length).toBe(1);
-			const firstKey = sentKeys[0];
-
-			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
-			expect(retryBtn).toBeDefined();
-			expect(retryBtn.hidden).toBe(false);
-
-			await retryBtn.dispatch('click');
-			await flush();
-
-			expect(attempt).toBe(2);
-			expect(sentKeys.length).toBe(2);
-			expect(sentKeys[1]).toBe(firstKey);
-		});
-
-		it('auto-handoff: on 201 Created with data.jobId, fills status form and loads progress immediately', async () => {
-			const requests = [];
-			const browser = createBrowser({
-				fetchImpl: async (url) => {
-					if (url === '/openapi.json') return response(contract);
-					requests.push(url);
-					if (url === '/api/jobs/tradingview-analysis') {
-						return response({ success: true, jobId: 'job-auto-handoff-789' }, 201);
-					}
-					if (url.startsWith('/api/jobs/job-auto-handoff-789')) {
-						return response({
-							success: true,
-							jobId: 'job-auto-handoff-789',
-							type: 'expanded-analysis',
-							status: 'processing',
-							progress: { fraction: 0.65, currentPhase: 'analysis' },
-							createdAt: new Date().toISOString(),
-						});
-					}
-					return response({ success: true, jobs: [] });
-				},
-			});
-			await flush();
-			browser.elementsById['api-key'].value = 'test-session-key';
-			await selectView(browser, 'jobs');
-			await flush();
-
-			const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
-			expect(statusForm.elements['path-jobId'].value).toBe('');
-
-			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
-			await createForm.dispatch('submit');
-			await flush();
-
-			expect(statusForm.elements['path-jobId'].value).toBe('job-auto-handoff-789');
-			expect(requests).toContain('/api/jobs/job-auto-handoff-789');
-			expect(statusForm.textContent).toContain('job-auto-handoff-789');
-			expect(statusForm.textContent).toContain('processing');
-		});
-
-		it('synchronizes advanced callback and channel options into raw JSON', async () => {
-			const browser = createBrowser({
-				fetchImpl: async (url) => {
-					if (url === '/openapi.json') return response(contract);
-					return response({ success: true, jobs: [] });
-				},
-			});
-			await flush();
-			await selectView(browser, 'jobs');
-			await flush();
-
-			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
-			createForm.elements.channel_telegram.checked = true;
-			await createForm.elements.channel_telegram.dispatch('change');
-			createForm.elements.telegramChatId.value = '-1009999';
-			await createForm.elements.telegramChatId.dispatch('input');
-			createForm.elements.callbackUrl.value = 'https://webhook.site/test';
-			await createForm.elements.callbackUrl.dispatch('input');
-			await flush();
-
-			const payload = JSON.parse(createForm.elements.body.value);
-			expect(payload.channels).toEqual(['telegram']);
-			expect(payload.telegramChatId).toBe('-1009999');
-			expect(payload.callbackUrl).toBe('https://webhook.site/test');
-			expect(payload.callbackEvents).toEqual(['completed', 'failed', 'cancelled', 'timed_out']);
-		});
-
-		it('retry: exposes same-key retry when network error or transport failure occurs', async () => {
-			const sentKeys = [];
-			let attempts = 0;
-			const browser = createBrowser({
-				fetchImpl: async (url, options) => {
-					if (url === '/openapi.json') return response(contract);
-					if (url === '/api/jobs/tradingview-analysis') {
-						attempts += 1;
-						sentKeys.push(options.headers['idempotency-key']);
-						if (attempts === 1) {
-							throw new Error('Failed to fetch: connection timeout');
-						}
-						return response({ success: true, jobId: 'recovered-job-111' }, 201);
-					}
-					if (url.startsWith('/api/jobs/recovered-job-111')) {
-						return response({ success: true, jobId: 'recovered-job-111', status: 'queued' });
-					}
-					return response({ success: true, jobs: [] });
-				},
-			});
-			await flush();
-			browser.elementsById['api-key'].value = 'test-session-key';
-			await selectView(browser, 'jobs');
-			await flush();
-
-			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
-			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
-			expect(retryBtn.hidden).toBe(true);
-
-			await createForm.dispatch('submit');
-			await flush();
-
-			expect(attempts).toBe(1);
-			expect(retryBtn.hidden).toBe(false);
-			const firstKey = sentKeys[0];
-			expect(typeof firstKey).toBe('string');
-
-			// Clicking retry re-submits with the same idempotency key
-			await retryBtn.dispatch('click');
-			await flush();
-
-			expect(attempts).toBe(2);
-			expect(sentKeys[1]).toBe(firstKey);
-		});
-
-		it('auto-handoff: on 503 JOB_QUEUE_ACCEPTANCE_UNKNOWN, fills status form with returned jobId and begins auto-loading', async () => {
-			const requests = [];
-			const browser = createBrowser({
-				fetchImpl: async (url) => {
-					if (url === '/openapi.json') return response(contract);
-					requests.push(url);
-					if (url === '/api/jobs/tradingview-analysis') {
-						return response({
-							error: 'The queue acceptance state could not be determined.',
-							code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
-							jobId: 'unknown-queue-job-503',
-						}, 503);
-					}
-					if (url.startsWith('/api/jobs/unknown-queue-job-503')) {
-						return response({
-							success: true,
-							jobId: 'unknown-queue-job-503',
-							status: 'queued',
-						});
-					}
-					return response({ success: true, jobs: [] });
-				},
-			});
-			await flush();
-			browser.elementsById['api-key'].value = 'test-session-key';
-			await selectView(browser, 'jobs');
-			await flush();
-
-			const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
-			expect(statusForm.elements['path-jobId'].value).toBe('');
-
-			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
-			await createForm.dispatch('submit');
-			await flush();
-
-			expect(statusForm.elements['path-jobId'].value).toBe('unknown-queue-job-503');
-			expect(requests).toContain('/api/jobs/unknown-queue-job-503');
-			expect(statusForm.textContent).toContain('unknown-queue-job-503');
-			expect(statusForm.textContent).toContain('queued');
-
-			// Retry button is also visible on 503 so the operator can retry with same key if desired
-			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
-			expect(retryBtn.hidden).toBe(false);
-		});
-	});
-
-	describe('Playground UX improvements', () => {
-		it('renders schema-aware inputs omitting query or body fields when inapplicable', async () => {
-			const browser = createBrowser({
-				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
-			});
-			await flush();
-			browser.elementsById['api-key'].value = 'test-key';
-			await selectView(browser, 'playground');
-			await flush();
-
-			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Operations'));
-			const select = find(playground, (node) => node.tagName === 'SELECT');
-
-			// POST /api/jobs/tradingview-analysis has body but NO query parameters
-			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/jobs/tradingview-analysis')).value;
-			await select.dispatch('change');
-
-			expect(playground.elements.body).toBeDefined();
-			expect(playground.elements.query).toBeUndefined();
-
-			// GET /api/alerts has query parameters but NO request body
-			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/alerts —')).value;
-			await select.dispatch('change');
-
-			expect(playground.elements.query).toBeDefined();
-			expect(playground.elements.body).toBeUndefined();
-
-			// GET /api/scanner-presets/{id} has path parameters but NEITHER query nor body
-			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/scanner-presets/{id}')).value;
-			await select.dispatch('change');
-
-			expect(playground.elements['path-id']).toBeDefined();
-			expect(playground.elements.query).toBeUndefined();
-			expect(playground.elements.body).toBeUndefined();
-		});
-
-		it('groups operations into optgroups and supports real-time text filtering', async () => {
-			const browser = createBrowser({
-				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
-			});
-			await flush();
-			await selectView(browser, 'playground');
-			await flush();
-
-			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Operations'));
-			const select = find(playground, (node) => node.tagName === 'SELECT');
-			const optgroups = findAll(select, (node) => node.tagName === 'OPTGROUP');
-
-			expect(optgroups.length).toBeGreaterThanOrEqual(5);
-			const groupLabels = optgroups.map((g) => g.label || g.attributes.label);
-			expect(groupLabels).toContain('Webhooks');
-			expect(groupLabels).toContain('Alerts');
-			expect(groupLabels).toContain('Jobs');
-
-			// Filter operations
-			const filterInput = playground.elements.filterOperations;
-			filterInput.value = 'volume-confirmation';
-			await filterInput.dispatch('input');
-
-			const filteredOptions = findAll(select, (node) => node.tagName === 'OPTION');
-			expect(filteredOptions.length).toBe(1);
-			expect(filteredOptions[0].textContent).toContain('/api/webhook/volume-confirmation');
-
-			// Reset filter
-			filterInput.value = '';
-			await filterInput.dispatch('input');
-			const allOptions = findAll(select, (node) => node.tagName === 'OPTION');
-			expect(allOptions.length).toBeGreaterThan(10);
-		});
-
-		it('preserves user input across operation switches within the session', async () => {
-			const browser = createBrowser({
-				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
-			});
-			await flush();
-			await selectView(browser, 'playground');
-			await flush();
-
-			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Operations'));
-			const select = find(playground, (node) => node.tagName === 'SELECT');
-
-			// Select POST /api/webhook/alert and enter custom body
-			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
-			await select.dispatch('change');
-			playground.elements.body.value = JSON.stringify({ message: 'Custom alert message 42' });
-			await playground.elements.body.dispatch('input');
-
-			// Switch to GET /api/alerts
-			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/alerts —')).value;
-			await select.dispatch('change');
-			expect(playground.elements.body).toBeUndefined();
-
-			// Switch back to POST /api/webhook/alert
-			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
-			await select.dispatch('change');
-			expect(playground.elements.body.value).toContain('Custom alert message 42');
-		});
-
-		it('preserves operation input when filtering auto-selects another operation', async () => {
-			const browser = createBrowser({
-				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
-			});
-			await flush();
-			await selectView(browser, 'playground');
-			await flush();
-
-			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Operations'));
-			const select = find(playground, (node) => node.tagName === 'SELECT');
-			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
-			const alertOperation = optionValue('POST /api/webhook/alert');
-			const volumeOperation = optionValue('POST /api/webhook/volume-confirmation');
-
-			select.value = alertOperation;
-			await select.dispatch('change');
-			playground.elements.body.value = JSON.stringify({ message: 'Original alert payload' });
-
-			const filter = playground.elements.filterOperations;
-			filter.value = 'volume-confirmation';
-			await filter.dispatch('input');
-			expect(select.value).toBe(volumeOperation);
-			playground.elements.body.value = JSON.stringify({ symbol: 'BINANCE:BTCUSDT', timeframe: '1h' });
-
-			filter.value = '';
-			await filter.dispatch('input');
-			select.value = alertOperation;
-			await select.dispatch('change');
-			expect(playground.elements.body.value).toContain('Original alert payload');
-
-			select.value = volumeOperation;
-			await select.dispatch('change');
-			expect(playground.elements.body.value).toContain('BINANCE:BTCUSDT');
-		});
-
-		it('does not let an empty filter result erase previously cached operation inputs', async () => {
-			const dispatched = [];
-			const browser = createBrowser({
-				fetchImpl: async (url) => {
-					if (url === '/openapi.json') return response(contract);
-					dispatched.push(url);
-					return response({});
-				},
-			});
-			await flush();
-			await selectView(browser, 'playground');
-			await flush();
-
-			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Operations'));
-			const select = find(playground, (node) => node.tagName === 'SELECT');
-			const submitButton = find(playground, (node) => node.tagName === 'BUTTON' && node.textContent === 'Send request');
-			const curlButton = find(playground, (node) => node.tagName === 'BUTTON' && node.textContent.includes('cURL'));
-			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
-			const alertOperation = optionValue('POST /api/webhook/alert');
-			const volumeOperation = optionValue('POST /api/webhook/volume-confirmation');
-
-			select.value = alertOperation;
-			await select.dispatch('change');
-			playground.elements.body.value = JSON.stringify({ message: 'Alert draft that must survive' });
-			await playground.elements.body.dispatch('input');
-
-			select.value = volumeOperation;
-			await select.dispatch('change');
-			playground.elements.body.value = JSON.stringify({ symbol: 'BINANCE:BTCUSDT', timeframe: '4h' });
-			await playground.elements.body.dispatch('input');
-
-			select.value = alertOperation;
-			await select.dispatch('change');
-
-			const filter = playground.elements.filterOperations;
-
-			// A blank `select.value` must mean "no operation selected", never index 0:
-			// `Number('') === 0`, so an unguarded lookup silently resolves to the first
-			// definition and leaves the dispatch controls armed against a route the
-			// operator never picked.
-			filter.value = 'zzz-no-operation-matches';
-			await filter.dispatch('input');
-			expect(select.value).toBe('');
-			expect(playground.elements.body).toBeUndefined();
-			expect(playground.elements.query).toBeUndefined();
-			expect(playground.elements['path-alertId']).toBeUndefined();
-			expect(submitButton.disabled).toBe(true);
-			expect(curlButton.disabled).toBe(true);
-
-			await playground.dispatch('submit');
-			await flush();
-			expect(dispatched).toEqual([]);
-
-			filter.value = 'volume-confirmation';
-			await filter.dispatch('input');
-			expect(select.value).toBe(volumeOperation);
-			expect(playground.elements.body.value).toContain('BINANCE:BTCUSDT');
-
-			select.value = alertOperation;
-			await select.dispatch('change');
-			expect(playground.elements.body.value).toContain('Alert draft that must survive');
-
-			select.value = volumeOperation;
-			await select.dispatch('change');
-			expect(playground.elements.body.value).toContain('BINANCE:BTCUSDT');
-		});
-
-		it('keeps the Playground submit locked across an operation switch while a request is pending', async () => {
-			let pendingResolver;
-			const dispatched = [];
-			const browser = createBrowser({
-				fetchImpl: (url) => {
-					if (url === '/openapi.json') return response(contract);
-					if (url.includes('/api/webhook/alert')) {
-						dispatched.push(url);
-						return new Promise((resolve) => { pendingResolver = resolve; });
-					}
-					return response({});
-				},
-			});
-			await flush();
-			browser.elementsById['api-key'].value = 'test-key';
-			await selectView(browser, 'playground');
-			await flush();
-
-			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Operations'));
-			const select = find(playground, (node) => node.tagName === 'SELECT');
-			const submitButton = find(playground, (node) => node.tagName === 'BUTTON' && node.textContent === 'Send request');
-			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
-
-			select.value = optionValue('POST /api/webhook/alert');
-			await select.dispatch('change');
-			await playground.dispatch('submit');
-			await flush();
-
-			expect(dispatched.length).toBe(1);
-			expect(submitButton.disabled).toBe(true);
-
-			// Switching operations re-renders the fields while the first request is still in flight.
-			select.value = optionValue('POST /api/webhook/volume-confirmation');
-			await select.dispatch('change');
-			await flush();
-			expect(submitButton.disabled).toBe(true);
-
-			// A second dispatch attempt must not reach the network while the first is pending.
-			await playground.dispatch('submit');
-			await flush();
-			expect(dispatched.length).toBe(1);
-
-			pendingResolver(response({ success: true, messageId: '12345' }));
-			await flush();
-
-			expect(dispatched.length).toBe(1);
-			expect(submitButton.disabled).toBe(false);
-		});
-
-		it('keeps the Playground submit locked when filtering auto-selects another operation during a pending request', async () => {
-			let pendingResolver;
-			const dispatched = [];
-			const browser = createBrowser({
-				fetchImpl: (url) => {
-					if (url === '/openapi.json') return response(contract);
-					if (url.includes('/api/webhook/alert')) {
-						dispatched.push(url);
-						return new Promise((resolve) => { pendingResolver = resolve; });
-					}
-					return response({});
-				},
-			});
-			await flush();
-			browser.elementsById['api-key'].value = 'test-key';
-			await selectView(browser, 'playground');
-			await flush();
-
-			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Operations'));
-			const select = find(playground, (node) => node.tagName === 'SELECT');
-			const submitButton = find(playground, (node) => node.tagName === 'BUTTON' && node.textContent === 'Send request');
-			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
-
-			select.value = optionValue('POST /api/webhook/alert');
-			await select.dispatch('change');
-			await playground.dispatch('submit');
-			await flush();
-			expect(dispatched.length).toBe(1);
-
-			// Filter-driven selection re-renders through populateOptions() rather than the select.
-			const filter = playground.elements.filterOperations;
-			filter.value = 'volume-confirmation';
-			await filter.dispatch('input');
-			await flush();
-
-			expect(select.value).toBe(optionValue('POST /api/webhook/volume-confirmation'));
-			expect(submitButton.disabled).toBe(true);
-
-			await playground.dispatch('submit');
-			await flush();
-			expect(dispatched.length).toBe(1);
-
-			pendingResolver(response({ success: true, messageId: '12345' }));
-			await flush();
-
-			expect(dispatched.length).toBe(1);
-			expect(submitButton.disabled).toBe(false);
-		});
-
-		it('renders structured results and provides collapsible raw JSON toggle', async () => {
-			const browser = createBrowser({
-				fetchImpl: async (url) => {
-					if (url === '/openapi.json') return response(contract);
-					if (url.includes('/api/webhook/volume-confirmation')) {
-						return response({
-							success: true,
-							symbol: 'BINANCE:BTCUSDT',
-							timeframe: '1h',
-							confirmed: true,
-							volumeRatio: 2.15,
-							currentVolume: 12000,
-							smaVolume: 5580,
-						});
-					}
-					return response({});
-				},
-			});
-			await flush();
-			browser.elementsById['api-key'].value = 'test-key';
-			await selectView(browser, 'playground');
-			await flush();
-
-			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Operations'));
-			const select = find(playground, (node) => node.tagName === 'SELECT');
-
-			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/volume-confirmation')).value;
-			await select.dispatch('change');
-			await playground.dispatch('submit');
-			await flush();
-
-			// Structured result host should contain the volume confirmation verdict
-			const structuredResult = find(playground, (n) => n.className === 'playground-structured-result');
-			expect(structuredResult.textContent).toContain('Confirmed');
-			expect(structuredResult.textContent).toContain('2.15x');
-
-			// Raw toggle should be visible with copy button and formatted JSON
-			const rawToggle = find(playground, (n) => n.tagName === 'DETAILS' && n.className === 'raw-status');
-			expect(rawToggle.hidden).toBe(false);
-			expect(rawToggle.textContent).toContain('Response details');
-			expect(rawToggle.textContent).toContain('2.15');
-		});
-
-		it('records request history with redacted credentials and allows restoration', async () => {
-			const browser = createBrowser({
-				fetchImpl: async (url) => {
-					if (url === '/openapi.json') return response(contract);
-					if (url.includes('/api/webhook/alert')) {
-						return response({ success: true, messageId: 'm-101' });
-					}
-					return response({});
-				},
-			});
-			await flush();
-			browser.elementsById['api-key'].value = 'test-key';
-			await selectView(browser, 'playground');
-			await flush();
-
-			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Operations'));
-			const select = find(playground, (node) => node.tagName === 'SELECT');
-
-			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
-			await select.dispatch('change');
-			playground.elements.body.value = JSON.stringify({ message: 'Buy BTC', apiKey: 'super-secret-key-999' });
-			await playground.dispatch('submit');
-			await flush();
-
-			const historyItems = findAll(playground, (n) => n.className === 'history-item');
-			expect(historyItems.length).toBe(1);
-			expect(historyItems[0].textContent).toContain('POST');
-			expect(historyItems[0].textContent).toContain('/api/webhook/alert');
-			expect(historyItems[0].textContent).toContain('HTTP 200');
-
-			// Verify secrets are redacted in history
-			expect(playground.textContent).not.toContain('super-secret-key-999');
-
-			// Change the current form to another operation
-			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/alerts —')).value;
-			await select.dispatch('change');
-			expect(playground.elements.body).toBeUndefined();
-
-			// Restore from history
-			const restoreBtn = find(historyItems[0], (n) => n.tagName === 'BUTTON' && n.textContent === 'Restore');
-			await restoreBtn.dispatch('click');
-			await flush();
-
-			// Form should be back to POST /api/webhook/alert with restored body
-			const currentSelected = find(select, (o) => o.value === select.value);
-			expect(currentSelected.textContent).toContain('POST /api/webhook/alert');
-			expect(playground.elements.body).toBeDefined();
-			expect(playground.elements.body.value).toContain('Buy BTC');
-			expect(playground.elements.body.value).toContain('[REDACTED]');
-		});
-
-		it('records the submitted query payload when operations change mid-flight', async () => {
-			let releaseRequest;
-			const pendingRequest = new Promise((resolve) => { releaseRequest = resolve; });
-			const browser = createBrowser({
-				fetchImpl: async (url) => {
-					if (url === '/openapi.json') return response(contract);
-					if (url.includes('/api/selftest/run')) {
-						await pendingRequest;
-						return response({ success: true, results: [] });
-					}
-					return response({});
-				},
-			});
-			await flush();
-			browser.elementsById['api-key'].value = 'test-key';
-			await selectView(browser, 'playground');
-			await flush();
-
-			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Operations'));
-			const select = find(playground, (node) => node.tagName === 'SELECT');
-			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
-
-			select.value = optionValue('POST /api/selftest/run');
-			await select.dispatch('change');
-			playground.elements.query.value = JSON.stringify({ only: 'submitted-check-1162' });
-			playground.elements.body.value = JSON.stringify({ only: 'submitted-body-1162' });
-
-			await playground.dispatch('submit');
-			await flush();
-
-			// The response is still in flight: switch operation and type a different query.
-			select.value = optionValue('GET /api/alerts —');
-			await select.dispatch('change');
-			playground.elements.query.value = JSON.stringify({ limit: 5 });
-			await playground.dispatch('input');
-
-			releaseRequest();
-			await flush();
-			await flush();
-
-			const historyItems = findAll(playground, (n) => n.className === 'history-item');
-			expect(historyItems.length).toBe(1);
-
-			const restoreBtn = find(historyItems[0], (n) => n.tagName === 'BUTTON' && n.textContent === 'Restore');
-			await restoreBtn.dispatch('click');
-			await flush();
-
-			const currentSelected = find(select, (o) => o.value === select.value);
-			expect(currentSelected.textContent).toContain('POST /api/selftest/run');
-			expect(playground.elements.query.value).toContain('submitted-check-1162');
-			expect(playground.elements.query.value).not.toContain('"limit"');
-			expect(playground.elements.body.value).toContain('submitted-body-1162');
-		});
-
-		it('records the submitted body payload when operations change mid-flight', async () => {
-			let releaseRequest;
-			const pendingRequest = new Promise((resolve) => { releaseRequest = resolve; });
-			const browser = createBrowser({
-				fetchImpl: async (url) => {
-					if (url === '/openapi.json') return response(contract);
-					if (url.includes('/api/webhook/alert')) {
-						await pendingRequest;
-						return response({ success: true, messageId: 'm-1162' });
-					}
-					return response({});
-				},
-			});
-			await flush();
-			browser.elementsById['api-key'].value = 'test-key';
-			await selectView(browser, 'playground');
-			await flush();
-
-			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Operations'));
-			const select = find(playground, (node) => node.tagName === 'SELECT');
-			const optionValue = (route) => find(select, (option) => option.tagName === 'OPTION' && option.textContent.includes(route)).value;
-
-			select.value = optionValue('POST /api/webhook/alert');
-			await select.dispatch('change');
-			playground.elements.body.value = JSON.stringify({ text: 'submitted alert 1162' });
-
-			await playground.dispatch('submit');
-			await flush();
-
-			// The response is still in flight: switch operation and type a different body.
-			select.value = optionValue('POST /api/jobs/tradingview-analysis');
-			await select.dispatch('change');
-			playground.elements.body.value = JSON.stringify({ symbols: ['BINANCE:BTCUSDT'] });
-			await playground.dispatch('input');
-
-			releaseRequest();
-			await flush();
-			await flush();
-
-			const historyItems = findAll(playground, (n) => n.className === 'history-item');
-			expect(historyItems.length).toBe(1);
-
-			const restoreBtn = find(historyItems[0], (n) => n.tagName === 'BUTTON' && n.textContent === 'Restore');
-			await restoreBtn.dispatch('click');
-			await flush();
-
-			const currentSelected = find(select, (o) => o.value === select.value);
-			expect(currentSelected.textContent).toContain('POST /api/webhook/alert');
-			expect(playground.elements.body.value).toContain('submitted alert 1162');
-			expect(playground.elements.body.value).not.toContain('BINANCE:BTCUSDT');
-		});
-
-		it('generates a curl command with literal $WEBHOOK_API_KEY placeholder and never leaks actual key', async () => {
-			let capturedTextarea = null;
-			const browser = createBrowser({
-				fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
-			});
-			await flush();
-			browser.elementsById['api-key'].value = 'actual-production-secret-key-12345';
-			await selectView(browser, 'playground');
-			await flush();
-
-			// Intercept textarea creation for execCommand copy
-			const origCreateElement = browser.context.document.createElement;
-			browser.context.document.createElement = (tag) => {
-				const el = origCreateElement(tag);
-				if (tag === 'textarea') capturedTextarea = el;
-				return el;
-			};
-			browser.context.document.execCommand = () => true;
-
-			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-				&& node.textContent.includes('Operations'));
-			const select = find(playground, (node) => node.tagName === 'SELECT');
-
-			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
-			await select.dispatch('change');
-			playground.elements.body.value = JSON.stringify({ message: 'Hello cURL' });
-
-			const curlBtn = find(playground, (n) => n.tagName === 'BUTTON' && n.textContent.includes('Copy as cURL'));
-			expect(curlBtn).toBeDefined();
-
-			await curlBtn.dispatch('click');
-			await flush();
-
-			expect(capturedTextarea).not.toBeNull();
-			const curlCommand = capturedTextarea.value;
-			expect(curlCommand).toContain('curl -X POST');
-			expect(curlCommand).toContain('/api/webhook/alert');
-			expect(curlCommand).toContain('-H "x-api-key: $WEBHOOK_API_KEY"');
-			expect(curlCommand).toContain('-H "Content-Type: application/json"');
-			expect(curlCommand).toContain('Hello cURL');
-			// Crucial security check: the actual API key MUST NOT appear anywhere in the curl output
-			expect(curlCommand).not.toContain('actual-production-secret-key-12345');
-		});
-
-		describe('request history records the actual outcome', () => {
-			const openPlayground = async (options) => {
-				const browser = createBrowser({
-					fetchImpl: async (url) => {
-						if (url === '/openapi.json') return response(contract);
-						return response({});
-					},
-					...options,
-				});
-				await flush();
-				browser.elementsById['api-key'].value = 'test-key';
-				await selectView(browser, 'playground');
-				await flush();
-				const form = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
-					&& node.textContent.includes('Operations'));
-				const select = find(form, (node) => node.tagName === 'SELECT');
-				const choose = async (route) => {
-					select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes(route)).value;
-					await select.dispatch('change');
-				};
-				return { browser, form, select, choose };
-			};
-
-			const badgeOf = (historyItem) => find(historyItem, (node) => typeof node.className === 'string'
-				&& node.className.startsWith('status-badge'));
-
-			it('labels a network failure as a network error instead of 200 OK', async () => {
-				const { form, choose } = await openPlayground({
-					fetchImpl: async (url) => {
-						if (url === '/openapi.json') return response(contract);
-						throw new TypeError('Failed to fetch');
-					},
-				});
-				await choose('POST /api/webhook/alert');
-				form.elements.body.value = JSON.stringify({ text: 'network failure probe' });
-				await form.dispatch('submit');
-				await flush();
-
-				const historyItems = findAll(form, (n) => n.className === 'history-item');
-				expect(historyItems.length).toBe(1);
-				const badge = badgeOf(historyItems[0]);
-				expect(badge.textContent).toBe('Network error');
-				expect(badge.textContent).not.toContain('200');
-				expect(badge.className).toContain('status-danger');
-			});
-
-			it('distinguishes a client-side request timeout from a generic network error', async () => {
-				const abortError = new Error('The operation was aborted');
-				abortError.name = 'AbortError';
-				const { form, choose } = await openPlayground({
-					fetchImpl: async (url) => {
-						if (url === '/openapi.json') return response(contract);
-						throw abortError;
-					},
-				});
-				await choose('POST /api/webhook/alert');
-				form.elements.body.value = JSON.stringify({ text: 'timeout probe' });
-				await form.dispatch('submit');
-				await flush();
-
-				const historyItems = findAll(form, (n) => n.className === 'history-item');
-				expect(badgeOf(historyItems[0]).textContent).toBe('Timed out');
-			});
-
-			it('labels a declined confirmation as cancelled and never sends the request', async () => {
-				const sent = [];
-				const { form, choose } = await openPlayground({
-					confirm: () => false,
-					fetchImpl: async (url) => {
-						if (url === '/openapi.json') return response(contract);
-						sent.push(url);
-						return response({ success: true });
-					},
-				});
-				await choose('POST /api/alerts/{alertId}/replay');
-				form.elements['path-alertId'].value = 'alert-1163';
-				await form.dispatch('submit');
-				await flush();
-
-				expect(sent.some((url) => url.includes('/api/alerts/alert-1163/replay'))).toBe(false);
-				const historyItems = findAll(form, (n) => n.className === 'history-item');
-				expect(historyItems.length).toBe(1);
-				const badge = badgeOf(historyItems[0]);
-				expect(badge.textContent).toBe('Cancelled');
-				expect(badge.className).toContain('status-danger');
-			});
-
-			it('labels an authorization refusal as not authorized and never sends the request', async () => {
-				const sent = [];
-				const auth = {
-					onAuthStateChanged: (listener) => {
-						listener({
-							email: 'viewer@example.com',
-							getIdToken: async () => 'viewer-token',
-							getIdTokenResult: async () => ({ claims: { role: 'admin.viewer' } }),
-						});
-						return () => {};
-					},
-					setPersistence: async () => undefined,
-					signInWithEmailAndPassword: jest.fn(),
-					signOut: jest.fn(),
-				};
-				const { form, choose } = await openPlayground({
-					firebase: { initializeApp: jest.fn(), auth: jest.fn(() => auth) },
-					fetchImpl: async (url) => {
-						if (url === '/admin/auth-config') {
-							return response({
-								enabled: true,
-								configured: true,
-								config: { apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros' },
-							});
-						}
-						if (url === '/openapi.json') return response(contract);
-						sent.push(url);
-						return response({ success: true });
-					},
-				});
-				await choose('POST /api/webhook/alert');
-				form.elements.body.value = JSON.stringify({ text: 'viewer must not mutate' });
-				await form.dispatch('submit');
-				await flush();
-
-				expect(sent.some((url) => url.includes('/api/webhook/alert'))).toBe(false);
-				const historyItems = findAll(form, (n) => n.className === 'history-item');
-				expect(historyItems.length).toBe(1);
-				const badge = badgeOf(historyItems[0]);
-				expect(badge.textContent).toBe('Not authorized');
-				expect(badge.className).toContain('status-danger');
-			});
-
-			it('records a real 4xx response as its own HTTP status and a non-success tone', async () => {
-				const { form, choose } = await openPlayground({
-					fetchImpl: async (url) => {
-						if (url === '/openapi.json') return response(contract);
-						if (url.includes('/api/webhook/alert')) {
-							return response({
-								success: false,
-								error: 'text is required',
-								code: 'INVALID_REQUEST',
-								requestId: 'req-1163',
-								retryable: false,
-							}, 400);
-						}
-						return response({});
-					},
-				});
-				await choose('POST /api/webhook/alert');
-				form.elements.body.value = JSON.stringify({});
-				await form.dispatch('submit');
-				await flush();
-
-				const historyItems = findAll(form, (n) => n.className === 'history-item');
-				expect(historyItems.length).toBe(1);
-				const badge = badgeOf(historyItems[0]);
-				expect(badge.textContent).toBe('HTTP 400');
-				expect(badge.className).toContain('status-danger');
-			});
-
-			it('records a real 2xx response as an HTTP status and a success tone', async () => {
-				const { form, choose } = await openPlayground({
-					fetchImpl: async (url) => {
-						if (url === '/openapi.json') return response(contract);
-						if (url.includes('/api/webhook/alert')) return response({ success: true, messageId: 'm-1163' });
-						return response({});
-					},
-				});
-				await choose('POST /api/webhook/alert');
-				form.elements.body.value = JSON.stringify({ text: 'successful delivery probe' });
-				await form.dispatch('submit');
-				await flush();
-
-				const historyItems = findAll(form, (n) => n.className === 'history-item');
-				expect(historyItems.length).toBe(1);
-				const badge = badgeOf(historyItems[0]);
-				expect(badge.textContent).toBe('HTTP 200');
-				expect(badge.className).toContain('status-ready');
-			});
-		});
-	});
-	it('moves focus to the view region and updates the document title on every view switch', async () => {
-		const browser = createBrowser({
-			fetchImpl: async (url) => {
-				if (url === '/openapi.json') return response(contract);
-				return response({});
-			},
-		});
-		await flush();
-		browser.elementsById['api-key'].value = 'test-key';
-
-		const view = browser.elementsById.view;
-		// Initial load focuses the overview view region.
-		expect(view._focused).toBe(true);
-		expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
-
-		view._focused = false;
-		await selectView(browser, 'status');
-		expect(view._focused).toBe(true);
-		expect(view.tabIndex).toBe(-1);
-		expect(browser.titleHistory.at(-1)).toMatch(/Status/);
-
-		view._focused = false;
-		await selectView(browser, 'alerts');
-		expect(view._focused).toBe(true);
-		expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
-
-		view._focused = false;
-		await selectView(browser, 'overview');
-		expect(view._focused).toBe(true);
-		expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
-	});
-
-	it('keeps the view region focusable for screen readers', () => {
+	it('uses native forms for admin credential entry', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
-		expect(shell).toMatch(/<section id="view"[^>]*tabindex="-1"/);
+		const authFormMatch = shell.match(/<form[^>]*id="auth-form"[\s\S]*?<\/form>/);
+		const connectionFormMatch = shell.match(/<form[^>]*id="connection-form"[\s\S]*?<\/form>/);
+		expect(authFormMatch).not.toBeNull();
+		expect(connectionFormMatch).not.toBeNull();
+
+		const authFormTag = authFormMatch[0].match(/<form[^>]*>/)[0];
+		const connectionFormTag = connectionFormMatch[0].match(/<form[^>]*>/)[0];
+		expect(authFormTag).toContain('id="auth-form"');
+		expect(authFormTag).not.toContain('novalidate');
+		expect(authFormTag).toContain('aria-describedby="auth-state"');
+		expect(connectionFormTag).toContain('id="connection-form"');
+		expect(connectionFormTag).not.toContain('novalidate');
+		expect(connectionFormTag).toContain('aria-describedby="key-state"');
+
+		const authButtonMatch = authFormMatch[0].match(/<button[^>]*id="sign-in"[^>]*>/);
+		const connectionButtonMatch = connectionFormMatch[0].match(/<button[^>]*id="save-key"[^>]*>/);
+		expect(authButtonMatch).not.toBeNull();
+		expect(connectionButtonMatch).not.toBeNull();
+		expect(authButtonMatch[0]).toContain('type="submit"');
+		expect(connectionButtonMatch[0]).toContain('type="submit"');
+
+		const emailInputMatch = authFormMatch[0].match(/<input[^>]*id="auth-email"[^>]*>/);
+		const passwordInputMatch = authFormMatch[0].match(/<input[^>]*id="auth-password"[^>]*>/);
+		const apiKeyInputMatch = connectionFormMatch[0].match(/<input[^>]*id="api-key"[^>]*>/);
+		expect(emailInputMatch).not.toBeNull();
+		expect(passwordInputMatch).not.toBeNull();
+		expect(apiKeyInputMatch).not.toBeNull();
+		expect(emailInputMatch[0]).toMatch(/\srequired(\s|>)/);
+		expect(emailInputMatch[0]).toMatch(/name="email"/);
+		expect(emailInputMatch[0]).toMatch(/aria-describedby="auth-state"/);
+		expect(passwordInputMatch[0]).toMatch(/\srequired(\s|>)/);
+		expect(passwordInputMatch[0]).toMatch(/name="password"/);
+		expect(passwordInputMatch[0]).toMatch(/aria-describedby="auth-state"/);
+		expect(apiKeyInputMatch[0]).toMatch(/\srequired(\s|>)/);
+		expect(apiKeyInputMatch[0]).toMatch(/name="api-key"/);
+		expect(apiKeyInputMatch[0]).toMatch(/aria-describedby="key-state"/);
+
+		const emailLabelMatch = authFormMatch[0].match(/<label[^>]*for="auth-email"[^>]*>[\s\S]*?<\/label>/);
+		const passwordLabelMatch = authFormMatch[0].match(/<label[^>]*for="auth-password"[^>]*>[\s\S]*?<\/label>/);
+		const apiKeyLabelMatch = connectionFormMatch[0].match(/<label[^>]*for="api-key"[^>]*>[\s\S]*?<\/label>/);
+		expect(emailLabelMatch).not.toBeNull();
+		expect(passwordLabelMatch).not.toBeNull();
+		expect(apiKeyLabelMatch).not.toBeNull();
 	});
 
-	it('does not announce the whole workspace as a live region', () => {
-		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
-		const viewTag = shell.match(/<section id="view"[^>]*>/)[0];
-		expect(viewTag).not.toMatch(/aria-live/);
-		expect(shell).toMatch(/id="view-status"[^>]*role="status"[^>]*aria-live="polite"/);
+	it('submits the Firebase sign-in form from the keyboard', async () => {
+		let authStateChanged;
+		const user = {
+			getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+			getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.viewer'] } }),
+		};
+		const auth = {
+			setPersistence: jest.fn().mockResolvedValue(undefined),
+			onAuthStateChanged: jest.fn((listener) => {
+				authStateChanged = listener;
+				listener(null);
+				return jest.fn();
+			}),
+			signInWithEmailAndPassword: jest.fn(async (...args) => {
+				expect(args).toEqual(['operator@example.com', 'keyboard-password']);
+				await authStateChanged(user);
+				return { user };
+			}),
+			signOut: jest.fn().mockResolvedValue(undefined),
+		};
+		const firebase = { initializeApp: jest.fn(), auth: jest.fn(() => auth) };
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({ enabled: true, configured: true, config: { apiKey: 'k', authDomain: 'a', projectId: 'p' } });
+				}
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+
+		const authForm = browser.elementsById['auth-form'];
+		expect(authForm.tagName).toBe('FORM');
+		const emailInput = browser.elementsById['auth-email'];
+		const passwordInput = browser.elementsById['auth-password'];
+		expect(emailInput.required).toBe(true);
+		expect(passwordInput.required).toBe(true);
+		emailInput.value = 'operator@example.com';
+		passwordInput.value = 'keyboard-password';
+		await authForm.dispatch('submit');
+		await flush();
+		expect(auth.signInWithEmailAndPassword).toHaveBeenCalledTimes(1);
+		expect(auth.signInWithEmailAndPassword).toHaveBeenCalledWith('operator@example.com', 'keyboard-password');
 	});
 
-	describe('deep-linkable views and filter state', () => {
-		const editField = async (input, value) => {
-			input.value = value;
-			await input.dispatch('input');
-			await flush();
+	it('refuses to submit the Firebase sign-in form when the email is empty', async () => {
+		let authStateChanged;
+		const user = {
+			getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+			getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.viewer'] } }),
 		};
-
-		const alertSummaryQuery = (browser, route = '/api/alerts/summary') => {
-			const call = [...browser.helperCalls].reverse().find((input) => input.path === route);
-			return call && call.query;
+		const auth = {
+			setPersistence: jest.fn().mockResolvedValue(undefined),
+			onAuthStateChanged: jest.fn((listener) => {
+				authStateChanged = listener;
+				listener(null);
+				return jest.fn();
+			}),
+			signInWithEmailAndPassword: jest.fn(),
+			signOut: jest.fn().mockResolvedValue(undefined),
 		};
-
-		const alertFilterFields = (browser, route) => {
-			const form = findForm(browser.elementsById.view, route);
-			const field = (name) => find(form, (node) => node.name === name
-				&& ['INPUT', 'SELECT', 'TEXTAREA'].includes(node.tagName));
-			return {
-				form,
-				from: field('from'),
-				to: field('to'),
-				limit: field('limit'),
-				source: field('source'),
-				enriched: field('enriched'),
-			};
-		};
-
-		const openApi = async (url) => {
-			if (url.endsWith('/openapi.json')) return response(contract);
-			if (url.startsWith('/api/alerts/summary')) return response({ success: true, summary: { totalAlerts: 1, window: {} } });
-			return response({ enabled: false, configured: false });
-		};
-
-		it('writes the active view into the URL on navigation', async () => {
-			const browser = createBrowser({ fetchImpl: openApi });
-			await flush();
-
-			await selectView(browser, 'alerts');
-
-			const lastCall = browser.historyCalls.at(-1);
-			expect(lastCall.mode).toBe('push');
-			expect(lastCall.url).toContain('view=alerts');
-			expect(browser.location.search).toContain('view=alerts');
-			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+		const firebase = { initializeApp: jest.fn(), auth: jest.fn(() => auth) };
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({ enabled: true, configured: true, config: { apiKey: 'k', authDomain: 'a', projectId: 'p' } });
+				}
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
 		});
+		await flush();
 
-		it('round-trips alert filters through the query string', async () => {
-			const browser = createBrowser({ fetchImpl: openApi });
-			await flush();
-			await selectView(browser, 'alerts');
-
-			const fields = alertFilterFields(browser, '/api/alerts/summary');
-			await editField(fields.from, '2026-08-01T00:00');
-			await editField(fields.to, '2026-08-02T00:00');
-			await editField(fields.limit, '42');
-			await editField(fields.source, 'webhook');
-			await editField(fields.enriched, 'true');
-			await fields.form.dispatch('submit');
-			await flush();
-
-			const serialised = browser.location.search;
-			expect(serialised).toContain('view=alerts');
-			expect(serialised).toContain('alerts.summary.from=2026-08-01T00%3A00');
-			expect(serialised).toContain('alerts.summary.limit=42');
-			expect(serialised).toContain('alerts.summary.source=webhook');
-			expect(serialised).toContain('alerts.summary.enriched=true');
-			const originalQuery = alertSummaryQuery(browser);
-
-			const restored = createBrowser({ fetchImpl: openApi, location: { search: serialised } });
-			await flush();
-
-			expect(find(browser.body, (node) => node.dataset.view === 'alerts').attributes['aria-current']).toBe('page');
-			expect(browser.elementsById.view.textContent).toContain('Load alert analytics');
-
-			const restoredFields = alertFilterFields(restored, '/api/alerts/summary');
-			expect(restoredFields.from.value).toBe('2026-08-01T00:00');
-			expect(restoredFields.to.value).toBe('2026-08-02T00:00');
-			expect(restoredFields.limit.value).toBe('42');
-			expect(restoredFields.source.value).toBe('webhook');
-			expect(restoredFields.enriched.value).toBe('true');
-
-			await restoredFields.form.dispatch('submit');
-			await flush();
-			expect(alertSummaryQuery(restored)).toEqual(originalQuery);
-		});
-
-		it('keeps the summary and export filter sets independent', async () => {
-			const browser = createBrowser({ fetchImpl: openApi });
-			await flush();
-			await selectView(browser, 'alerts');
-
-			const summary = alertFilterFields(browser, '/api/alerts/summary');
-			await editField(summary.limit, '11');
-			await summary.form.dispatch('submit');
-			await flush();
-
-			const exportFields = alertFilterFields(browser, '/api/alerts/export');
-			expect(exportFields.limit.value).not.toBe('11');
-			expect(browser.location.search).toContain('alerts.summary.limit=11');
-			expect(browser.location.search).not.toContain('alerts.export.limit=11');
-		});
-
-		it('round-trips outcomes symbol and status filters', async () => {
-			const browser = createBrowser({ fetchImpl: openApi });
-			await flush();
-			await selectView(browser, 'outcomes');
-
-			const form = findForm(browser.elementsById.view, '/api/outcomes');
-			const symbol = find(form, (node) => node.name === 'symbol');
-			const status = find(form, (node) => node.name === 'status');
-			await editField(symbol, 'BTCUSDT');
-			await editField(status, 'evaluated');
-			await form.dispatch('submit');
-			await flush();
-
-			const serialised = browser.location.search;
-			expect(serialised).toContain('outcomes.list.symbol=BTCUSDT');
-			expect(serialised).toContain('outcomes.list.status=evaluated');
-
-			const restored = createBrowser({ fetchImpl: openApi, location: { search: serialised } });
-			await flush();
-			const restoredForm = findForm(restored.elementsById.view, '/api/outcomes');
-			expect(find(restoredForm, (node) => node.name === 'symbol').value).toBe('BTCUSDT');
-			expect(find(restoredForm, (node) => node.name === 'status').value).toBe('evaluated');
-		});
-
-		it('falls back to the overview view and rewrites an unknown view value', async () => {
-			const browser = createBrowser({ fetchImpl: openApi, location: { search: '?view=does-not-exist' } });
-			await flush();
-
-			expect(browser.location.search).toBe('?view=overview');
-			expect(browser.historyCalls.some((call) => call.mode === 'replace' && call.url.includes('view=overview'))).toBe(true);
-			expect(browser.elementsById.view.textContent.length).toBeGreaterThan(0);
-			expect(find(browser.body, (node) => node.dataset.view === 'overview').attributes['aria-current']).toBe('page');
-			expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
-		});
-
-		it('moves between views on Back and Forward without reloading', async () => {
-			const browser = createBrowser({ fetchImpl: openApi });
-			await flush();
-			expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
-
-			await selectView(browser, 'alerts');
-			const alertsUrl = browser.location.search;
-			await selectView(browser, 'outcomes');
-			expect(browser.titleHistory.at(-1)).toMatch(/Outcomes/);
-
-			browser.location.search = alertsUrl;
-			await browser.dispatchPopState();
-
-			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
-			expect(browser.elementsById.view.textContent).toContain('Load alert analytics');
-			expect(find(browser.body, (node) => node.dataset.view === 'alerts').attributes['aria-current']).toBe('page');
-			expect(find(browser.body, (node) => node.dataset.view === 'outcomes').attributes['aria-current']).toBeUndefined();
-			expect(browser.elementsById.view._focused).toBe(true);
-
-			browser.location.search = '?view=outcomes';
-			await browser.dispatchPopState();
-			expect(browser.titleHistory.at(-1)).toMatch(/Outcomes/);
-			expect(browser.elementsById.view.textContent).toContain('Load outcomes');
-		});
-
-		it('does not fire an API request before sign-in on a deep link', async () => {
-			const requests = [];
-			let authStateChanged;
-			const user = {
-				email: 'ops@example.com',
-				getIdToken: jest.fn().mockResolvedValue('firebase-token'),
-				getIdTokenResult: jest.fn().mockResolvedValue({ claims: { 'admin.operator': true } }),
-			};
-			const auth = {
-				setPersistence: jest.fn().mockResolvedValue(undefined),
-				onAuthStateChanged: jest.fn((listener) => {
-					authStateChanged = listener;
-					listener(null);
-					return jest.fn();
-				}),
-				signInWithEmailAndPassword: jest.fn(async () => {
-					await authStateChanged(user);
-					return { user };
-				}),
-				signOut: jest.fn().mockResolvedValue(undefined),
-			};
-			const firebase = { initializeApp: jest.fn(), auth: jest.fn(() => auth) };
-			const browser = createBrowser({
-				firebase,
-				location: { search: '?view=alerts&alerts.summary.limit=7' },
-				fetchImpl: async (url) => {
-					requests.push(url);
-					if (url === '/admin/auth-config') {
-						return response({
-							enabled: true,
-							configured: true,
-							config: { apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros' },
-						});
-					}
-					if (url === '/openapi.json') return response(contract);
-					return response({});
-				},
-			});
-			await flush();
-
-			expect(requests.filter((url) => url !== '/admin/auth-config')).toEqual([]);
-			expect(browser.elementsById.view.textContent).toContain('Sign in required.');
-			expect(browser.elementsById['auth-form'].hidden).toBe(false);
-			expect(browser.titleHistory).not.toContain('Alerts · Cabros Bot Console');
-
-			browser.elementsById['auth-email'].value = 'ops@example.com';
-			browser.elementsById['auth-password'].value = 'password';
-			await browser.elementsById['sign-in'].dispatch('click');
-			await flush();
-
-			expect(requests).toContain('/openapi.json');
-			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
-			expect(browser.elementsById.view.textContent).toContain('Load alert analytics');
-			expect(alertFilterFields(browser, '/api/alerts/summary').limit.value).toBe('7');
-		});
-
-		it('keeps the backend origin allowlist intact alongside deep-link state', async () => {
-			const requests = [];
-			const browser = createBrowser({
-				location: {
-					hostname: 'cabros-bot.web.app',
-					search: '?backend=https%3A%2F%2Fattacker.example&view=alerts',
-				},
-				fetchImpl: async (url) => {
-					requests.push(url);
-					if (url.endsWith('/openapi.json')) return response(contract);
-					return response({ enabled: false, configured: false });
-				},
-			});
-			await flush();
-
-			expect(requests.some((url) => url.includes('attacker.example'))).toBe(false);
-			expect(requests[0]).toBe('https://openclaw.tail5e4271.ts.net/admin/auth-config');
-			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
-			expect(browser.location.search).toContain('view=alerts');
-
-			await selectView(browser, 'outcomes');
-			expect(browser.location.search).toContain('backend=https%3A%2F%2Fattacker.example');
-		});
-
-		it('keeps an allowlisted backend origin while navigating views', async () => {
-			const requests = [];
-			const browser = createBrowser({
-				location: {
-					hostname: 'cabros-bot.web.app',
-					search: '?backend=https%3A%2F%2Fcabros-bot-production.up.railway.app&view=alerts',
-				},
-				fetchImpl: async (url) => {
-					requests.push(url);
-					if (url.endsWith('/openapi.json')) return response(contract);
-					return response({ enabled: false, configured: false });
-				},
-			});
-			await flush();
-			await selectView(browser, 'outcomes');
-
-			expect(requests.some((url) => url.startsWith('https://cabros-bot-production.up.railway.app/'))).toBe(true);
-			expect(browser.location.search).toContain('backend=https%3A%2F%2Fcabros-bot-production.up.railway.app');
-			expect(browser.location.search).toContain('view=outcomes');
-		});
+		const authForm = browser.elementsById['auth-form'];
+		browser.elementsById['auth-password'].value = 'some-password';
+		await authForm.dispatch('submit');
+		await flush();
+		expect(auth.signInWithEmailAndPassword).not.toHaveBeenCalled();
+		const state = browser.elementsById['auth-state'];
+		expect(state.className).toBe('response-error');
+		expect(state.textContent).toMatch(/email/i);
+		expect(state.textContent).not.toContain('some-password');
 	});
 
+	it('submits the legacy API-key form from the keyboard when the key is present', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({ enabled: true, configured: false });
+				}
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+
+		const connectionForm = browser.elementsById['connection-form'];
+		expect(connectionForm.tagName).toBe('FORM');
+		const apiKeyInput = browser.elementsById['api-key'];
+		expect(apiKeyInput.required).toBe(true);
+		apiKeyInput.value = 'keyboard-key';
+		await connectionForm.dispatch('submit');
+		await flush();
+		expect(browser.storage.get('cabros-admin-api-key')).toBe('keyboard-key');
+		expect(browser.elementsById['key-state'].textContent).toContain('saved for this browser session');
+	});
+
+	it('refuses to submit the legacy API-key form when the key is empty', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({ enabled: true, configured: false });
+				}
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+
+		const connectionForm = browser.elementsById['connection-form'];
+		await connectionForm.dispatch('submit');
+		await flush();
+		expect(browser.storage.has('cabros-admin-api-key')).toBe(false);
+		const state = browser.elementsById['key-state'];
+		expect(state.textContent).toMatch(/enter|empty|required/i);
+	});
+
+	it('flags the Firebase email field with aria-invalid when it is empty', async () => {
+		let authStateChanged;
+		const auth = {
+			setPersistence: jest.fn().mockResolvedValue(undefined),
+			onAuthStateChanged: jest.fn((listener) => {
+				authStateChanged = listener;
+				listener(null);
+				return jest.fn();
+			}),
+			signInWithEmailAndPassword: jest.fn(),
+			signOut: jest.fn().mockResolvedValue(undefined),
+		};
+		const firebase = { initializeApp: jest.fn(), auth: jest.fn(() => auth) };
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({ enabled: true, configured: true, config: { apiKey: 'k', authDomain: 'a', projectId: 'p' } });
+				}
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+
+		const authForm = browser.elementsById['auth-form'];
+		const emailInput = browser.elementsById['auth-email'];
+		const passwordInput = browser.elementsById['auth-password'];
+		passwordInput.value = 'keyboard-password';
+		await authForm.dispatch('submit');
+		await flush();
+		expect(emailInput.attributes['aria-invalid']).toBe('true');
+		expect(passwordInput.attributes['aria-invalid']).toBe('false');
+		expect(auth.signInWithEmailAndPassword).not.toHaveBeenCalled();
+	});
 });
