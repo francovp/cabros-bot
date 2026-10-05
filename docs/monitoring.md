@@ -100,19 +100,25 @@ curl http://localhost/healthcheck
 
 ### Production Smoke Probe
 
-A scheduled GitHub Actions workflow (`.github/workflows/production-smoke-probe.yml`) probes the Railway deployment every 15 minutes and pages the Telegram admin chat on persistent failures. The probe runs `ops/production-smoke-probe.sh`, which:
+A scheduled GitHub Actions workflow (`.github/workflows/production-smoke-probe.yml`) probes the Render production deployment every 15 minutes. **A failing probe fails the scheduled job, and GitHub's own notification for a failed scheduled workflow is the alert channel — this workflow has no paging step.** (The separate external uptime monitor below *does* page, on a DOWN transition only.) The probe runs `ops/production-smoke-probe.sh`, which:
 
 - Hits `/healthcheck` (must return HTTP 200).
 - Hits `/api/status` with the `x-api-key` header from the `WEBHOOK_API_KEY` GitHub secret.
 - Asserts `service.commit` matches the latest `master` SHA (catches stale deploys).
 - Optionally asserts each dependency in `PRODUCTION_REQUIRE_READY_DEPS` is `ready: true`.
+- Optionally asserts each feature flag in `PRODUCTION_REQUIRE_ENABLED_FLAGS` is `true` (catches an enablement that never landed).
+
+The default target must match the live platform. It previously defaulted to `https://cabros-bot-production.up.railway.app`, which answers 404 since Railway was retired. Because no `PRODUCTION_BASE_URL` repository variable is configured, the in-repo fallback is what actually executes — so the scheduled job probed a host that no longer exists and failed on every run, and a genuinely stale deploy was indistinguishable from a misconfigured target. The default is now the Render web service `cabros-crypto-bot-telegram-iac`.
+
+Every failure message therefore ends with `(probed <base_url>)`. A 404 from a decommissioned host and a 404 from a broken service are indistinguishable in a log unless the message names what was probed, so a wrong target is always obvious at a glance and never confused with a real outage.
 
 Configure the probe via GitHub repository variables (no application-owned env vars required):
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PRODUCTION_BASE_URL` | `https://cabros-bot-production.up.railway.app` | Probe target. |
+| `PRODUCTION_BASE_URL` | `https://cabros-crypto-bot-telegram.onrender.com` | Probe target. |
 | `PRODUCTION_REQUIRE_READY_DEPS` | empty | Comma-separated dependency names that must be ready (e.g. `tradingViewMcp,firestore`). |
+| `PRODUCTION_REQUIRE_ENABLED_FLAGS` | empty | Comma-separated `featureFlags` that must be `true` in production. |
 | `PRODUCTION_PROBE_TIMEOUT` | `15` | Per-request curl timeout (seconds). |
 
 Configure the probe via GitHub repository secrets:
@@ -120,8 +126,8 @@ Configure the probe via GitHub repository secrets:
 | Secret | Purpose |
 | --- | --- |
 | `WEBHOOK_API_KEY` | Sent via the `x-api-key` header. Never appears in URLs, logs, or job summaries. |
-| `TELEGRAM_BOT_TOKEN` | (Optional) Enables admin paging on persistent failures. |
-| `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` | (Optional) Target chat id for admin paging. |
+
+There are no Telegram secrets for this workflow. An earlier revision documented `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` and `PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES` as optional paging controls, but no step read any of them, so all three were removed rather than left wired up to imply a page that never fires.
 
 Exit codes:
 
@@ -131,14 +137,33 @@ Exit codes:
 - `4` — `/api/status` request failed or returned non-JSON
 - `5` — `service.commit` does not match the expected SHA (stale deploy)
 - `6` — at least one required dependency is not ready
+- `7` — `FLAG_DISABLED`: at least one required feature flag is not `true`
+
+#### Asserting a production enablement actually landed
+
+A `render.yaml` Blueprint entry with `value: true` is a *declaration of intent*. Production reality is a separate fact, and until now nothing in the repository connected the two — which is how `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` could be declared `true` in the Blueprint while production reported `false` (issue #1109).
+
+Set the `PRODUCTION_REQUIRE_ENABLED_FLAGS` repository variable to a comma-separated flag list to make the declaration checkable on a schedule. It defaults to empty, so it adds no failure mode until deliberately enabled.
+
+```bash
+ops/production-smoke-probe.sh \
+  --require-enabled-flags tradingViewConfluenceEnrichment,langfusePrompts
+```
+
+**A flag absent from the deployed build counts as disabled.** The comparison demands the literal string `true`, so an absent key — which yields an empty value, not `true` — can never satisfy the assertion, and a stale build that predates the flag cannot pass. Treating absence as success would let an old deployment look compliant: the same shape-is-not-readiness trap this repository has hit repeatedly. Note that the jq default (`// false`) is *not* what enforces this; it only labels the diagnostic as `value=false` instead of blank. `tests/unit/production-smoke-probe.test.js` pins both halves — that an absent flag exits `7`, and that it is reported as `value=false`.
+
+Verified live verdicts against production when this check was added:
+
+```text
+FLAG_DISABLED: tradingViewConfluenceEnrichment(value=false) (probed https://cabros-crypto-bot-telegram.onrender.com)
+```
 
 Run locally for debugging:
 
 ```bash
 WEBHOOK_API_KEY=$YOUR_KEY \
-PRODUCTION_BASE_URL=https://cabros-bot-production.up.railway.app \
-PRODUCTION_EXPECTED_COMMIT=$(git rev-parse origin/master) \
-ops/production-smoke-probe.sh
+  PRODUCTION_EXPECTED_COMMIT=$(git rev-parse origin/master) \
+  ops/production-smoke-probe.sh
 ```
 
 ### External Uptime Monitoring
@@ -160,7 +185,7 @@ Repository variables (all optional — each has a working default, so an unset v
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `UPTIME_MONITOR_BASE_URL` | `https://cabros-bot-production.up.railway.app` | Production origin to probe. Update this on any platform or host change. |
+| `UPTIME_MONITOR_BASE_URL` | `https://cabros-crypto-bot-telegram.onrender.com` | Production origin to probe. Update this on any platform or host change. |
 | `UPTIME_MONITOR_CHECK_DOCS` | `true` | Also probe the public `/docs` contract. |
 | `UPTIME_MONITOR_TIMEOUT_MS` | `10000` | Per-request deadline in milliseconds. |
 | `UPTIME_WATCHDOG_MAX_AGE_MINUTES` | `30` | How stale the last monitor run may be before the watchdog fails. |
