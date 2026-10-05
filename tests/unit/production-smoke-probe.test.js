@@ -245,6 +245,226 @@ esac
 		expect(result.stderr).toContain('tradingViewMcp');
 	});
 
+	it('defaults to the live Render production host, not the decommissioned Railway host', () => {
+		// The probe used to default to the retired Railway host, which answers 404.
+		// That kept this repo's only authenticated production check permanently red
+		// while probing a host that no longer exists.
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --write-out) shift 2 ;;
+    --output) out="$2"; shift 2 ;;
+    -H) shift; shift ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "$url" in
+  */healthcheck)
+    if [ -n "$out" ]; then printf 'OK' > "$out"; fi
+    printf '%s' "200" ;;
+  */api/status)
+    if [ -n "$out" ]; then
+      printf '{"service":{"commit":"abc"},"dependencies":{},"featureFlags":{}}' > "$out"
+    fi
+    printf '%s' "200" ;;
+  *)
+    printf '%s' "404" ;;
+esac
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			// Explicitly unset so an ambient value cannot mask the script default.
+			PRODUCTION_BASE_URL: '',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir });
+		const combinedOutput = (result.stdout || '') + (result.stderr || '');
+		expect(combinedOutput).toContain('cabros-crypto-bot-telegram.onrender.com');
+		expect(combinedOutput).not.toContain('railway.app');
+	});
+
+	it('names the probed base_url in HEALTHCHECK_FAILED so a wrong target is distinguishable', () => {
+		// A 404 from a decommissioned host and a 404 from a broken service are
+		// indistinguishable in the log unless the message names the target.
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --write-out) shift 2 ;;
+    --output) out="$2"; shift 2 ;;
+    -H) shift; shift ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+printf '%s' "404"
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir }, [
+			'--base-url',
+			'https://retired-host.example',
+		]);
+		expect(result.status).toBe(3);
+		expect(result.stderr).toContain('HEALTHCHECK_FAILED');
+		expect(result.stderr).toContain('https://retired-host.example');
+	});
+
+	it('exits 7 FLAG_DISABLED when a required feature flag is not enabled in production', () => {
+		// This is the acceptance criterion of issue #1109: a Blueprint-declared flag
+		// must be observably true on the deployed service, not just in render.yaml.
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --write-out) shift 2 ;;
+    --output) out="$2"; shift 2 ;;
+    -H) shift; shift ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "$url" in
+  */healthcheck)
+    if [ -n "$out" ]; then printf 'OK' > "$out"; fi
+    printf '%s' "200" ;;
+  */api/status)
+    if [ -n "$out" ]; then
+      printf '{"service":{"commit":"abc"},"dependencies":{},"featureFlags":{"tradingViewConfluenceEnrichment":false,"langfusePrompts":true}}' > "$out"
+    fi
+    printf '%s' "200" ;;
+esac
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir }, [
+			'--require-enabled-flags',
+			'tradingViewConfluenceEnrichment,langfusePrompts',
+		]);
+		expect(result.status).toBe(7);
+		expect(result.stderr).toContain('FLAG_DISABLED');
+		// The disabled flag is named; the satisfied one is not reported as a failure.
+		expect(result.stderr).toContain('tradingViewConfluenceEnrichment');
+		expect(result.stderr).not.toContain('langfusePrompts');
+	});
+
+	it('reports an absent feature flag as disabled rather than passing silently', () => {
+		// A flag the deployed build does not expose is NOT enabled; treating absence
+		// as success would let a stale build look compliant.
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --write-out) shift 2 ;;
+    --output) out="$2"; shift 2 ;;
+    -H) shift; shift ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "$url" in
+  */healthcheck)
+    if [ -n "$out" ]; then printf 'OK' > "$out"; fi
+    printf '%s' "200" ;;
+  */api/status)
+    if [ -n "$out" ]; then
+      printf '{"service":{"commit":"abc"},"dependencies":{},"featureFlags":{}}' > "$out"
+    fi
+    printf '%s' "200" ;;
+esac
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir }, [
+			'--require-enabled-flags',
+			'tradingViewConfluenceEnrichment',
+		]);
+		expect(result.status).toBe(7);
+		expect(result.stderr).toContain('tradingViewConfluenceEnrichment');
+	});
+
+	it('exits 0 when every required feature flag is enabled', () => {
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --write-out) shift 2 ;;
+    --output) out="$2"; shift 2 ;;
+    -H) shift; shift ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "$url" in
+  */healthcheck)
+    if [ -n "$out" ]; then printf 'OK' > "$out"; fi
+    printf '%s' "200" ;;
+  */api/status)
+    if [ -n "$out" ]; then
+      printf '{"service":{"commit":"abc"},"dependencies":{},"featureFlags":{"tradingViewConfluenceEnrichment":true,"langfusePrompts":true}}' > "$out"
+    fi
+    printf '%s' "200" ;;
+esac
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir }, [
+			'--require-enabled-flags',
+			'tradingViewConfluenceEnrichment,langfusePrompts',
+		]);
+		expect(result.status).toBe(0);
+	});
+
 	it('exits 3 HEALTHCHECK_FAILED when /healthcheck returns non-200', () => {
 		const curlStub = join(tempDir, 'curl');
 		const stubBody = `#!/usr/bin/env bash
@@ -323,6 +543,26 @@ describe('Production Smoke Probe workflow YAML', () => {
 		const content = readFileSync(workflowPath, 'utf8');
 		expect(content).toContain('PRODUCTION_BASE_URL');
 		expect(content).toMatch(/vars\.PRODUCTION_BASE_URL/);
+	});
+
+	it('defaults the base URL to the live Render host, not the retired Railway host', () => {
+		// No PRODUCTION_BASE_URL repository variable exists, so this env fallback is
+		// what actually runs; a stale value silently disables every production check.
+		const content = readFileSync(workflowPath, 'utf8');
+		expect(content).toContain('cabros-crypto-bot-telegram.onrender.com');
+		expect(content).not.toContain('cabros-bot-production.up.railway.app');
+	});
+
+	it('wires the PRODUCTION_REQUIRE_ENABLED_FLAGS repo-variable override', () => {
+		const content = readFileSync(workflowPath, 'utf8');
+		expect(content).toContain('PRODUCTION_REQUIRE_ENABLED_FLAGS');
+		expect(content).toMatch(/vars\.PRODUCTION_REQUIRE_ENABLED_FLAGS/);
+	});
+
+	it('never echoes the API key on the flag-check path', () => {
+		const content = readFileSync(workflowPath, 'utf8');
+		expect(content).not.toMatch(/api-key=/i);
+		expect(content).not.toMatch(/x-api-key=/i);
 	});
 
 	it('uses jq to handle JSON parsing', () => {
