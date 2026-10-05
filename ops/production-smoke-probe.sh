@@ -4,8 +4,9 @@
 # Smoke-probes a deployed Cabros Bot service after a production deploy.
 # Reads the deployment status from `service.commit` (reported by /api/status)
 # and verifies the service is reachable, healthy, and reporting the latest
-# commit on the configured branch. Optional degraded-dependency and expected-
-# commit checks catch stale or broken deployments.
+# commit on the configured branch. Optional degraded-dependency, feature-flag
+# and expected-commit checks catch stale or broken deployments, or a
+# Blueprint-declared enablement that never landed in the live service.
 #
 # Auth: WEBHOOK_API_KEY is sent via the `x-api-key` header. The script never
 # echoes the value in URLs, query strings, logs, or job summaries; it pipes
@@ -20,35 +21,45 @@
 #                            a non-200 other than 401/403
 #   5   COMMIT_MISMATCH — service.commit != expected commit (stale deploy)
 #   6   DEGRADED_DEPENDENCY — at least one required dependency degraded
-#   7   AUTH_REJECTED — /api/status returned 401/403: the server answered and
+#   7   FLAG_DISABLED — at least one required feature flag is not true
+#   8   AUTH_REJECTED — /api/status returned 401/403: the server answered and
 #                       rejected this credential, so the secret is rotated or
 #                       mismatched. NOT a production outage
 #
-# The distinction between exit 4 and exit 7 is load-bearing. Exit 4 means
-# production did not answer us, which pages the operator chat; exit 7 means
+# The distinction between exit 4 and exit 8 is load-bearing. Exit 4 means
+# production did not answer us, which is a genuine outage; exit 8 means
 # production answered and rejected us, which is a CI/secret problem. Collapsing
-# the two would page "alerts are not being delivered" while they are.
+# the two would report "alerts are not being delivered" while they are — the
+# workflow classifies them as different outcomes (`down` vs `auth_rejected`)
+# precisely so neither is mistaken for the other.
+#
+# AUTH_REJECTED takes 8, not 7, because issue #1360 already shipped 7 as
+# FLAG_DISABLED; renumbering a published enum would break its documented
+# contract, so this code takes the next free slot instead.
 #
 # Usage:
 #   ops/production-smoke-probe.sh \
 #     [--base-url URL] [--expected-commit SHA] \
 #     [--require-ready-deps dep1,dep2,...] \
+#     [--require-enabled-flags flag1,flag2,...] \
 #     [--status-endpoint /api/status] [--healthcheck-endpoint /healthcheck]
 #
 # Required env:
 #   WEBHOOK_API_KEY   header value sent as `x-api-key`
 #
 # Optional env:
-#   PRODUCTION_BASE_URL       override the probe target (default: Railway production)
+#   PRODUCTION_BASE_URL       override the probe target (default: Render production)
 #   PRODUCTION_EXPECTED_COMMIT override the expected commit SHA
 #   PRODUCTION_REQUIRE_READY_DEPS  comma-separated dependency names that must be ready
+#   PRODUCTION_REQUIRE_ENABLED_FLAGS  comma-separated featureFlags that must be true
 #   PRODUCTION_PROBE_TIMEOUT   curl --max-time in seconds (default: 15)
 
 set -euo pipefail
 
-BASE_URL="${PRODUCTION_BASE_URL:-https://cabros-bot-production.up.railway.app}"
+BASE_URL="${PRODUCTION_BASE_URL:-https://cabros-crypto-bot-telegram.onrender.com}"
 EXPECTED_COMMIT="${PRODUCTION_EXPECTED_COMMIT:-}"
 REQUIRE_READY_DEPS="${PRODUCTION_REQUIRE_READY_DEPS:-}"
+REQUIRE_ENABLED_FLAGS="${PRODUCTION_REQUIRE_ENABLED_FLAGS:-}"
 HEALTHCHECK_PATH="/healthcheck"
 STATUS_PATH="/api/status"
 PROBE_TIMEOUT="${PRODUCTION_PROBE_TIMEOUT:-15}"
@@ -56,12 +67,13 @@ PROBE_TIMEOUT="${PRODUCTION_PROBE_TIMEOUT:-15}"
 print_usage() {
 	cat <<'EOF'
 Usage: production-smoke-probe.sh [--base-url URL] [--expected-commit SHA] \
-	[--require-ready-deps dep1,dep2,...] [--status-endpoint /api/status] \
-	[--healthcheck-endpoint /healthcheck]
+	[--require-ready-deps dep1,dep2,...] [--require-enabled-flags flag1,flag2,...] \
+	[--status-endpoint /api/status] [--healthcheck-endpoint /healthcheck]
 
 Required env: WEBHOOK_API_KEY
 Optional env: PRODUCTION_BASE_URL, PRODUCTION_EXPECTED_COMMIT,
-              PRODUCTION_REQUIRE_READY_DEPS, PRODUCTION_PROBE_TIMEOUT
+              PRODUCTION_REQUIRE_READY_DEPS, PRODUCTION_REQUIRE_ENABLED_FLAGS,
+              PRODUCTION_PROBE_TIMEOUT
 EOF
 }
 
@@ -77,6 +89,10 @@ while [ $# -gt 0 ]; do
 			;;
 		--require-ready-deps)
 			REQUIRE_READY_DEPS="$2"
+			shift 2
+			;;
+		--require-enabled-flags)
+			REQUIRE_ENABLED_FLAGS="$2"
 			shift 2
 			;;
 		--status-endpoint)
@@ -139,7 +155,7 @@ HEALTHCHECK_HTTP="$(normalize_http_code "$(printf 'x-api-key: %s\n' "$WEBHOOK_AP
 		-H 'accept: application/json' -H @- "$HEALTHCHECK_URL" || echo '000')")"
 
 if [[ "$HEALTHCHECK_HTTP" != "200" ]]; then
-	echo "HEALTHCHECK_FAILED: $HEALTHCHECK_PATH returned HTTP $HEALTHCHECK_HTTP." >&2
+	echo "HEALTHCHECK_FAILED: $HEALTHCHECK_PATH returned HTTP $HEALTHCHECK_HTTP (probed $BASE_URL)." >&2
 	exit 3
 fi
 
@@ -151,19 +167,20 @@ STATUS_HTTP="$(normalize_http_code "$(printf 'x-api-key: %s\n' "$WEBHOOK_API_KEY
 
 # A 401/403 means the server is up and answering — it is rejecting *this*
 # credential, so the WEBHOOK_API_KEY secret has been rotated or never matched.
-# That is a CI/secret problem, and it must not share exit 4 with real
-# reachability failures, because exit 4 pages the operator chat.
+# That is a CI/secret problem and must not share exit 4 with real reachability
+# failures, or the workflow would classify a rotated key as `down` and an
+# operator would read "alerts are not being delivered" while they are.
 #
 # /healthcheck deliberately has no equivalent branch: it is unauthenticated by
 # design, so a 401/403 there is a gateway/server response rather than a
 # credential failure and stays a genuine HEALTHCHECK_FAILED.
 if [[ "$STATUS_HTTP" == "401" || "$STATUS_HTTP" == "403" ]]; then
-	echo "AUTH_REJECTED: $STATUS_PATH returned HTTP $STATUS_HTTP; the WEBHOOK_API_KEY secret does not match the server." >&2
-	exit 7
+	echo "AUTH_REJECTED: $STATUS_PATH returned HTTP $STATUS_HTTP; the WEBHOOK_API_KEY secret does not match the server (probed $BASE_URL)." >&2
+	exit 8
 fi
 
 if [[ "$STATUS_HTTP" != "200" ]]; then
-	echo "STATUS_UNREACHABLE: $STATUS_PATH returned HTTP $STATUS_HTTP." >&2
+	echo "STATUS_UNREACHABLE: $STATUS_PATH returned HTTP $STATUS_HTTP (probed $BASE_URL)." >&2
 	exit 4
 fi
 
@@ -179,7 +196,7 @@ if [[ -z "$REPORTED_COMMIT" ]]; then
 fi
 
 if [[ -n "$EXPECTED_COMMIT" && "$REPORTED_COMMIT" != "$EXPECTED_COMMIT" ]]; then
-	echo "COMMIT_MISMATCH: service.commit=$REPORTED_COMMIT expected=$EXPECTED_COMMIT." >&2
+	echo "COMMIT_MISMATCH: service.commit=$REPORTED_COMMIT expected=$EXPECTED_COMMIT (probed $BASE_URL)." >&2
 	exit 5
 fi
 
@@ -198,8 +215,32 @@ if [[ -n "$REQUIRE_READY_DEPS" ]]; then
 	done
 	IFS="$OLD_IFS"
 	if [[ -n "$DEGRADED_DEPS" ]]; then
-		echo "DEGRADED_DEPENDENCY: $DEGRADED_DEPS" >&2
+		echo "DEGRADED_DEPENDENCY: $DEGRADED_DEPS (probed $BASE_URL)" >&2
 		exit 6
+	fi
+fi
+
+if [[ -n "$REQUIRE_ENABLED_FLAGS" ]]; then
+	DISABLED_FLAGS=""
+	OLD_IFS="$IFS"
+	IFS=','
+	for flag in $REQUIRE_ENABLED_FLAGS; do
+		flag_trimmed="${flag// /}"
+		[[ -z "$flag_trimmed" ]] && continue
+		# Absence is disabled because the comparison demands the literal string
+		# `true`, so an absent key (`null`, or an empty jq default) can never satisfy a
+		# production-intent check — a stale build that does not know the flag at all
+		# must not pass. `// false` only labels the diagnostic with `value=false`
+		# instead of a blank, so do not read it as the enforcement point.
+		value="$(jq -r ".featureFlags.\"$flag_trimmed\" // false" "$PROBE_TMPDIR/status.json")"
+		if [[ "$value" != "true" ]]; then
+			DISABLED_FLAGS="${DISABLED_FLAGS:+$DISABLED_FLAGS,}$flag_trimmed(value=$value)"
+		fi
+	done
+	IFS="$OLD_IFS"
+	if [[ -n "$DISABLED_FLAGS" ]]; then
+		echo "FLAG_DISABLED: $DISABLED_FLAGS (probed $BASE_URL)" >&2
+		exit 7
 	fi
 fi
 

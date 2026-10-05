@@ -1,7 +1,26 @@
 /* global fetch, AbortController */
 
 const { sendWithRetry } = require('../../lib/retryHelper');
-const { parseTradingViewSignal, normalizeTradingViewTimeframe } = require('./parseTradingViewSignal');
+const {
+	parseTradingViewSignal,
+	normalizeTradingViewTimeframe,
+	resolveMcpExchange,
+} = require('./parseTradingViewSignal');
+
+// The MCP server answers an unresolvable symbol/venue pair with a "no data"
+// payload naming the venue it silently fell back to. That answer is a property
+// of the (symbol, exchange) pair, not of the transport, so retrying it can
+// never succeed (#591).
+const DETERMINISTIC_NO_DATA_PATTERN = /\bno data found for\b|\bsymbol not found\b|\bunknown symbol\b|\binvalid symbol\b|\bticker not found\b/i;
+
+/**
+ * @param {Error|unknown} error
+ * @returns {boolean} True when the MCP response is a deterministic symbol/venue miss.
+ */
+function isDeterministicNoDataError(error) {
+	const message = error && typeof error.message === 'string' ? error.message : '';
+	return DETERMINISTIC_NO_DATA_PATTERN.test(message);
+}
 const {
 	getStopLossMeta,
 	getTakeProfitTarget,
@@ -100,6 +119,18 @@ function createMcpError(message) {
 	return error;
 }
 
+function createEmptyConfluenceEnrichmentStatus() {
+	return {
+		enabled: process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true',
+		attemptedCount: 0,
+		appliedCount: 0,
+		failedCount: 0,
+		budgetExhaustedCount: 0,
+		lastAppliedAt: null,
+		lastFailureCategory: null,
+	};
+}
+
 function createRuntimeStatus({ includeEnrichment = true } = {}) {
 	const status = {
 		status: 'unknown',
@@ -118,6 +149,7 @@ function createRuntimeStatus({ includeEnrichment = true } = {}) {
 			fullCount: 0,
 			partialCount: 0,
 			failedCount: 0,
+			confluence: createEmptyConfluenceEnrichmentStatus(),
 		};
 	}
 
@@ -520,7 +552,17 @@ class TradingViewMcpService {
 			: null;
 		const baseDeadlineAt = budgetDeadlineAt ? Math.min(budgetDeadlineAt, budgetStartedAt + baseBudgetMs) : null;
 		const symbol = parsedSignal.symbol.toUpperCase();
-		const exchange = (parsedSignal.exchange || cfg.defaultExchange).toUpperCase();
+		const requestedExchange = (parsedSignal.exchange || cfg.defaultExchange).toUpperCase();
+		// #591: the MCP server cannot resolve several TradingView exchange prefixes
+		// and silently falls back to a crypto venue. Resolving the outbound venue
+		// here fixes the call without touching the exchange recorded on the alert.
+		const resolvedExchange = resolveMcpExchange(requestedExchange);
+		const exchange = resolvedExchange.mappedExchange || requestedExchange;
+		if (resolvedExchange.mapped && this.logger?.debug) {
+			this.logger.debug(`[TradingViewMcpService] ${resolvedExchange.reason} (${requestedExchange} -> ${exchange})`);
+		} else if (resolvedExchange.unsupported && this.logger?.debug) {
+			this.logger.debug(`[TradingViewMcpService] ${resolvedExchange.reason} for ${symbol}; attempting original venue and failing open if unresolvable`);
+		}
 		const timeframe = normalizeTradingViewTimeframe(parsedSignal.timeframe || parsedSignal.rawTimeframe, cfg.defaultTimeframe);
 
 		// Create an overall budget controller for the enrichment timeout.
@@ -601,19 +643,28 @@ class TradingViewMcpService {
 				const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe, signal: combinedSignal });
 				return { success: true, channel: 'tradingview-mcp', analysis };
 			} catch (error) {
+				// A "no data for this symbol/venue" answer is deterministic, not
+				// transient (#591): retrying it only burns the enrichment budget.
+				const terminal = isDeterministicNoDataError(error);
 				return {
 					success: false,
 					channel: 'tradingview-mcp',
 					error: error.message,
 					// Carry the structural budget marker out of the abort reason so the
-					// retry/caller chain can still recognise our own deadline.
+					// retry/caller chain can still recognise our own deadline (GH-630).
 					...(error && error.mcpBudgetExhausted === true ? { mcpBudgetExhausted: true } : {}),
-					retryable: error.category !== 'provider_unavailable',
+					// A deterministic "no data for this symbol/venue" answer will never
+					// succeed on a retry, so stop the chain here rather than adding a
+					// second stop mechanism - retryHelper already halts on retryable:false.
+					retryable: terminal ? false : error.category !== 'provider_unavailable',
 				};
 			} finally {
 				clearTimeout(attemptTimeoutId);
 			}
-		}, cfg.maxRetries, this.logger, { signal: baseSignal, maxRetryDelayMs: retryDelayCapMs });
+		}, cfg.maxRetries, this.logger, {
+			signal: baseSignal,
+			maxRetryDelayMs: retryDelayCapMs,
+		});
 		cleanBaseBudget();
 
 		// Budget still applies for volume confirmation, but the budget timer
@@ -685,6 +736,13 @@ class TradingViewMcpService {
 
 			// Respect both the per-call timeout and the overall enrichment budget
 			const combinedSignal = AbortSignal.any([confluenceController.signal, budgetController.signal]);
+			// These counters count CALLS, not enrichments. One alert enrichment issues up
+			// to two confluence calls (combined_analysis, then multi_timeframe_analysis when
+			// enabled), so each call records its own attempt and exactly one outcome. The
+			// alternative - one attempt per enrichment - makes applied+failed<=attempted
+			// arithmetically impossible, because a budget-starved second call would then be
+			// charged to the first call's attempt and be reported as both applied and failed.
+			this._recordConfluenceOutcome({ attempted: true });
 
 			try {
 				confluenceAnalysis = await this.callCombinedAnalysis({
@@ -693,33 +751,42 @@ class TradingViewMcpService {
 					timeframe,
 					signal: combinedSignal,
 				});
+				this._recordConfluenceOutcome({ applied: true });
 				console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
 				if (multiTimeframeEnabled) {
 					if (budgetController.signal.aborted) {
 						optionalEnrichmentPartial = true;
+						this._recordConfluenceOutcome({ budgetExhausted: true });
 					} else {
+						this._recordConfluenceOutcome({ attempted: true });
 						multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
 							symbol,
 							exchange,
 							signal: combinedSignal,
 						});
+						this._recordConfluenceOutcome({ applied: true });
 						console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
 					}
 				}
 			} catch (error) {
 				optionalEnrichmentPartial = true;
+				this._recordConfluenceOutcome({ failed: true, error });
 				this.logger.warn(`[TradingViewMcpService] Confluence enrichment failed for ${symbol} (fail-open): ${error.message}`);
 			} finally {
 				clearTimeout(confluenceTimeoutId);
 			}
 		} else if (confluenceEnabled) {
 			optionalEnrichmentPartial = true;
+			this._recordConfluenceOutcome({ budgetExhausted: true });
 		}
 
 		cleanBudget();
 		const enrichmentStatus = optionalEnrichmentPartial ? 'partial' : 'full';
 		this._recordEnrichmentStatus(enrichmentStatus);
-		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis, confluenceAnalysis, multiTimeframeAnalysis, enrichmentStatus);
+		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis, confluenceAnalysis, multiTimeframeAnalysis, enrichmentStatus, {
+			requestedExchange,
+			requestedExchangeMappedTo: resolvedExchange.mapped ? exchange : null,
+		});
 	}
 
 	async callCoinAnalysis({ symbol, exchange, timeframe, signal }) {
@@ -1168,7 +1235,7 @@ class TradingViewMcpService {
 		return parsedPayloads[0];
 	}
 
-	_toEnrichedAlert(originalText, signal, analysis = {}, volumeAnalysis = null, confluenceAnalysis = null, multiTimeframeAnalysis = null, tradingViewEnrichmentStatus = 'full') {
+	_toEnrichedAlert(originalText, signal, analysis = {}, volumeAnalysis = null, confluenceAnalysis = null, multiTimeframeAnalysis = null, tradingViewEnrichmentStatus = 'full', exchangeResolution = {}) {
 		const { side, symbol, exchange, timeframe } = signal;
 		const sideLabel = side === 'SELL' ? 'VENTA' : 'COMPRA';
 		const sideSentiment = side === 'SELL' ? -0.55 : 0.55;
@@ -1356,6 +1423,14 @@ class TradingViewMcpService {
 			extraText,
 			confluenceData: confluenceAnalysis || null,
 			multiTimeframeData: multiTimeframeAnalysis || null,
+			// Reports the venue the screener sent; the MCP-only alias target is
+			// surfaced separately (#591). `exchange` is deliberately NOT emitted:
+			// it would be an identical duplicate of `requestedExchange`, and leaving
+			// it absent keeps the existing fill-from-parse path unchanged.
+			requestedExchange: exchangeResolution.requestedExchange || exchange,
+			...(exchangeResolution.requestedExchangeMappedTo
+				? { requestedExchangeMappedTo: exchangeResolution.requestedExchangeMappedTo }
+				: {}),
 			...riskMetadata,
 		};
 	}
@@ -1495,6 +1570,34 @@ class TradingViewMcpService {
 				[countKey]: enrichment[countKey] + 1,
 			},
 		};
+	}
+
+	_recordConfluenceOutcome(outcome = {}) {
+		try {
+			const enrichment = this.runtimeStatus.enrichment || {};
+			const confluence = enrichment.confluence || createEmptyConfluenceEnrichmentStatus();
+			const next = { ...confluence };
+			if (outcome.attempted) {
+				next.attemptedCount += 1;
+			}
+			if (outcome.applied) {
+				next.appliedCount += 1;
+				next.lastAppliedAt = new Date().toISOString();
+			}
+			if (outcome.failed) {
+				next.failedCount += 1;
+				next.lastFailureCategory = this._getErrorCategory(outcome.error) || 'unknown_error';
+			}
+			if (outcome.budgetExhausted) {
+				next.budgetExhaustedCount += 1;
+			}
+			this.runtimeStatus = {
+				...this.runtimeStatus,
+				enrichment: { ...enrichment, confluence: next },
+			};
+		} catch (error) {
+			this.logger?.warn?.(`[TradingViewMcpService] Failed to record confluence enrichment outcome: ${error.message}`);
+		}
 	}
 
 	_getAlertPathEnrichmentStatus() {
@@ -1762,4 +1865,5 @@ module.exports = {
 	DEFAULT_TRADINGVIEW_MCP_URL,
 	HEARTBEAT_COLLECTION_NAME,
 	TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID,
+	isDeterministicNoDataError,
 };

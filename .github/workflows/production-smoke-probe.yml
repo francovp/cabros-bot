@@ -1,29 +1,51 @@
 name: Production Smoke Probe
 
-# Scheduled GitHub Actions workflow that smoke-probes Railway production so a bad
-# or missing deployment pages operators instead of silently killing alert delivery.
+# Scheduled GitHub Actions workflow that smoke-probes production after each
+# deployment so a silently bad deployment fails the job instead of passing
+# unnoticed.
+#
+# Alerting: this workflow has no paging step, and does not need one. A non-zero
+# probe exit fails the scheduled run, and GitHub's own notification for a failed
+# scheduled workflow is the alert channel. Telegram paging belongs to the
+# secretless uptime monitor (external-uptime-monitor.yml), which pages once on a
+# DOWN transition and once on recovery. Adding a second pager here would double
+# the page for one outage and lose the recovery signal, which is the alert
+# fatigue this repository has already been bitten by.
+#
+# The default target is the Render production web service
+# (cabros-crypto-bot-telegram-iac). It must match the live platform: an earlier
+# default pointed at the retired Railway host, which answers 404, so this job
+# stayed red for every run while probing a host that no longer existed and a
+# genuinely stale deploy was indistinguishable from a misconfigured target.
+#
+# The probe script lives in this repository, so `actions/checkout` is a hard
+# prerequisite rather than a convenience. Without it every run died at exit 127
+# before a single HTTP request, and the only automated production availability
+# gate was a no-op that looked like a real failing gate (issue #971).
 #
 # Configuration:
-#   1. Add GitHub repository variable PRODUCTION_BASE_URL with the canonical
-#      deployment URL (default: https://cabros-bot-production.up.railway.app).
+#   1. (Normally unnecessary) Add GitHub repository variable
+#      PRODUCTION_BASE_URL to override the default deployment URL.
 #   2. Add GitHub secret WEBHOOK_API_KEY (matches the server's validateApiKey).
 #      Required: without it the probe cannot run and the job reports
 #      `probe_unconfigured` rather than a production failure.
-#   3. (Optional) Add GitHub secret TELEGRAM_BOT_TOKEN (admin-notifications
-#      bot) and TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID (target chat id) to
-#      enable admin paging when production is unreachable. Without both, a real
-#      outage is reported as `paging_not_configured` and the failed job is the
-#      only signal.
-#   4. (Optional) Override PRODUCTION_EXPECTED_COMMIT, PRODUCTION_REQUIRE_READY_DEPS,
-#      PRODUCTION_PROBE_TIMEOUT, and PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES
-#      via repository variables.
+#   3. (Optional) Override PRODUCTION_EXPECTED_COMMIT,
+#      PRODUCTION_REQUIRE_READY_DEPS, PRODUCTION_REQUIRE_ENABLED_FLAGS and
+#      PRODUCTION_PROBE_TIMEOUT via repository variables.
+#
+# PRODUCTION_REQUIRE_ENABLED_FLAGS is a comma-separated list of /api/status
+# featureFlags that must be true on the deployed service. Use it to assert that
+# an enablement declared in render.yaml actually landed in production rather
+# than only being declared; a flag absent from the deployed build counts as
+# disabled, so a stale deploy cannot satisfy the assertion.
 #
 # Failure classification: every run maps to exactly one outcome, so a broken CI
 # setup is never mistaken for a production outage:
 #   ok              healthy
-#   down             production unreachable or unhealthy  -> pages the admin chat
+#   down             production unreachable or unhealthy (exit 3 or 4)
 #   stale            production serving a different commit (deploy in flight)
 #   degraded         production reachable, a required dependency is not ready
+#   flag_disabled    production reachable, a required feature flag is not true
 #   unconfigured     WEBHOOK_API_KEY missing; the probe never ran
 #   auth_rejected    /api/status answered 401/403: the secret was rotated or
 #                    never matched. Production is up and serving; CI is wrong
@@ -31,14 +53,14 @@ name: Production Smoke Probe
 #   invalid_args     the probe rejected its arguments; a bug in this workflow
 #   unknown          unclassified non-zero exit; reachability unknown
 #
-# Only `down` pages. Paging a stale deploy, a missing secret or a rotated secret
-# would train operators to ignore the one signal that means alerts are not
-# being delivered.
+# The classification is the deliverable, not the paging. A stale deploy, a
+# missing script, an unconfigured secret and a rotated secret are four different
+# operational problems; collapsing them into one warning is how a broken CI setup
+# reads as a production outage.
 #
 # Security: WEBHOOK_API_KEY is sent via the `x-api-key` header (never in URLs
-# or query parameters) by piping it into curl through stdin. The Telegram bot
-# token and chat id are never echoed; both helper scripts redact them from any
-# provider output they surface. Job summaries and logs never echo these values.
+# or query parameters) by piping it into curl through stdin. Job summaries and
+# logs never echo the key.
 
 on:
   schedule:
@@ -64,12 +86,10 @@ jobs:
     timeout-minutes: 4
 
     env:
-      PRODUCTION_BASE_URL: ${{ github.event.inputs.base_url || vars.PRODUCTION_BASE_URL || 'https://cabros-bot-production.up.railway.app' }}
+      PRODUCTION_BASE_URL: ${{ github.event.inputs.base_url || vars.PRODUCTION_BASE_URL || 'https://cabros-crypto-bot-telegram.onrender.com' }}
       PRODUCTION_REQUIRE_READY_DEPS: ${{ vars.PRODUCTION_REQUIRE_READY_DEPS || '' }}
+      PRODUCTION_REQUIRE_ENABLED_FLAGS: ${{ vars.PRODUCTION_REQUIRE_ENABLED_FLAGS || '' }}
       PRODUCTION_PROBE_TIMEOUT: ${{ vars.PRODUCTION_PROBE_TIMEOUT || '15' }}
-      PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES: ${{ vars.PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES || '60' }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID }}
 
     steps:
       # The probe script lives in this repository, so the workspace must be
@@ -81,14 +101,6 @@ jobs:
 
       - name: Install jq (used by the probe script)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
-
-      - name: Restore the last operator page timestamp
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: .smoke-probe-state
-          key: production-smoke-probe-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            production-smoke-probe-
 
       - name: Determine the expected commit SHA
         id: master-sha
@@ -129,9 +141,9 @@ jobs:
             echo "outcome=script_missing" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          chmod +x ops/production-smoke-probe.sh ops/production-smoke-probe-notify.sh
-          if [[ ! -x ops/production-smoke-probe.sh || ! -x ops/production-smoke-probe-notify.sh ]]; then
-            echo "::error title=Probe script not executable::probe_script_missing: ops/production-smoke-probe.sh or ops/production-smoke-probe-notify.sh is present but not executable after chmod. This is a bug in the CI workflow or the repository file mode, NOT a production outage; the availability gate did not run."
+          chmod +x ops/production-smoke-probe.sh
+          if [[ ! -x ops/production-smoke-probe.sh ]]; then
+            echo "::error title=Probe script not executable::probe_script_missing: ops/production-smoke-probe.sh is present but not executable after chmod. This is a bug in the CI workflow or the repository file mode, NOT a production outage; the availability gate did not run."
             echo "outcome=script_missing" >> "$GITHUB_OUTPUT"
             exit 1
           fi
@@ -170,6 +182,9 @@ jobs:
               outcome=degraded
               ;;
             7)
+              outcome=flag_disabled
+              ;;
+            8)
               outcome=auth_rejected
               echo "::error title=Probe authentication rejected::probe_auth_rejected: $detail Production answered the probe, so this is NOT a production outage: the WEBHOOK_API_KEY repository secret was rotated or never matched the server. Rotate the secret."
               ;;
@@ -192,22 +207,3 @@ jobs:
             echo "::warning::Smoke probe exited with code $rc (outcome=$outcome)"
             exit 1
           fi
-
-      - name: Page the admin chat when production is down
-        if: always()
-        env:
-          PROBE_OUTCOME: ${{ steps.preflight.outputs.outcome || steps.probe.outputs.outcome }}
-          PROBE_DETAIL: ${{ steps.probe.outputs.probe_detail }}
-          PROBE_EXIT: ${{ steps.probe.outputs.probe_exit }}
-          PROBE_BASE_URL: ${{ env.PRODUCTION_BASE_URL }}
-          PROBE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PROBE_COOLDOWN_MINUTES: ${{ env.PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES }}
-          PROBE_COOLDOWN_STATE_FILE: .smoke-probe-state/last-page.env
-        run: ops/production-smoke-probe-notify.sh
-
-      - name: Persist the operator page timestamp
-        if: always()
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: .smoke-probe-state
-          key: production-smoke-probe-${{ github.run_id }}-${{ github.run_attempt }}

@@ -20,8 +20,11 @@ const symbolAnalysisStorageService = require('../services/storage/SymbolAnalysis
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
+const { getAdminPagingStatus } = require('../services/notification/adminPagingStatus');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
-const { firestoreWriteMetricsService } = require('../services/storage/FirestoreWriteMetricsService');
+const { firestoreWriteMetricsService, READ_HEALTH } = require('../services/storage/FirestoreWriteMetricsService');
+const { getPromptService } = require('../services/prompts');
+const { signalClassMetrics } = require('../services/alerts/signalClassifier');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
@@ -30,6 +33,7 @@ const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldow
 const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
 const { alertModeration } = require('../services/alerts/alertModeration');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const { getPromptReadiness } = require('../services/prompts/promptReadiness');
 const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStorageService');
 const {
 	isNewsMonitorPaused,
@@ -114,6 +118,70 @@ function providerDependencyStatus({ enabled, configured, provider = null }) {
 	return {
 		provider,
 		...dependencyStatus({ enabled, configured }),
+	};
+}
+
+/**
+ * Issue #1178. `ready` comes from observed prompt resolutions, not from credential
+ * shape, so flipping `ENABLE_LANGFUSE_PROMPTS=true` cannot make a deployment that
+ * falls back to the local prompt file report itself as ready.
+ *
+ * `schemaDrift` is the rollout signal for a Langfuse prompt that has not been
+ * republished after a local-fallback contract change (#1031): it is not a failure,
+ * but it does mean the managed prompt is behind the code.
+ */
+function getLangfusePromptDependencyStatus(langfusePromptsEnabled) {
+	const status = getPromptReadiness().getStatus();
+
+	if (!langfusePromptsEnabled) {
+		return status;
+	}
+
+	const drift = getPromptService().getSchemaDriftStatus();
+	if (Object.keys(drift).length === 0) {
+		return status;
+	}
+
+	return {
+		...status,
+		schemaDrift: Object.values(drift),
+	};
+}
+
+/**
+ * Fold observed read health into the Firestore dependency verdict.
+ *
+ * Issue #1285: `dependencies.firestore.ready` was derived purely from
+ * `enabled && configured`, and `configured` only checks that a credential blob
+ * parses with a valid private key. So a deployment whose writes succeeded 29/29
+ * and whose every read query was rejected still reported `ready: true` — the
+ * status endpoint could not distinguish a working Firestore from a broken one.
+ *
+ * Read health is applied only once a read has actually been observed, so the
+ * pre-existing `{ enabled, configured, ready, status }` shape is byte-identical
+ * for deployments that have not read yet. An untouched read path stays
+ * `ready: true` rather than flipping to a state that would imply breakage.
+ */
+function withFirestoreReadHealth(status) {
+	const readMetrics = firestoreWriteMetricsService.getReadSnapshot();
+	if (!readMetrics) {
+		return status;
+	}
+	const base = {
+		...status,
+		readHealth: readMetrics.readHealth,
+	};
+	if (readMetrics.readHealth !== READ_HEALTH.DEGRADED) {
+		return base;
+	}
+	return {
+		...base,
+		ready: false,
+		status: 'degraded',
+		readsFailed: readMetrics.readsFailed,
+		consecutiveReadFailures: readMetrics.consecutiveReadFailures,
+		lastReadErrorCategory: readMetrics.lastErrorCategory,
+		lastReadFailureAt: readMetrics.lastReadFailureAt,
 	};
 }
 
@@ -287,10 +355,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
 		enabled: tradingViewVolumeConfirmationEnabled,
 	});
-	const firestore = dependencyStatus({
+	const firestore = withFirestoreReadHealth(dependencyStatus({
 		enabled: firestoreEnabled,
 		configured: isFirestoreConfigured(),
-	});
+	}));
 	const firestoreJobStorage = dependencyStatus({
 		enabled: firestoreJobStorageEnabled,
 		configured: firestore.configured,
@@ -308,10 +376,29 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			configured: hasValue(process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE),
 		}),
 	};
-	const langfuse = dependencyStatus({
-		enabled: langfusePromptsEnabled,
-		configured: hasValue(process.env.LANGFUSE_PUBLIC_KEY) && hasValue(process.env.LANGFUSE_SECRET_KEY),
-	});
+	const langfuse = getLangfusePromptDependencyStatus(langfusePromptsEnabled);
+	// Configuration/reachability (dependencies.langfuse) says nothing about whether
+	// prompts are actually served remotely. Keep the two facts apart so a 100%
+	// local-fallback regression is visible instead of silent.
+	let langfusePrompts;
+	try {
+		langfusePrompts = getPromptService().getPromptResolutionStatus();
+	} catch (error) {
+		console.warn(`[status] Failed to read prompt-resolution telemetry: ${error.message}`);
+		// Emit the documented fail-open verdict rather than omitting the key: a
+		// consumer reading status.dependencies.langfusePrompts.servingStatus would
+		// otherwise get a TypeError on exactly the path where telemetry is broken.
+		langfusePrompts = {
+			enabled: langfusePromptsEnabled,
+			configured: hasValue(process.env.LANGFUSE_PUBLIC_KEY) && hasValue(process.env.LANGFUSE_SECRET_KEY),
+			ready: false,
+			servingStatus: 'unknown',
+			servingPrompts: false,
+			lastErrorCategory: null,
+			consecutiveFailures: 0,
+			prompts: [],
+		};
+	}
 	const braveSearch = dependencyStatus({
 		enabled: newsMonitorEnabled && forceBraveSearch,
 		configured: hasValue(process.env.BRAVE_SEARCH_API_KEY),
@@ -467,6 +554,12 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		...(deliveryMetricsService.getSnapshot()
 			? { deliveryMetrics: deliveryMetricsService.getSnapshot() }
 			: {}),
+		// Non-secret operator-paging health. Lets an operator tell a working admin path from
+		// a silent one: readiness alone reports "ready" for a channel that is 0/N at runtime.
+		// Channel names and counters only — never tokens, webhook URLs, or chat IDs.
+		...(getAdminPagingStatus()
+			? { adminPaging: getAdminPagingStatus() }
+			: {}),
 		dependencies: {
 			telegram,
 			whatsapp,
@@ -485,8 +578,20 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			...(firestoreWriteMetricsService.getSnapshot()
 				? { firestoreWriteMetrics: firestoreWriteMetricsService.getSnapshot() }
 				: {}),
+			// `featureFlags.signalClassMarker: true` only says the badge marker
+			// is allowed to render; it says nothing about whether alerts are
+			// actually being classified. Expose the population rate so a silent
+			// regression back to 100% `unknown` is detectable from /api/status
+			// instead of looking healthy.
+			...(signalClassMetrics.getSnapshot()
+				? { signalClassClassification: signalClassMetrics.getSnapshot() }
+				: {}),
+			...(firestoreWriteMetricsService.getReadSnapshot()
+				? { firestoreReadMetrics: firestoreWriteMetricsService.getReadSnapshot() }
+				: {}),
 			sentry,
 			langfuse,
+			...(langfusePrompts ? { langfusePrompts } : {}),
 			braveSearch,
 			newsMonitor: {
 				enabled: newsMonitorEnabled,
@@ -507,6 +612,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			firebaseRemoteConfig: remoteConfigStatus,
 			chatPreferences: chatPreferenceService.getStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			newsAnalysisStorage: newsAnalysisStorageService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
 			userPriceAlertWorker: userPriceAlertService.getStatus(),
 			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
@@ -528,6 +634,9 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				lastRunEvaluatedCount: signalOutcomeWorkerStatus.lastRunEvaluatedCount,
 				lastRunPendingCount: signalOutcomeWorkerStatus.lastRunPendingCount,
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
+				leaseMs: signalOutcomeWorkerStatus.leaseMs,
+				lastRunLeaseHeld: signalOutcomeWorkerStatus.lastRunLeaseHeld,
+				leaseHeldSkipCount: signalOutcomeWorkerStatus.leaseHeldSkipCount,
 			},
 			notificationRedrive: notificationRedriveService.getStatus({ skipTelemetrySync }),
 			alertSignalRepeatSuppression: {
@@ -571,6 +680,14 @@ async function getApiStatus(req, res) {
 			} catch (_) {
 				// Fail-open for status endpoint
 			}
+		}
+		// Prove scanner-preset durability with the bounded read that `/api/status` is
+		// asserting, instead of reporting credential shape as readiness (#1342). Fail-open
+		// and never blocks the response.
+		try {
+			await scannerPresetService.probeStorageReadiness();
+		} catch (_) {
+			// Fail-open for status endpoint
 		}
 		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {

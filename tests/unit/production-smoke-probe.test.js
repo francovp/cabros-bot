@@ -245,6 +245,312 @@ esac
 		expect(result.stderr).toContain('tradingViewMcp');
 	});
 
+	it('defaults to the live Render production host, not the decommissioned Railway host', () => {
+		// The probe used to default to the retired Railway host, which answers 404.
+		// That kept this repo's only authenticated production check permanently red
+		// while probing a host that no longer exists.
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --write-out) shift 2 ;;
+    --output) out="$2"; shift 2 ;;
+    -H) shift; shift ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "$url" in
+  */healthcheck)
+    if [ -n "$out" ]; then printf 'OK' > "$out"; fi
+    printf '%s' "200" ;;
+  */api/status)
+    if [ -n "$out" ]; then
+      printf '{"service":{"commit":"abc"},"dependencies":{},"featureFlags":{}}' > "$out"
+    fi
+    printf '%s' "200" ;;
+  *)
+    printf '%s' "404" ;;
+esac
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			// Explicitly unset so an ambient value cannot mask the script default.
+			PRODUCTION_BASE_URL: '',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir });
+		const combinedOutput = (result.stdout || '') + (result.stderr || '');
+		expect(combinedOutput).toContain('cabros-crypto-bot-telegram.onrender.com');
+		expect(combinedOutput).not.toContain('railway.app');
+	});
+
+	it('names the probed base_url in HEALTHCHECK_FAILED so a wrong target is distinguishable', () => {
+		// A 404 from a decommissioned host and a 404 from a broken service are
+		// indistinguishable in the log unless the message names the target.
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --write-out) shift 2 ;;
+    --output) out="$2"; shift 2 ;;
+    -H) shift; shift ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+printf '%s' "404"
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir }, [
+			'--base-url',
+			'https://retired-host.example',
+		]);
+		expect(result.status).toBe(3);
+		expect(result.stderr).toContain('HEALTHCHECK_FAILED');
+		expect(result.stderr).toContain('https://retired-host.example');
+	});
+
+	it('exits 7 FLAG_DISABLED when a required feature flag is not enabled in production', () => {
+		// This is the acceptance criterion of issue #1109: a Blueprint-declared flag
+		// must be observably true on the deployed service, not just in render.yaml.
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --write-out) shift 2 ;;
+    --output) out="$2"; shift 2 ;;
+    -H) shift; shift ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "$url" in
+  */healthcheck)
+    if [ -n "$out" ]; then printf 'OK' > "$out"; fi
+    printf '%s' "200" ;;
+  */api/status)
+    if [ -n "$out" ]; then
+      printf '{"service":{"commit":"abc"},"dependencies":{},"featureFlags":{"tradingViewConfluenceEnrichment":false,"langfusePrompts":true}}' > "$out"
+    fi
+    printf '%s' "200" ;;
+esac
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir }, [
+			'--require-enabled-flags',
+			'tradingViewConfluenceEnrichment,langfusePrompts',
+		]);
+		expect(result.status).toBe(7);
+		expect(result.stderr).toContain('FLAG_DISABLED');
+		// The disabled flag is named; the satisfied one is not reported as a failure.
+		expect(result.stderr).toContain('tradingViewConfluenceEnrichment');
+		expect(result.stderr).not.toContain('langfusePrompts');
+	});
+
+	it('reports an absent feature flag as disabled rather than passing silently', () => {
+		// A flag the deployed build does not expose is NOT enabled; treating absence
+		// as success would let a stale build look compliant.
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --write-out) shift 2 ;;
+    --output) out="$2"; shift 2 ;;
+    -H) shift; shift ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "$url" in
+  */healthcheck)
+    if [ -n "$out" ]; then printf 'OK' > "$out"; fi
+    printf '%s' "200" ;;
+  */api/status)
+    if [ -n "$out" ]; then
+      printf '{"service":{"commit":"abc"},"dependencies":{},"featureFlags":{}}' > "$out"
+    fi
+    printf '%s' "200" ;;
+esac
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir }, [
+			'--require-enabled-flags',
+			'tradingViewConfluenceEnrichment',
+		]);
+		expect(result.status).toBe(7);
+		expect(result.stderr).toContain('tradingViewConfluenceEnrichment');
+	});
+
+	it('treats a flag ABSENT from the deployed build as disabled (exit 7)', () => {
+		// This is the invariant, asserted as behaviour rather than as a jq default.
+		// Mutating `// false` to `// empty` used to leave this whole suite green,
+		// because absence was never covered: the `!= "true"` comparison is what
+		// rejects it, not the jq alternative operator.
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --write-out) shift 2 ;;
+    --output) out="$2"; shift 2 ;;
+    -H) shift; shift ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "$url" in
+  */healthcheck)
+    if [ -n "$out" ]; then printf 'OK' > "$out"; fi
+    printf '%s' "200" ;;
+  */api/status)
+    if [ -n "$out" ]; then
+      printf '{"service":{"commit":"abc"},"dependencies":{},"featureFlags":{"langfusePrompts":true}}' > "$out"
+    fi
+    printf '%s' "200" ;;
+esac
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir }, [
+			'--require-enabled-flags',
+			'tradingViewConfluenceEnrichment',
+		]);
+		expect(result.status).toBe(7);
+		expect(result.stderr).toContain('FLAG_DISABLED');
+		expect(result.stderr).toContain('tradingViewConfluenceEnrichment');
+	});
+
+	it('reports an absent flag without claiming the deployed build is broken', () => {
+		// The diagnostic must name the flag and the probed target so an operator can
+		// tell "this build is old" apart from "this feature is deliberately off".
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --output) out="$2"; shift 2 ;;
+    -*) shift ;;
+    *) shift ;;
+  esac
+done
+if [ -n "$out" ]; then
+  printf '{"service":{"commit":"abc"},"dependencies":{},"featureFlags":{}}' > "$out"
+fi
+printf '%s' "200"
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir }, [
+			'--base-url',
+			'https://example.test',
+			'--require-enabled-flags',
+			'someFlagTheBuildDoesNotHave',
+		]);
+		expect(result.stderr).toContain('someFlagTheBuildDoesNotHave(value=false)');
+		expect(result.stderr).toContain('https://example.test');
+	});
+
+	it('exits 0 when every required feature flag is enabled', () => {
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --write-out) shift 2 ;;
+    --output) out="$2"; shift 2 ;;
+    -H) shift; shift ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "$url" in
+  */healthcheck)
+    if [ -n "$out" ]; then printf 'OK' > "$out"; fi
+    printf '%s' "200" ;;
+  */api/status)
+    if [ -n "$out" ]; then
+      printf '{"service":{"commit":"abc"},"dependencies":{},"featureFlags":{"tradingViewConfluenceEnrichment":true,"langfusePrompts":true}}' > "$out"
+    fi
+    printf '%s' "200" ;;
+esac
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir }, [
+			'--require-enabled-flags',
+			'tradingViewConfluenceEnrichment,langfusePrompts',
+		]);
+		expect(result.status).toBe(0);
+	});
+
 	it('exits 3 HEALTHCHECK_FAILED when /healthcheck returns non-200', () => {
 		const curlStub = join(tempDir, 'curl');
 		const stubBody = `#!/usr/bin/env bash
@@ -303,14 +609,15 @@ exit 6
 		const result = runProbe({ ...env, _tempDir: tempDir });
 		expect(result.status).toBe(3);
 		expect(result.stderr).toContain('HEALTHCHECK_FAILED');
-		expect(result.stderr).toContain('HTTP 000.');
+		expect(result.stderr).toContain('HTTP 000 (probed ');
 		expect(result.stderr).not.toContain('000000');
 	});
 
 	// Regression coverage: an invalid or rotated WEBHOOK_API_KEY used to exit 4,
-	// which the workflow classifies as `down` and therefore pages as a production
-	// outage — while production was healthy and delivering alerts. A 401/403 proves
-	// the server answered and rejected the credential, so it needs its own code.
+	// which the workflow classifies as `down` — a production outage — while
+	// production was healthy and delivering alerts. A 401/403 proves the server
+	// answered and rejected the credential, so it needs its own code, and that code
+	// is 8 because issue #1360 already shipped 7 as FLAG_DISABLED.
 	describe('AUTH_REJECTED (a rotated secret is not a production outage)', () => {
 		function installStatusCodeStub(code) {
 			const curlStub = join(tempDir, 'curl');
@@ -341,7 +648,7 @@ esac
 		}
 
 		it.each(['401', '403'])(
-			'exits 7 with AUTH_REJECTED (not 4) when /api/status returns %s',
+			'exits 8 with AUTH_REJECTED (not 4) when /api/status returns %s',
 			(code) => {
 				installStatusCodeStub(code);
 
@@ -352,8 +659,9 @@ esac
 					PATH: tempDir,
 				};
 				const result = runProbe({ ...env, _tempDir: tempDir });
-				expect(result.status).toBe(7);
+				expect(result.status).toBe(8);
 				expect(result.status).not.toBe(4);
+				expect(result.status).not.toBe(7);
 				const output = (result.stdout || '') + (result.stderr || '');
 				expect(output).toContain('AUTH_REJECTED');
 				expect(output).toContain(code);
@@ -420,6 +728,10 @@ describe('Production Smoke Probe workflow YAML', () => {
 		__dirname,
 		'../../.github/workflows/production-smoke-probe.yml',
 	);
+	const notifyScriptPath = join(
+		__dirname,
+		'../../ops/production-smoke-probe-notify.sh',
+	);
 
 	it('exists and is readable', () => {
 		expect(existsSync(workflowPath)).toBe(true);
@@ -457,15 +769,55 @@ describe('Production Smoke Probe workflow YAML', () => {
 		expect(content).toMatch(/vars\.PRODUCTION_BASE_URL/);
 	});
 
+	it('defaults the base URL to the live Render host, not the retired Railway host', () => {
+		// No PRODUCTION_BASE_URL repository variable exists, so this env fallback is
+		// what actually runs; a stale value silently disables every production check.
+		const content = readFileSync(workflowPath, 'utf8');
+		expect(content).toContain('cabros-crypto-bot-telegram.onrender.com');
+		expect(content).not.toContain('cabros-bot-production.up.railway.app');
+	});
+
+	it('wires the PRODUCTION_REQUIRE_ENABLED_FLAGS repo-variable override', () => {
+		const content = readFileSync(workflowPath, 'utf8');
+		expect(content).toContain('PRODUCTION_REQUIRE_ENABLED_FLAGS');
+		expect(content).toMatch(/vars\.PRODUCTION_REQUIRE_ENABLED_FLAGS/);
+	});
+
+	it('never echoes the API key on the flag-check path', () => {
+		const content = readFileSync(workflowPath, 'utf8');
+		expect(content).not.toMatch(/api-key=/i);
+		expect(content).not.toMatch(/x-api-key=/i);
+	});
+
 	it('uses jq to handle JSON parsing', () => {
 		const content = readFileSync(workflowPath, 'utf8');
 		expect(content).toContain('jq');
 	});
 
-	it('optionally pages Telegram on persistent failures', () => {
+	it('does not claim a Telegram page it does not implement', () => {
+		// This workflow has no paging step: a non-zero exit fails the scheduled job
+		// and GitHub's own notification is the alert channel. The header used to
+		// promise admin paging and the env block carried three variables nothing
+		// read, which reads as "paging is configured" to any operator scanning it.
 		const content = readFileSync(workflowPath, 'utf8');
-		expect(content).toContain('TELEGRAM_BOT_TOKEN');
-		expect(content).toContain('TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID');
+
+		// Scope to the job env block: prose may legitimately name a removed variable
+		// to explain why it was removed, but wiring one back in is the defect.
+		const envBlock = content.slice(content.indexOf('    env:\n'));
+		expect(envBlock).toBeDefined();
+		for (const dead of [
+			'TELEGRAM_BOT_TOKEN',
+			'TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID',
+			'PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES',
+		]) {
+			expect(envBlock).not.toContain(`${dead}:`);
+			expect(content).not.toMatch(new RegExp(`secrets\\.${dead}\\b`));
+			expect(content).not.toMatch(new RegExp(`vars\\.${dead}\\b`));
+		}
+
+		// The header must not promise paging, and must still name the real channel.
+		expect(content).not.toMatch(/pag(e|es|ing)\s+(the\s+)?operators/i);
+		expect(content).toMatch(/no paging step/i);
 	});
 
 	it('documents the configuration secrets in comments', () => {
@@ -561,10 +913,7 @@ describe('Production Smoke Probe workflow YAML', () => {
 			const dir = mkdtempSync(join(tmpdir(), 'cabros-preflight-'));
 			const scriptDir = join(dir, 'ops');
 			require('fs').mkdirSync(scriptDir, { recursive: true });
-			for (const name of [
-				'production-smoke-probe.sh',
-				'production-smoke-probe-notify.sh',
-			]) {
+			for (const name of ['production-smoke-probe.sh']) {
 				writeFileSync(join(scriptDir, name), '#!/usr/bin/env bash\ntrue\n', { mode: 0o644 });
 			}
 			const outputFile = join(dir, 'github-output');
@@ -667,7 +1016,8 @@ describe('Production Smoke Probe workflow YAML', () => {
 			[4, 'down'],
 			[5, 'stale'],
 			[6, 'degraded'],
-			[7, 'auth_rejected'],
+			[7, 'flag_disabled'],
+			[8, 'auth_rejected'],
 			[64, 'invalid_args'],
 			[126, 'script_missing'],
 			[127, 'script_missing'],
@@ -678,48 +1028,49 @@ describe('Production Smoke Probe workflow YAML', () => {
 		});
 
 		it('never classifies an exit code as down unless production really failed', () => {
-			// The paging-triggering outcome. Everything a broken CI setup can produce
-			// must land elsewhere, or operators get false outage pages.
-			for (const rc of [2, 7, 64, 126, 127, 1, 9]) {
+			// `down` is the only verdict that claims alerts stopped flowing. Everything
+			// a broken CI setup can produce must land elsewhere, or an operator reads a
+			// repository or secret problem as a production outage.
+			for (const rc of [2, 7, 8, 64, 126, 127, 1, 9]) {
 				expect(classify(rc).outcome).not.toBe('down');
 			}
 		});
 
 		it('reports a rotated secret as a CI problem in its own annotation', () => {
 			const content = readFileSync(workflowPath, 'utf8');
-			expect(content).toMatch(/7\)[\s\S]{0,400}?outcome=auth_rejected/);
+			expect(content).toMatch(/8\)[\s\S]{0,400}?outcome=auth_rejected/);
 			expect(content).toContain('probe_auth_rejected');
 		});
 	});
 
-	describe('admin paging (issue #971)', () => {
-		it('invokes the paging helper after the probe', () => {
+	// Issue #1360 assigned Telegram paging to the secretless external uptime
+	// monitor, which pages once on a DOWN transition and once on recovery. A
+	// second pager in this workflow would duplicate the DOWN page for a single
+	// outage and drop the recovery signal — the alert fatigue both #1107 and
+	// #971 were filed about. These assertions lock that decision in so the next
+	// agent to find a "missing" pager reads why it is absent.
+	describe('no duplicate pager (issue #1360 supersedes the #971 paging step)', () => {
+		it('declares no Telegram secrets', () => {
 			const content = readFileSync(workflowPath, 'utf8');
-			expect(content).toContain('ops/production-smoke-probe-notify.sh');
+			expect(content).not.toContain('TELEGRAM_BOT_TOKEN');
+			expect(content).not.toContain('TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID');
 		});
 
-		it('passes the probe outcome to the paging helper', () => {
+		it('has no cooldown latch, because nothing latches', () => {
 			const content = readFileSync(workflowPath, 'utf8');
-			expect(content).toContain('PROBE_OUTCOME');
+			expect(content).not.toContain('PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES');
+			expect(content).not.toContain('actions/cache/');
 		});
 
-		it('runs the paging step even though the probe step failed', () => {
+		it('does not reference a paging helper script', () => {
 			const content = readFileSync(workflowPath, 'utf8');
-			expect(content).toMatch(/if:\s*always\(\)/);
+			expect(content).not.toContain('production-smoke-probe-notify.sh');
+			expect(existsSync(notifyScriptPath)).toBe(false);
 		});
 
-		it('wires the cooldown setting it documents in the header', () => {
+		it('states in the header where paging actually lives', () => {
 			const content = readFileSync(workflowPath, 'utf8');
-			expect(content).toContain('PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES');
-			expect(content).toMatch(
-				/PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES:\s*\$\{\{\s*vars\.PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES/,
-			);
-		});
-
-		it('persists the cooldown latch between scheduled runs', () => {
-			const content = readFileSync(workflowPath, 'utf8');
-			expect(content).toMatch(/actions\/cache\/restore@[0-9a-f]{40}/);
-			expect(content).toMatch(/actions\/cache\/save@[0-9a-f]{40}/);
+			expect(content).toContain('external-uptime-monitor.yml');
 		});
 	});
 
