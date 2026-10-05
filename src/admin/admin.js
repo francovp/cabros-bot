@@ -100,6 +100,7 @@ const DISPLAY_LABELS = {
 const VIEW_TITLES = {
 	overview: 'Overview',
 	status: 'Status',
+	trading: 'Trading',
 	alerts: 'Alerts',
 	outcomes: 'Outcomes',
 	presets: 'Presets',
@@ -118,6 +119,7 @@ const CONSOLE_VIEW_NAMES = Object.freeze(Object.keys(VIEW_TITLES));
 // Scope prefixes keep the alerts summary and export filter sets independent, because
 // they are two separate forms with separate defaults.
 const FILTER_SCOPE_VIEWS = Object.freeze({
+	trading: 'trading',
 	'alerts.list': 'alerts',
 	'alerts.summary': 'alerts',
 	'alerts.export': 'alerts',
@@ -6567,6 +6569,751 @@ const buildNewsMonitorForm = (contract, operation, fields, definition) => {
 	};
 };
 
+// Realized P&L, ROI, fees and open exposure need a durable trade ledger that is not
+// deployed yet. Each real-money panel looks its path up in the loaded contract and
+// renders a named pending state when it is absent, so this path pointing at an
+// operation the contract does not yet carry is intentional, not a typo.
+const TRADING_LEDGER_PATH = '/api/trading/ledger/summary';
+
+const TRADING_REAL_METRICS = [
+	['Realized P&L', 'realizedPnl'],
+	['Unrealized P&L', 'unrealizedPnl'],
+	['ROI', 'roiPercent'],
+	['Profit factor', 'profitFactor'],
+	['Fees', 'feesPaid'],
+	['Avg hold', 'averageHoldMinutes'],
+	['Open exposure', 'openExposure'],
+];
+
+const TRADING_REAL_METRIC_HINTS = {
+	realizedPnl: 'Closed trades only',
+	unrealizedPnl: 'Mark to last evaluated price',
+	roiPercent: 'On deployed capital',
+	profitFactor: 'Gross win over gross loss',
+	feesPaid: 'Exchange commission',
+	averageHoldMinutes: 'Per closed trade',
+	openExposure: 'Against BINANCE_TRADING_MAX_NOTIONAL',
+};
+
+const TRADING_WINDOWS = ['1h', '4h', '1D', '1W'];
+
+const formatTradingPercent = (value, digits = 2) => {
+	const numeric = asFiniteNumber(value);
+	if (numeric === null) return '—';
+	return `${numeric > 0 ? '+' : ''}${numeric.toFixed(digits)}%`;
+};
+
+const formatTradingR = (value) => {
+	const numeric = asFiniteNumber(value);
+	if (numeric === null) return '—';
+	return `${numeric > 0 ? '+' : ''}${numeric.toFixed(2)}R`;
+};
+
+// The service reports every percentage at two decimals (parseFloat(toFixed(2))), so
+// a bare interpolation would print "59%" for a pooled average and "59.00%" for a
+// per-window one purely because the pooled value happened to be whole.
+const formatTradingHitRate = (value) => {
+	const numeric = asFiniteNumber(value);
+	return numeric === null ? '—' : `${numeric.toFixed(2)}%`;
+};
+
+const tradingUtcDay = (value) => {
+	if (typeof value !== 'string' || value.trim() === '') return null;
+	const parsed = Date.parse(value);
+	if (!Number.isFinite(parsed)) return null;
+	return new Date(parsed).toISOString().slice(0, 10);
+};
+
+const collectEvaluatedSignals = (records, windowKey) => {
+	const list = Array.isArray(records) ? records : [];
+	return list.reduce((acc, record) => {
+		const window = asObject(asObject(record && record.outcomes)[windowKey]);
+		const value = asFiniteNumber(window.return);
+		if (window.status !== 'evaluated' || value === null) return acc;
+		const day = tradingUtcDay(record && record.receivedAt);
+		acc.push({
+			day,
+			symbol: record && record.symbol ? String(record.symbol) : 'unknown',
+			setupType: record && record.setupType ? String(record.setupType) : 'unlabelled',
+			side: record && record.side ? String(record.side) : 'unknown',
+			value,
+		});
+		return acc;
+	}, []);
+};
+
+const summariseSignalsBy = (signals, key) => {
+	const buckets = new Map();
+	signals.forEach((signal) => {
+		const name = signal[key];
+		const bucket = buckets.get(name) || { name, count: 0, wins: 0, sum: 0 };
+		bucket.count += 1;
+		bucket.sum += signal.value;
+		if (signal.value > 0) bucket.wins += 1;
+		buckets.set(name, bucket);
+	});
+	return [...buckets.values()]
+		.map((bucket) => ({
+			...bucket,
+			meanReturn: bucket.sum / bucket.count,
+			hitRate: bucket.count ? (bucket.wins / bucket.count) * 100 : null,
+		}))
+		.sort((a, b) => a.meanReturn - b.meanReturn);
+};
+
+const buildDailyBuckets = (signals) => {
+	const byDay = new Map();
+	signals.forEach((signal) => {
+		const day = signal.day || 'undated';
+		const bucket = byDay.get(day) || { day, count: 0, sum: 0 };
+		bucket.count += 1;
+		bucket.sum += signal.value;
+		byDay.set(day, bucket);
+	});
+	return [...byDay.values()]
+		.map((bucket) => ({
+			day: bucket.day,
+			count: bucket.count,
+			sum: bucket.sum,
+			meanReturn: bucket.sum / bucket.count,
+		}))
+		.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+};
+
+const firstEvaluatedWindowKey = (records) => {
+	const list = Array.isArray(records) ? records : [];
+	for (const key of TRADING_WINDOWS) {
+		if (list.some((record) => asObject(asObject(record && record.outcomes)[key]).status === 'evaluated')) return key;
+	}
+	return TRADING_WINDOWS[0];
+};
+
+// SignalOutcomeService.summarizeOutcomes() has no top-level winRatePercent,
+// averageReturnPercent, averageMfePercent or averageMaePercent. Those four live one
+// level down at summary.windows[<window>] (schema WindowStats), alongside
+// totalSignals. Reading the top-level names renders a permanent em dash even when
+// the backend computed the value, so the window block is always resolved first.
+const WINDOW_POOLED_METRICS = ['hitRatePercent', 'averageReturnPercent', 'averageMfePercent', 'averageMaePercent'];
+
+// Each WindowStats percentage is a mean over that window's evaluated
+// (signal, window) observations, and `totalSignals` is exactly that denominator.
+// Weighting by it therefore reproduces the pooled mean across windows rather than
+// an unweighted average of per-window percentages, which would let a window with
+// two observations count as much as one with two hundred.
+const poolWindowStats = (blocks) => {
+	const pooled = { totalSignals: 0 };
+	const sums = {};
+	WINDOW_POOLED_METRICS.forEach((metric) => { sums[metric] = 0; });
+	blocks.forEach((block) => {
+		const total = asFiniteNumber(block.totalSignals);
+		if (total === null || total <= 0) return;
+		pooled.totalSignals += total;
+		WINDOW_POOLED_METRICS.forEach((metric) => {
+			const value = asFiniteNumber(block[metric]);
+			if (value === null) return;
+			sums[metric] += value * total;
+		});
+	});
+	WINDOW_POOLED_METRICS.forEach((metric) => {
+		pooled[metric] = pooled.totalSignals > 0 ? sums[metric] / pooled.totalSignals : null;
+	});
+	return pooled;
+};
+
+// `windowKey` is the raw select value, so '' means "All windows" — and there is no
+// single window block to read then. Pooling keeps the strip informative instead of
+// blank, and `pooled` lets the copy say so rather than implying a one-window number.
+const resolveTradingWindowStats = (summary, windowKey) => {
+	const windows = asObject(summary && summary.windows);
+	const requested = typeof windowKey === 'string' ? windowKey.trim() : '';
+	if (requested) {
+		const stats = asObject(windows[requested]);
+		return { stats, scope: requested, pooled: false, available: Object.keys(stats).length > 0 };
+	}
+	const blocks = TRADING_WINDOWS
+		.map((key) => asObject(windows[key]))
+		.filter((block) => Object.keys(block).length > 0);
+	if (!blocks.length) return { stats: {}, scope: '', pooled: false, available: false };
+	return { stats: poolWindowStats(blocks), scope: 'all windows', pooled: true, available: true };
+};
+
+const describeTradingWindowScope = (resolved) => {
+	if (!resolved || !resolved.available) return '';
+	return resolved.pooled ? 'pooled across all windows' : `${resolved.scope} window`;
+};
+
+const createTradingKpiCard = (label, value, meta, badgeText, tone) => {
+	const card = createMetricCard(label, value, meta);
+	card.className = `${card.className} trading-kpi`;
+	card.append(element('span', {
+		className: `trading-kpi-badge status-badge ${tone || 'status-disabled'}`,
+		text: badgeText,
+	}));
+	return card;
+};
+
+const renderPaperKpiStrip = (summary, badgeText, resolved) => {
+	const grid = element('div', { className: 'metric-grid kpi-strip' });
+	const received = asFiniteNumber(summary.totalSignalsReceived);
+	const evaluated = asFiniteNumber(summary.totalSignalsEvaluated);
+	const coverage = received && received > 0 && evaluated !== null
+		? Math.round((evaluated / received) * 100)
+		: null;
+	const stats = asObject(resolved && resolved.stats);
+	const scope = describeTradingWindowScope(resolved);
+	const hitRate = asFiniteNumber(stats.hitRatePercent);
+	const mfe = asFiniteNumber(stats.averageMfePercent);
+	const mae = asFiniteNumber(stats.averageMaePercent);
+
+	grid.append(
+		createTradingKpiCard('Signals recorded', formatOrderValue(summary.totalSignalsReceived),
+			`${formatOrderValue(summary.totalSignalsEligible)} eligible · ${formatOrderValue(summary.totalSignalsPending)} pending`,
+			badgeText, 'status-disabled'),
+		createTradingKpiCard('Coverage', coverage === null ? '—' : `${coverage}%`,
+			`${formatOrderValue(summary.totalSignalsEvaluated)} evaluated of ${formatOrderValue(summary.totalSignalsReceived)}`,
+			badgeText, 'status-disabled'),
+		createTradingKpiCard('Hit rate', formatTradingHitRate(hitRate),
+			`Evaluated signals closing above entry${scope ? ` · ${scope}` : ''}`,
+			badgeText, 'status-disabled'),
+		createTradingKpiCard('Expectancy', formatTradingR(summary.expectancyR),
+			'Average R-multiple per evaluated window',
+			badgeText, 'status-disabled'),
+		createTradingKpiCard('Average return', formatTradingPercent(stats.averageReturnPercent),
+			`Paper, per evaluated window${scope ? ` · ${scope}` : ''}`,
+			badgeText, 'status-disabled'),
+		createTradingKpiCard('MFE / MAE',
+			mfe === null && mae === null ? '—' : `${mfe === null ? '—' : `${mfe.toFixed(2)}%`} / ${mae === null ? '—' : `${mae.toFixed(2)}%`}`,
+			`Excursion reached vs tolerated${scope ? ` · ${scope}` : ''}`,
+			badgeText, 'status-disabled'),
+	);
+	return grid;
+};
+
+// A disabled feature and an unavailable dependency get different copy: telling an
+// operator to go enable a feature that is already deployed sends them the wrong way.
+const classifyTradingFailure = (status, data) => {
+	if (status === 403 || (data && data.code === 'FEATURE_DISABLED')) {
+		return { tone: 'status-misconfigured', heading: 'Not available — trade ledger API not deployed', body: 'Realized P&L, ROI, fees and open exposure need the durable trade ledger. Set the trading feature flags and redeploy once that API ships; this panel fills in automatically.' };
+	}
+	if (status === 503) {
+		return { tone: 'status-unknown', heading: 'Trade ledger temporarily unavailable', body: 'The backend answered but could not produce ledger data right now. This is a transient dependency state, not a disabled feature — retry from the refresh button.' };
+	}
+	return { tone: 'status-danger', heading: 'Trade ledger request failed', body: '' };
+};
+
+// Same reasoning as classifyTradingFailure, applied to the paper summary. A 400 is
+// this console's own malformed request, so telling the operator to enable a flag
+// that is already correct sends them the wrong way; only FEATURE_DISABLED earns
+// that advice.
+const classifyPaperFailure = (status, data) => {
+	if (status === 403 || (data && data.code === 'FEATURE_DISABLED')) {
+		return { tone: 'status-misconfigured', heading: 'Signal outcome tracking is disabled', body: 'Set ENABLE_SIGNAL_OUTCOME_TRACKING=true and redeploy to record paper outcomes.' };
+	}
+	if (status === 503) {
+		return { tone: 'status-unknown', heading: 'Outcome storage temporarily unavailable', body: 'Signal outcome tracking is enabled but its storage could not be read. This is a dependency state, not a disabled feature — retry from the refresh button.' };
+	}
+	if (status === 400) {
+		return { tone: 'status-danger', heading: 'Console sent an invalid filter', body: 'The backend rejected the window filter this console sent. No environment change is needed — the request itself was malformed.' };
+	}
+	return { tone: 'status-danger', heading: 'Outcome summary request failed', body: '' };
+};
+
+const createTradingPanelShell = (className, title, note) => {
+	const panel = element('section', { className: `dashboard-section ${className}` });
+	panel.append(element('h3', { text: title }));
+	if (note) panel.append(element('p', { className: 'trading-panel-note', text: note }));
+	return panel;
+};
+
+const renderRealPnlPanel = (contract, definition, query, button) => {
+	const panel = createTradingPanelShell('real-pnl-panel', 'Real trading P&L');
+	const host = element('div', { className: 'trading-metric-list' });
+	const pendingNotice = element('div', { className: 'trading-pending-notice' });
+	const pending = element('div', { className: 'trading-metric-list' });
+	const localOutput = element('div', { className: 'response-block', text: '' });
+	panel.append(host, pendingNotice, pending, localOutput);
+
+	const showPending = (classification) => {
+		host.replaceChildren();
+		const notice = element('p', { className: 'empty-state' });
+		notice.append(
+			element('span', { className: `status-badge ${classification.tone}`, text: classification.heading }),
+			element('span', { text: ` ${classification.body}` }),
+		);
+		pendingNotice.replaceChildren(
+			notice,
+			element('p', { className: 'trading-panel-note', text: 'Metrics that will appear here once a ledger exists:' }),
+		);
+		pending.replaceChildren(...TRADING_REAL_METRICS.map(([label, key]) => {
+			const box = element('div', { className: 'trading-metric-pending' });
+			box.append(
+				element('p', { className: 'metric-label', text: label }),
+				element('strong', { className: 'metric-value', text: '—' }),
+				element('p', { className: 'metric-meta', text: TRADING_REAL_METRIC_HINTS[key] }),
+			);
+			return box;
+		}));
+		localOutput.textContent = '';
+	};
+
+	if (!contract || !contract.paths || !contract.paths[TRADING_LEDGER_PATH]) {
+		showPending({
+			tone: 'status-disabled',
+			heading: 'Not available — trade ledger API not deployed',
+			body: `The API contract has no ${TRADING_LEDGER_PATH} operation, so there is no measured P&L to show. Nothing is fabricated here: these metrics appear automatically once the ledger ships.`,
+		});
+		return Promise.resolve(panel);
+	}
+
+	let capturedStatus = 0;
+	return sendRequest({
+		definition,
+		path: TRADING_LEDGER_PATH,
+		query,
+		button,
+		output: localOutput,
+		isCurrent: () => true,
+		captureResponseStatus: (status) => { capturedStatus = status; },
+		formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+	}).then((data) => {
+		const payload = data && typeof data === 'object' && !Array.isArray(data) ? data : null;
+		if (payload && capturedStatus < 400) {
+			host.replaceChildren(...TRADING_REAL_METRICS.map(([label, key]) => createTradingKpiCard(
+				label,
+				formatOrderValue(payload[key]),
+				TRADING_REAL_METRIC_HINTS[key],
+				'Measured',
+				'status-ready',
+			)));
+			pendingNotice.replaceChildren();
+			pending.replaceChildren();
+			return panel;
+		}
+		showPending(classifyTradingFailure(capturedStatus, payload));
+		return panel;
+	});
+};
+
+const renderChartPanel = (className, title, note, chartNode, emptyText) => {
+	const panel = createTradingPanelShell(className, title, note);
+	if (chartNode) panel.append(chartNode);
+	else panel.append(createEmptyState(emptyText));
+	return panel;
+};
+
+const renderAttributionPanel = (className, title, note, rows, dimensionLabel) => {
+	const panel = createTradingPanelShell(className, title, note);
+	if (!rows.length) {
+		panel.append(createEmptyState('No evaluated signals to attribute yet.'));
+		return panel;
+	}
+	const wrap = element('div', { className: 'table-wrap' });
+	const table = element('table', { className: 'data-table' });
+	const head = element('tr');
+	[dimensionLabel, 'Signals', 'Wins', 'Hit rate', 'Avg return', 'Total return'].forEach((label) => head.append(element('th', { text: label })));
+	table.append(head);
+	rows.forEach((row) => {
+		const tr = element('tr');
+		tr.append(
+			element('td', { text: row.name }),
+			element('td', { text: String(row.count) }),
+			element('td', { text: String(row.wins) }),
+			element('td', { text: row.hitRate === null ? '—' : `${row.hitRate.toFixed(1)}%` }),
+			element('td', { text: formatTradingPercent(row.meanReturn) }),
+			element('td', { text: formatTradingPercent(row.sum) }),
+		);
+		table.append(tr);
+	});
+	wrap.append(table);
+	panel.append(wrap);
+	return panel;
+};
+
+const describeSignalShape = (signals) => {
+	if (!signals.length) return 'No evaluated signals in the selected window.';
+	const wins = signals.filter((signal) => signal.value > 0).length;
+	const sum = signals.reduce((total, signal) => total + signal.value, 0);
+	return `${signals.length} evaluated signals, ${wins} closed above entry, total return ${formatTradingPercent(sum)}.`;
+};
+
+const createLiveFeed = () => {
+	const panel = createTradingPanelShell('live-feed-panel', 'Live event feed');
+	const feed = element('div', { className: 'live-feed' });
+	feed.append(createEmptyState('No events yet — connect a key or sign in to stream.'));
+	panel.append(feed);
+	const MAX_ROWS = 40;
+	const unsubscribe = onSseEvent((type, data) => {
+		if (type === 'connected') return;
+		if (feed.firstChild && feed.firstChild.className === 'empty-state') feed.replaceChildren();
+		const row = element('div', { className: 'live-feed-row' });
+		row.append(
+			element('span', { className: 'live-feed-type', text: type }),
+			element('span', { text: data && data.symbol ? String(data.symbol) : '—' }),
+		);
+		['status', 'channel', 'name', 'error'].forEach((key) => {
+			if (!data || data[key] === undefined || data[key] === null || data[key] === '') return;
+			row.append(element('span', { className: 'status-badge status-disabled', text: `${key}: ${String(data[key])}` }));
+		});
+		row.append(createTimestamp(Date.now()));
+		feed.prepend(row);
+		while (feed.children.length > MAX_ROWS && feed.lastElementChild) feed.lastElementChild.remove();
+	});
+	return { panel, unsubscribe };
+};
+
+const createOrderAuditPanel = (button) => {
+	const panel = createTradingPanelShell('order-audit-panel', 'Recent order audit');
+	const list = element('div', { className: 'table-wrap' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
+	panel.append(button, list, output);
+	return { panel, list, output };
+};
+
+const renderOrderAudit = (list, data) => {
+	const records = Array.isArray(data && data.records) && data.records.length
+		? data.records
+		: (Array.isArray(data && data.audit) ? data.audit : []);
+	list.replaceChildren();
+	if (!records.length) {
+		list.append(createEmptyState('No order mutations recorded yet.'));
+		return;
+	}
+	// The rail column is narrow, so the table keeps a floor width and the wrapper scrolls
+	// instead of `width: 100%` wrapping headers into unreadable fragments.
+	const table = element('table', { className: 'data-table data-table-scroll' });
+	const head = element('tr');
+	['When', 'Symbol', 'Action', 'Status', 'Env'].forEach((label) => head.append(element('th', { text: label })));
+	table.append(head);
+	records.slice(0, 20).forEach((record) => {
+		const tr = element('tr');
+		const when = element('td');
+		when.append(record && record.timestamp ? createTimestamp(record.timestamp) : element('span', { text: '—' }));
+		tr.append(
+			when,
+			element('td', { text: formatOrderValue(record && record.symbol) }),
+			element('td', { text: formatOrderValue(record && record.action) }),
+			element('td', { text: formatOrderValue(record && record.status) }),
+			element('td', { text: formatOrderValue(record && record.environment) }),
+		);
+		table.append(tr);
+	});
+	list.append(table);
+};
+
+const createQuickControl = (label, definition, body) => {
+	const button = element('button', { className: 'quick-control', text: label });
+	button.type = 'button';
+	const output = element('p', { className: 'quick-control-output request-state' });
+	button.addEventListener('click', () => {
+		sendRequest({
+			definition,
+			path: definition.path,
+			body,
+			button,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+	});
+	return { button, output };
+};
+
+const createTradingView = (contract) => {
+	const summaryDefinition = { method: 'GET', path: '/api/outcomes/summary', label: 'Load signal performance' };
+	const outcomesDefinition = { method: 'GET', path: '/api/outcomes', label: 'Load signal records' };
+	const auditDefinition = { method: 'GET', path: '/api/trading/binance/orders/audit', label: 'Load order audit' };
+	const ledgerDefinition = { method: 'GET', path: TRADING_LEDGER_PATH, label: 'Load trade ledger' };
+	const statusDefinition = { method: 'GET', path: '/api/status', label: 'Load trading environment' };
+
+	const wrap = element('section', { className: 'dashboard trading-view' });
+	const hero = element('div', { className: 'dashboard-hero' });
+	const heroCopy = element('div');
+	heroCopy.append(
+		element('p', { className: 'eyebrow', text: 'Trading' }),
+		element('h2', { text: 'Are the alerts making money?' }),
+		element('p', { text: 'Paper signal performance from recorded outcomes, beside the real order audit. The curve plots cumulative signal return, which is not account equity.' }),
+	);
+	const heroActions = element('div', { className: 'quick-controls' });
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: —' });
+	heroActions.append(environmentBadge);
+	hero.append(heroCopy, heroActions);
+	const environmentOutput = element('div', { className: 'response-block', text: '' });
+	wrap.append(hero, environmentOutput);
+
+	const filters = element('form', { className: 'operation-card' });
+	filters.append(element('h3', { text: 'Filters' }));
+	const windowField = addField(filters, 'Evaluation window', 'window', { tag: 'select' });
+	[['', 'All windows'], ...TRADING_WINDOWS.map((key) => [key, key])].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		windowField.append(option);
+	});
+	const limit = addField(filters, 'Record limit', 'limit', { type: 'number', min: 1, max: 100, value: 100 });
+	registerFilterScope('trading', { window: windowField, limit });
+	const refresh = element('button', { text: 'Refresh trading data' });
+	refresh.type = 'submit';
+	const filterNote = element('p', { className: 'trading-panel-note', text: '' });
+	filters.append(refresh, filterNote);
+
+	const layout = element('div', { className: 'trading-layout' });
+	const main = element('div', { className: 'trading-main' });
+	const rail = element('aside', {
+		className: 'ops-rail',
+		attributes: { 'aria-label': 'Operations rail' },
+	});
+	layout.append(main, rail);
+	wrap.append(filters, layout);
+
+	const paperPanel = createTradingPanelShell('paper-panel', 'Paper signal performance',
+		'Server-computed aggregates from recorded outcomes. These are paper results on evaluated signals, not realised account profit.');
+	const paperHost = element('div');
+	const paperOutput = element('div', { className: 'response-block', text: '' });
+	paperPanel.append(paperHost, paperOutput);
+
+	const realPanelHost = element('div');
+	const realOutput = element('div', { className: 'response-block', text: '' });
+	const analyticsOutput = element('div', { className: 'response-block', text: '' });
+	main.append(paperPanel, realPanelHost, realOutput);
+
+	const curveHost = element('div');
+	const barsHost = element('div');
+	const symbolHost = element('div');
+	const setupHost = element('div');
+	const compareHost = element('div');
+	main.append(curveHost, barsHost, symbolHost, setupHost, compareHost, analyticsOutput);
+
+	const { panel: feedPanel, unsubscribe: unsubscribeFeed } = createLiveFeed();
+	const auditButton = element('button', { className: 'quick-control', text: auditDefinition.label });
+	auditButton.type = 'submit';
+	const audit = createOrderAuditPanel(auditButton);
+	const quickPanel = createTradingPanelShell('quick-controls-panel', 'Quick controls');
+	const quickControls = element('div', { className: 'quick-controls' });
+	const quickOutput = element('p', { className: 'quick-control-output request-state' });
+	quickPanel.append(quickControls, quickOutput);
+	rail.append(feedPanel, audit.panel, quickPanel);
+
+	const mutationControls = [
+		createQuickControl('Pause news monitor', { method: 'POST', path: '/api/news-monitor/pause', label: 'Pause news monitor', confirm: 'Pause the news monitor? Scheduled sweeps stop until you resume them.' }, {}),
+		createQuickControl('Resume news monitor', { method: 'POST', path: '/api/news-monitor/resume', label: 'Resume news monitor', confirm: 'Resume the news monitor?' }, {}),
+		createQuickControl('Run self-test', { method: 'POST', path: '/api/selftest/run', label: 'Run self-test' }, {}),
+		createQuickControl('Send test alert', { method: 'POST', path: '/api/admin/test-alert', label: 'Send test alert', confirm: 'Send a test alert to every enabled channel?' }, {}),
+	];
+	if (canPerformMutation()) {
+		mutationControls.forEach((control) => quickControls.append(control.button));
+		mutationControls.forEach((control) => quickPanel.append(control.output));
+	} else {
+		quickPanel.append(createEmptyState('Mutation controls are hidden for the admin.viewer role.'));
+	}
+
+	let generation = 0;
+
+	const applyEnvironment = (status) => {
+		const binance = asObject(asObject(asObject(status && status.dependencies).binanceTrading));
+		const environment = binance.environment ? String(binance.environment) : '';
+		environmentBadge.replaceChildren(environment
+			? formatOrderEnvironment(environment)
+			: element('span', { className: 'status-badge status-disabled', text: 'Environment: unknown' }));
+		if (!binance.maxNotionalConfigured) {
+			filterNote.textContent = 'BINANCE_TRADING_MAX_NOTIONAL is not configured; the console never receives its numeric value.';
+		}
+	};
+
+	const loadEnvironment = (current) => sendRequest({
+		definition: statusDefinition,
+		path: statusDefinition.path,
+		button: refresh,
+		output: environmentOutput,
+		isCurrent: () => current === generation,
+		formatResponse: () => '',
+	}).then((status) => applyEnvironment(status));
+
+	const loadPaper = (current) => sendRequest({
+		definition: summaryDefinition,
+		path: summaryDefinition.path,
+		query: Object.fromEntries(Object.entries({ window: windowField.value }).filter(([, value]) => value !== '')),
+		button: refresh,
+		output: paperOutput,
+		isCurrent: () => current === generation,
+		captureResponseData: (data, response) => renderPaper(data, response),
+		formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+	});
+
+	const renderPaper = (data, response) => {
+		if (response && response.ok === false) {
+			const classification = classifyPaperFailure(response.status, data);
+			const notice = element('p', { className: 'empty-state' });
+			notice.append(
+				element('span', { className: `status-badge ${classification.tone}`, text: classification.heading }),
+				element('span', { text: ` ${classification.body}` }),
+			);
+			paperHost.replaceChildren(notice);
+			renderCompare(null, null, classification);
+			return;
+		}
+		const summary = asObject(data && data.summary);
+		if (!data || !data.summary) {
+			paperHost.replaceChildren(createEmptyState('No outcome summary block in the response.'));
+			renderCompare(null, null, null);
+			return;
+		}
+		const resolved = resolveTradingWindowStats(summary, windowField.value);
+		paperHost.replaceChildren(renderPaperKpiStrip(summary, 'Paper · signals', resolved));
+		renderCompare(summary, null, null, resolved);
+	};
+
+	const renderCompare = (summary, ledger, failure, resolved) => {
+		compareHost.replaceChildren();
+		const panel = createTradingPanelShell('paper-vs-real-panel', 'Paper vs real win rate',
+			'Paper results come from evaluated signals; real results require a measured ledger. They are not interchangeable.');
+		const grid = element('div', { className: 'paper-vs-real' });
+
+		const paperColumn = element('div', { className: 'paper-vs-real-column' });
+		paperColumn.append(element('h4', { text: 'Paper (evaluated signals)' }));
+		const paperStats = asObject(resolved && resolved.stats);
+		const paperHitRate = summary ? asFiniteNumber(paperStats.hitRatePercent) : null;
+		const paperScope = describeTradingWindowScope(resolved);
+		paperColumn.append(
+			createTradingKpiCard('Hit rate', formatTradingHitRate(paperHitRate),
+				summary
+					? `From GET /api/outcomes/summary${paperScope ? ` · ${paperScope}` : ''}`
+					: (failure ? failure.heading : 'No paper summary available'),
+				'Paper · signals', 'status-disabled'),
+		);
+
+		const realColumn = element('div', { className: 'paper-vs-real-column' });
+		realColumn.append(element('h4', { text: 'Real (trade ledger)' }));
+		if (ledger) {
+			realColumn.append(createTradingKpiCard('Hit rate', formatOrderValue(ledger.winRatePercent), 'From the trade ledger', 'Measured', 'status-ready'));
+		} else {
+			realColumn.append(createTradingKpiCard('Hit rate', '—',
+				failure ? failure.heading : 'No trade ledger measurement available', 'Not measured', 'status-disabled'));
+		}
+
+		grid.append(paperColumn, realColumn);
+		panel.append(grid);
+		compareHost.append(panel);
+	};
+
+	const renderSignalAnalytics = (records, windowKey) => {
+		const signals = collectEvaluatedSignals(records, windowKey);
+		const emptyText = 'No evaluated signals for this window yet, so the curve and breakdown are empty.';
+		const scope = windowKey ? `${windowKey} window` : 'first available window per signal';
+
+		if (!signals.length) {
+			curveHost.replaceChildren(renderChartPanel('equity-panel', 'Cumulative signal return', 'Not account equity.', null, emptyText));
+			barsHost.replaceChildren(renderChartPanel('daily-panel', 'Average daily signal return', 'Mean return per signal day.', null, emptyText));
+			symbolHost.replaceChildren(renderAttributionPanel('attribution-symbols', 'P&L by symbol', 'Ranked worst to best.', [], 'Symbol'));
+			setupHost.replaceChildren(renderAttributionPanel('attribution-setups', 'P&L by setup type', 'Ranked worst to best.', [], 'Setup type'));
+			return;
+		}
+
+		const daily = buildDailyBuckets(signals);
+		let running = 0;
+		let runningCount = 0;
+		const cumulative = daily.map((bucket) => {
+			runningCount += bucket.count;
+			running += bucket.sum;
+			return { label: bucket.day, value: running / runningCount };
+		});
+
+		curveHost.replaceChildren(renderChartPanel(
+			'equity-panel',
+			'Cumulative signal return',
+			`Cumulative average return per signal across ${scope}. This is paper signal return, not account equity. ${describeSignalShape(signals)}`,
+			window.CabrosAdminCharts.lineChart(
+				[{ label: 'Cumulative average signal return (%)', points: cumulative }],
+				{ label: 'Cumulative average signal return', xKey: 'label', yKey: 'value', formatY: (value) => `${Number(value).toFixed(2)}%` },
+			),
+		));
+
+		barsHost.replaceChildren(renderChartPanel(
+			'daily-panel',
+			'Average daily signal return',
+			`Mean return per signal day across ${scope}. ${describeSignalShape(signals)}`,
+			window.CabrosAdminCharts.barChart(
+				daily.map((bucket) => ({ label: bucket.day, value: bucket.meanReturn })),
+				{ label: 'Average daily signal return', valueKey: 'value', formatValue: (value) => `${Number(value).toFixed(2)}%` },
+			),
+		));
+
+		symbolHost.replaceChildren(renderAttributionPanel(
+			'attribution-symbols', 'P&L by symbol',
+			`Derived from ${signals.length} evaluated signals in the ${scope}.`, summariseSignalsBy(signals, 'symbol'), 'Symbol',
+		));
+		setupHost.replaceChildren(renderAttributionPanel(
+			'attribution-setups', 'P&L by setup type',
+			`Derived from ${signals.length} evaluated signals in the ${scope}.`, summariseSignalsBy(signals, 'setupType'), 'Setup type',
+		));
+	};
+
+	const loadSignals = (current) => sendRequest({
+		definition: outcomesDefinition,
+		path: outcomesDefinition.path,
+		query: { limit: String(Number(trimFormValue(limit.value)) || 100) },
+		button: refresh,
+		output: analyticsOutput,
+		isCurrent: () => current === generation,
+		captureResponseData: (data) => {
+			const records = Array.isArray(data && data.outcomes) ? data.outcomes : [];
+			const windowKey = windowField.value || firstEvaluatedWindowKey(records);
+			renderSignalAnalytics(records, windowKey);
+		},
+		formatResponse: ({ summary, status, elapsed, data }) => `${summary}\nHTTP ${status} · ${elapsed} ms · `
+			+ `${data && Array.isArray(data.outcomes) ? `${data.outcomes.length} signal records` : 'no records returned'}`,
+	});
+
+	const loadAudit = (current) => sendRequest({
+		definition: auditDefinition,
+		path: auditDefinition.path,
+		query: { limit: '20' },
+		button: auditButton,
+		output: audit.output,
+		isCurrent: () => current === generation,
+		captureResponseData: (data) => {
+			audit.list.replaceChildren();
+			renderOrderAudit(audit.list, data);
+		},
+		formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+	});
+
+	const loadAll = () => {
+		const current = ++generation;
+		refresh.disabled = true;
+		return Promise.all([
+			loadEnvironment(current),
+			loadPaper(current),
+			loadSignals(current),
+			loadAudit(current),
+			renderRealPnlPanel(contract, ledgerDefinition, {}, refresh)
+				.then((panel) => realPanelHost.replaceChildren(panel)),
+		]).then(() => {
+			if (current === generation) refresh.disabled = false;
+		}).catch((error) => {
+			if (current === generation) {
+				refresh.disabled = false;
+				showError(environmentOutput, `Trading dashboard could not refresh: ${error.message}`);
+			}
+		});
+	};
+
+	filters.addEventListener('submit', (event) => {
+		event.preventDefault();
+		loadAll();
+	});
+	[windowField, limit].forEach((field) => {
+		field.addEventListener('input', () => { filterNote.textContent = 'Filters changed — refresh trading data to apply.'; });
+	});
+
+	auditButton.addEventListener('click', () => loadAudit(generation));
+
+	detachActiveViewPoll = () => {
+		generation += 1;
+		unsubscribeFeed();
+	};
+
+	loadAll();
+	return wrap;
+};
+
 const renderView = async (name) => {
 	const view = document.getElementById('view');
 	if (typeof detachActiveViewPoll === 'function') detachActiveViewPoll();
@@ -6589,6 +7336,10 @@ const renderView = async (name) => {
 			return;
 		}
 		view.append(element('h2', { text: name[0].toUpperCase() + name.slice(1) }));
+		if (name === 'trading') {
+			view.append(createTradingView(contract));
+			return;
+		}
 		if (name === 'alerts') {
 			view.append(createAlertListForm());
 			view.append(createAlertSummaryForm(), createAlertExportForm());
@@ -6791,10 +7542,40 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 	});
 };
 
+const setupSidebarToggle = () => {
+	const toggle = getElement('toggle-sidebar');
+	const shell = getElement('console-shell');
+	if (!toggle || !shell) return;
+	const LABELS = { expanded: 'Collapse sidebar', collapsed: 'Expand sidebar' };
+	const apply = (collapsed) => {
+		if (collapsed) shell.setAttribute('data-sidebar', 'collapsed');
+		else shell.removeAttribute('data-sidebar');
+		toggle.textContent = collapsed ? LABELS.collapsed : LABELS.expanded;
+		toggle.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
+	};
+	let initialCollapsed = false;
+	try {
+		initialCollapsed = sessionStorage.getItem('cabros-admin-sidebar-collapsed') === 'true';
+	} catch (_) {
+		initialCollapsed = false;
+	}
+	apply(initialCollapsed);
+	toggle.addEventListener('click', () => {
+		const collapsed = shell.getAttribute('data-sidebar') === 'collapsed';
+		apply(!collapsed);
+		try {
+			sessionStorage.setItem('cabros-admin-sidebar-collapsed', String(!collapsed));
+		} catch (_) {
+			// A collapsed sidebar is cosmetic, so a storage failure must not block the toggle.
+		}
+	});
+};
+
 document.addEventListener('DOMContentLoaded', async () => {
 	const view = getElement('view');
 	if (view) view.replaceChildren(createLoadingState('Checking authentication…'));
 	document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigateToView(button.dataset.view)));
+	setupSidebarToggle();
 	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
 		window.addEventListener('popstate', handleConsolePopState);
 	}
