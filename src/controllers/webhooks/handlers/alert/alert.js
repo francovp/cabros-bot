@@ -271,6 +271,17 @@ function postAlert(botOrGetter) {
 			const rawSignalClass = (typeof body === 'object' && body && 'signalClass' in body)
 				? body.signalClass
 				: req.query?.signalClass;
+			// `validateAlert` falls back to `metadata.signalClass` when neither the body
+			// nor the query carried one. The classifier must see the same precedence, or
+			// a caller using the documented metadata form is silently misclassified -
+			// and replay, which preserves metadata, would not round-trip (AGENTS.md
+			// "Replay Payload Preservation"). Mirrors validation's `!== undefined` test
+			// exactly, including the `'signalClass' in body` short-circuit above.
+			const metadataSignalClass = (rawSignalClass === undefined
+				&& typeof body === 'object' && body && body.metadata && typeof body.metadata === 'object')
+				? body.metadata.signalClass
+				: undefined;
+			const effectiveSignalClass = rawSignalClass === undefined ? metadataSignalClass : rawSignalClass;
 
 			const { text } = validateAlert(
 				alertText,
@@ -286,7 +297,7 @@ function postAlert(botOrGetter) {
 			// would then always win over derivation. An explicit 'unknown' from
 			// the caller is still honored. Classification is deterministic,
 			// channel neutral, and fails open to 'unknown'.
-			const signalClass = classifySignal(text, { explicit: rawSignalClass });
+			const signalClass = classifySignal(text, { explicit: effectiveSignalClass });
 			const source = (typeof body === 'object' && body && typeof body.source === 'string' && body.source.trim())
 				? body.source.trim()
 				: 'webhook-alert';

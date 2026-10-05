@@ -119,6 +119,23 @@ describe('Alert signal classification (issue #858)', () => {
 		expect(alertStorageService.saveAlert.mock.calls[0][0].signalClass).toBe('reversal');
 	});
 
+	it('honors metadata.signalClass, which validateAlert also treats as explicit', async () => {
+		// Regression: the classifier consulted only the top-level/query value, so a
+		// caller using the documented metadata form was silently derived instead.
+		// Replay preserves metadata (AGENTS.md "Replay Payload Preservation"), so this
+		// also had to round-trip.
+		await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({
+				text: REALISTIC_BREAKOUT_ALERT,
+				metadata: { signalClass: 'reversal' },
+			})
+			.expect(200);
+
+		expect(alertStorageService.saveAlert.mock.calls[0][0].signalClass).toBe('reversal');
+	});
+
 	it('still honors unknown when the caller explicitly asks for it', async () => {
 		await request(app)
 			.post('/api/webhook/alert')

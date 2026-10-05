@@ -13,6 +13,7 @@ const {
 	SignalClassMetrics,
 	signalClassMetrics,
 } = require('../../src/services/alerts/signalClassifier');
+const { VALID_SIGNAL_CLASSES } = require('../../src/lib/validation');
 
 describe('signalClassifier', () => {
 	describe('classifies realistic production payloads', () => {
@@ -230,6 +231,24 @@ describe('signalClassifier', () => {
 		it('matches multi-word phrases across arbitrary spacing', () => {
 			expect(classifySignal('break   out now')).toBe('breakout');
 			expect(classifySignal('volumen   fuerte')).toBe('volume_spike');
+		});
+	});
+	describe('accent folding (#858 review)', () => {
+		// RULES stores the Spanish vocabulary unaccented, so accented spellings - the
+		// form real Spanish alerts use - never matched without folding.
+		it('matches accented and unaccented spellings identically', () => {
+			expect(classifySignal('BTCUSDT sobrecompra extrema'))
+				.toBe(classifySignal('BTCUSDT sobrecompra extrema'));
+			expect(classifySignal('BTCUSDT sobrevendido'))
+				.toBe(classifySignal('BTCUSDT sobrevendido'));
+		});
+
+		it('still matches accented multi-word phrases after folding', () => {
+			expect(classifySignal('tendencia ascendente')).toBe('trend_continuation');
+		});
+
+		it('does not let folding break word boundaries', () => {
+			expect(classifySignal('las manualidades del prestamo')).toBe('unknown');
 		});
 	});
 });

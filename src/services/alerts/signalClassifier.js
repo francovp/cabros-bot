@@ -177,9 +177,19 @@ function normalizeForMatching(text) {
 	if (typeof text !== 'string') {
 		return '';
 	}
-	// Lowercase and collapse all whitespace so multi-word phrases match across
-	// arbitrary line breaks, double spaces, and tab-separated webhook bodies.
-	return text.toLowerCase().replace(/\s+/g, ' ').trim();
+	// Lowercase, fold accents, and collapse all whitespace.
+	//
+	// The Spanish vocabulary in RULES is stored unaccented, so without folding the
+	// accented spellings that real Spanish alerts actually use never matched:
+	// 'sobrecompra extrema' vs 'sobrecompra extrema' both missed. Folding is done
+	// by stripping combining marks after NFD, which keeps every character in the
+	// range [a-z0-9] and therefore keeps the ASCII word-boundary matchers valid.
+	return text
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.toLowerCase()
+		.replace(/\s+/g, ' ')
+		.trim();
 }
 
 function normalizeExplicitSignalClass(value) {
@@ -201,6 +211,21 @@ function normalizeExplicitSignalClass(value) {
 // Boundaries are ASCII-aware on purpose: alert bodies are English/Spanish, and
 // `\\b` would not treat an accented letter as a word character, which would
 // either break real matches or reintroduce the substring problem.
+/**
+ * Where a signalClass came from. Recorded so a dead classifier is distinguishable
+ * from one that is merely unused: `populationRate` alone cannot tell those apart,
+ * because a caller that always supplies an explicit class yields the same 1.0 as
+ * a fully working classifier.
+ */
+const SignalClassSource = Object.freeze({
+	DERIVED: 'derived',
+	EXPLICIT: 'explicit',
+	// Derivation ran and found no setup semantics in the text.
+	DEFAULTED: 'defaulted',
+});
+
+const VALID_SIGNAL_CLASS_SOURCES = new Set(Object.values(SignalClassSource));
+
 const PHRASE_MATCHERS = Object.freeze(RULES.map(rule => Object.freeze({
 	class: rule.class,
 	matchers: Object.freeze(rule.phrases.map(phrase => {
@@ -239,9 +264,10 @@ class SignalClassMetrics {
 	constructor() {
 		this.windowStartedAt = Date.now();
 		this.classCounters = new Map();
+		this.sourceCounters = new Map();
 	}
 
-	record(signalClass) {
+	record(signalClass, source = SignalClassSource.DERIVED) {
 		try {
 			if (typeof signalClass !== 'string') {
 				return;
@@ -251,6 +277,8 @@ class SignalClassMetrics {
 				return;
 			}
 			this.classCounters.set(normalized, (this.classCounters.get(normalized) || 0) + 1);
+			const origin = VALID_SIGNAL_CLASS_SOURCES.has(source) ? source : SignalClassSource.DERIVED;
+			this.sourceCounters.set(origin, (this.sourceCounters.get(origin) || 0) + 1);
 		} catch (error) {
 			// Fail-open: metric bookkeeping must never propagate.
 			console.warn('[SignalClassMetrics] record failed:', error.message);
@@ -270,6 +298,10 @@ class SignalClassMetrics {
 			}
 			const unknownAlerts = byClass[SignalClass.UNKNOWN] || 0;
 			const classifiedAlerts = totalAlerts - unknownAlerts;
+			const bySource = {};
+			for (const [origin, count] of this.sourceCounters.entries()) {
+				bySource[origin] = count;
+			}
 			return {
 				window: {
 					startedAt: new Date(this.windowStartedAt).toISOString(),
@@ -282,6 +314,15 @@ class SignalClassMetrics {
 				// a classification regression is silent rather than absent.
 				populationRate: classifiedAlerts / totalAlerts,
 				byClass,
+				// Where each class came from. Without this, `populationRate` alone
+				// cannot detect a dead classifier: a caller that always sends an
+				// explicit class produces the same 1.0 as a fully working classifier,
+				// and an always-'unknown' caller produces the same 0.0 as a regression.
+				// `derivedAlerts` is therefore the real health signal.
+				bySource,
+				derivedAlerts: bySource[SignalClassSource.DERIVED] || 0,
+				explicitAlerts: bySource[SignalClassSource.EXPLICIT] || 0,
+				defaultedAlerts: bySource[SignalClassSource.DEFAULTED] || 0,
 			};
 		} catch (error) {
 			console.warn('[SignalClassMetrics] getSnapshot failed:', error.message);
@@ -291,6 +332,7 @@ class SignalClassMetrics {
 
 	reset() {
 		this.classCounters.clear();
+		this.sourceCounters.clear();
 		this.windowStartedAt = Date.now();
 	}
 }
@@ -312,7 +354,10 @@ function classifySignal(text, options = {}) {
 		const explicit = normalizeExplicitSignalClass(options && options.explicit);
 		const derived = deriveSignalClass(normalizeForMatching(text));
 		const resolved = explicit || derived || SignalClass.UNKNOWN;
-		signalClassMetrics.record(resolved);
+		const source = explicit
+			? SignalClassSource.EXPLICIT
+			: (derived ? SignalClassSource.DERIVED : SignalClassSource.DEFAULTED);
+		signalClassMetrics.record(resolved, source);
 		return resolved;
 	} catch (error) {
 		// Fail-open: an unexpected classifier fault degrades to 'unknown' and
@@ -323,6 +368,7 @@ function classifySignal(text, options = {}) {
 }
 
 module.exports = {
+	SignalClassSource,
 	SignalClass,
 	classifySignal,
 	deriveSignalClass,
