@@ -47,12 +47,24 @@ const VIEW_ACTIONS = {
 				return chips.children.length ? chips : null;
 			},
 		},
+		{
+			method: 'POST', path: '/api/alerts/batch/replay', label: 'Batch replay alerts',
+			confirm: 'Replay selected alerts?',
+		},
+		{
+			method: 'POST', path: '/api/alerts/batch/export', label: 'Batch export alerts',
+		},
+		{
+			method: 'POST', path: '/api/alerts/batch/delete', label: 'Batch delete alerts',
+			confirm: 'Delete selected alerts? This action cannot be undone.',
+		},
 	],
 	presets: [
 		{ method: 'PUT', path: '/api/scanner-presets/{id}', label: 'Update preset' },
 		{
 			method: 'POST', path: '/api/scanner-presets/{id}/run', label: 'Run preset',
 			confirm: 'Run this scanner preset?',
+			renderSuccess: (data) => analysisReportResult(data),
 		},
 		{
 			method: 'DELETE', path: '/api/scanner-presets/{id}', label: 'Delete preset',
@@ -85,7 +97,38 @@ const DISPLAY_LABELS = {
 	cloudflareAig: 'Cloudflare AI Gateway',
 };
 
+const VIEW_TITLES = {
+	overview: 'Overview',
+	status: 'Status',
+	alerts: 'Alerts',
+	outcomes: 'Outcomes',
+	presets: 'Presets',
+	jobs: 'Jobs',
+	orders: 'Orders',
+	analysis: 'Analysis',
+	playground: 'Playground',
+};
+const CONSOLE_TITLE_BASE = 'Cabros Bot Console';
+
+// Closed set: a `view` value outside it must fall back, never render a blank workspace.
+const DEFAULT_CONSOLE_VIEW = 'overview';
+const FIREBASE_SIGN_IN_LANDING_VIEW = 'status';
+const CONSOLE_VIEW_NAMES = Object.freeze(Object.keys(VIEW_TITLES));
+
+// Scope prefixes keep the alerts summary and export filter sets independent, because
+// they are two separate forms with separate defaults.
+const FILTER_SCOPE_VIEWS = Object.freeze({
+	'alerts.list': 'alerts',
+	'alerts.summary': 'alerts',
+	'alerts.export': 'alerts',
+	'outcomes.list': 'outcomes',
+	'outcomes.summary': 'outcomes',
+	'outcomes.calibration': 'outcomes',
+});
+
+const DEFAULT_BACKEND_ORIGIN = 'https://openclaw.tail5e4271.ts.net';
 const ALLOWED_BACKEND_ORIGINS = new Set([
+	DEFAULT_BACKEND_ORIGIN,
 	'https://cabros-bot-production.up.railway.app',
 ]);
 
@@ -108,7 +151,7 @@ const getApiBaseUrl = () => {
 		const paramOrigin = getAllowedBackendOrigin(param);
 		if (paramOrigin) return paramOrigin;
 		if (typeof window !== 'undefined' && window.location && (window.location.hostname.endsWith('web.app') || window.location.hostname.endsWith('firebaseapp.com'))) {
-			return 'https://cabros-bot-production.up.railway.app';
+			return DEFAULT_BACKEND_ORIGIN;
 		}
 	} catch (_) {
 		// Fallback safely
@@ -116,10 +159,94 @@ const getApiBaseUrl = () => {
 	return '';
 };
 
+const getWindowLocation = () => (typeof window !== 'undefined' && window.location ? window.location : null);
+
+const readConsoleSearch = () => {
+	try {
+		const location = getWindowLocation();
+		return location && typeof location.search === 'string' ? location.search : '';
+	} catch (_) {
+		return '';
+	}
+};
+
+const readConsoleParams = () => {
+	try {
+		return new URLSearchParams(readConsoleSearch());
+	} catch (_) {
+		return new URLSearchParams();
+	}
+};
+
+const resolveConsoleView = (value) => {
+	const name = typeof value === 'string' ? value.trim() : '';
+	return CONSOLE_VIEW_NAMES.includes(name) ? name : DEFAULT_CONSOLE_VIEW;
+};
+
+const readConsoleUrlState = () => {
+	const params = readConsoleParams();
+	const requested = params.get('view');
+	const view = resolveConsoleView(requested);
+	return {
+		view,
+		viewRequested: requested !== null,
+		viewRecognised: view === requested,
+		params,
+	};
+};
+
+const filterParamsForView = (view, params) => {
+	const source = params || readConsoleParams();
+	const carried = {};
+	Object.keys(FILTER_SCOPE_VIEWS).forEach((scope) => {
+		if (FILTER_SCOPE_VIEWS[scope] !== view) return;
+		const prefix = `${scope}.`;
+		source.forEach((value, key) => {
+			if (key.startsWith(prefix)) carried[key] = value;
+		});
+	});
+	return carried;
+};
+
+const buildConsoleUrl = (view, filterParams = {}) => {
+	const location = getWindowLocation();
+	let pathname = '';
+	try {
+		pathname = (location && location.pathname) || '';
+	} catch (_) {
+		pathname = '';
+	}
+	const params = new URLSearchParams();
+	readConsoleParams().forEach((value, key) => {
+		const ownsFilterScope = Object.keys(FILTER_SCOPE_VIEWS).some((scope) => key.startsWith(`${scope}.`));
+		if (key !== 'view' && !ownsFilterScope) params.set(key, value);
+	});
+	params.set('view', view);
+	Object.entries(filterParams).forEach(([key, value]) => {
+		if (value !== undefined && value !== null && value !== '') params.set(key, value);
+	});
+	const search = params.toString();
+	return `${pathname}${search ? `?${search}` : ''}`;
+};
+
+const writeConsoleUrl = (url, { replace = false } = {}) => {
+	const history = typeof window !== 'undefined' ? window.history : null;
+	if (!history) return false;
+	try {
+		if (replace && typeof history.replaceState === 'function') history.replaceState({}, '', url);
+		else if (!replace && typeof history.pushState === 'function') history.pushState({}, '', url);
+		else return false;
+		return true;
+	} catch (_) {
+		return false;
+	}
+};
+
 let contractPromise;
 let authConfigPromise;
 let firebaseSdkPromise;
 let detachActiveViewPoll = null;
+let currentConsoleView = DEFAULT_CONSOLE_VIEW;
 let authState = { enabled: false, auth: null, user: null, role: null };
 
 const CONTRACT_TIMEOUT_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.CONTRACT_TIMEOUT_MS
@@ -140,6 +267,19 @@ const VOLUME_CONFIRMATION_OVERHEAD_MS = typeof window !== 'undefined' && window.
 const VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS
 	? window.CabrosAdminRequest.VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS
 	: (VOLUME_CONFIRMATION_MCP_CALLS * TRADINGVIEW_MCP_MAX_TIMEOUT_MS) + VOLUME_CONFIRMATION_OVERHEAD_MS; // 390000 ms
+
+// Symbol analysis budget breakdown:
+// - ONE createDeadline() signal spans the base analyzeSymbolIdentifier call and the optional
+//   multi_timeframe_analysis / multi_agent_debate calls, so this budget is never multiplied per
+//   MCP call the way volume confirmation is. Worst case is a single min(EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS, 120,000 ms).
+// - Ingress, route handling, symbol validation, and network transport overhead: 30,000 ms
+const SYMBOL_ANALYSIS_BACKEND_BUDGET_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.SYMBOL_ANALYSIS_BACKEND_BUDGET_MS
+	? window.CabrosAdminRequest.SYMBOL_ANALYSIS_BACKEND_BUDGET_MS : 120000;
+const SYMBOL_ANALYSIS_OVERHEAD_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.SYMBOL_ANALYSIS_OVERHEAD_MS
+	? window.CabrosAdminRequest.SYMBOL_ANALYSIS_OVERHEAD_MS : 30000;
+const SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS = typeof window !== 'undefined' && window.CabrosAdminRequest && window.CabrosAdminRequest.SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS
+	? window.CabrosAdminRequest.SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS
+	: SYMBOL_ANALYSIS_BACKEND_BUDGET_MS + SYMBOL_ANALYSIS_OVERHEAD_MS; // 150000 ms
 
 // Long-running alert and analysis pipeline budget breakdown:
 // - TradingView MCP enrichment maximum budget: 120,000 ms (TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS max)
@@ -188,16 +328,35 @@ const LONG_RUNNING_REQUEST_PATHS = typeof window !== 'undefined' && window.Cabro
 		'/api/webhook/alert',
 		'/api/webhook/message',
 		'/api/alerts/{alertId}/replay',
+		'/api/alerts/batch/replay',
 	]);
 
-const getApiRequestTimeout = (definition) => {
+const getApiRequestTimeout = (definition, options) => {
 	if (typeof window !== 'undefined' && window.CabrosAdminRequest && typeof window.CabrosAdminRequest.getApiRequestTimeout === 'function') {
-		return window.CabrosAdminRequest.getApiRequestTimeout(definition);
+		return window.CabrosAdminRequest.getApiRequestTimeout(definition, options);
 	}
 	if (!definition || !definition.path) return API_REQUEST_TIMEOUT_MS;
-	if (definition.path === '/api/webhook/volume-confirmation'
-		|| definition.path === '/api/webhook/symbol-analysis') {
+	if (definition.path === '/api/webhook/volume-confirmation') {
 		return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+	}
+	if (definition.path === '/api/webhook/symbol-analysis') {
+		return SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS;
+	}
+	if (definition.path === '/api/alerts/batch/replay') {
+		let count = 1;
+		if (options && typeof options === 'object') {
+			if (typeof options.batchSize === 'number' && options.batchSize > 0) {
+				count = Math.min(options.batchSize, 50);
+			} else if (options.body) {
+				try {
+					const parsed = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
+					if (Array.isArray(parsed && parsed.alertIds) && parsed.alertIds.length > 0) {
+						count = Math.min(parsed.alertIds.length, 50);
+					}
+				} catch (_) { /* Fall back to the bounded default budget. */ }
+			}
+		}
+		return count > 1 ? count * LONG_RUNNING_API_REQUEST_TIMEOUT_MS : LONG_RUNNING_API_REQUEST_TIMEOUT_MS;
 	}
 	return LONG_RUNNING_REQUEST_PATHS.has(definition.path)
 		? LONG_RUNNING_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS;
@@ -318,7 +477,9 @@ const createCopyButton = (getText, label = 'Copy') => {
 	button.type = 'button';
 	button.className = 'copy-button';
 	button.addEventListener('click', () => copyToClipboard(
-		typeof getText === 'function' ? String(getText() ?? '') : String(getText ?? ''),
+		label === 'Copy details'
+			? window.CabrosAdminComponents.plainText(window.CabrosAdminComponents.present(JSON.parse((typeof getText === 'function' ? getText() : getText) || 'null'), false, getElement('api-key')?.value || ''))
+			: typeof getText === 'function' ? String(getText() ?? '') : String(getText ?? ''),
 		button,
 	));
 	return button;
@@ -437,6 +598,7 @@ const setupFirebaseAuth = async (config) => {
 			authState.user = user;
 			if (!user) {
 				authState.role = null;
+				disconnectSse();
 				showSignedOutState();
 				return;
 			}
@@ -444,12 +606,19 @@ const setupFirebaseAuth = async (config) => {
 				const tokenResult = await user.getIdTokenResult();
 				authState.role = window.CabrosAdminRequest.getAdminRole(tokenResult.claims);
 				if (!authState.role) {
+					disconnectSse();
 					showAuthState('This account is not authorized for the admin console.', true);
 					return;
 				}
 				showSignedInState();
-				navigateToView('status');
+				setupSseStream();
+				const requested = readConsoleUrlState();
+				navigateToView(
+					requested.viewRequested ? requested.view : FIREBASE_SIGN_IN_LANDING_VIEW,
+					{ history: 'replace' },
+				);
 			} catch (error) {
+				disconnectSse();
 				showAuthState('Unable to verify the signed-in account.', true);
 			}
 		});
@@ -457,6 +626,252 @@ const setupFirebaseAuth = async (config) => {
 		showAuthState('Firebase sign-in is unavailable. Ask an administrator to configure it.', true);
 	}
 };
+
+let sseAbortController = null;
+let sseReconnectTimer = null;
+let sseReconnectAttempts = 0;
+const sseListeners = new Set();
+const MAX_SSE_RECONNECT_DELAY_MS = 30000;
+// Bounds the SSE handshake only, not the stream body. An event stream is
+// legitimately idle between events, so this must not become a read deadline.
+const SSE_HANDSHAKE_TIMEOUT_MS = 15000;
+
+const getRetryAfterMs = (response) => {
+	const rawValue = response?.headers?.get?.('retry-after');
+	if (!rawValue) return null;
+
+	const seconds = Number(String(rawValue).trim());
+	if (Number.isFinite(seconds) && seconds >= 0) {
+		return Math.min(MAX_SSE_RECONNECT_DELAY_MS, Math.ceil(seconds * 1000));
+	}
+
+	const retryAt = Date.parse(rawValue);
+	return Number.isFinite(retryAt)
+		? Math.min(MAX_SSE_RECONNECT_DELAY_MS, Math.max(0, retryAt - Date.now()))
+		: null;
+};
+
+const scheduleSseReconnect = (retryAfterMs = null) => {
+	if (sseReconnectTimer) clearTimeout(sseReconnectTimer);
+	updateSseIndicator('connecting', 'Reconnecting…');
+	const exponentialDelay = Math.min(MAX_SSE_RECONNECT_DELAY_MS, 2000 * Math.pow(1.5, sseReconnectAttempts));
+	const delay = Number.isFinite(retryAfterMs)
+		? Math.min(MAX_SSE_RECONNECT_DELAY_MS, Math.max(0, retryAfterMs))
+		: exponentialDelay + Math.random() * 1000;
+	sseReconnectAttempts++;
+	sseReconnectTimer = setTimeout(() => {
+		sseReconnectTimer = null;
+		setupSseStream();
+	}, delay);
+};
+
+const onSseEvent = (handler) => {
+	sseListeners.add(handler);
+	return () => sseListeners.delete(handler);
+};
+
+const dispatchSseEvent = (type, data) => {
+	sseListeners.forEach((listener) => {
+		try {
+			listener(type, data);
+		} catch (error) {
+			console.error('SSE listener error:', error);
+		}
+	});
+};
+
+const updateSseIndicator = (state, label) => {
+	const indicator = getElement('sse-status');
+	const labelEl = getElement('sse-label');
+	if (!indicator) return;
+	indicator.className = `sse-indicator ${state}`;
+	indicator.title = `Real-time stream: ${label}`;
+	if (labelEl) labelEl.textContent = label;
+};
+
+const showToast = (message, type = 'info', durationMs = 4000) => {
+	let container = getElement('toast-container');
+	if (!container) {
+		container = element('div', { id: 'toast-container', className: 'toast-container' });
+		document.body?.append(container);
+	}
+	const toast = element('div', { className: `toast toast-${type}`, text: message });
+	container?.append(toast);
+	setTimeout(() => {
+		if (toast.style) toast.style.opacity = '0';
+		setTimeout(() => {
+			if (typeof toast.remove === 'function') toast.remove();
+		}, 250);
+	}, durationMs);
+};
+
+const disconnectSse = () => {
+	if (sseReconnectTimer) {
+		clearTimeout(sseReconnectTimer);
+		sseReconnectTimer = null;
+	}
+	if (sseAbortController) {
+		try {
+			sseAbortController.abort();
+		} catch (_) {
+			// Fail-safe
+		}
+		sseAbortController = null;
+	}
+	sseReconnectAttempts = 0;
+	updateSseIndicator('disconnected', 'Offline');
+};
+
+const setupSseStream = async () => {
+	if (typeof window === 'undefined' || typeof window.fetch === 'undefined') {
+		return;
+	}
+	if (sseReconnectTimer) {
+		clearTimeout(sseReconnectTimer);
+		sseReconnectTimer = null;
+	}
+	if (sseAbortController) {
+		try {
+			sseAbortController.abort();
+		} catch (_) {
+			// Fail-safe
+		}
+		sseAbortController = null;
+	}
+
+	const headers = {
+		Accept: 'text/event-stream',
+	};
+
+	if (authState.enabled && authState.user) {
+		try {
+			const token = await authState.user.getIdToken();
+			headers.Authorization = `Bearer ${token}`;
+		} catch (_) {
+			updateSseIndicator('disconnected', 'Auth error');
+			return;
+		}
+	} else {
+		const apiKey = getElement('api-key')?.value || '';
+		if (apiKey) {
+			headers['x-api-key'] = apiKey;
+		}
+	}
+
+	if (!headers.Authorization && !headers['x-api-key']) {
+		updateSseIndicator('disconnected', 'Offline');
+		return;
+	}
+
+	updateSseIndicator('connecting', 'Connecting…');
+
+	const baseUrl = getApiBaseUrl();
+	const streamUrl = `${baseUrl}/api/admin/events`;
+	const controller = new AbortController();
+	sseAbortController = controller;
+
+	let handshakeTimer = setTimeout(() => controller.abort(), SSE_HANDSHAKE_TIMEOUT_MS);
+	const clearHandshakeTimer = () => {
+		if (handshakeTimer === null) return;
+		clearTimeout(handshakeTimer);
+		handshakeTimer = null;
+	};
+
+	try {
+		const response = await fetch(streamUrl, {
+			method: 'GET',
+			headers,
+			signal: controller.signal,
+		});
+		clearHandshakeTimer();
+
+		if (!response.ok) {
+			const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+			if (!retryable) {
+				updateSseIndicator('disconnected', 'Unavailable');
+				return;
+			}
+			const error = new Error(`SSE stream HTTP ${response.status}`);
+			error.retryAfterMs = getRetryAfterMs(response);
+			throw error;
+		}
+
+		updateSseIndicator('connected', 'Live');
+		sseReconnectAttempts = 0;
+
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder();
+		let buffer = '';
+
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) {
+				if (sseAbortController === controller) scheduleSseReconnect();
+				return;
+			}
+			buffer += decoder.decode(value, { stream: true });
+			const blocks = buffer.split('\n\n');
+			buffer = blocks.pop() || '';
+
+			for (const block of blocks) {
+				const trimmed = block.trim();
+				if (!trimmed || trimmed.startsWith(':')) continue;
+
+				let eventType = 'message';
+				const dataLines = [];
+				for (const line of trimmed.split('\n')) {
+					if (line.startsWith('event:')) {
+						eventType = line.slice(6).trim();
+					} else if (line.startsWith('data:')) {
+						dataLines.push(line.slice(5).trim());
+					}
+				}
+
+				if (eventType === 'connected') {
+					updateSseIndicator('connected', 'Live');
+					continue;
+				}
+
+				if (dataLines.length > 0) {
+					try {
+						const data = JSON.parse(dataLines.join('\n'));
+						dispatchSseEvent(eventType, data);
+						if (eventType === 'job-progress') {
+							if (data.status === 'completed') {
+								showToast(`Job ${String(data.jobId).slice(0, 8)}… completed`, 'success');
+							} else if (data.status === 'failed' || data.status === 'timed_out') {
+								showToast(`Job ${String(data.jobId).slice(0, 8)}… ${data.status}: ${data.error || 'Failed'}`, 'error');
+							}
+						} else if (eventType === 'scanner-result') {
+							showToast(`Scanner preset completed${data.name ? `: ${data.name}` : ''}`, 'info');
+						} else if (eventType === 'alert-delivered') {
+							const channels = Array.isArray(data.channels) ? data.channels.join(', ') : 'channels';
+							showToast(`Alert delivered: ${data.symbol || 'symbol'} (${channels})`, 'success');
+						} else if (eventType === 'delivery-failure') {
+							showToast(`Delivery failure: ${data.symbol || 'symbol'} (${data.channel || 'channel'}): ${data.error || 'error'}`, 'error');
+						}
+					} catch (err) {
+						console.error('Failed to parse SSE event payload:', err);
+					}
+				}
+			}
+		}
+	} catch (error) {
+		clearHandshakeTimer();
+		// `aborted` alone cannot separate an intentional teardown from our own
+		// handshake deadline. disconnectSse() and a newer setupSseStream() both
+		// clear sseAbortController, so ownership is the discriminator: while we
+		// still own it, our own abort is a stall that must reconnect. Collapsing
+		// this to `if (aborted) return` turns the handshake deadline above into a
+		// permanently dead stream.
+		if (controller.signal.aborted && sseAbortController !== controller) {
+			return;
+		}
+		console.error('SSE stream error:', error);
+		scheduleSseReconnect(error.retryAfterMs);
+	}
+};
+
 
 const parseJson = (value, label) => {
 	if (!value.trim()) return undefined;
@@ -469,7 +884,7 @@ const parseJson = (value, label) => {
 
 const resolveRef = (contract, value) => {
 	if (!value || !value.$ref) return value;
-	return value.$ref.slice(2).split('/').reduce((current, key) => current[key], contract);
+	return value.$ref.slice(2).split('/').reduce((current, key) => current && current[key], contract);
 };
 
 const getOperation = (contract, definition) => contract.paths[definition.path]
@@ -498,8 +913,10 @@ const createIdempotencyKey = () => (window.crypto && typeof window.crypto.random
 	? window.crypto.randomUUID()
 	: `admin-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
+const SYMBOL_PATTERN = /^[A-Za-z0-9_]+:[A-Za-z0-9._-]+$/;
+
 const withReplayIdempotencyKey = (definition, body) => {
-	if (definition.method !== 'POST' || definition.path !== '/api/alerts/{alertId}/replay') return body;
+	if (definition.method !== 'POST' || (definition.path !== '/api/alerts/{alertId}/replay' && definition.path !== '/api/alerts/batch/replay')) return body;
 	if (body && ['idempotencyKey', 'idempotency_key'].some((key) => typeof body[key] === 'string' && body[key].trim())) return body;
 	return { ...(body || {}), idempotencyKey: createIdempotencyKey() };
 };
@@ -512,14 +929,46 @@ const getRequestBody = (definition, form) => {
 	return requestBody;
 };
 
-const addJsonField = (form, labelText, name, value) => {
-	const label = element('label', { text: labelText });
-	const textarea = element('textarea');
-	textarea.name = name;
-	textarea.rows = 8;
-	textarea.value = JSON.stringify(value, null, 2);
-	label.append(textarea);
-	form.append(label);
+// The hidden transport value preserves existing request/idempotency builders;
+// operators edit typed Vue controls, never serialized payloads.
+const addObjectField = (form, labelText, name, value, contract, schema = {}) => {
+	const input = element('input');
+	input.name = name;
+	input.type = 'hidden';
+	const editor = element('cabros-fields');
+	editor.heading = labelText;
+	editor.schema = window.CabrosAdminComponents.schemaFor(contract, schema);
+	let serialized = '';
+	Object.defineProperty(input, 'value', {
+		get: () => serialized,
+		set: (next) => {
+			serialized = String(next);
+			try { editor.value = JSON.parse(serialized); } catch (_) { /* Request validation reports invalid restored data. */ }
+		},
+	});
+	input.value = JSON.stringify(value || {}, null, 2);
+	editor.addEventListener('update', (event) => {
+		input.value = JSON.stringify(event.detail[0]);
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+	});
+	form.append(input, editor);
+};
+
+const getQuerySchema = (contract, operation) => ({
+	type: 'object', additionalProperties: false,
+	properties: Object.fromEntries(getParameters(contract, operation).filter((p) => p.in === 'query').map((p) => [p.name, { ...resolveRef(contract, p.schema), description: p.description }])),
+	required: getParameters(contract, operation).filter((p) => p.in === 'query' && p.required).map((p) => p.name),
+});
+
+const createResult = (data) => {
+	const value = window.CabrosAdminComponents.present(data, false, getElement('api-key')?.value || '');
+	const result = element('cabros-result');
+	result.value = value;
+	return result;
+};
+
+const showResult = (output, serialized) => {
+	output.replaceChildren(...(serialized ? [createResult(JSON.parse(serialized))] : []));
 };
 
 const addField = (form, labelText, name, options = {}) => {
@@ -570,12 +1019,109 @@ const displayStatus = (value) => STATUS_LABELS[value] || displayLabel(value || '
 const statusTone = (value) => ['ready', 'disabled', 'misconfigured'].includes(value) ? value : 'unknown';
 
 const statusEntries = (value) => Object.entries(asObject(value))
-	.filter(([, detail]) => detail && typeof detail === 'object' && typeof detail.status === 'string');
+	.filter(([, detail]) => detail && typeof detail === 'object');
+
+const hasStatus = (detail) => detail.status !== undefined && detail.status !== null && detail.status !== '';
+const nestedStatusEntries = (detail) => Object.entries(asObject(detail))
+	.filter(([name, nested]) => name === 'profiling' && hasStatus(nested));
+const statusDetails = (detail) => [detail, ...nestedStatusEntries(detail).map(([, nested]) => nested)];
+const effectiveStatus = (detail) => statusDetails(detail).find((statusDetail) => hasStatus(statusDetail)
+	&& !['ready', 'disabled'].includes(statusDetail.status))?.status || detail.status;
 
 const statusCounts = (entries) => entries.reduce((counts, [, detail]) => {
-	counts[detail.status] = (counts[detail.status] || 0) + 1;
+	const status = effectiveStatus(detail);
+	if (status) counts[status] = (counts[status] || 0) + 1;
 	return counts;
 }, {});
+
+const statusNeedsAttention = (detail) => hasStatus({ status: effectiveStatus(detail) })
+	&& !['ready', 'disabled'].includes(effectiveStatus(detail));
+
+const statusDetailFields = [
+	['configured', 'Configured'],
+	['enabled', 'Enabled'],
+	['environment', 'Environment'],
+	['allowedSymbols', 'Allowed symbols'],
+	['maxNotionalConfigured', 'Max notional configured'],
+	['lastSuccessfulLoad', 'Last successful load', true],
+	['cooldownActive', 'Cooldown active'],
+	['remainingCooldownMs', 'Remaining cooldown (ms)'],
+	['lastTriggeredAt', 'Last triggered', true],
+	['triggersTotal', 'Triggers total'],
+	['braveFallbacksDuringCooldown', 'Brave fallbacks during cooldown'],
+	['lastBraveFallbackAt', 'Last Brave fallback', true],
+	['lastCheckedAt', 'Last checked', true],
+	['lastSuccessAt', 'Last success', true],
+	['lastFailureAt', 'Last failure', true],
+	['lastErrorCategory', 'Last error'],
+	['successCount', 'Successes'],
+	['failureCount', 'Failures'],
+	['windowMs', 'Window (ms)'],
+	['activeEntries', 'Active entries'],
+	['hits', 'Hits'],
+	['misses', 'Misses'],
+	['failures', 'Coalescing failures'],
+	['suppressedCount', 'Suppressed'],
+	['lastSuppressedAt', 'Last suppressed', true],
+	['activeTrackedSignals', 'Active tracked signals'],
+	['intervalMs', 'Interval (ms)'],
+	['batchLimit', 'Batch limit'],
+	['maxAttempts', 'Max attempts'],
+	['maxAgeMs', 'Max age (ms)'],
+	['enqueued', 'Enqueued'],
+	['claimed', 'Claimed'],
+	['completed', 'Completed'],
+	['failed', 'Failed'],
+	['lastErrorCode', 'Last error code'],
+	['brokerReachable', 'Broker reachable'],
+	['lastBrokerProbeAt', 'Last broker probe', true],
+	['lastBrokerProbeErrorCode', 'Last broker probe error'],
+	['lastEnqueuedAt', 'Last enqueued', true],
+	['mode', 'Mode'],
+	['backend', 'Backend'],
+	['role', 'Worker role'],
+	['running', 'Running'],
+	['shutdownRequested', 'Shutdown requested'],
+	['isEvaluating', 'Evaluating'],
+	['source', 'Source'],
+	['templateVersion', 'Template version'],
+	['consecutiveFailures', 'Consecutive failures'],
+	['lastRunAt', 'Last run', true],
+	['lastRunDurationMs', 'Last run duration (ms)'],
+	['lastRunSymbolCount', 'Last run symbols'],
+	['lastRunExecutedCount', 'Last run executed'],
+	['lastRunRedrivenCount', 'Last run redriven'],
+	['lastRunScannedCount', 'Last run scanned'],
+	['lastRunEvaluatedCount', 'Last run evaluated'],
+	['lastRunPendingCount', 'Last run pending'],
+	['lastRunErrorCount', 'Last run errors'],
+	['pendingCount', 'Pending'],
+	['deliveredCount', 'Delivered'],
+	['exhaustedCount', 'Exhausted'],
+	['zeroChannelBroadcasts', 'Zero-channel broadcasts'],
+	['lastPollAt', 'Last poll', true],
+	['lastError', 'Last error detail'],
+	['lastErrorAt', 'Last error at', true],
+	['metrics.totalRequests', 'Total requests'],
+	['metrics.successRequests', 'Success requests'],
+	['metrics.failureRequests', 'Failure requests'],
+	['metrics.timeoutRequests', 'Timeout requests'],
+	['circuitBreaker.state', 'Circuit breaker state'],
+	['circuitBreaker.openedAt', 'Circuit breaker opened', true],
+	['circuitBreaker.cooldownMs', 'Circuit breaker cooldown (ms)'],
+	['circuitBreaker.consecutiveFailures', 'Circuit breaker consecutive failures'],
+	['enrichment.alertPath.windowMs', 'Alert path window (ms)'],
+	['enrichment.alertPath.totalCount', 'Alert path total'],
+	['enrichment.alertPath.appliedCount', 'Alert path applied'],
+	['enrichment.alertPath.failedCount', 'Alert path failed'],
+	['enrichment.alertPath.appliedRate24h', 'Alert path applied rate (%)'],
+	['enrichment.alertPath.failureRate24h', 'Alert path failure rate (%)'],
+	['leaseMs', 'Lease (ms)'],
+	['lastRunLeaseHeld', 'Last run lease held'],
+	['leaseHeldSkipCount', 'Lease-held skips'],
+];
+
+const statusFieldValue = (detail, key) => key.split('.').reduce((value, part) => asObject(value)[part], detail);
 
 const SENTIMENT_TONES = {
 	bullish: 'status-ready',
@@ -590,6 +1136,15 @@ const DECISION_ACTION_TONES = {
 	hold: 'status-disabled',
 	neutral: 'status-disabled',
 };
+
+const CONFIDENCE_TONES = {
+	high: 'status-ready',
+	medium: 'status-active',
+	moderate: 'status-active',
+	low: 'status-danger',
+};
+
+const MTF_ENVELOPE_KEYS = ['timeframes', 'alignment', 'recommendation'];
 
 const JOB_ACTIVE_STATUSES = ['pending', 'processing'];
 const JOB_STATUS_TONES = {
@@ -610,8 +1165,8 @@ const RESULT_STATUS_TONES = {
 };
 
 const createStatusBadge = (status, tones) => element('span', {
-	className: `status-badge ${(tones && tones[status]) || 'status-misconfigured'}`,
-	text: displayLabel(status),
+	className: `status-badge ${(tones && tones[status]) || `status-${statusTone(status)}`}`,
+	text: tones ? displayLabel(status) : displayStatus(status),
 });
 
 const createMeter = (fraction, labelText) => {
@@ -786,12 +1341,23 @@ const symbolAnalysisResult = (data) => {
 			text: `Status: ${displayLabel(data.analysisStatus)}`,
 		}));
 	}
+
+	// The endpoint returns categorical confidence labels, so the numeric-only
+	// meter path must not be the only consumer or confidence disappears entirely.
+	const confidence = asFiniteNumber(decision.confidence);
+	const confidenceLabel = confidence === null ? asLabelValue(decision.confidence) : '';
+	if (confidenceLabel) {
+		const tone = CONFIDENCE_TONES[confidenceLabel.toLowerCase()] || 'status-unknown';
+		badges.append(element('span', {
+			className: `status-badge ${tone}`,
+			text: `Confidence: ${displayLabel(confidenceLabel)}`,
+		}));
+	}
 	if (badges.children.length) panel.append(badges);
 
 	const identity = [data.symbol || analysis.symbol, data.timeframe || analysis.timeframe].filter(Boolean).join(' · ');
 	if (identity) panel.append(element('p', { className: 'request-state', text: identity }));
 
-	const confidence = asFiniteNumber(decision.confidence);
 	if (confidence !== null) {
 		const normConfidence = confidence > 1 ? confidence / 100 : confidence;
 		panel.append(createMeter(normConfidence, `${Math.round(normConfidence * 100)}% confidence`));
@@ -882,13 +1448,36 @@ const symbolAnalysisResult = (data) => {
 		const mtfBlock = element('div', { className: 'detail-block' });
 		mtfBlock.append(element('h4', { text: 'Multi-timeframe Analysis' }));
 		const mtfChips = element('div', { className: 'chip-grid' });
-		Object.entries(mtf).forEach(([tf, tfData]) => {
+		const alignment = asObject(mtf.alignment);
+		const recommendation = asObject(mtf.recommendation);
+		const timeframes = asObject(mtf.timeframes);
+		// The endpoint nests the breakdown under `timeframes` beside sibling
+		// `alignment` and `recommendation` keys. Reading those siblings as
+		// timeframes renders the envelope and hides every real trend.
+		const timeframeEntries = Object.entries(Object.keys(timeframes).length ? timeframes : mtf)
+			.filter(([key]) => !MTF_ENVELOPE_KEYS.includes(key));
+		timeframeEntries.forEach(([tf, tfData]) => {
 			const tfObj = asObject(tfData);
-			const tfTrend = tfObj.trend || tfObj.direction || tfObj.status || (typeof tfData === 'string' ? tfData : null);
+			const tfTrend = tfObj.bias || tfObj.trend || tfObj.direction || tfObj.status || asLabelValue(tfData);
 			if (tfTrend) {
 				mtfChips.append(element('span', { className: 'capability-chip', text: `${tf}: ${displayLabel(tfTrend)}` }));
 			}
 		});
+
+		const alignmentStatus = asLabelValue(alignment.status);
+		if (alignmentStatus) {
+			mtfChips.append(element('span', { className: 'capability-chip', text: `Alignment: ${displayLabel(alignmentStatus)}` }));
+		}
+		const alignmentConfidence = asLabelValue(alignment.confidence);
+		if (alignmentConfidence) {
+			mtfChips.append(element('span', { className: 'capability-chip', text: `Alignment confidence: ${displayLabel(alignmentConfidence)}` }));
+		}
+		const recommendedAction = asLabelValue(recommendation.action) || asLabelValue(mtf.recommendation);
+		if (recommendedAction) {
+			const tone = DECISION_ACTION_TONES[recommendedAction.toLowerCase()] || 'status-unknown';
+			mtfChips.append(element('span', { className: `status-badge ${tone}`, text: `Recommendation: ${displayLabel(recommendedAction)}` }));
+		}
+
 		if (mtfChips.children.length) {
 			mtfBlock.append(mtfChips);
 			panel.append(mtfBlock);
@@ -907,14 +1496,14 @@ const symbolAnalysisResult = (data) => {
 };
 
 const volumeConfirmationResult = (data) => {
-		const panel = element('article', { className: 'operation-card verdict-panel' });
-		panel.append(element('p', { className: 'eyebrow', text: 'Volume confirmation' }));
-		const badges = element('div', { className: 'badge-row' });
-		badges.append(data.confirmed === true
-			? element('span', { className: 'status-badge status-ready', text: 'Confirmed' })
-			: data.confirmed === false
-				? element('span', { className: 'status-badge status-danger', text: 'Not confirmed' })
-				: element('span', { className: 'status-badge status-active', text: 'Unknown' }));
+	const panel = element('article', { className: 'operation-card verdict-panel' });
+	panel.append(element('p', { className: 'eyebrow', text: 'Volume confirmation' }));
+	const badges = element('div', { className: 'badge-row' });
+	badges.append(data.confirmed === true
+		? element('span', { className: 'status-badge status-ready', text: 'Confirmed' })
+		: data.confirmed === false
+			? element('span', { className: 'status-badge status-danger', text: 'Not confirmed' })
+			: element('span', { className: 'status-badge status-active', text: 'Unknown' }));
 	if (data.decision) badges.append(element('span', { className: 'capability-chip', text: displayLabel(data.decision) }));
 	panel.append(badges);
 
@@ -1003,6 +1592,13 @@ const analysisReportResult = (data) => {
 };
 
 const asFiniteNumber = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+
+const LABEL_VALUE_MAX_LENGTH = 40;
+
+const asLabelValue = (value) => {
+	if (typeof value !== 'string') return '';
+	return value.trim().slice(0, LABEL_VALUE_MAX_LENGTH);
+};
 
 const sentimentBadge = (enrichment) => {
 	const sentiment = enrichment && typeof enrichment === 'object' ? String(enrichment.sentiment || '') : '';
@@ -1160,9 +1756,20 @@ const createAlertDetailPanel = (alert) => {
 	return panel;
 };
 
-const createAlertCard = (alert) => {
+const createAlertCard = (alert, { onSelect, isSelected = false, registerCheckbox } = {}) => {
 	const card = element('article', { className: 'operation-card alert-card' });
 	const headCopy = element('div');
+	if (alert && alert.id && typeof onSelect === 'function') {
+		const selectLabel = element('label', { className: 'alert-select-label' });
+		const checkbox = element('input', { className: 'alert-select-checkbox' });
+		checkbox.type = 'checkbox';
+		checkbox.checked = Boolean(isSelected);
+		checkbox.setAttribute('aria-label', `Select alert ${alert.id}`);
+		checkbox.addEventListener('change', () => onSelect(alert.id, checkbox.checked));
+		if (typeof registerCheckbox === 'function') registerCheckbox(checkbox);
+		selectLabel.append(checkbox);
+		headCopy.append(selectLabel);
+	}
 	headCopy.append(element('p', {
 		className: 'eyebrow',
 		text: alert && alert.source ? `Source: ${alert.source}` : 'Stored alert',
@@ -1220,35 +1827,88 @@ const createMetricCard = (label, value, meta) => {
 	return card;
 };
 
-const renderStatusCards = (container, entries, emptyText) => {
+const renderStatusCards = (container, entries, emptyText, { detailed = false } = {}) => {
 	container.replaceChildren();
 	if (!entries.length) {
 		container.append(createEmptyState(emptyText));
 		return;
 	}
 	entries.forEach(([name, detail]) => {
+		if (detailed) {
+			const status = effectiveStatus(detail);
+			const card = element('details', { className: 'status-card status-detail-card' });
+			const summary = element('summary', { className: 'status-detail-summary' });
+			const copy = element('div');
+			copy.append(
+				element('strong', { text: displayLabel(name) }),
+				element('small', { text: detail.provider ? `Provider: ${detail.provider}` : displayStatus(status) }),
+			);
+			summary.append(copy, createStatusBadge(status));
+			const list = element('dl', { className: 'status-detail-list' });
+			statusDetailFields.forEach(([key, label, timestamp]) => {
+				const fieldValue = statusFieldValue(detail, key);
+				if (fieldValue === undefined || fieldValue === null || fieldValue === '') return;
+				const value = element('dd');
+				value.append(timestamp ? createTimestamp(fieldValue) : element('span', { text: Array.isArray(fieldValue) ? fieldValue.join(', ') : String(fieldValue) }));
+				list.append(element('dt', { text: label }), value);
+			});
+			nestedStatusEntries(detail).forEach(([nestedName, nested]) => {
+				const value = element('dd');
+				value.append(createStatusBadge(nested.status));
+				list.append(
+					element('dt', { text: displayLabel(nestedName) }),
+					value,
+				);
+			});
+			card.append(summary, list);
+			container.append(card);
+			return;
+		}
 		const card = element('article', { className: 'status-card' });
+		const status = effectiveStatus(detail);
 		const copy = element('div');
 		copy.append(
 			element('strong', { text: displayLabel(name) }),
-			element('small', { text: detail.provider ? `Provider: ${detail.provider}` : displayStatus(detail.status) }),
+			element('small', { text: detail.provider ? `Provider: ${detail.provider}` : displayStatus(status) }),
 		);
 		const badge = element('span', {
-			className: `status-badge status-${statusTone(detail.status)}`,
-			text: displayStatus(detail.status),
+			className: `status-badge status-${statusTone(status)}`,
+			text: displayStatus(status),
 		});
 		card.append(copy, badge);
 		container.append(card);
 	});
 };
 
-const renderStatusDashboard = ({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status) => {
+const renderStatusDependencies = (container, entries, filter = 'all', search = '') => {
+	const query = String(search).trim().toLowerCase();
+	const filtered = entries
+		.filter(([name, detail]) => {
+			const toneMatches = filter === 'all'
+				|| (filter === 'attention' && statusNeedsAttention(detail))
+				|| (filter === 'ready' && effectiveStatus(detail) === 'ready')
+				|| (filter === 'disabled' && detail.status === 'disabled')
+				|| (filter === 'unknown' && statusDetails(detail).some((statusDetail) => statusDetail.status === 'unknown'));
+			const searchableStatuses = statusDetails(detail)
+				.flatMap((statusDetail) => [statusDetail.status, displayStatus(statusDetail.status)])
+				.join(' ');
+			const searchable = `${displayLabel(name)} ${detail.provider || ''} ${searchableStatuses}`.toLowerCase();
+			return toneMatches && (!query || searchable.includes(query));
+		})
+		.sort(([leftName, left], [rightName, right]) => {
+			const priority = (detail) => statusNeedsAttention(detail) ? 0 : !hasStatus(detail) ? 1 : detail.status === 'ready' ? 2 : 1;
+			return priority(left) - priority(right) || displayLabel(leftName).localeCompare(displayLabel(rightName));
+		});
+	renderStatusCards(container, filtered, 'No dependencies match these filters.', { detailed: true });
+};
+
+const renderStatusDashboard = ({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status, { renderDependencies } = {}) => {
 	const service = asObject(status.service);
 	const features = Object.entries(asObject(status.featureFlags)).filter(([, enabled]) => enabled === true);
 	const channels = statusEntries(status.deliveryChannels);
 	const dependencies = statusEntries(status.dependencies);
 	const dependencyCounts = statusCounts(dependencies);
-	const attentionCount = dependencies.filter(([, detail]) => !['ready', 'disabled'].includes(detail.status)).length;
+	const attentionCount = dependencies.filter(([, detail]) => statusNeedsAttention(detail)).length;
 
 	metrics.replaceChildren(
 		createMetricCard('Service', service.name || 'Unknown service', service.version ? `Version ${service.version}` : 'Version unavailable'),
@@ -1259,7 +1919,8 @@ const renderStatusDashboard = ({ metrics, channelGrid, dependencyGrid, featureGr
 	lastChecked.textContent = `Last checked ${new Date().toLocaleTimeString()}`;
 
 	renderStatusCards(channelGrid, channels, 'No delivery channels reported.');
-	renderStatusCards(dependencyGrid, dependencies, 'No dependencies reported.');
+	if (typeof renderDependencies === 'function') renderDependencies(dependencies);
+	else renderStatusCards(dependencyGrid, dependencies, 'No dependencies reported.');
 	featureGrid.replaceChildren();
 	if (!features.length) {
 		featureGrid.append(element('p', { className: 'request-state', text: 'No feature flags are enabled.' }));
@@ -1271,6 +1932,113 @@ const renderStatusDashboard = ({ metrics, channelGrid, dependencyGrid, featureGr
 	})));
 };
 
+const renderStatusUnavailable = ({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }) => {
+	metrics.replaceChildren(element('p', { className: 'request-state', text: 'Status unavailable. Check the API key and service logs.' }));
+	lastChecked.textContent = 'Status unavailable.';
+	renderStatusCards(channelGrid, [], 'Status unavailable.');
+	renderStatusCards(dependencyGrid, [], 'Status unavailable.');
+	featureGrid.replaceChildren(createEmptyState('Status unavailable.'));
+};
+
+const createStatusExplorer = () => {
+	const dashboard = element('div', { className: 'dashboard' });
+	const hero = element('section', { className: 'dashboard-hero' });
+	const heroCopy = element('div');
+	const lastChecked = element('p', { className: 'request-state', text: 'Waiting for live status…' });
+	heroCopy.append(
+		element('p', { className: 'eyebrow', text: 'Runtime status' }),
+		element('h2', { text: 'Status' }),
+		element('p', { text: 'Inspect dependency readiness, delivery channels and worker health.' }),
+		lastChecked,
+	);
+	const refreshButton = element('button', { className: 'button-primary', text: 'Refresh status' });
+	refreshButton.type = 'button';
+	hero.append(heroCopy, refreshButton);
+
+	const metrics = element('div', { className: 'metric-grid' });
+	metrics.append(element('p', { className: 'request-state', text: 'Loading live status…' }));
+	const channelGrid = element('div', { className: 'status-grid' });
+	const dependencyGrid = element('div', { className: 'status-grid' });
+	const featureGrid = element('div', { className: 'chip-grid' });
+	const searchLabel = element('label', { text: 'Search dependencies' });
+	const search = element('input');
+	search.name = 'dependency-search';
+	search.type = 'search';
+	search.placeholder = 'Name, provider or status';
+	searchLabel.append(search);
+	const toneLabel = element('label', { text: 'Filter by status' });
+	const tone = element('select');
+	tone.name = 'dependency-tone';
+	[
+		['all', 'All statuses'],
+		['attention', 'Needs attention'],
+		['ready', 'Ready'],
+		['disabled', 'Disabled'],
+		['unknown', 'Unknown'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		tone.append(option);
+	});
+	toneLabel.append(tone);
+	const filters = element('div', { className: 'status-filter-bar' });
+	filters.append(searchLabel, toneLabel);
+
+	const statusOutput = element('div', { className: 'response-block', text: 'No status response yet.' });
+	let lastRawStatus = '';
+	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy details');
+	rawCopyButton.hidden = true;
+	const rawStatus = element('details', { className: 'raw-status' });
+	rawStatus.append(
+		element('summary', { text: 'Response details' }),
+		rawCopyButton,
+		statusOutput,
+	);
+
+	const section = (title, content) => {
+		const node = element('section', { className: 'dashboard-section' });
+		node.append(element('h3', { text: title }), content);
+		return node;
+	};
+	dashboard.append(
+		hero,
+		metrics,
+		section('Delivery channels', channelGrid),
+		section('Dependency filters', filters),
+		section('Dependency health', dependencyGrid),
+		section('Enabled capabilities', featureGrid),
+		rawStatus,
+	);
+
+	let dependencies = [];
+	const renderDependencies = () => renderStatusDependencies(dependencyGrid, dependencies, tone.value, search.value);
+	search.addEventListener('input', renderDependencies);
+	tone.addEventListener('change', renderDependencies);
+	const loadStatus = async () => {
+		lastRawStatus = '';
+		rawCopyButton.hidden = true;
+		const status = await sendRequest({
+			definition: STATUS_DEFINITION,
+			path: STATUS_DEFINITION.path,
+			button: refreshButton,
+			output: statusOutput,
+		});
+		if (status && typeof status === 'object') {
+			lastRawStatus = JSON.stringify(status);
+			rawCopyButton.hidden = false;
+			dependencies = statusEntries(status.dependencies);
+			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status, { renderDependencies });
+		} else {
+			dependencies = [];
+			renderStatusUnavailable({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked });
+		}
+	};
+	refreshButton.addEventListener('click', () => { loadStatus(); });
+	if (getElement('api-key')?.value || (authState.enabled && authState.user)) loadStatus();
+	else metrics.replaceChildren(element('p', { className: 'request-state', text: 'Enter an API key to load live status.' }));
+	return dashboard;
+};
+
 const createOverviewDashboard = () => {
 	const dashboard = element('div', { className: 'dashboard' });
 	const hero = element('section', { className: 'dashboard-hero' });
@@ -1280,6 +2048,10 @@ const createOverviewDashboard = () => {
 		element('p', { className: 'eyebrow', text: 'Live control plane' }),
 		element('h2', { text: 'Operational overview' }),
 		element('p', { text: 'A quick read on service readiness, enabled capabilities and delivery health.' }),
+		element('p', {
+			className: 'dashboard-subtitle',
+			text: 'New here? See docs/PRODUCT.md for the human-readable capability map and first-24-hours operator journey.',
+		}),
 		lastChecked,
 	);
 	const refreshButton = element('button', { className: 'button-primary', text: 'Refresh dashboard' });
@@ -1291,13 +2063,13 @@ const createOverviewDashboard = () => {
 	const channelGrid = element('div', { className: 'status-grid' });
 	const dependencyGrid = element('div', { className: 'status-grid' });
 	const featureGrid = element('div', { className: 'chip-grid' });
-	const statusOutput = element('pre', { className: 'response-block', text: 'No status response yet.' });
+	const statusOutput = element('div', { className: 'response-block', text: 'No status response yet.' });
 	let lastRawStatus = '';
-	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy JSON');
+	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawStatus = element('details', { className: 'raw-status' });
 	rawStatus.append(
-		element('summary', { text: 'Show raw status response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		statusOutput,
 	);
@@ -1326,14 +2098,14 @@ const createOverviewDashboard = () => {
 			output: statusOutput,
 		});
 		if (status && typeof status === 'object') {
-			lastRawStatus = JSON.stringify(status, null, 2);
+			lastRawStatus = JSON.stringify(status);
 			rawCopyButton.hidden = false;
 			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status);
 		} else {
-			metrics.replaceChildren(element('p', { className: 'request-state', text: 'Status unavailable. Check the API key and service logs.' }));
+			renderStatusUnavailable({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked });
 		}
 	};
-	refreshButton.addEventListener('click', loadStatus);
+	refreshButton.addEventListener('click', () => { loadStatus(); });
 	if (getElement('api-key')?.value || (authState.enabled && authState.user)) {
 		loadStatus();
 	} else {
@@ -1342,13 +2114,50 @@ const createOverviewDashboard = () => {
 	return dashboard;
 };
 
-	const sendRequest = async ({
-		definition, path, query, body, button, output, formatResponse, parseSuccessResponse, isCurrent, captureResponseStatus,
+// A request can end without an HTTP response at all. Each such end is a distinct
+// operator-facing result, so it is labelled explicitly; an HTTP status is only ever
+// assigned after captureResponseStatus receives a real response.
+const REQUEST_OUTCOMES = {
+	AUTHORIZATION_DENIED: 'authorization_denied',
+	SIGN_IN_EXPIRED: 'sign_in_expired',
+	INVALID_REQUEST: 'invalid_request',
+	CANCELLED: 'cancelled',
+	SUPERSEDED: 'superseded',
+	TIMED_OUT: 'timed_out',
+	NETWORK_ERROR: 'network_error',
+};
+
+const REQUEST_OUTCOME_LABELS = {
+	[REQUEST_OUTCOMES.AUTHORIZATION_DENIED]: 'Not authorized',
+	[REQUEST_OUTCOMES.SIGN_IN_EXPIRED]: 'Sign-in expired',
+	[REQUEST_OUTCOMES.INVALID_REQUEST]: 'Invalid request',
+	[REQUEST_OUTCOMES.CANCELLED]: 'Cancelled',
+	[REQUEST_OUTCOMES.SUPERSEDED]: 'Superseded',
+	[REQUEST_OUTCOMES.TIMED_OUT]: 'Timed out',
+	[REQUEST_OUTCOMES.NETWORK_ERROR]: 'Network error',
+};
+
+const DEFAULT_NO_RESPONSE_LABEL = 'No response';
+
+const describeRequestOutcome = (outcome) => REQUEST_OUTCOME_LABELS[outcome] || DEFAULT_NO_RESPONSE_LABEL;
+
+// fetchWithTimeout aborts via AbortController, so an exceeded client budget rejects with
+// an AbortError — the request may or may not have reached the server, unlike a transport failure.
+const classifyRequestFailure = (error) => (error && error.name === 'AbortError'
+	? REQUEST_OUTCOMES.TIMED_OUT
+	: REQUEST_OUTCOMES.NETWORK_ERROR);
+
+const sendRequest = async ({
+	definition, path, query, body, headers, button, output, formatResponse, parseSuccessResponse, isCurrent, captureResponseStatus, captureResponseData, captureOutcome,
 }) => {
 	const requestIsCurrent = typeof isCurrent === 'function' ? isCurrent : () => true;
+	const recordOutcome = (outcome) => {
+		if (typeof captureOutcome === 'function') captureOutcome(outcome);
+	};
 	const apiKey = getElement('api-key')?.value || '';
 	const requiredRole = definition.requiredRole || (definition.method === 'GET' ? 'admin.viewer' : 'admin.operator');
 	if (authState.enabled && (!authState.user || !window.CabrosAdminRequest.canAccess({ requiredRole }, authState.role))) {
+		recordOutcome(REQUEST_OUTCOMES.AUTHORIZATION_DENIED);
 		showError(output, authState.user ? 'Your admin role cannot perform this operation.' : 'Sign in is required.');
 		return;
 	}
@@ -1357,11 +2166,14 @@ const createOverviewDashboard = () => {
 		try {
 			authToken = await authState.user.getIdToken();
 		} catch (error) {
+			recordOutcome(REQUEST_OUTCOMES.SIGN_IN_EXPIRED);
 			showError(output, 'Unable to refresh the admin sign-in. Please sign in again.');
 			return;
 		}
 	}
-	const summary = window.CabrosAdminRequest.redactSecret(`${definition.method} ${path}`, apiKey);
+	const baseSummary = window.CabrosAdminRequest.redactSecret(`${definition.method} ${path}`, apiKey);
+	const idempotencyKey = headers && (headers['idempotency-key'] || headers['x-idempotency-key']);
+	const summary = idempotencyKey ? `${baseSummary} · Idempotency: ${idempotencyKey}` : baseSummary;
 	let request;
 	try {
 		request = window.CabrosAdminRequest.createRequest({
@@ -1369,18 +2181,26 @@ const createOverviewDashboard = () => {
 			method: definition.method,
 			query,
 			body,
+			headers,
 			apiKey,
 			authToken,
 			baseUrl: getApiBaseUrl(),
 		});
 	} catch (error) {
+		recordOutcome(REQUEST_OUTCOMES.INVALID_REQUEST);
 		showError(output, error.message);
 		return;
 	}
 
-	if (!window.CabrosAdminRequest.confirmRequest(definition, (message) => window.confirm(message))) return;
+	if (!window.CabrosAdminRequest.confirmRequest(definition, (message) => window.confirm(message))) {
+		recordOutcome(REQUEST_OUTCOMES.CANCELLED);
+		return;
+	}
 
-	if (!requestIsCurrent()) return;
+	if (!requestIsCurrent()) {
+		recordOutcome(REQUEST_OUTCOMES.SUPERSEDED);
+		return;
+	}
 	button.disabled = true;
 	output.className = 'response-block';
 	output.replaceChildren(
@@ -1389,7 +2209,7 @@ const createOverviewDashboard = () => {
 	);
 	const started = performance.now();
 	try {
-		const result = await fetchWithTimeout(request.url, request.options, getApiRequestTimeout(definition), async (response) => {
+		const result = await fetchWithTimeout(request.url, request.options, getApiRequestTimeout(definition, request.options), async (response) => {
 			if (typeof captureResponseStatus === 'function') captureResponseStatus(response.status);
 			const elapsed = Math.round(performance.now() - started);
 			let data;
@@ -1406,6 +2226,7 @@ const createOverviewDashboard = () => {
 					// Non-JSON responses stay readable as text.
 				}
 			}
+			if (typeof captureResponseData === 'function') captureResponseData(data, response);
 			return { response, data, formatted, elapsed };
 		});
 		const { response, data, formatted, elapsed } = result;
@@ -1413,11 +2234,16 @@ const createOverviewDashboard = () => {
 		output.className = `response-block${response.ok ? '' : ' response-error'}`;
 		const responseText = response.ok && formatResponse
 			? formatResponse({ summary, status: response.status, elapsed, data })
-			: `${summary}\nHTTP ${response.status} · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(formatted, apiKey)}`;
+			: `${summary}\nHTTP ${response.status} · ${elapsed} ms`;
 		output.textContent = window.CabrosAdminRequest.redactSecret(responseText, apiKey);
+		if (!(response.ok && formatResponse)) {
+			if (data !== undefined) output.append(createResult(data));
+			else output.append(element('p', { text: window.CabrosAdminRequest.redactSecret(formatted, apiKey) }));
+		}
 		return response.ok ? data : undefined;
 	} catch (error) {
 		const elapsed = Math.round(performance.now() - started);
+		recordOutcome(classifyRequestFailure(error));
 		if (!requestIsCurrent()) return;
 		showError(output, `${summary}\nNetwork error · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(error.message, apiKey)}`);
 	} finally {
@@ -1436,6 +2262,7 @@ const createAlertListForm = () => {
 	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
 	const source = addField(form, 'Source', 'source', { placeholder: 'webhook' });
 	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
+	registerFilterScope('alerts.list', { limit, before, source, enriched });
 	[
 		['', 'All alerts'],
 		['true', 'Enriched only'],
@@ -1453,19 +2280,189 @@ const createAlertListForm = () => {
 	const next = element('button', { text: 'Next page' });
 	next.type = 'button';
 	next.disabled = true;
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const alertList = element('div', { className: 'form-fields alert-list' });
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		rawOutput,
 	);
-	form.append(button, prev, next, output, alertList, rawToggle);
+
+	const batchToolbar = element('div', { className: 'batch-toolbar' });
+	const selectAllLabel = element('label', { className: 'alert-select-all-label' });
+	const selectAllCheckbox = element('input', { className: 'alert-select-all' });
+	selectAllCheckbox.type = 'checkbox';
+	selectAllCheckbox.checked = false;
+	selectAllCheckbox.setAttribute('aria-label', 'Select all alerts on page');
+	selectAllLabel.append(selectAllCheckbox, element('span', { text: 'Select all' }));
+
+	const selectionCount = element('span', { className: 'batch-selection-count', text: '0 selected' });
+
+	const batchReplayButton = element('button', { className: 'button-secondary batch-replay-btn', text: 'Replay selected' });
+	batchReplayButton.type = 'button';
+	batchReplayButton.disabled = true;
+
+	const batchExportButton = element('button', { className: 'button-secondary batch-export-btn', text: 'Export selected' });
+	batchExportButton.type = 'button';
+	batchExportButton.disabled = true;
+
+	const batchDeleteButton = element('button', { className: 'button-secondary destructive-action batch-delete-btn', text: 'Delete selected' });
+	batchDeleteButton.type = 'button';
+	batchDeleteButton.disabled = true;
+
+	const batchOutput = element('div', { className: 'response-block batch-output' });
+	batchOutput.hidden = true;
+
+	batchToolbar.append(selectAllLabel, selectionCount, batchReplayButton, batchExportButton, batchDeleteButton, batchOutput);
+
+	form.append(button, prev, next, output, batchToolbar, alertList, rawToggle);
+
+	let currentAlerts = [];
+	const selectedAlertIds = new Set();
+	const cardCheckboxes = [];
+
+	const updateBatchToolbar = () => {
+		const count = selectedAlertIds.size;
+		selectionCount.textContent = `${count} selected`;
+		const hasSelection = count > 0;
+		const isOperator = canPerformMutation();
+		const exceedsReplayLimit = count > 50;
+
+		batchReplayButton.disabled = !hasSelection || !isOperator || exceedsReplayLimit;
+		if (!isOperator) {
+			batchReplayButton.title = 'Requires admin.operator role';
+		} else if (exceedsReplayLimit) {
+			batchReplayButton.title = `Batch replay is limited to 50 alerts at a time (${count} selected)`;
+		} else {
+			batchReplayButton.removeAttribute('title');
+		}
+
+		batchExportButton.disabled = !hasSelection;
+
+		batchDeleteButton.disabled = !hasSelection || !isOperator;
+		if (!isOperator) batchDeleteButton.title = 'Requires admin.operator role';
+		else batchDeleteButton.removeAttribute('title');
+
+		const selectable = currentAlerts.filter((a) => a && a.id);
+		selectAllCheckbox.checked = selectable.length > 0 && selectedAlertIds.size === selectable.length;
+	};
+
+	const onAlertSelect = (alertId, isChecked) => {
+		if (isChecked) {
+			selectedAlertIds.add(alertId);
+		} else {
+			selectedAlertIds.delete(alertId);
+		}
+		updateBatchToolbar();
+	};
+
+	selectAllCheckbox.addEventListener('change', () => {
+		const shouldSelect = selectAllCheckbox.checked;
+		currentAlerts.forEach((alert) => {
+			if (alert && alert.id) {
+				if (shouldSelect) {
+					selectedAlertIds.add(alert.id);
+				} else {
+					selectedAlertIds.delete(alert.id);
+				}
+			}
+		});
+		cardCheckboxes.forEach((cb) => {
+			cb.checked = shouldSelect;
+		});
+		updateBatchToolbar();
+	});
+
+	batchReplayButton.addEventListener('click', async () => {
+		const ids = Array.from(selectedAlertIds);
+		if (!ids.length) return;
+		if (!canPerformMutation()) return;
+		if (ids.length > 50) {
+			batchOutput.hidden = false;
+			batchOutput.textContent = `Batch replay limit exceeded: up to 50 alerts can be replayed at once (${ids.length} selected). Please narrow your selection.`;
+			return;
+		}
+
+		batchOutput.hidden = false;
+		await sendRequest({
+			definition: {
+				method: 'POST',
+				path: '/api/alerts/batch/replay',
+				label: 'Batch replay alerts',
+				confirm: 'Replay selected alerts?',
+			},
+			path: '/api/alerts/batch/replay',
+			button: batchReplayButton,
+			output: batchOutput,
+			options: { batchSize: ids.length },
+			body: withReplayIdempotencyKey({ method: 'POST', path: '/api/alerts/batch/replay' }, { alertIds: ids }),
+			formatResponse: ({ summary, status, elapsed, data }) => {
+				const count = data && Array.isArray(data.results) ? data.results.length : 0;
+				const successful = data && Array.isArray(data.results) ? data.results.filter((r) => r.success).length : 0;
+				return `${summary}\nHTTP ${status} · ${elapsed} ms\n\nBatch replay complete: ${successful}/${count} succeeded.`;
+			},
+		});
+		updateBatchToolbar();
+	});
+
+	batchExportButton.addEventListener('click', async () => {
+		const ids = Array.from(selectedAlertIds);
+		if (!ids.length) return;
+
+		batchOutput.hidden = false;
+		await sendRequest({
+			definition: {
+				method: 'POST',
+				path: '/api/alerts/batch/export',
+				label: 'Batch export alerts',
+				requiredRole: 'admin.viewer',
+			},
+			path: '/api/alerts/batch/export',
+			button: batchExportButton,
+			output: batchOutput,
+			body: { alertIds: ids, format: 'jsonl' },
+			parseSuccessResponse: parseAlertExportResponse('jsonl'),
+			formatResponse: ({ summary, status, elapsed, data }) => (
+				`${summary}\nHTTP ${status} · ${elapsed} ms\n\nDownloaded ${data.filename} (${data.contentType || 'unknown content type'}).`
+			),
+		});
+		updateBatchToolbar();
+	});
+
+	batchDeleteButton.addEventListener('click', async () => {
+		const ids = Array.from(selectedAlertIds);
+		if (!ids.length) return;
+		if (!canPerformMutation()) return;
+
+		batchOutput.hidden = false;
+		const res = await sendRequest({
+			definition: {
+				method: 'POST',
+				path: '/api/alerts/batch/delete',
+				label: 'Batch delete alerts',
+				confirm: 'Delete selected alerts? This action cannot be undone.',
+			},
+			path: '/api/alerts/batch/delete',
+			button: batchDeleteButton,
+			output: batchOutput,
+			body: { alertIds: ids },
+			formatResponse: ({ summary, status, elapsed, data }) => (
+				`${summary}\nHTTP ${status} · ${elapsed} ms\n\nBatch delete complete: ${data && data.deleted ? data.deleted : 0} alerts deleted.`
+			),
+		});
+		if (res && res.success) {
+			selectedAlertIds.clear();
+			updateBatchToolbar();
+			requestPage(before.value);
+		} else {
+			updateBatchToolbar();
+		}
+	});
 
 	let nextBefore;
 	let backCursors = [];
@@ -1493,18 +2490,32 @@ const createAlertListForm = () => {
 		});
 		if (generation !== pageGeneration) return false;
 		if (data && Array.isArray(data.alerts)) {
+			currentAlerts = data.alerts;
+			selectedAlertIds.clear();
+			cardCheckboxes.length = 0;
+			selectAllCheckbox.checked = false;
+			updateBatchToolbar();
 			lastRawJson = JSON.stringify(data, null, 2);
-			rawOutput.textContent = lastRawJson;
+			showResult(rawOutput, lastRawJson);
 			rawCopyButton.hidden = false;
 			alertList.replaceChildren();
 			if (!data.alerts.length) {
 				alertList.append(createEmptyState('No stored alerts match these filters.'));
 			} else {
-				data.alerts.forEach((alert) => alertList.append(createAlertCard(alert)));
+				data.alerts.forEach((alert) => alertList.append(createAlertCard(alert, {
+					onSelect: onAlertSelect,
+					isSelected: selectedAlertIds.has(alert.id),
+					registerCheckbox: (cb) => cardCheckboxes.push(cb),
+				})));
 			}
 		} else {
+			currentAlerts = [];
+			selectedAlertIds.clear();
+			cardCheckboxes.length = 0;
+			selectAllCheckbox.checked = false;
+			updateBatchToolbar();
 			lastRawJson = '';
-			rawOutput.textContent = '';
+			showResult(rawOutput, '');
 			rawCopyButton.hidden = true;
 			alertList.replaceChildren();
 		}
@@ -1524,12 +2535,17 @@ const createAlertListForm = () => {
 		pageGeneration += 1;
 		nextBefore = undefined;
 		backCursors = [];
+		currentAlerts = [];
+		selectedAlertIds.clear();
+		cardCheckboxes.length = 0;
+		selectAllCheckbox.checked = false;
+		updateBatchToolbar();
 		next.disabled = true;
 		prev.disabled = true;
 		button.disabled = false;
 		alertList.replaceChildren();
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load alerts to refresh.';
 		if (clearCursor) before.value = '';
@@ -1579,7 +2595,66 @@ const reportWindowDefaults = () => {
 	};
 };
 
-const addAlertReportFilters = (form, { requiredWindow = false } = {}) => {
+let activeFilterScopes = [];
+
+const resetFilterScopes = () => {
+	activeFilterScopes = [];
+};
+
+const registerFilterScope = (scope, fields) => {
+	if (FILTER_SCOPE_VIEWS[scope]) {
+		activeFilterScopes.push({ scope, fields: { ...fields } });
+	}
+	return fields;
+};
+
+const readFilterValue = (input) => {
+	if (!input) return '';
+	if (input.type === 'checkbox') return input.checked ? 'true' : '';
+	return typeof input.value === 'string' ? input.value : '';
+};
+
+const collectFilterParams = (view) => {
+	const collected = {};
+	activeFilterScopes.forEach(({ scope, fields }) => {
+		if (view && FILTER_SCOPE_VIEWS[scope] !== view) return;
+		Object.entries(fields).forEach(([name, input]) => {
+			const value = readFilterValue(input);
+			if (value !== '') collected[`${scope}.${name}`] = value;
+		});
+	});
+	return collected;
+};
+
+const applyFilterParams = (params) => {
+	if (!params) return;
+	activeFilterScopes.forEach(({ scope, fields }) => {
+		Object.entries(fields).forEach(([name, input]) => {
+			const key = `${scope}.${name}`;
+			if (!input || !params.has(key)) return;
+			const value = params.get(key);
+			if (input.type === 'checkbox') input.checked = value === 'true';
+			else input.value = value;
+		});
+	});
+};
+
+const syncConsoleUrlFromFilters = () => {
+	writeConsoleUrl(buildConsoleUrl(currentConsoleView, collectFilterParams(currentConsoleView)), { replace: true });
+};
+
+const bindFilterScopeListeners = () => {
+	activeFilterScopes.forEach(({ fields }) => {
+		Object.values(fields).forEach((input) => {
+			if (!input || typeof input.addEventListener !== 'function' || input.consoleFilterBound) return;
+			input.consoleFilterBound = true;
+			input.addEventListener('input', syncConsoleUrlFromFilters);
+			input.addEventListener('change', syncConsoleUrlFromFilters);
+		});
+	});
+};
+
+const addAlertReportFilters = (form, { requiredWindow = false, scope } = {}) => {
 	const defaults = reportWindowDefaults();
 	const from = addField(form, 'From', 'from', {
 		type: 'datetime-local', value: defaults.from, required: requiredWindow,
@@ -1599,7 +2674,7 @@ const addAlertReportFilters = (form, { requiredWindow = false } = {}) => {
 		option.value = value;
 		enriched.append(option);
 	});
-	return { from, to, limit, source, enriched };
+	return registerFilterScope(scope, { from, to, limit, source, enriched });
 };
 
 const toIsoTimestamp = (value, label) => {
@@ -1620,6 +2695,107 @@ const getAlertReportQuery = (fields, { format, includeText } = {}) => Object.fro
 		includeText,
 	}).filter(([, value]) => value !== undefined && value !== ''),
 );
+
+// Verdict tones for the sentiment calibration panel. A window too small to
+// judge is deliberately NOT green: `insufficient_sample` is the absence of
+// evidence, and rendering it as a pass would read as reassurance.
+const SENTIMENT_CALIBRATION_TONES = {
+	spread_collapse: 'status-danger',
+	top_band_concentration: 'status-danger',
+	insufficient_sample: 'status-disabled',
+	no_samples: 'status-disabled',
+};
+
+const SENTIMENT_CALIBRATION_LABELS = {
+	spread_collapse: 'Spread collapsed',
+	top_band_concentration: 'Top-band concentration',
+	insufficient_sample: 'Not enough samples',
+	no_samples: 'No samples',
+};
+
+const formatScore = (value) => {
+	const numeric = asFiniteNumber(value);
+	return numeric === null ? '—' : numeric.toFixed(2);
+};
+
+const renderSentimentCalibration = (enrichment) => {
+	const calibration = asObject(enrichment && enrichment.sentimentCalibration);
+	if (!calibration || !('sampleCount' in calibration)) return null;
+
+	const reason = typeof calibration.reason === 'string' && calibration.reason ? calibration.reason : null;
+	const saturated = calibration.saturated === true;
+	const evaluated = calibration.evaluated === true;
+	const verdict = saturated ? 'Saturated' : (evaluated ? 'Healthy' : 'Not evaluated');
+	const tone = saturated
+		? 'status-danger'
+		: (reason ? (SENTIMENT_CALIBRATION_TONES[reason] || 'status-disabled') : 'status-ready');
+
+	const spread = asFiniteNumber(calibration.spread);
+	const topBandShare = asFiniteNumber(calibration.topBandShare);
+	const section = element('section', { className: 'dashboard-section sentiment-calibration' });
+
+	const header = element('div', { className: 'section-header' });
+	header.append(
+		element('h3', { text: 'Sentiment calibration' }),
+		element('span', {
+			className: `status-badge ${tone}`,
+			text: verdict,
+			attributes: { role: 'status' },
+		}),
+	);
+	section.append(header);
+
+	const grid = element('div', { className: 'metric-grid' });
+	const topBandPct = topBandShare === null ? '—' : `${Math.round(topBandShare * 100)}%`;
+	grid.append(
+		createMetricCard(
+			'Scores in window',
+			formatJobValue(calibration.sampleCount),
+			`${formatJobValue(calibration.distinctValueCount)} distinct · ${formatJobValue(calibration.bucketCount)} buckets`,
+		),
+		createMetricCard(
+			'Spread (p90 − p10)',
+			spread === null ? '—' : spread.toFixed(2),
+			`p10 ${formatScore(calibration.p10)} · p90 ${formatScore(calibration.p90)}`,
+		),
+		createMetricCard('Range', `${formatScore(calibration.min)} → ${formatScore(calibration.max)}`, `p50 ${formatScore(calibration.p50)}`),
+		createMetricCard('At or above 0.75', topBandPct, `${formatJobValue(calibration.topBandCount)} of ${formatJobValue(calibration.sampleCount)} scores`),
+		createMetricCard(
+			'Zero-source capped',
+			formatJobValue(calibration.rawScoreCapCount),
+			calibration.rawScoreCapCount
+				? 'Cap is live in this deployment'
+				: 'No capped alerts in this window',
+		),
+	);
+	section.append(grid);
+
+	const details = element('p', { className: 'metric-meta' });
+	details.append(element('span', { text: reason ? `Rule: ${reason}` : 'Rule: none (healthy)' }));
+	section.append(details);
+
+	const buckets = Array.isArray(calibration.buckets) ? calibration.buckets : [];
+	if (buckets.length) {
+		const table = element('table', { className: 'data-table' });
+		const head = element('tr');
+		['Band', 'Count'].forEach((label) => head.append(element('th', { text: label })));
+		table.append(head);
+		buckets.forEach((bucket) => {
+			const row = element('tr');
+			const detail = asObject(bucket);
+			const lower = asFiniteNumber(detail.lowerBound);
+			const upper = asFiniteNumber(detail.upperBound);
+			row.append(
+				element('td', { text: lower === null || upper === null ? '—' : `${lower.toFixed(1)} – ${upper.toFixed(1)}` }),
+				element('td', { text: formatJobValue(detail.count) }),
+			);
+			table.append(row);
+		});
+		section.append(table);
+	}
+
+	return section;
+};
 
 const renderAlertSummaryBlocks = (data) => {
 	const wrap = element('div', { className: 'dashboard summary-blocks' });
@@ -1653,6 +2829,13 @@ const renderAlertSummaryBlocks = (data) => {
 			`${formatJobValue(enrichment.plainAlerts)} plain · denominator ${formatJobValue(coverage.denominator)}`,
 		),
 	);
+
+	// Appended before the coverage sections so a saturated score is the first
+	// thing an operator reads: it invalidates every per-alert score above it.
+	const calibrationPanel = renderSentimentCalibration(enrichment);
+	if (calibrationPanel) {
+		wrap.append(calibrationPanel);
+	}
 
 	const channels = Object.entries(asObject(delivery.byChannel));
 	if (channels.length) {
@@ -1726,18 +2909,18 @@ const createAlertSummaryForm = () => {
 		element('h3', { text: definition.label }),
 		element('code', { text: `${definition.method} ${definition.path}` }),
 	);
-	const fields = addAlertReportFilters(form);
+	const fields = addAlertReportFilters(form, { scope: 'alerts.summary' });
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const blocks = element('div', { className: 'summary-host' });
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw analytics response' }),
+		element('summary', { text: 'Analytics details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -1748,7 +2931,7 @@ const createAlertSummaryForm = () => {
 		button.disabled = false;
 		blocks.replaceChildren();
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load alert analytics to refresh.';
 	};
@@ -1778,12 +2961,12 @@ const createAlertSummaryForm = () => {
 				if (!data || !data.summary) {
 					blocks.replaceChildren();
 					lastRawJson = '';
-					rawOutput.textContent = '';
+					showResult(rawOutput, '');
 					rawCopyButton.hidden = true;
 					return;
 				}
 				blocks.replaceChildren(renderAlertSummaryBlocks(data));
-				rawOutput.textContent = lastRawJson;
+				showResult(rawOutput, lastRawJson);
 				rawCopyButton.hidden = false;
 			});
 		} catch (error) {
@@ -1800,7 +2983,7 @@ const createAlertExportForm = () => {
 		element('h3', { text: definition.label }),
 		element('code', { text: `${definition.method} ${definition.path}` }),
 	);
-	const fields = addAlertReportFilters(form, { requiredWindow: true });
+	const fields = addAlertReportFilters(form, { requiredWindow: true, scope: 'alerts.export' });
 	const format = addField(form, 'Format', 'format', { tag: 'select' });
 	[['jsonl', 'JSONL'], ['csv', 'CSV']].forEach(([value, text]) => {
 		const option = element('option', { text });
@@ -1812,7 +2995,7 @@ const createAlertExportForm = () => {
 	});
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	form.append(button, output);
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
@@ -2101,6 +3284,7 @@ const createOutcomesListForm = () => {
 	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
 	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
+	registerFilterScope('outcomes.list', { symbol, exchange, status, window: windowField, from, to, limit, before });
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
@@ -2110,15 +3294,15 @@ const createOutcomesListForm = () => {
 	const next = element('button', { text: 'Next page' });
 	next.type = 'button';
 	next.disabled = true;
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const outcomeList = element('div', { className: 'form-fields outcome-list' });
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw response' }),
+		element('summary', { text: 'Response details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -2155,7 +3339,7 @@ const createOutcomesListForm = () => {
 		if (generation !== pageGeneration) return false;
 		if (data && Array.isArray(data.outcomes)) {
 			lastRawJson = JSON.stringify(data, null, 2);
-			rawOutput.textContent = lastRawJson;
+			showResult(rawOutput, lastRawJson);
 			rawCopyButton.hidden = false;
 			outcomeList.replaceChildren();
 			if (!data.outcomes.length) {
@@ -2165,7 +3349,7 @@ const createOutcomesListForm = () => {
 			}
 		} else {
 			lastRawJson = '';
-			rawOutput.textContent = '';
+			showResult(rawOutput, '');
 			rawCopyButton.hidden = true;
 			outcomeList.replaceChildren();
 		}
@@ -2190,7 +3374,7 @@ const createOutcomesListForm = () => {
 		button.disabled = false;
 		outcomeList.replaceChildren();
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load outcomes to refresh.';
 		if (clearCursor) before.value = '';
@@ -2331,18 +3515,19 @@ const createOutcomesSummaryForm = () => {
 	const from = addField(form, 'From', 'from', { placeholder: 'ISO-8601 timestamp' });
 	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
+	registerFilterScope('outcomes.summary', { symbol, exchange, status, window: windowField, from, to, limit });
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const blocks = element('div', { className: 'summary-host' });
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw summary response' }),
+		element('summary', { text: 'Summary details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -2354,7 +3539,7 @@ const createOutcomesSummaryForm = () => {
 		button.disabled = false;
 		blocks.replaceChildren();
 		lastRawJson = '';
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load outcomes summary to refresh.';
 	};
@@ -2391,11 +3576,166 @@ const createOutcomesSummaryForm = () => {
 			if (!data || !data.summary) {
 				blocks.replaceChildren();
 				lastRawJson = '';
-				rawOutput.textContent = '';
+				showResult(rawOutput, '');
 				rawCopyButton.hidden = true;
 				return;
 			}
 			blocks.replaceChildren(renderOutcomesSummaryBlocks(data));
+			showResult(rawOutput, lastRawJson);
+			rawCopyButton.hidden = false;
+		});
+	});
+	return form;
+};
+
+const renderOutcomesCalibrationBlocks = (data) => {
+	const calibration = asObject(data && data.calibration);
+	const wrap = element('div', { className: 'dashboard' });
+	const metrics = element('div', { className: 'metric-grid' });
+	wrap.append(metrics);
+
+	const available = calibration.available === true;
+	const totalScored = calibration.totalScoredAlerts ?? 0;
+	const suggestedThreshold = calibration.suggestedThreshold;
+	const rationale = calibration.suggestedThresholdRationale || '—';
+
+	metrics.append(
+		createMetricCard(
+			'Scored alerts',
+			formatJobValue(totalScored),
+			available ? 'Sufficient sample size' : 'Minimum 20 scored alerts required',
+		),
+		createMetricCard(
+			'Suggested threshold',
+			suggestedThreshold !== null && suggestedThreshold !== undefined ? `${suggestedThreshold}` : '—',
+			rationale,
+		),
+	);
+
+	const buckets = Array.isArray(calibration.buckets) ? calibration.buckets : [];
+	if (buckets.length) {
+		const section = element('section', { className: 'dashboard-section' });
+		section.append(element('h3', { text: 'Calibration buckets' }));
+		const table = element('table', { className: 'data-table' });
+		const head = element('tr');
+		['Confidence Range', 'Alerts', 'Avg Return (1h)', 'Avg Return (4h)', 'Target Hit Rate'].forEach((label) => head.append(element('th', { text: label })));
+		table.append(head);
+		buckets.forEach((b) => {
+			const detail = asObject(b);
+			const row = element('tr');
+			const hitRatePct = detail.targetHitRate !== undefined && detail.targetHitRate !== null
+				? `${Math.round(detail.targetHitRate * 100)}%`
+				: '—';
+			const ret1h = detail.avgReturn1h !== undefined && detail.avgReturn1h !== null
+				? `${detail.avgReturn1h > 0 ? '+' : ''}${detail.avgReturn1h}%`
+				: '—';
+			const ret4h = detail.avgReturn4h !== undefined && detail.avgReturn4h !== null
+				? `${detail.avgReturn4h > 0 ? '+' : ''}${detail.avgReturn4h}%`
+				: '—';
+			row.append(
+				element('td', { text: detail.range || '—' }),
+				element('td', { text: formatJobValue(detail.count ?? 0) }),
+				element('td', { text: ret1h }),
+				element('td', { text: ret4h }),
+				element('td', { text: hitRatePct }),
+			);
+			table.append(row);
+		});
+		section.append(table);
+		wrap.append(section);
+	}
+
+	return wrap;
+};
+
+const createOutcomesCalibrationForm = () => {
+	const definition = { method: 'GET', path: '/api/outcomes/calibration', label: 'Load outcomes calibration' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const symbol = addField(form, 'Symbol', 'symbol', { placeholder: 'BTCUSDT or BINANCE:BTCUSDT' });
+	const exchange = addField(form, 'Exchange', 'exchange', { placeholder: 'BINANCE' });
+	const windowField = addField(form, 'Window', 'window', { tag: 'select' });
+	[
+		['4h', '4h (Default)'],
+		['1h', '1h'],
+		['1D', '1D'],
+		['1W', '1W'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		windowField.append(option);
+	});
+	const from = addField(form, 'From', 'from', { placeholder: 'ISO-8601 timestamp' });
+	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
+	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 1000, value: 1000 });
+	registerFilterScope('outcomes.calibration', { symbol, exchange, window: windowField, from, to, limit });
+
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const blocks = element('div', { className: 'summary-host' });
+	let lastRawJson = '';
+	const rawOutput = element('pre', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.append(
+		element('summary', { text: 'Show raw calibration response' }),
+		rawCopyButton,
+		rawOutput,
+	);
+	form.append(button, output, blocks, rawToggle);
+
+	let calibrationGeneration = 0;
+	const invalidateCalibration = () => {
+		calibrationGeneration += 1;
+		button.disabled = false;
+		blocks.replaceChildren();
+		lastRawJson = '';
+		rawOutput.textContent = '';
+		rawCopyButton.hidden = true;
+		output.textContent = 'Filters changed — load outcomes calibration to refresh.';
+	};
+	[symbol, exchange, windowField, from, to, limit].forEach((field) => {
+		field.addEventListener('input', invalidateCalibration);
+		field.addEventListener('change', invalidateCalibration);
+	});
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		const generation = ++calibrationGeneration;
+		const query = Object.fromEntries(Object.entries({
+			limit: limit.value,
+			symbol: symbol.value,
+			exchange: exchange.value,
+			window: windowField.value,
+			from: from.value,
+			to: to.value,
+		}).filter(([, value]) => value !== ''));
+		sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button,
+			output,
+			isCurrent: () => generation === calibrationGeneration,
+			formatResponse: ({ summary: sumText, status: respStatus, elapsed, data }) => {
+				if (!data || !data.calibration) return `${sumText}\nHTTP ${respStatus} · ${elapsed} ms\n\nNo calibration data returned.`;
+				lastRawJson = JSON.stringify(data, null, 2);
+				return `${sumText}\nHTTP ${respStatus} · ${elapsed} ms`;
+			},
+		}).then((data) => {
+			if (generation !== calibrationGeneration) return;
+			if (!data || !data.calibration) {
+				blocks.replaceChildren();
+				lastRawJson = '';
+				rawOutput.textContent = '';
+				rawCopyButton.hidden = true;
+				return;
+			}
+			blocks.replaceChildren(renderOutcomesCalibrationBlocks(data));
 			rawOutput.textContent = lastRawJson;
 			rawCopyButton.hidden = false;
 		});
@@ -2409,6 +3749,284 @@ const getQueryEnum = (contract, definition, name) => {
 	return parameter && parameter.schema && parameter.schema.enum || [];
 };
 
+const formatOrderValue = (value) => value === undefined || value === null || value === '' ? '—' : String(value);
+
+const formatOrderEnvironment = (environment) => {
+	if (environment === 'live') {
+		return element('span', {
+			className: 'status-badge status-danger',
+			text: 'Environment: live',
+		});
+	}
+	if (environment === 'testnet') {
+		return element('span', {
+			className: 'status-badge status-ready',
+			text: 'Environment: testnet',
+		});
+	}
+	return element('span', {
+		className: 'status-badge status-disabled',
+		text: `Environment: ${formatOrderValue(environment)}`,
+	});
+};
+
+const ORDER_SUMMARY_FIELDS = [
+	['Symbol', 'symbol'],
+	['Side', 'side'],
+	['Type', 'type'],
+	['Status', 'status'],
+	['Price', 'price'],
+	['Orig qty', 'origQty'],
+	['Executed qty', 'executedQty'],
+	['Cumulative quote', 'cummulativeQuoteQty'],
+	['Time in force', 'timeInForce'],
+	['Stop price', 'stopPrice'],
+];
+
+const ORDER_IDENTIFIER_FIELDS = [
+	['Order ID', 'orderId'],
+	['Client order ID', 'clientOrderId'],
+];
+
+const createOrderCard = (order) => {
+	const card = element('article', { className: 'operation-card order-card' });
+	const symbol = formatOrderValue(order && order.symbol);
+	const heading = element('h3');
+	heading.append(
+		element('span', { text: symbol }),
+		createCopyButton(() => `${formatOrderValue(order && order.symbol)} · ${formatOrderValue(order && order.orderId)}`, 'Copy summary'),
+	);
+	card.append(heading);
+
+	const identifiers = element('dl');
+	ORDER_IDENTIFIER_FIELDS.forEach(([label, key]) => {
+		if (!order || order[key] === undefined || order[key] === null) return;
+		const dd = element('dd');
+		dd.append(element('span', { text: formatOrderValue(order[key]) }));
+		dd.append(createCopyButton(() => formatOrderValue(order[key]), 'Copy'));
+		identifiers.append(element('dt', { text: label }), dd);
+	});
+	if (identifiers.children.length) card.append(identifiers);
+
+	const details = element('dl');
+	ORDER_SUMMARY_FIELDS.forEach(([label, key]) => {
+		details.append(
+			element('dt', { text: label }),
+			element('dd', { text: formatOrderValue(order && order[key]) }),
+		);
+	});
+	card.append(details);
+
+	const timestamps = element('dl');
+	const stampFields = [
+		['Created', order && order.time],
+		['Transact', order && order.transactTime],
+		['Working', order && order.workingTime],
+		['Updated', order && order.updateTime],
+	];
+	stampFields.forEach(([label, value]) => {
+		const dd = element('dd');
+		if (value !== undefined && value !== null && value !== '') dd.append(createTimestamp(value));
+		else dd.textContent = '—';
+		timestamps.append(element('dt', { text: label }), dd);
+	});
+	card.append(timestamps);
+
+	const fills = Array.isArray(order && order.fills) ? order.fills : [];
+	if (fills.length) {
+		const fillsBlock = element('div', { className: 'order-fills' });
+		fillsBlock.append(element('h4', { text: `Fills (${fills.length})` }));
+		const list = element('dl');
+		fills.forEach((fill) => {
+			['price', 'qty', 'commission', 'commissionAsset', 'tradeId'].forEach((key) => {
+				if (fill[key] === undefined || fill[key] === null) return;
+				list.append(element('dt', { text: key }), element('dd', { text: formatOrderValue(fill[key]) }));
+			});
+		});
+		fillsBlock.append(list);
+		card.append(fillsBlock);
+	}
+
+	return card;
+};
+
+const ORDER_LIST_QUERY_VALIDATION = {
+	symbol: (value) => typeof value === 'string' && /^[A-Z0-9]{5,20}$/.test(String(value).trim().toUpperCase()),
+	limit: (value) => {
+		const normalized = String(value).trim();
+		const parsed = Number(normalized);
+		return /^\d+$/.test(normalized) && Number.isFinite(parsed) && parsed >= 1 && parsed <= 100;
+	},
+	orderId: (value) => {
+		const normalized = String(value).trim();
+		const parsed = Number(normalized);
+		return /^\d+$/.test(normalized) && Number.isFinite(parsed) && parsed > 0;
+	},
+	origClientOrderId: (value) => {
+		const normalized = String(value).trim();
+		return /^[A-Za-z0-9._:-]{1,36}$/.test(normalized);
+	},
+};
+
+const trimFormValue = (value) => (value === undefined || value === null ? '' : String(value).trim());
+
+const createOrderListForm = () => {
+	const definition = { method: 'GET', path: '/api/trading/binance/orders', label: 'Load recent orders' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const symbol = addField(form, 'Symbol', 'symbol', { placeholder: 'BTCUSDT', required: true });
+	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: —' });
+	const list = element('div', { className: 'form-fields' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
+	form.append(button, environmentBadge, list, output);
+
+	let listRequestVersion = 0;
+	const invalidateListRequest = () => {
+		listRequestVersion += 1;
+		list.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
+		button.disabled = false;
+		output.className = 'response-block request-state';
+		output.textContent = 'Filters changed. Submit to load recent orders.';
+	};
+	symbol.addEventListener('input', invalidateListRequest);
+	limit.addEventListener('input', invalidateListRequest);
+
+	const renderOrders = (orders, environment) => {
+		list.replaceChildren();
+		environmentBadge.replaceChildren(formatOrderEnvironment(environment));
+		if (!orders.length) {
+			list.append(createEmptyState('No recent orders found.'));
+			return;
+		}
+		orders.forEach((order) => list.append(createOrderCard(order)));
+	};
+
+	form.addEventListener('submit', async (event) => {
+		event.preventDefault();
+		list.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
+		const requestVersion = ++listRequestVersion;
+		const query = {};
+		const symbolValue = trimFormValue(symbol.value).toUpperCase();
+		if (ORDER_LIST_QUERY_VALIDATION.symbol(symbolValue)) query.symbol = symbolValue;
+		const limitValue = trimFormValue(limit.value);
+		if (limitValue && ORDER_LIST_QUERY_VALIDATION.limit(limitValue)) query.limit = String(Number(limitValue));
+		if (!query.symbol) {
+			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button,
+			output,
+			isCurrent: () => requestVersion === listRequestVersion,
+			formatResponse: ({ summary, status: responseStatus, elapsed }) => (
+				`${summary}\nHTTP ${responseStatus} · ${elapsed} ms`
+			),
+		});
+		if (requestVersion === listRequestVersion && data && Array.isArray(data.orders)) {
+			renderOrders(data.orders, data.environment);
+		}
+	});
+
+	return form;
+};
+
+const createOrderLookupForm = () => {
+	const definition = { method: 'GET', path: '/api/trading/binance/orders', label: 'Get single order' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const symbol = addField(form, 'Symbol', 'symbol', { placeholder: 'BTCUSDT', required: true });
+	const orderId = addField(form, 'Order ID', 'path-orderId', { type: 'number', min: 1, placeholder: 'Binance numeric order ID' });
+	const origClientOrderId = addField(form, 'origClientOrderId', 'path-origClientOrderId', {
+		placeholder: '1-36 safe characters (A-Z a-z 0-9 . _ : -)',
+		pattern: '^[A-Za-z0-9._:-]{1,36}$',
+		maxLength: 36,
+	});
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: —' });
+	const result = element('div');
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
+	const hint = element('p', { className: 'hint', text: 'Provide either orderId or origClientOrderId to query a single order.' });
+	form.append(button, environmentBadge, hint, result, output);
+
+	let lookupRequestVersion = 0;
+	const invalidateLookup = () => {
+		lookupRequestVersion += 1;
+		result.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
+		button.disabled = false;
+		output.className = 'response-block request-state';
+		output.textContent = 'Filters changed. Submit to load order.';
+	};
+	symbol.addEventListener('input', invalidateLookup);
+	orderId.addEventListener('input', invalidateLookup);
+	origClientOrderId.addEventListener('input', invalidateLookup);
+
+	form.addEventListener('submit', async (event) => {
+		event.preventDefault();
+		result.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
+		const requestVersion = ++lookupRequestVersion;
+		const symbolValue = trimFormValue(symbol.value).toUpperCase();
+		const orderIdValue = trimFormValue(orderId.value);
+		const origClientOrderIdValue = trimFormValue(origClientOrderId.value);
+		if (!ORDER_LIST_QUERY_VALIDATION.symbol(symbolValue)) {
+			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+		if (!orderIdValue && !origClientOrderIdValue) {
+			showError(output, 'orderId or origClientOrderId is required for single-order lookup.');
+			return;
+		}
+		if (orderIdValue && origClientOrderIdValue) {
+			showError(output, 'Provide exactly one order identifier.');
+			return;
+		}
+		if (orderIdValue && !ORDER_LIST_QUERY_VALIDATION.orderId(orderIdValue)) {
+			showError(output, 'orderId must be a positive integer.');
+			return;
+		}
+		if (origClientOrderIdValue && !ORDER_LIST_QUERY_VALIDATION.origClientOrderId(origClientOrderIdValue)) {
+			showError(output, 'origClientOrderId must contain 1-36 safe characters (letters, numbers, ., _, :, -).');
+			return;
+		}
+		const query = { symbol: symbolValue };
+		if (orderIdValue) query.orderId = orderIdValue.replace(/^0+(?=\d)/, '');
+		else if (origClientOrderIdValue) query.origClientOrderId = origClientOrderIdValue;
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button,
+			output,
+			isCurrent: () => requestVersion === lookupRequestVersion,
+			formatResponse: ({ summary, status: responseStatus, elapsed }) => (
+				`${summary}\nHTTP ${responseStatus} · ${elapsed} ms`
+			),
+		});
+		if (requestVersion === lookupRequestVersion && data && data.order) {
+			environmentBadge.replaceChildren(formatOrderEnvironment(data.environment));
+			result.replaceChildren(createOrderCard(data.order));
+		}
+	});
+
+	return form;
+};
+
 const formatJobValue = (value) => value === undefined || value === null || value === '' ? '—' : String(value);
 
 const formatJobProgress = (progress) => {
@@ -2419,6 +4037,7 @@ const formatJobProgress = (progress) => {
 const createJobSummary = (job, onSelect) => {
 	const card = element('article', { className: 'operation-card' });
 	const jobId = formatJobValue(job && job.jobId);
+	if (job && job.jobId) card.dataset.jobId = job.jobId;
 	const jobHeading = element('h3');
 	jobHeading.append(
 		element('span', { text: jobId }),
@@ -2487,7 +4106,7 @@ const createJobListForm = (contract, onSelect) => {
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	const list = element('div', { className: 'form-fields' });
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	form.append(button, list, output);
 	let listRequestVersion = 0;
 	const invalidateListRequest = () => {
@@ -2549,15 +4168,15 @@ const createJobStatusForm = () => {
 	const pollButton = element('button', { className: 'button-ghost', text: 'Pause auto-refresh' });
 	pollButton.type = 'button';
 	pollButton.hidden = true;
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const statusPanel = element('div');
 	let lastRawJson = '';
-	const rawOutput = element('pre', { className: 'response-block' });
-	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawToggle = element('details', { className: 'raw-status' });
 	rawToggle.append(
-		element('summary', { text: 'Show raw job payload' }),
+		element('summary', { text: 'Job details' }),
 		rawCopyButton,
 		rawOutput,
 	);
@@ -2594,7 +4213,7 @@ const createJobStatusForm = () => {
 	const clearStructuredState = () => {
 		statusPanel.replaceChildren();
 		actions.replaceChildren();
-		rawOutput.textContent = '';
+		showResult(rawOutput, '');
 		rawCopyButton.hidden = true;
 		lastFetchedActive = false;
 		stopPollTimer();
@@ -2604,7 +4223,7 @@ const createJobStatusForm = () => {
 	const applyStatus = (data, jobId) => {
 		statusPanel.replaceChildren(createJobPanel(data));
 		lastRawJson = JSON.stringify(data, null, 2);
-		rawOutput.textContent = lastRawJson;
+		showResult(rawOutput, lastRawJson);
 		rawCopyButton.hidden = false;
 		renderActions(data, jobId);
 		lastFetchedActive = JOB_ACTIVE_STATUSES.includes(data.status);
@@ -2631,15 +4250,16 @@ const createJobStatusForm = () => {
 			captureResponseStatus: (responseStatus) => { pollFailureStatus = responseStatus; },
 		});
 		if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value.trim() !== jobId) return data;
-		if (data && data.status) applyStatus(data, jobId);
-		else if (!isAutoRefresh) clearStructuredState();
-		else {
+		if (data && data.status) {
+			applyStatus(data, jobId);
+		} else if (!isAutoRefresh) {
+			clearStructuredState();
+		} else {
 			statusRequestVersion += 1;
 			stopPollTimer();
 			const recoverable = typeof pollFailureStatus !== 'number'
 				|| pollFailureStatus >= 500 || pollFailureStatus === 429;
-			if (recoverable && lastFetchedActive && !pollPaused) schedulePoll();
-			else {
+			if (recoverable && lastFetchedActive && !pollPaused) {schedulePoll();} else {
 				lastFetchedActive = false;
 				updatePollButton();
 			}
@@ -2705,25 +4325,930 @@ const createJobStatusForm = () => {
 		Promise.resolve(requestStatus(false)).catch(() => {});
 	});
 
+	const unsubscribeSse = onSseEvent((type, data) => {
+		if (type === 'job-progress' && data && data.jobId) {
+			if (jobIdInput && jobIdInput.value.trim() === data.jobId) {
+				Promise.resolve(requestStatus(true)).catch(() => {});
+			}
+		}
+	});
+
 	detachActiveViewPoll = () => {
 		statusRequestVersion += 1;
 		stopPollTimer();
+		unsubscribeSse();
 	};
 
 	return {
 		form,
-		selectJob: (selectedJobId) => {
+		stopPollTimer,
+		destroy: () => {
+			statusRequestVersion += 1;
+			stopPollTimer();
+			unsubscribeSse();
+		},
+		selectJob: async (selectedJobId, options = {}) => {
 			statusRequestVersion += 1;
 			jobIdInput.value = selectedJobId;
 			button.disabled = false;
 			clearStructuredState();
+			if (options && options.autoLoad) {
+				if (typeof form.scrollIntoView === 'function') {
+					form.scrollIntoView({ behavior: 'smooth' });
+				}
+				return requestStatus(false);
+			}
 			output.textContent = 'Job selected. Submit to load its status.';
 			if (typeof jobIdInput.focus === 'function') jobIdInput.focus();
+			return undefined;
 		},
 	};
 };
 
-const createOperationForm = (contract, definition) => {
+const PRESET_SCAN_TYPES = [
+	{ id: 'top_gainers', label: 'Top gainers' },
+	{ id: 'top_losers', label: 'Top losers' },
+	{ id: 'bollinger_scan', label: 'Bollinger bands' },
+	{ id: 'volume_breakout_scanner', label: 'Volume breakout' },
+	{ id: 'smart_volume_scanner', label: 'Smart volume' },
+];
+
+const PRESET_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1D', '1W', '1M'];
+
+const createJobCreateForm = (contract, definition, onJobCreated) => {
+	const operation = getOperation(contract, definition);
+	const form = element('form', { className: 'operation-card structured-form' });
+	form.append(
+		element('h3', { text: definition.label || 'Create job' }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+
+	const eaTimeframes = (() => {
+		const schema = contract?.components?.schemas?.ExpandedAnalysisRequest?.properties?.timeframe;
+		if (schema && Array.isArray(schema.enum) && schema.enum.length) return schema.enum;
+		return PRESET_TIMEFRAMES;
+	})();
+
+	const msTimeframes = (() => {
+		const schema = contract?.components?.schemas?.MarketScannerRequest?.properties?.timeframe;
+		if (schema && Array.isArray(schema.enum) && schema.enum.length) return schema.enum;
+		return ['15m', '1h', '4h', '1D'];
+	})();
+
+	const msScans = (() => {
+		const schema = contract?.components?.schemas?.MarketScannerRequest?.properties?.scans;
+		if (schema?.items && Array.isArray(schema.items.enum) && schema.items.enum.length) return schema.items.enum;
+		return ['top_gainers', 'top_losers', 'volume_breakout_scanner', 'smart_volume_scanner', 'bollinger_scan'];
+	})();
+
+	const cbEventsEnum = (() => {
+		const schema = contract?.components?.schemas?.CallbackFields?.properties?.callbackEvents;
+		if (schema?.items && Array.isArray(schema.items.enum) && schema.items.enum.length) return schema.items.enum;
+		return ['completed', 'failed', 'cancelled', 'timed_out', 'processing'];
+	})();
+
+	// Job type selector
+	const typeSelect = addField(form, 'Job type', 'type', { tag: 'select' });
+	[
+		{ value: 'expanded-analysis', label: 'Expanded analysis' },
+		{ value: 'market-scanner', label: 'Market scanner' },
+	].forEach(({ value, label }) => {
+		const opt = element('option', { text: label });
+		opt.value = value;
+		typeSelect.append(opt);
+	});
+	typeSelect.value = 'expanded-analysis';
+
+	// Shared Timeframe Selector
+	const timeframeSelect = addField(form, 'Timeframe', 'timeframe', { tag: 'select' });
+	const updateTimeframeOptions = (timeframes, defaultValue) => {
+		timeframeSelect.replaceChildren();
+		timeframes.forEach((tf) => {
+			const opt = element('option', { text: tf });
+			opt.value = tf;
+			timeframeSelect.append(opt);
+		});
+		timeframeSelect.value = defaultValue;
+	};
+
+	// Type containers
+	const eaContainer = element('div', { className: 'job-type-container' });
+	const msContainer = element('div', { className: 'job-type-container' });
+	msContainer.hidden = true;
+
+	// --- Expanded Analysis fields ---
+	const symbolsInput = addField(eaContainer, 'Symbols (EXCHANGE:SYMBOL, one per line)', 'symbols', {
+		tag: 'textarea',
+		rows: 3,
+		placeholder: 'BINANCE:BTCUSDT\nNASDAQ:NVDA',
+		value: 'BINANCE:BTCUSDT',
+	});
+	const symbolsFeedback = element('div', { className: 'field-feedback' });
+	eaContainer.append(symbolsFeedback);
+
+	// Shared MTF checkbox element
+	const mtfLabel = element('label', { className: 'checkbox-label' });
+	const mtfCheckbox = element('input', { type: 'checkbox' });
+	mtfCheckbox.name = 'includeMultiTimeframe';
+	const mtfSpan = element('span', { text: 'Include multi-timeframe analysis' });
+	mtfLabel.append(mtfCheckbox, mtfSpan);
+	eaContainer.append(mtfLabel);
+
+	// --- Market Scanner fields ---
+	const msExchangeInput = addField(msContainer, 'Exchange', 'exchange', {
+		placeholder: 'BINANCE',
+		value: 'BINANCE',
+	});
+
+	const scansFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	scansFieldset.append(element('legend', { text: 'Scans' }));
+	const scanInputs = [];
+	const initialCheckedScans = ['top_gainers', 'top_losers', 'volume_breakout_scanner'];
+	msScans.forEach((scan) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `scan_${scan}`;
+		cb.value = scan;
+		cb.checked = initialCheckedScans.includes(scan);
+		const def = PRESET_SCAN_TYPES.find((s) => s.id === scan);
+		label.append(cb, element('span', { text: def ? def.label : scan.replace(/_/g, ' ') }));
+		scansFieldset.append(label);
+		scanInputs.push(cb);
+	});
+	msContainer.append(scansFieldset);
+
+	const msLimitInput = addField(msContainer, 'Scan limit (1-20)', 'limit', {
+		type: 'number',
+		min: 1,
+		max: 20,
+		value: 5,
+	});
+	const clampLimit = () => {
+		const val = parseInt(msLimitInput.value, 10);
+		if (Number.isFinite(val)) {
+			msLimitInput.value = Math.max(1, Math.min(20, val));
+		}
+	};
+	msLimitInput.addEventListener('input', clampLimit);
+	msLimitInput.addEventListener('change', clampLimit);
+
+	const msBbwInput = addField(msContainer, 'BBW threshold', 'bbw_threshold', {
+		type: 'number',
+		step: '0.01',
+		min: 0,
+		value: 0.05,
+	});
+
+	const msFlags = element('div', { className: 'badge-row' });
+	const msRankedCheckbox = addField(msFlags, 'Ranked results', 'ranked', {
+		type: 'checkbox',
+		checked: true,
+	});
+	msContainer.append(msFlags);
+
+	form.append(eaContainer, msContainer);
+
+	// --- Advanced Section ---
+	const advancedDetails = element('details', { className: 'raw-status' });
+	advancedDetails.append(element('summary', { text: 'Advanced options' }));
+
+	const channelsFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	channelsFieldset.append(element('legend', { text: 'Notification channels (optional)' }));
+	const channelInputs = [];
+	['telegram', 'whatsapp', 'discord'].forEach((ch) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `channel_${ch}`;
+		cb.value = ch;
+		label.append(cb, element('span', { text: ch.charAt(0).toUpperCase() + ch.slice(1) }));
+		channelsFieldset.append(label);
+		channelInputs.push(cb);
+	});
+	advancedDetails.append(channelsFieldset);
+
+	const tgChatInput = addField(advancedDetails, 'Telegram Chat ID (optional)', 'telegramChatId', {
+		placeholder: 'e.g. -1001234567890',
+	});
+	const waChatInput = addField(advancedDetails, 'WhatsApp Chat ID (optional)', 'whatsappChatId', {
+		placeholder: 'e.g. 1234567890@c.us',
+	});
+
+	const cbUrlInput = addField(advancedDetails, 'Callback URL (optional)', 'callbackUrl', {
+		placeholder: 'https://myapp.example.com/job-done',
+	});
+	const cbSecretInput = addField(advancedDetails, 'Callback secret (optional)', 'callbackSecret', {
+		placeholder: 'shared-secret',
+	});
+	const cbEventsFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	cbEventsFieldset.append(element('legend', { text: 'Callback events' }));
+	const cbEventInputs = [];
+	const defaultCbEvents = ['completed', 'failed', 'cancelled', 'timed_out'];
+	cbEventsEnum.forEach((evt) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `callback_event_${evt}`;
+		cb.value = evt;
+		cb.checked = defaultCbEvents.includes(evt);
+		label.append(cb, element('span', { text: evt }));
+		cbEventsFieldset.append(label);
+		cbEventInputs.push(cb);
+	});
+	advancedDetails.append(cbEventsFieldset);
+
+	const timeoutMsInput = addField(advancedDetails, 'Timeout ms (optional)', 'timeoutMs', {
+		type: 'number',
+		min: 1000,
+		max: 600000,
+		step: 1000,
+		placeholder: '300000',
+	});
+
+	addObjectField(advancedDetails, 'Request options', 'body', {}, contract, getBodySchema(contract, operation));
+	form.append(advancedDetails);
+
+	// Actions, output, and raw response
+	const button = element('button', { text: definition.label || 'Create job' });
+	button.type = 'submit';
+	const retryButton = element('button', { className: 'button-ghost', text: 'Retry submission' });
+	retryButton.type = 'button';
+	retryButton.hidden = true;
+	const formActions = element('div', { className: 'form-actions' });
+	formActions.append(button, retryButton);
+
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
+	let lastRawJson = '';
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.append(
+		element('summary', { text: 'Response details' }),
+		rawCopyButton,
+		rawOutput,
+	);
+	form.append(formActions, output, rawToggle);
+
+	// Validation
+	const validateSymbols = () => {
+		const text = (symbolsInput.value || '').trim();
+		if (!text) {
+			const msg = 'At least one symbol is required.';
+			symbolsFeedback.textContent = msg;
+			symbolsFeedback.className = 'field-feedback error';
+			return msg;
+		}
+		const symbols = text.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+		if (!symbols.length) {
+			const msg = 'At least one symbol is required.';
+			symbolsFeedback.textContent = msg;
+			symbolsFeedback.className = 'field-feedback error';
+			return msg;
+		}
+		const invalid = symbols.filter((s) => !SYMBOL_PATTERN.test(s));
+		if (invalid.length > 0) {
+			const msg = `Malformed symbol(s): ${invalid.join(', ')}. Expected EXCHANGE:SYMBOL format (e.g. BINANCE:BTCUSDT).`;
+			symbolsFeedback.textContent = msg;
+			symbolsFeedback.className = 'field-feedback error';
+			return msg;
+		}
+		symbolsFeedback.textContent = '';
+		symbolsFeedback.className = 'field-feedback';
+		return null;
+	};
+
+	symbolsInput.addEventListener('input', validateSymbols);
+
+	// Type switching
+	const updateTypeView = () => {
+		const isEA = typeSelect.value === 'expanded-analysis';
+		eaContainer.hidden = !isEA;
+		msContainer.hidden = isEA;
+		if (isEA) {
+			updateTimeframeOptions(eaTimeframes, '1D');
+			eaContainer.append(mtfLabel);
+			mtfSpan.textContent = 'Include multi-timeframe analysis';
+			mtfCheckbox.checked = false;
+			validateSymbols();
+		} else {
+			updateTimeframeOptions(msTimeframes, '4h');
+			msFlags.append(mtfLabel);
+			mtfSpan.textContent = 'Include multi-timeframe';
+			mtfCheckbox.checked = true;
+			symbolsFeedback.textContent = '';
+			symbolsFeedback.className = 'field-feedback';
+		}
+	};
+
+	// Payload builder & sync
+	const buildPayload = () => {
+		const selectedType = typeSelect.value;
+		const payload = { type: selectedType };
+
+		if (selectedType === 'expanded-analysis') {
+			const text = (symbolsInput.value || '').trim();
+			const symbols = text ? text.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean) : [];
+			payload.symbols = symbols;
+			payload.timeframe = timeframeSelect.value || '1D';
+			if (mtfCheckbox.checked) payload.includeMultiTimeframe = true;
+		} else if (selectedType === 'market-scanner') {
+			payload.exchange = (msExchangeInput.value || '').trim() || 'BINANCE';
+			payload.timeframe = timeframeSelect.value || '4h';
+			const selectedScans = scanInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+			payload.scans = selectedScans.length ? selectedScans : ['top_gainers', 'top_losers', 'volume_breakout_scanner'];
+			clampLimit();
+			const rawLimit = parseInt(msLimitInput.value, 10);
+			payload.limit = Number.isFinite(rawLimit) ? rawLimit : 5;
+			const bbw = parseFloat(msBbwInput.value);
+			if (Number.isFinite(bbw)) payload.bbw_threshold = bbw;
+			if (msRankedCheckbox.checked) payload.ranked = true;
+			if (mtfCheckbox.checked) payload.includeMultiTimeframe = true;
+		}
+
+		const selectedChannels = channelInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+		if (selectedChannels.length > 0) payload.channels = selectedChannels;
+		const tgChat = (tgChatInput.value || '').trim();
+		if (tgChat) payload.telegramChatId = tgChat;
+		const waChat = (waChatInput.value || '').trim();
+		if (waChat) payload.whatsappChatId = waChat;
+
+		const cbUrl = (cbUrlInput.value || '').trim();
+		if (cbUrl) {
+			payload.callbackUrl = cbUrl;
+			const cbSecret = (cbSecretInput.value || '').trim();
+			if (cbSecret) payload.callbackSecret = cbSecret;
+			const selectedEvents = cbEventInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+			if (selectedEvents.length > 0) payload.callbackEvents = selectedEvents;
+		}
+		const timeoutVal = parseInt(timeoutMsInput.value, 10);
+		if (Number.isFinite(timeoutVal) && timeoutVal > 0) payload.timeoutMs = timeoutVal;
+
+		return payload;
+	};
+
+	let isAdvancedDirty = false;
+	const syncBody = () => {
+		if (isAdvancedDirty || !form.elements.body) return undefined;
+		const payload = buildPayload();
+		form.elements.body.value = JSON.stringify(payload, null, 2);
+		return payload;
+	};
+
+	typeSelect.addEventListener('change', () => {
+		updateTypeView();
+		isAdvancedDirty = false;
+		syncBody();
+	});
+
+	const structuredInputs = [
+		symbolsInput, mtfCheckbox, timeframeSelect,
+		msExchangeInput, msLimitInput, msBbwInput, msRankedCheckbox,
+		...scanInputs, ...channelInputs, tgChatInput, waChatInput,
+		cbUrlInput, cbSecretInput, ...cbEventInputs, timeoutMsInput,
+	];
+	structuredInputs.forEach((input) => {
+		input.addEventListener('input', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+		input.addEventListener('change', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+	});
+	if (form.elements.body) {
+		form.elements.body.addEventListener('input', () => {
+			isAdvancedDirty = true;
+		});
+	}
+
+	updateTypeView();
+	syncBody();
+
+	// Submission & retry
+	let lastIdempotencyKey = null;
+	let submitInProgress = false;
+
+	const doSubmit = async (idempotencyKey) => {
+		if (submitInProgress) return;
+		if (!isAdvancedDirty && typeSelect.value === 'expanded-analysis') {
+			const err = validateSymbols();
+			if (err) {
+				showError(output, err);
+				return;
+			}
+		}
+
+		let body;
+		try {
+			const bodyInput = form.elements.body;
+			body = isAdvancedDirty && bodyInput ? parseJson(bodyInput.value, 'Request body') : buildPayload();
+		} catch (error) {
+			showError(output, error.message);
+			return;
+		}
+
+		lastIdempotencyKey = idempotencyKey;
+		retryButton.hidden = true;
+		lastRawJson = '';
+		showResult(rawOutput, '');
+		rawCopyButton.hidden = true;
+		submitInProgress = true;
+
+		let pollFailureStatus;
+		let responseData;
+		const headers = { 'idempotency-key': idempotencyKey };
+		try {
+			const data = await sendRequest({
+				definition,
+				path: definition.path,
+				headers,
+				body,
+				button,
+				output,
+				captureResponseStatus: (responseStatus) => { pollFailureStatus = responseStatus; },
+				captureResponseData: (parsedData) => { responseData = parsedData; },
+				formatResponse: ({ summary, status: responseStatus, elapsed }) => (
+					`${summary}\nHTTP ${responseStatus} · ${elapsed} ms`
+				),
+			});
+
+			const effectiveData = data || responseData;
+			if (effectiveData) {
+				lastRawJson = JSON.stringify(effectiveData, null, 2);
+				showResult(rawOutput, lastRawJson);
+				rawCopyButton.hidden = false;
+			}
+
+			const isAcceptanceUnknown = pollFailureStatus === 503
+				&& responseData
+				&& responseData.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN'
+				&& responseData.jobId;
+
+			if (effectiveData && effectiveData.jobId && ((!pollFailureStatus || pollFailureStatus < 400) || isAcceptanceUnknown)) {
+				if (typeof onJobCreated === 'function') {
+					await onJobCreated(effectiveData.jobId);
+				}
+			}
+
+			if (!data || (pollFailureStatus && pollFailureStatus >= 400)) {
+				retryButton.hidden = false;
+			}
+		} catch (error) {
+			showError(output, error.message);
+			retryButton.hidden = false;
+		} finally {
+			submitInProgress = false;
+		}
+	};
+
+	form.addEventListener('submit', async (event) => {
+		event.preventDefault();
+		const freshKey = createIdempotencyKey();
+		await doSubmit(freshKey);
+	});
+
+	retryButton.addEventListener('click', async () => {
+		if (lastIdempotencyKey) {
+			await doSubmit(lastIdempotencyKey);
+		}
+	});
+
+	return form;
+};
+
+const canPerformMutation = () => !authState.enabled
+	|| (Boolean(authState.user) && window.CabrosAdminRequest.canAccess({ requiredRole: 'admin.operator' }, authState.role));
+
+const createPresetSummary = (preset, { onEdit, onRun, onDelete }) => {
+	const card = element('article', { className: 'operation-card preset-card' });
+	const id = String(preset && preset.id || '—');
+	const name = String(preset && preset.name || 'Unnamed preset');
+
+	const header = element('div', { className: 'preset-card-header' });
+	const titleHeading = element('h3');
+	titleHeading.append(element('span', { text: name }));
+	const monoId = element('span', { className: 'mono-line' });
+	monoId.append(
+		element('code', { text: id }),
+		createCopyButton(id, 'Copy ID'),
+	);
+	header.append(titleHeading, monoId);
+	card.append(header);
+
+	const summaryLine = element('p', {
+		className: 'job-meta',
+		text: `${preset.exchange || 'BINANCE'} · ${preset.timeframe || '4h'} · Limit ${preset.limit || 5}`,
+	});
+	card.append(summaryLine);
+
+	const chips = element('div', { className: 'chip-grid' });
+	(Array.isArray(preset.scans) ? preset.scans : []).forEach((scan) => {
+		chips.append(element('span', { className: 'capability-chip', text: scan }));
+	});
+
+	if (preset.schedule && preset.schedule.enabled !== false && (preset.schedule.cadence || preset.schedule.cadenceMs)) {
+		const cadence = preset.schedule.cadence || `${Math.round(preset.schedule.cadenceMs / 60000)}m`;
+		chips.append(element('span', { className: 'status-badge status-active', text: `Schedule: ${cadence}` }));
+	}
+
+	if (preset.ranked) {
+		chips.append(element('span', { className: 'status-badge status-ready', text: 'Ranked' }));
+	}
+	if (preset.includeMultiTimeframe) {
+		chips.append(element('span', { className: 'status-badge status-ready', text: 'MTF' }));
+	}
+	if (preset.bbwThreshold !== undefined && preset.bbwThreshold !== null) {
+		chips.append(element('span', { className: 'capability-chip', text: `BBW: ${preset.bbwThreshold}` }));
+	}
+	if (chips.children.length) card.append(chips);
+
+	if (preset.lastRunAt || preset.lastStatus) {
+		const dl = element('dl', { className: 'status-detail-list' });
+		if (preset.lastStatus) {
+			dl.append(element('dt', { text: 'Last status' }), element('dd', { text: preset.lastStatus }));
+		}
+		if (preset.lastRunAt) {
+			const dd = element('dd');
+			dd.append(createTimestamp(preset.lastRunAt));
+			dl.append(element('dt', { text: 'Last run' }), dd);
+		}
+		card.append(dl);
+	}
+
+	const actions = element('div', { className: 'preset-actions' });
+	const runBtn = element('button', { text: 'Run', className: 'button-primary' });
+	runBtn.type = 'button';
+	runBtn.setAttribute('aria-label', `Run preset ${name}`);
+	const editBtn = element('button', { text: 'Edit' });
+	editBtn.type = 'button';
+	editBtn.setAttribute('aria-label', `Edit preset ${name}`);
+	const deleteBtn = element('button', { text: 'Delete', className: 'destructive-action' });
+	deleteBtn.type = 'button';
+	deleteBtn.setAttribute('aria-label', `Delete preset ${name}`);
+
+	const isOperator = canPerformMutation();
+	if (!isOperator) {
+		runBtn.disabled = true;
+		runBtn.title = 'Requires admin.operator role';
+		editBtn.disabled = true;
+		editBtn.title = 'Requires admin.operator role';
+		deleteBtn.disabled = true;
+		deleteBtn.title = 'Requires admin.operator role';
+	}
+
+	const resultHost = element('div');
+	const output = element('div', { className: 'response-block', text: '' });
+	output.hidden = true;
+	let lastRawJson = '';
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.hidden = true;
+	rawToggle.append(element('summary', { text: 'Run details' }), rawCopyButton, rawOutput);
+
+	runBtn.addEventListener('click', () => {
+		onRun(preset, runBtn, card, output, resultHost, rawToggle, rawOutput, rawCopyButton, (rawJson) => {
+			lastRawJson = rawJson;
+		});
+	});
+	editBtn.addEventListener('click', () => {
+		onEdit(preset);
+	});
+	deleteBtn.addEventListener('click', () => {
+		onDelete(preset, deleteBtn, card);
+	});
+
+	actions.append(runBtn, editBtn, deleteBtn);
+	card.append(actions, resultHost, output, rawToggle);
+
+	return card;
+};
+
+const createPresetListForm = (contract, { onEdit, onStorageUpdate }) => {
+	const definition = { method: 'GET', path: '/api/scanner-presets', label: 'Load presets' };
+	const form = element('form', { className: 'operation-card preset-list-panel' });
+
+	const titleRow = element('div', { className: 'section-heading' });
+	const title = element('h3', { text: 'Scanner presets' });
+	const storageBadge = element('span', { className: 'status-badge status-unknown', text: 'Storage: checking…' });
+	titleRow.append(title, storageBadge);
+	const route = element('code', { text: `${definition.method} ${definition.path}` });
+	form.append(titleRow, route);
+
+	const updateStorageBadge = (storage) => {
+		if (!storage || typeof storage !== 'object') return;
+		const mode = String(storage.mode || 'unknown');
+		const backend = String(storage.backend || 'unknown');
+		const isDurable = mode.toLowerCase() === 'durable';
+		storageBadge.className = `status-badge ${isDurable ? 'status-ready' : 'status-disabled'}`;
+		storageBadge.textContent = `${displayLabel(mode)} · ${displayLabel(backend)}`;
+	};
+
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+
+	const listContainer = element('div', { className: 'form-fields preset-list' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
+
+	let lastListRawJson = '';
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastListRawJson, 'Copy details');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.hidden = true;
+	rawToggle.append(element('summary', { text: 'Presets details' }), rawCopyButton, rawOutput);
+
+	form.append(button, listContainer, output, rawToggle);
+
+	const onRunPreset = async (preset, runBtn, card, cardOutput, cardResultHost, cardRawToggle, cardRawOutput, cardRawCopy, setRawJson) => {
+		const runDef = {
+			method: 'POST',
+			path: '/api/scanner-presets/{id}/run',
+			label: 'Run preset',
+			confirm: 'Run this scanner preset?',
+			requiredRole: 'admin.operator',
+		};
+		cardResultHost.replaceChildren();
+		setRawJson('');
+		cardRawToggle.hidden = true;
+		cardOutput.hidden = false;
+		cardOutput.className = 'response-block request-state';
+		cardOutput.textContent = 'Running scanner preset…';
+		try {
+			const data = await sendRequest({
+				definition: runDef,
+				path: `/api/scanner-presets/${encodeURIComponent(preset.id)}/run`,
+				query: { dryRun: false },
+				button: runBtn,
+				output: cardOutput,
+				formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+			});
+			if (!data) {
+				cardOutput.hidden = true;
+				return;
+			}
+			if (data.storage) {
+				updateStorageBadge(data.storage);
+				if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
+			}
+			const rawJson = JSON.stringify(data, null, 2);
+			setRawJson(rawJson);
+			showResult(cardRawOutput, rawJson);
+			cardRawCopy.hidden = false;
+			cardRawToggle.hidden = false;
+			const rendered = analysisReportResult(data);
+			cardResultHost.replaceChildren(...(rendered ? [rendered] : []));
+		} catch (error) {
+			showError(cardOutput, error.message);
+		}
+	};
+
+	const onDeletePreset = async (preset, deleteBtn, card) => {
+		const deleteDef = {
+			method: 'DELETE',
+			path: '/api/scanner-presets/{id}',
+			label: 'Delete preset',
+			confirm: 'Delete this scanner preset?',
+			requiredRole: 'admin.operator',
+		};
+		try {
+			const data = await sendRequest({
+				definition: deleteDef,
+				path: `/api/scanner-presets/${encodeURIComponent(preset.id)}`,
+				button: deleteBtn,
+				output,
+			});
+			if (data && data.success) {
+				card.remove();
+				if (data.storage) {
+					updateStorageBadge(data.storage);
+					if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
+				}
+				await loadPresets();
+			}
+		} catch (error) {
+			showError(output, error.message);
+		}
+	};
+
+	const loadPresets = async () => {
+		listContainer.replaceChildren(element('div', { className: 'loading-state', text: 'Loading presets…' }));
+		rawToggle.hidden = true;
+		try {
+			const data = await sendRequest({
+				definition,
+				path: definition.path,
+				button,
+				output,
+				formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+			});
+			if (!data) {
+				listContainer.replaceChildren();
+				return;
+			}
+			if (data.storage) {
+				updateStorageBadge(data.storage);
+				if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
+			}
+			lastListRawJson = JSON.stringify(data, null, 2);
+			showResult(rawOutput, lastListRawJson);
+			rawCopyButton.hidden = false;
+			rawToggle.hidden = false;
+
+			const presets = Array.isArray(data.presets) ? data.presets : [];
+			listContainer.replaceChildren();
+			if (!presets.length) {
+				listContainer.append(createEmptyState('No scanner presets found.'));
+				return;
+			}
+			presets.forEach((preset) => {
+				const card = createPresetSummary(preset, {
+					onEdit,
+					onRun: onRunPreset,
+					onDelete: onDeletePreset,
+				});
+				listContainer.append(card);
+			});
+		} catch (error) {
+			showError(output, error.message);
+		}
+	};
+
+	form.refresh = () => loadPresets();
+	form.updateStorage = (storage) => updateStorageBadge(storage);
+
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		Promise.resolve(loadPresets()).catch(() => {});
+	});
+
+	return form;
+};
+
+const addPresetStructuredFields = (form, contract, operation) => {
+	const bodyExample = getBodyExample(contract, operation) || {};
+	let isAdvancedDirty = false;
+
+	const nameInput = addField(form, 'Preset name', 'name', {
+		required: true,
+		placeholder: 'e.g. Daily Momentum',
+		value: bodyExample.name || '',
+	});
+
+	const exchangeInput = addField(form, 'Exchange', 'exchange', {
+		placeholder: 'BINANCE',
+		value: bodyExample.exchange || 'BINANCE',
+	});
+
+	const timeframeSelect = addField(form, 'Timeframe', 'timeframe', { tag: 'select' });
+	PRESET_TIMEFRAMES.forEach((tf) => {
+		const option = element('option', { text: tf });
+		option.value = tf;
+		if (tf === (bodyExample.timeframe || '4h')) option.selected = true;
+		timeframeSelect.append(option);
+	});
+	timeframeSelect.value = bodyExample.timeframe || '4h';
+
+	const scansFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	scansFieldset.append(element('legend', { text: 'Scan types' }));
+	const initialScans = Array.isArray(bodyExample.scans) && bodyExample.scans.length
+		? bodyExample.scans
+		: ['top_gainers', 'top_losers', 'volume_breakout_scanner'];
+	const scanInputs = [];
+	PRESET_SCAN_TYPES.forEach((scan) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `scan_${scan.id}`;
+		cb.value = scan.id;
+		cb.checked = initialScans.includes(scan.id);
+		label.append(cb, element('span', { text: scan.label }));
+		scansFieldset.append(label);
+		scanInputs.push(cb);
+	});
+	form.presetScanInputs = scanInputs;
+	form.append(scansFieldset);
+
+	const limitInput = addField(form, 'Scan limit', 'limit', {
+		type: 'number',
+		min: 1,
+		max: 20,
+		value: bodyExample.limit || 5,
+	});
+	limitInput.addEventListener('change', () => {
+		const val = parseInt(limitInput.value, 10);
+		if (Number.isFinite(val)) {
+			limitInput.value = Math.max(1, Math.min(20, val));
+		}
+	});
+
+	const bbwInput = addField(form, 'BBW threshold', 'bbwThreshold', {
+		type: 'number',
+		step: '0.01',
+		min: 0,
+		placeholder: '0.05',
+		value: bodyExample.bbwThreshold !== undefined && bodyExample.bbwThreshold !== null ? bodyExample.bbwThreshold : '',
+	});
+
+	const flagsRow = element('div', { className: 'badge-row' });
+	const rankedLabel = element('label', { className: 'checkbox-label' });
+	const rankedCb = element('input', { type: 'checkbox' });
+	rankedCb.name = 'ranked';
+	rankedCb.checked = Boolean(bodyExample.ranked);
+	rankedLabel.append(rankedCb, element('span', { text: 'Ranked results' }));
+
+	const mtfLabel = element('label', { className: 'checkbox-label' });
+	const mtfCb = element('input', { type: 'checkbox' });
+	mtfCb.name = 'includeMultiTimeframe';
+	mtfCb.checked = Boolean(bodyExample.includeMultiTimeframe);
+	mtfLabel.append(mtfCb, element('span', { text: 'Include multi-timeframe' }));
+	flagsRow.append(rankedLabel, mtfLabel);
+	form.append(flagsRow);
+
+	const scheduleInput = addField(form, 'Schedule cadence (optional)', 'schedule', {
+		placeholder: 'e.g. 1h, 4h, 1d',
+		value: (bodyExample.schedule && (bodyExample.schedule.cadence || (bodyExample.schedule.cadenceMs && `${Math.round(bodyExample.schedule.cadenceMs / 60000)}m`))) || '',
+	});
+
+	const advancedDetails = element('details', { className: 'raw-status' });
+	advancedDetails.append(element('summary', { text: 'All request options' }));
+	addObjectField(advancedDetails, 'Request options', 'body', bodyExample, contract, getBodySchema(contract, operation));
+	form.append(advancedDetails);
+
+	const syncBody = () => {
+		if (isAdvancedDirty) return undefined;
+		const name = (nameInput.value || '').trim();
+		const exchange = (exchangeInput.value || '').trim() || 'BINANCE';
+		const timeframe = timeframeSelect.value || '4h';
+		const rawLimit = parseInt(limitInput.value, 10);
+		const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(20, rawLimit)) : 5;
+		const selectedScans = scanInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+		const bbw = parseFloat(bbwInput.value);
+		const ranked = Boolean(rankedCb.checked);
+		const includeMultiTimeframe = Boolean(mtfCb.checked);
+		const schedule = (scheduleInput.value || '').trim();
+
+		const payload = {
+			name,
+			exchange,
+			timeframe,
+			scans: selectedScans.length ? selectedScans : ['top_gainers', 'top_losers', 'volume_breakout_scanner'],
+			limit,
+		};
+		if (Number.isFinite(bbw)) payload.bbwThreshold = bbw;
+		if (ranked) payload.ranked = true;
+		if (includeMultiTimeframe) payload.includeMultiTimeframe = true;
+		if (schedule) payload.schedule = { enabled: true, cadence: schedule };
+
+		if (form.elements.body) {
+			form.elements.body.value = JSON.stringify(payload, null, 2);
+		}
+		return payload;
+	};
+
+	[nameInput, exchangeInput, limitInput, bbwInput, scheduleInput].forEach((input) => {
+		input.addEventListener('input', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+	});
+	[timeframeSelect, rankedCb, mtfCb, ...scanInputs].forEach((input) => {
+		input.addEventListener('change', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+	});
+
+	if (form.elements.body) {
+		form.elements.body.addEventListener('input', () => {
+			isAdvancedDirty = true;
+		});
+	}
+
+	form.populatePreset = (preset) => {
+		isAdvancedDirty = false;
+		if (form.elements['path-id'] && preset.id) {
+			form.elements['path-id'].value = preset.id;
+		}
+		nameInput.value = preset.name || '';
+		exchangeInput.value = preset.exchange || 'BINANCE';
+		timeframeSelect.value = preset.timeframe || '4h';
+		limitInput.value = preset.limit || 5;
+		bbwInput.value = preset.bbwThreshold !== undefined && preset.bbwThreshold !== null ? preset.bbwThreshold : '';
+		rankedCb.checked = Boolean(preset.ranked);
+		mtfCb.checked = Boolean(preset.includeMultiTimeframe);
+		scheduleInput.value = (preset.schedule && (preset.schedule.cadence || (preset.schedule.cadenceMs && `${Math.round(preset.schedule.cadenceMs / 60000)}m`))) || '';
+		const targetScans = Array.isArray(preset.scans) ? preset.scans : [];
+		scanInputs.forEach((cb) => {
+			cb.checked = targetScans.includes(cb.value);
+		});
+		syncBody();
+	};
+
+	syncBody();
+};
+
+const createOperationForm = (contract, definition, options = {}) => {
 	const operation = getOperation(contract, definition);
 	const form = element('form', { className: 'operation-card' });
 	const title = element('h3', { text: definition.label });
@@ -2731,29 +5256,34 @@ const createOperationForm = (contract, definition) => {
 	form.append(title, route);
 	const pathNames = addPathFields(form, definition.path);
 
+	const isPresetUpsert = (definition.path === '/api/scanner-presets' && definition.method === 'POST') ||
+		(definition.path === '/api/scanner-presets/{id}' && definition.method === 'PUT');
+
 	if (definition.method === 'GET' || getParameters(contract, operation).some((parameter) => parameter.in === 'query')) {
-		addJsonField(form, 'Query JSON', 'query', getQueryExample(contract, operation));
+		addObjectField(form, 'Filters', 'query', getQueryExample(contract, operation), contract, getQuerySchema(contract, operation));
 	}
-	if (definition.method !== 'GET' && operation && operation.requestBody) {
-		addJsonField(form, 'Request body JSON', 'body', getBodyExample(contract, operation));
+	if (isPresetUpsert) {
+		addPresetStructuredFields(form, contract, operation);
+	} else if (definition.method !== 'GET' && operation && operation.requestBody) {
+		addObjectField(form, 'Request options', 'body', getBodyExample(contract, operation), contract, getBodySchema(contract, operation));
 	}
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	if (definition.confirm) button.className = 'destructive-action';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
 	const hasStructuredResult = typeof definition.renderSuccess === 'function';
 	const resultHost = hasStructuredResult ? element('div') : null;
 	let lastRawJson = '';
 	let rawOutputEl = null;
 	let rawCopyButton = null;
 	if (hasStructuredResult) {
-		rawOutputEl = element('pre', { className: 'response-block' });
-		rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+		rawOutputEl = element('div', { className: 'response-block' });
+		rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
 		rawCopyButton.hidden = true;
 		const rawToggle = element('details', { className: 'raw-status' });
 		rawToggle.append(
-			element('summary', { text: 'Show raw response' }),
+			element('summary', { text: 'Response details' }),
 			rawCopyButton,
 			rawOutputEl,
 		);
@@ -2766,7 +5296,7 @@ const createOperationForm = (contract, definition) => {
 		if (resultHost) resultHost.replaceChildren();
 		if (rawCopyButton) {
 			lastRawJson = '';
-			rawOutputEl.textContent = '';
+			showResult(rawOutputEl, '');
 			rawCopyButton.hidden = true;
 		}
 		try {
@@ -2785,15 +5315,21 @@ const createOperationForm = (contract, definition) => {
 					? ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`
 					: undefined,
 			})).then((data) => {
+				if (options && typeof options.onStorageUpdate === 'function' && data && data.storage) {
+					options.onStorageUpdate(data.storage);
+				}
+				if (options && typeof options.onSuccess === 'function' && data) {
+					options.onSuccess(data);
+				}
 				if (!resultHost) return;
 				if (!data) {
 					resultHost.replaceChildren();
-					rawOutputEl.textContent = '';
+					showResult(rawOutputEl, '');
 					rawCopyButton.hidden = true;
 					return;
 				}
 				lastRawJson = JSON.stringify(data, null, 2);
-				rawOutputEl.textContent = lastRawJson;
+				showResult(rawOutputEl, lastRawJson);
 				rawCopyButton.hidden = false;
 				const rendered = definition.renderSuccess(data);
 				resultHost.replaceChildren(...(rendered ? [rendered] : []));
@@ -2805,60 +5341,1253 @@ const createOperationForm = (contract, definition) => {
 	return form;
 };
 
+const PLAYGROUND_STRUCTURED_RENDERERS = {
+	'POST /api/webhook/symbol-analysis': (data) => symbolAnalysisResult(data),
+	'POST /api/webhook/expanded-analysis-alert': (data) => analysisReportResult(data),
+	'POST /api/webhook/market-scanner-alert': (data) => analysisReportResult(data),
+	'POST /api/webhook/volume-confirmation': (data) => volumeConfirmationResult(data),
+	'POST /api/news-monitor': (data) => newsMonitorResults(data),
+	'GET /api/alerts/{alertId}': (data) => (data && data.alert ? createAlertDetailPanel(data.alert) : null),
+	'GET /api/alerts': (data) => {
+		if (!data || !Array.isArray(data.alerts) || !data.alerts.length) return null;
+		const container = element('div', { className: 'alert-feed' });
+		data.alerts.forEach((alert) => container.append(createAlertCard(alert)));
+		return container;
+	},
+	'GET /api/alerts/summary': (data) => (data && data.summary ? renderAlertSummaryBlocks(data) : null),
+	'POST /api/alerts/{alertId}/replay': (data) => {
+		const chips = deliveryChips(data && data.results);
+		return chips && chips.children && chips.children.length ? chips : null;
+	},
+	'POST /api/scanner-presets/{id}/run': (data) => analysisReportResult(data),
+	'GET /api/jobs/{jobId}': (data) => (data && (data.jobId || data.status) ? createJobPanel(data) : null),
+	'POST /api/jobs/tradingview-analysis': (data) => (data && (data.jobId || data.status) ? createJobPanel(data) : null),
+	'GET /api/outcomes/{id}': (data) => (data && data.id ? createOutcomeDetailPanel(data) : null),
+	'GET /api/outcomes/summary': (data) => (data && data.summary ? renderOutcomesSummaryBlocks(data) : null),
+	'GET /api/outcomes/calibration': (data) => (data && data.calibration ? renderOutcomesCalibrationBlocks(data) : null),
+};
+
+const getPlaygroundRenderer = (definition) => {
+	if (!definition) return null;
+	if (typeof definition.renderSuccess === 'function') return definition.renderSuccess;
+	return PLAYGROUND_STRUCTURED_RENDERERS[`${definition.method} ${definition.path}`] || null;
+};
+
+const PLAYGROUND_GROUP_ORDER = [
+	'Webhooks',
+	'Jobs',
+	'Alerts',
+	'Presets',
+	'Trading',
+	'Analysis',
+	'News Monitor',
+	'Outcomes',
+	'Status & Docs',
+	'Other',
+];
+
+const getPlaygroundOperationGroup = (path) => {
+	if (path.startsWith('/api/webhook/')) return 'Webhooks';
+	if (path.startsWith('/api/jobs')) return 'Jobs';
+	if (path.startsWith('/api/alerts')) return 'Alerts';
+	if (path.startsWith('/api/scanner-presets')) return 'Presets';
+	if (path.startsWith('/api/trading')) return 'Trading';
+	if (path.startsWith('/api/news-monitor')) return 'News Monitor';
+	if (path.startsWith('/api/symbol-analyses')) return 'Analysis';
+	if (path.startsWith('/api/outcomes')) return 'Outcomes';
+	if (path.startsWith('/api/status') || path.startsWith('/api/capabilities') || path.includes('docs') || path.includes('openapi')) return 'Status & Docs';
+	return 'Other';
+};
+
+const playgroundInputCache = new Map();
+const playgroundHistory = [];
+const sanitizeForHistory = (text) => {
+	if (!text || typeof text !== 'string') return text;
+	return text.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization)['"]?\s*[:=]\s*['"]?)[^'"\s,}\]]+/gi, '$1[REDACTED]');
+};
+
 const renderPlayground = (contract, view) => {
 	const form = element('form', { className: 'operation-card playground' });
-	form.append(element('h2', { text: 'Playground' }));
+	form.append(element('h2', { text: 'Operations' }));
+
+	const filterLabel = element('label', { text: 'Filter operations' });
+	const filterInput = element('input', { type: 'search', placeholder: 'Filter by method, path, or label...' });
+	filterInput.name = 'filterOperations';
+	filterLabel.append(filterInput);
+
 	const selectLabel = element('label', { text: 'Operation' });
 	const select = element('select');
-	const definitions = window.CabrosAdminRequest.operationDefinitions(contract);
-	definitions.forEach((definition, index) => {
-		const option = element('option', { text: `${definition.method} ${definition.path} — ${definition.label}` });
-		option.value = index;
-		select.append(option);
-	});
+	select.name = 'operation';
 	selectLabel.append(select);
+
+	const definitions = window.CabrosAdminRequest.operationDefinitions(contract);
+
+	// `Number('') === 0`, so a direct `definitions[Number(select.value)]` lookup resolves a
+	// blank selection to the FIRST definition instead of to nothing. Every lookup goes through
+	// this resolver so "no operation matches" is a real no-selection state. Do not inline it.
+	const selectedDefinition = () => {
+		const raw = select.value;
+		if (raw === undefined || raw === null || String(raw).trim() === '') return undefined;
+		const index = Number(raw);
+		if (!Number.isInteger(index) || index < 0) return undefined;
+		return definitions[index];
+	};
+
 	const fields = element('div', { className: 'form-fields' });
+
+	const buttonRow = element('div', { className: 'badge-row playground-actions' });
 	const button = element('button', { text: 'Send request' });
 	button.type = 'submit';
-	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
-	form.append(selectLabel, fields, button, output);
+
+	const buildCurlCommand = () => {
+		const definition = selectedDefinition();
+		if (!definition) return '';
+		const pathNames = [...definition.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
+		const resolvedPath = pathNames.reduce((acc, name) => {
+			const val = form.elements[`path-${name}`]?.value;
+			return acc.replace(`{${name}}`, val ? encodeURIComponent(val) : `{${name}}`);
+		}, definition.path);
+
+		let queryString = '';
+		if (form.elements.query && form.elements.query.value.trim()) {
+			try {
+				const parsed = parseJson(form.elements.query.value, 'Query');
+				if (parsed && typeof parsed === 'object') {
+					const sp = new URLSearchParams();
+					Object.entries(parsed).forEach(([k, v]) => {
+						if (v !== undefined && v !== null && v !== '') sp.set(k, String(v));
+					});
+					const qs = sp.toString();
+					if (qs) queryString = `?${qs}`;
+				}
+			} catch (_) {
+				// Query invalid JSON; omit params from cURL
+			}
+		}
+
+		const baseUrl = getApiBaseUrl();
+		const origin = (typeof window !== 'undefined' && window.location && window.location.origin) || '';
+		const fullUrl = `${baseUrl || origin}${resolvedPath}${queryString}`;
+
+		const lines = [`curl -X ${definition.method} "${fullUrl}"`];
+		lines.push('  -H "x-api-key: $WEBHOOK_API_KEY"');
+		if (form.elements.body && definition.method !== 'GET') {
+			const bodyVal = form.elements.body.value.trim();
+			if (bodyVal) {
+				lines.push('  -H "Content-Type: application/json"');
+				lines.push(`  -d '${bodyVal.replace(/'/g, '\'\\\'\'')}'`);
+			}
+		}
+		return lines.join(' \\\n');
+	};
+
+	const curlButton = createCopyButton(() => buildCurlCommand(), 'Copy as cURL');
+	buttonRow.append(button, curlButton);
+
+	const resultHost = element('div', { className: 'playground-structured-result' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
+
+	let lastRawJson = '';
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.append(
+		element('summary', { text: 'Response details' }),
+		rawCopyButton,
+		rawOutput,
+	);
+	rawToggle.hidden = true;
+
+	const historySection = element('div', { className: 'playground-history' });
+	historySection.append(element('h3', { text: 'Request history' }));
+	const historyEmpty = element('p', { className: 'empty-state', text: 'No requests sent this session.' });
+	const historyList = element('div', { className: 'history-list' });
+	historySection.append(historyEmpty, historyList);
+
+	form.append(filterLabel, selectLabel, fields, buttonRow, resultHost, output, rawToggle, historySection);
 	view.append(form);
+
+	let pendingRequestCount = 0;
+	const isSubmitLocked = () => pendingRequestCount > 0;
+	const syncSubmitLockedState = () => {
+		button.disabled = isSubmitLocked() || !selectedDefinition();
+	};
+
+	const saveCurrentInputs = (def) => {
+		if (!def) return;
+		const key = `${def.method} ${def.path}`;
+		const pathNames = [...def.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
+		const pathValues = {};
+		pathNames.forEach((name) => {
+			const el = form.elements[`path-${name}`];
+			if (el) pathValues[name] = el.value;
+		});
+		playgroundInputCache.set(key, {
+			pathValues,
+			query: form.elements.query ? form.elements.query.value : undefined,
+			body: form.elements.body ? form.elements.body.value : undefined,
+		});
+	};
 
 	const renderFields = () => {
 		fields.replaceChildren();
-		const definition = definitions[Number(select.value)];
-		const operation = getOperation(contract, definition);
+		const definition = selectedDefinition();
+		if (!definition) {
+			button.disabled = true;
+			curlButton.disabled = true;
+			return;
+		}
+		// Every re-render path (operation switch, filter auto-select, history restore)
+		// lands here, so this is the single place that decides whether a dispatch is
+		// allowed. `pendingRequestCount` is the source of truth: a request that outlives
+		// this re-render must keep the shared submit button locked so a second alert,
+		// replay, or order mutation cannot be dispatched behind it.
+		button.disabled = isSubmitLocked();
+		curlButton.disabled = false;
 		button.className = definition.confirm ? 'destructive-action' : '';
-		addPathFields(fields, definition.path);
-		addJsonField(fields, 'Query JSON', 'query', getQueryExample(contract, operation));
-		addJsonField(fields, 'Request body JSON', 'body', getBodyExample(contract, operation));
+
+		const pathNames = addPathFields(fields, definition.path);
+		const operation = getOperation(contract, definition);
+		const queryParameters = getParameters(contract, operation).filter((p) => p && p.in === 'query');
+		const hasQueryParams = queryParameters.length > 0;
+		if (hasQueryParams) {
+			addObjectField(fields, 'Filters', 'query', getQueryExample(contract, operation), contract, getQuerySchema(contract, operation));
+		}
+
+		const requestBody = resolveRef(contract, operation && operation.requestBody);
+		const hasRequestBody = Boolean(requestBody && requestBody.content && requestBody.content['application/json']);
+		if (hasRequestBody && definition.method !== 'GET') {
+			addObjectField(fields, 'Request options', 'body', getBodyExample(contract, operation), contract, getBodySchema(contract, operation));
+		}
+
+		const key = `${definition.method} ${definition.path}`;
+		const cached = playgroundInputCache.get(key);
+		if (cached) {
+			if (cached.pathValues) {
+				pathNames.forEach((name) => {
+					const input = form.elements[`path-${name}`];
+					if (input && cached.pathValues[name] !== undefined) {
+						input.value = cached.pathValues[name];
+					}
+				});
+			}
+			if (hasQueryParams && form.elements.query && cached.query !== undefined) {
+				form.elements.query.value = cached.query;
+			}
+			if (hasRequestBody && form.elements.body && cached.body !== undefined) {
+				form.elements.body.value = cached.body;
+			}
+		}
 	};
 
-	select.addEventListener('change', renderFields);
+	const populateOptions = (filterText = '') => {
+		const currentVal = select.value;
+		select.replaceChildren();
+		const query = filterText.trim().toLowerCase();
+		let firstAvailableValue = null;
+		let currentValStillAvailable = false;
+
+		const grouped = new Map();
+		PLAYGROUND_GROUP_ORDER.forEach((group) => grouped.set(group, []));
+
+		definitions.forEach((definition, index) => {
+			const text = `${definition.method} ${definition.path} — ${definition.label}`;
+			if (query && !text.toLowerCase().includes(query)) return;
+			const group = getPlaygroundOperationGroup(definition.path);
+			if (!grouped.has(group)) grouped.set(group, []);
+			grouped.get(group).push({ definition, index, text });
+		});
+
+		PLAYGROUND_GROUP_ORDER.forEach((group) => {
+			const items = grouped.get(group) || [];
+			if (!items.length) return;
+			const optgroup = element('optgroup', { label: group });
+			optgroup.label = group;
+			optgroup.setAttribute('label', group);
+			items.forEach(({ index, text }) => {
+				const option = element('option', { text });
+				option.value = String(index);
+				if (firstAvailableValue === null) firstAvailableValue = String(index);
+				if (String(index) === String(currentVal)) currentValStillAvailable = true;
+				optgroup.append(option);
+			});
+			select.append(optgroup);
+		});
+
+		if (currentValStillAvailable) {
+			select.value = currentVal;
+		} else if (firstAvailableValue !== null) {
+			// Filter-driven selection: save current inputs under the old definition
+			// and update previousDefinition to the newly selected one so subsequent
+			// explicit changes save under the correct operation. `previousDefinition`
+			// is null when this filter followed an empty result, which makes this save a
+			// no-op instead of writing the empty form over the last active operation.
+			saveCurrentInputs(previousDefinition);
+			previousDefinition = definitions[Number(firstAvailableValue)];
+			select.value = firstAvailableValue;
+			renderFields();
+		} else {
+			// Nothing matches. Persist the in-flight draft before the fields are torn
+			// down, then clear previousDefinition: leaving it pointing at the operation
+			// that is no longer rendered is what let the next auto-select save the blank
+			// form into that operation's cache.
+			saveCurrentInputs(previousDefinition);
+			previousDefinition = null;
+			select.value = '';
+			renderFields();
+		}
+	};
+
+	const renderHistoryList = () => {
+		if (playgroundHistory.length === 0) {
+			historyEmpty.hidden = false;
+			historyList.replaceChildren();
+			return;
+		}
+		historyEmpty.hidden = true;
+		historyList.replaceChildren();
+		playgroundHistory.forEach((entry) => {
+			const row = element('div', { className: 'history-item' });
+			const badge = element('span', {
+				className: `status-badge ${entry.ok ? 'status-ready' : 'status-danger'}`,
+				text: String(entry.status),
+			});
+			const methodEl = element('code', { text: entry.method });
+			const pathEl = element('span', { className: 'history-path', text: entry.resolvedPath });
+			const timeStr = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : '';
+			const timeEl = element('span', { className: 'timestamp', text: timeStr });
+			const restoreBtn = element('button', { text: 'Restore' });
+			restoreBtn.type = 'button';
+			restoreBtn.className = 'history-restore-btn';
+			restoreBtn.addEventListener('click', () => {
+				restoreHistoryEntry(entry);
+			});
+			row.append(badge, methodEl, pathEl, timeEl, restoreBtn);
+			historyList.append(row);
+		});
+	};
+
+	const addHistoryEntry = (entry) => {
+		playgroundHistory.unshift({
+			...entry,
+			query: sanitizeForHistory(entry.query),
+			body: sanitizeForHistory(entry.body),
+			timestamp: Date.now(),
+		});
+		if (playgroundHistory.length > 10) playgroundHistory.pop();
+		renderHistoryList();
+	};
+
+	const restoreHistoryEntry = (entry) => {
+		const targetIndex = definitions.findIndex((d) => d.method === entry.method && d.path === entry.path);
+		if (targetIndex === -1) return;
+		saveCurrentInputs(selectedDefinition());
+		if (filterInput.value) {
+			filterInput.value = '';
+			populateOptions('');
+		}
+		select.value = String(targetIndex);
+		previousDefinition = definitions[targetIndex];
+		renderFields();
+		if (entry.pathValues) {
+			Object.entries(entry.pathValues).forEach(([name, val]) => {
+				const el = form.elements[`path-${name}`];
+				if (el && val !== undefined) el.value = val;
+			});
+		}
+		if (form.elements.query && entry.query !== undefined) {
+			form.elements.query.value = entry.query;
+		}
+		if (form.elements.body && entry.body !== undefined) {
+			form.elements.body.value = entry.body;
+		}
+		saveCurrentInputs(definitions[targetIndex]);
+	};
+
+	let previousDefinition = definitions[0];
+	select.addEventListener('change', () => {
+		saveCurrentInputs(previousDefinition);
+		previousDefinition = selectedDefinition();
+		renderFields();
+	});
+
+	fields.addEventListener('input', () => {
+		saveCurrentInputs(selectedDefinition());
+	});
+
+	filterInput.addEventListener('input', () => {
+		populateOptions(filterInput.value);
+	});
+
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
+		// A disabled submit button does not stop implicit submission (Enter in a text
+		// input) or a programmatic submit, so the lock is also enforced here.
+		if (isSubmitLocked()) return;
+		resultHost.replaceChildren();
+		lastRawJson = '';
+		showResult(rawOutput, '');
+		rawCopyButton.hidden = true;
+		rawToggle.hidden = true;
+
+		const definition = selectedDefinition();
+		if (!definition) return;
+
+		const pathNames = [...definition.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
+		const resolvedPath = fillPath(definition.path, pathNames, form);
+		const pathValues = {};
+		pathNames.forEach((name) => {
+			const el = form.elements[`path-${name}`];
+			if (el) pathValues[name] = el.value;
+		});
+
+		let submittedBody = form.elements.body ? form.elements.body.value : undefined;
+		const submittedQuery = form.elements.query ? form.elements.query.value : undefined;
+
+		let query;
+		let body;
 		try {
-			const definition = definitions[Number(select.value)];
-			const pathNames = [...definition.path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
-			sendRequest({
+			if (form.elements.query) {
+				query = window.CabrosAdminRequest.validateQuery(parseJson(submittedQuery, 'Query'));
+			}
+			if (form.elements.body) {
+				body = getRequestBody(definition, form);
+				submittedBody = form.elements.body.value;
+			}
+		} catch (error) {
+			showError(output, error.message);
+			addHistoryEntry({
+				method: definition.method,
+				path: definition.path,
+				resolvedPath,
+				pathValues,
+				query: submittedQuery,
+				body: submittedBody,
+				status: 'Validation error',
+				ok: false,
+			});
+			return;
+		}
+
+		saveCurrentInputs(definition);
+		const renderer = getPlaygroundRenderer(definition);
+		const hasStructured = typeof renderer === 'function';
+
+		let responseStatus = null;
+		let responseOk = false;
+		let responseData = null;
+		let requestOutcome = null;
+
+		pendingRequestCount += 1;
+		syncSubmitLockedState();
+		sendRequest({
+			definition,
+			path: resolvedPath,
+			query,
+			body,
+			button,
+			output,
+			captureResponseStatus: (status) => {
+				responseStatus = status;
+				responseOk = status >= 200 && status < 300;
+			},
+			captureResponseData: (capturedData, response) => {
+				responseData = capturedData;
+				if (response) {
+					responseStatus = response.status;
+					responseOk = response.ok;
+				}
+			},
+			captureOutcome: (outcome) => { requestOutcome = outcome; },
+			formatResponse: hasStructured
+				? ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`
+				: undefined,
+		}).then((data) => {
+			addHistoryEntry({
+				method: definition.method,
+				path: definition.path,
+				resolvedPath,
+				pathValues,
+				query: submittedQuery,
+				body: submittedBody,
+				status: responseStatus ? `HTTP ${responseStatus}` : describeRequestOutcome(requestOutcome),
+				ok: responseOk,
+			});
+
+			const payloadToRender = data || responseData;
+			let rendered = null;
+			if (hasStructured && payloadToRender && responseOk !== false) {
+				try {
+					rendered = renderer(payloadToRender);
+				} catch (_) {
+					rendered = null;
+				}
+			}
+			if (rendered) {
+				resultHost.replaceChildren(rendered);
+				lastRawJson = JSON.stringify(payloadToRender, null, 2);
+				showResult(rawOutput, lastRawJson);
+				rawCopyButton.hidden = false;
+				rawToggle.hidden = false;
+			} else if (payloadToRender && hasStructured) {
+				output.append(createResult(payloadToRender));
+			}
+		}).catch(() => {
+			addHistoryEntry({
+				method: definition.method,
+				path: definition.path,
+				resolvedPath,
+				pathValues,
+				query: submittedQuery,
+				body: submittedBody,
+				status: responseStatus ? `HTTP ${responseStatus}` : describeRequestOutcome(requestOutcome),
+				ok: responseOk,
+			});
+		}).finally(() => {
+			// Runs after sendRequest's own finally, so this is the authoritative write.
+			pendingRequestCount = Math.max(0, pendingRequestCount - 1);
+			syncSubmitLockedState();
+		});
+	});
+
+	populateOptions();
+	renderFields();
+	renderHistoryList();
+};
+
+
+const getBodySchema = (contract, operation) => {
+	const requestBody = resolveRef(contract, operation && operation.requestBody);
+	const json = requestBody && requestBody.content && requestBody.content['application/json'];
+	if (!json || !json.schema) return null;
+	return resolveRef(contract, json.schema);
+};
+
+const getQueryEnumValues = (contract, definition, paramName) => {
+	const operation = getOperation(contract, definition);
+	const parameter = getParameters(contract, operation).find((p) => p.name === paramName);
+	if (!parameter || !parameter.schema) return [];
+	if (Array.isArray(parameter.schema.enum)) return parameter.schema.enum;
+	if (parameter.schema.items && Array.isArray(parameter.schema.items.enum)) {
+		return parameter.schema.items.enum;
+	}
+	return [];
+};
+
+const getBodySchemaEnum = (contract, operation, propertyName) => {
+	const schema = getBodySchema(contract, operation);
+	if (!schema || !schema.properties || !schema.properties[propertyName]) return [];
+	const prop = resolveRef(contract, schema.properties[propertyName]);
+	if (Array.isArray(prop.enum)) return prop.enum;
+	if (prop.items) {
+		const items = resolveRef(contract, prop.items);
+		if (items && Array.isArray(items.enum)) return items.enum;
+	}
+	return [];
+};
+
+const createStructuredAnalysisForm = (contract, definition, builder) => {
+	const operation = getOperation(contract, definition);
+	const form = element('form', { className: 'operation-card structured-form' });
+	const title = element('h3', { text: definition.label });
+	const route = element('code', { text: `${definition.method} ${definition.path}` });
+	form.append(title, route);
+	const pathNames = addPathFields(form, definition.path);
+
+	const isGet = definition.method === 'GET';
+	const fields = element('div', { className: 'form-fields' });
+	const builderResult = (builder && builder(contract, operation, fields, definition)) || {};
+
+	let isAdvancedDirty = false;
+	const bodyExample = getBodyExample(contract, operation) || {};
+
+	if (!isGet) {
+		const advancedDetails = element('details', { className: 'raw-status' });
+		advancedDetails.append(element('summary', { text: 'All request options' }));
+		addObjectField(advancedDetails, 'Request options', 'body', bodyExample, contract, getBodySchema(contract, operation));
+		form.append(fields, advancedDetails);
+	} else {
+		form.append(fields);
+	}
+
+	const syncBody = () => {
+		if (isGet || isAdvancedDirty || !form.elements.body) return undefined;
+		let payload = {};
+		if (typeof builderResult.getBody === 'function') {
+			try {
+				payload = builderResult.getBody();
+			} catch (_) {
+				return undefined;
+			}
+		}
+		form.elements.body.value = JSON.stringify(payload, null, 2);
+		return payload;
+	};
+
+	if (!isGet && form.elements.body) {
+		form.elements.body.addEventListener('input', () => {
+			isAdvancedDirty = true;
+		});
+
+		fields.addEventListener('input', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+		fields.addEventListener('change', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+
+		if (Array.isArray(builderResult.inputs)) {
+			builderResult.inputs.forEach((input) => {
+				if (input && typeof input.addEventListener === 'function') {
+					input.addEventListener('input', () => {
+						isAdvancedDirty = false;
+						syncBody();
+					});
+					input.addEventListener('change', () => {
+						isAdvancedDirty = false;
+						syncBody();
+					});
+				}
+			});
+		}
+
+		syncBody();
+	}
+
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	if (definition.confirm) button.className = 'destructive-action';
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
+	const hasStructuredResult = typeof definition.renderSuccess === 'function';
+	const resultHost = hasStructuredResult ? element('div') : null;
+	let lastRawJson = '';
+	let rawOutputEl = null;
+	let rawCopyButton = null;
+
+	if (hasStructuredResult) {
+		rawOutputEl = element('div', { className: 'response-block' });
+		rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
+		rawCopyButton.hidden = true;
+		const rawToggle = element('details', { className: 'raw-status' });
+		rawToggle.append(
+			element('summary', { text: 'Response details' }),
+			rawCopyButton,
+			rawOutputEl,
+		);
+		form.append(button, resultHost, output, rawToggle);
+	} else {
+		form.append(button, output);
+	}
+
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		if (resultHost) resultHost.replaceChildren();
+		if (rawCopyButton) {
+			lastRawJson = '';
+			showResult(rawOutputEl, '');
+			rawCopyButton.hidden = true;
+		}
+
+		try {
+			let query;
+			let body;
+
+			if (isGet) {
+				if (typeof builderResult.getQuery === 'function') {
+					query = builderResult.getQuery();
+				} else if (form.elements.query) {
+					query = window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query'));
+				}
+			} else {
+				if (!isAdvancedDirty && typeof builderResult.validate === 'function') {
+					const validationError = builderResult.validate();
+					if (validationError) {
+						showError(output, validationError);
+						return;
+					}
+				}
+				const input = form.elements.body;
+				body = input ? parseJson(input.value, 'Request body') : undefined;
+				body = withReplayIdempotencyKey(definition, body);
+				if (input && body && body.replayIdempotencyKey) {
+					input.value = JSON.stringify(body, null, 2);
+				}
+			}
+
+			Promise.resolve(sendRequest({
 				definition,
 				path: fillPath(definition.path, pathNames, form),
-				query: window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query')),
-				body: getRequestBody(definition, form),
+				query,
+				body,
 				button,
 				output,
-			});
+				formatResponse: hasStructuredResult
+					? ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`
+					: undefined,
+			})).then((data) => {
+				if (!resultHost) return;
+				if (!data) {
+					resultHost.replaceChildren();
+					showResult(rawOutputEl, '');
+					rawCopyButton.hidden = true;
+					return;
+				}
+				lastRawJson = JSON.stringify(data, null, 2);
+				showResult(rawOutputEl, lastRawJson);
+				rawCopyButton.hidden = false;
+				const rendered = definition.renderSuccess(data);
+				resultHost.replaceChildren(...(rendered ? [rendered] : []));
+			}).catch(() => {});
 		} catch (error) {
 			showError(output, error.message);
 		}
 	});
-	renderFields();
+
+	return form;
+};
+
+const buildExpandedAnalysisForm = (contract, operation, fields) => {
+	const bodyExample = getBodyExample(contract, operation) || {};
+	const timeframeEnum = getBodySchemaEnum(contract, operation, 'timeframe');
+	const analysisModeEnum = getBodySchemaEnum(contract, operation, 'analysisMode');
+	const channelsEnum = getBodySchemaEnum(contract, operation, 'channels');
+
+	const initialSymbols = Array.isArray(bodyExample.symbols) && bodyExample.symbols.length
+		? bodyExample.symbols.join('\n')
+		: (bodyExample.symbol || 'BINANCE:BTCUSDT');
+
+	const symbolsInput = addField(fields, 'Symbols (EXCHANGE:SYMBOL, one per line)', 'symbols', {
+		tag: 'textarea',
+		rows: 4,
+		placeholder: 'BINANCE:BTCUSDT\nNASDAQ:NVDA',
+		value: initialSymbols,
+	});
+
+	const feedback = element('div', { className: 'field-feedback' });
+	fields.append(feedback);
+
+	const timeframeSelect = addField(fields, 'Timeframe', 'timeframe', { tag: 'select' });
+	const availableTimeframes = timeframeEnum.length ? timeframeEnum : ['5m', '15m', '1h', '4h', '1D', '1W', '1M'];
+	availableTimeframes.forEach((tf) => {
+		const opt = element('option', { text: tf });
+		opt.value = tf;
+		timeframeSelect.append(opt);
+	});
+	timeframeSelect.value = bodyExample.timeframe || (availableTimeframes.includes('1D') ? '1D' : availableTimeframes[0]);
+
+	const analysisModeSelect = addField(fields, 'Analysis mode', 'analysisMode', { tag: 'select' });
+	const availableModes = analysisModeEnum.length ? analysisModeEnum : ['standard', 'combined'];
+	availableModes.forEach((mode) => {
+		const opt = element('option', { text: mode });
+		opt.value = mode;
+		analysisModeSelect.append(opt);
+	});
+	analysisModeSelect.value = bodyExample.analysisMode || 'standard';
+
+	const includeMTF = addField(fields, 'Include multi-timeframe analysis', 'includeMultiTimeframe', {
+		type: 'checkbox',
+	});
+	includeMTF.checked = Boolean(bodyExample.includeMultiTimeframe);
+
+	const dryRun = addField(fields, 'Dry run (simulate without sending alerts)', 'dryRun', {
+		type: 'checkbox',
+	});
+	dryRun.checked = Boolean(bodyExample.dryRun);
+
+	const channelsFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	channelsFieldset.append(element('legend', { text: 'Notification channels' }));
+	const availableChannels = channelsEnum.length ? channelsEnum : ['telegram', 'whatsapp', 'discord'];
+	const channelInputs = [];
+	const initialChannels = Array.isArray(bodyExample.channels) ? bodyExample.channels : [];
+	availableChannels.forEach((ch) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `channel_${ch}`;
+		cb.value = ch;
+		cb.checked = initialChannels.includes(ch);
+		label.append(cb, element('span', { text: ch.charAt(0).toUpperCase() + ch.slice(1) }));
+		channelsFieldset.append(label);
+		channelInputs.push(cb);
+	});
+	fields.append(channelsFieldset);
+
+	const tgChatInput = addField(fields, 'Telegram Chat ID (optional)', 'telegramChatId', {
+		value: bodyExample.telegramChatId || '',
+	});
+	const tgThreadInput = addField(fields, 'Telegram Thread ID (optional, 0 for general)', 'telegramThreadId', {
+		type: 'number',
+		min: 0,
+		value: bodyExample.telegramThreadId !== undefined ? bodyExample.telegramThreadId : '',
+	});
+	const waChatInput = addField(fields, 'WhatsApp Chat ID (optional)', 'whatsappChatId', {
+		value: bodyExample.whatsappChatId || '',
+	});
+
+	const validate = () => {
+		const text = (symbolsInput.value || '').trim();
+		if (!text) {
+			feedback.textContent = 'At least one symbol is required.';
+			feedback.className = 'field-feedback error';
+			return 'At least one symbol is required.';
+		}
+		const symbols = text.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+		const invalid = symbols.filter((s) => !SYMBOL_PATTERN.test(s));
+		if (invalid.length > 0) {
+			const msg = `Malformed symbol(s): ${invalid.join(', ')}. Expected EXCHANGE:SYMBOL format (e.g. BINANCE:BTCUSDT).`;
+			feedback.textContent = msg;
+			feedback.className = 'field-feedback error';
+			return msg;
+		}
+		feedback.textContent = '';
+		feedback.className = 'field-feedback';
+		return null;
+	};
+
+	symbolsInput.addEventListener('input', validate);
+
+	const getBody = () => {
+		const text = (symbolsInput.value || '').trim();
+		const symbols = text ? text.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean) : [];
+		const selectedChannels = channelInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+		const payload = {
+			symbols,
+			timeframe: timeframeSelect.value,
+			analysisMode: analysisModeSelect.value,
+		};
+		if (includeMTF.checked) payload.includeMultiTimeframe = true;
+		if (dryRun.checked) payload.dryRun = true;
+		if (selectedChannels.length > 0) payload.channels = selectedChannels;
+		const tgChat = (tgChatInput.value || '').trim();
+		if (tgChat) payload.telegramChatId = tgChat;
+		const tgThread = (tgThreadInput.value || '').trim();
+		if (tgThread !== '') payload.telegramThreadId = parseInt(tgThread, 10);
+		const waChat = (waChatInput.value || '').trim();
+		if (waChat) payload.whatsappChatId = waChat;
+		return payload;
+	};
+
+	return {
+		getBody,
+		validate,
+		inputs: [symbolsInput, timeframeSelect, analysisModeSelect, includeMTF, dryRun, ...channelInputs, tgChatInput, tgThreadInput, waChatInput],
+	};
+};
+
+const buildMarketScannerForm = (contract, operation, fields) => {
+	const bodyExample = getBodyExample(contract, operation) || {};
+	const timeframeEnum = getBodySchemaEnum(contract, operation, 'timeframe');
+	const scansEnum = getBodySchemaEnum(contract, operation, 'scans');
+	const channelsEnum = getBodySchemaEnum(contract, operation, 'channels');
+
+	const exchangeInput = addField(fields, 'Exchange', 'exchange', {
+		placeholder: 'BINANCE',
+		value: bodyExample.exchange || 'BINANCE',
+	});
+
+	const timeframeSelect = addField(fields, 'Timeframe', 'timeframe', { tag: 'select' });
+	const availableTimeframes = timeframeEnum.length ? timeframeEnum : ['15m', '1h', '4h', '1D'];
+	availableTimeframes.forEach((tf) => {
+		const opt = element('option', { text: tf });
+		opt.value = tf;
+		timeframeSelect.append(opt);
+	});
+	timeframeSelect.value = bodyExample.timeframe || (availableTimeframes.includes('4h') ? '4h' : availableTimeframes[0]);
+
+	const scansFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	scansFieldset.append(element('legend', { text: 'Scans' }));
+	const availableScans = scansEnum.length ? scansEnum : ['top_gainers', 'top_losers', 'volume_breakout_scanner', 'smart_volume_scanner', 'bollinger_scan'];
+	const scanInputs = [];
+	const initialScans = Array.isArray(bodyExample.scans) && bodyExample.scans.length
+		? bodyExample.scans
+		: ['top_gainers', 'top_losers', 'volume_breakout_scanner'];
+	availableScans.forEach((scan) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `scan_${scan}`;
+		cb.value = scan;
+		cb.checked = initialScans.includes(scan);
+		label.append(cb, element('span', { text: scan.replace(/_/g, ' ') }));
+		scansFieldset.append(label);
+		scanInputs.push(cb);
+	});
+	fields.append(scansFieldset);
+
+	const limitInput = addField(fields, 'Scan limit (1-20)', 'limit', {
+		type: 'number',
+		min: 1,
+		max: 20,
+		value: bodyExample.limit || 5,
+	});
+
+	const bbwInput = addField(fields, 'BBW threshold', 'bbw_threshold', {
+		type: 'number',
+		step: '0.01',
+		value: bodyExample.bbw_threshold !== undefined ? bodyExample.bbw_threshold : 0.05,
+	});
+
+	const ratingInput = addField(fields, 'Rating (-3 to 3)', 'rating', {
+		type: 'number',
+		min: -3,
+		max: 3,
+		value: bodyExample.rating !== undefined ? bodyExample.rating : 3,
+	});
+
+	const patternSelect = addField(fields, 'Pattern type', 'pattern_type', { tag: 'select' });
+	['bullish', 'bearish'].forEach((pt) => {
+		const opt = element('option', { text: pt });
+		opt.value = pt;
+		patternSelect.append(opt);
+	});
+	patternSelect.value = bodyExample.pattern_type || 'bullish';
+
+	const candleInput = addField(fields, 'Candle count (2-5)', 'candle_count', {
+		type: 'number',
+		min: 2,
+		max: 5,
+		value: bodyExample.candle_count || 3,
+	});
+
+	const minGrowthInput = addField(fields, 'Min growth (optional)', 'min_growth', {
+		type: 'number',
+		step: '0.01',
+		value: bodyExample.min_growth !== undefined ? bodyExample.min_growth : '',
+	});
+
+	const maxDeclineInput = addField(fields, 'Max decline (optional)', 'max_decline', {
+		type: 'number',
+		step: '0.01',
+		value: bodyExample.max_decline !== undefined ? bodyExample.max_decline : '',
+	});
+
+	const rankedCb = addField(fields, 'Ranked results', 'ranked', { type: 'checkbox' });
+	rankedCb.checked = Boolean(bodyExample.ranked);
+
+	const mtfCb = addField(fields, 'Include multi-timeframe', 'includeMultiTimeframe', { type: 'checkbox' });
+	mtfCb.checked = Boolean(bodyExample.includeMultiTimeframe);
+
+	const dryRunCb = addField(fields, 'Dry run (simulate without sending alerts)', 'dryRun', { type: 'checkbox' });
+	dryRunCb.checked = Boolean(bodyExample.dryRun);
+
+	const channelsFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	channelsFieldset.append(element('legend', { text: 'Notification channels' }));
+	const availableChannels = channelsEnum.length ? channelsEnum : ['telegram', 'whatsapp', 'discord'];
+	const channelInputs = [];
+	const initialChannels = Array.isArray(bodyExample.channels) ? bodyExample.channels : [];
+	availableChannels.forEach((ch) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `channel_${ch}`;
+		cb.value = ch;
+		cb.checked = initialChannels.includes(ch);
+		label.append(cb, element('span', { text: ch.charAt(0).toUpperCase() + ch.slice(1) }));
+		channelsFieldset.append(label);
+		channelInputs.push(cb);
+	});
+	fields.append(channelsFieldset);
+
+	const tgChatInput = addField(fields, 'Telegram Chat ID (optional)', 'telegramChatId', {
+		value: bodyExample.telegramChatId || '',
+	});
+	const tgThreadInput = addField(fields, 'Telegram Thread ID (optional, 0 for general)', 'telegramThreadId', {
+		type: 'number',
+		min: 0,
+		value: bodyExample.telegramThreadId !== undefined ? bodyExample.telegramThreadId : '',
+	});
+	const waChatInput = addField(fields, 'WhatsApp Chat ID (optional)', 'whatsappChatId', {
+		value: bodyExample.whatsappChatId || '',
+	});
+
+	const getBody = () => {
+		const exchange = (exchangeInput.value || '').trim() || 'BINANCE';
+		const timeframe = timeframeSelect.value || '4h';
+		const selectedScans = scanInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+		const rawLimit = parseInt(limitInput.value, 10);
+		const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(20, rawLimit)) : 5;
+		const bbw = parseFloat(bbwInput.value);
+		const rating = parseInt(ratingInput.value, 10);
+		const candleCount = parseInt(candleInput.value, 10);
+		const minGrowth = parseFloat(minGrowthInput.value);
+		const maxDecline = parseFloat(maxDeclineInput.value);
+		const selectedChannels = channelInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+
+		const payload = {
+			exchange,
+			timeframe,
+			scans: selectedScans.length ? selectedScans : ['top_gainers', 'top_losers', 'volume_breakout_scanner'],
+			limit,
+			pattern_type: patternSelect.value || 'bullish',
+		};
+		if (Number.isFinite(bbw)) payload.bbw_threshold = bbw;
+		if (Number.isFinite(rating)) payload.rating = rating;
+		if (Number.isFinite(candleCount)) payload.candle_count = candleCount;
+		if (Number.isFinite(minGrowth)) payload.min_growth = minGrowth;
+		if (Number.isFinite(maxDecline)) payload.max_decline = maxDecline;
+		if (rankedCb.checked) payload.ranked = true;
+		if (mtfCb.checked) payload.includeMultiTimeframe = true;
+		if (dryRunCb.checked) payload.dryRun = true;
+		if (selectedChannels.length > 0) payload.channels = selectedChannels;
+		const tgChat = (tgChatInput.value || '').trim();
+		if (tgChat) payload.telegramChatId = tgChat;
+		const tgThread = (tgThreadInput.value || '').trim();
+		if (tgThread !== '') payload.telegramThreadId = parseInt(tgThread, 10);
+		const waChat = (waChatInput.value || '').trim();
+		if (waChat) payload.whatsappChatId = waChat;
+		return payload;
+	};
+
+	return {
+		getBody,
+		inputs: [
+			exchangeInput, timeframeSelect, ...scanInputs, limitInput, bbwInput,
+			ratingInput, patternSelect, candleInput, minGrowthInput, maxDeclineInput,
+			rankedCb, mtfCb, dryRunCb, ...channelInputs, tgChatInput, tgThreadInput, waChatInput,
+		],
+	};
+};
+
+const buildVolumeConfirmationForm = (contract, operation, fields) => {
+	const bodyExample = getBodyExample(contract, operation) || {};
+	const timeframeEnum = getBodySchemaEnum(contract, operation, 'timeframe');
+
+	const symbolInput = addField(fields, 'Symbol (EXCHANGE:SYMBOL)', 'symbol', {
+		placeholder: 'BINANCE:BTCUSDT',
+		value: bodyExample.symbol || 'BINANCE:BTCUSDT',
+	});
+
+	const feedback = element('div', { className: 'field-feedback' });
+	fields.append(feedback);
+
+	let timeframeControl;
+	if (timeframeEnum.length > 0) {
+		timeframeControl = addField(fields, 'Timeframe', 'timeframe', { tag: 'select' });
+		timeframeEnum.forEach((tf) => {
+			const opt = element('option', { text: tf });
+			opt.value = tf;
+			timeframeControl.append(opt);
+		});
+		timeframeControl.value = bodyExample.timeframe || timeframeEnum[0];
+	} else {
+		timeframeControl = addField(fields, 'Timeframe', 'timeframe', {
+			placeholder: '1h',
+			value: bodyExample.timeframe || '1h',
+		});
+	}
+
+	const validate = () => {
+		const sym = (symbolInput.value || '').trim();
+		if (!sym) {
+			feedback.textContent = 'Symbol is required.';
+			feedback.className = 'field-feedback error';
+			return 'Symbol is required.';
+		}
+		if (!SYMBOL_PATTERN.test(sym)) {
+			const msg = `Malformed symbol: "${sym}". Expected EXCHANGE:SYMBOL format (e.g. BINANCE:BTCUSDT).`;
+			feedback.textContent = msg;
+			feedback.className = 'field-feedback error';
+			return msg;
+		}
+		feedback.textContent = '';
+		feedback.className = 'field-feedback';
+		return null;
+	};
+
+	symbolInput.addEventListener('input', validate);
+
+	const getBody = () => ({
+		symbol: (symbolInput.value || '').trim(),
+		timeframe: (timeframeControl.value || '').trim() || '1h',
+	});
+
+	return {
+		getBody,
+		validate,
+		inputs: [symbolInput, timeframeControl],
+	};
+};
+
+const buildSymbolAnalysisForm = (contract, operation, fields) => {
+	const bodyExample = getBodyExample(contract, operation) || {};
+	const timeframeEnum = getBodySchemaEnum(contract, operation, 'timeframe');
+	const analysisModeEnum = getBodySchemaEnum(contract, operation, 'analysisMode');
+
+	const symbolInput = addField(fields, 'Symbol (EXCHANGE:SYMBOL)', 'symbol', {
+		placeholder: 'BINANCE:BTCUSDT',
+		value: bodyExample.symbol || 'BINANCE:BTCUSDT',
+	});
+
+	const feedback = element('div', { className: 'field-feedback' });
+	fields.append(feedback);
+
+	let timeframeControl;
+	if (timeframeEnum.length > 0) {
+		timeframeControl = addField(fields, 'Timeframe', 'timeframe', { tag: 'select' });
+		timeframeEnum.forEach((tf) => {
+			const opt = element('option', { text: tf });
+			opt.value = tf;
+			timeframeControl.append(opt);
+		});
+		timeframeControl.value = bodyExample.timeframe || (timeframeEnum.includes('1D') ? '1D' : timeframeEnum[0]);
+	} else {
+		timeframeControl = addField(fields, 'Timeframe', 'timeframe', {
+			placeholder: '1D',
+			value: bodyExample.timeframe || '1D',
+		});
+	}
+
+	const analysisModeSelect = addField(fields, 'Analysis mode', 'analysisMode', { tag: 'select' });
+	const availableModes = analysisModeEnum.length ? analysisModeEnum : ['standard', 'combined'];
+	availableModes.forEach((mode) => {
+		const opt = element('option', { text: mode });
+		opt.value = mode;
+		analysisModeSelect.append(opt);
+	});
+	analysisModeSelect.value = bodyExample.analysisMode || 'standard';
+
+	const validate = () => {
+		const sym = (symbolInput.value || '').trim();
+		if (!sym) {
+			feedback.textContent = 'Symbol is required.';
+			feedback.className = 'field-feedback error';
+			return 'Symbol is required.';
+		}
+		if (!SYMBOL_PATTERN.test(sym)) {
+			const msg = `Malformed symbol: "${sym}". Expected EXCHANGE:SYMBOL format (e.g. BINANCE:BTCUSDT).`;
+			feedback.textContent = msg;
+			feedback.className = 'field-feedback error';
+			return msg;
+		}
+		feedback.textContent = '';
+		feedback.className = 'field-feedback';
+		return null;
+	};
+
+	symbolInput.addEventListener('input', validate);
+
+	const getBody = () => ({
+		symbol: (symbolInput.value || '').trim(),
+		timeframe: (timeframeControl.value || '').trim() || '1D',
+		analysisMode: analysisModeSelect.value || 'standard',
+	});
+
+	return {
+		getBody,
+		validate,
+		inputs: [symbolInput, timeframeControl, analysisModeSelect],
+	};
+};
+
+const buildNewsMonitorForm = (contract, operation, fields, definition) => {
+	const isGet = definition.method === 'GET';
+
+	if (isGet) {
+		const queryExample = getQueryExample(contract, operation) || {};
+		const cryptoInput = addField(fields, 'Crypto symbols (comma-separated)', 'crypto', {
+			placeholder: 'BTCUSDT,ETHUSDT',
+			value: queryExample.crypto || 'BTCUSDT',
+		});
+		const stocksInput = addField(fields, 'Stock symbols (comma-separated)', 'stocks', {
+			placeholder: 'NVDA,MSFT',
+			value: queryExample.stocks || 'NVDA',
+		});
+		const dryRunCb = addField(fields, 'Dry run (analyze only, no delivery)', 'dryRun', { type: 'checkbox' });
+		dryRunCb.checked = Boolean(queryExample.dryRun);
+
+		return {
+			getQuery: () => {
+				const query = {};
+				const crypto = (cryptoInput.value || '').trim();
+				const stocks = (stocksInput.value || '').trim();
+				if (crypto) query.crypto = crypto;
+				if (stocks) query.stocks = stocks;
+				if (dryRunCb.checked) query.dryRun = true;
+				return query;
+			},
+			inputs: [cryptoInput, stocksInput, dryRunCb],
+		};
+	}
+
+	const bodyExample = getBodyExample(contract, operation) || {};
+	const channelsEnum = getBodySchemaEnum(contract, operation, 'channels');
+
+	const initialCrypto = Array.isArray(bodyExample.crypto)
+		? bodyExample.crypto.join(',')
+		: (bodyExample.crypto || 'BTCUSDT');
+	const initialStocks = Array.isArray(bodyExample.stocks)
+		? bodyExample.stocks.join(',')
+		: (bodyExample.stocks || 'NVDA');
+
+	const cryptoInput = addField(fields, 'Crypto symbols (comma-separated)', 'crypto', {
+		placeholder: 'BTCUSDT,ETHUSDT',
+		value: initialCrypto,
+	});
+	const stocksInput = addField(fields, 'Stock symbols (comma-separated)', 'stocks', {
+		placeholder: 'NVDA,MSFT',
+		value: initialStocks,
+	});
+	const dryRunCb = addField(fields, 'Dry run (analyze only, no delivery)', 'dryRun', { type: 'checkbox' });
+	dryRunCb.checked = Boolean(bodyExample.dryRun);
+
+	const channelsFieldset = element('fieldset', { className: 'preset-scans-fieldset' });
+	channelsFieldset.append(element('legend', { text: 'Notification channels' }));
+	const availableChannels = channelsEnum.length ? channelsEnum : ['telegram', 'whatsapp', 'discord'];
+	const channelInputs = [];
+	const initialChannels = Array.isArray(bodyExample.channels) ? bodyExample.channels : [];
+	availableChannels.forEach((ch) => {
+		const label = element('label', { className: 'checkbox-label' });
+		const cb = element('input', { type: 'checkbox' });
+		cb.name = `channel_${ch}`;
+		cb.value = ch;
+		cb.checked = initialChannels.includes(ch);
+		label.append(cb, element('span', { text: ch.charAt(0).toUpperCase() + ch.slice(1) }));
+		channelsFieldset.append(label);
+		channelInputs.push(cb);
+	});
+	fields.append(channelsFieldset);
+
+	const tgChatInput = addField(fields, 'Telegram Chat ID (optional)', 'telegramChatId', {
+		value: bodyExample.telegramChatId || '',
+	});
+	const tgThreadInput = addField(fields, 'Telegram Thread ID (optional, 0 for general)', 'telegramThreadId', {
+		type: 'number',
+		min: 0,
+		value: bodyExample.telegramThreadId !== undefined ? bodyExample.telegramThreadId : '',
+	});
+	const waChatInput = addField(fields, 'WhatsApp Chat ID (optional)', 'whatsappChatId', {
+		value: bodyExample.whatsappChatId || '',
+	});
+
+	const getBody = () => {
+		const crypto = (cryptoInput.value || '').trim();
+		const stocks = (stocksInput.value || '').trim();
+		const selectedChannels = channelInputs.filter((cb) => cb.checked).map((cb) => cb.value);
+		const payload = {};
+		if (crypto) payload.crypto = crypto.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+		if (stocks) payload.stocks = stocks.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+		if (dryRunCb.checked) payload.dryRun = true;
+		if (selectedChannels.length > 0) payload.channels = selectedChannels;
+		const tgChat = (tgChatInput.value || '').trim();
+		if (tgChat) payload.telegramChatId = tgChat;
+		const tgThread = (tgThreadInput.value || '').trim();
+		if (tgThread !== '') payload.telegramThreadId = parseInt(tgThread, 10);
+		const waChat = (waChatInput.value || '').trim();
+		if (waChat) payload.whatsappChatId = waChat;
+		return payload;
+	};
+
+	return {
+		getBody,
+		inputs: [cryptoInput, stocksInput, dryRunCb, ...channelInputs, tgChatInput, tgThreadInput, waChatInput],
+	};
 };
 
 const renderView = async (name) => {
 	const view = document.getElementById('view');
 	if (typeof detachActiveViewPoll === 'function') detachActiveViewPoll();
 	detachActiveViewPoll = null;
+	resetFilterScopes();
 	view.replaceChildren(createLoadingState('Loading API contract…'));
 	try {
 		const contract = await loadContract();
@@ -2871,6 +6600,10 @@ const renderView = async (name) => {
 			view.append(createOverviewDashboard());
 			return;
 		}
+		if (name === 'status') {
+			view.append(createStatusExplorer());
+			return;
+		}
 		view.append(element('h2', { text: name[0].toUpperCase() + name.slice(1) }));
 		if (name === 'alerts') {
 			view.append(createAlertListForm());
@@ -2881,13 +6614,94 @@ const renderView = async (name) => {
 		if (name === 'outcomes') {
 			view.append(createOutcomesListForm());
 			view.append(createOutcomesSummaryForm());
+			view.append(createOutcomesCalibrationForm());
 			return;
 		}
 		if (name === 'jobs') {
 			const status = createJobStatusForm();
 			view.append(createJobListForm(contract, status.selectJob));
-			VIEWS.jobs.forEach((definition) => view.append(createOperationForm(contract, definition)));
+			VIEWS.jobs.forEach((definition) => view.append(createJobCreateForm(contract, definition, (jobId) => {
+				status.selectJob(jobId, { autoLoad: true });
+			})));
 			view.append(status.form);
+			return;
+		}
+		if (name === 'orders') {
+			view.append(createOrderListForm());
+			view.append(createOrderLookupForm());
+			return;
+		}
+		if (name === 'presets') {
+			let updateForm = null;
+			let listForm = null;
+			const onEdit = (preset) => {
+				if (updateForm && typeof updateForm.populatePreset === 'function') {
+					updateForm.populatePreset(preset);
+					if (typeof updateForm.scrollIntoView === 'function') {
+						updateForm.scrollIntoView({ behavior: 'smooth' });
+					}
+					if (updateForm.elements?.name && typeof updateForm.elements.name.focus === 'function') {
+						updateForm.elements.name.focus();
+					}
+				}
+			};
+			const onStorageUpdate = (storage) => {
+				if (listForm && typeof listForm.updateStorage === 'function') {
+					listForm.updateStorage(storage);
+				}
+			};
+			const onPresetMutated = async (storage) => {
+				if (storage) onStorageUpdate(storage);
+				if (listForm && typeof listForm.refresh === 'function') {
+					await listForm.refresh();
+				}
+			};
+			listForm = createPresetListForm(contract, { onEdit, onStorageUpdate });
+			view.append(listForm);
+
+			VIEWS.presets.forEach((definition) => {
+				if (definition.method === 'GET') return;
+				const form = createOperationForm(contract, definition, {
+					onStorageUpdate: onPresetMutated,
+					onSuccess: () => {
+						if (listForm && typeof listForm.refresh === 'function') listForm.refresh();
+					},
+				});
+				view.append(form);
+			});
+
+			VIEW_ACTIONS.presets.forEach((definition) => {
+				const form = createOperationForm(contract, definition, {
+					onStorageUpdate: onPresetMutated,
+					onSuccess: () => {
+						if (listForm && typeof listForm.refresh === 'function') listForm.refresh();
+					},
+				});
+				if (definition.method === 'PUT') {
+					updateForm = form;
+				}
+				view.append(form);
+			});
+			return;
+		}
+		if (name === 'analysis') {
+			const definitions = [...(VIEWS[name] || []), ...(VIEW_ACTIONS[name] || [])];
+			definitions.forEach((definition) => {
+				const path = definition.path;
+				if (path === '/api/webhook/expanded-analysis-alert') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildExpandedAnalysisForm));
+				} else if (path === '/api/webhook/market-scanner-alert') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildMarketScannerForm));
+				} else if (path === '/api/webhook/volume-confirmation') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildVolumeConfirmationForm));
+				} else if (path === '/api/webhook/symbol-analysis') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildSymbolAnalysisForm));
+				} else if (path === '/api/news-monitor') {
+					view.append(createStructuredAnalysisForm(contract, definition, buildNewsMonitorForm));
+				} else {
+					view.append(createOperationForm(contract, definition));
+				}
+			});
 			return;
 		}
 		[...(VIEWS[name] || []), ...(VIEW_ACTIONS[name] || [])]
@@ -2897,12 +6711,58 @@ const renderView = async (name) => {
 	}
 };
 
-const navigateToView = (name) => {
+const navigateToView = (name, { history: historyMode = 'push' } = {}) => {
 	if (authState.enabled && !authState.user) return showSignedOutState();
+	const target = resolveConsoleView(name);
+	currentConsoleView = target;
+	markActiveView(target);
+	setViewTitle(target);
+	if (historyMode !== 'none') {
+		const carried = historyMode === 'push' ? {} : filterParamsForView(target, readConsoleParams());
+		writeConsoleUrl(buildConsoleUrl(target, carried), { replace: historyMode === 'replace' });
+	}
+	return renderView(target).then(() => {
+		applyFilterParams(readConsoleParams());
+		bindFilterScopeListeners();
+		moveFocusToView(target);
+	});
+};
+
+const handleConsolePopState = () => {
+	navigateToView(readConsoleUrlState().view, { history: 'none' });
+};
+
+const canonicaliseConsoleUrl = () => {
+	const state = readConsoleUrlState();
+	if (!state.viewRequested || state.viewRecognised) return;
+	writeConsoleUrl(buildConsoleUrl(state.view, filterParamsForView(state.view, state.params)), { replace: true });
+};
+
+const markActiveView = (name) => {
+	if (typeof document === 'undefined' || !document) return;
 	const buttons = document.querySelectorAll('[data-view]');
 	buttons.forEach((button) => button.removeAttribute('aria-current'));
 	[...buttons].find((button) => button.dataset.view === name)?.setAttribute('aria-current', 'page');
-	return renderView(name);
+};
+
+const setViewTitle = (name) => {
+	if (typeof document === 'undefined' || !document) return;
+	const label = VIEW_TITLES[name] || (name ? name[0].toUpperCase() + name.slice(1) : '');
+	document.title = label ? `${label} · ${CONSOLE_TITLE_BASE}` : CONSOLE_TITLE_BASE;
+	const status = getElement('view-status');
+	if (status) status.textContent = label ? `${label} view` : '';
+};
+
+const moveFocusToView = (name) => {
+	if (typeof document === 'undefined' || !document) return;
+	const view = document.getElementById('view');
+	if (!view) return;
+	if (view.tabIndex === undefined || view.tabIndex === null) {
+		try { view.tabIndex = -1; } catch (_) { /* readonly in some test envs */ }
+	}
+	if (typeof view.focus === 'function') {
+		try { view.focus(); } catch (_) { /* focus is best-effort */ }
+	}
 };
 
 const setupLegacyConsole = ({ persist = true } = {}) => {
@@ -2929,6 +6789,7 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 		}
 		apiKey.setAttribute('aria-invalid', 'false');
 		keyState.className = 'request-state';
+		setupSseStream();
 		if (!persist) {
 			keyState.textContent = 'API key kept only in memory for webhook operations.';
 			return;
@@ -2946,6 +6807,7 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 
 	getElement('clear-key')?.addEventListener('click', () => {
 		apiKey.value = '';
+		disconnectSse();
 		if (!persist) {
 			keyState.textContent = 'API key cleared from the form.';
 			return;
@@ -2963,6 +6825,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 	const view = getElement('view');
 	if (view) view.replaceChildren(createLoadingState('Checking authentication…'));
 	document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigateToView(button.dataset.view)));
+	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+		window.addEventListener('popstate', handleConsolePopState);
+	}
+	canonicaliseConsoleUrl();
+
 
 	const config = await loadAuthConfig();
 	if (config.enabled) {
@@ -2974,5 +6841,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 	setHidden('firebase-auth', true);
 	setHidden('legacy-connection', false);
 	setupLegacyConsole();
-	renderView('overview');
+	if (getElement('api-key')?.value) setupSseStream();
+	navigateToView(readConsoleUrlState().view, { history: 'none' });
+
 });
