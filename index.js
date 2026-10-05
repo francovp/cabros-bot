@@ -7,6 +7,7 @@ printWarnings(validateEnv());
 
 const {
 	getPrice,
+	userPriceAlertCmd,
 	cryptoBotCmd,
 	expandedAnalysisCmd,
 	marketScannerCmd,
@@ -33,20 +34,26 @@ const { createProcessLifecycle } = require('./src/lib/processLifecycle');
 const { waitForBackgroundTasks } = require('./src/lib/backgroundTaskTracker');
 const { getTelegramBootstrapConfig, sendStartupDeploymentNotification } = require('./src/lib/telegramBootstrap');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
+const { attachReadinessOverrides } = require('./src/controllers/readiness');
 const { launchTelegramBot } = require('./src/lib/telegramCommandMenu');
 const { attachTelegramErrorBoundary, handlePollingError, startTelegramHealthProbe, stopTelegramHealthProbe } = require('./src/lib/telegramErrorBoundary');
 const { registerAlertActionHandlers } = require('./src/lib/telegramAlertActions');
 const { registerAuthMiddleware: registerTelegramCommandAuth } = require('./src/lib/telegramCommandAuth');
 const { jobService } = require('./src/services/jobs/JobService');
+const { jobBacklogService } = require('./src/services/jobs/JobBacklogService');
+const { jobQueue } = require('./src/services/jobs/JobQueue');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
 const { whatsAppCommandBridgeService } = require('./src/services/notification/WhatsAppCommandBridgeService');
 const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
+const { userPriceAlertService } = require('./src/services/alerts/UserPriceAlertService');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
 const { alertSchedulerService } = require('./src/services/scheduler');
 const { adminSseService } = require('./src/services/sse/AdminSseService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
+const { probeManagedPromptReadiness } = require('./src/services/prompts');
+const { configureServerTimeouts } = require('./src/lib/serverTimeouts');
 const Sentry = require('@sentry/node');
 
 const { token, shouldStartTelegramBot } = getTelegramBootstrapConfig();
@@ -58,7 +65,7 @@ bootstrapReadiness.begin({
 let bot;
 let botLaunchPromise;
 let bootstrapPromise;
-let server;
+
 
 const port = process.env.PORT || 80;
 const now = new Date();
@@ -92,6 +99,8 @@ const lifecycle = createProcessLifecycle({
 	stopNotificationRedriveWorker: (options) => notificationRedriveService.stopWorker(options),
 	stopWhatsAppCommandBridge: (options) => whatsAppCommandBridgeService.stop(options),
 	stopScannerPresetScheduler: (options) => scannerPresetSchedulerService.stopWorker(options),
+	stopJobBacklogMonitor: (options) => jobBacklogService.stop(options),
+	stopUserPriceAlertWorker: (options) => userPriceAlertService.stopWorker(options),
 	stopNewsMonitorScheduler: (options) => newsMonitorSchedulerService.stopWorker(options),
 	stopAlertScheduler: (options) => alertSchedulerService.stopWorker(options),
 	stopRemoteConfig: () => remoteConfigService.stop(),
@@ -109,6 +118,12 @@ async function bootstrapApplication() {
 
 	void remoteConfigService.start();
 
+	// Proven, bounded and detached: `dependencies.langfuse.ready` on /api/status
+	// needs one observed resolution to flip to true, and without this an idle
+	// deployment could not tell working prompts from a valid-credential /
+	// unpublished-label pair that falls back to the local file forever (#1178).
+	void probeManagedPromptReadiness();
+
 	// Start background signal outcome evaluation worker if enabled
 	SignalOutcomeService.startWorker();
 	// Start background notification redrive worker if enabled
@@ -116,6 +131,25 @@ async function bootstrapApplication() {
 	// Start background scanner preset scheduler if enabled
 	scannerPresetSchedulerService.botGetter = () => bot;
 	scannerPresetSchedulerService.startWorker();
+	// Start background job backlog monitor if enabled
+	jobBacklogService.startMonitor();
+	// Prove broker connectivity at boot so /api/capabilities reports a real queue
+	// verdict on an idle deployment. Without this, readiness only ever became true
+	// as a side effect of the first enqueue, so a correct render-worker cut-over
+	// read as "not_started" and an operator could not tell it apart from a broker
+	// that was configured but unreachable.
+	void jobQueue.probeBrokerReadiness().then((result) => {
+		if (result.skipped) {
+			return;
+		}
+		console.log(
+			`Job queue broker ${result.reachable ? 'reachable' : 'UNREACHABLE'}` +
+			(result.reachable ? '' : ` (lastErrorCode=${result.errorCode})`),
+		);
+	});
+	// Start background user price alert worker if enabled
+	userPriceAlertService.setBotGetter(() => bot);
+	userPriceAlertService.startWorker({ source: 'web' });
 	// Start background news-monitor scheduler if enabled
 	newsMonitorSchedulerService.startWorker({ source: 'web' });
 	// Start background alert scheduler (JSON-defined news + scanner schedules) if enabled
@@ -137,10 +171,18 @@ async function bootstrapApplication() {
 	if (shouldLaunchTelegramBot) {
 		console.log('Telegram Bot is enabled');
 		bot = new Telegraf(token);
+		// Give the readiness probe a live handle on the bot so its Telegram check
+		// performs a real getMe round-trip instead of reporting a permanent
+		// `telegram_bot_unavailable`. Registered before the probe can ever run.
+		attachReadinessOverrides(app, {
+			getBot: () => bot,
+			isBotEnabled: () => Boolean(bot) && !lifecycle.isShuttingDown(),
+		});
 		bot.use(telegramMaintenanceMode);
 		registerTelegramCommandAuth(bot);
 		bot.use(telegramCommandRateLimiter);
 		bot.command(['precio'], getPrice);
+		bot.command(['alerta', 'alert'], userPriceAlertCmd);
 		bot.command(['cryptobot'], cryptoBotCmd);
 		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);
 		bot.command(['scanner'], marketScannerCmd);
@@ -194,12 +236,17 @@ async function bootstrapApplication() {
 	}
 }
 
-server = app.listen(port, () => {
+const server = app.listen(port, () => {
 	bootstrapPromise = bootstrapApplication();
 	void bootstrapPromise.catch((error) => {
 		bootstrapReadiness.fail(error);
 		console.error('[index] Application bootstrap failed:', error.message);
 	});
 });
+
+// Bound slow clients before the 'listening' event, not inside the listen callback:
+// the server already accepts connections by then, which would leave a window where
+// headersTimeout/requestTimeout are still Node's unbounded defaults.
+configureServerTimeouts(server);
 
 module.exports = { bot };

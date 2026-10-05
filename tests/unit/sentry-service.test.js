@@ -460,6 +460,25 @@ describe('SentryService', () => {
 				);
 			});
 
+			// Issue #1285 relies on this: `captureRuntimeError` reads a fixed
+			// allow-list and silently drops an unsupported `tags` field, so a
+			// category passed any other way never reaches Sentry.
+			it('maps extra.category onto a Sentry category tag', () => {
+				service.captureRuntimeError({
+					channel: 'alerts-controller',
+					error: new Error('Alert storage is enabled but Firestore is unavailable.'),
+					extra: { category: 'failed_precondition', missingIndex: true },
+				});
+
+				expect(Sentry.captureException).toHaveBeenCalledWith(
+					expect.any(Error),
+					expect.objectContaining({
+						tags: expect.objectContaining({ category: 'failed_precondition' }),
+						extra: expect.objectContaining({ category: 'failed_precondition', missingIndex: true }),
+					}),
+				);
+			});
+
 			it('should build correct event for news-monitor channel', () => {
 				const newsContext = {
 					symbolCount: 5,

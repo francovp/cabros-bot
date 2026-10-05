@@ -21,6 +21,7 @@ const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../.
 const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
 const geminiPriceService = require('../../../../services/grounding/geminiPriceService');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
+const { smartEscapeMarkdownV2 } = require('../../../../services/notification/formatters/markdownV2Formatter');
 const { MainClient } = require('binance');
 const { createHash } = require('node:crypto');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
@@ -31,6 +32,7 @@ const {
 } = require('../../../../services/notification/requestRouting');
 const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 
+
 const promptService = getPromptService();
 const CLASSIFIER_EVENT_INSTRUCTIONS = [
 	'Classify whether this asset headline describes a specific, material financial event.',
@@ -39,6 +41,8 @@ const CLASSIFIER_EVENT_INSTRUCTIONS = [
 	'regulatory means a law, regulator, or policy action affecting the asset or market.',
 	'none means the headline does not describe a material financial event.',
 ].join(' ');
+
+const markdownV2Formatter = new MarkdownV2Formatter();
 
 // Placeholder for NotificationManager - will be injected
 let notificationManager = null;
@@ -527,7 +531,7 @@ class NewsAnalyzer {
 				const currentIndex = nextIndex;
 				nextIndex += 1;
 				const symbol = symbols[currentIndex];
-				const symbolTokenUsage = new TokenUsageTracker();
+const symbolTokenUsage = new TokenUsageTracker('news-analysis');
 				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, symbolTokenUsage, routing, batchStartedAt, symbolOptions)
 					.then((result) => {
 						if (tokenUsage) {
@@ -1174,7 +1178,7 @@ class NewsAnalyzer {
 		// Optional LLM enrichment
 		let enrichmentMetadata = null;
 		if (this.enrichmentService.isEnabled() && ENABLE_NEWS_MONITOR_TEST_MODE !== true) {
-			enrichmentMetadata = await this.enrichmentService.enrichAlert(geminiAnalysis);
+			enrichmentMetadata = await this.enrichmentService.enrichAlert(geminiAnalysis, { tokenUsage });
 			if (enrichmentMetadata && enrichmentMetadata.enriched_confidence < this.alertThreshold) {
 				console.debug('[Analyzer] Enrichment lowered confidence below threshold');
 				return {
@@ -1787,6 +1791,17 @@ class NewsAnalyzer {
 			calibrationFields.grounding_calibration = geminiAnalysis.calibration;
 		}
 
+		// Issue #1230: surface the source-quality tier so an operator can audit
+		// WHY an alert cleared the threshold. Unresolved tier => omitted.
+		// NOTE: deliberately NOT written into `calibrationFields` — that object is
+		// never spread into the returned alert, so a write there is inert. The value
+		// is surfaced via the `sourceQualityTier` shorthand on the alert instead.
+		const sourceQualityTier = (geminiAnalysis.calibration
+			&& typeof geminiAnalysis.calibration.qualityTier === 'string'
+			&& geminiAnalysis.calibration.qualityTier.trim())
+			? geminiAnalysis.calibration.qualityTier.trim()
+			: undefined;
+
 		// Build the title/original text
 		const eventLabel = this.eventCategoryLabel(geminiAnalysis.event_category);
 		const headline = (geminiAnalysis.headline && geminiAnalysis.headline.trim())
@@ -1858,9 +1873,23 @@ class NewsAnalyzer {
 		const confidenceProvenance = geminiAnalysis.confidence_source
 			? `_Confidence source: ${geminiAnalysis.confidence_source}_`
 			: `_Model used: ${GROUNDING_MODEL_NAME}_`;
-		const enrichedExtraText = confidenceReason
-			? `_Model Confidence: ${confidense}%_\n_Reason: ${confidenceReason}_\n${confidenceProvenance}`
-			: `_Model Confidence: ${confidense}%_\n${confidenceProvenance}`;
+		// Issue #1230: the tier is appended to `extraText` because that is what
+		// `formatEnriched()` actually renders to the trader. `formatAlertMessage()`
+		// has no production call site, so a line added only there would never be seen.
+		// `extraText` is emitted verbatim by MarkdownV2Formatter, so the penalty value
+		// must be escaped — `(` `)` and `.` are MarkdownV2-reserved and would make
+		// Telegram reject the entire message.
+		const qualityAuditLine = sourceQualityTier
+			? (typeof geminiAnalysis.calibration?.qualityPenalty === 'number'
+				? `_Source Quality: ${smartEscapeMarkdownV2(sourceQualityTier)} (x${smartEscapeMarkdownV2(String(geminiAnalysis.calibration.qualityPenalty))})_`
+				: `_Source Quality: ${smartEscapeMarkdownV2(sourceQualityTier)}_`)
+			: '';
+		const enrichedExtraText = [
+			confidenceReason
+				? `_Model Confidence: ${confidense}%_\n_Reason: ${confidenceReason}_\n${confidenceProvenance}`
+				: `_Model Confidence: ${confidense}%_\n${confidenceProvenance}`,
+			qualityAuditLine,
+		].filter(Boolean).join('\n');
 		const enriched = {
 			originalText: alertTitle,
 			summary: context,
@@ -1893,6 +1922,7 @@ class NewsAnalyzer {
 			uncertainty_reason: geminiAnalysis.uncertainty_reason,
 			invalidation_hint: geminiAnalysis.invalidation_hint,
 			calibration: geminiAnalysis.calibration || undefined,
+			sourceQualityTier,
 			promptVersion: geminiAnalysis.promptVersion || undefined,
 			timestamp: Date.now(),
 			marketContext: marketContext || undefined,
@@ -1938,6 +1968,23 @@ class NewsAnalyzer {
 			message += `Reason: ${reason}\n`;
 		}
 
+		// Issue #1230: make the source-quality tier auditable in the delivered
+		// message, not just in logs. Read from `calibration` rather than
+		// `sourceQualityTier`: this formatter is also called with analysis objects
+		// that were not produced by `buildAlert` (see tests/unit/news-alert-formatting.test.js),
+		// where the shorthand is absent but the calibration block is present.
+		const qualityTier = (analysis.calibration
+			&& typeof analysis.calibration.qualityTier === 'string'
+			&& analysis.calibration.qualityTier.trim())
+			? analysis.calibration.qualityTier.trim()
+			: '';
+		if (qualityTier) {
+			const qualityPenalty = typeof analysis.calibration.qualityPenalty === 'number'
+				? ` (x${analysis.calibration.qualityPenalty})`
+				: '';
+			message += `Source Quality: ${qualityTier}${qualityPenalty}\n`;
+		}
+
 		if (marketContext) {
 			if (marketContext.price) {
 				const change = marketContext.change24h ?? 0;
@@ -1959,7 +2006,7 @@ class NewsAnalyzer {
 		}
 
 		if (analysis.invalidation_hint && typeof analysis.invalidation_hint === 'string' && analysis.invalidation_hint.trim()) {
-			message += `Invalidación: ${analysis.invalidation_hint.trim()}\n`;
+			message += `Invalidación: ${markdownV2Formatter.format(analysis.invalidation_hint.trim())}\n`;
 		}
 
 		if (analysis.sources && Array.isArray(analysis.sources) && analysis.sources.length > 0) {

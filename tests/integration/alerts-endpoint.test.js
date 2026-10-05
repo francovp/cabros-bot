@@ -252,7 +252,7 @@ describe('Alerts API Integration Tests', () => {
 			.expect(400);
 
 		expect(res.body).toEqual({
-			error: "Invalid include parameter 'unknown_field'. Allowed values: enrichment_summary.",
+			error: 'Invalid include parameter \'unknown_field\'. Allowed values: enrichment_summary.',
 			code: 'INVALID_REQUEST',
 		});
 	});
@@ -407,6 +407,43 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	// ── Issue #1285 ──────────────────────────────────────────────────────────
+	// The 503 body carried no machine-readable reason, so a rejected query was
+	// indistinguishable from a credential failure without log access.
+	it('surfaces the sanitized Firestore category on a rejected query', async () => {
+		const error = new Error('Alert storage is enabled but Firestore is unavailable. Firestore failed precondition: a missing composite index is the usual cause.');
+		error.code = 'STORAGE_UNAVAILABLE';
+		error.category = 'failed_precondition';
+		error.missingIndex = true;
+		alertStorageService.listAlerts.mockRejectedValue(error);
+
+		const res = await request(app)
+			.get('/api/alerts')
+			.set('x-api-key', 'test-key')
+			.expect(503);
+
+		expect(res.body).toMatchObject({
+			code: 'STORAGE_UNAVAILABLE',
+			category: 'failed_precondition',
+			missingIndex: true,
+		});
+	});
+
+	it('omits category and missingIndex when the error carries no valid category', async () => {
+		const error = new Error('Alert storage is enabled but Firestore is unavailable.');
+		error.code = 'STORAGE_UNAVAILABLE';
+		error.category = 'definitely_not_a_real_category';
+		alertStorageService.summarizeAlerts.mockRejectedValue(error);
+
+		const res = await request(app)
+			.get('/api/alerts/summary')
+			.set('x-api-key', 'test-key')
+			.expect(503);
+
+		expect(res.body).not.toHaveProperty('category');
+		expect(res.body).not.toHaveProperty('missingIndex');
+	});
+
 	it('returns an alert analytics summary for a bounded time window', async () => {
 		alertStorageService.summarizeAlerts.mockResolvedValue({
 			window: {
@@ -423,6 +460,13 @@ describe('Alerts API Integration Tests', () => {
 				plain: 1,
 				tradingViewData: 1,
 				withoutTradingViewData: 1,
+			},
+			costByFeature: {
+				grounding: { alerts: 1, batches: 0, symbols: 1, inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.001 },
+				'news-analysis': { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+				'expanded-analysis': { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+				scanner: { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+				enrichment: { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
 			},
 			enrichment: {
 				enrichedAlerts: 1,
@@ -481,6 +525,13 @@ describe('Alerts API Integration Tests', () => {
 					plain: 1,
 					tradingViewData: 1,
 					withoutTradingViewData: 1,
+				},
+				costByFeature: {
+					grounding: { alerts: 1, batches: 0, symbols: 1, inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.001 },
+					'news-analysis': { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+					'expanded-analysis': { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+					scanner: { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+					enrichment: { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
 				},
 				enrichment: {
 					enrichedAlerts: 1,
@@ -571,6 +622,42 @@ describe('Alerts API Integration Tests', () => {
 			.expect(200);
 
 		expect(res.body.summary.enrichment.evidenceCoverage).toEqual(evidenceCoverage);
+	});
+
+	it('returns sentiment calibration from the protected summary endpoint', async () => {
+		const sentimentCalibration = {
+			sampleCount: 97,
+			evaluated: true,
+			saturated: true,
+			reason: 'top_band_concentration',
+			min: 0.55,
+			max: 0.85,
+			p10: 0.7,
+			p50: 0.8,
+			p90: 0.85,
+			spread: 0.15,
+			distinctValueCount: 7,
+			bucketCount: 4,
+			buckets: [
+				{ lowerBound: 0.5, upperBound: 0.6, count: 1 },
+				{ lowerBound: 0.6, upperBound: 0.7, count: 8 },
+				{ lowerBound: 0.7, upperBound: 0.8, count: 46 },
+				{ lowerBound: 0.8, upperBound: 0.9, count: 42 },
+			],
+			topBandCount: 85,
+			topBandShare: 0.876289,
+			rawScoreCapCount: 13,
+		};
+		alertStorageService.summarizeAlerts.mockResolvedValue({
+			enrichment: { sentimentCalibration },
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/summary')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(res.body.summary.enrichment.sentimentCalibration).toEqual(sentimentCalibration);
 	});
 
 	it('omits unfiltered shadow metrics from filtered summaries', async () => {
@@ -790,8 +877,8 @@ describe('Alerts API Integration Tests', () => {
 					useTradingViewData: true,
 					tradingViewEnrichmentStatus: 'partial',
 					deliveryResults: [{ channel: 'whatsapp', success: false, messageId: null, errorCode: 'PROVIDER_LIMIT', statusCode: 429 }],
-				suppressedRepeat: true,
-				tokenUsage: null,
+					suppressedRepeat: true,
+					tokenUsage: null,
 					text: '=@SUM(1,1), "quoted"\r\n+next',
 				},
 			],
@@ -813,12 +900,22 @@ describe('Alerts API Integration Tests', () => {
 			includeEnrichment: false,
 		});
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
-		expect(res.text).toContain("'=alert-1,,-42,'@webhook");
+		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
+		expect(res.text).toContain('\'=alert-1,,-42,\'@webhook');
 		expect(res.text).toContain('"\'=@SUM(1,1), ""quoted""\r\n+next"');
 		expect(res.text).not.toContain('=alert-1,-42,@webhook');
 		expect(res.text).toContain('PROVIDER_LIMIT');
 		expect(res.text).toContain('}]",true,,');
+	});
+
+	it('includes entry-price mirrors in CSV export', async () => {
+		alertStorageService.exportAlerts.mockResolvedValue({ alerts: [{ id: 'priced-alert', currentPrice: 100, priceCurrency: 'USD' }] });
+		const res = await request(app)
+			.get('/api/alerts/export?format=csv&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z')
+			.set('x-api-key', 'test-key').expect(200);
+		const [header, row] = res.text.trim().split('\n').map(line => line.split(','));
+		expect(row[header.indexOf('currentPrice')]).toBe('100');
+		expect(row[header.indexOf('priceCurrency')]).toBe('USD');
 	});
 
 	it('includes news-monitor metadata in CSV export', async () => {
@@ -838,6 +935,7 @@ describe('Alerts API Integration Tests', () => {
 					confidence: 0.85,
 					sentimentScore: 0.75,
 					dedupStatus: 'fresh',
+					feature: 'news-analysis',
 					channels: ['telegram'],
 					deliveryResults: [{ channel: 'telegram', success: true }],
 					tokenUsage: { inputTokens: 100, outputTokens: 50, totalTokens: 150, totalCost: 0.001 },
@@ -852,9 +950,10 @@ describe('Alerts API Integration Tests', () => {
 			.expect(200);
 
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
+		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
 		expect(res.text).toContain('news-123,req-news-456,2026-06-06T12:00:00.000Z,news-monitor,news_event,true,false,false,not_applicable,price_surge,0.85,0.75,fresh');
 		expect(res.text).toContain('BTCUSDT: Bitcoin surges past 100k');
+		expect(res.text).toContain(',news-analysis,');
 	});
 
 	it('neutralizes tab- and carriage-return-prefixed formulas in CSV strings', async () => {
@@ -872,7 +971,7 @@ describe('Alerts API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(200);
 
-		expect(res.text).toContain("'\t=alert-1");
+		expect(res.text).toContain('\'\t=alert-1');
 		expect(res.text).toContain('"\'\r@received-at"');
 		expect(res.text).toContain('"\'\n=alert-text"');
 	});

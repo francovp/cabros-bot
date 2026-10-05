@@ -35,7 +35,8 @@ const {
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
 
-function resolveBot(botOrGetter) {	if (typeof botOrGetter === 'function') {
+function resolveBot(botOrGetter) {
+	if (typeof botOrGetter === 'function') {
 		return botOrGetter();
 	}
 
@@ -65,6 +66,24 @@ function postMarketScannerAlert(botOrGetter) {
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseMarketScannerRequest(req);
 			const timeoutMs = getMarketScannerTimeoutMs();
+			const mcpUnavailable = getMcpUnavailableReason();
+			if (mcpUnavailable) {
+				const scanResults = buildSkippedScanResults(parsed.scans, mcpUnavailable);
+				console.debug(`[MarketScanner] ${mcpUnavailable}`);
+				return res.status(502).json({
+					success: false,
+					ranked: parsed.ranked === true,
+					includeMultiTimeframe: parsed.includeMultiTimeframe === true,
+					code: 'TRADINGVIEW_MCP_UNAVAILABLE',
+					error: mcpUnavailable,
+					scanResults: compactScanResults(scanResults),
+					summary: buildSummary(scanResults, []),
+					timedOut: false,
+					timeoutMs,
+					requestId,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
+				});
+			}
 			const deadline = createScannerDeadline(timeoutMs, req.requestDeadlineSignal);
 			let scanResults;
 
@@ -154,6 +173,10 @@ function postMarketScannerAlert(botOrGetter) {
 					requestId,
 					text: alertText,
 					symbol: scannerSymbols[0] || null,
+					// A scanner run covers many symbols but persists one report document,
+					// so record the complete scanned symbol set.
+					symbols: scannerSymbols,
+					batchId: requestId,
 					exchange: parsed.exchange || null,
 					enriched: false,
 					enrichmentData: null,
@@ -404,6 +427,13 @@ function compactScanResults(results, includeScores = false) {
 				errorCategory: result.errorCategory || null,
 			};
 		}
+		if (result.status === 'skipped') {
+			return {
+				scan: result.scan,
+				status: result.status,
+				reason: result.reason,
+			};
+		}
 
 		const compact = {
 			scan: result.scan,
@@ -473,6 +503,57 @@ function appendTimeoutResults(results, scans, error) {
 			error,
 		});
 	});
+}
+
+// Fast-fail gate for a provider that is known-down, gated on the circuit breaker's
+// *recoverable* state rather than the sticky runtime status.
+//
+// `runtimeStatus.status === 'degraded'` alone is NOT a valid gate: it is only cleared
+// by a later *successful* MCP call, so gating on it skips the very calls that could
+// clear it -- a self-locking outage that never self-heals in a scanner-only process.
+// `getCircuitBreakerStatus()` is time-based: `getBreakerState()` moves open -> half-open
+// once the cooldown expires, which is exactly the "is a bounded probe allowed right now?"
+// signal we need. So fail fast only while the breaker is *still* open, and let the first
+// request after the cooldown act as the recovery probe.
+const FAIL_FAST_ERROR_CATEGORIES = ['http_5xx', 'request_failed', 'circuit_breaker_open'];
+
+function getMcpUnavailableReason() {
+	let mcpStatus = null;
+	try {
+		mcpStatus = typeof tradingViewMcpService?.getStatus === 'function'
+			? tradingViewMcpService.getStatus({ enabled: true })
+			: null;
+	} catch (error) {
+		// Fail open: an unavailable readiness lookup must not block the scanner.
+		console.debug('[MarketScanner] MCP readiness lookup failed; continuing scan:', error.message);
+		return null;
+	}
+
+	if (!mcpStatus || mcpStatus.status !== 'degraded') {
+		return null;
+	}
+	if (!FAIL_FAST_ERROR_CATEGORIES.includes(mcpStatus.lastErrorCategory)) {
+		return null;
+	}
+
+	const breakerState = mcpStatus.circuitBreaker && mcpStatus.circuitBreaker.state;
+	// No reported breaker state (e.g. a degraded status from an older/alternate
+	// implementation) means "unknown", and unknown is treated as probeable so the gate
+	// can never permanently lock the scanner out.
+	if (breakerState !== 'open') {
+		return null;
+	}
+
+	return `TradingView MCP is currently unavailable (circuit breaker: open, lastError: ${mcpStatus.lastErrorCategory}). Scans skipped.`;
+}
+
+function buildSkippedScanResults(scans, reason) {
+	return scans.map((scan) => ({
+		scan,
+		status: 'skipped',
+		reason,
+		items: [],
+	}));
 }
 
 function hasTimedOut(results) {
