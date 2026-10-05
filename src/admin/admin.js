@@ -74,6 +74,18 @@ const VIEW_ACTIONS = {
 };
 
 const STATUS_DEFINITION = { method: 'GET', path: '/api/status', label: 'Refresh status' };
+// GET is a viewer-level read, POST is an operator-level mutation that spends real
+// outbound provider quota, so the two carry different roles and the run confirms first.
+const SELFTEST_DEFINITION = {
+	method: 'GET', path: '/api/selftest', label: 'Load self-test', requiredRole: 'admin.viewer',
+};
+const SELFTEST_RUN_DEFINITION = {
+	method: 'POST',
+	path: '/api/selftest/run',
+	label: 'Run self-test',
+	requiredRole: 'admin.operator',
+	confirm: 'Run the self-test now? It makes real outbound checks against external providers.',
+};
 const STATUS_LABELS = {
 	ready: 'Ready',
 	disabled: 'Disabled',
@@ -101,6 +113,7 @@ const DISPLAY_LABELS = {
 const VIEW_TITLES = {
 	overview: 'Overview',
 	status: 'Status',
+	diagnostics: 'Diagnostics',
 	trading: 'Trading',
 	alerts: 'Alerts',
 	outcomes: 'Outcomes',
@@ -2038,6 +2051,97 @@ const createStatusExplorer = () => {
 	refreshButton.addEventListener('click', () => { loadStatus(); });
 	if (getElement('api-key')?.value || (authState.enabled && authState.user)) loadStatus();
 	else metrics.replaceChildren(element('p', { className: 'request-state', text: 'Enter an API key to load live status.' }));
+	return dashboard;
+};
+
+const SELFTEST_UNAVAILABLE_TEXT = 'The self-test report is unavailable. GET /api/selftest did not return a result, so no check evidence exists to show.';
+const SELFTEST_MODULE_MISSING_TEXT = 'Diagnostics module unavailable. src/admin/admin-diagnostics.js did not load, so the self-test report cannot be rendered.';
+
+const getDiagnosticsApi = () => window.CabrosAdminDiagnostics || null;
+
+const createDiagnosticsView = () => {
+	const diagnostics = getDiagnosticsApi();
+	const dashboard = element('div', { className: 'dashboard' });
+	const hero = element('section', { className: 'dashboard-hero' });
+	const heroCopy = element('div');
+	const lastChecked = element('p', { className: 'request-state', text: 'Waiting for the self-test result…' });
+	heroCopy.append(
+		element('p', { className: 'eyebrow', text: 'Outbound diagnostics' }),
+		element('h2', { text: 'Self-test' }),
+		element('p', { text: 'Per-check evidence for Telegram, Gemini, TradingView MCP, Firestore and Binance. Run it when something looks quiet.' }),
+		lastChecked,
+	);
+	const heroActions = element('div', { className: 'selftest-actions' });
+	const refreshButton = element('button', { className: 'button-ghost', text: 'Refresh report' });
+	refreshButton.type = 'button';
+	const runButton = element('button', { className: 'button-primary', text: 'Run self-test' });
+	runButton.type = 'button';
+	heroActions.append(refreshButton, runButton);
+	hero.append(heroCopy, heroActions);
+
+	const reportHost = element('div', { className: 'selftest-host' });
+	const runOutput = element('div', { className: 'response-block', text: 'No self-test run from this console yet.' });
+	dashboard.append(hero, reportHost, runOutput);
+	if (!diagnostics) {
+		lastChecked.textContent = 'Diagnostics module unavailable.';
+		reportHost.append(createEmptyState(SELFTEST_MODULE_MISSING_TEXT));
+		return dashboard;
+	}
+	reportHost.append(element('p', { className: 'request-state', text: 'Loading the last self-test result…' }));
+
+	const renderReport = (data) => {
+		lastChecked.textContent = `Last checked ${new Date().toLocaleTimeString()}`;
+		reportHost.replaceChildren(diagnostics.renderSelfTest(data));
+	};
+
+	const renderUnavailable = (failure) => {
+		lastChecked.textContent = 'Self-test report unavailable.';
+		const serverMessage = failure && typeof failure.error === 'string' ? failure.error.trim() : '';
+		reportHost.replaceChildren(diagnostics.renderUnavailable(serverMessage || SELFTEST_UNAVAILABLE_TEXT));
+	};
+
+	// sendRequest resolves with undefined for two different situations: the response was an
+	// HTTP failure, or the request never reached the network at all. The pre-flight returns
+	// (declined confirm, denied role, expired sign-in, unbuildable request, superseded view)
+	// taught this console nothing new, so overwriting the loaded report with "unavailable"
+	// would destroy evidence that is still the best answer available. An attempted request
+	// that failed is the opposite case and does repaint.
+	const NO_NEW_EVIDENCE_OUTCOMES = new Set([
+		REQUEST_OUTCOMES.AUTHORIZATION_DENIED,
+		REQUEST_OUTCOMES.SIGN_IN_EXPIRED,
+		REQUEST_OUTCOMES.INVALID_REQUEST,
+		REQUEST_OUTCOMES.CANCELLED,
+		REQUEST_OUTCOMES.SUPERSEDED,
+	]);
+
+	const requestSelfTest = async (definition, button) => {
+		let failure = null;
+		let outcome = null;
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			button,
+			output: runOutput,
+			captureResponseData: (parsed) => {
+				if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) failure = parsed;
+			},
+			captureOutcome: (recorded) => { outcome = recorded; },
+		});
+		if (data && typeof data === 'object') {
+			renderReport(data);
+			return;
+		}
+		if (outcome && NO_NEW_EVIDENCE_OUTCOMES.has(outcome)) return;
+		renderUnavailable(failure);
+	};
+
+	refreshButton.addEventListener('click', () => { requestSelfTest(SELFTEST_DEFINITION, refreshButton); });
+	runButton.addEventListener('click', () => {
+		requestSelfTest(SELFTEST_RUN_DEFINITION, runButton).catch(() => {});
+	});
+
+	if (getElement('api-key')?.value || (authState.enabled && authState.user)) requestSelfTest(SELFTEST_DEFINITION, refreshButton).catch(() => {});
+	else reportHost.replaceChildren(createEmptyState('Enter an API key or sign in to load the self-test report.'));
 	return dashboard;
 };
 
@@ -7375,6 +7479,10 @@ const renderView = async (name) => {
 		}
 		if (name === 'status') {
 			view.append(createStatusExplorer());
+			return;
+		}
+		if (name === 'diagnostics') {
+			view.append(createDiagnosticsView());
 			return;
 		}
 		if (name === 'newsMonitor') {

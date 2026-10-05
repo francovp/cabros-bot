@@ -262,7 +262,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['overview', 'status', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'newsMonitor', 'trading', 'playground'].forEach((view) => {
+	['overview', 'status', 'diagnostics', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'newsMonitor', 'trading', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -365,11 +365,17 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		},
 	};
 	context.window.fetch = context.fetch;
-	// admin-charts.js and admin-newsmonitor.js are evaluated in the browser context, not require()d
-	// into Node: they build nodes through the ambient `document`, which only exists inside this vm,
-	// and they publish their APIs onto the shared `window` object that admin.js reads. Order
-	// mirrors the deferred <script> order in index.html.
-	['admin-charts.js', 'admin-newsmonitor.js', 'admin.js'].forEach((relative) => {
+	// admin-charts.js, admin-diagnostics.js and admin-newsmonitor.js are evaluated in the
+	// browser context, not require()d into Node: they build nodes through the ambient
+	// `document`, which only exists inside this vm, and they publish their APIs onto the
+	// shared `window` object that admin.js reads. Order mirrors the deferred <script> order
+	// in index.html.
+	[
+		'admin-charts.js',
+		'admin-diagnostics.js',
+		'admin-newsmonitor.js',
+		'admin.js',
+	].forEach((relative) => {
 		vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../src/admin', relative), 'utf8'), context);
 	});
 	documentListeners.DOMContentLoaded();
@@ -8041,6 +8047,361 @@ describe('structured analysis forms', () => {
 			await stream.emit('delivery-failure', { symbol: 'ETHUSDT', channel: 'whatsapp', error: 'boom' });
 			await flush();
 			expect(feed.children.length).toBe(40);
+		});
+	});
+
+	describe('Diagnostics self-test view', () => {
+		const selfTestResult = (overrides = {}) => ({
+			status: 'fail',
+			summary: { pass: 2, warn: 1, fail: 1, skipped: 1 },
+			checks: [
+				{ id: 'telegram.bot_info', status: 'pass', message: 'Bot @cabros_bot is up', durationMs: 12, evidence: { id: 4242 } },
+				{ id: 'auth.api_key', status: 'pass', message: 'API key is configured', durationMs: 0 },
+				{ id: 'gemini.grounding', status: 'warn', message: 'Grounding returned 0 sources', durationMs: 3100, evidence: { sources: [], attempts: 2 } },
+				{ id: 'firestore.collections', status: 'fail', message: 'Firestore read failed: permission_denied', durationMs: 4980, evidence: { reason: 'permission_denied', retryable: false } },
+				{ id: 'binance.trading', status: 'skipped', message: 'ENABLE_BINANCE_TRADING is not enabled', durationMs: 0 },
+			],
+			service: { name: 'cabros-crypto-bot', version: '1.2.3', commit: 'abc1234', uptimeSec: 90061, nodeVersion: 'v24.18.0' },
+			startedAt: '2026-10-05T02:00:00.000Z',
+			finishedAt: '2026-10-05T02:00:09.000Z',
+			durationMs: 9000,
+			requestId: 'selftest-request-1',
+			cached: true,
+			...overrides,
+		});
+
+		const diagnosticsBrowser = (fetchImpl, options = {}) => {
+			const requests = [];
+			const browser = createBrowser({
+				storedKey: 'selftest-key',
+				...options,
+				fetchImpl: async (url, requestOptions) => {
+					requests.push([url, requestOptions]);
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return fetchImpl(url, requestOptions);
+				},
+			});
+			return { browser, requests };
+		};
+
+		it('leads with the overall status badge and names service identity and timings', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult()));
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const view = browser.elementsById.view;
+			const badges = findAll(view, (node) => node.className.includes('status-badge'));
+			expect(badges[0].textContent).toBe('Fail');
+			expect(badges[0].className).toContain('status-danger');
+			expect(view.textContent).toContain('cabros-crypto-bot');
+			expect(view.textContent).toContain('v24.18.0');
+			expect(view.textContent).toContain('Started');
+			expect(view.textContent).toContain('Finished');
+			expect(view.textContent).toContain('9000 ms');
+		});
+
+		it('sorts failing and unknown checks before passing and skipped ones', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult({
+				checks: [
+					{ id: 'channels.enabled', status: 'pass', message: 'Telegram enabled', durationMs: 1 },
+					{ id: 'service.metadata', status: 'skipped', message: 'No metadata', durationMs: 0 },
+					{ id: 'telegram.bot_info', status: 'unknown', message: 'Bot handle not resolved', durationMs: 7 },
+					{ id: 'auth.api_key', status: 'pass', message: 'API key configured', durationMs: 0 },
+					{ id: 'gemini.grounding', status: 'fail', message: 'Grounding unreachable', durationMs: 5000 },
+				],
+			})));
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const renderedIds = findAll(browser.elementsById.view, (node) => node.className === 'mono-line')
+				.map((node) => node.textContent);
+			expect(renderedIds).toEqual([
+				'gemini.grounding',
+				'telegram.bot_info',
+				'auth.api_key',
+				'channels.enabled',
+				'service.metadata',
+			]);
+		});
+
+		it('renders nested evidence as a readable definition list', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult({
+				status: 'warn',
+				checks: [
+					{
+						id: 'telegram.env',
+						status: 'pass',
+						message: 'Bot is up',
+						durationMs: 42,
+						evidence: {
+							chatId: -1001234,
+							topicRoutes: { webhookSignal: 7, newsMonitor: 11 },
+							allowedChatIds: ['-1001234', '-1009999'],
+							nested: { deep: { value: true } },
+						},
+					},
+				],
+			})));
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const view = browser.elementsById.view;
+			const evidenceList = find(view, (node) => node.tagName === 'DL' && node.className.includes('evidence-list'));
+			expect(evidenceList).toBeDefined();
+			expect(evidenceList.textContent).toContain('Chat Id');
+			expect(evidenceList.textContent).toContain('-1001234');
+			expect(evidenceList.textContent).toContain('Topic Routes');
+			expect(evidenceList.textContent).toContain('Allowed Chat Ids');
+			expect(evidenceList.textContent).toContain('Nested');
+			expect(evidenceList.textContent).toContain('Value');
+			expect(evidenceList.textContent).not.toContain('{"');
+			expect(evidenceList.textContent).not.toContain('":');
+		});
+
+		it('says in words when the result is cached or expired', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult({ expired: true })));
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const notice = browser.elementsById.view.textContent;
+			expect(notice).toContain('Cached result');
+			expect(notice).toContain('no longer current');
+			expect(notice).toContain('Run self-test');
+		});
+
+		it('says in words when the result is a fresh cached read', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult({ cached: true })));
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const notice = browser.elementsById.view.textContent;
+			expect(notice).toContain('Cached result');
+			expect(notice).not.toContain('no longer current');
+		});
+
+		it('confirms before running and shows the fresh result without a cached notice', async () => {
+			const confirmations = [];
+			const { browser, requests } = diagnosticsBrowser(async (url) => {
+				if (url === '/api/selftest/run') return response(selfTestResult({ cached: false, status: 'pass' }));
+				return response(selfTestResult());
+			}, {
+				confirm: (message) => {
+					confirmations.push(message);
+					return true;
+				},
+			});
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const runButton = findButton(browser.elementsById.view, 'Run self-test');
+			expect(runButton).toBeDefined();
+			expect(requests.some(([url]) => url === '/api/selftest/run')).toBe(false);
+
+			await runButton.dispatch('click');
+			await flush();
+
+			expect(confirmations).toHaveLength(1);
+			expect(confirmations[0]).toContain('outbound checks');
+			expect(requests.at(-1)[0]).toBe('/api/selftest/run');
+			expect(browser.elementsById.view.textContent).toContain('Pass');
+			expect(browser.elementsById.view.textContent).not.toContain('Cached result');
+			expect(runButton.disabled).toBe(false);
+		});
+
+		it('never dispatches the run when the operator declines the confirmation', async () => {
+			const { browser, requests } = diagnosticsBrowser(async () => response(selfTestResult()), {
+				confirm: () => false,
+			});
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const runButton = findButton(browser.elementsById.view, 'Run self-test');
+			await runButton.dispatch('click');
+			await flush();
+
+			expect(requests.some(([url]) => url === '/api/selftest/run')).toBe(false);
+		});
+
+		it('leaves the loaded report untouched when the operator declines the run confirmation', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult()), {
+				confirm: () => false,
+			});
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const view = browser.elementsById.view;
+			expect(findAll(view, (node) => node.className === 'mono-line')).toHaveLength(5);
+
+			await findButton(view, 'Run self-test').dispatch('click');
+			await flush();
+
+			// sendRequest resolves with undefined for an HTTP failure and for a declined
+			// confirm alike. Collapsing the two replaced a five-check Fail verdict with an
+			// "Unavailable" report while the sibling response block still read HTTP 200.
+			expect(findAll(view, (node) => node.textContent === 'Unavailable')).toHaveLength(0);
+			expect(findAll(view, (node) => node.className === 'mono-line')).toHaveLength(5);
+			expect(view.textContent).toContain('Firestore read failed: permission_denied');
+			expect(view.textContent).toContain('Self-test verdict');
+			expect(view.textContent).not.toContain('Treat this as unknown, not as a pass');
+			expect(findAll(view, (node) => node.className.includes('status-badge'))[0].textContent).toBe('Fail');
+		});
+
+		it('still repaints the report when the refresh is dispatched and then fails', async () => {
+			let reads = 0;
+			const { browser } = diagnosticsBrowser(async (url) => {
+				if (url === '/api/selftest' && (reads += 1) > 1) throw new TypeError('Failed to fetch');
+				return response(selfTestResult());
+			});
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const view = browser.elementsById.view;
+			expect(findAll(view, (node) => node.className === 'mono-line')).toHaveLength(5);
+
+			await findButton(view, 'Refresh report').dispatch('click');
+			await flush();
+
+			// An attempted request that failed is new evidence about the endpoint, unlike a
+			// declined dialog, so the report is allowed to change.
+			expect(findAll(view, (node) => node.textContent === 'Unavailable')).toHaveLength(1);
+			expect(findAll(view, (node) => node.className === 'mono-line')).toHaveLength(0);
+		});
+
+		it('locks the run button while the request is in flight', async () => {
+			let releaseRun;
+			const runPending = new Promise((resolve) => { releaseRun = resolve; });
+			const { browser } = diagnosticsBrowser(async (url) => {
+				if (url === '/api/selftest/run') {
+					await runPending;
+					return response(selfTestResult({ cached: false }));
+				}
+				return response(selfTestResult());
+			}, { confirm: () => true });
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const runButton = findButton(browser.elementsById.view, 'Run self-test');
+			await runButton.dispatch('click');
+			expect(runButton.disabled).toBe(true);
+
+			releaseRun();
+			await flush();
+			expect(runButton.disabled).toBe(false);
+		});
+
+		it('states plainly when no self-test has been run yet', async () => {
+			const { browser } = diagnosticsBrowser(async () => response({
+				status: 'unknown',
+				message: 'No self-test has been run yet. POST /api/selftest/run to trigger one.',
+				requestId: 'selftest-request-empty',
+				cached: false,
+			}));
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const view = browser.elementsById.view;
+			expect(view.textContent).toContain('No self-test has been run yet');
+			expect(view.textContent).toContain('Unknown');
+			expect(findAll(view, (node) => node.className === 'mono-line')).toHaveLength(0);
+		});
+
+		it('states plainly when the self-test endpoint is unavailable', async () => {
+			const { browser } = diagnosticsBrowser(async (url) => {
+				if (url === '/api/selftest') {
+					return response({ error: 'Self-test is not available in this deployment.', code: 'FEATURE_DISABLED', requestId: 'r-1' }, 503);
+				}
+				return response({});
+			});
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const view = browser.elementsById.view;
+			expect(view.textContent).toContain('Self-test is not available in this deployment.');
+			expect(view.textContent).toContain('unavailable');
+			expect(findAll(view, (node) => node.className === 'mono-line')).toHaveLength(0);
+		});
+
+		it('renders a degraded suite without pretending it passed', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult({
+				status: 'warn',
+				summary: { pass: 1, warn: 2, fail: 0, skipped: 1 },
+				checks: [
+					{ id: 'tradingview_mcp.endpoint', status: 'warn', message: 'MCP handshake slow', durationMs: 4800 },
+					{ id: 'channels.enabled', status: 'warn', message: 'Admin Telegram delivery at 0%', durationMs: 2 },
+					{ id: 'auth.api_key', status: 'pass', message: 'API key is configured', durationMs: 0 },
+					{ id: 'binance.trading', status: 'skipped', message: 'ENABLE_BINANCE_TRADING is not enabled', durationMs: 0 },
+				],
+			})));
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const view = browser.elementsById.view;
+			const badges = findAll(view, (node) => node.className.includes('status-badge'));
+			expect(badges[0].textContent).toBe('Warning');
+			expect(badges[0].className).toContain('status-active');
+			expect(view.textContent).toContain('MCP handshake slow');
+			expect(view.textContent).toContain('Admin Telegram delivery at 0%');
+		});
+
+		it('keeps the admin.viewer read and admin.operator run roles distinct', async () => {
+			const dispatched = [];
+			let authStateChanged;
+			const user = {
+				getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+				getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.viewer'] } }),
+			};
+			const auth = {
+				setPersistence: jest.fn().mockResolvedValue(undefined),
+				onAuthStateChanged: jest.fn((listener) => {
+					authStateChanged = listener;
+					listener(null);
+					return jest.fn();
+				}),
+				signInWithEmailAndPassword: jest.fn(async () => {
+					await authStateChanged(user);
+					return { user };
+				}),
+				signOut: jest.fn().mockResolvedValue(undefined),
+			};
+			const browser = createBrowser({
+				firebase: { initializeApp: jest.fn(), auth: jest.fn(() => auth) },
+				confirm: () => true,
+				fetchImpl: async (url) => {
+					if (url === '/admin/auth-config') {
+						return response({ enabled: true, configured: true, config: {
+							apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros',
+						} });
+					}
+					if (url.endsWith('/openapi.json')) return response(contract);
+					dispatched.push(url);
+					return response(selfTestResult());
+				},
+			});
+			await flush();
+			browser.elementsById['auth-email'].value = 'viewer@example.com';
+			browser.elementsById['auth-password'].value = 'password';
+			await browser.elementsById['sign-in'].dispatch('click');
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			expect(dispatched).toContain('/api/selftest');
+
+			const runButton = findButton(browser.elementsById.view, 'Run self-test');
+			await runButton.dispatch('click');
+			await flush();
+
+			expect(dispatched).not.toContain('/api/selftest/run');
+			expect(browser.elementsById.view.textContent).toContain('admin role cannot perform');
+		});
+
+		it('renders safely when the diagnostics module failed to load', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult()));
+			delete browser.context.window.CabrosAdminDiagnostics;
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			expect(browser.elementsById.view.textContent).toContain('Diagnostics module unavailable');
+			expect(browser.titleHistory.at(-1)).toContain('Diagnostics');
 		});
 	});
 

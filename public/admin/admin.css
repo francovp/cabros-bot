@@ -129,6 +129,21 @@ textarea { resize: vertical; font-family: inherit; }
 .status-misconfigured, .status-unknown { background: #fff4db; color: var(--warning); }
 .status-active { background: #fff4db; color: var(--warning); }
 .status-danger { background: #fff0f1; color: var(--danger); }
+.selftest-actions { display: flex; flex-wrap: wrap; gap: .6rem; }
+.selftest-verdict { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.selftest-verdict .eyebrow { margin: 0; }
+.selftest-verdict .status-badge { padding: .55rem 1rem; font-size: 1.05rem; letter-spacing: .04em; }
+.selftest-totals { margin: 0; color: #3e4f60; font-size: .95rem; }
+.selftest-notice { margin: 0; padding: .6rem .75rem; border-left: 3px solid var(--warning); border-radius: 0 var(--radius-md) var(--radius-md) 0; background: #fffaf0; color: #6a5312; }
+.selftest-unavailable { margin: 0; font-size: 1rem; }
+.selftest-host { display: grid; gap: .8rem; }
+.selftest-check { display: block; min-width: 0; padding: .85rem 1rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: #ffffff; }
+.selftest-check .section-heading { flex-wrap: wrap; align-items: start; }
+.selftest-check .section-heading > div:first-child { min-width: 0; flex: 1 1 8rem; }
+.selftest-check-meta { display: flex; flex: 0 0 auto; align-items: center; gap: .5rem; }
+.selftest-duration { color: var(--muted); font-family: var(--font-mono); font-size: .75rem; }
+.evidence-list { margin-top: .6rem; padding-top: .6rem; grid-template-columns: minmax(0, 1fr); }
+.evidence-list dt { overflow-wrap: anywhere; }
 .meter { display: flex; align-items: center; gap: .6rem; margin: .2rem 0; }
 .meter .progress-track { flex: 1 1 auto; }
 .meter-label { color: var(--muted); font-size: .76rem; white-space: nowrap; overflow-wrap: anywhere; }

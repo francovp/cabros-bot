@@ -161,6 +161,9 @@ Unlike equity market data, this feature **does** run a bounded startup probe (5s
 - `ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT` - Enable multi-agent consensus analysis fallback for `/api/webhook/symbol-analysis` (`true` or `false`, default: `false`)
 - `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` - Suppress duplicate channel delivery for the same `exchange|symbol|timeframe|side` signal within its cooldown window; suppressed alerts are still persisted with a `suppressedRepeat: true` marker and opposite-side flips always deliver (`true` or `false`, default: `false`)
 - `ALERT_SIGNAL_COOLDOWN_BARS` - Cooldown length in alert-timeframe bars for repeat suppression (`1`-`10`, default: `1`)
+- `ENABLE_ALERT_SYNTH_BURST_AGGREGATION` - Collapse same-direction multi-symbol alert bursts into one regime message per channel (`true` or `false`, default: `false`)
+- `ALERT_BURST_WINDOW_MS` - Buffered window in milliseconds before a burst is evaluated; also the maximum latency added to a parsed alert (`1000`-`15000`, default: `3000`)
+- `ALERT_BURST_MIN_SIGNALS` - Minimum same-direction signals inside the window required to send one aggregate message; below it every alert is delivered individually (`2`-`20`, default: `3`)
 - Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
 
 #### Firestore Alert Storage
