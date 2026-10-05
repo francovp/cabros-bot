@@ -4,6 +4,7 @@
 const {
 	normalizeUsageMetadata,
 	TokenUsageTracker,
+	PRICING_PER_1M,
 } = require('../../src/lib/tokenUsage');
 
 describe('tokenUsage', () => {
@@ -74,9 +75,9 @@ describe('tokenUsage', () => {
 			const tracker = new TokenUsageTracker();
 			tracker.addUsage({ inputTokens: 1000000, outputTokens: 1000000 }, 'azure-llm');
 			const json = tracker.toJSON();
-			expect(json.inputCost).toBe(0);
-			expect(json.outputCost).toBe(0);
-			expect(json.totalCost).toBe(0);
+			expect(json.inputCost).toBeCloseTo(PRICING_PER_1M.default.input, 10);
+			expect(json.outputCost).toBeCloseTo(PRICING_PER_1M.default.output, 10);
+			expect(json.totalCost).toBeCloseTo(PRICING_PER_1M.default.input + PRICING_PER_1M.default.output, 10);
 			expect(json.pricing.unknownModelPricing).toBe(true);
 			expect(json.pricing.unknownModels).toContain('azure-llm');
 		});
