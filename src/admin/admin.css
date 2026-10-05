@@ -168,7 +168,18 @@ textarea { resize: vertical; font-family: inherit; }
 @keyframes shimmer { 100% { transform: translateX(100%); } }
 .data-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
 .data-table th, .data-table td { padding: .5rem .65rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
-.data-table th { color: var(--muted); font-size: .72rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+/* `white-space: nowrap` is deliberately absent from this rule. Seven of the eight
+   `.data-table` sites in admin.js append the table straight into a `.dashboard-section`
+   with no `.table-scroll` wrapper, and a grid item defaults to `min-width: auto`, so an
+   unbreakable header there sets the page's own min-content width instead of panning
+   inside a box. Measured on the Outcomes "Performance by window" table, a global nowrap
+   took page-level horizontal overflow from 0px to 468px at 375px (523px at 320px, 66px at
+   1024px). Wrapping headers are what every unwrapped table in this console has always had. */
+.data-table th { color: var(--muted); font-size: .72rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+/* Scoped to the scroller, so it cannot reach an unwrapped table: a `.data-table` that does
+   have a `.table-scroll` around it keeps one-line headers and pans instead of stacking
+   them into tall cells. This selector MUST stay scoped — see the note above. */
+.table-scroll .data-table th { white-space: nowrap; }
 .data-table tr:last-child td { border-bottom: none; }
 .copy-button { padding: .3rem .55rem; border-radius: var(--radius-sm); font-size: .72rem; font-weight: 700; color: var(--muted); }
 .copy-button:hover { color: #202833; }

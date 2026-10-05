@@ -5973,6 +5973,36 @@ describe('news monitor operations view', () => {
 		expect(view.textContent).not.toContain('Loading delivery analytics…');
 	});
 
+	it('clears the breakdowns when a summary read fails after a good one', async () => {
+		// The previous window's charts and tables are the dangerous part here: left in place
+		// they sit directly beside "Delivery analytics unavailable." and read as current.
+		let failSummary = false;
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				if (String(url).startsWith('/openapi.json')) return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response(RUNNING);
+				if (String(url).startsWith('/api/news-monitor/summary')) {
+					return failSummary ? response({ error: 'Unavailable' }, 503) : response(SUMMARY);
+				}
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Analyses by symbol');
+		expect(view.textContent).toContain('BTCUSDT');
+
+		failSummary = true;
+		const summaryForm = find(view, (node) => node.tagName === 'FORM' && node.textContent.includes('Load analytics'));
+		await summaryForm.dispatch('submit');
+		await flush();
+
+		expect(view.textContent).toContain('Delivery analytics unavailable.');
+		expect(view.textContent).not.toContain('BTCUSDT');
+		expect(view.textContent).not.toContain('Analyses by event category');
+		expect(view.textContent).not.toContain('price_surge');
+		expect(view.textContent).toContain('Breakdown unavailable');
+	});
+
 	it('claims nothing about the monitor before any status read has happened', async () => {
 		// No API key and no Firebase session: the pause state was never read, so the card
 		// used to render the healthy branch — a green RUNNING badge on a monitor that might

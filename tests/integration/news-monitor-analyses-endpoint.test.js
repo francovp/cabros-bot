@@ -37,6 +37,11 @@ describe('GET /api/news-monitor/analyses and /summary (admin read contract)', ()
 	afterEach(() => {
 		process.env = savedEnv;
 		newsAnalysisStorageService.__resetFirestoreClient();
+		// Undo the app.use() from beforeEach so routes do not accumulate across tests and
+		// leak into later suites that mount against the same app instance.
+		if (app._router && app._router.stack && app._router.stack.length > 0) {
+			app._router.stack.pop();
+		}
 	});
 
 	const seed = async (symbols) => {

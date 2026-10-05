@@ -1316,3 +1316,36 @@ describe('news-monitor stop/target example (GH-712)', () => {
 		expect(confluence.appliedCount + confluence.failedCount).toBeLessThanOrEqual(confluence.attemptedCount);
 	});
 });
+
+// `success` was added to both news-monitor read envelopes but the saved 200 examples kept
+// omitting it, so the examples contradicted the runtime and the schema sitting beside them
+// — and nothing enforced it. These assert each example against the schema that declares the
+// field required, so the drift cannot come back silently.
+describe('news-monitor admin read examples (issue #1290)', () => {
+	const readEndpoints = [
+		{ name: 'GET News Monitor Summary', schema: 'NewsAnalysisSummary' },
+		{ name: 'GET News Monitor Analyses', schema: 'NewsAnalysisList' },
+	];
+
+	readEndpoints.forEach(({ name, schema }) => {
+		it(`${name} saved 200 example carries every field its schema marks required`, () => {
+			const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+			const openapi = JSON.parse(fs.readFileSync(
+				path.join(__dirname, '../../src/openapi/openapi.json'), 'utf8'));
+			const item = findItem(collection.item, name);
+			expect(item).toBeDefined();
+
+			const required = openapi.components.schemas[schema].required || [];
+			expect(required).toContain('success');
+
+			const example = item.response.find((response) => response.code === 200);
+			expect(example).toBeDefined();
+			const body = JSON.parse(example.body);
+
+			// The console reads these bodies directly, so an example that understates the
+			// envelope teaches the next reader the wrong contract.
+			expect(Object.keys(body)).toEqual(expect.arrayContaining(required));
+			expect(body.success).toBe(true);
+		});
+	});
+});

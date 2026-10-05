@@ -719,6 +719,29 @@ describe('admin chart primitives', () => {
 			expect(floor * 16 / viewBoxWidth * 11).toBeGreaterThanOrEqual(8);
 			expect(rule).toMatch(/max-width: none/);
 		});
+
+		// Every `.data-table` in admin.js except one is appended straight into a
+		// `.dashboard-section`, which is a grid item with `min-width: auto`. An unbreakable
+		// header there sets the page's min-content width instead of panning in a box: the
+		// Outcomes "Performance by window" table measured 0px -> 468px of page-level
+		// horizontal overflow at 375px. The harness has no layout engine, so this pins the
+		// structural contract that keeps it unreachable rather than the rendered width.
+		it('never puts an unbreakable header on a table that may render without a scroller', () => {
+			const globalHeaderRule = CSS.match(/^\.data-table th \{([^}]*)\}/m)[1];
+
+			expect(globalHeaderRule).not.toMatch(/white-space:\s*nowrap/);
+		});
+
+		it('scopes any nowrap data-table header to the scroller that can contain it', () => {
+			const scoped = CSS.match(/^\.table-scroll \.data-table th \{([^}]*)\}/m);
+
+			expect(scoped).not.toBeNull();
+			expect(scoped[1]).toMatch(/white-space:\s*nowrap/);
+			// The scroller is what makes the nowrap safe, so its own containment contract is
+			// part of the same guarantee rather than a separate nicety.
+			expect(CSS).toMatch(/\.table-scroll \{[^}]*min-width: 0/);
+			expect(CSS).toMatch(/\.table-scroll \{[^}]*overflow(?:-x)?:\s*auto/);
+		});
 	});
 
 	describe('CSP and asset constraints', () => {

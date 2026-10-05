@@ -392,6 +392,11 @@
 			});
 			if (!data || typeof data !== 'object') {
 				kpiGrid.replaceChildren(createEmptyState('Delivery analytics unavailable.'));
+				// A failed read must not leave the previous window's charts and tables on
+				// screen: unverified numbers beside an error read as current ones.
+				[symbolSection, categorySection, proxySection].forEach((section) => {
+					section.replaceChildren(createEmptyState('Breakdown unavailable — reload to refresh.'));
+				});
 				return undefined;
 			}
 			renderKpis(data);
