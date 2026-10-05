@@ -50,16 +50,38 @@ describe('PromptService', () => {
 		expect(prompt.userPrompt).toEqual(expect.stringContaining('risk_reward_ratio'));
 	});
 
-	it('should include evidence calibration guidance in the local alert enrichment prompt', async () => {
+	it('should include reference anchor calibration guidance in the local alert enrichment prompt', async () => {
 		const service = new PromptService({ logger });
 
 		const prompt = await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, {
 			alertContext: 'Bitcoin breaks resistance',
 		});
 
-		expect(prompt.userPrompt).toEqual(expect.stringContaining('0.9+'));
-		expect(prompt.userPrompt).toEqual(expect.stringContaining('0.6-0.8'));
-		expect(prompt.userPrompt).toEqual(expect.stringContaining('corroborating sources'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('0.90'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('0.60'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('0.30'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('reference anchors'));
+	});
+
+	it('should require a sentiment_score_evidence justification in the local alert enrichment prompt', async () => {
+		const service = new PromptService({ logger });
+
+		const prompt = await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, {
+			alertContext: 'Bitcoin breaks resistance',
+		});
+
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('sentiment_score_evidence'));
+	});
+
+	it('should report the local fallback prompt as calibrated', async () => {
+		const service = new PromptService({ logger });
+
+		const prompt = await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, {
+			alertContext: 'Bitcoin breaks resistance',
+		});
+
+		expect(prompt.schemaDriftDetected).toBe(false);
+		expect(prompt.missingCalibrationGuidance).toEqual([]);
 	});
 
 	it('should include setup_type evidence rubric and omission guidance in the local alert enrichment prompt', async () => {
@@ -245,7 +267,12 @@ describe('PromptService', () => {
 		const prompt = await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'Bitcoin alert context' });
 
 		expect(prompt.schemaDriftDetected).toBe(true);
-		expect(prompt.missingCalibrationGuidance).toEqual(['0.9+', '0.6-0.8', 'corroborating sources']);
+		expect(prompt.missingCalibrationGuidance).toEqual([
+			'sentiment_score_evidence',
+			'0.90',
+			'0.60',
+			'0.30',
+		]);
 	});
 
 	it('should mark schemaDriftDetected as false when remote alert-enrichment prompt includes all required risk fields', async () => {
@@ -254,7 +281,44 @@ describe('PromptService', () => {
 		const remotePrompt = {
 			version: 5,
 			compile: jest.fn().mockReturnValue([
-				{ role: 'system', content: 'You are an analyst. Include invalidation_level, target_level, setup_type, and risk_reward_ratio. Use 0.9+ only with multiple independent corroborating sources; use 0.6-0.8 for partial evidence.' },
+				{ role: 'system', content: 'You are an analyst. Include invalidation_level, target_level, setup_type, and risk_reward_ratio. Score against reference anchors: 0.90 multi-source major catalyst, 0.60 partial, 0.30 negligible. Require sentiment_score_evidence.' },
+				{ role: 'user', content: 'Context: {{alertContext}}' },
+			]),
+		};
+		const client = {
+			prompt: {
+				get: jest.fn().mockResolvedValue(remotePrompt),
+			},
+		};
+		const service = new PromptService({
+			logger,
+			clientProvider: jest.fn().mockResolvedValue(client),
+		});
+
+		const prompt = await service.getChatPrompt(
+			PromptKeys.ALERT_ENRICHMENT,
+			{ alertContext: 'Bitcoin alert context' },
+		);
+
+		expect(prompt.source).toBe('langfuse');
+		expect(prompt.schemaDriftDetected).toBe(false);
+		expect(prompt.missingRiskFields).toEqual([]);
+		expect(logger.warn).not.toHaveBeenCalled();
+	});
+
+	it('GH-599: does NOT mark alert-enrichment prompt as drift when only current_price / price_currency are missing', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+
+		// Carries every required risk field and the full post-#1031 calibration anchor set
+		// so the ONLY thing absent is `current_price` / `price_currency`. That isolates what
+		// this test is about: price fields are excluded from the drift contract, so their
+		// absence must not be reported as drift. An earlier version of this fixture used the
+		// superseded `0.9+ / 0.6-0.8 / corroborating sources` rubric, which #1031 replaced —
+		// it then failed on missingCalibrationGuidance, which is a different concern entirely.
+		const remotePrompt = {
+			version: 7,
+			compile: jest.fn().mockReturnValue([
+				{ role: 'system', content: 'You are an analyst. Include invalidation_level, target_level, setup_type, and risk_reward_ratio. Score against reference anchors: 0.90 multi-source major catalyst, 0.60 partial, 0.30 negligible. Require sentiment_score_evidence.' },
 				{ role: 'user', content: 'Context: {{alertContext}}' },
 			]),
 		};

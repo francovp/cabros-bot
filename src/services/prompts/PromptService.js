@@ -11,6 +11,11 @@ const {
 	PromptKeys,
 	getPromptDefinition,
 } = require('./promptRegistry');
+const {
+	classifyPromptError,
+	getPromptReadiness,
+	recordPromptReadinessSafely,
+} = require('./promptReadiness');
 
 const REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS = Object.freeze([
 	'invalidation_level',
@@ -18,10 +23,27 @@ const REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS = Object.freeze([
 	'setup_type',
 	'risk_reward_ratio',
 ]);
+/**
+ * Markers the `alert-enrichment` prompt must carry to be considered calibrated.
+ *
+ * These replaced the older `0.9+ / 0.6-0.8 / corroborating sources` triple. That
+ * rubric had no reference anchor and no justification field, which is how
+ * production ended up with 87.6% of scores at or above 0.75 (issue #1031). The
+ * anchors are now absolute band values and the model must name its choice, so
+ * the markers are the band values plus the required field.
+ *
+ * The local fallback is inspected by the same function, so the two stay in
+ * lockstep: a Langfuse prompt that has not been republished after #1031 reports
+ * `schemaDriftDetected` until it carries the anchors and the justification
+ * field. That flag is the intended rollout signal, not a failure.
+ *
+ * Optional price fields stay outside drift detection for legacy prompts (GH-599).
+ */
 const REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE = Object.freeze([
-	'0.9+',
-	'0.6-0.8',
-	'corroborating sources',
+	'sentiment_score_evidence',
+	'0.90',
+	'0.60',
+	'0.30',
 ]);
 
 function inspectAlertEnrichmentRiskSchema(promptName, content) {
@@ -141,6 +163,10 @@ class PromptService {
 			if (remotePrompt) {
 				return remotePrompt;
 			}
+
+			recordPromptReadinessSafely(
+				() => getPromptReadiness().recordLocalFallback({ promptName: definition.name }),
+			);
 		}
 
 		return this.resolveLocalPrompt(definition, variables, options);
@@ -175,6 +201,10 @@ class PromptService {
 		let client;
 		const usingDefaultClientProvider = this.clientProvider === getLangfuseClient;
 
+		// Asking for a remote prompt and not getting one is the event an operator
+		// needs to see, so this counts even when client initialization is refused.
+		recordPromptReadinessSafely(() => getPromptReadiness().recordAttempt());
+
 		try {
 			client = await this.clientProvider();
 		} catch (error) {
@@ -185,6 +215,9 @@ class PromptService {
 				`langfuse-disabled:${disabledReason}`,
 				`[PromptService] Langfuse prompt management unavailable, using local fallbacks: ${disabledReason}`,
 			);
+			recordPromptReadinessSafely(
+				() => getPromptReadiness().recordFailure(classifyPromptError(error)),
+			);
 			return null;
 		}
 
@@ -194,6 +227,9 @@ class PromptService {
 				this.warnOnce(
 					`langfuse-disabled:${disabledReason}`,
 					`[PromptService] Langfuse prompt management unavailable, using local fallbacks: ${disabledReason}`,
+				);
+				recordPromptReadinessSafely(
+					() => getPromptReadiness().recordFailure(classifyPromptError(disabledReason)),
 				);
 				return null;
 			}
@@ -241,9 +277,19 @@ class PromptService {
 			};
 
 			if (definition.type === 'chat') {
+				recordPromptReadinessSafely(() => getPromptReadiness().recordSuccess({
+					promptName: definition.name,
+					label,
+					version: prompt.version,
+				}));
 				return this.normalizeChatPrompt(compiledPrompt, metadata);
 			}
 
+			recordPromptReadinessSafely(() => getPromptReadiness().recordSuccess({
+				promptName: definition.name,
+				label,
+				version: prompt.version,
+			}));
 			return {
 				type: 'text',
 				text: normalizeMessageContent(compiledPrompt),
@@ -253,6 +299,9 @@ class PromptService {
 			this.warnOnce(
 				`langfuse-fetch:${definition.name}:${error.message}`,
 				`[PromptService] Failed to fetch Langfuse prompt "${definition.name}", using local fallback: ${error.message}`,
+			);
+			recordPromptReadinessSafely(
+				() => getPromptReadiness().recordFailure(classifyPromptError(error)),
 			);
 			return null;
 		}
