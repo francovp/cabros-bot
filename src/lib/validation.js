@@ -16,8 +16,49 @@ const extractDomain = (url) => {
 	}
 };
 
-const validateAlert = (text, metadata = null) => {
-	if (!text || typeof text !== 'string') {
+const VALID_SIGNAL_CLASSES = new Set([
+	'breakout',
+	'mean_reversion',
+	'trend_continuation',
+	'reversal',
+	'volume_spike',
+	'news_event',
+	'manual',
+	'unknown',
+]);
+
+function createInvalidRequestError(message) {
+	const error = new Error(message);
+	error.statusCode = 400;
+	error.code = 'INVALID_REQUEST';
+	error.response = {
+		error: message,
+		code: 'INVALID_REQUEST',
+		error_code: 400,
+	};
+	return error;
+}
+
+function validateSignalClass(signalClass) {
+	if (signalClass === undefined || signalClass === null) {
+		return 'unknown';
+	}
+	if (typeof signalClass !== 'string') {
+		throw createInvalidRequestError(
+			`Invalid signalClass. Must be one of: ${Array.from(VALID_SIGNAL_CLASSES).join(', ')}`,
+		);
+	}
+	const normalized = signalClass.trim().toLowerCase();
+	if (!VALID_SIGNAL_CLASSES.has(normalized)) {
+		throw createInvalidRequestError(
+			`Invalid signalClass '${signalClass}'. Must be one of: ${Array.from(VALID_SIGNAL_CLASSES).join(', ')}`,
+		);
+	}
+	return normalized;
+}
+
+const validateAlert = (text, metadata = null, signalClass) => {
+	if (!text || typeof text !== 'string' || !text.trim()) {
 		throw new Error('Alert text is required and must be a string');
 	}
 
@@ -25,12 +66,22 @@ const validateAlert = (text, metadata = null) => {
 		throw new Error('Alert metadata must be a valid object if provided');
 	}
 
+	let targetSignalClass = signalClass;
+	if (targetSignalClass === undefined && metadata && typeof metadata === 'object' && metadata.signalClass !== undefined) {
+		targetSignalClass = metadata.signalClass;
+	}
+	const validatedSignalClass = validateSignalClass(targetSignalClass);
+
 	// Truncate text if needed
 	if (text.length > 4000) {
 		text = text.substring(0, 4000) + '...';
 	}
 
-	return { text, metadata };
+	return {
+		text,
+		metadata,
+		signalClass: validatedSignalClass,
+	};
 };
 
 const validateSearchResult = (result) => {
@@ -76,4 +127,6 @@ module.exports = {
 	validateAlert,
 	validateSearchResult,
 	validateGeminiResponse,
+	VALID_SIGNAL_CLASSES,
+	validateSignalClass,
 };

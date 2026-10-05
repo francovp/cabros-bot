@@ -1,0 +1,354 @@
+# Webhook Alerts API
+
+[← Back to README](../README.md) | [API Reference](api-reference.md)
+
+The bot exposes several webhook endpoints to receive alerts from TradingView, scanners, and external automation.
+All webhook endpoints are protected by `validateApiKey` (via `x-api-key` header) and support multi-channel notification dispatch.
+
+### POST /api/webhook/expanded-analysis-alert
+
+Generate an expanded technical-analysis report with TradingView MCP `coin_analysis` data and send it through all enabled notification channels.
+
+**Request (JSON):**
+```json
+{
+  "symbols": ["BINANCE:BTCUSDT", "NASDAQ:NVDA"],
+  "timeframe": "1D"
+}
+```
+
+If `symbols` is empty or omitted, the endpoint falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS`. If neither is defined, it returns `400 NO_SYMBOLS`. Symbols must be complete `EXCHANGE:SYMBOL` identifiers; crypto pairs are not normalized automatically.
+
+The endpoint stops analysis at `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` (default 60 seconds, max 120 seconds). If the deadline is reached before any symbol is analyzed, it returns `504 EXPANDED_ANALYSIS_ALERT_TIMEOUT`; completed symbols are returned and remaining symbols are marked with `status: "timeout"`.
+
+**Response:**
+```json
+{
+  "success": true,
+  "alertText": "📊 *ANÁLISIS AMPLIADO — Friday 22/05/2026*...",
+  "results": [
+    {
+      "symbol": "NASDAQ:NVDA",
+      "status": "analyzed",
+      "price": 219.51,
+      "rsi": 57.8
+    }
+  ],
+  "deliveryResults": [
+    {
+      "channel": "telegram",
+      "success": true,
+      "messageId": "123456"
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "analyzed": 1,
+    "error": 0,
+    "delivered": 1
+  },
+  "requestId": "req-abc123",
+  "processingTimeMs": 1200
+}
+```
+
+### POST /api/webhook/volume-confirmation
+
+Run TradingView MCP `volume_confirmation_analysis` on demand and return structured JSON without sending notifications.
+
+**Request (JSON):**
+```json
+{
+  "symbol": "BINANCE:BTCUSDT",
+  "timeframe": "4h"
+}
+```
+
+- `symbol`: Required `EXCHANGE:SYMBOL` identifier.
+- `timeframe`: Optional indicator interval. Defaults to `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` or `1h`.
+- `dryRun`: Optional. When `true` (or `?dryRun=true`), validates the request and returns the parsed `symbol`/`exchange`/`timeframe` echo with `dryRun: true`, `decision: 'unknown'`, `volumeRatio: null`, and `analysis: null` — no MCP call is made. Useful for validating request shape before paying the ~360s MCP budget.
+
+**Response (JSON):**
+```json
+{
+  "success": true,
+  "symbol": "BINANCE:BTCUSDT",
+  "exchange": "BINANCE",
+  "asset": "BTCUSDT",
+  "timeframe": "4h",
+  "confirmed": true,
+  "decision": "confirm",
+  "volumeRatio": 1.7,
+  "analysis": {
+    "symbol": "BINANCE:BTCUSDT",
+    "volume_analysis": {
+      "volume_ratio": 1.7,
+      "volume_strength": "HIGH"
+    }
+  },
+  "requestId": "req-vol-123",
+  "processingTimeMs": 310
+}
+```
+
+If the symbol format is invalid, the endpoint returns `400 INVALID_REQUEST`. If TradingView MCP fails, it returns `502 VOLUME_CONFIRMATION_FAILED` with the upstream error message.
+
+### POST /api/webhook/symbol-analysis
+
+Analyze one `EXCHANGE:SYMBOL` with TradingView MCP and return the Spanish report plus decision-ready data without sending notifications or placing orders.
+
+**Request (JSON):**
+```json
+{
+  "symbol": "BINANCE:BTCUSDT",
+  "timeframe": "1D",
+  "analysisMode": "combined",
+  "includeMultiTimeframe": true,
+  "includeMultiAgent": true
+}
+```
+
+- `dryRun`: Optional. When `true` (or `?dryRun=true`), validates the request and returns the parsed `symbol`/`exchange`/`timeframe`/`analysisMode`/`includeMultiTimeframe` echo with `dryRun: true`, `side: null`, `analysis: null`, and `analysisStatus: 'dry-run'` — no MCP `coin_analysis` (or `multi_timeframe_analysis`) call is made. Useful for probe requests that want to avoid the ~120s MCP budget.
+
+The response includes `alertText`, normalized price/volume/indicator/signal/assessment data, sentiment/news/confluence, multi-timeframe results, and multi-agent consensus results (`multiAgent`) when requested (or when `ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT=true`), plus directional `risk` and `decision` metadata. When multi-agent consensus disagrees with the directional signal (decision is `HOLD`, confidence is `Low`, or decision opposes side), an advisory warning (`Consenso multi-agente no confirma la señal`) is appended to `decision.warnings` without flipping the primary action. `decision.action` is `BUY` or `SELL` only when the data and risk levels are sufficient; otherwise it is `NO_TRADE`. This endpoint never delivers notifications or submits orders. Invalid symbols return `400 INVALID_REQUEST`, TradingView failures return `502 SYMBOL_ANALYSIS_FAILED`, and deadline expiry returns `504 SYMBOL_ANALYSIS_TIMEOUT`. Upstream multi-agent failures fail open and mark `analysisStatus: "partial"` while preserving the base analysis.
+
+### POST /api/webhook/market-scanner-alert
+
+Execute multiple market scanner tools on the TradingView MCP server (such as top gainers, top losers, volume breakout, smart volume, or Bollinger squeeze), generate a formatted technical summary report in Spanish, and send it through all enabled notification channels.
+
+**Request (JSON):**
+```json
+{
+  "exchange": "BINANCE",
+  "timeframe": "4h",
+  "scans": [
+    "top_gainers",
+    "top_losers",
+    "volume_breakout_scanner",
+    "smart_volume_scanner",
+    "bollinger_scan"
+  ],
+  "limit": 5,
+  "bbw_threshold": 0.05,
+  "ranked": true,
+  "includeMultiTimeframe": true
+}
+```
+
+- `exchange`: (Optional) The exchange identifier to run scans against. Defaults to `MARKET_SCANNER_DEFAULT_EXCHANGE` or `BINANCE`.
+- `timeframe`: (Optional) Interval for indicators (e.g. `5m`, `15m`, `1h`, `4h`, `1D`, `1W`, `1M`). Defaults to `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` or `4h`.
+- `scans`: (Optional) Array of scan types to execute sequentially. Defaults to `['top_gainers', 'top_losers', 'volume_breakout_scanner']`.
+- `limit`: (Optional) Max number of results per section (clamped to `[1, 20]`, default: `5`).
+- `bbw_threshold`: (Optional) Bollinger Band Width threshold for the Bollinger squeeze scan (default: `0.05`).
+- `ranked`: (Optional) Sort results by actionable trade quality and include numeric `score` plus non-empty `reason` in each `scanResults[].scores[]` entry (default: `false`).
+- `includeMultiTimeframe`: (Optional) Fetch higher-timeframe alignment for each scanner candidate through TradingView MCP. Aligned candidates receive a default `+10` score modifier, counter-trend candidates receive a default `-10` modifier, and upstream failures leave the original scanner item unchanged (default: `false`). The alias `include_multi_timeframe` is also accepted.
+
+**Response (JSON):**
+```json
+{
+  "success": true,
+  "alertText": "📡 *SCANNER DE MERCADO — Saturday 23/05/2026*\n...",
+  "scanResults": [
+    {
+      "scan": "top_gainers",
+      "status": "success",
+      "itemCount": 1
+    }
+  ],
+  "deliveryResults": [
+    {
+      "channel": "telegram",
+      "success": true,
+      "messageId": "123456"
+    }
+  ],
+  "summary": {
+    "totalScans": 1,
+    "success": 1,
+    "error": 0,
+    "timeout": 0,
+    "totalItems": 1,
+    "delivered": 1
+  },
+  "timedOut": false,
+  "includeMultiTimeframe": true,
+  "timeoutMs": 90000,
+  "requestId": "req-xyz789",
+  "processingTimeMs": 1450
+}
+```
+
+When `ranked` is `true`, each successful scan also includes structured scores:
+
+```json
+{
+  "scan": "top_gainers",
+  "status": "success",
+  "itemCount": 1,
+  "scores": [{ "symbol": "BTCUSDT", "score": 83, "reason": "+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10", "trendConfluence": { "status": "aligned", "direction": "bullish", "confidence": 82, "adjustment": 10 } }]
+}
+```
+
+**Provider-outage fast-fail (502):**
+
+Before starting the sequential scans the handler reads the process-local TradingView MCP status. When the status is `degraded` with `lastErrorCategory` of `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, no scanner call is attempted: the endpoint returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with every requested scan reported as `status: "skipped"` plus a `reason`.
+
+```json
+{
+  "success": false,
+  "code": "TRADINGVIEW_MCP_UNAVAILABLE",
+  "error": "TradingView MCP is currently unavailable (circuit breaker: open, lastError: http_5xx). Scans skipped.",
+  "scanResults": [
+    { "scan": "top_gainers", "status": "skipped", "reason": "TradingView MCP is currently unavailable (circuit breaker: open, lastError: http_5xx). Scans skipped." }
+  ],
+  "timedOut": false
+}
+```
+
+This endpoint returns `502` in two distinct shapes:
+
+| `code` | Meaning |
+|---|---|
+| `TRADINGVIEW_MCP_UNAVAILABLE` | The readiness gate skipped every scan; **no** scanner call was attempted. |
+| `ALL_SCANS_FAILED` | The scans were attempted and every one failed at the provider. |
+
+**Self-recovery guarantee:** the gate is intentionally keyed on the circuit breaker's time-based state, not on the sticky `status: "degraded"` runtime flag. `getBreakerState()` moves `open` → `half-open` once `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses, so the first request after the cooldown is allowed through as a bounded recovery probe. A transient outage therefore always self-heals without a process restart, while a provider that is genuinely still down still fails fast instead of firing every scan at it. Degraded states outside the provider-outcome categories (for example `http_4xx`), a missing circuit-breaker state, and readiness-lookup errors all fail open and scan normally.
+
+### POST /api/webhook/alert
+
+Send alert via webhook. Accepts either JSON or plain text.
+
+Optional headers:
+- `x-request-id`: Optional client-supplied correlation ID (1-128 printable ASCII characters). If omitted or invalid, a UUIDv4 is generated.
+- `idempotency-key` / `x-idempotency-key`: Optional replay key for deduplicating retries.
+
+Optional query param: `useTradingViewData=true` enables TradingView MCP technical enrichment for this request (requires `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`).
+
+**Request (JSON):**
+```json
+{
+  "text": "BTC price is at $45,000 - breakout detected!"
+}
+```
+
+**Request (Plain Text):**
+```
+Content-Type: text/plain
+
+BTC price is at $45,000 - breakout detected!
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "requestId": "0d63f03b-d5a2-4a0b-928d-1959b8eb6a95",
+  "results": [
+    {
+      "channel": "telegram",
+      "success": true,
+      "messageId": "123456"
+    },
+    {
+      "channel": "whatsapp",
+      "success": true,
+      "messageId": "whatsapp-msg-id"
+    }
+  ],
+  "enriched": false
+}
+```
+
+#### Per-symbol channel routing (`symbolRoutes`)
+
+`POST /api/webhook/alert` accepts an optional `symbolRoutes` object to send different
+symbols to different channels:
+
+```json
+{
+  "text": "BINANCE:BTCUSDT breakout confirmed",
+  "symbolRoutes": {
+    "BTCUSDT": { "channels": ["telegram"] },
+    "NASDAQ:NVDA": { "channels": ["discord"] }
+  }
+}
+```
+
+Keys are bare symbols (`BTCUSDT`) or exchange-qualified (`NASDAQ:NVDA`), matched
+case-insensitively against the alert text. Digit-initial symbols are supported
+(e.g. `1INCHUSDT`).
+
+A dispatch is produced **only** for a symbol that matches one of the configured keys.
+Text containing no configured route key is delivered normally through the request-level
+`channels` or the enabled-channel broadcast — indicator words and other uppercase
+tokens are not treated as symbols. Each delivery result includes the matched `symbol`
+(bare form, so a `NASDAQ:NVDA` route reports `NVDA`).
+
+When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` is enabled and it narrows the
+request-level channel set, every `symbolRoutes` entry is intersected with the same set,
+so a route cannot resurrect a channel that is still in its repeat-suppression cooldown.
+
+Omitting `symbolRoutes` preserves the existing broadcast and request-level routing
+behavior exactly.
+
+### POST /api/webhook/message
+
+Deliver a generic, non-alert message to the enabled notification channels. Use this when the payload is
+operator-authored automation output rather than a TradingView alert or scanner run.
+
+**Request (JSON):**
+```json
+{
+  "message": "Custom notification from automation",
+  "channels": ["telegram", "whatsapp"]
+}
+```
+
+- `message`: Required non-empty string. Values longer than `MAX_MESSAGE_LENGTH` (4,000 characters) are clipped
+  before delivery.
+- `channels`: Optional subset of `telegram`, `whatsapp`, `discord`. Omit it to broadcast to every enabled channel.
+- `telegramChatId` / `telegramThreadId` / `whatsappChatId` / `discordWebhookUrl`: Optional per-channel destination
+  overrides. `telegramThreadId` targets a forum topic (`0` = General).
+- `dryValidate`: Optional boolean. Validates and returns chunk estimates without sending anything.
+- Idempotency: send `idempotency-key` / `x-idempotency-key` (or `idempotencyKey` in the body or query) to replay a
+  prior response instead of re-delivering. Reusing a key with a different payload returns `409`.
+
+**Response (message within 4,000 characters):**
+```json
+{
+  "success": true,
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-msg-123" }
+  ]
+}
+```
+
+**Response (message exceeded 4,000 characters):**
+```json
+{
+  "success": true,
+  "truncated": true,
+  "originalLength": 6000,
+  "deliveredLength": 4003,
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-msg-123" }
+  ]
+}
+```
+
+**Truncation metadata (GH-602).** Inbound messages above `MAX_MESSAGE_LENGTH` are clipped to 4,000 characters plus a
+`'...'` suffix before delivery, so `deliveredLength` is 4,003 in the default configuration. When truncation occurs the
+response adds:
+
+- `truncated`: Always `true` when present. Callers can use it to detect silent content loss.
+- `originalLength`: Inbound character count before clipping (minimum 4,001).
+- `deliveredLength`: Character count of the text actually handed to the notification channels.
+
+These three fields are **strictly additive and appear only when truncation occurred** — a message that fits returns
+`{ success: true, results }` unchanged, so existing integrations are unaffected. Truncation is independent of chunk
+estimation: a long message that also exceeds a channel's single-message limit returns both the truncation fields and
+the `delivered` / `channelDetails` / `estimatedChunks` metadata.
+
+A `console.warn` line records the clip with numeric `originalLength`, `deliveredLength`, and `max` values only; message
+content is never logged. Delivery proceeds with the clipped text regardless — truncation never blocks a send.
+
