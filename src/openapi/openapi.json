@@ -535,7 +535,7 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/DeliveryResult"
+            "$ref": "#/components/responses/WebhookAlertDeliveryResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -1345,7 +1345,7 @@
         ],
         "responses": {
           "200": {
-            "description": "JSON Lines or CSV export",
+            "description": "JSON Lines or CSV export. Export records include a comma-separated `feature` tag column when feature-attributed token usage is available.",
             "headers": {
               "X-Shadow-Mode-Metrics": {
                 "description": "JSON-encoded shadow-mode outcome metrics payload emitted by SignalOutcomeService.getMetricsSummary(). Returns the string \"No measurements found\" when signal-outcome tracking is disabled or no measurements exist. Object form (when tracking is enabled with data) follows the ShadowModeMetrics schema: coverage buckets, per-window hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR plus drawdown proxy and latency/cost metadata. Omitted when source, enriched, or signalClass filters are supplied because the shadow-mode metrics service has no matching filters.",
@@ -5699,6 +5699,35 @@
           }
         }
       },
+      "WebhookAlertDeliveryResult": {
+        "description": "Per-channel delivery result for POST /api/webhook/alert. When the shared alert validator clips input above 4,000 characters, the response includes truncated, originalLength, and deliveredLength so callers can detect the loss. When ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION is enabled and the same exchange/symbol/timeframe/side signal fires within its cooldown window, the response includes suppressedRepeat: true with empty results and deliveredChannels while the alert remains persisted with a suppression marker.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/WebhookAlertDeliveryResult"
+            },
+            "example": {
+              "success": true,
+              "requestId": "req-123",
+              "truncated": true,
+              "originalLength": 4001,
+              "deliveredLength": 4003,
+              "results": [
+                {
+                  "channel": "telegram",
+                  "success": true,
+                  "durationMs": 180
+                }
+              ]
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
       "TestAlertResult": {
         "description": "Test alert verification probe result. Contains channel delivery results or dry-run formatting preview.",
         "content": {
@@ -9079,6 +9108,27 @@
           }
         }
       },
+      "FeatureCostSummary": {
+        "type": "object",
+        "required": [
+          "alerts",
+          "batches",
+          "symbols",
+          "inputTokens",
+          "outputTokens",
+          "totalTokens",
+          "totalCost"
+        ],
+        "properties": {
+          "alerts": { "type": "integer", "minimum": 0 },
+          "batches": { "type": "integer", "minimum": 0 },
+          "symbols": { "type": "integer", "minimum": 0 },
+          "inputTokens": { "type": "number", "minimum": 0 },
+          "outputTokens": { "type": "number", "minimum": 0 },
+          "totalTokens": { "type": "number", "minimum": 0 },
+          "totalCost": { "type": "number", "minimum": 0 }
+        }
+      },
       "AlertSummary": {
         "type": "object",
         "properties": {
@@ -9097,6 +9147,18 @@
           "byFeatureFlag": {
             "$ref": "#/components/schemas/JsonObject",
             "description": "Includes tradingViewData for requested MCP enrichment, tradingViewDataApplied for successfully applied MCP results, and withoutTradingViewData for requests that did not opt in."
+          },
+"costByFeature": {
+            "type": "object",
+            "description": "Token usage and cost attribution by feature. Records are attributed from their persisted tokenUsage.byFeature tags; legacy records without tags fall back to their alert source, and records with no real token usage are not attributed at all. totalCost is an estimate from published list pricing (unrecognized models use the default rate, never 0); alerts counts stored documents, batches counts distinct news-monitor requests grouped by requestId/batchId, and symbols counts distinct symbols across a batch including multi-symbol reports stored as a single document.",
+            "properties": {
+              "grounding": { "$ref": "#/components/schemas/FeatureCostSummary" },
+              "news-analysis": { "$ref": "#/components/schemas/FeatureCostSummary" },
+              "expanded-analysis": { "$ref": "#/components/schemas/FeatureCostSummary" },
+              "scanner": { "$ref": "#/components/schemas/FeatureCostSummary" },
+              "enrichment": { "$ref": "#/components/schemas/FeatureCostSummary" }
+            },
+            "additionalProperties": false
           },
           "signalClassCounts": {
             "$ref": "#/components/schemas/JsonObject",
@@ -11692,7 +11754,34 @@
             "description": "Persisted replay attempt ID returned only on live replay; absent when dryRun=true."
           }
         }
+      },      "WebhookAlertDeliveryResult": {
+        "description": "Response for POST /api/webhook/alert. Mirrors the shared DeliveryResult schema and adds endpoint-specific truncation metadata: when the shared alert validator clips submitted text above 4,000 characters the response carries truncated: true, originalLength, and deliveredLength. All three are absent when the text fits, and they never appear on alert replay responses.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DeliveryResult"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "truncated": {
+                "type": "boolean",
+                "description": "True when the shared alert validator clipped submitted text above 4,000 characters."
+              },
+              "originalLength": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Character length of the alert text as submitted, before truncation."
+              },
+              "deliveredLength": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Character length of the alert text actually processed and delivered, including the appended ellipsis."
+              }
+            }
+          }
+        ]
       },
+
       "Job": {
         "type": "object",
         "properties": {

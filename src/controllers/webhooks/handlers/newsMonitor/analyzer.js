@@ -531,7 +531,7 @@ class NewsAnalyzer {
 				const currentIndex = nextIndex;
 				nextIndex += 1;
 				const symbol = symbols[currentIndex];
-				const symbolTokenUsage = new TokenUsageTracker();
+const symbolTokenUsage = new TokenUsageTracker('news-analysis');
 				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, symbolTokenUsage, routing, batchStartedAt, symbolOptions)
 					.then((result) => {
 						if (tokenUsage) {
@@ -1178,7 +1178,7 @@ class NewsAnalyzer {
 		// Optional LLM enrichment
 		let enrichmentMetadata = null;
 		if (this.enrichmentService.isEnabled() && ENABLE_NEWS_MONITOR_TEST_MODE !== true) {
-			enrichmentMetadata = await this.enrichmentService.enrichAlert(geminiAnalysis);
+			enrichmentMetadata = await this.enrichmentService.enrichAlert(geminiAnalysis, { tokenUsage });
 			if (enrichmentMetadata && enrichmentMetadata.enriched_confidence < this.alertThreshold) {
 				console.debug('[Analyzer] Enrichment lowered confidence below threshold');
 				return {

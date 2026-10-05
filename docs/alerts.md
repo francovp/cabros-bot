@@ -64,7 +64,7 @@ List stored alerts ordered by `receivedAt` descending.
 
 #### GET /api/alerts/export
 
-Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string fields whose leading control characters (`tab`/`LF`/`CR`) are followed by `=`, `+`, `-`, or `@`—or that begin directly with those markers—with an apostrophe so spreadsheet clients treat them as inert text; finite numeric strings such as `-42` remain unchanged. JSONL output is unchanged.
+Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string fields whose leading control characters (`tab`/`LF`/`CR`) are followed by `=`, `+`, `-`, or `@`—or that begin directly with those markers—with an apostrophe so spreadsheet clients treat them as inert text; finite numeric strings such as `-42` remain unchanged. Feature-attributed records include a `feature` column containing comma-separated tags. JSONL output is unchanged.
 
 **Query Parameters:**
 - `format` - `jsonl` or `csv` (default: `jsonl`)
@@ -95,6 +95,12 @@ Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited gr
 - `eventCategory` - Optional event category filter (e.g. `price_surge`, `price_decline`, `regulatory`). Case-insensitive and matched against `eventCategory`. Up to 64 characters.
 
 The service caps the queried window at 31 days to keep routine operator usage cheap.
+
+The summary also returns `costByFeature` for `grounding`, `news-analysis`, `expanded-analysis`, `scanner`, and `enrichment`. Each bucket includes `alerts`, `batches`, `symbols`, `inputTokens`, `outputTokens`, `totalTokens`, and `totalCost`; the feature costs sum to `enrichment.tokenUsage.totalCost` without double-counting. Older records without feature tags are attributed conservatively from their stored source.
+
+`totalCost` values are **estimates** derived from published list prices in `src/lib/tokenUsage.js` (`PRICING_PER_1M`), not provider invoices. Model names are normalized before lookup (provider prefixes such as `openai/` or `azure/` and revision suffixes are stripped, family heuristics fill gaps, and models marked `:free` or `/free` cost 0). A model that matches no known entry is priced at the documented default rate rather than 0, so an unpriced model is never reported as free. `alerts` counts stored documents, `batches` counts distinct news-monitor requests (grouped by `requestId`/`batchId`, not per document), and `symbols` counts distinct symbols across a batch — a multi-symbol expanded-analysis or scanner report contributes all of its symbols even though it is stored as one document.
+
+An alert that persisted no real token usage is not attributed to any feature. Plain webhook alerts always store a `tokenUsage` object, but when grounding and TradingView enrichment are both disabled it is all-zero, so it contributes nothing to any bucket and carries no `feature` tag in CSV exports.
 
 **Response (200 OK):**
 ```json
