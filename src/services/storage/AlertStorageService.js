@@ -106,6 +106,40 @@ const VALID_SETUP_TYPES = new Set([
 	'reversal',
 ]);
 const VALID_TRADINGVIEW_ENRICHMENT_STATUSES = new Set(['full', 'partial', 'failed', 'not_applicable']);
+const FEATURE_TAGS = ['grounding', 'news-analysis', 'expanded-analysis', 'scanner', 'enrichment'];
+const MAX_PERSISTED_SYMBOLS_PER_BATCH = 200;
+
+/**
+ * Normalize a request-level symbol list into a bounded, de-duplicated array of
+ * upper-case symbols safe to persist on the alert document.
+ */
+function sanitizePersistedSymbols(symbols) {
+	if (!Array.isArray(symbols)) return [];
+	const seen = new Set();
+	for (const raw of symbols) {
+		if (typeof raw !== 'string') continue;
+		const trimmed = raw.trim().toUpperCase();
+		if (!trimmed || trimmed.length > 64) continue;
+		seen.add(trimmed);
+		if (seen.size >= MAX_PERSISTED_SYMBOLS_PER_BATCH) break;
+	}
+	return Array.from(seen);
+}
+
+/**
+ * True only when the record reflects real billable LLM work.
+ * A webhook alert persists `tokenUsage.toJSON()` even when every enrichment
+ * feature is disabled, producing a truthy all-zero object. Treating that as
+ * grounding usage would invent a feature spend that never happened.
+ */
+function hasRealTokenUsage(tokenUsage) {
+	if (!tokenUsage || typeof tokenUsage !== 'object') return false;
+	return FEATURE_TAGS.some((feature) => {
+		const usage = tokenUsage.byFeature && tokenUsage.byFeature[feature];
+		return Boolean(usage) && getNumericValue(usage.calls) > 0;
+	}) || getNumericValue(tokenUsage.totalTokens) > 0
+		|| getNumericValue(tokenUsage.totalCost) > 0;
+}
 
 // Lazy Firestore singleton
 let db = null;
@@ -1161,6 +1195,134 @@ function addTokenUsage(totals, tokenUsage) {
 	totals.totalCost += getNumericValue(tokenUsage.totalCost);
 }
 
+function createFeatureCostSummary() {
+	return Object.fromEntries(FEATURE_TAGS.map(feature => [feature, {
+		alerts: 0,
+		batches: 0,
+		symbols: 0,
+		inputTokens: 0,
+		outputTokens: 0,
+		totalTokens: 0,
+		totalCost: 0,
+	}]));
+}
+
+function getLegacyFeature(source, tokenUsage) {
+	if (!tokenUsage && !['expanded-analysis', 'market-scanner', 'scanner-preset', 'news-monitor'].includes(source)) {
+		return null;
+	}
+	if (source === 'news-monitor') return 'news-analysis';
+	if (source === 'expanded-analysis') return 'expanded-analysis';
+	if (source === 'market-scanner' || source === 'scanner-preset') return 'scanner';
+	// A plain webhook alert persists a truthy all-zero tokenUsage object even when
+	// no enrichment ran. Only attribute grounding when tokens were really used.
+	return hasRealTokenUsage(tokenUsage) ? 'grounding' : null;
+}
+
+function addFeatureCostSummary(summary, data, batchState) {
+	const tokenUsage = data && data.tokenUsage;
+	const byFeature = tokenUsage && typeof tokenUsage.byFeature === 'object'
+		? tokenUsage.byFeature
+		: null;
+	const entries = byFeature && Object.keys(byFeature).length > 0
+		? Object.entries(byFeature)
+		: [[getLegacyFeature(data && data.source, tokenUsage), tokenUsage]];
+	const symbols = extractPersistedSymbols(data);
+
+	for (const [feature, usage] of entries) {
+		if (!FEATURE_TAGS.includes(feature)) continue;
+		const bucket = summary[feature];
+		bucket.inputTokens += getNumericValue(usage && (usage.inputTokens || usage.promptTokens));
+		bucket.outputTokens += getNumericValue(usage && (usage.outputTokens || usage.completionTokens));
+		bucket.totalTokens += getNumericValue(usage && (usage.totalTokens || usage.total));
+		bucket.totalCost += getNumericValue(usage && usage.totalCost);
+
+		// A news-monitor request fans out to one stored document per symbol, so
+		// counting each document would report N batches for a single request.
+		// Count each persisted batch grouping key exactly once instead.
+		if (data.source === 'news-monitor') {
+			const batchKey = resolveBatchKey(data);
+			if (batchKey) {
+				if (batchState.seenBatches.has(batchKey)) continue;
+				batchState.seenBatches.add(batchKey);
+				bucket.batches += 1;
+			}
+		} else {
+			bucket.alerts += 1;
+		}
+
+		// `symbols` counts distinct symbols, not documents: expanded-analysis and
+		// scanner store one report covering many symbols but persist only the first,
+		// while news-monitor persists one document per symbol.
+		bucket.symbols += countNewSymbols(batchState, data, symbols, feature);
+	}
+}
+
+/**
+ * Resolve a stable grouping key identifying the request that produced a document.
+ * Falls back to the document id when no request-scoped key was persisted.
+ */
+function resolveBatchKey(data) {
+	if (data && typeof data.requestId === 'string' && data.requestId.trim()) {
+		return data.requestId.trim();
+	}
+	if (data && typeof data.batchId === 'string' && data.batchId.trim()) {
+		return data.batchId.trim();
+	}
+	return null;
+}
+
+/**
+ * Symbols represented by a stored document: the explicit `symbols` list when the
+ * handler persisted the full request-level set, otherwise the single parsed symbol.
+ */
+function extractPersistedSymbols(data) {
+	if (data && Array.isArray(data.symbols)) {
+		const seen = new Set();
+		for (const raw of data.symbols) {
+			if (typeof raw === 'string' && raw.trim()) {
+				seen.add(raw.trim().toUpperCase());
+			}
+		}
+		if (seen.size > 0) return seen;
+	}
+	const single = extractAlertSymbol(data);
+	return single && single !== 'unknown' ? new Set([single]) : new Set();
+}
+
+/**
+ * Count how many of this document's symbols have not yet been attributed for the
+ * given feature bucket, so multi-symbol reports are credited once per distinct
+ * symbol. Dedup is scoped per feature: a document carrying both `grounding` and
+ * `enrichment` usage must report the symbol in both buckets.
+ */
+function countNewSymbols(batchState, data, symbols, feature) {
+	if (symbols.size === 0) return 0;
+	const bucketKey = `${resolveBatchKey(data) || (data && data.id) || 'anonymous'}::${feature}`;
+	if (!batchState.seenSymbols.has(bucketKey)) {
+		batchState.seenSymbols.set(bucketKey, new Set());
+	}
+	const seen = batchState.seenSymbols.get(bucketKey);
+	let added = 0;
+	for (const symbol of symbols) {
+		if (!seen.has(symbol)) {
+			seen.add(symbol);
+			added += 1;
+		}
+	}
+	return added;
+}
+
+function getFeatureNames(data) {
+	const byFeature = data && data.tokenUsage && data.tokenUsage.byFeature;
+	const taggedFeatures = byFeature && typeof byFeature === 'object'
+		? Object.keys(byFeature).filter(feature => FEATURE_TAGS.includes(feature))
+		: [];
+	return taggedFeatures.length > 0
+		? taggedFeatures
+		: [getLegacyFeature(data && data.source, data && data.tokenUsage)].filter(Boolean);
+}
+
 function addDeliverySummary(summary, deliveryResults) {
 	if (!Array.isArray(deliveryResults)) {
 		return;
@@ -1208,12 +1370,27 @@ function summarizeTokenUsage(tokenUsage) {
 		return null;
 	}
 
-	return {
+	const result = {
 		inputTokens: getNumericValue(tokenUsage.inputTokens || tokenUsage.promptTokens),
 		outputTokens: getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens),
 		totalTokens: getNumericValue(tokenUsage.totalTokens || tokenUsage.total),
 		totalCost: getNumericValue(tokenUsage.totalCost),
 	};
+	if (tokenUsage.byFeature && typeof tokenUsage.byFeature === 'object') {
+		result.byFeature = Object.fromEntries(Object.entries(tokenUsage.byFeature)
+			.filter(([feature]) => FEATURE_TAGS.includes(feature))
+			.map(([feature, usage]) => [feature, {
+				calls: getNumericValue(usage.calls),
+				inputTokens: getNumericValue(usage.inputTokens),
+				outputTokens: getNumericValue(usage.outputTokens),
+				totalTokens: getNumericValue(usage.totalTokens),
+				inputCost: getNumericValue(usage.inputCost),
+				outputCost: getNumericValue(usage.outputCost),
+				totalCost: getNumericValue(usage.totalCost),
+			}]));
+		if (Object.keys(result.byFeature).length === 0) delete result.byFeature;
+	}
+	return result;
 }
 
 function truncateAlertText(text) {
@@ -1243,6 +1420,10 @@ function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
 		deliveryResults: summarizeDeliveryResults(data.deliveryResults),
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 	};
+	const featureNames = getFeatureNames(data);
+	if (featureNames.length > 0) {
+		record.feature = featureNames.join(',');
+	}
 	if (typeof data.requestId === 'string' && data.requestId.trim()) {
 		record.requestId = data.requestId.trim();
 	}
@@ -1649,7 +1830,7 @@ function getFirestore() {
 		const initialization = initializeFirebaseAdminApp({ admin });
 		if (!initialization.ok) {
 			console.warn(
-				`[AlertStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`
+				`[AlertStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`,
 			);
 			db = null;
 			return null;
@@ -1714,6 +1895,8 @@ function emitAlertDeliveryEvents(params, alertId = null) {
  * @param {Array}   params.deliveryResults   - Array of SendResult from notificationManager.sendToAll()
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
  * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
+ * @param {string[]} params.symbols - Complete request-level symbol set for multi-symbol reports
+ * @param {string}  params.batchId - Stable request-scoped grouping key for batch counting
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
 async function saveAlertInternal(params = {}) {
@@ -1739,6 +1922,8 @@ async function saveAlertInternal(params = {}) {
 		dedupStatus,
 		requestId,
 		scannerErrorCategories,
+		symbols,
+		batchId,
 		telegramChatId,
 		telegramThreadId,
 		whatsappChatId,
@@ -1846,6 +2031,16 @@ async function saveAlertInternal(params = {}) {
 		const sanitizedScannerErrorCategories = sanitizeScannerErrorCategories(scannerErrorCategories);
 		if (sanitizedScannerErrorCategories.length > 0) {
 			document.scannerErrorCategories = sanitizedScannerErrorCategories;
+		}
+		// Request-level grouping: multi-symbol handlers persist the complete symbol
+		// set so summary aggregation can count symbols and batches accurately
+		// instead of once per stored document.
+		const sanitizedSymbols = sanitizePersistedSymbols(symbols);
+		if (sanitizedSymbols.length > 0) {
+			document.symbols = sanitizedSymbols;
+		}
+		if (typeof batchId === 'string' && batchId.trim()) {
+			document.batchId = batchId.trim();
 		}
 		if (typeof effectiveTelegramChatId === 'string' && effectiveTelegramChatId.trim()) {
 			document.telegramChatId = effectiveTelegramChatId.trim();
@@ -2776,12 +2971,16 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 			averageDeliveryMs: null,
 			byChannel: {},
 		},
+		costByFeature: createFeatureCostSummary(),
 	};
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
 	const channelLatencySamples = {};
 	const sentimentScores = [];
 	let rawScoreCapCount = 0;
+	// Cross-document state so multi-symbol / multi-document requests are not
+	// counted once per stored document.
+	const batchState = { seenBatches: new Set(), seenSymbols: new Map() };
 
 	for (const doc of docs) {
 		const data = doc.data() || {};
@@ -2838,6 +3037,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		}
 
 		addTokenUsage(summary.enrichment.tokenUsage, data.tokenUsage);
+		addFeatureCostSummary(summary.costByFeature, data, batchState);
 		addDeliverySummary(summary.delivery, data.deliveryResults);
 		collectLatency(processingLatencySamples, data.processingTimeMs ?? data.processing_time_ms);
 
@@ -2875,6 +3075,9 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 	finalizeEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage);
 	summary.enrichment.sentimentCalibration = buildSentimentCalibration(sentimentScores, rawScoreCapCount);
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
+	for (const feature of FEATURE_TAGS) {
+		summary.costByFeature[feature].totalCost = Number(summary.costByFeature[feature].totalCost.toFixed(6));
+	}
 	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
 	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);
 	summary.latency.byChannel = {};

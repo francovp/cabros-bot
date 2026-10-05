@@ -1345,7 +1345,7 @@
         ],
         "responses": {
           "200": {
-            "description": "JSON Lines or CSV export",
+            "description": "JSON Lines or CSV export. Export records include a comma-separated `feature` tag column when feature-attributed token usage is available.",
             "headers": {
               "X-Shadow-Mode-Metrics": {
                 "description": "JSON-encoded shadow-mode outcome metrics payload emitted by SignalOutcomeService.getMetricsSummary(). Returns the string \"No measurements found\" when signal-outcome tracking is disabled or no measurements exist. Object form (when tracking is enabled with data) follows the ShadowModeMetrics schema: coverage buckets, per-window hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR plus drawdown proxy and latency/cost metadata. Omitted when source, enriched, or signalClass filters are supplied because the shadow-mode metrics service has no matching filters.",
@@ -9108,6 +9108,27 @@
           }
         }
       },
+      "FeatureCostSummary": {
+        "type": "object",
+        "required": [
+          "alerts",
+          "batches",
+          "symbols",
+          "inputTokens",
+          "outputTokens",
+          "totalTokens",
+          "totalCost"
+        ],
+        "properties": {
+          "alerts": { "type": "integer", "minimum": 0 },
+          "batches": { "type": "integer", "minimum": 0 },
+          "symbols": { "type": "integer", "minimum": 0 },
+          "inputTokens": { "type": "number", "minimum": 0 },
+          "outputTokens": { "type": "number", "minimum": 0 },
+          "totalTokens": { "type": "number", "minimum": 0 },
+          "totalCost": { "type": "number", "minimum": 0 }
+        }
+      },
       "AlertSummary": {
         "type": "object",
         "properties": {
@@ -9126,6 +9147,18 @@
           "byFeatureFlag": {
             "$ref": "#/components/schemas/JsonObject",
             "description": "Includes tradingViewData for requested MCP enrichment, tradingViewDataApplied for successfully applied MCP results, and withoutTradingViewData for requests that did not opt in."
+          },
+"costByFeature": {
+            "type": "object",
+            "description": "Token usage and cost attribution by feature. Records are attributed from their persisted tokenUsage.byFeature tags; legacy records without tags fall back to their alert source, and records with no real token usage are not attributed at all. totalCost is an estimate from published list pricing (unrecognized models use the default rate, never 0); alerts counts stored documents, batches counts distinct news-monitor requests grouped by requestId/batchId, and symbols counts distinct symbols across a batch including multi-symbol reports stored as a single document.",
+            "properties": {
+              "grounding": { "$ref": "#/components/schemas/FeatureCostSummary" },
+              "news-analysis": { "$ref": "#/components/schemas/FeatureCostSummary" },
+              "expanded-analysis": { "$ref": "#/components/schemas/FeatureCostSummary" },
+              "scanner": { "$ref": "#/components/schemas/FeatureCostSummary" },
+              "enrichment": { "$ref": "#/components/schemas/FeatureCostSummary" }
+            },
+            "additionalProperties": false
           },
           "signalClassCounts": {
             "$ref": "#/components/schemas/JsonObject",
