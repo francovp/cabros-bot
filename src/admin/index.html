@@ -7,7 +7,8 @@
   <link rel="stylesheet" href="/admin/admin.css">
 </head>
 <body>
-  <main class="console-shell">
+  <a class="skip-link" href="#view">Skip to workspace</a>
+  <main id="console-shell" class="console-shell">
     <aside class="console-sidebar">
       <div class="brand-lockup">
         <span class="brand-mark" aria-hidden="true">CB</span>
@@ -16,31 +17,33 @@
           <h1>Cabros Bot</h1>
         </div>
       </div>
-      <nav class="console-nav" aria-label="Console sections">
+      <nav id="console-nav" class="console-nav" aria-label="Console sections">
         <p class="nav-label">Workspace</p>
-        <button data-view="overview" type="button" aria-current="page"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>Overview</button>
-        <button data-view="status" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12L17 12h4"/></svg>Status</button>
-        <button data-view="alerts" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3"/></svg>Alerts</button>
-        <button data-view="outcomes" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>Outcomes</button>
-        <button data-view="presets" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 9-7 9-7-9z"/></svg>Presets</button>
-        <button data-view="jobs" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg>Jobs</button>
-        <button data-view="orders" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18"/><path d="M3 12h18"/><path d="M3 17h12"/><circle cx="19" cy="17" r="1.5"/></svg>Orders</button>
-        <button data-view="analysis" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M18.5 15.5l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9z"/></svg>Analysis</button>
-        <button data-view="playground" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4.5l13 7.5-13 7.5z"/></svg>Playground</button>
+        <button data-view="overview" type="button" aria-current="page"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg><span class="nav-text">Overview</span></button>
+        <button data-view="status" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12L17 12h4"/></svg><span class="nav-text">Status</span></button>
+        <button data-view="alerts" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3"/></svg><span class="nav-text">Alerts</span></button>
+        <button data-view="outcomes" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg><span class="nav-text">Outcomes</span></button>
+        <button data-view="presets" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 9-7 9-7-9z"/></svg><span class="nav-text">Presets</span></button>
+        <button data-view="jobs" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg><span class="nav-text">Jobs</span></button>
+        <button data-view="orders" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18"/><path d="M3 12h18"/><path d="M3 17h12"/><circle cx="19" cy="17" r="1.5"/></svg><span class="nav-text">Orders</span></button>
+        <button data-view="analysis" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M18.5 15.5l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9z"/></svg><span class="nav-text">Analysis</span></button>
+        <button data-view="trading" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17.5 8.5 11l4 3.5L21 5"/><path d="M15 5h6v6"/></svg><span class="nav-text">Trading</span></button>
+        <button data-view="playground" type="button"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4.5l13 7.5-13 7.5z"/></svg><span class="nav-text">Operations</span></button>
       </nav>
-      <p class="sidebar-note">Protected operator console</p>
+      <p class="sidebar-note">Workspace · Cabros Bot</p>
     </aside>
     <section class="console-content">
       <header class="topbar">
         <div>
           <p class="eyebrow">Operator workspace</p>
-          <p class="topbar-title">Monitor, diagnose and trigger safely</p>
+          <p class="topbar-title">Your operations, at a glance</p>
         </div>
         <div class="topbar-actions">
           <div id="sse-status" class="sse-indicator disconnected" title="Real-time stream: Offline" role="status" aria-live="polite">
             <span class="sse-dot" aria-hidden="true"></span>
             <span id="sse-label" class="sse-label">Offline</span>
           </div>
+          <button id="toggle-sidebar" class="button-ghost" type="button" aria-pressed="false" aria-controls="console-nav">Collapse sidebar</button>
           <button id="clear-key" class="button-ghost" type="button">Clear key</button>
         </div>
       </header>
@@ -74,11 +77,15 @@
         </form>
         <p id="key-state" class="request-state" aria-live="polite"></p>
       </section>
-      <section id="view" aria-live="polite" tabindex="-1"></section>
+      <p id="view-status" class="request-state" role="status" aria-live="polite" aria-atomic="true"></p>
+      <section id="view" tabindex="-1"></section>
     </section>
     <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
   </main>
+  <script src="/admin/vue.runtime.global.prod.js" defer></script>
+  <script src="/admin/admin-components.js" defer></script>
   <script src="/admin/admin-request.js" defer></script>
+  <script src="/admin/admin-charts.js" defer></script>
   <script src="/admin/admin.js" defer></script>
 </body>
 </html>

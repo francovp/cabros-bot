@@ -197,6 +197,147 @@ function validateDiscordWebhookOverride(field, value) {
 	return value;
 }
 
+function normalizeSymbolRouteKey(rawKey) {
+	if (typeof rawKey !== 'string') {
+		throw new NotificationRoutingValidationError('"symbolRoutes" keys must be non-empty symbol strings', {
+			field: 'symbolRoutes',
+		});
+	}
+
+	const key = rawKey.trim().toUpperCase().split(':').map((part) => part.trim()).join(':').replace(/\s+/g, '_');
+	if (!/^(?:[A-Z][A-Z0-9_]{1,15}:)?[A-Z0-9._-]{2,20}$/.test(key)) {
+		throw new NotificationRoutingValidationError(`Invalid symbolRoutes key: ${rawKey}`, {
+			field: 'symbolRoutes',
+		});
+	}
+
+	return key;
+}
+
+function normalizeSymbolRoutes(rawSymbolRoutes) {
+	if (rawSymbolRoutes === undefined) {
+		return undefined;
+	}
+	if (!rawSymbolRoutes || typeof rawSymbolRoutes !== 'object' || Array.isArray(rawSymbolRoutes) || Object.keys(rawSymbolRoutes).length === 0) {
+		throw new NotificationRoutingValidationError('"symbolRoutes" must be a non-empty object', {
+			field: 'symbolRoutes',
+		});
+	}
+
+	return Object.fromEntries(Object.entries(rawSymbolRoutes).map(([rawKey, rawRoute]) => {
+		if (!rawRoute || typeof rawRoute !== 'object' || Array.isArray(rawRoute)) {
+			throw new NotificationRoutingValidationError(`Route for ${rawKey} must be an object`, {
+				field: 'symbolRoutes',
+			});
+		}
+
+		return [normalizeSymbolRouteKey(rawKey), {
+			channels: normalizeChannels(rawRoute.channels, { required: true }),
+		}];
+	}));
+}
+
+// Matches a symbol reference candidate in alert text. The symbol group allows a
+// leading digit so digit-initial symbols accepted by normalizeSymbolRouteKey
+// (e.g. `1INCHUSDT`) can actually be matched.
+const SYMBOL_REFERENCE_PATTERN = /\b(?:([A-Za-z][A-Za-z0-9_]{1,15}):)?([A-Za-z0-9][A-Za-z0-9._-]{1,19})\b/g;
+
+/**
+ * Escapes a literal for safe use inside a RegExp.
+ */
+function escapeRegExp(value) {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Extracts the symbol references present in `text` that actually correspond to a
+ * configured `symbolRoutes` key.
+ *
+ * Only *configured* keys can produce a dispatch, so restricting extraction to those
+ * keys removes the ambiguity of a free-standing "is this token a symbol?" heuristic.
+ * Previously every uppercase-looking token became a reference, so text such as
+ * `BINANCE:BTCUSDT RSI OVERBOUGHT` was read as three symbols; `RSI` and `OVERBOUGHT`
+ * then fell back to the request-level channels or a broadcast and the alert was
+ * delivered two extra times. Now an unmatched token produces no dispatch at all.
+ *
+ * @param {string} text - Alert text to scan.
+ * @param {Object} symbolRoutes - Normalized `symbolRoutes` map from parseNotificationRouting.
+ * @returns {Array<{symbol: string, channels: string[]|undefined}>} Ordered, deduplicated matches.
+ */
+function resolveSymbolRouteDispatches(text, symbolRoutes, routing = {}) {
+	if (!symbolRoutes) {
+		return null;
+	}
+
+	if (typeof text !== 'string') {
+		return null;
+	}
+
+	// Exchange-qualified keys (e.g. `NASDAQ:NVDA`) are matched as a unit, because a
+	// bare `NVDA` may be a legitimately distinct route key of its own.
+	const qualifiedPattern = Object.keys(symbolRoutes)
+		.filter((key) => key.includes(':'))
+		.sort((a, b) => b.length - a.length)
+		.map(escapeRegExp)
+		.join('|');
+	// Bare keys are matched standalone, ignoring an `EXCHANGE:` prefix in the text so
+	// `BINANCE:BTCUSDT` still routes to a `BTCUSDT` key.
+	const barePattern = Object.keys(symbolRoutes)
+		.filter((key) => !key.includes(':'))
+		.sort((a, b) => b.length - a.length)
+		.map(escapeRegExp)
+		.join('|');
+
+	if (!qualifiedPattern && !barePattern) {
+		return null;
+	}
+
+	// Every alternation branch must be able to match. An empty branch would match
+	// the empty string and `exec` would never advance past the same index, so the
+	// scan below would loop forever. This case is already guarded above, but the
+	// non-empty filter keeps the pattern structurally safe.
+	const branches = [];
+	if (qualifiedPattern) {
+		branches.push(`(?<qualified>${qualifiedPattern})`);
+	}
+	if (barePattern) {
+		branches.push(`(?<bare>${barePattern})`);
+	}
+	if (branches.length === 0) {
+		return null;
+	}
+	const combined = new RegExp(
+		branches
+			.map((branch) => (branch.includes('<bare>') ? `\\b${branch}\\b` : branch))
+			.join('|'),
+		'g',
+	);
+
+	const dispatches = [];
+	const seen = new Set();
+	let match;
+	while ((match = combined.exec(text)) !== null) {
+		const referenceKey = match.groups?.qualified || match.groups?.bare;
+		if (!referenceKey) {
+			// Defensive: a zero-width match would otherwise make exec() spin forever.
+			combined.lastIndex += 1;
+			continue;
+		}
+		if (seen.has(referenceKey)) {
+			continue;
+		}
+		seen.add(referenceKey);
+		dispatches.push({
+			// Report the bare symbol (`NVDA`) even for an exchange-qualified route key
+			// (`NASDAQ:NVDA`) so delivery results stay readable and stable.
+			symbol: referenceKey.includes(':') ? referenceKey.split(':').pop() : referenceKey,
+			channels: symbolRoutes[referenceKey].channels || routing.channels,
+		});
+	}
+
+	return dispatches.length > 0 ? dispatches : null;
+}
+
 function parseNotificationRouting(raw = {}, options = {}) {
 	const {
 		requiredChannels = false,
@@ -225,6 +366,7 @@ function parseNotificationRouting(raw = {}, options = {}) {
 			telegramThreadId: undefined,
 			whatsappChatId: undefined,
 			discordWebhookUrl: undefined,
+			symbolRoutes: undefined,
 		};
 	}
 
@@ -252,6 +394,7 @@ function parseNotificationRouting(raw = {}, options = {}) {
 		telegramThreadId: validateThreadIdOverride('telegramThreadId', rawThreadId),
 		whatsappChatId,
 		discordWebhookUrl: validateDiscordWebhookOverride('discordWebhookUrl', raw.discordWebhookUrl),
+		symbolRoutes: normalizeSymbolRoutes(raw.symbolRoutes),
 	};
 }
 
@@ -263,6 +406,17 @@ async function sendWithNotificationRouting(notificationManager, alert, routing =
 		whatsappChatId: routing.whatsappChatId,
 		discordWebhookUrl: routing.discordWebhookUrl,
 	};
+	const symbolDispatches = resolveSymbolRouteDispatches(alert && alert.text, routing.symbolRoutes, routing);
+	if (symbolDispatches) {
+		const results = await Promise.all(symbolDispatches.map(async ({ symbol, channels }) => {
+			const symbolAlert = { ...alertPayload, symbol };
+			const delivered = channels
+				? await notificationManager.sendToChannels(symbolAlert, channels, options)
+				: await notificationManager.sendToAll(symbolAlert, options);
+			return delivered.map((result) => ({ ...result, symbol }));
+		}));
+		return results.flat();
+	}
 
 	if (routing.channels) {
 		// Late defensive backstop: fail-fast ordering should have already
@@ -302,12 +456,16 @@ function assertChannelsAvailable(notificationManager, routing = {}) {
 }
 
 function validateNotificationRouting(notificationManager, routing = {}) {
-	if (!routing.channels) {
+	const requestedChannels = [
+		...(routing.channels || []),
+		...Object.values(routing.symbolRoutes || {}).flatMap((route) => route.channels),
+	];
+	if (requestedChannels.length === 0) {
 		return;
 	}
 
 	const enabledChannels = getRequestedChannels(notificationManager);
-	const unavailableChannels = routing.channels.filter((channel) => !enabledChannels.includes(channel));
+	const unavailableChannels = [...new Set(requestedChannels)].filter((channel) => !enabledChannels.includes(channel));
 	if (unavailableChannels.length > 0) {
 		throw new NotificationRoutingValidationError(
 			`Requested channel(s) disabled or misconfigured: ${unavailableChannels.join(', ')}`,
@@ -316,16 +474,22 @@ function validateNotificationRouting(notificationManager, routing = {}) {
 	}
 }
 
-function getRequestedChannels(notificationManager, routing = {}) {
+function getRequestedChannels(notificationManager, routing = {}, text) {
+	const enabledChannels = !notificationManager || typeof notificationManager.getEnabledChannels !== 'function'
+		? []
+		: notificationManager.getEnabledChannels();
+	if (routing.symbolRoutes) {
+		const dispatches = resolveSymbolRouteDispatches(text, routing.symbolRoutes, routing);
+		if (dispatches) {
+			return [...new Set(dispatches.flatMap(({ channels }) => channels || enabledChannels))];
+		}
+	}
+
 	if (routing.channels) {
 		return routing.channels;
 	}
 
-	if (!notificationManager || typeof notificationManager.getEnabledChannels !== 'function') {
-		return [];
-	}
-
-	return notificationManager.getEnabledChannels();
+	return enabledChannels;
 }
 
 function getDeliveredChannels(results = []) {
@@ -343,4 +507,5 @@ module.exports = {
 	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,
+	resolveSymbolRouteDispatches,
 };

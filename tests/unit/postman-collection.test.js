@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
 
 const collectionPath = path.join(__dirname, '../../CabrosBot.postman_collection.json');
 
@@ -108,6 +109,29 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('documents valid and invalid per-symbol alert routing variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const valid = findItem(collection.item, 'POST Send Alert (per-symbol routing)');
+		const invalid = findItem(collection.item, 'POST Send Alert (invalid symbol route)');
+
+		expect(valid).toBeDefined();
+		expect(JSON.parse(valid.request.body.raw).symbolRoutes).toEqual({
+			BTCUSDT: { channels: ['telegram'] },
+			NVDA: { channels: ['discord'] },
+		});
+		expect(valid.response[0].body).toContain('"symbol":"BTCUSDT"');
+		expect(invalid).toBeDefined();
+		expect(JSON.parse(invalid.request.body.raw).symbolRoutes.BTCUSDT.channels).toEqual(['slack']);
+		expect(invalid.response[0].code).toBe(400);
+		// The nested channel validation reports `field: "channels"` (plus the unknown
+		// channel list), not the outer `symbolRoutes` field. This mirrors the real
+		// NotificationRoutingValidationError raised by normalizeChannels.
+		expect(JSON.parse(invalid.response[0].body).details).toEqual({
+			field: 'channels',
+			unknownChannels: ['slack'],
+		});
+	});
+
 	it('makes the oversized webhook example generate padding in Postman', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const oversized = findItem(collection.item, 'POST Send Message (oversized body)');
@@ -120,6 +144,7 @@ describe('Postman collection contract', () => {
 		expect(script).toContain('pm.variables.set(\'oversizedWebhookPadding\'');
 		expect(oversized.request.body.raw).toContain('{{oversizedWebhookPadding}}');
 		expect(oversized.request.body.raw).not.toContain('{{$padString}}');
+
 	});
 
 	it('uses distinct demo keys for middleware-backed scanner requests', () => {
@@ -233,6 +258,14 @@ describe('Postman collection contract', () => {
 		expect(enrichedData.price_data).toEqual({ current_price: 64863.03, high: 65000, low: 64000 });
 	});
 
+	it('does not claim deterministic R:R in the alert dry-run example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const sendAlert = findItem(collection.item, 'POST Send Alert Dry Run (risk metadata)');
+		const enrichedData = JSON.parse(sendAlert.response[0].body).payload.enrichedData;
+
+		expect(enrichedData).not.toHaveProperty('risk_reward_ratio_source');
+	});
+
 	it('aligns Binance MARKET quantity dry-run example with request and runtime response', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const marketSell = findItem(collection.item, 'POST Binance order (valid MARKET quantity dry-run)');
@@ -309,6 +342,54 @@ describe('Postman collection contract', () => {
 				durationMs: expect.any(Number),
 			}));
 		}
+	});
+
+	it('documents the empty test-alert text 400 that mirrors the OpenAPI minLength', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Test Alert (Invalid Input - 400 Bad Request)');
+		const example = item.response.find((response) => response.name === '400 Bad Request - Empty Text');
+
+		expect(example).toBeDefined();
+		expect(example.code).toBe(400);
+		expect(JSON.parse(example.body)).toEqual({
+			error: 'Alert text is required and must be a string',
+			code: 'INVALID_REQUEST',
+		});
+		expect(JSON.parse(example.originalRequest.body.raw)).toEqual({ text: '', channels: ['telegram'] });
+
+		const contract = JSON.parse(fs.readFileSync(
+			path.join(__dirname, '../../src/openapi/openapi.json'),
+			'utf8',
+		));
+		expect(contract.components.schemas.TestAlertRequest.properties.text.minLength).toBe(1);
+	});
+
+	it('documents the test-alert dry-run preview the formatter actually returns (GH-1158)', () => {
+		// postTestAlert() sets `text` to the same string as `preview` and
+		// `length` to preview.length, so asserting preview === text looks redundant
+		// until you know it: it is the property the stale GH-1158 example broke by
+		// hand-writing an ellipsis preview. Regenerated from the documented request so
+		// the example can still detect formatter or contract drift.
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Test Alert (Dry Run)');
+		const example = item.response.find((response) => response.name === '200 OK - Dry Run Preview');
+
+		expect(example).toBeDefined();
+		const requestBody = JSON.parse(item.request.body.raw);
+		expect(JSON.parse(example.originalRequest.body.raw)).toEqual(requestBody);
+		expect(requestBody.dryRun).toBe(true);
+		expect(requestBody.channels).toEqual(['telegram']);
+
+		const body = JSON.parse(example.body);
+		expect(body.ok).toBe(true);
+		expect(body.dryRun).toBe(true);
+		expect(body.persisted).toBe(false);
+		expect(body.results).toEqual([]);
+
+		const expectedPreview = new MarkdownV2Formatter().format(requestBody.text);
+		expect(body.formatted.telegram.preview).toBe(expectedPreview);
+		expect(body.formatted.telegram.text).toBe(expectedPreview);
+		expect(body.formatted.telegram.length).toBe(expectedPreview.length);
 	});
 
 	it('documents Request Timeout (408) on every affected admin request variant', () => {
@@ -413,6 +494,78 @@ describe('Postman collection contract', () => {
 		expect(summaryInvalid).toBeDefined();
 		expect(summaryInvalid.response[0].code).toBe(400);
 		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+	});
+
+	it('documents the optional summary interval series with self-consistent examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const hourly = findItem(collection.item, 'GET Alert Analytics Summary (interval=hour)');
+		const daily = findItem(collection.item, 'GET Alert Analytics Summary (interval=day)');
+		const invalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid interval - 400 Bad Request)');
+		const overCap = findItem(collection.item, 'GET Alert Analytics Summary (interval window over cap - 400 Bad Request)');
+
+		expect(hourly).toBeDefined();
+		expect(hourly.request.url.raw).toContain('interval=hour');
+		expect(daily).toBeDefined();
+		expect(daily.request.url.raw).toContain('interval=day');
+
+		expect(invalid).toBeDefined();
+		expect(invalid.response[0].code).toBe(400);
+		const invalidBody = JSON.parse(invalid.response[0].body);
+		expect(invalidBody).toEqual({
+			success: false,
+			error: 'Invalid interval parameter. Allowed values: hour, day.',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+
+		expect(overCap).toBeDefined();
+		expect(overCap.response[0].code).toBe(400);
+		const overCapBody = JSON.parse(overCap.response[0].body);
+		expect(overCapBody.error).toContain('interval "hour"');
+		expect(overCapBody.error).toContain('31 days');
+		expect(overCapBody.code).toBe('INVALID_REQUEST');
+
+		// The examples must be internally consistent with the runtime contract,
+		// otherwise they document a shape the server never produces.
+		const hourlyBody = JSON.parse(hourly.response[0].body).summary;
+		expect(hourlyBody.window.interval).toBe('hour');
+		expect(hourlyBody.window.maxDays).toBe(31);
+		expect(hourlyBody.buckets.map(b => b.bucketStart)).toEqual([
+			'2026-06-06T00:00:00.000Z',
+			'2026-06-06T01:00:00.000Z',
+			'2026-06-06T02:00:00.000Z',
+			'2026-06-06T03:00:00.000Z',
+		]);
+
+		const dailyBody = JSON.parse(daily.response[0].body).summary;
+		expect(dailyBody.window.interval).toBe('day');
+		expect(dailyBody.window.maxDays).toBe(366);
+
+		for (const body of [hourlyBody, dailyBody]) {
+			expect(body.buckets.reduce((sum, b) => sum + b.total, 0)).toBe(body.totalAlerts);
+			for (const bucket of body.buckets) {
+				expect(Object.keys(bucket)).toEqual(['bucketStart', 'total', 'success', 'failure', 'byChannel']);
+				const channels = Object.values(bucket.byChannel);
+				expect(bucket.success).toBe(channels.reduce((sum, c) => sum + c.success, 0));
+				expect(bucket.failure).toBe(channels.reduce((sum, c) => sum + c.failure, 0));
+			}
+			const starts = body.buckets.map(b => Date.parse(b.bucketStart));
+			expect(starts).toEqual([...starts].sort((a, b) => a - b));
+		}
+
+		// Gapless series: the empty-window example must still be zero-filled.
+		const emptyBody = JSON.parse(hourly.response[1].body).summary;
+		expect(emptyBody.buckets).toHaveLength(3);
+		for (const bucket of emptyBody.buckets) {
+			expect(bucket).toEqual({
+				bucketStart: expect.any(String),
+				total: 0,
+				success: 0,
+				failure: 0,
+				byChannel: {},
+			});
+		}
 	});
 
 	it('documents signalClass in alert webhook and alert query/summary examples', () => {
@@ -543,6 +696,308 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
 	});
 
+	it('documents the job queue broker readiness variants for the #1117 cutover', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Capabilities - job queue broker readiness (#1117)');
+
+		expect(item).toBeDefined();
+
+		const queueOf = (res) => JSON.parse(res.body).dependencies.jobExecutionQueue;
+		const ready = item.response.find((res) => res.name.includes('ready -'));
+		const unreachable = item.response.find((res) => res.name.includes('unreachable'));
+		const notStarted = item.response.find((res) => res.name.includes('not_started'));
+		const disabled = item.response.find((res) => res.name.includes('disabled -'));
+
+		// The acceptance step in #1117 is a curl against /api/capabilities, so the
+		// request must hit that exact path.
+		expect(item.request.url.path).toEqual(['api', 'capabilities']);
+		expect(JSON.parse(ready.body).featureFlags.jobExecutionWorker).toBe(true);
+
+		expect(queueOf(ready)).toMatchObject({
+			mode: 'render-worker',
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			brokerReachable: true,
+			lastBrokerProbeAt: '2026-10-04T12:00:00.000Z',
+			lastBrokerProbeErrorCode: null,
+		});
+
+		// configured stays true because REDIS_URL is a non-empty string; only the
+		// probe verdict can distinguish this from the healthy case above.
+		expect(queueOf(unreachable)).toMatchObject({
+			configured: true,
+			ready: false,
+			status: 'unreachable',
+			brokerReachable: false,
+			lastBrokerProbeErrorCode: 'JOB_QUEUE_PROBE_TIMEOUT',
+		});
+
+		expect(queueOf(notStarted)).toMatchObject({
+			ready: false,
+			status: 'not_started',
+			brokerReachable: null,
+		});
+
+		expect(queueOf(disabled)).toMatchObject({
+			mode: 'local',
+			enabled: false,
+			status: 'disabled',
+			brokerReachable: null,
+		});
+
+		const scripts = JSON.stringify(item.event);
+		expect(scripts).toContain('unreachable');
+		expect(scripts).toContain('brokerReachable');
+		expect(scripts).toContain('redis://');
+
+		for (const res of item.response) {
+			expect(res.body).not.toContain('queue.example');
+			expect(res.body).not.toContain('redis://');
+		}
+	});
+
+	it('documents unverified, ready, degraded and disabled idempotency storage variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - idempotency storage readiness (issue #1111)');
+
+		expect(item).toBeDefined();
+
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const ready = item.response.find((res) => res.name.includes('a durable reservation has succeeded'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const disabled = item.response.find((res) => res.name.includes('gate off'));
+
+		// Issue #1111 acceptance: credential shape must not be reported as proof that
+		// duplicate suppression works, because every Firestore failure falls open.
+		expect(unverified.code).toBe(200);
+		expect(JSON.parse(unverified.body).dependencies.idempotencyStorage).toEqual({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'unverified',
+			mode: 'durable',
+			backend: 'firestore',
+			failOpen: true,
+			readiness: 'unverified',
+			collection: 'idempotency_keys',
+			operationsAttempted: 0,
+			operationsSucceeded: 0,
+			operationsFailed: 0,
+			consecutiveFailures: 0,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorReason: null,
+		});
+
+		expect(ready.code).toBe(200);
+		expect(JSON.parse(ready.body).dependencies.idempotencyStorage).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			operationsSucceeded: 47,
+			consecutiveFailures: 0,
+		});
+
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.idempotencyStorage).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			// Intent is unchanged while durability is broken, and the fallback is stated.
+			mode: 'durable',
+			backend: 'firestore',
+			failOpen: true,
+			lastErrorReason: 'firestore_unavailable',
+		});
+
+		expect(disabled.code).toBe(200);
+		expect(JSON.parse(disabled.body).dependencies.idempotencyStorage).toMatchObject({
+			enabled: false,
+			ready: false,
+			status: 'disabled',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
+
+		// Every documented variant must be free of the provider text that Firestore
+		// embeds in its error messages.
+		for (const response of item.response) {
+			expect(response.body).not.toContain('projects/');
+			expect(response.body).not.toContain('console.firebase.google.com');
+		}
+	});
+
+	it('documents the signal outcome sweep lease observability (issue #1110)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Capabilities - signal outcome sweep lease (issue #1110)');
+
+		expect(item).toBeDefined();
+		expect(item.request.url.raw).toBe('{{baseUrl}}/api/capabilities');
+
+		const winning = item.response.find((res) => res.name.includes('winning evaluator'));
+		const losing = item.response.find((res) => res.name.includes('losing replica'));
+		const lostMidSweep = item.response.find((res) => res.name.includes('ownership lost mid-sweep'));
+
+		// The three fields the PR's stated purpose depends on: an operator has to be
+		// able to identify the winning evaluator from /api/status alone.
+		expect(winning.code).toBe(200);
+		expect(JSON.parse(winning.body).dependencies.signalOutcomeWorker).toMatchObject({
+			leaseMs: 120000,
+			lastRunLeaseHeld: false,
+			leaseHeldSkipCount: 7,
+			lastRunEvaluatedCount: 9,
+		});
+
+		// A replica that never wins the lease is recognisable: the skip counter
+		// climbs while nothing is evaluated.
+		expect(JSON.parse(losing.body).dependencies.signalOutcomeWorker).toMatchObject({
+			leaseMs: 120000,
+			lastRunLeaseHeld: true,
+			leaseHeldSkipCount: 138,
+			lastRunScannedCount: 0,
+			lastRunEvaluatedCount: 0,
+		});
+
+		// Ownership lost mid-sweep: the sweep stopped acting, but it did evaluate
+		// the documents it finished before the renewal proved the lease was gone.
+		expect(JSON.parse(lostMidSweep.body).dependencies.signalOutcomeWorker).toMatchObject({
+			lastRunLeaseHeld: true,
+			leaseHeldSkipCount: 2,
+			lastRunScannedCount: 5,
+			lastRunEvaluatedCount: 2,
+		});
+
+		// The documented lease window must match the service bounds.
+		for (const response of item.response) {
+			const { leaseMs } = JSON.parse(response.body).dependencies.signalOutcomeWorker;
+			expect(leaseMs).toBeGreaterThanOrEqual(10000);
+			expect(leaseMs).toBeLessThanOrEqual(600000);
+			// Lease ownership identity is an internal lock value, never an operator signal.
+			expect(response.body).not.toContain('lockedBy');
+		}
+
+		// Every documented variant must carry runnable assertions, not just examples.
+		const executed = (item.event || []).flatMap((entry) => entry.script.exec).join('\n');
+		expect(executed).toContain('leaseHeldSkipCount');
+		expect(executed).toContain('lastRunLeaseHeld');
+		expect(executed).toContain('leaseMs');
+	});
+
+	it('documents degraded, healthy, and omitted firestore read-metric variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - firestore read metrics (degraded read path)');
+
+		expect(item).toBeDefined();
+
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const healthy = item.response.find((res) => res.name.includes('healthy'));
+		const omitted = item.response.find((res) => res.name.includes('omitted'));
+		const unauthorized = item.response.find((res) => res.code === 401);
+
+		// Issue #1285 acceptance: a broken read path must be visible on /api/status
+		// as a non-ready dependency with a sanitized category.
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.firestore).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readHealth: 'degraded',
+			lastReadErrorCategory: 'failed_precondition',
+		});
+		expect(JSON.parse(degraded.body).dependencies.firestoreReadMetrics.lastErrorCategory)
+			.toBe('failed_precondition');
+
+		expect(healthy.code).toBe(200);
+		expect(JSON.parse(healthy.body).dependencies.firestore).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readHealth: 'healthy',
+		});
+
+		expect(omitted.code).toBe(200);
+		expect(JSON.parse(omitted.body).dependencies.firestoreReadMetrics).toBeUndefined();
+		expect(JSON.parse(omitted.body).dependencies.firestore).not.toHaveProperty('readHealth');
+
+		expect(unauthorized.code).toBe(401);
+	});
+
+	it('documents proven equity market-data readiness states for GET Status', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - equity market data readiness (issue #1116)');
+
+		expect(item).toBeDefined();
+
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const ready = item.response.find((res) => res.name.includes('ready'));
+
+		// Issue #1116 acceptance: a shaped-but-unproven credential must never read as
+		// ready, so the pre-call state is documented as unverified rather than ready.
+		expect(unverified.code).toBe(200);
+		expect(JSON.parse(unverified.body).dependencies.equityMarketData).toMatchObject({
+			configured: true,
+			ready: false,
+			status: 'unverified',
+			readiness: 'unverified',
+			requestsSucceeded: 0,
+			lastErrorReason: null,
+		});
+
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.equityMarketData).toMatchObject({
+			configured: true,
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			consecutiveFailures: 1,
+			lastErrorReason: 'twelve_data_misconfigured',
+		});
+
+		expect(ready.code).toBe(200);
+		expect(JSON.parse(ready.body).dependencies.equityMarketData).toMatchObject({
+			configured: true,
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			requestsSucceeded: 14,
+		});
+
+		for (const res of [unverified, degraded, ready]) {
+			const raw = res.body;
+			expect(raw).not.toMatch(/apikey/i);
+			expect(raw).not.toMatch(/sk-[a-z0-9]/i);
+		}
+	});
+
+	it('documents both STORAGE_UNAVAILABLE classifications for GET List Alerts', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'GET List Alerts');
+
+		const missingIndex = item.response.find((res) => res.name.includes('missing composite index'));
+		const uninitialized = item.response.find((res) => res.name.includes('check credentials'));
+
+		// The two variants must be mutually exclusive so an operator can tell a
+		// rejected query from a credential/init failure without log access.
+		expect(missingIndex.code).toBe(503);
+		expect(JSON.parse(missingIndex.body)).toMatchObject({
+			code: 'STORAGE_UNAVAILABLE',
+			category: 'failed_precondition',
+			missingIndex: true,
+		});
+		expect(uninitialized.code).toBe(503);
+		expect(JSON.parse(uninitialized.body)).toMatchObject({
+			code: 'STORAGE_UNAVAILABLE',
+			category: 'uninitialized',
+		});
+
+		for (const res of [missingIndex, uninitialized]) {
+			const body = JSON.parse(res.body);
+			expect(body.error).not.toMatch(/projects\//);
+			expect(body.error).not.toMatch(/console\.firebase\.google\.com/);
+		}
+	});
+
 	it('documents distinct invalid query variants for GET Summarize Signal Outcomes', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const invalidLimit = findItem(collection.item, 'GET Summarize Signal Outcomes (invalid limit)');
@@ -657,43 +1112,133 @@ describe('Postman collection contract', () => {
 });
 
 describe('news-monitor stop/target example (GH-712)', () => {
-		it('POST News Monitor success example includes a populated stop/target alert', () => {
-			const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
-			const postItem = findItem(collection.item, 'POST News Monitor');
-			expect(postItem).toBeDefined();
+	it('POST News Monitor success example includes a populated stop/target alert', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const postItem = findItem(collection.item, 'POST News Monitor');
+		expect(postItem).toBeDefined();
 
-			const successExample = postItem.response.find(
-				(response) => response.name === '200 OK - Analysis summary',
-			);
-			expect(successExample).toBeDefined();
+		const successExample = postItem.response.find(
+			(response) => response.name === '200 OK - Analysis summary',
+		);
+		expect(successExample).toBeDefined();
 
-			const body = JSON.parse(successExample.body);
-			const resultsWithBarriers = body.results.filter(
-				(result) => result.alert && typeof result.alert.stop === 'number' && typeof result.alert.target === 'number',
-			);
-			expect(resultsWithBarriers.length).toBeGreaterThanOrEqual(1);
+		const body = JSON.parse(successExample.body);
+		const resultsWithBarriers = body.results.filter(
+			(result) => result.alert && typeof result.alert.stop === 'number' && typeof result.alert.target === 'number',
+		);
+		expect(resultsWithBarriers.length).toBeGreaterThanOrEqual(1);
 
-			resultsWithBarriers.forEach((result) => {
-				expect(result.alert.stop).toBeGreaterThan(0);
-				expect(result.alert.target).toBeGreaterThan(result.alert.stop);
-			});
-
-			const resultsWithoutBarriers = body.results.filter(
-				(result) => result.alert && (result.alert.stop === undefined || result.alert.target === undefined),
-			);
-			expect(resultsWithoutBarriers.length).toBeGreaterThanOrEqual(1);
+		resultsWithBarriers.forEach((result) => {
+			expect(result.alert.stop).toBeGreaterThan(0);
+			expect(result.alert.target).toBeGreaterThan(result.alert.stop);
 		});
 
-		it('POST News Monitor (dry run) example includes a populated stop/target alert', () => {
-			const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
-			const dryRunItem = findItem(collection.item, 'POST News Monitor (dry run)');
-			expect(dryRunItem).toBeDefined();
-
-			const body = JSON.parse(dryRunItem.response[0].body);
-			const alert = body.results[0].alert;
-			expect(typeof alert.stop).toBe('number');
-			expect(typeof alert.target).toBe('number');
-			expect(alert.stop).toBeGreaterThan(0);
-			expect(alert.target).toBeGreaterThan(alert.stop);
-		});
+		const resultsWithoutBarriers = body.results.filter(
+			(result) => result.alert && (result.alert.stop === undefined || result.alert.target === undefined),
+		);
+		expect(resultsWithoutBarriers.length).toBeGreaterThanOrEqual(1);
 	});
+
+	it('POST News Monitor (dry run) example includes a populated stop/target alert', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const dryRunItem = findItem(collection.item, 'POST News Monitor (dry run)');
+		expect(dryRunItem).toBeDefined();
+
+		const body = JSON.parse(dryRunItem.response[0].body);
+		const alert = body.results[0].alert;
+		expect(typeof alert.stop).toBe('number');
+		expect(typeof alert.target).toBe('number');
+		expect(alert.stop).toBeGreaterThan(0);
+		expect(alert.target).toBeGreaterThan(alert.stop);
+	});
+
+	// Issue #1109. Re-validating the examples here keeps them honest against the same
+	// invariants their `pm.test` scripts assert, instead of drifting from them.
+	it('Get Status - confluence enrichment counters examples satisfy the counter invariants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		expect(item).toBeDefined();
+
+		const allowedFailureCategories = [
+			null, 'timeout', 'http_5xx', 'http_4xx', 'invalid_response',
+			'provider_unavailable', 'circuit_breaker_open', 'request_failed', 'unknown_error',
+		];
+
+		for (const response of item.response) {
+			const body = JSON.parse(response.body);
+			const confluence = body.dependencies.tradingViewMcp.enrichment.confluence;
+
+			expect(confluence.enabled).toBe(true);
+			expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
+			expect(allowedFailureCategories).toContain(confluence.lastFailureCategory);
+			expect(confluence.appliedCount + confluence.failedCount)
+				.toBeLessThanOrEqual(confluence.attemptedCount);
+			expect(response.body).not.toContain('combined_analysis failed');
+			expect(response.body).not.toContain('projects/');
+		}
+	});
+
+	it('Get Status - confluence enrichment counters asserts the block is separate from alertPath', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		const script = item.event.find((entry) => entry.listen === 'test').script.exec.join('\n');
+
+		expect(script).toContain('enrichment.confluence');
+		expect(script).toContain('enrichment.alertPath');
+		expect(script).toContain('appliedCount + c.failedCount');
+	});
+
+	// GH-637: a saved response alone cannot demonstrate the 4,000-character clip, because
+	// the request that produced it must actually send an oversized body. The example is
+	// only runnable if it generates that body itself.
+	it('provides a runnable oversized-alert example that reproduces the truncation response', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Send Alert (truncation metadata)');
+		expect(item).toBeDefined();
+
+		// The body must be larger than the 4,000-character cap, built at runtime.
+		const prerequest = item.event.find((entry) => entry.listen === 'prerequest');
+		expect(prerequest).toBeDefined();
+		const prerequestScript = prerequest.script.exec.join('\n');
+		expect(prerequestScript).toContain('truncationPadding');
+		expect(prerequestScript).toMatch(/repeat\(\s*\d{4,}\s*\)/);
+		expect(item.request.body.raw).toContain('{{truncationPadding}}');
+
+		// And it must assert the documented response rather than only display it.
+		const test = item.event.find((entry) => entry.listen === 'test');
+		expect(test).toBeDefined();
+		const testScript = test.script.exec.join('\n');
+		for (const field of ['truncated', 'originalLength', 'deliveredLength']) {
+			expect(testScript).toContain(field);
+		}
+
+		const example = item.response.find((response) => /truncated/.test(response.name));
+		expect(example.code).toBe(200);
+		const body = JSON.parse(example.body);
+		expect(body.truncated).toBe(true);
+		expect(body.originalLength).toBeGreaterThan(4000);
+		expect(body.deliveredLength).toBe(4003);
+	});
+
+	// The first version of this example was named for a budget-starved multi-timeframe
+	// call while recording failedCount: 0, so it could not represent the scenario it was
+	// named for and the `pm.test` invariant was never exercised against a failure. These
+	// two assertions pin the example to the case it claims to show.
+	it('exercises the budget-starved multi-timeframe case in the confluence status example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		const example = item.response.find((response) => /multi-timeframe call budget-starved/.test(response.name));
+		expect(example).toBeDefined();
+
+		const body = JSON.parse(example.body);
+		const enrichment = body.dependencies.tradingViewMcp.enrichment;
+		const confluence = enrichment.confluence;
+
+		expect(body.featureFlags.tradingViewConfluenceMultiTimeframe).toBe(true);
+		expect(confluence.failedCount).toBeGreaterThan(0);
+		expect(confluence.lastFailureCategory).not.toBeNull();
+		// Two calls per alert with multi-timeframe on, so the window cannot be 1:1 with alerts.
+		expect(confluence.attemptedCount).toBeGreaterThan(enrichment.alertPath.totalCount);
+		expect(confluence.appliedCount + confluence.failedCount).toBeLessThanOrEqual(confluence.attemptedCount);
+	});
+});

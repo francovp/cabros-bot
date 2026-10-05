@@ -341,7 +341,9 @@ class NewsMonitorSchedulerService {
 		try {
 			const result = await this._executeAnalysis(symbols, timeoutMs, {
 				...options,
-				renewLease: (nextUntilMs) => this._renewLease(nextUntilMs, leaseMs),
+				// Contract: renewLease receives the current time; _renewLease owns the
+				// now + leaseMs arithmetic. #1135 doubled the lease by passing a deadline here.
+				renewLease: (renewNowMs) => this._renewLease(renewNowMs, leaseMs),
 				leaseMs,
 			});
 			executedCount = result.executedCount;
@@ -526,7 +528,7 @@ class NewsMonitorSchedulerService {
 		const renewIntervalMs = Math.max(1000, Math.floor(leaseMs / 2));
 		const renewHandle = renewLease
 			? setInterval(() => {
-				renewLease(Date.now() + leaseMs).catch((err) => {
+				renewLease(Date.now()).catch((err) => {
 					console.warn('[NewsMonitorScheduler] Lease renew tick failed:', err.message);
 				});
 			}, renewIntervalMs)

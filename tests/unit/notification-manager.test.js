@@ -1061,3 +1061,97 @@ describe('NotificationManager admin failure notifications', () => {
 	});
 });
 
+describe('NotificationManager delivery-metrics durationMs fallback (#1112)', () => {
+	const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
+	const FALLBACK_DISPATCH_MS = 742;
+
+	let manager;
+
+	beforeEach(() => {
+		deliveryMetricsService.resetForTesting();
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => false),
+			isConfigured: jest.fn(() => true),
+			send: jest.fn(),
+		};
+		manager = new NotificationManager(telegramService);
+	});
+
+	afterEach(() => {
+		deliveryMetricsService.resetForTesting();
+		jest.restoreAllMocks();
+	});
+
+	// Issue #1112: an excluded sample would leave averageDeliveryMs null instead of the fallback value.
+	it.each([
+		['missing', undefined],
+		['null', null],
+		['NaN', Number.NaN],
+		['Infinity', Number.POSITIVE_INFINITY],
+		['-Infinity', Number.NEGATIVE_INFINITY],
+		['non-numeric string', 'fast'],
+	])('substitutes the total dispatch duration when a channel result has a %s durationMs', (_label, durationMs) => {
+		manager._recordDeliveryMetrics(
+			[{ success: true, channel: 'telegram', durationMs }],
+			FALLBACK_DISPATCH_MS,
+		);
+
+		const snapshot = deliveryMetricsService.getSnapshot();
+		expect(snapshot.success).toBe(1);
+		expect(snapshot.byChannel.telegram.averageDeliveryMs).toBe(FALLBACK_DISPATCH_MS);
+	});
+
+	it('excludes a negative durationMs from the average but still counts the delivery', () => {
+		manager._recordDeliveryMetrics(
+			[{ success: true, channel: 'telegram', durationMs: -5 }],
+			FALLBACK_DISPATCH_MS,
+		);
+
+		// A negative value is a finite number, so the manager keeps it instead of substituting;
+		// record()'s non-negative guard is what drops it from the average.
+		const snapshot = deliveryMetricsService.getSnapshot();
+		expect(snapshot.success).toBe(1);
+		expect(snapshot.byChannel.telegram.averageDeliveryMs).toBeNull();
+	});
+
+	it('keeps a valid channel-reported durationMs instead of the dispatch fallback', () => {
+		manager._recordDeliveryMetrics(
+			[{ success: true, channel: 'telegram', durationMs: 120 }],
+			FALLBACK_DISPATCH_MS,
+		);
+
+		const snapshot = deliveryMetricsService.getSnapshot();
+		expect(snapshot.byChannel.telegram.averageDeliveryMs).toBe(120);
+	});
+
+	it('substitutes only the affected results and averages them with reported durations', () => {
+		manager._recordDeliveryMetrics(
+			[
+				{ success: true, channel: 'telegram', durationMs: 100 },
+				{ success: false, channel: 'whatsapp' },
+				{ success: true, channel: 'discord', durationMs: Number.NaN },
+			],
+			FALLBACK_DISPATCH_MS,
+		);
+
+		const snapshot = deliveryMetricsService.getSnapshot();
+		expect(snapshot.total).toBe(3);
+		expect(snapshot.failure).toBe(1);
+		// (100 + 742 + 742) / 3 — the whatsapp sample is included via the fallback, not dropped.
+		expect(snapshot.averageDeliveryMs).toBe(528);
+		expect(snapshot.byChannel.telegram.averageDeliveryMs).toBe(100);
+		expect(snapshot.byChannel.whatsapp.averageDeliveryMs).toBe(FALLBACK_DISPATCH_MS);
+		expect(snapshot.byChannel.discord.averageDeliveryMs).toBe(FALLBACK_DISPATCH_MS);
+	});
+
+	it('still records counters for a skipped result without counting it as a delivery', () => {
+		manager._recordDeliveryMetrics(
+			[{ success: true, channel: 'telegram', durationMs: 50, skipped: true }],
+			FALLBACK_DISPATCH_MS,
+		);
+
+		expect(deliveryMetricsService.getSnapshot()).toBeNull();
+	});
+});
+

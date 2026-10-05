@@ -103,13 +103,44 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 
 #### Langfuse Prompt Management
 
-- `ENABLE_LANGFUSE_PROMPTS` - Fetch runtime prompts from Langfuse (`true` or `false`, default: `false`)
-- `LANGFUSE_PUBLIC_KEY` - Langfuse public key (required when Langfuse prompt management is enabled)
-- `LANGFUSE_SECRET_KEY` - Langfuse secret key (required when Langfuse prompt management is enabled)
-- `LANGFUSE_BASE_URL` - Langfuse base URL (default: `https://cloud.langfuse.com`)
-- `LANGFUSE_PROMPT_LABEL` - Prompt label to fetch (default: `latest` in local/dev/test, `production` in production-like environments)
-- `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` - Prompt cache TTL in seconds (default: `0` for `latest`, `60` for `production`)
+Enabled in production (`render.yaml`: `value: true`, `previewValue: false` on the web service and the jobs worker; credentials are `sync: false` and live in the Render dashboard). Previews stay off so a throwaway PR deploy cannot publish traces against the production Langfuse project.
+
+- `ENABLE_LANGFUSE_PROMPTS` - Fetch runtime prompts from Langfuse (`true` or `false`, default: `false`). Environment-only for Remote Config parity: a process-startup gate.
+- `LANGFUSE_PUBLIC_KEY` - Langfuse public key (required when Langfuse prompt management is enabled). **Secret**: platform secret store only.
+- `LANGFUSE_SECRET_KEY` - Langfuse secret key (required when Langfuse prompt management is enabled). **Secret**: platform secret store only.
+- `LANGFUSE_BASE_URL` - Langfuse base URL (default: `https://cloud.langfuse.com`). Must be an HTTP(S) URL; only its host is reported by `/api/status`. Environment-only: an external destination.
+- `LANGFUSE_PROMPT_LABEL` - Prompt label to fetch (default: `latest` in local/dev/test, `production` in production-like environments; `render.yaml` pins `production`). Environment-only.
+- `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` - Prompt cache TTL in seconds (default: `0` for `latest`, `60` for `production`; `render.yaml` pins `300`). Must be a non-negative integer. Environment-only.
 - Optional local prompt overrides: `SEARCH_QUERY_PROMPT`, `GEMINI_SYSTEM_PROMPT`, `ALERT_ENRICHMENT_SYSTEM_PROMPT`, `NEWS_ANALYSIS_SYSTEM_PROMPT`, and `CONFIDENCE_ENRICHMENT_SYSTEM_PROMPT`. Unset values use the versioned local fallback files.
+
+##### Verifying Langfuse prompts are actually resolving
+
+Setting the flag is **necessary but not sufficient**. Prompt resolution fails **open** to the local prompt file, which is what keeps alert delivery alive — and which also makes a deployment where every alert silently resolves locally indistinguishable from a healthy one. `dependencies.langfuse.configured` is credential *shape* only, so a typo'd, revoked, or wrong-project key satisfies it. `ready` is therefore proven from observed resolutions (issue #1178):
+
+| `status` | Meaning | Operator action |
+|---|---|---|
+| `disabled` | The gate is not `true`. | Nothing; local prompts are the configured intent. |
+| `misconfigured` | Enabled, but a credential is missing or blank. | Set it in the Render dashboard. |
+| `unverified` | Configured, but nothing has resolved yet. **No evidence, not health.** | Wait for the startup probe, then re-check. |
+| `ready` | A managed prompt actually resolved. | Nothing. |
+| `degraded` | A resolution failed; the local file was used. | Read `lastErrorReason`. |
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
+  "$BASE_URL/api/capabilities" \
+  | jq '{flag: .featureFlags.langfusePrompts,
+         dep: .dependencies.langfuse | {status, ready, promptsSucceeded,
+                                         localFallbackCount, lastErrorReason,
+                                         fallingBack: .localFallbackByPrompt}}'
+```
+
+Read `localFallbackCount`, not the flag: it counts resolutions that used the local file *while the gate was on*, and is the number that proves the enablement is doing something. `status: "ready"` with a non-zero `promptsSucceeded` and an empty `fallingBack` map is the evidence the managed prompts are live.
+
+`lastErrorReason` is a closed enum — `langfuse_not_configured`, `langfuse_client_unavailable`, `langfuse_auth_failed`, `langfuse_prompt_not_found`, `langfuse_timeout`, `langfuse_invalid_response`, `langfuse_unavailable` — because a Langfuse error body can embed the project id, base URL, and API key.
+
+**`langfuse_prompt_not_found` is the expected first-deploy failure**: prompts published under `latest` but never under a `production` label make every fetch 404, every alert fall back to the local file, and the deployment still *look* healthy. Publish the label with the [`langfuse-prompt-sync`](../../.agents/skills/langfuse-prompt-sync/SKILL.md) skill. `consecutiveFailures` clears on the next success, so publishing the label self-heals the verdict without a restart.
+
+Unlike equity market data, this feature **does** run a bounded startup probe (5s, `unref`'d, fail-open, non-blocking) that resolves every registered prompt once, precisely so an idle deployment gets a proven verdict instead of `unverified` forever.
 
 #### TradingView MCP Analysis
 
@@ -138,7 +169,7 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 - `ALERT_STORAGE_RETENTION_DAYS` - Retention for `alerts` and `alertReplays` records in days (`1`-`3650`, default: `90`). New records get `expiresAt`; run `bash ops/configure-firestore-alert-retention.sh` once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
 - **Backup & Disaster Recovery**: To safeguard high-value analytical history (`alerts`, `alertReplays`, `tradingSignalOutcomes`, `scannerPresets`) against permanent TTL deletion, automated scheduled workflows (`.github/workflows/firestore-backup.yml`), managed GCS exports (`ops/export-firestore-managed.sh`), and selective JSONL exports (`pnpm run backup:firestore`, `pnpm run restore:firestore`) are provided. See [`docs/firestore-backup-and-restore.md`](firestore-backup-and-restore.md) for the complete runbook and restore procedures.
 - `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`)
-- `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`)
+- `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`). **Enabled in production** via `render.yaml` on the web service only (issue #1111). Read [`dependencies.idempotencyStorage`](#verifying-idempotency-storage-is-actually-durable) before treating it as working.
 - `ENABLE_FIRESTORE_ALERT_FEEDBACK` - Enable Firestore persistence for trader alert feedback (👍/👎 verdicts from inline keyboard callbacks) (`true` or `false`, default: `false`). Disabled falls back to a process-local in-memory surface so the summary endpoints still return aggregate counts in development.
 - `ALERT_FEEDBACK_RETENTION_DAYS` - Retention for `alertFeedback` records in days (`1`-`3650`, default: `90`, matches alert retention). New records get `expiresAt`; backfill + native TTL can be enabled via `ops/configure-firestore-alert-retention.sh` once per Firebase project.
 - `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
@@ -149,10 +180,73 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 - `TWELVE_DATA_API_KEY` - Twelve Data API key; sent in the `Authorization` header and never returned by status endpoints
 - `TWELVE_DATA_BASE_URL` - Optional Twelve Data base URL override (default: `https://api.twelvedata.com`)
 - `EQUITY_MARKET_DATA_TIMEOUT_MS` - Per-request equity market-data timeout, capped at 30 seconds (default: `5000`)
+
+#### Verifying equity market data is actually working
+
+Setting `ENABLE_EQUITY_MARKET_DATA=true` and `TWELVE_DATA_API_KEY` is **necessary but not sufficient**, and `/api/status` is deliberately built so it cannot claim otherwise:
+
+| Field | Meaning |
+| :--- | :--- |
+| `featureFlags.equityMarketData` | The `ENABLE_EQUITY_MARKET_DATA` gate only. Says nothing about whether the feature works. |
+| `dependencies.equityMarketData.configured` | Credential **shape** only: gate on, provider selected, key non-empty. Not proof the key works. |
+| `dependencies.equityMarketData.status` | `disabled`, `misconfigured`, `unverified`, `ready`, or `degraded`. |
+| `dependencies.equityMarketData.ready` | `true` only after an observed **successful** provider call. |
+| `dependencies.equityMarketData.readiness` | `unverified` / `verified` / `degraded` from the observed-call window. |
+| `dependencies.equityMarketData.lastErrorReason` | Sanitized failure class, e.g. `twelve_data_misconfigured`, `twelve_data_rate_limited`, `twelve_data_timeout`. |
+
+A typo'd, revoked, quota-exhausted, or wrong-plan key all pass the `configured` check, so `configured: true` must never be read as "equity outcomes are working". Roll the feature out by watching `status` transition `unverified` → `ready` once the first equity evaluation runs:
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
+  | jq '{flag: .featureFlags.equityMarketData, dep: .dependencies.equityMarketData}'
+```
+
+- `status: "unverified"` — the key is configured but no provider call has succeeded yet. Wait for the first evaluation sweep; equity outcomes are evaluated on the signal-outcome cadence, not continuously.
+- `status: "ready"` — proven working.
+- `status: "degraded"` with `lastErrorReason` — the provider rejected the call. A `twelve_data_misconfigured` reason is the signal to replace or fix the key; `twelve_data_rate_limited` means raise `EQUITY_MARKET_DATA_RPM` budget or reduce signal volume.
+
+Counters (`requestsAttempted`, `requestsSucceeded`, `requestsFailed`, `consecutiveFailures`) and timestamps (`lastSuccessAt`, `lastFailureAt`) are process-local and reset on restart, so `unverified` is also the normal state immediately after every deploy. There is no startup probe: a probe would spend provider quota on every restart purely to manufacture a green checkmark, and on the 8-RPM free tier that is a real cost for no new information.
+
+#### Verifying idempotency storage is actually durable
+
+`ENABLE_FIRESTORE_IDEMPOTENCY=true` is **enabled in production** (issue #1111, declared on the web service in `render.yaml`), but the gate alone is not proof that duplicates are suppressed. `IdempotencyStorageService` is fail-open by design: every Firestore error is logged and swallowed, and the request continues with in-memory idempotency. A deployment whose credentials look valid but cannot reach Firestore behaves exactly as it did before the flag existed, so the reported state is derived from observed durable work instead:
+
+| Field | Meaning |
+| :--- | :--- |
+| `featureFlags.firestoreIdempotency` | The `ENABLE_FIRESTORE_IDEMPOTENCY` gate only. |
+| `dependencies.idempotencyStorage.configured` | Credential **shape** only. Not proof that reservations persist. |
+| `dependencies.idempotencyStorage.status` | `disabled`, `misconfigured`, `unverified`, `ready`, or `degraded`. |
+| `dependencies.idempotencyStorage.ready` | `true` only after an observed **successful** durable operation. |
+| `dependencies.idempotencyStorage.readiness` | `unverified` / `verified` / `degraded` from the observed-operation window. |
+| `dependencies.idempotencyStorage.mode` / `backend` | Configured **intent** (`durable`/`firestore`), unchanged by a failure. |
+| `dependencies.idempotencyStorage.failOpen` | Always `true`: a degraded verdict still delivers alerts, it just cannot suppress a duplicate after a restart or across replicas. |
+| `dependencies.idempotencyStorage.lastErrorReason` | Closed enum: `firestore_not_initialized` or `firestore_unavailable`. Never provider text. |
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
+  | jq '{flag: .featureFlags.firestoreIdempotency, dep: .dependencies.idempotencyStorage}'
+```
+
+- `status: "unverified"` — the normal state right after a deploy, before the first keyed request has been served. Send one idempotent webhook with an `idempotency-key` and re-check.
+- `status: "ready"` — proven durable.
+- `status: "degraded"` — falling back to in-memory. `firestore_unavailable` points at the Firestore SDK or network path; `firestore_not_initialized` points at the credential loader, and is the signal to check `FIREBASE_SERVICE_ACCOUNT_JSON` / `GOOGLE_APPLICATION_CREDENTIALS`. `consecutiveFailures` clears on the next success, so a transient outage self-heals without a restart.
+
+Counters (`operationsAttempted`, `operationsSucceeded`, `operationsFailed`, `consecutiveFailures`) and timestamps are process-local and reset on restart. A status read never counts as a durable attempt.
+
+**Prerequisite — TTL on `idempotency_keys`.** Every document carries `expiresAt`, but Firestore only deletes on it once the TTL policy exists, and Firestore TTL deletion is eventually consistent (up to ~24 h) and only removes documents that are *already* expired. `getEntry()` lazily deletes a document it reads after expiry, which is a safety net rather than a cleanup strategy: a key that is never replayed is never read. Run once per Firebase project:
+
+```bash
+bash ops/configure-operational-collection-retention.sh   # covers idempotency_keys
+```
+
+Until that runs, the collection grows without bound. This is the same eventual deletion the other operational collections depend on, and it is a deployment step — it is not something this repository can apply for you.
+
+**Rollback.** Set the variable back to `false` and redeploy; the service falls back to in-memory idempotency on the next request and no code change is needed. Nothing is lost that matters — unexpired reservations simply stop being shared, so a duplicate is possible again, which is the pre-#1111 behaviour.
 - `SIGNAL_OUTCOME_WORKER_ROLE` - Scheduler role: `web` preserves the local/web timer, `worker` enables only the dedicated worker entrypoint, and `disabled` prevents scheduler startup (default: `web`)
-- `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access
-- `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization
-- `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a service account JSON file for local development
+- `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` - Distributed sweep lease duration in milliseconds (`10000`-`600000`, integer, default: `120000`). The sweep is claimed in the Firestore `signalOutcomeLocks` collection so exactly one process evaluates a pending signal when more than one has tracking enabled; a replica that loses the claim skips with `reason: "lease-held"` and makes no market-data calls. Fails open to single-process behaviour when Firestore or the lease write is unavailable, so it can never disable evaluation. Reported as `dependencies.signalOutcomeWorker.leaseMs`.
+- `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access. Service accounts only; an ADC document supplied inline is rejected with an actionable error because ADC is resolved from a file or the managed runtime, never from an inline value.
+- `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization. Required when credentials resolve through Application Default Credentials, since `authorized_user` and `external_account` documents carry no project id of their own.
+- `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a credential JSON file for local development. Accepts a service account key (used directly) or an Application Default Credentials document such as the `authorized_user` file written by `gcloud application-default login` or an `external_account` workload-identity config (resolved by the Firebase Admin SDK).
 
 #### Per-Chat User Preferences
 
@@ -169,6 +263,15 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 - `JOB_QUEUE_CONCURRENCY` - Worker concurrency (default: `1`)
 - `JOB_QUEUE_CLAIM_LEASE_MS` - Firestore claim lease and heartbeat interval (default: `60000` ms)
 - `JOB_QUEUE_CONNECT_TIMEOUT_MS` - Redis connection timeout (default: `5000` ms)
+
+#### Async Job Backlog Monitoring
+
+- `ENABLE_JOB_BACKLOG_MONITOR` - Enable the periodic background async job backlog depth probe and operator paging (`true` or `false`, default: `true`)
+- `JOB_BACKLOG_ALERT_THRESHOLD_MS` - Age in milliseconds at which the oldest queued job triggers an operator page (`1000`-`86400000`, default: `900000` / 15m, Remote Config supported)
+- `JOB_BACKLOG_PAGE_COOLDOWN_MS` - Cooldown in milliseconds between repeated backlog pages so a sustained stall cannot storm the operator (`1000`-`86400000`, default: `900000` / 15m, Remote Config supported)
+- `JOB_BACKLOG_PROBE_INTERVAL_MS` - Interval in milliseconds between background backlog depth probes (`1000`-`3600000`, default: `60000` / 1m, Remote Config supported)
+
+The probe reads BullMQ waiting/delayed/failed/active counts plus a bounded Firestore count of non-terminal `queued` durable rows, and surfaces them on `GET /api/status` and `GET /api/capabilities` under `dependencies.jobExecutionQueue` (`waitingCount`, `delayedCount`, `failedCount`, `activeCount`, `durableQueuedCount`, `oldestQueuedAgeMs`, `backlogAlert`). No Redis URL or credential is exposed. When `oldestQueuedAgeMs` crosses the threshold, the monitor pages `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` once per cooldown window and sends a single all-clear when the backlog drains. All probing and paging fails open: a probe or notification failure never blocks job intake or alert delivery.
 
 `render.yaml` provisions a starter Background Worker and Key Value store. The web service remains on `JOB_EXECUTION_MODE=local` by default; switching it to `render-worker` requires the worker, Redis, and Firestore credentials to be available. For deployments without Redis, `JOB_EXECUTION_MODE=firestore-poller` allows dedicated workers to poll Firestore directly without extra infrastructure. The API returns `503 JOB_QUEUE_UNAVAILABLE` instead of accepting a job when durable storage or queue requirements are not met. If enqueue acknowledgement and deterministic Redis reconciliation both fail in `render-worker` mode, it returns `503 JOB_QUEUE_ACCEPTANCE_UNKNOWN` with the durably stored `jobId`; the worker periodically re-enqueues durable queued rows, retries retained failed BullMQ jobs, and recovers expired claims after Redis recovers.
 
@@ -203,6 +306,51 @@ The allow-list contains news thresholds, timeouts, concurrency, quota retries, T
 
 The service loads once at startup and refreshes on the bounded cadence; it does not fetch Remote Config per alert. `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS` remains environment-only because the worker timer is created during process startup and is not a request-time setting. Disabled, unavailable, timed-out, stale, malformed, or invalid values fail open to the current environment/default behavior. The server-side Remote Config API is currently a Firebase Preview feature, so monitor its quota and error rate before enabling it in production. `firebase-admin` is upgraded to the Node 24-compatible 12.x line (`^12.1.0`, lockfile resolution `12.7.0`).
 
+##### Publishing the server template (`firebase-server` namespace)
+
+Enabling `ENABLE_FIREBASE_REMOTE_CONFIG` alone does **not** activate remote tuning: the flag and valid credentials only mean the loader is *wired up*. A template must also be published to the **`firebase-server`** namespace, which is the exact namespace `admin.remoteConfig().initServerTemplate()` reads.
+
+- Publish with `pnpm run deploy:firebase-remote-config:server` locally, or by running the **Deploy Firebase Remote Config Server Template** workflow (`.github/workflows/firebase-remote-config.yml`, `workflow_dispatch`) against `master`. The workflow uses the `FIREBASE_SERVICE_ACCOUNT_JSON` Actions secret and the `FIREBASE_PROJECT_ID` repository variable (default `cabros-bot`).
+- **Namespace contract**: the publish target is `projects/{projectId}/namespaces/firebase-server/serverRemoteConfig`. Publishing to the default/client namespace (`/remoteConfig`) is a silent no-op for this loader — the template appears in the console while the service keeps reading an empty server template forever.
+- The `firebase-server` namespace does not exist until the first publish, so the script bootstraps it with `If-Match: *`. A pre-publish `getServerTemplate()` that returns `remote-config/not-found` is the expected bootstrap state, not a failure.
+
+Verify activation through `GET /api/status` → `dependencies.firebaseRemoteConfig`:
+
+| Field | Meaning |
+| --- | --- |
+| `enabled` / `configured` | The loader is wired up. Neither implies remote values are being served. |
+| `templatePublished` | `true` only after at least one successful template load. `false` means nothing was ever fetched. |
+| `ready` | `true` only after a **successful and still-fresh** load. |
+| `source` | `remote` only when live remote overrides are in use; `environment`/`default` mean they are not. |
+| `lastErrorCategory` | `template_not_published` means the `firebase-server` namespace has no template and must be published. This is distinct from a transient `load_failed`; `permission_denied` and `unauthenticated` mean the service account lacks the server-template permission. |
+| `consecutiveFailures` | Consecutive failed loads; reset to `0` on success. |
+
+In the inert state (`templatePublished: false, ready: false, source: "environment", lastErrorCategory: "template_not_published"`) every value comes from the environment fallback — intended fail-open behavior; the alert path is never blocked.
+
+##### Production enablement (issue #1113)
+
+Production enables the gate on **every compute service** in `render.yaml` — the web service, the BullMQ job worker, and the signal-outcome worker — with `previewValue: false`. Two properties follow, and both are load-order dependent rather than code dependent:
+
+- **The gate is declared, not assumed.** `RemoteConfigService.start()` returns `false` immediately when `ENABLE_FIREBASE_REMOTE_CONFIG` is not `true`, so a service that omits the key never loads the template at all and silently keeps evaluating environment values. The gate must be on any process that calls `remoteConfigService.start()`; `getRuntimeConfig()` merges remote overrides only when it is.
+- **A per-service gate is a correctness bug, not a config preference.** `getRuntimeConfig()` merges remote overrides only where the gate is on, so two processes with different gate values evaluate *different* effective configs from the same published template. `SIGNAL_OUTCOME_RETENTION_DAYS` is the sharpest case: the web service stamps `expiresAt` on outcome documents while the signal-outcome worker applies the same window when evaluating them, so a split gate makes the two processes disagree about document lifecycle.
+
+Enabling the gate does not by itself activate remote tuning, so the deploy is a **two-step** rollout:
+
+1. Merge this change. Render applies the blueprint and redeploys. Until a template exists the service reports `status: "degraded"` with `lastErrorCategory: "template_not_published"` — the honest inert state above, with every value still coming from the environment. Nothing is degraded functionally, and this is the expected state between the two steps.
+2. Once the deployment is green, run the **Deploy Firebase Remote Config Server Template** workflow (`workflow_dispatch`, ref `master`). The service then reports `ready: true`, `templatePublished: true`, `source: "remote"`, and `templateVersion` matching the published version.
+
+The publish workflow is deliberately manual and agent-driven publishes are prohibited: a template becomes the live authority for production the moment it lands. Confirm step 2 on each compute service, not only on the web service.
+
+##### After publishing, `render.yaml` no longer owns allow-listed values
+
+This is the main operational consequence of turning the feature on, and it is easy to get wrong.
+
+The Firebase Admin SDK reports a fetched template parameter's `defaultValue` with source `remote` (`ValueImpl('remote', parameterDefaultValue)` in `remote-config.js`), and `RemoteConfigService.getRemoteValue()` accepts any value whose source is `remote`. So **every parameter present in `firebase-remote-config-template.json` becomes a remote override that takes precedence over `process.env`**, even though the template entries look like plain defaults.
+
+Once the template is published, editing an allow-listed key in `render.yaml` or in the Render dashboard has **no effect** on that running process. To change an allow-listed value you must edit `firebase-remote-config-template.json` and re-run the publish workflow. The template is therefore the source of truth for the allow-list after first publish, and `render.yaml` acts only as a fallback for keys the template omits (and for the gate itself).
+
+Keep `firebase-remote-config-template.json` aligned with the intended production values before publishing. A template whose defaults are stale will silently override freshly corrected `render.yaml` values, and `ready: true` will still be reported because the load succeeded.
+
 #### Firestore Emulator Integration Tests
 
 The optional `pnpm test:firebase` command runs the Firestore-backed integration suite against the local Firebase emulator using the `demo-cabros` project ID. It covers the Admin SDK storage paths, idempotency transactions, async jobs, scanner presets, signal outcomes, and deny-by-default client rules.
@@ -220,6 +368,7 @@ pnpm test:firebase
 #### Server Configuration
 
 - `PORT` - HTTP server port (default: `80`)
+- HTTP server timeouts are fixed at 10 seconds for headers, 120 seconds for complete requests, and 30 seconds for keep-alive connections to bound slow-client resource use. Node only enforces `headersTimeout` when its periodic connection checker fires, so `connectionsCheckingInterval` is also fixed at 5 seconds (Node's 30s default would defer rejection to ~30s). Because the sweep is aligned to server start rather than to each connection, a slow-header client is rejected within a worst case of **15 seconds** (`headersTimeout + connectionsCheckingInterval`), not exactly 10 (see `src/lib/serverTimeouts.js`).
 - `SHUTDOWN_TIMEOUT_MS` - Maximum graceful shutdown budget in milliseconds (default: `10000`, hard cap: `30000`); after the deadline active jobs receive a bounded finalization attempt and are persisted as retryable cancellations, remaining HTTP connections are force-closed, and the process exits
 - `RENDER` - Render.com deployment flag (used internally)
 - `IS_PULL_REQUEST` - Render preview environment flag (disables bot in PRs)
@@ -229,7 +378,7 @@ pnpm test:firebase
 - `RAILWAY_GIT_COMMIT_SHA` / `RAILWAY_GIT_REPO_OWNER` / `RAILWAY_GIT_REPO_NAME` - Railway GitHub deployment metadata used for release and deployment notifications
 - `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel/Railway, and `false` for direct deployments)
 - `REQUEST_TIMEOUT_MS` - Hard request-deadline ceiling for mounted `/api` routes in milliseconds (default: `30000`, valid range: `1000`-`120000`; invalid values fall back to the default). The timeout returns `408 REQUEST_TIMEOUT` with a request ID.
-- `REQUEST_DEADLINE_EXEMPT_PATHS` - Optional comma-separated paths excluded from the deadline; `/healthcheck`, `/ready`, `/openapi.json`, and `/docs` are always exempt. Per-endpoint deadlines such as `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` and `MARKET_SCANNER_TIMEOUT_MS` remain the operation-specific soft budgets inside the global ceiling.
+- `REQUEST_DEADLINE_EXEMPT_PATHS` - Optional comma-separated paths excluded from the deadline; `/healthcheck`, `/ready`, `/openapi.json`, and `/docs` (including its static asset subtree) are always exempt. This is the single exemption vocabulary shared with structured request logging, so a path added here is silenced in both the deadline and the request log — see [Structured Request Logging](monitoring.md#structured-request-logging-gh-665). Per-endpoint deadlines such as `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` and `MARKET_SCANNER_TIMEOUT_MS` remain the operation-specific soft budgets inside the global ceiling.
 - `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes; invalid values use the default)
 - `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default). Webhook and MCP ingest endpoints (`/api/webhook/alert`, `/api/webhook/message`, `/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, `/api/webhook/volume-confirmation`, `/api/webhook/symbol-analysis`, and `/api/news-monitor`) use an isolated finite bucket of 1,000 requests per window so TradingView and scanner bursts do not consume the ordinary client bucket; API-key validation still applies. Public documentation and admin console assets (`/openapi.json`, `/docs`, `/admin`, and associated static assets) are mounted before the rate limiter and are exempt from the global rate limit budget, mirroring `/healthcheck` and `/ready`.
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production). The logger automatically masks sensitive plain-object keys, bare-scalar secrets preceded by sensitive labels, URL query secrets, embedded JSON strings, Authorization/Bearer credentials, Telegram bot tokens, Discord webhook tokens, OpenAI keys, and dynamically registered request-scoped secrets via `registerSecretValue` / `clearSecretValue`.
@@ -302,9 +451,21 @@ The response and audit logs include only sanitized order metadata. API credentia
 #### Scanner Preset Storage
 
 - `ENABLE_FIRESTORE_SCANNER_PRESETS` - Enable the scanner-preset Firestore persistence gate independently from alert storage, job storage, and outcome tracking (default: `false`)
-- When Firestore is initialized and writes succeed, scanner-preset responses and `/api/status` report `storage.mode: "durable"` with `backend: "firestore"`.
-- When the flag is disabled, or Firestore initialization/write fails, the service reports `storage.mode: "ephemeral"` with `backend: "memory"`; presets in this mode can be lost on restart or redeploy.
-- `dependencies.scannerPresetStorage` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `mode`, and `backend` without secrets. A `misconfigured` status means a Firestore gate is enabled but the client is unavailable.
+- `storage.mode` and `storage.backend` are **intent-derived**: they report the configured target and stay `durable`/`firestore` whenever the flag is on and credentials are present. They only report `ephemeral`/`memory` when the flag is off or credentials are unusable — the two cases where presets really are lost on restart or redeploy. Do not read `memory` as "the flag is off": that confusion is what made a transient Firestore error look like a disabled feature in [#1342](https://github.com/francovp/cabros-bot/issues/1342).
+- `dependencies.scannerPresetStorage` reports `status` so the three causes an operator must act on differently stay distinguishable, and `configured`/`ready` are not the same question:
+
+| `status` | Meaning | Operator action |
+| :--- | :--- | :--- |
+| `disabled` | `ENABLE_FIRESTORE_SCANNER_PRESETS` is not `true`. | Nothing; presets are ephemeral by choice. |
+| `misconfigured` | The gate is on but credentials are genuinely absent or rejected. | Fix Firebase credentials. This is the only status that means "check your credentials". |
+| `unverified` | No durable operation has been observed yet. Not a failure, and not health — the normal state immediately after a restart. | None. |
+| `ready` | A durable read or write has actually succeeded. | None. |
+| `degraded` | A durable operation failed and nothing has answered since. `lastErrorReason` names the class. | Investigate Firestore reachability; `consecutiveFailures` clears on the next success. |
+
+- `configured` is credential **shape** only. `ready` is the proof question and is true only after an observed durable read or write, so a deployment whose key looks valid but cannot reach Firestore reports `degraded` instead of `ready`. `GET /api/status` and `GET /api/capabilities` prove it with a bounded, single-flight durable read (rate-limited to one probe per 5s so polling cannot amplify Firestore reads), so **no prior write is required**.
+- Alongside the verdict: `readiness`, `failOpen` (always `true` — preset CRUD keeps serving from the in-memory mirror), `collection`, the `operationsAttempted`/`operationsSucceeded`/`operationsFailed`/`consecutiveFailures` counters, `lastSuccessAt`/`lastFailureAt`, and a closed-enum `lastErrorReason` (`firestore_not_initialized`, `firestore_unavailable`, `firestore_probe_timeout`) that never contains a provider message.
+- `pendingWrites`, `inFlightWrites`, `pendingDeletes`, `oldestPendingWriteAt`, and `lastReadFellBack` report local unsynced workload. They are deliberately **not** part of the verdict: an unsynced record is a pending-sync fact, not a store fault, so a record left behind by a failed write can never pin the process to `ephemeral`. Watch `pendingWrites > 0` with a rising `oldestPendingWriteAt` as the signal that records are at risk of being lost on restart.
+- The readiness counters are process-local and reset on restart. The probe issues the same indexed `orderBy('createdAt','desc')` query `listPresets()` uses, bounded to one document, so it needs no composite index beyond the single-field sort the list already requires.
 
 #### Scanner Preset Optimistic Concurrency
 
