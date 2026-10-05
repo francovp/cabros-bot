@@ -59,16 +59,6 @@
       "key": "firebaseIdToken",
       "value": "paste-firebase-id-token-here",
       "type": "string"
-    },
-    {
-      "key": "secondaryApiKey",
-      "value": "your-secondary-key-here",
-      "type": "string"
-    },
-    {
-      "key": "unlistedApiKey",
-      "value": "not-a-configured-key",
-      "type": "string"
     }
   ],
   "item": [
@@ -1745,9 +1735,10 @@
           ]
         },
         {
-          "name": "POST Send Alert (secondary WEBHOOK_API_KEYS key)",
+          "name": "POST Send Alert (truncation metadata)",
           "request": {
             "method": "POST",
+            "description": "The shared alert validator (src/lib/validation.js validateAlert) clips alert text to 4,000 characters plus an ellipsis. This request deliberately sends more than 4,000 characters so the clipping path actually runs, and the 200 response returns truncated: true with originalLength and deliveredLength. The prerequest script builds the padding, so running this request reproduces the documented response instead of only reading a saved example.",
             "header": [
               {
                 "key": "Content-Type",
@@ -1756,34 +1747,19 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{secondaryApiKey}}",
+                "value": "{{apiKey}}",
                 "type": "text"
               },
               {
-                "key": "idempotency-key",
-                "value": "alert-key-1",
-                "type": "text",
-                "description": "Canonical idempotency header",
-                "disabled": true
-              },
-              {
-                "key": "x-idempotency-key",
-                "value": "alert-key-1",
-                "type": "text",
-                "description": "Alternative x-prefixed idempotency header variant",
-                "disabled": true
-              },
-              {
                 "key": "x-request-id",
-                "value": "req-12345",
+                "value": "gh637-truncation-001",
                 "type": "text",
-                "description": "Optional request correlation ID",
-                "disabled": true
+                "description": "Optional request correlation ID"
               }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"signalClass\": \"breakout\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101\n}"
+              "raw": "{\n  \"text\": \"BINANCE:BTCUSDT truncation probe {{truncationPadding}}\",\n  \"signalClass\": \"breakout\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert",
@@ -1797,75 +1773,66 @@
               ]
             }
           },
-          "response": [
+          "event": [
             {
-              "name": "Success (secondary key accepted)",
-              "status": "OK",
-              "code": 200,
-              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\"}],\"enriched\":false}"
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// 4,000-character cap: build a payload comfortably above it.",
+                  "const filler = 'X'.repeat(4500);",
+                  "pm.variables.set('truncationPadding', filler);"
+                ]
+              }
             },
             {
-              "name": "Forbidden (key not in WEBHOOK_API_KEYS)",
-              "originalRequest": {
-                "method": "POST",
-                "header": [
-                  {
-                    "key": "Content-Type",
-                    "value": "application/json",
-                    "type": "text"
-                  },
-                  {
-                    "key": "x-api-key",
-                    "value": "{{unlistedApiKey}}",
-                    "type": "text"
-                  },
-                  {
-                    "key": "idempotency-key",
-                    "value": "alert-key-1",
-                    "type": "text",
-                    "description": "Canonical idempotency header",
-                    "disabled": true
-                  },
-                  {
-                    "key": "x-idempotency-key",
-                    "value": "alert-key-1",
-                    "type": "text",
-                    "description": "Alternative x-prefixed idempotency header variant",
-                    "disabled": true
-                  },
-                  {
-                    "key": "x-request-id",
-                    "value": "req-12345",
-                    "type": "text",
-                    "description": "Optional request correlation ID",
-                    "disabled": true
-                  }
-                ],
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"signalClass\": \"breakout\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101\n}"
-                },
-                "url": {
-                  "raw": "{{baseUrl}}/api/webhook/alert",
-                  "host": [
-                    "{{baseUrl}}"
-                  ],
-                  "path": [
-                    "api",
-                    "webhook",
-                    "alert"
-                  ]
-                }
-              },
-              "status": "Forbidden",
-              "code": 403,
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The body sent above exceeds 4,000 characters, so truncation must be reported.",
+                  "pm.test(\"status is 200\", function () {",
+                  "  pm.expect(pm.response.code).to.eql(200);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "pm.test(\"truncated is true\", function () {",
+                  "  pm.expect(json.truncated).to.eql(true);",
+                  "});",
+                  "",
+                  "pm.test(\"originalLength reports the submitted length\", function () {",
+                  "  pm.expect(json.originalLength).to.be.above(4000);",
+                  "});",
+                  "",
+                  "pm.test(\"deliveredLength is the clipped length plus the ellipsis\", function () {",
+                  "  pm.expect(json.deliveredLength).to.eql(4003);",
+                  "});",
+                  "",
+                  "pm.test(\"requestId echoes the supplied X-Request-Id\", function () {",
+                  "  pm.expect(json.requestId).to.eql(\"gh637-truncation-001\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Success - truncated",
+              "status": "OK",
+              "code": 200,
               "header": [
                 {
-                  "key": "Content-Type",
-                  "value": "application/json"
+                  "key": "X-Request-Id",
+                  "value": "gh637-truncation-001"
                 }
               ],
-              "body": "{\n  \"error\": \"Forbidden: Invalid API key\"\n}"
+              "body": "{\n  \"success\": true,\n  \"requestId\": \"gh637-truncation-001\",\n  \"truncated\": true,\n  \"originalLength\": 4529,\n  \"deliveredLength\": 4003,\n  \"results\": [],\n  \"enriched\": false\n}"
+            },
+            {
+              "name": "Success - not truncated (under the cap)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"requestId\": \"gh637-truncation-002\",\n  \"results\": [],\n  \"enriched\": false\n}"
             }
           ]
         },
@@ -4295,6 +4262,131 @@
                 }
               ],
               "cookie": []
+            }
+          ]
+        },
+        {
+          "name": "POST Send Alert (secondary WEBHOOK_API_KEYS key)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{secondaryApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "alert-key-1",
+                "type": "text",
+                "description": "Canonical idempotency header",
+                "disabled": true
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "alert-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
+              },
+              {
+                "key": "x-request-id",
+                "value": "req-12345",
+                "type": "text",
+                "description": "Optional request correlation ID",
+                "disabled": true
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"signalClass\": \"breakout\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success (secondary key accepted)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\"}],\"enriched\":false}"
+            },
+            {
+              "name": "Forbidden (key not in WEBHOOK_API_KEYS)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{unlistedApiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "idempotency-key",
+                    "value": "alert-key-1",
+                    "type": "text",
+                    "description": "Canonical idempotency header",
+                    "disabled": true
+                  },
+                  {
+                    "key": "x-idempotency-key",
+                    "value": "alert-key-1",
+                    "type": "text",
+                    "description": "Alternative x-prefixed idempotency header variant",
+                    "disabled": true
+                  },
+                  {
+                    "key": "x-request-id",
+                    "value": "req-12345",
+                    "type": "text",
+                    "description": "Optional request correlation ID",
+                    "disabled": true
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"signalClass\": \"breakout\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ]
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Forbidden: Invalid API key\"\n}"
             }
           ]
         }

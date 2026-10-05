@@ -1116,6 +1116,38 @@ describe('news-monitor stop/target example (GH-712)', () => {
 		expect(script).toContain('appliedCount + c.failedCount');
 	});
 
+	// GH-637: a saved response alone cannot demonstrate the 4,000-character clip, because
+	// the request that produced it must actually send an oversized body. The example is
+	// only runnable if it generates that body itself.
+	it('provides a runnable oversized-alert example that reproduces the truncation response', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Send Alert (truncation metadata)');
+		expect(item).toBeDefined();
+
+		// The body must be larger than the 4,000-character cap, built at runtime.
+		const prerequest = item.event.find((entry) => entry.listen === 'prerequest');
+		expect(prerequest).toBeDefined();
+		const prerequestScript = prerequest.script.exec.join('\n');
+		expect(prerequestScript).toContain('truncationPadding');
+		expect(prerequestScript).toMatch(/repeat\(\s*\d{4,}\s*\)/);
+		expect(item.request.body.raw).toContain('{{truncationPadding}}');
+
+		// And it must assert the documented response rather than only display it.
+		const test = item.event.find((entry) => entry.listen === 'test');
+		expect(test).toBeDefined();
+		const testScript = test.script.exec.join('\n');
+		for (const field of ['truncated', 'originalLength', 'deliveredLength']) {
+			expect(testScript).toContain(field);
+		}
+
+		const example = item.response.find((response) => /truncated/.test(response.name));
+		expect(example.code).toBe(200);
+		const body = JSON.parse(example.body);
+		expect(body.truncated).toBe(true);
+		expect(body.originalLength).toBeGreaterThan(4000);
+		expect(body.deliveredLength).toBe(4003);
+	});
+
 	// The first version of this example was named for a budget-starved multi-timeframe
 	// call while recording failedCount: 0, so it could not represent the scenario it was
 	// named for and the `pm.test` invariant was never exercised against a failure. These

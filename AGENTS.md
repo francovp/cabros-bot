@@ -2387,3 +2387,13 @@ Every rejection is a **warning and `return 1`**, not an exit code: the check is 
 **Coverage**: `tests/unit/verify-preview-deployment-binding.test.js` drives both scripts against fake `gh`/`curl` binaries. It reproduces the reported scenario (newest `pending` + previous `success`) and asserts exit `2` when the selected URL is not serving `EXPECTED_SHA`, plus the served-build mismatch, the short-SHA prefix match, every unprovable-evidence warning, the Railway fallback, and API-key non-leakage. The `gh` stub answers three distinct `--jq` projections so the legacy code path is reproduced faithfully rather than accidentally passing. A dedicated block drives a hostile `environment_url` — plain HTTP, a non-allowlisted HTTPS host, prefix/suffix-confusable hosts, userinfo smuggling, and glob metacharacters — asserting exit `0` with `served-commit check skipped`, `/api/status` never requested, and **no `x-api-key` in the curl invocation log**; it also asserts the operator override works and that the three real platform hosts still receive the key. Each case also returns a *matching* `service.commit`, so a regression that leaked the key would still print `Served-build match` and could only be caught by the invocation-log assertion.
 
 No endpoint, OpenAPI, Postman, environment variable, Remote Config key, or feature flag was added; `agents.md` and `AGENTS.md` are the same file. `VERIFY_PREVIEW_ALLOWED_HOSTS` is an operator-facing shell variable read by agent tooling, not an application environment variable, so `.env.example` / Remote Config parity does not apply.
+
+## Shared Alert Validation Truncation (Issue #637)
+
+`validateAlert()` keeps the existing 4,000-character cap but now returns `truncated`, `originalLength`, and `deliveredLength` when clipping input. `/api/webhook/alert` propagates those fields in its 200 response and emits a structured warning, allowing callers to detect content loss without changing delivery or enrichment gates. No environment variable, Linear issue, or Remote Config key was added.
+
+The truncation fields are attached only to the `/api/webhook/alert` response. They are **not** part of the shared `DeliveryResult` schema, because `DeliveryResult` is also referenced by `POST /api/alerts/{alertId}/replay`, whose `replayAlert` response never includes them; `/api/webhook/alert` therefore documents an endpoint-specific schema and example.
+
+**Coverage**:
+- `tests/unit/validation.test.js` — Boundary, no-truncation, and truncation-with-signalClass metadata behavior.
+- `tests/unit/alert-webhook-request-id.test.js` and `tests/integration/alert-grounding.test.js` — Response propagation through dry-run and the mounted webhook.

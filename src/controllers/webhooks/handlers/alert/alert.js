@@ -271,15 +271,26 @@ function postAlert(botOrGetter) {
 				? body.signalClass
 				: req.query?.signalClass;
 
-			const { text, signalClass } = validateAlert(
+			const validatedAlert = validateAlert(
 				alertText,
 				typeof body === 'object' ? body.metadata : undefined,
 				rawSignalClass,
 			);
+			const { text, signalClass } = validatedAlert;
+			const truncation = validatedAlert.truncated === true
+				? {
+					truncated: true,
+					originalLength: validatedAlert.originalLength,
+					deliveredLength: validatedAlert.deliveredLength,
+				}
+				: {};
+			if (truncation.truncated) {
+				console.warn('[Alert] Alert text truncated before processing', truncation);
+			}
 			const source = (typeof body === 'object' && body && typeof body.source === 'string' && body.source.trim())
 				? body.source.trim()
 				: 'webhook-alert';
-			alert = { text, source, signalClass };
+			alert = { text, source, signalClass, ...truncation };
 			// `alert.text` is immutable from here on, so the TradingView signal is parsed
 			// once and shared by the repeat-suppression, persistence, and outcome-eligibility
 			// paths below.
@@ -325,6 +336,7 @@ function postAlert(botOrGetter) {
 				return res.json({
 					success: true,
 					dryRun: true,
+					...truncation,
 					enriched,
 					payload: {
 						text: alert.text,
@@ -549,6 +561,7 @@ function postAlert(botOrGetter) {
 			res.json({
 				success: true,
 				results,
+				...truncation,
 				enriched,
 				suppressedRepeat: suppressedRepeat || undefined,
 				tokenUsage: tokenUsageJSON,
@@ -687,7 +700,7 @@ function postAlert(botOrGetter) {
 						textLength: alertText ? alertText.length : 0,
 						hasEnrichment: !!(alert && alert.enriched),
 						enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
-						truncated: false,
+						truncated: Boolean(alert && alert.truncated),
 					},
 				});
 			}
